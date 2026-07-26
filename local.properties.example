@@ -1,0 +1,22 @@
+# Copy this file to local.properties and adjust for your machine.
+# local.properties is in .gitignore and never committed.
+
+# Android SDK location (Android Studio fills this in automatically).
+# Windows example:
+sdk.dir=C\:\\Users\\<you>\\AppData\\Local\\Android\\Sdk
+
+# --- Signing ---
+# The shared keystore lives in keystore/pravka.jks and IS committed to this
+# private repo, so the key can never be lost and every build is signed the
+# same way. These values are also the build script defaults - you only need
+# them here if you move the keystore somewhere else.
+keystore.path=keystore/pravka.jks
+keystore.password=pravka-keystore-2026
+keystore.alias=pravka
+keystore.keyPassword=pravka-keystore-2026
+
+# --- Telegram delivery (gradlew deliverApk / deliver) ---
+# Create a bot via @BotFather, get your chat_id via @userinfobot.
+# Leave empty to skip Telegram delivery.
+telegram.botToken=
+telegram.chatId=

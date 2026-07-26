@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Правка</string>
+    <string name="build_info">Сборка %1$s (код %2$d) · %3$s</string>
+</resources>
