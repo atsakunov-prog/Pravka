@@ -5,8 +5,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,9 +18,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -27,7 +34,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -54,6 +61,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -71,9 +79,10 @@ import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.PravkaTheme
 
 // Four tabs: Settings, Dictionary, Prompts, Statistics.
-// Visual design pass comes as the final stage.
+// Editorial "proofreader" design: paper, ink, red pen (ui/Theme.kt).
 class MainActivity : ComponentActivity() {
 
     private val serviceEnabled = mutableStateOf(false)
@@ -82,7 +91,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val app = application as PravkaApp
         setContent {
-            MaterialTheme {
+            PravkaTheme {
                 MainScreen(
                     settings = app.settings,
                     promptStore = app.promptStore,
@@ -129,6 +138,7 @@ private fun MainScreen(
     var tab by remember { mutableStateOf(Tab.SETTINGS) }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
@@ -170,6 +180,72 @@ private fun MainScreen(
 }
 
 // ---------------------------------------------------------------------------
+// Shared design pieces
+// ---------------------------------------------------------------------------
+
+/** The wide "П" mark - same as the launcher icon and the floating button. */
+@Composable
+private fun BrandMark(size: androidx.compose.ui.unit.Dp, textSize: androidx.compose.ui.unit.TextUnit) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .background(MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "П",
+            fontSize = textSize,
+            fontFamily = FontFamily.Serif,
+            fontWeight = FontWeight.Black,
+            color = MaterialTheme.colorScheme.onPrimary,
+        )
+    }
+}
+
+@Composable
+private fun ScreenTitle(text: String) {
+    Text(text, style = MaterialTheme.typography.headlineSmall)
+}
+
+/** Small uppercase label in the accent color above a card. */
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text.uppercase(Locale.forLanguageTag("ru")),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+    )
+}
+
+@Composable
+private fun SectionCard(
+    label: String? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        if (label != null) SectionLabel(label)
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                content = content,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HintText(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 
@@ -202,133 +278,162 @@ private fun SettingsTab(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge)
-        Text(
-            stringResource(R.string.build_info, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, BuildConfig.BUILD_TIME),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Spacer(Modifier.height(24.dp))
-
-        Text(
-            stringResource(if (serviceEnabled) R.string.service_status_on else R.string.service_status_off),
-            style = MaterialTheme.typography.titleMedium,
-            color = if (serviceEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-        )
-        if (!serviceEnabled) {
-            Spacer(Modifier.height(8.dp))
-            Button(onClick = onOpenAccessibilitySettings) {
-                Text(stringResource(R.string.service_enable))
+        // Brand header
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BrandMark(size = 48.dp, textSize = 26.sp)
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    stringResource(R.string.build_info, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, BuildConfig.BUILD_TIME),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            Text(stringResource(R.string.service_hint), style = MaterialTheme.typography.bodySmall)
         }
-        Spacer(Modifier.height(24.dp))
 
-        Text(stringResource(R.string.settings_api_key_title), style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = { apiKey = it; savedMark = false },
-            enabled = loaded,
-            singleLine = true,
-            visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            label = { Text(stringResource(R.string.settings_api_key_label)) },
-            trailingIcon = {
-                TextButton(onClick = { keyVisible = !keyVisible }) {
-                    Text(stringResource(if (keyVisible) R.string.settings_hide else R.string.settings_show))
-                }
-            },
+        // Accessibility service status
+        Card(
             modifier = Modifier.fillMaxWidth(),
-        )
-        Text(stringResource(R.string.settings_api_key_hint), style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(24.dp))
-
-        Text(stringResource(R.string.settings_model_title), style = MaterialTheme.typography.titleMedium)
-        // Model choice applies immediately - waiting for a "Save" press was a
-        // trap: the owner picked Nano, never pressed Save, and every request
-        // silently kept going to Sonnet.
-        fun pickModel(value: String) {
-            model = value
-            scope.launch { settings.setCleanModel(value) }
-        }
-        ModelOption(stringResource(R.string.settings_model_sonnet), model == Settings.MODEL_SONNET) {
-            pickModel(Settings.MODEL_SONNET)
-        }
-        ModelOption(stringResource(R.string.settings_model_haiku), model == Settings.MODEL_HAIKU) {
-            pickModel(Settings.MODEL_HAIKU)
-        }
-        ModelOption(stringResource(R.string.settings_model_nano), model == Settings.MODEL_NANO) {
-            pickModel(Settings.MODEL_NANO)
-        }
-        if (model == Settings.MODEL_NANO) {
-            var nanoStatus by remember { mutableStateOf("…") }
-            var downloading by remember { mutableStateOf(false) }
-            val nanoScope = rememberCoroutineScope()
-            val context = LocalContext.current
-            LaunchedEffect(downloading) { nanoStatus = nanoProvider.statusText() }
-            Text("Gemini Nano: $nanoStatus", style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    enabled = !downloading,
-                    onClick = {
-                        downloading = true
-                        nanoScope.launch {
-                            val result = nanoProvider.download()
-                            downloading = false
-                            Feedback.toast(
-                                context,
-                                if (result.isSuccess) context.getString(R.string.nano_download_done)
-                                else context.getString(R.string.nano_download_failed, result.exceptionOrNull()?.message ?: ""),
-                            )
-                            nanoStatus = nanoProvider.statusText()
-                        }
+            colors = CardDefaults.cardColors(
+                containerColor = if (serviceEnabled) {
+                    MaterialTheme.colorScheme.secondaryContainer
+                } else {
+                    MaterialTheme.colorScheme.errorContainer
+                },
+            ),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(if (serviceEnabled) R.string.service_status_on else R.string.service_status_off),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (serviceEnabled) {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onErrorContainer
                     },
-                ) { Text(stringResource(if (downloading) R.string.nano_downloading else R.string.nano_download)) }
-                OutlinedButton(onClick = { nanoScope.launch { nanoStatus = nanoProvider.statusText() } }) {
-                    Text(stringResource(R.string.nano_refresh))
+                )
+                if (!serviceEnabled) {
+                    Button(onClick = onOpenAccessibilitySettings) {
+                        Text(stringResource(R.string.service_enable))
+                    }
+                    Text(
+                        stringResource(R.string.service_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
                 }
             }
-            Text(stringResource(R.string.nano_hint), style = MaterialTheme.typography.bodySmall)
         }
-        Spacer(Modifier.height(16.dp))
 
-        Button(
-            onClick = {
-                scope.launch {
-                    settings.setApiKey(apiKey)
-                    settings.setCleanModel(model)
-                    savedMark = true
+        SectionCard(label = stringResource(R.string.settings_api_key_title)) {
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = { apiKey = it; savedMark = false },
+                enabled = loaded,
+                singleLine = true,
+                visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                label = { Text(stringResource(R.string.settings_api_key_label)) },
+                trailingIcon = {
+                    TextButton(onClick = { keyVisible = !keyVisible }) {
+                        Text(stringResource(if (keyVisible) R.string.settings_hide else R.string.settings_show))
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(6.dp))
+            HintText(stringResource(R.string.settings_api_key_hint))
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    scope.launch {
+                        settings.setApiKey(apiKey)
+                        settings.setCleanModel(model)
+                        savedMark = true
+                    }
+                },
+                enabled = loaded,
+            ) {
+                Text(stringResource(if (savedMark) R.string.settings_saved else R.string.settings_save))
+            }
+        }
+
+        SectionCard(label = stringResource(R.string.settings_model_title)) {
+            // Model choice applies immediately - waiting for a "Save" press was
+            // a trap: the owner picked Nano, never pressed Save, and every
+            // request silently kept going to Sonnet.
+            fun pickModel(value: String) {
+                model = value
+                scope.launch { settings.setCleanModel(value) }
+            }
+            ModelOption(stringResource(R.string.settings_model_sonnet), model == Settings.MODEL_SONNET) {
+                pickModel(Settings.MODEL_SONNET)
+            }
+            ModelOption(stringResource(R.string.settings_model_haiku), model == Settings.MODEL_HAIKU) {
+                pickModel(Settings.MODEL_HAIKU)
+            }
+            ModelOption(stringResource(R.string.settings_model_nano), model == Settings.MODEL_NANO) {
+                pickModel(Settings.MODEL_NANO)
+            }
+            if (model == Settings.MODEL_NANO) {
+                var nanoStatus by remember { mutableStateOf("…") }
+                var downloading by remember { mutableStateOf(false) }
+                val nanoScope = rememberCoroutineScope()
+                val context = LocalContext.current
+                LaunchedEffect(downloading) { nanoStatus = nanoProvider.statusText() }
+                Spacer(Modifier.height(4.dp))
+                Text("Gemini Nano: $nanoStatus", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        enabled = !downloading,
+                        onClick = {
+                            downloading = true
+                            nanoScope.launch {
+                                val result = nanoProvider.download()
+                                downloading = false
+                                Feedback.toast(
+                                    context,
+                                    if (result.isSuccess) context.getString(R.string.nano_download_done)
+                                    else context.getString(R.string.nano_download_failed, result.exceptionOrNull()?.message ?: ""),
+                                )
+                                nanoStatus = nanoProvider.statusText()
+                            }
+                        },
+                    ) { Text(stringResource(if (downloading) R.string.nano_downloading else R.string.nano_download)) }
+                    OutlinedButton(onClick = { nanoScope.launch { nanoStatus = nanoProvider.statusText() } }) {
+                        Text(stringResource(R.string.nano_refresh))
+                    }
                 }
-            },
-            enabled = loaded,
-        ) {
-            Text(stringResource(if (savedMark) R.string.settings_saved else R.string.settings_save))
+                Spacer(Modifier.height(4.dp))
+                HintText(stringResource(R.string.nano_hint))
+            }
         }
-        Spacer(Modifier.height(32.dp))
 
-        Text(stringResource(R.string.settings_fab_title), style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(8.dp))
-        Text(stringResource(R.string.settings_fab_size, sizeSlider.toInt()), style = MaterialTheme.typography.bodyMedium)
-        Slider(
-            value = sizeSlider,
-            onValueChange = { sizeSlider = it },
-            onValueChangeFinished = { scope.launch { settings.setFabSize(sizeSlider.toInt()) } },
-            valueRange = 36f..72f,
-        )
-        Text(
-            stringResource(R.string.settings_fab_alpha, (alphaSlider * 100).toInt()),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Slider(
-            value = alphaSlider,
-            onValueChange = { alphaSlider = it },
-            onValueChangeFinished = { scope.launch { settings.setFabAlpha(alphaSlider) } },
-            valueRange = 0.15f..1f,
-        )
-        Spacer(Modifier.height(24.dp))
+        SectionCard(label = stringResource(R.string.settings_fab_title)) {
+            Text(stringResource(R.string.settings_fab_size, sizeSlider.toInt()), style = MaterialTheme.typography.bodyMedium)
+            Slider(
+                value = sizeSlider,
+                onValueChange = { sizeSlider = it },
+                onValueChangeFinished = { scope.launch { settings.setFabSize(sizeSlider.toInt()) } },
+                valueRange = 36f..72f,
+            )
+            Text(
+                stringResource(R.string.settings_fab_alpha, (alphaSlider * 100).toInt()),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Slider(
+                value = alphaSlider,
+                onValueChange = { alphaSlider = it },
+                onValueChangeFinished = { scope.launch { settings.setFabAlpha(alphaSlider) } },
+                valueRange = 0.15f..1f,
+            )
+        }
 
-        Text(stringResource(R.string.settings_usage_hint), style = MaterialTheme.typography.bodyMedium)
+        HintText(stringResource(R.string.settings_usage_hint))
     }
 }
 
@@ -346,6 +451,13 @@ private fun ModelOption(label: String, selected: Boolean, onSelect: () -> Unit) 
 // ---------------------------------------------------------------------------
 // Dictionary
 // ---------------------------------------------------------------------------
+
+@Composable
+private fun dictModeColor(mode: DictMode) = when (mode) {
+    DictMode.HARD -> MaterialTheme.colorScheme.primary
+    DictMode.HINT -> MaterialTheme.colorScheme.tertiary
+    DictMode.PROTECT -> MaterialTheme.colorScheme.secondary
+}
 
 @Composable
 private fun DictionaryTab(store: DictionaryStore) {
@@ -400,17 +512,14 @@ private fun DictionaryTab(store: DictionaryStore) {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.tab_dictionary),
-                    style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { showAddDialog = true }) { Text(stringResource(R.string.dict_add)) }
+                ScreenTitle(stringResource(R.string.tab_dictionary))
+                Spacer(Modifier.weight(1f))
+                Button(onClick = { showAddDialog = true }) { Text(stringResource(R.string.dict_add)) }
             }
             Row {
                 TextButton(onClick = { export() }) { Text(stringResource(R.string.dict_export)) }
@@ -431,18 +540,29 @@ private fun DictionaryTab(store: DictionaryStore) {
         for (mode in DictMode.entries) {
             val sectionEntries = section(mode)
             item(key = "header_$mode") {
-                Text(
-                    stringResource(
-                        when (mode) {
-                            DictMode.HARD -> R.string.dict_section_hard
-                            DictMode.HINT -> R.string.dict_section_hint
-                            DictMode.PROTECT -> R.string.dict_section_protect
-                        },
-                        sectionEntries.size,
-                    ),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 14.dp, bottom = 6.dp, start = 4.dp),
+                ) {
+                    Box(
+                        Modifier
+                            .size(8.dp)
+                            .background(dictModeColor(mode), CircleShape)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(
+                            when (mode) {
+                                DictMode.HARD -> R.string.dict_section_hard
+                                DictMode.HINT -> R.string.dict_section_hint
+                                DictMode.PROTECT -> R.string.dict_section_protect
+                            },
+                            sectionEntries.size,
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             items(sectionEntries, key = { it.id }) { entry ->
                 DictRow(entry, onClick = { dialogEntry = entry }, onToggle = { enabled ->
@@ -483,7 +603,7 @@ private fun DictionaryTab(store: DictionaryStore) {
 private fun DictRow(entry: DictEntry, onClick: () -> Unit, onToggle: (Boolean) -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -492,12 +612,19 @@ private fun DictRow(entry: DictEntry, onClick: () -> Unit, onToggle: (Boolean) -
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 if (entry.note.isNotBlank()) {
-                    Text(entry.note, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        entry.note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             if (entry.hits > 0) {
-                Text("×${entry.hits}", style = MaterialTheme.typography.labelMedium)
-                Spacer(Modifier.height(0.dp))
+                Text(
+                    "×${entry.hits}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
             }
             Switch(checked = entry.enabled, onCheckedChange = onToggle, modifier = Modifier.padding(start = 8.dp))
         }
@@ -614,11 +741,11 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(stringResource(R.string.prompts_header), style = MaterialTheme.typography.headlineSmall)
-        Text(stringResource(R.string.prompts_subheader), style = MaterialTheme.typography.bodySmall)
+        ScreenTitle(stringResource(R.string.prompts_header))
+        HintText(stringResource(R.string.prompts_subheader))
         for (id in PromptStore.PromptId.entries) {
             val override by promptStore.overrideFlow(id).collectAsState(initial = null)
             val effective = override ?: promptStore.factory(id)
@@ -634,20 +761,25 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
                             Text(
                                 stringResource(R.string.prompt_modified),
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.tertiary,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier
+                                    .background(MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.shapes.small)
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
                             )
                         }
                     }
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         effective.lineSequence().take(2).joinToString("\n"),
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         stringResource(R.string.prompt_char_count, effective.length, effective.length / 3),
                         style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -678,7 +810,7 @@ private fun PromptEditor(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(20.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text(stringResource(R.string.prompt_back)) }
@@ -706,6 +838,7 @@ private fun PromptEditor(
         Text(
             stringResource(R.string.prompt_char_count, text.length, text.length / 3),
             style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         error?.let {
             Text(stringResource(it), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -769,79 +902,115 @@ private fun StatsTab(stats: Stats, historyLog: HistoryLog) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        Text(stringResource(R.string.stats_header), style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(12.dp))
+        ScreenTitle(stringResource(R.string.stats_header))
+
         snapshot?.let { s ->
-            Text(stringResource(R.string.stats_cost_header), style = MaterialTheme.typography.titleMedium)
-            StatRow(R.string.stats_cost_today, "$%.4f".format(Locale.US, s.costTodayUsd))
-            StatRow(R.string.stats_cost_week, "$%.4f".format(Locale.US, s.costWeekUsd))
-            StatRow(R.string.stats_cost_month, "$%.4f".format(Locale.US, s.costMonthUsd))
-            StatRow(R.string.stats_cost_total, "$%.4f".format(Locale.US, s.costTotalUsd))
-            Spacer(Modifier.height(12.dp))
-
-            StatRow(R.string.stats_total, s.total.toString())
-            StatRow(R.string.stats_clean, s.clean.toString())
-            StatRow(R.string.stats_business, s.business.toString())
-            StatRow(R.string.stats_soften, s.soften.toString())
-            StatRow(R.string.stats_unchanged, s.unchanged.toString())
-            StatRow(R.string.stats_errors, s.errors.toString())
-            StatRow(R.string.stats_chars, "%,d".format(ru, s.charsProcessed))
-            StatRow(R.string.stats_tokens, "%,d / %,d".format(ru, s.tokensIn, s.tokensOut))
-            StatRow(
-                R.string.stats_latency,
-                String.format(ru, "%.1f с", s.averageLatencyMs / 1000.0),
-            )
-        }
-        Spacer(Modifier.height(16.dp))
-
-        OutlinedButton(
-            onClick = {
-                runCatching {
-                    context.startActivity(
-                        android.content.Intent.createChooser(
-                            historyLog.shareIntent(),
-                            context.getString(R.string.stats_share_history),
-                        )
+            SectionCard(label = stringResource(R.string.stats_cost_header)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        "$%.4f".format(Locale.US, s.costTodayUsd),
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.primary,
                     )
-                }.onFailure { Feedback.toast(context, context.getString(R.string.stats_history_empty)) }
-            },
-            enabled = historyLog.exists(),
-        ) {
-            Text(stringResource(R.string.stats_share_history))
-        }
-        Text(stringResource(R.string.stats_history_hint), style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(24.dp))
-
-        Text(stringResource(R.string.stats_log_header), style = MaterialTheme.typography.titleMedium)
-        Text(stringResource(R.string.stats_log_hint), style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(8.dp))
-        if (log.isEmpty()) {
-            Text(stringResource(R.string.stats_log_empty), style = MaterialTheme.typography.bodyMedium)
-        }
-        for (entry in log) {
-            HorizontalDivider()
-            Column(Modifier.padding(vertical = 8.dp)) {
-                Text(
-                    entry.ts.replace('T', ' ').take(19) +
-                        " · ${entry.mode} · ${entry.model.ifBlank { entry.providerId }}" +
-                        (entry.error?.let { " · ОШИБКА" } ?: ""),
-                    style = MaterialTheme.typography.labelMedium,
-                )
-                Text(
-                    String.format(
-                        ru, "%.1f с · %d/%d ток · $%.4f",
-                        entry.latencyMs / 1000.0, entry.inputTokens, entry.outputTokens, entry.costUsd,
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                )
-                entry.error?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(R.string.stats_cost_today).lowercase(ru),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
                 }
-                Text("← " + entry.input.take(80), style = MaterialTheme.typography.bodySmall)
-                if (entry.output.isNotEmpty()) {
-                    Text("→ " + entry.output.take(80), style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(8.dp))
+                StatRow(R.string.stats_cost_week, "$%.4f".format(Locale.US, s.costWeekUsd))
+                StatRow(R.string.stats_cost_month, "$%.4f".format(Locale.US, s.costMonthUsd))
+                StatRow(R.string.stats_cost_total, "$%.4f".format(Locale.US, s.costTotalUsd))
+            }
+
+            SectionCard(label = stringResource(R.string.stats_total)) {
+                StatRow(R.string.stats_total, s.total.toString())
+                StatRow(R.string.stats_clean, s.clean.toString())
+                StatRow(R.string.stats_business, s.business.toString())
+                StatRow(R.string.stats_soften, s.soften.toString())
+                StatRow(R.string.stats_unchanged, s.unchanged.toString())
+                StatRow(R.string.stats_errors, s.errors.toString())
+                StatRow(R.string.stats_chars, "%,d".format(ru, s.charsProcessed))
+                StatRow(R.string.stats_tokens, "%,d / %,d".format(ru, s.tokensIn, s.tokensOut))
+                StatRow(
+                    R.string.stats_latency,
+                    String.format(ru, "%.1f с", s.averageLatencyMs / 1000.0),
+                )
+            }
+        }
+
+        Column {
+            OutlinedButton(
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent.createChooser(
+                                historyLog.shareIntent(),
+                                context.getString(R.string.stats_share_history),
+                            )
+                        )
+                    }.onFailure { Feedback.toast(context, context.getString(R.string.stats_history_empty)) }
+                },
+                enabled = historyLog.exists(),
+            ) {
+                Text(stringResource(R.string.stats_share_history))
+            }
+            HintText(stringResource(R.string.stats_history_hint))
+        }
+
+        Column {
+            SectionLabel(stringResource(R.string.stats_log_header))
+            HintText(stringResource(R.string.stats_log_hint))
+            Spacer(Modifier.height(8.dp))
+            if (log.isEmpty()) {
+                Text(stringResource(R.string.stats_log_empty), style = MaterialTheme.typography.bodyMedium)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (entry in log) {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    entry.mode,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (entry.error != null) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    },
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    entry.ts.replace('T', ' ').take(19) +
+                                        " · ${entry.model.ifBlank { entry.providerId }}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text(
+                                String.format(
+                                    ru, "%.1f с · %d/%d ток · $%.4f",
+                                    entry.latencyMs / 1000.0, entry.inputTokens, entry.outputTokens, entry.costUsd,
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            entry.error?.let {
+                                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text("← " + entry.input.take(80), style = MaterialTheme.typography.bodySmall)
+                            if (entry.output.isNotEmpty()) {
+                                Text("→ " + entry.output.take(80), style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -851,7 +1020,12 @@ private fun StatsTab(stats: Stats, historyLog: HistoryLog) {
 @Composable
 private fun StatRow(labelRes: Int, value: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-        Text(stringResource(labelRes), modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        Text(value, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            stringResource(labelRes),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
     }
 }

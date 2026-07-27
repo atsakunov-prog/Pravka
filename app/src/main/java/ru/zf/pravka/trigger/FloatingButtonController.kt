@@ -38,6 +38,13 @@ class FloatingButtonController(
 
     companion object {
         private const val LONG_PRESS_MS = 450L
+
+        // Editorial palette shared with ui/Theme.kt and the launcher icon:
+        // ink circle, vermilion ring, paper-white serif "П".
+        private val INK = 0xFF241F19.toInt()
+        private val INK_MENU = 0xF5241F19.toInt()
+        private val VERMILION = 0xFFC13B2A.toInt()
+        private val PAPER = 0xFFF7F3EA.toInt()
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -110,7 +117,8 @@ class FloatingButtonController(
         val container = FrameLayout(service)
         val background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(0xFF1B3A5C.toInt())
+            setColor(INK)
+            setStroke(dp(2), VERMILION)
         }
         container.background = background
         container.elevation = dp(4).toFloat()
@@ -118,9 +126,9 @@ class FloatingButtonController(
 
         label = TextView(service).apply {
             text = "П"
-            setTextColor(Color.WHITE)
+            setTextColor(PAPER)
             textSize = 20f
-            typeface = Typeface.DEFAULT_BOLD
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
             gravity = Gravity.CENTER
         }
         container.addView(
@@ -132,7 +140,7 @@ class FloatingButtonController(
         )
         progress = ProgressBar(service).apply {
             visibility = View.GONE
-            indeterminateTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(VERMILION)
         }
         val progressSize = dp(28)
         container.addView(
@@ -260,15 +268,16 @@ class FloatingButtonController(
         val list = LinearLayout(service).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                setColor(0xF21B3A5C.toInt())
-                cornerRadius = dp(12).toFloat()
+                setColor(INK_MENU)
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), VERMILION)
             }
             elevation = dp(6).toFloat()
         }
         fun item(textRes: Int, action: () -> Unit) {
             val item = TextView(service).apply {
                 text = service.getString(textRes)
-                setTextColor(Color.WHITE)
+                setTextColor(PAPER)
                 textSize = 15f
                 setPadding(dp(16), dp(12), dp(16), dp(12))
                 setOnClickListener {

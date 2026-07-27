@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- White Cyrillic letter "П" drawn as three bars, centered in the 66dp safe zone. -->
+<!-- Paper-white wide Cyrillic "П" on the vermilion adaptive-icon background:
+     three bars, drawn wider than a normal П - the brand mark. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M37,39 h34 v7 h-34 z M37,39 h7 v30 h-7 z M64,39 h7 v30 h-7 z" />
+        android:fillColor="#F7F3EA"
+        android:pathData="M32,37 h44 v8 h-44 z M32,37 h9 v34 h-9 z M67,37 h9 v34 h-9 z" />
 </vector>
