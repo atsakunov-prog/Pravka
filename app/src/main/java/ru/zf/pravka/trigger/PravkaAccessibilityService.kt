@@ -33,7 +33,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var floatingButton: FloatingButtonController? = null
-    private var undoChip: UndoChipController? = null
+    private var resultBar: ResultBarController? = null
     private var busy = false
 
     // Weak cache of the last focused editable node and its text, updated on
@@ -46,7 +46,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        undoChip = UndoChipController(this, ::undoLast)
+        resultBar = ResultBarController(this, ::undoLast, ::addPairToDictionary)
         floatingButton = FloatingButtonController(
             service = this,
             scope = scope,
@@ -82,9 +82,9 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // App or window switched: the field the chip would undo is
+                // App or window switched: the field the bar describes is
                 // gone; only keep the button when a field is still focused.
-                undoChip?.dismiss()
+                resultBar?.dismiss()
                 if (liveFocusedEditableNode() != null) floatingButton?.show()
                 else floatingButton?.hide()
             }
@@ -103,6 +103,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         return if (node.isEditable) node else null
     }
 
+    /** External triggers (quick settings tile) land here too. */
+    fun trigger(mode: ProofreadMode) = runProofread(mode)
+
+    fun triggerUndo() = undoLast()
+
     private fun runProofread(mode: ProofreadMode) {
         if (busy) return
         val app = application as PravkaApp
@@ -115,9 +120,32 @@ class PravkaAccessibilityService : AccessibilityService() {
             floatingButton?.setBusy(false)
             busy = false
             Feedback.report(this@PravkaAccessibilityService, outcome)
-            // Something was written into the field - offer a one-tap undo
-            // for a few seconds on top of the long-press menu item.
-            if (outcome is ProofreadEngine.Outcome.Applied) undoChip?.show()
+            // Something was written into the field - offer undo, the word
+            // diff and quick add-to-dictionary for a few seconds (spec 9.2).
+            if (outcome is ProofreadEngine.Outcome.Applied) {
+                UndoStack.last()?.let { resultBar?.show(it.before, it.after) }
+            }
+        }
+    }
+
+    // Result-bar action: the model "fixed" a correct word - protect the
+    // dictated form and hard-replace the wrong one back on future runs.
+    private fun addPairToDictionary(correct: String, wrong: String) {
+        val app = application as PravkaApp
+        scope.launch {
+            val store = app.dictionaryStore
+            val existing = store.all().map { it.from.lowercase() to it.mode }.toHashSet()
+            if ((correct.lowercase() to ru.zf.pravka.core.DictMode.PROTECT) !in existing) {
+                store.add(correct, "", ru.zf.pravka.core.DictMode.PROTECT, "")
+            }
+            if ((wrong.lowercase() to ru.zf.pravka.core.DictMode.HARD) !in existing) {
+                store.add(wrong, correct, ru.zf.pravka.core.DictMode.HARD, "")
+            }
+            Haptics.success(this@PravkaAccessibilityService)
+            Feedback.toast(
+                this@PravkaAccessibilityService,
+                getString(R.string.dict_pair_added, correct, wrong),
+            )
         }
     }
 
@@ -162,7 +190,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         // The foldable changes configuration on fold/unfold - reposition.
-        undoChip?.dismiss()
+        resultBar?.dismiss()
         floatingButton?.onConfigurationChanged()
     }
 
@@ -170,8 +198,8 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
-        undoChip?.dismiss()
-        undoChip = null
+        resultBar?.dismiss()
+        resultBar = null
         floatingButton?.destroy()
         floatingButton = null
         scope.cancel()

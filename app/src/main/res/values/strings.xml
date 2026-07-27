@@ -27,7 +27,16 @@
     <string name="settings_save">Сохранить</string>
     <string name="settings_saved">Сохранено ✓</string>
     <string name="accessibility_description">Правка читает текст из активного поля ввода и заменяет его исправленным по нажатию плавающей кнопки «П». Текст отправляется только в настроенный API правки.</string>
-    <string name="undo_chip">↩ Откатить</string>
+    <string name="result_undo">↩ Откатить</string>
+    <string name="result_diff">Изменения</string>
+    <string name="result_dict">В словарь</string>
+    <string name="diff_panel_title">Что изменилось</string>
+    <string name="diff_panel_empty">Пословных отличий нет — поменялись только знаки или регистр.</string>
+    <string name="dict_panel_title">Какое слово модель зря исправила? Нажми пару — верну и защищу.</string>
+    <string name="dict_panel_empty">Заменённых слов не нашёл.</string>
+    <string name="dict_pair_added">В словарь: «%1$s» защищено, «%2$s» теперь заменяется на «%1$s»</string>
+    <string name="toast_no_service">Сначала включи службу Правки в спец. возможностях</string>
+    <string name="quick_clean">Чистка</string>
     <string name="fab_menu_business">Деловой стиль</string>
     <string name="fab_menu_soften">Мягче</string>
     <string name="fab_menu_undo">Откатить последнюю правку</string>
