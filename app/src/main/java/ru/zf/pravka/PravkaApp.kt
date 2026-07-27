@@ -3,7 +3,10 @@ package ru.zf.pravka
 import android.app.Application
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
+import ru.zf.pravka.core.DictionaryApplier
 import ru.zf.pravka.core.ProofreadEngine
+import ru.zf.pravka.data.DictionaryStore
+import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
@@ -17,6 +20,8 @@ class PravkaApp : Application() {
     val settings by lazy { Settings(this) }
     val promptStore by lazy { PromptStore(this) }
     val stats by lazy { Stats(this) }
+    val dictionaryStore by lazy { DictionaryStore(this) }
+    val historyLog by lazy { HistoryLog(this) }
 
     val httpClient by lazy {
         OkHttpClient.Builder()
@@ -27,5 +32,14 @@ class PravkaApp : Application() {
 
     val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient) }
 
-    val engine by lazy { ProofreadEngine(claudeProvider, ClipboardTarget(this), stats) }
+    val engine by lazy {
+        ProofreadEngine(
+            provider = claudeProvider,
+            clipboardFallback = ClipboardTarget(this),
+            stats = stats,
+            dictionary = DictionaryApplier(dictionaryStore),
+            dictionaryStore = dictionaryStore,
+            history = historyLog,
+        )
+    }
 }

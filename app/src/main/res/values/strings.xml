@@ -33,8 +33,41 @@
     <string name="service_hint">Настройки → Спец. возможности → Правка → Включить. После этого в поле ввода появляется плавающая кнопка «П»: короткое нажатие — чистка, долгое — меню режимов и откат.</string>
 
     <string name="tab_settings">Настройки</string>
+    <string name="tab_dictionary">Словарь</string>
     <string name="tab_prompts">Промпты</string>
     <string name="tab_stats">Статистика</string>
+
+    <string name="fab_menu_open_app">Открыть приложение</string>
+
+    <string name="dict_add">+ Запись</string>
+    <string name="dict_edit">Запись словаря</string>
+    <string name="dict_search">Поиск по словарю</string>
+    <string name="dict_section_hard">Замены (%1$d)</string>
+    <string name="dict_section_hint">Подсказки (%1$d)</string>
+    <string name="dict_section_protect">Не исправлять (%1$d)</string>
+    <string name="dict_from">Что слышится</string>
+    <string name="dict_to">Чем должно быть</string>
+    <string name="dict_note">Пояснение (уходит в промпт)</string>
+    <string name="dict_mode_hard">Замена</string>
+    <string name="dict_mode_hint">Подсказка</string>
+    <string name="dict_mode_protect">Защита</string>
+    <string name="dict_enabled">Включена</string>
+    <string name="dict_delete">Удалить</string>
+    <string name="dict_cancel">Отмена</string>
+    <string name="dict_export">Экспорт JSON</string>
+    <string name="dict_import">Импорт JSON</string>
+    <string name="dict_imported">Импортировано записей: %1$d</string>
+    <string name="dict_import_failed">Не удалось импортировать: файл не похож на словарь Правки</string>
+
+    <string name="stats_cost_header">Стоимость API</string>
+    <string name="stats_cost_today">Сегодня</string>
+    <string name="stats_cost_week">С понедельника</string>
+    <string name="stats_cost_month">С начала месяца</string>
+    <string name="stats_cost_total">За всё время</string>
+    <string name="stats_tokens">Токены (вход / выход)</string>
+    <string name="stats_share_history">Выгрузить историю (JSONL)</string>
+    <string name="stats_history_hint">Файл со всеми правками: время, модель, токены, стоимость, вход и выход. Можно скинуть в чат с Claude для разбора качества.</string>
+    <string name="stats_history_empty">История пока пуста</string>
 
     <string name="settings_fab_title">Плавающая кнопка</string>
     <string name="settings_fab_size">Размер: %1$d dp</string>

@@ -1,17 +1,23 @@
 package ru.zf.pravka.core
 
 import ru.zf.pravka.data.DebugLog
+import ru.zf.pravka.data.DictionaryStore
+import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.target.TextTarget
 
-// The single orchestrator every trigger goes through (spec section 4).
-// Reads text from the target, calls the provider, cleans the reply,
-// writes the result back (clipboard fallback), records the debug log
-// and usage counters. Dictionary hard-replacements arrive in stage 5.
+// The single orchestrator every trigger goes through (spec section 4):
+// read from the target -> apply HARD dictionary replacements -> collect the
+// {DICT} hint block -> call the provider -> clean the reply -> write back
+// (clipboard fallback) -> increment dictionary hits, record debug log,
+// history file, usage counters, undo stack.
 class ProofreadEngine(
     private val provider: ProofreadProvider,
     private val clipboardFallback: TextTarget,
     private val stats: Stats,
+    private val dictionary: DictionaryApplier,
+    private val dictionaryStore: DictionaryStore,
+    private val history: HistoryLog,
 ) {
 
     companion object {
@@ -39,23 +45,43 @@ class ProofreadEngine(
         val input = target.read()?.trim().orEmpty()
         if (input.length < MIN_INPUT_LENGTH) return Outcome.Rejected
 
-        val rawResult = provider.proofread(input, mode).getOrElse { e ->
+        val prepared = dictionary.prepare(input)
+
+        val rawResult = provider.proofread(prepared.text, mode, prepared.dictBlock).getOrElse { e ->
             val message = e.message ?: "Неизвестная ошибка"
-            log(mode, input, output = "", latency = 0, provider = provider.id, error = message)
+            log(mode, input, "", 0, provider.id, prepared.firedIds, message)
+            history.append(mode.name, provider.id, "", 0, 0, 0, 0.0, false, input, "", message)
             stats.recordError()
             return Outcome.Failed(message)
         }
 
-        val cleaned = ResponseCleaner.clean(rawResult.text, input)
+        val cleaned = ResponseCleaner.clean(rawResult.text, prepared.text)
         if (cleaned == null) {
-            log(mode, input, rawResult.text, rawResult.latencyMs, rawResult.providerId, error = "response corrupted")
+            log(mode, input, rawResult.text, rawResult.latencyMs, rawResult.providerId, prepared.firedIds, "response corrupted")
+            history.append(
+                mode.name, rawResult.providerId, rawResult.modelId, rawResult.latencyMs,
+                rawResult.inputTokens, rawResult.outputTokens, rawResult.costUsd,
+                false, input, rawResult.text, "response corrupted",
+            )
             stats.recordError()
             return Outcome.Failed("Модель вернула испорченный ответ, текст не тронут.")
         }
 
-        val result = rawResult.copy(text = cleaned, changed = cleaned != input)
-        log(mode, input, cleaned, result.latencyMs, result.providerId, error = null)
-        stats.recordSuccess(mode, result.latencyMs, input.length, result.changed)
+        // "changed" compares against the ORIGINAL input: a HARD replacement
+        // alone must still count as a change and be written back.
+        val result = rawResult.copy(
+            text = cleaned,
+            changed = cleaned != input,
+            appliedDictEntries = prepared.firedIds,
+        )
+        log(mode, input, cleaned, result.latencyMs, result.providerId, prepared.firedIds, null)
+        history.append(
+            mode.name, result.providerId, result.modelId, result.latencyMs,
+            result.inputTokens, result.outputTokens, result.costUsd,
+            result.changed, input, cleaned, null,
+        )
+        stats.recordSuccess(mode, result.latencyMs, input.length, result.changed, result.inputTokens, result.outputTokens, result.costUsd)
+        dictionaryStore.incrementHits(prepared.firedIds)
 
         if (!result.changed) return Outcome.Unchanged(result)
 
@@ -74,6 +100,7 @@ class ProofreadEngine(
         output: String,
         latency: Long,
         provider: String,
+        firedIds: List<Long>,
         error: String?,
     ) {
         DebugLog.add(
@@ -84,7 +111,7 @@ class ProofreadEngine(
                 latencyMs = latency,
                 input = input,
                 output = output,
-                appliedDictEntries = emptyList(),
+                appliedDictEntries = firedIds,
                 error = error,
             )
         )

@@ -31,7 +31,13 @@ class ClaudeProvider(
 
     override suspend fun isAvailable(): Boolean = settings.apiKey().isNotBlank()
 
-    override suspend fun proofread(input: String, mode: ProofreadMode): Result<ProofreadResult> =
+    private data class ApiReply(val text: String, val inputTokens: Int, val outputTokens: Int)
+
+    override suspend fun proofread(
+        input: String,
+        mode: ProofreadMode,
+        dictBlock: String,
+    ): Result<ProofreadResult> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val apiKey = settings.apiKey()
@@ -43,28 +49,42 @@ class ClaudeProvider(
                     else -> Settings.MODEL_SONNET
                 }
                 // Owner-edited override if present, factory text otherwise.
-                // Dictionary block arrives in stage 5; empty for now.
                 val template = promptStore.effective(mode, forNano = false)
-                val parts = Prompts.assemble(template, dictBlock = "")
+                val parts = Prompts.assemble(template, dictBlock)
 
                 val started = System.currentTimeMillis()
-                val text = requestWithOneRetry(apiKey, model, parts, input)
+                val reply = requestWithOneRetry(apiKey, model, parts, input)
                 ProofreadResult(
-                    text = text,
+                    text = reply.text,
                     providerId = id,
                     latencyMs = System.currentTimeMillis() - started,
-                    changed = text.trim() != input.trim(),
+                    changed = reply.text.trim() != input.trim(),
                     appliedDictEntries = emptyList(),
+                    modelId = model,
+                    inputTokens = reply.inputTokens,
+                    outputTokens = reply.outputTokens,
+                    costUsd = costUsd(model, reply.inputTokens, reply.outputTokens),
                 )
             }
         }
+
+    // USD per million tokens: input to output.
+    private val prices = mapOf(
+        Settings.MODEL_SONNET to (3.0 to 15.0),
+        Settings.MODEL_HAIKU to (1.0 to 5.0),
+    )
+
+    private fun costUsd(model: String, inputTokens: Int, outputTokens: Int): Double {
+        val (pIn, pOut) = prices[model] ?: return 0.0
+        return inputTokens / 1_000_000.0 * pIn + outputTokens / 1_000_000.0 * pOut
+    }
 
     private fun requestWithOneRetry(
         apiKey: String,
         model: String,
         parts: Prompts.PromptParts,
         input: String,
-    ): String {
+    ): ApiReply {
         // Spec 6.1: one retry on network error or timeout; none on 4xx.
         return try {
             request(apiKey, model, parts, input)
@@ -78,7 +98,7 @@ class ClaudeProvider(
         model: String,
         parts: Prompts.PromptParts,
         input: String,
-    ): String {
+    ): ApiReply {
         // Rough token estimate for Russian text (~2.5 chars/token) + 30% headroom.
         val estimatedInputTokens = input.length / 2 + 1
         val maxTokens = (estimatedInputTokens * 13 / 10 + 300).coerceIn(1024, 8192)
@@ -146,7 +166,11 @@ class ClaudeProvider(
                 if (block.optString("type") == "text") sb.append(block.optString("text"))
             }
             if (sb.isEmpty()) throw ApiException("Модель вернула пустой ответ.")
-            return sb.toString()
+            val usage = json.optJSONObject("usage")
+            val inputTokens = usage?.let {
+                it.optInt("input_tokens") + it.optInt("cache_creation_input_tokens") + it.optInt("cache_read_input_tokens")
+            } ?: 0
+            return ApiReply(sb.toString(), inputTokens, usage?.optInt("output_tokens") ?: 0)
         }
     }
 

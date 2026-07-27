@@ -57,6 +57,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             settings = (application as PravkaApp).settings,
             onMode = ::runProofread,
             onUndo = ::undoLast,
+            onOpenApp = {
+                startActivity(
+                    android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            },
         )
         accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback)
     }

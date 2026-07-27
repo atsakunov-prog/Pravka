@@ -1,0 +1,1098 @@
+{
+  "format": "pravka-dictionary",
+  "version": 1,
+  "entries": [
+    {
+      "from": "эм энд эй",
+      "to": "M&A",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эмэндэй",
+      "to": "M&A",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эм-энд-эй",
+      "to": "M&A",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эбитда",
+      "to": "EBITDA",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ебитда",
+      "to": "EBITDA",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ибитда",
+      "to": "EBITDA",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "дью дилидженс",
+      "to": "due diligence",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "дьюдил",
+      "to": "due diligence",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "дью дил",
+      "to": "due diligence",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ай ар ар",
+      "to": "IRR",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "айарар",
+      "to": "IRR",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ирр",
+      "to": "IRR",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "кэпэкс",
+      "to": "CAPEX",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "капекс",
+      "to": "CAPEX",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "опэкс",
+      "to": "OPEX",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "опекс",
+      "to": "OPEX",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "кпи",
+      "to": "KPI",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "кейпиай",
+      "to": "KPI",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "нда",
+      "to": "NDA",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эн ди эй",
+      "to": "NDA",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эс эйч эй",
+      "to": "SHA",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "кпмг",
+      "to": "КПМГ",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "кейпиэмджи",
+      "to": "КПМГ",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эскро",
+      "to": "эскроу",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ретенер",
+      "to": "ретейнер",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ретейнэр",
+      "to": "ретейнер",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "юнит экономика",
+      "to": "юнит-экономика",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "кешфлоу",
+      "to": "cash flow",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "кэш флоу",
+      "to": "cash flow",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эдо",
+      "to": "ЭДО",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "осу",
+      "to": "ОСУ",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "фнс",
+      "to": "ФНС",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ндс",
+      "to": "НДС",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ноушен",
+      "to": "Notion",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ноушн",
+      "to": "Notion",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "нотион",
+      "to": "Notion",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "тудуист",
+      "to": "Todoist",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "тудуйст",
+      "to": "Todoist",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "туду ист",
+      "to": "Todoist",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "клод коуд",
+      "to": "Claude Code",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "клод код",
+      "to": "Claude Code",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "клауд код",
+      "to": "Claude Code",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "дудлайнг",
+      "to": "Duolingo",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "дуалинго",
+      "to": "Duolingo",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "дуолинго",
+      "to": "Duolingo",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "звифт",
+      "to": "Zwift",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "вахо кикр",
+      "to": "Wahoo KICKR",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "кикер",
+      "to": "Wahoo KICKR",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "викер",
+      "to": "Wahoo KICKR",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "гармин",
+      "to": "Garmin",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "интервалс айсию",
+      "to": "intervals.icu",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "интервалс",
+      "to": "intervals.icu",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "виспер экс",
+      "to": "WhisperX",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "вискер экс",
+      "to": "WhisperX",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "давинчи резолв",
+      "to": "DaVinci Resolve",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "да винчи резолв",
+      "to": "DaVinci Resolve",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "бамбу лаб",
+      "to": "Bambu Lab",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "бамбулаб",
+      "to": "Bambu Lab",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "страва",
+      "to": "Strava",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "марзбан",
+      "to": "Marzban",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "вэпээс",
+      "to": "VPS",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "адб",
+      "to": "adb",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "апк",
+      "to": "APK",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "фтп",
+      "to": "FTP",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эф ти пи",
+      "to": "FTP",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "вэо два макс",
+      "to": "VO2 max",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "во два макс",
+      "to": "VO2 max",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эйчарви",
+      "to": "HRV",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "хрв",
+      "to": "HRV",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ситиэль",
+      "to": "CTL",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эйтиэль",
+      "to": "ATL",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "тиэсби",
+      "to": "TSB",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "элтиэйчар",
+      "to": "LTHR",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "тээсэс",
+      "to": "TSS",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "зет два",
+      "to": "Z2",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "зона два",
+      "to": "Z2",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "бжж",
+      "to": "BJJ",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "би джей джей",
+      "to": "BJJ",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "чекмат",
+      "to": "Checkmat",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "айэфэс",
+      "to": "IFS",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ай эф эс",
+      "to": "IFS",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "анблендинг",
+      "to": "unblending",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "блендинг",
+      "to": "Blending",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "пи ди эй",
+      "to": "PDA",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ефт",
+      "to": "EFT",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "и эф ти",
+      "to": "EFT",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "брейшит",
+      "to": "Берешит",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "симхат тора",
+      "to": "Симхат Тора",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "рош ашана",
+      "to": "Рош ха-Шана",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "рош хашана",
+      "to": "Рош ха-Шана",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "бар мицва",
+      "to": "бар-мицва",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "шабат",
+      "to": "Шаббат",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ханнука",
+      "to": "Ханука",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "батерьев",
+      "to": "Батырев",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "батырёв",
+      "to": "Батырев",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "канем",
+      "to": "Канеман",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "канеман",
+      "to": "Канеман",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "канэман",
+      "to": "Канеман",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "сейфа",
+      "to": "CFO",
+      "mode": "HINT",
+      "note": "в рабочем и финансовом контексте"
+    },
+    {
+      "from": "мяч",
+      "to": "поле CRM \"Мяч\"",
+      "mode": "HINT",
+      "note": "в рабочем контексте это поле CRM, у кого ход, а не спортивный снаряд"
+    },
+    {
+      "from": "колесо",
+      "to": "поле CRM \"Колесо крутится\"",
+      "mode": "HINT",
+      "note": "в контексте сделок"
+    },
+    {
+      "from": "лог",
+      "to": "Лог взаимодействий CRM",
+      "mode": "HINT",
+      "note": "в рабочем контексте"
+    },
+    {
+      "from": "модель",
+      "to": "финансовая модель",
+      "mode": "HINT",
+      "note": "в контексте сделок и клиентов; в контексте ИИ и техники оставить как есть"
+    },
+    {
+      "from": "дека",
+      "to": "презентация для инвесторов",
+      "mode": "HINT",
+      "note": "в контексте сделок"
+    },
+    {
+      "from": "тело",
+      "to": "тело кредита",
+      "mode": "HINT",
+      "note": "в контексте финансирования"
+    },
+    {
+      "from": "глава",
+      "to": "недельная глава Торы",
+      "mode": "HINT",
+      "note": "в еврейском контексте; глава книги в контексте проекта Глагол быть"
+    },
+    {
+      "from": "менеджер",
+      "to": "Manager",
+      "mode": "HINT",
+      "note": "часть по IFS, с большой буквы, в терапевтическом контексте"
+    },
+    {
+      "from": "пожарный",
+      "to": "Firefighter",
+      "mode": "HINT",
+      "note": "часть по IFS, в терапевтическом контексте"
+    },
+    {
+      "from": "изгнанник",
+      "to": "Изгнанник",
+      "mode": "HINT",
+      "note": "термин IFS, всегда с большой буквы"
+    },
+    {
+      "from": "станок",
+      "to": "велостанок",
+      "mode": "HINT",
+      "note": "в спортивном контексте"
+    },
+    {
+      "from": "база",
+      "to": "база Notion",
+      "mode": "HINT",
+      "note": "в рабочем контексте"
+    },
+    {
+      "from": "ЗФ",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Знакомый финансист",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Tasty Coffee",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Додо",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "BUNGLY",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "ПТИЦ",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Чемодан.Про",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Стеллар Групп",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Старая Ферма",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Доставка морем",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Алфавит",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Яблоков",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Стаффджет",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Восток Инвестиции",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "КЕБ",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Мармакс",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "IQnergy",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "QRobotics",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Магнит",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Контур",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "O2 Consulting",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Шепелина",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Немцова",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Пушкина",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Корецкий",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Шерстобитов",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Завертнев",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Коробейников",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Куликов",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Климов",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Шаров",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Лукьянова",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Гурвич",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Кёниг",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Митенев",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Примакова",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Шмелёва",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Косых",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Керч",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Марианна",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Мариаш",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Серёжа",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Боря",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Рома",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Летово",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Травкова",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Крылатское",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Кутузовский",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "intervals.icu",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Claude Code",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Notion",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Todoist",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "WhisperX",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Zwift",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "DaVinci Resolve",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Bambu Lab",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Marzban",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Gamma",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Checkmat",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "CAPiTA",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Глагол быть",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "виспер",
+      "to": "WhisperX",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "берешит",
+      "to": "Берешит",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ханука",
+      "to": "Ханука",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "свифт",
+      "to": "Zwift",
+      "mode": "HINT",
+      "note": "в спортивном контексте; банковский SWIFT оставить как есть"
+    },
+    {
+      "from": "та",
+      "to": "ТА",
+      "mode": "HINT",
+      "note": "в контексте терапии — транзактный анализ"
+    },
+    {
+      "from": "клуба",
+      "to": "Клода",
+      "mode": "HINT",
+      "note": "когда речь про ИИ Claude (Клод), а не про клуб"
+    },
+    {
+      "from": "этапа",
+      "to": "Тапа",
+      "mode": "HINT",
+      "note": "когда по смыслу речь про Тапа, а не про этап"
+    },
+    {
+      "from": "Ромик",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Клод",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    },
+    {
+      "from": "Тап",
+      "to": "",
+      "mode": "PROTECT",
+      "note": ""
+    }
+  ]
+}

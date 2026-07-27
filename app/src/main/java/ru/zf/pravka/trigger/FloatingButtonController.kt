@@ -33,6 +33,7 @@ class FloatingButtonController(
     private val settings: Settings,
     private val onMode: (ProofreadMode) -> Unit,
     private val onUndo: () -> Unit,
+    private val onOpenApp: () -> Unit,
 ) {
 
     companion object {
@@ -280,6 +281,7 @@ class FloatingButtonController(
         item(R.string.fab_menu_business) { onMode(ProofreadMode.BUSINESS) }
         item(R.string.fab_menu_soften) { onMode(ProofreadMode.SOFTEN) }
         item(R.string.fab_menu_undo) { onUndo() }
+        item(R.string.fab_menu_open_app) { onOpenApp() }
 
         val (w, h) = screenSize()
         val menuParams = WindowManager.LayoutParams(

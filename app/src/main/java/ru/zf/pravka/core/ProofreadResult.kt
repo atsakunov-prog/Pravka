@@ -6,4 +6,8 @@ data class ProofreadResult(
     val latencyMs: Long,
     val changed: Boolean,
     val appliedDictEntries: List<Long>,  // ids of dictionary entries that fired
+    val modelId: String = "",
+    val inputTokens: Int = 0,
+    val outputTokens: Int = 0,
+    val costUsd: Double = 0.0,
 )
