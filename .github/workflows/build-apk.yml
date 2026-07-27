@@ -35,6 +35,27 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug -PbuildNumber=${{ github.run_number }} --no-daemon
 
+      - name: Publish APK to apk-builds branch
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          mkdir /tmp/apkpub
+          cp "$APK" /tmp/apkpub/pravka-debug.apk
+          {
+            echo "versionName=1.0.${{ github.run_number }}"
+            echo "versionCode=${{ github.run_number }}"
+            echo "commit=${GITHUB_SHA}"
+            echo "branch=${GITHUB_REF_NAME}"
+            echo "builtAt=$(date -u +%Y-%m-%dT%H:%MZ)"
+          } > /tmp/apkpub/build-info.txt
+          cd /tmp/apkpub
+          git init -q -b apk-builds
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -q -m "Pravka debug APK 1.0.${{ github.run_number }} from ${GITHUB_SHA::7} (${GITHUB_REF_NAME})"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" apk-builds
+
       - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4
         with:
