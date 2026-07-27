@@ -43,7 +43,13 @@ class NanoProvider(
         }
         runCatching {
             when (model.checkStatus()) {
-                FeatureStatus.AVAILABLE -> "Модель готова"
+                FeatureStatus.AVAILABLE -> {
+                    // Name and token limit prove the inference stack is
+                    // actually alive, not just "status says ok".
+                    val name = runCatching { model.getBaseModelName() }.getOrNull() ?: "?"
+                    val limit = runCatching { model.getTokenLimit() }.getOrNull() ?: 0
+                    "Модель готова ($name, лимит $limit ток.)"
+                }
                 FeatureStatus.DOWNLOADABLE -> "Модель не скачана — нажми «Скачать»"
                 FeatureStatus.DOWNLOADING -> "Модель скачивается…"
                 else -> "Недоступна на этом устройстве"

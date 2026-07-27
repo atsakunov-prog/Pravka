@@ -26,8 +26,11 @@ class PravkaApp : Application() {
 
     val httpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(5, TimeUnit.SECONDS)   // spec 6.1
-            .readTimeout(25, TimeUnit.SECONDS)
+            .connectTimeout(5, TimeUnit.SECONDS)
+            // Spec 6.1 said 25s, sized for the proxy. Without streaming the
+            // API returns the whole body only after generation completes, and
+            // real long dictations (5000+ chars) already hit 25s.
+            .readTimeout(90, TimeUnit.SECONDS)
             .build()
     }
 

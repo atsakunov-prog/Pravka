@@ -245,14 +245,21 @@ private fun SettingsTab(
         Spacer(Modifier.height(24.dp))
 
         Text(stringResource(R.string.settings_model_title), style = MaterialTheme.typography.titleMedium)
+        // Model choice applies immediately - waiting for a "Save" press was a
+        // trap: the owner picked Nano, never pressed Save, and every request
+        // silently kept going to Sonnet.
+        fun pickModel(value: String) {
+            model = value
+            scope.launch { settings.setCleanModel(value) }
+        }
         ModelOption(stringResource(R.string.settings_model_sonnet), model == Settings.MODEL_SONNET) {
-            model = Settings.MODEL_SONNET; savedMark = false
+            pickModel(Settings.MODEL_SONNET)
         }
         ModelOption(stringResource(R.string.settings_model_haiku), model == Settings.MODEL_HAIKU) {
-            model = Settings.MODEL_HAIKU; savedMark = false
+            pickModel(Settings.MODEL_HAIKU)
         }
         ModelOption(stringResource(R.string.settings_model_nano), model == Settings.MODEL_NANO) {
-            model = Settings.MODEL_NANO; savedMark = false
+            pickModel(Settings.MODEL_NANO)
         }
         if (model == Settings.MODEL_NANO) {
             var nanoStatus by remember { mutableStateOf("…") }

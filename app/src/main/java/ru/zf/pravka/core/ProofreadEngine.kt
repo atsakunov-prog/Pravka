@@ -60,6 +60,12 @@ class ProofreadEngine(
 
         val rawResult = primary.proofread(prepared.text, mode, prepared.dictBlock, onPartial).getOrElse { primaryError ->
             if (useNano) {
+                // The Nano failure must stay visible even when the fallback
+                // succeeds - otherwise "why does everything go through
+                // Sonnet?" is undiagnosable from the history.
+                val nanoMessage = primaryError.message ?: "Nano: неизвестная ошибка"
+                log(mode, input, "", 0, nano.id, prepared.firedIds, nanoMessage)
+                history.append(mode.name, nano.id, "gemini-nano", 0, 0, 0, 0.0, false, input, "", "fallback to Claude: $nanoMessage")
                 claude.proofread(prepared.text, mode, prepared.dictBlock).getOrElse { claudeError ->
                     val message = "Nano: ${primaryError.message}\nClaude: ${claudeError.message}"
                     log(mode, input, "", 0, "nano+claude", prepared.firedIds, message)
