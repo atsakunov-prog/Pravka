@@ -43,7 +43,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -263,11 +262,6 @@ private fun SettingsTab(
     var savedMark by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
 
-    val fabSize by settings.fabSizeFlow.collectAsState(initial = Settings.FAB_SIZE_DEFAULT)
-    val fabAlpha by settings.fabAlphaFlow.collectAsState(initial = Settings.FAB_ALPHA_DEFAULT)
-    var sizeSlider by remember(fabSize) { mutableStateOf(fabSize.toFloat()) }
-    var alphaSlider by remember(fabAlpha) { mutableStateOf(fabAlpha) }
-
     LaunchedEffect(Unit) {
         apiKey = settings.apiKey()
         model = settings.cleanModel()
@@ -411,26 +405,6 @@ private fun SettingsTab(
                 Spacer(Modifier.height(4.dp))
                 HintText(stringResource(R.string.nano_hint))
             }
-        }
-
-        SectionCard(label = stringResource(R.string.settings_fab_title)) {
-            Text(stringResource(R.string.settings_fab_size, sizeSlider.toInt()), style = MaterialTheme.typography.bodyMedium)
-            Slider(
-                value = sizeSlider,
-                onValueChange = { sizeSlider = it },
-                onValueChangeFinished = { scope.launch { settings.setFabSize(sizeSlider.toInt()) } },
-                valueRange = 36f..72f,
-            )
-            Text(
-                stringResource(R.string.settings_fab_alpha, (alphaSlider * 100).toInt()),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Slider(
-                value = alphaSlider,
-                onValueChange = { alphaSlider = it },
-                onValueChangeFinished = { scope.launch { settings.setFabAlpha(alphaSlider) } },
-                valueRange = 0.15f..1f,
-            )
         }
 
         HintText(stringResource(R.string.settings_usage_hint))

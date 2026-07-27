@@ -21,9 +21,9 @@ import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.Haptics
 
 // The core of the app (spec 5.2): reads and writes the focused editable field,
-// keeps a cache of the last focused node (for triggers that steal focus),
-// hosts the floating button overlay and handles the system accessibility
-// button in the navigation bar.
+// keeps a cache of the last focused node (for triggers that steal focus) and
+// handles the system accessibility button - the single trigger, per the
+// owner's decision (the floating button duplicated it and was removed).
 class PravkaAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -32,7 +32,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var floatingButton: FloatingButtonController? = null
+    private var undoChip: UndoChipController? = null
     private var busy = false
 
     // Weak cache of the last focused editable node and its text, updated on
@@ -51,19 +51,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        floatingButton = FloatingButtonController(
-            service = this,
-            scope = scope,
-            settings = (application as PravkaApp).settings,
-            onMode = ::runProofread,
-            onUndo = ::undoLast,
-            onOpenApp = {
-                startActivity(
-                    android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            },
-        )
+        undoChip = UndoChipController(this, ::undoLast)
         accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback)
     }
 
@@ -74,9 +62,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                 if (source.isEditable) {
                     cachedFocus = WeakReference(source)
                     cachedFocusText = source.text?.toString()
-                    floatingButton?.show()
-                } else {
-                    floatingButton?.hide()
                 }
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
@@ -87,10 +72,8 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // App or window switched: only keep the button when an
-                // editable field is still in focus.
-                if (liveFocusedEditableNode() != null) floatingButton?.show()
-                else floatingButton?.hide()
+                // App or window switched: the field the chip would undo is gone.
+                undoChip?.dismiss()
             }
         }
     }
@@ -112,13 +95,14 @@ class PravkaAccessibilityService : AccessibilityService() {
         val app = application as PravkaApp
         scope.launch {
             busy = true
-            floatingButton?.setBusy(true)
             Haptics.start(this@PravkaAccessibilityService)
             selectAllInFocusedField()
             val outcome = app.engine.proofread(AccessibilityTarget(this@PravkaAccessibilityService), mode)
-            floatingButton?.setBusy(false)
             busy = false
             Feedback.report(this@PravkaAccessibilityService, outcome)
+            // Something was written into the field - offer a one-tap undo
+            // for a few seconds (the removed floating-button menu carried it).
+            if (outcome is ProofreadEngine.Outcome.Applied) undoChip?.show()
         }
     }
 
@@ -162,16 +146,16 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        // The foldable changes configuration on fold/unfold - reposition.
-        floatingButton?.onConfigurationChanged()
+        // The foldable changes configuration on fold/unfold.
+        undoChip?.dismiss()
     }
 
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
         instance = null
-        floatingButton?.destroy()
-        floatingButton = null
+        undoChip?.dismiss()
+        undoChip = null
         scope.cancel()
         super.onDestroy()
     }

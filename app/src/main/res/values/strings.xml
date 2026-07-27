@@ -26,25 +26,21 @@
     <string name="nano_hint">Эксперимент запаркован: AICore блокирует вызовы из фоновых приложений (ошибка 30), а правка работает из фоновой службы. Выбор Nano будет просто уходить в Claude. Оставлено на случай, если Google откроет фоновый доступ.</string>
     <string name="settings_save">Сохранить</string>
     <string name="settings_saved">Сохранено ✓</string>
-    <string name="accessibility_description">Правка читает текст из активного поля ввода и заменяет его исправленным по нажатию плавающей кнопки или кнопки доступности. Текст отправляется только в настроенный API правки.</string>
-    <string name="fab_menu_business">Деловой стиль</string>
-    <string name="fab_menu_soften">Мягче</string>
-    <string name="fab_menu_undo">Откатить последнюю правку</string>
+    <string name="accessibility_description">Правка читает текст из активного поля ввода и заменяет его исправленным по нажатию кнопки специальных возможностей. Текст отправляется только в настроенный API правки.</string>
+    <string name="undo_chip">↩ Откатить</string>
     <string name="toast_nothing_to_undo">Нечего откатывать в этом поле</string>
     <string name="toast_undone">Откатил</string>
     <string name="toast_undo_failed">Не смог откатить — поле не даёт записать текст</string>
 
     <string name="service_status_on">Служба доступности включена ✓</string>
-    <string name="service_status_off">Служба доступности выключена — плавающая кнопка не работает</string>
+    <string name="service_status_off">Служба доступности выключена — Правка не работает</string>
     <string name="service_enable">Включить службу</string>
-    <string name="service_hint">Настройки → Спец. возможности → Правка → Включить. После этого в поле ввода появляется плавающая кнопка «П»: короткое нажатие — чистка, долгое — меню режимов и откат.</string>
+    <string name="service_hint">Настройки → Спец. возможности → Правка → Включить, там же включи ярлык (кнопку) Правки. Нажатие этой кнопки исправляет текст в активном поле; после правки на пару секунд появляется «Откатить».</string>
 
     <string name="tab_settings">Настройки</string>
     <string name="tab_dictionary">Словарь</string>
     <string name="tab_prompts">Промпты</string>
     <string name="tab_stats">Статистика</string>
-
-    <string name="fab_menu_open_app">Открыть приложение</string>
 
     <string name="dict_add">+ Запись</string>
     <string name="dict_edit">Запись словаря</string>
@@ -76,10 +72,6 @@
     <string name="stats_history_hint">Файл со всеми правками: время, модель, токены, стоимость, вход и выход. Можно скинуть в чат с Claude для разбора качества.</string>
     <string name="stats_history_empty">История пока пуста</string>
 
-    <string name="settings_fab_title">Плавающая кнопка</string>
-    <string name="settings_fab_size">Размер: %1$d dp</string>
-    <string name="settings_fab_alpha">Прозрачность в покое: %1$d%%</string>
-
     <string name="prompts_header">Промпты</string>
     <string name="prompts_subheader">Это точные инструкции, которые уходят модели вместе с твоим текстом. Правь осторожно: {INPUT} — место подстановки текста, {DICT} — место для словаря.</string>
     <string name="prompt_title_clean_claude">Чистка (Claude)</string>
@@ -108,5 +100,5 @@
     <string name="stats_log_hint">Читаются из файла истории — переживают перезапуски и обновления. Полная история — по кнопке выгрузки выше.</string>
     <string name="stats_log_empty">Пока пусто — сделай правку в любом поле.</string>
 
-    <string name="settings_usage_hint">Как пользоваться: надиктуй текст в любом приложении, выдели его и выбери «Правка» в меню выделения. Текст заменится исправленным. Если пункта нет в меню — у этого приложения своё меню выделения, остальные способы вызова появятся на следующих этапах.</string>
+    <string name="settings_usage_hint">Как пользоваться: надиктуй текст в любое поле и нажми кнопку специальных возможностей (значок в панели навигации). Текст заменится исправленным, а на несколько секунд появится кнопка «Откатить». Запасной путь — выделить текст и выбрать «Правка» в меню выделения, где оно есть.</string>
 </resources>
