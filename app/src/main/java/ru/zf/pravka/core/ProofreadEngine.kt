@@ -106,6 +106,8 @@ class ProofreadEngine(
             mode.name, result.providerId, result.modelId, result.latencyMs,
             result.inputTokens, result.outputTokens, result.costUsd,
             result.changed, input, cleaned, null,
+            cacheWriteTokens = result.cacheWriteTokens,
+            cacheReadTokens = result.cacheReadTokens,
         )
         stats.recordSuccess(mode, result.latencyMs, input.length, result.changed, result.inputTokens, result.outputTokens, result.costUsd)
         dictionaryStore.incrementHits(prepared.firedIds)

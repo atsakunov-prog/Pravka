@@ -31,7 +31,13 @@ class ClaudeProvider(
 
     override suspend fun isAvailable(): Boolean = settings.apiKey().isNotBlank()
 
-    private data class ApiReply(val text: String, val inputTokens: Int, val outputTokens: Int)
+    private data class ApiReply(
+        val text: String,
+        val inputTokens: Int,       // uncached, billed at full price
+        val cacheWriteTokens: Int,  // billed at 2x (1h TTL cache write)
+        val cacheReadTokens: Int,   // billed at 0.1x
+        val outputTokens: Int,
+    )
 
     override suspend fun proofread(
         input: String,
@@ -66,22 +72,28 @@ class ClaudeProvider(
                     changed = reply.text.trim() != input.trim(),
                     appliedDictEntries = emptyList(),
                     modelId = model,
-                    inputTokens = reply.inputTokens,
+                    inputTokens = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                     outputTokens = reply.outputTokens,
-                    costUsd = costUsd(model, reply.inputTokens, reply.outputTokens),
+                    costUsd = costUsd(model, reply),
+                    cacheWriteTokens = reply.cacheWriteTokens,
+                    cacheReadTokens = reply.cacheReadTokens,
                 )
             }
         }
 
-    // USD per million tokens: input to output.
+    // USD per million tokens: input to output. Cache pricing derives from
+    // the input price: 1h-TTL writes cost 2x, reads 0.1x.
     private val prices = mapOf(
         Settings.MODEL_SONNET to (3.0 to 15.0),
         Settings.MODEL_HAIKU to (1.0 to 5.0),
     )
 
-    private fun costUsd(model: String, inputTokens: Int, outputTokens: Int): Double {
+    private fun costUsd(model: String, reply: ApiReply): Double {
         val (pIn, pOut) = prices[model] ?: return 0.0
-        return inputTokens / 1_000_000.0 * pIn + outputTokens / 1_000_000.0 * pOut
+        val inputCost =
+            (reply.inputTokens + 2.0 * reply.cacheWriteTokens + 0.1 * reply.cacheReadTokens) /
+                1_000_000.0 * pIn
+        return inputCost + reply.outputTokens / 1_000_000.0 * pOut
     }
 
     private fun requestWithOneRetry(
@@ -122,20 +134,26 @@ class ClaudeProvider(
                         put(
                             "content",
                             JSONArray().apply {
-                                // Stable instruction prefix carries the cache breakpoint.
-                                // Below the model's minimum cacheable size it is a no-op;
-                                // once the dictionary grows the prompt, caching kicks in.
+                                // Cache breakpoint sits on the stable template prefix
+                                // ONLY - the dict block varies per request and would
+                                // invalidate the cache on every dictation. 1h TTL:
+                                // the owner's real gaps between fixes run up to ~30
+                                // min, which the default 5m TTL would keep missing.
+                                // Below Sonnet's 1024-token minimum it is a no-op.
                                 put(
                                     JSONObject().apply {
                                         put("type", "text")
-                                        put("text", parts.beforeInput)
-                                        put("cache_control", JSONObject().put("type", "ephemeral"))
+                                        put("text", parts.stablePrefix)
+                                        put(
+                                            "cache_control",
+                                            JSONObject().put("type", "ephemeral").put("ttl", "1h"),
+                                        )
                                     }
                                 )
                                 put(
                                     JSONObject().apply {
                                         put("type", "text")
-                                        put("text", input + parts.afterInput)
+                                        put("text", parts.dictPart + input + parts.afterInput)
                                     }
                                 )
                             }
@@ -172,10 +190,13 @@ class ClaudeProvider(
             }
             if (sb.isEmpty()) throw ApiException("Модель вернула пустой ответ.")
             val usage = json.optJSONObject("usage")
-            val inputTokens = usage?.let {
-                it.optInt("input_tokens") + it.optInt("cache_creation_input_tokens") + it.optInt("cache_read_input_tokens")
-            } ?: 0
-            return ApiReply(sb.toString(), inputTokens, usage?.optInt("output_tokens") ?: 0)
+            return ApiReply(
+                text = sb.toString(),
+                inputTokens = usage?.optInt("input_tokens") ?: 0,
+                cacheWriteTokens = usage?.optInt("cache_creation_input_tokens") ?: 0,
+                cacheReadTokens = usage?.optInt("cache_read_input_tokens") ?: 0,
+                outputTokens = usage?.optInt("output_tokens") ?: 0,
+            )
         }
     }
 

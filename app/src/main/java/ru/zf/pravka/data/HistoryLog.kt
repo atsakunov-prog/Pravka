@@ -38,6 +38,8 @@ class HistoryLog(private val context: Context) {
         input: String,
         output: String,
         error: String?,
+        cacheWriteTokens: Int = 0,
+        cacheReadTokens: Int = 0,
     ) {
         runCatching {
             if (file.exists() && file.length() > MAX_BYTES) {
@@ -52,6 +54,8 @@ class HistoryLog(private val context: Context) {
                 put("model", model)
                 put("latency_ms", latencyMs)
                 put("input_tokens", inputTokens)
+                if (cacheWriteTokens > 0) put("cache_write_tokens", cacheWriteTokens)
+                if (cacheReadTokens > 0) put("cache_read_tokens", cacheReadTokens)
                 put("output_tokens", outputTokens)
                 put("cost_usd", costUsd)
                 put("changed", changed)
