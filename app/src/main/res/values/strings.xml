@@ -1,5 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Правка</string>
+    <string name="action_label">Правка</string>
     <string name="build_info">Сборка %1$s (код %2$d) · %3$s</string>
+
+    <string name="banner_working">Правлю…</string>
+    <string name="toast_done">Правка · Claude · %1$s с</string>
+    <string name="toast_no_changes">Без изменений</string>
+    <string name="toast_copied">Не смог вставить, текст в буфере</string>
+
+    <string name="settings_api_key_title">Ключ Anthropic API</string>
+    <string name="settings_api_key_label">sk-ant-…</string>
+    <string name="settings_api_key_hint">Хранится только на этом устройстве. Создай отдельный ключ с лимитом трат на console.anthropic.com.</string>
+    <string name="settings_show">показать</string>
+    <string name="settings_hide">скрыть</string>
+    <string name="settings_model_title">Модель для режима «Чистка»</string>
+    <string name="settings_model_sonnet">Sonnet 5 — по умолчанию, лучше держит авторский голос</string>
+    <string name="settings_model_haiku">Haiku 4.5 — быстрее и дешевле, может упрощать</string>
+    <string name="settings_save">Сохранить</string>
+    <string name="settings_saved">Сохранено ✓</string>
+    <string name="settings_usage_hint">Как пользоваться: надиктуй текст в любом приложении, выдели его и выбери «Правка» в меню выделения. Текст заменится исправленным. Если пункта нет в меню — у этого приложения своё меню выделения, остальные способы вызова появятся на следующих этапах.</string>
 </resources>

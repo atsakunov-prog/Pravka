@@ -1,0 +1,27 @@
+package ru.zf.pravka
+
+import android.app.Application
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
+import ru.zf.pravka.core.ProofreadEngine
+import ru.zf.pravka.data.Settings
+import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.target.ClipboardTarget
+
+// Plain service locator - the dependency graph is small enough
+// that a DI framework would be an unjustified dependency (spec section 14).
+class PravkaApp : Application() {
+
+    val settings by lazy { Settings(this) }
+
+    val httpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)   // spec 6.1
+            .readTimeout(25, TimeUnit.SECONDS)
+            .build()
+    }
+
+    val claudeProvider by lazy { ClaudeProvider(settings, httpClient) }
+
+    val engine by lazy { ProofreadEngine(claudeProvider, ClipboardTarget(this)) }
+}
