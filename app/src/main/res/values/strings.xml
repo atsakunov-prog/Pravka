@@ -23,7 +23,7 @@
     <string name="nano_refresh">Обновить статус</string>
     <string name="nano_download_done">Модель Nano скачана</string>
     <string name="nano_download_failed">Не удалось скачать: %1$s</string>
-    <string name="nano_hint">Nano работает без интернета и без оплаты, только в режиме «Чистка». Русский язык официально не поддержан — это эксперимент, качество смотри в истории. Деловой стиль и «Мягче» всегда идут через Claude. При ошибке Nano автоматически подставится Claude.</string>
+    <string name="nano_hint">Эксперимент запаркован: AICore блокирует вызовы из фоновых приложений (ошибка 30), а правка работает из фоновой службы. Выбор Nano будет просто уходить в Claude. Оставлено на случай, если Google откроет фоновый доступ.</string>
     <string name="settings_save">Сохранить</string>
     <string name="settings_saved">Сохранено ✓</string>
     <string name="accessibility_description">Правка читает текст из активного поля ввода и заменяет его исправленным по нажатию плавающей кнопки или кнопки доступности. Текст отправляется только в настроенный API правки.</string>
