@@ -12,7 +12,9 @@ import ru.zf.pravka.target.TextTarget
 // (clipboard fallback) -> increment dictionary hits, record debug log,
 // history file, usage counters, undo stack.
 class ProofreadEngine(
-    private val provider: ProofreadProvider,
+    private val claude: ProofreadProvider,
+    private val nano: ProofreadProvider,
+    private val settings: ru.zf.pravka.data.Settings,
     private val clipboardFallback: TextTarget,
     private val stats: Stats,
     private val dictionary: DictionaryApplier,
@@ -47,12 +49,31 @@ class ProofreadEngine(
 
         val prepared = dictionary.prepare(input)
 
-        val rawResult = provider.proofread(prepared.text, mode, prepared.dictBlock).getOrElse { e ->
-            val message = e.message ?: "Неизвестная ошибка"
-            log(mode, input, "", 0, provider.id, prepared.firedIds, message)
-            history.append(mode.name, provider.id, "", 0, 0, 0, 0.0, false, input, "", message)
-            stats.recordError()
-            return Outcome.Failed(message)
+        // Owner picks the model explicitly; Nano applies to CLEAN only and
+        // pushes partially corrected text back into the field as chunks
+        // complete. On a Nano failure - automatic fallback to Claude
+        // (spec 6.3), the result banner then shows which provider answered.
+        val useNano = mode == ProofreadMode.CLEAN && settings.cleanModel() == ru.zf.pravka.data.Settings.MODEL_NANO
+        val primary = if (useNano) nano else claude
+        val onPartial: (suspend (String) -> Unit)? =
+            if (useNano) { partial -> runCatching { target.write(partial) } } else null
+
+        val rawResult = primary.proofread(prepared.text, mode, prepared.dictBlock, onPartial).getOrElse { primaryError ->
+            if (useNano) {
+                claude.proofread(prepared.text, mode, prepared.dictBlock).getOrElse { claudeError ->
+                    val message = "Nano: ${primaryError.message}\nClaude: ${claudeError.message}"
+                    log(mode, input, "", 0, "nano+claude", prepared.firedIds, message)
+                    history.append(mode.name, "nano+claude", "", 0, 0, 0, 0.0, false, input, "", message)
+                    stats.recordError()
+                    return Outcome.Failed(message)
+                }
+            } else {
+                val message = primaryError.message ?: "Неизвестная ошибка"
+                log(mode, input, "", 0, primary.id, prepared.firedIds, message)
+                history.append(mode.name, primary.id, "", 0, 0, 0, 0.0, false, input, "", message)
+                stats.recordError()
+                return Outcome.Failed(message)
+            }
         }
 
         val cleaned = ResponseCleaner.clean(rawResult.text, prepared.text)

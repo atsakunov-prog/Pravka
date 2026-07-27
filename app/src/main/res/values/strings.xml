@@ -17,6 +17,13 @@
     <string name="settings_model_title">Модель для режима «Чистка»</string>
     <string name="settings_model_sonnet">Sonnet 5 — по умолчанию, лучше держит авторский голос</string>
     <string name="settings_model_haiku">Haiku 4.5 — быстрее и дешевле, может упрощать</string>
+    <string name="settings_model_nano">Gemini Nano — офлайн, бесплатно, правит кусками (эксперимент)</string>
+    <string name="nano_download">Скачать модель</string>
+    <string name="nano_downloading">Скачивается…</string>
+    <string name="nano_refresh">Обновить статус</string>
+    <string name="nano_download_done">Модель Nano скачана</string>
+    <string name="nano_download_failed">Не удалось скачать: %1$s</string>
+    <string name="nano_hint">Nano работает без интернета и без оплаты, только в режиме «Чистка». Русский язык официально не поддержан — это эксперимент, качество смотри в истории. Деловой стиль и «Мягче» всегда идут через Claude. При ошибке Nano автоматически подставится Claude.</string>
     <string name="settings_save">Сохранить</string>
     <string name="settings_saved">Сохранено ✓</string>
     <string name="accessibility_description">Правка читает текст из активного поля ввода и заменяет его исправленным по нажатию плавающей кнопки или кнопки доступности. Текст отправляется только в настроенный API правки.</string>
@@ -98,7 +105,7 @@
     <string name="stats_chars">Обработано символов</string>
     <string name="stats_latency">Средняя задержка</string>
     <string name="stats_log_header">Последние правки</string>
-    <string name="stats_log_hint">Хранятся только в памяти, очищаются при перезапуске. В постоянной статистике текстов нет.</string>
+    <string name="stats_log_hint">Читаются из файла истории — переживают перезапуски и обновления. Полная история — по кнопке выгрузки выше.</string>
     <string name="stats_log_empty">Пока пусто — сделай правку в любом поле.</string>
 
     <string name="settings_usage_hint">Как пользоваться: надиктуй текст в любом приложении, выдели его и выбери «Правка» в меню выделения. Текст заменится исправленным. Если пункта нет в меню — у этого приложения своё меню выделения, остальные способы вызова появятся на следующих этапах.</string>

@@ -60,14 +60,11 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.DictEntry
 import ru.zf.pravka.core.DictMode
 import ru.zf.pravka.core.Prompts
-import ru.zf.pravka.data.DebugLog
 import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.PromptStore
@@ -92,6 +89,7 @@ class MainActivity : ComponentActivity() {
                     stats = app.stats,
                     dictionaryStore = app.dictionaryStore,
                     historyLog = app.historyLog,
+                    nanoProvider = app.nanoProvider,
                     serviceEnabled = serviceEnabled.value,
                     onOpenAccessibilitySettings = {
                         startActivity(
@@ -124,6 +122,7 @@ private fun MainScreen(
     stats: Stats,
     dictionaryStore: DictionaryStore,
     historyLog: HistoryLog,
+    nanoProvider: ru.zf.pravka.provider.NanoProvider,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
 ) {
@@ -161,7 +160,7 @@ private fun MainScreen(
     ) { padding ->
         Column(Modifier.padding(padding)) {
             when (tab) {
-                Tab.SETTINGS -> SettingsTab(settings, serviceEnabled, onOpenAccessibilitySettings)
+                Tab.SETTINGS -> SettingsTab(settings, nanoProvider, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore)
                 Tab.PROMPTS -> PromptsTab(promptStore)
                 Tab.STATS -> StatsTab(stats, historyLog)
@@ -177,6 +176,7 @@ private fun MainScreen(
 @Composable
 private fun SettingsTab(
     settings: Settings,
+    nanoProvider: ru.zf.pravka.provider.NanoProvider,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
 ) {
@@ -250,6 +250,39 @@ private fun SettingsTab(
         }
         ModelOption(stringResource(R.string.settings_model_haiku), model == Settings.MODEL_HAIKU) {
             model = Settings.MODEL_HAIKU; savedMark = false
+        }
+        ModelOption(stringResource(R.string.settings_model_nano), model == Settings.MODEL_NANO) {
+            model = Settings.MODEL_NANO; savedMark = false
+        }
+        if (model == Settings.MODEL_NANO) {
+            var nanoStatus by remember { mutableStateOf("…") }
+            var downloading by remember { mutableStateOf(false) }
+            val nanoScope = rememberCoroutineScope()
+            val context = LocalContext.current
+            LaunchedEffect(downloading) { nanoStatus = nanoProvider.statusText() }
+            Text("Gemini Nano: $nanoStatus", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    enabled = !downloading,
+                    onClick = {
+                        downloading = true
+                        nanoScope.launch {
+                            val result = nanoProvider.download()
+                            downloading = false
+                            Feedback.toast(
+                                context,
+                                if (result.isSuccess) context.getString(R.string.nano_download_done)
+                                else context.getString(R.string.nano_download_failed, result.exceptionOrNull()?.message ?: ""),
+                            )
+                            nanoStatus = nanoProvider.statusText()
+                        }
+                    },
+                ) { Text(stringResource(if (downloading) R.string.nano_downloading else R.string.nano_download)) }
+                OutlinedButton(onClick = { nanoScope.launch { nanoStatus = nanoProvider.statusText() } }) {
+                    Text(stringResource(R.string.nano_refresh))
+                }
+            }
+            Text(stringResource(R.string.nano_hint), style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.height(16.dp))
 
@@ -721,8 +754,8 @@ private fun PromptEditor(
 private fun StatsTab(stats: Stats, historyLog: HistoryLog) {
     val context = LocalContext.current
     val snapshot by stats.snapshotFlow.collectAsState(initial = null)
-    val log = remember { DebugLog.snapshot().asReversed() }
-    val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.forLanguageTag("ru")) }
+    // Persistent history from the JSONL file - survives restarts and updates.
+    val log = remember { historyLog.readLast(30) }
     val ru = Locale.forLanguageTag("ru")
 
     Column(
@@ -784,9 +817,17 @@ private fun StatsTab(stats: Stats, historyLog: HistoryLog) {
             HorizontalDivider()
             Column(Modifier.padding(vertical = 8.dp)) {
                 Text(
-                    "${timeFormat.format(Date(entry.timestamp))} · ${entry.mode} · ${entry.providerId} · ${entry.latencyMs} мс" +
+                    entry.ts.replace('T', ' ').take(19) +
+                        " · ${entry.mode} · ${entry.model.ifBlank { entry.providerId }}" +
                         (entry.error?.let { " · ОШИБКА" } ?: ""),
                     style = MaterialTheme.typography.labelMedium,
+                )
+                Text(
+                    String.format(
+                        ru, "%.1f с · %d/%d ток · $%.4f",
+                        entry.latencyMs / 1000.0, entry.inputTokens, entry.outputTokens, entry.costUsd,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
                 )
                 entry.error?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)

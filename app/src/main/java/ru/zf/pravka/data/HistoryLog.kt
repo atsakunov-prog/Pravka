@@ -65,6 +65,51 @@ class HistoryLog(private val context: Context) {
 
     fun exists(): Boolean = file.exists() && file.length() > 0
 
+    data class Entry(
+        val ts: String,
+        val mode: String,
+        val providerId: String,
+        val model: String,
+        val latencyMs: Long,
+        val inputTokens: Int,
+        val outputTokens: Int,
+        val costUsd: Double,
+        val changed: Boolean,
+        val input: String,
+        val output: String,
+        val error: String?,
+    )
+
+    /** Last [limit] entries, newest first. Survives restarts and updates. */
+    @Synchronized
+    fun readLast(limit: Int): List<Entry> {
+        if (!file.exists()) return emptyList()
+        return runCatching {
+            file.readLines()
+                .takeLast(limit)
+                .mapNotNull { line ->
+                    runCatching {
+                        val o = JSONObject(line)
+                        Entry(
+                            ts = o.optString("ts"),
+                            mode = o.optString("mode"),
+                            providerId = o.optString("provider"),
+                            model = o.optString("model"),
+                            latencyMs = o.optLong("latency_ms"),
+                            inputTokens = o.optInt("input_tokens"),
+                            outputTokens = o.optInt("output_tokens"),
+                            costUsd = o.optDouble("cost_usd", 0.0),
+                            changed = o.optBoolean("changed"),
+                            input = o.optString("input"),
+                            output = o.optString("output"),
+                            error = if (o.has("error")) o.optString("error") else null,
+                        )
+                    }.getOrNull()
+                }
+                .asReversed()
+        }.getOrElse { emptyList() }
+    }
+
     fun shareIntent(): Intent {
         val uri = FileProvider.getUriForFile(context, AUTHORITY, file)
         return Intent(Intent.ACTION_SEND).apply {

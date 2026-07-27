@@ -11,6 +11,7 @@ import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.provider.NanoProvider
 import ru.zf.pravka.target.ClipboardTarget
 
 // Plain service locator - the dependency graph is small enough
@@ -31,10 +32,13 @@ class PravkaApp : Application() {
     }
 
     val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient) }
+    val nanoProvider by lazy { NanoProvider(this, promptStore) }
 
     val engine by lazy {
         ProofreadEngine(
-            provider = claudeProvider,
+            claude = claudeProvider,
+            nano = nanoProvider,
+            settings = settings,
             clipboardFallback = ClipboardTarget(this),
             stats = stats,
             dictionary = DictionaryApplier(dictionaryStore),

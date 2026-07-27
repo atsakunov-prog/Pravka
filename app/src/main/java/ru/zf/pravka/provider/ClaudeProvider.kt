@@ -37,6 +37,7 @@ class ClaudeProvider(
         input: String,
         mode: ProofreadMode,
         dictBlock: String,
+        onPartial: (suspend (String) -> Unit)?,  // single-shot provider, unused
     ): Result<ProofreadResult> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -44,8 +45,12 @@ class ClaudeProvider(
                 if (apiKey.isBlank()) {
                     throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
                 }
+                // When Nano is selected but Claude runs (rewrite modes or
+                // fallback), Sonnet is the sane default.
                 val model = when (mode) {
                     ProofreadMode.CLEAN -> settings.cleanModel()
+                        .takeIf { it == Settings.MODEL_SONNET || it == Settings.MODEL_HAIKU }
+                        ?: Settings.MODEL_SONNET
                     else -> Settings.MODEL_SONNET
                 }
                 // Owner-edited override if present, factory text otherwise.

@@ -16,6 +16,7 @@ class Settings(private val context: Context) {
     companion object {
         const val MODEL_SONNET = "claude-sonnet-5"
         const val MODEL_HAIKU = "claude-haiku-4-5"
+        const val MODEL_NANO = "gemini-nano"
 
         private val KEY_API_KEY = stringPreferencesKey("anthropic_api_key")
         private val KEY_CLEAN_MODEL = stringPreferencesKey("clean_model")
