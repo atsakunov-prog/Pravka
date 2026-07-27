@@ -2,7 +2,11 @@ package ru.zf.pravka.provider
 
 import android.content.Context
 import com.google.mlkit.genai.common.FeatureStatus
+import com.google.mlkit.genai.common.GenAiException
+import com.google.mlkit.genai.common.internal.GenAiUtils
 import com.google.mlkit.genai.prompt.Generation
+import com.google.mlkit.genai.prompt.TextPart
+import com.google.mlkit.genai.prompt.generateContentRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.core.ProofreadMode
@@ -26,7 +30,7 @@ class NanoProvider(
 
     class NanoException(message: String) : Exception(message)
 
-    private val model by lazy { Generation.getClient(context) }
+    private val model by lazy { Generation.getClient() }
     private var warmedUp = false
 
     override suspend fun isAvailable(): Boolean =
@@ -34,6 +38,9 @@ class NanoProvider(
 
     /** Human-readable status line for the settings screen. */
     suspend fun statusText(): String = withContext(Dispatchers.IO) {
+        if (!runCatching { GenAiUtils.isAiCoreCompatible(context) }.getOrDefault(true)) {
+            return@withContext "Устройство не поддерживает AICore"
+        }
         runCatching {
             when (model.checkStatus()) {
                 FeatureStatus.AVAILABLE -> "Модель готова"
@@ -41,7 +48,7 @@ class NanoProvider(
                 FeatureStatus.DOWNLOADING -> "Модель скачивается…"
                 else -> "Недоступна на этом устройстве"
             }
-        }.getOrElse { "Ошибка AICore: ${it.message}" }
+        }.getOrElse { humanize(it) }
     }
 
     suspend fun download(): Result<Unit> = withContext(Dispatchers.IO) {
@@ -117,8 +124,30 @@ class NanoProvider(
     }
 
     private suspend fun generate(prompt: String): String {
-        val response = model.generateContent(prompt)
+        // Spec 6.2: predictability over creativity.
+        val request = generateContentRequest(TextPart(prompt)) {
+            temperature = 0.1f
+            topK = 1
+            candidateCount = 1
+            seed = 20260727
+            maxOutputTokens = 256
+        }
+        val response = try {
+            model.generateContent(request)
+        } catch (e: GenAiException) {
+            throw NanoException(humanize(e))
+        }
         return response.candidates.firstOrNull()?.text
             ?: throw NanoException("Nano вернула пустой ответ")
+    }
+
+    // AICore errors look scary; translate the typical ones (spec 6.2).
+    private fun humanize(e: Throwable): String = when {
+        e is GenAiException && e.errorCode == 601 ->
+            "AICore не привязался (601), обычно лечится перезагрузкой телефона."
+        e is GenAiException && e.errorCode == 606 ->
+            "AICore ещё не докачал конфигурацию (606) — подожди немного и перезагрузи телефон."
+        e is GenAiException -> "Ошибка AICore ${e.errorCode}: ${e.message}"
+        else -> e.message ?: "Ошибка Nano"
     }
 }
