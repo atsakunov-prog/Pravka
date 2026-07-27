@@ -1,9 +1,7 @@
 package ru.zf.pravka.trigger
 
 import android.annotation.SuppressLint
-import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.MotionEvent
@@ -11,6 +9,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -40,8 +39,8 @@ class FloatingButtonController(
         private const val LONG_PRESS_MS = 450L
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
-        // ink circle, vermilion ring, paper-white serif "П".
-        private val INK = 0xFF241F19.toInt()
+        // the button IS the launcher icon - vermilion circle, paper-white
+        // geometric "П" (owner's request, matching the screenshot).
         private val INK_MENU = 0xF5241F19.toInt()
         private val VERMILION = 0xFFC13B2A.toInt()
         private val PAPER = 0xFFF7F3EA.toInt()
@@ -55,7 +54,7 @@ class FloatingButtonController(
     private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
 
     private var button: FrameLayout? = null
-    private var label: TextView? = null
+    private var label: ImageView? = null
     private var progress: ProgressBar? = null
     private var params: WindowManager.LayoutParams? = null
     private var menu: View? = null
@@ -117,19 +116,14 @@ class FloatingButtonController(
         val container = FrameLayout(service)
         val background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(INK)
-            setStroke(dp(2), VERMILION)
+            setColor(VERMILION)
         }
         container.background = background
         container.elevation = dp(4).toFloat()
         container.alpha = idleAlpha
 
-        label = TextView(service).apply {
-            text = "П"
-            setTextColor(PAPER)
-            textSize = 20f
-            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
-            gravity = Gravity.CENTER
+        label = ImageView(service).apply {
+            setImageResource(R.drawable.ic_fab_glyph)
         }
         container.addView(
             label,
@@ -140,7 +134,7 @@ class FloatingButtonController(
         )
         progress = ProgressBar(service).apply {
             visibility = View.GONE
-            indeterminateTintList = android.content.res.ColorStateList.valueOf(VERMILION)
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(PAPER)
         }
         val progressSize = dp(28)
         container.addView(
@@ -176,7 +170,6 @@ class FloatingButtonController(
                 buttonSize = dp(sizeDp)
                 p.width = buttonSize
                 p.height = buttonSize
-                label?.textSize = 12f + sizeDp / 4f
                 runCatching { windowManager.updateViewLayout(container, p) }
             }
         }

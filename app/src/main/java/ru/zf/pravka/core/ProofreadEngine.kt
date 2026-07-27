@@ -45,7 +45,10 @@ class ProofreadEngine(
 
     suspend fun proofread(target: TextTarget, mode: ProofreadMode): Outcome {
         val input = target.read()?.trim().orEmpty()
-        if (input.length < MIN_INPUT_LENGTH) return Outcome.Rejected
+        // A deliberately selected fragment may be a single word - the
+        // minimum-length guard only protects against accidental triggers.
+        if (input.isEmpty()) return Outcome.Rejected
+        if (input.length < MIN_INPUT_LENGTH && !target.isExplicitFragment()) return Outcome.Rejected
 
         val prepared = dictionary.prepare(input)
 
@@ -115,7 +118,8 @@ class ProofreadEngine(
         if (!result.changed) return Outcome.Unchanged(result)
 
         return if (target.write(cleaned)) {
-            UndoStack.push(before = input, after = cleaned)
+            val (undoBefore, undoAfter) = target.undoPair(input, cleaned)
+            UndoStack.push(before = undoBefore, after = undoAfter)
             Outcome.Applied(result)
         } else {
             clipboardFallback.write(cleaned)

@@ -82,9 +82,13 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                // Toasts and our own overlays fire this event too - ignore
+                // ourselves, or the result bar dies the moment it appears
+                // (the owner never saw it at all before this check).
+                if (event.packageName == packageName) return
                 // App or window switched: the field the bar describes is
                 // gone; only keep the button when a field is still focused.
-                resultBar?.dismiss()
+                resultBar?.dismissIfStale()
                 if (liveFocusedEditableNode() != null) floatingButton?.show()
                 else floatingButton?.hide()
             }
@@ -150,12 +154,16 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     // Visual feedback: highlight the whole field the moment proofreading
-    // starts, so it is obvious what is being processed. The engine reads
-    // the entire field regardless of selection.
+    // starts, so it is obvious what is being processed. When the user has
+    // already selected a fragment, that selection is the work item - keep
+    // it (AccessibilityTarget will fix only the selected part).
     private fun selectAllInFocusedField() {
         val node = focusedEditableNode() ?: return
         val length = node.text?.length ?: return
         if (length == 0) return
+        val start = node.textSelectionStart
+        val end = node.textSelectionEnd
+        if (start in 0 until end) return
         val args = android.os.Bundle().apply {
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, length)

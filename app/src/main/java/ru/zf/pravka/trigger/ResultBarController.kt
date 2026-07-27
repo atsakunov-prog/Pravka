@@ -39,6 +39,7 @@ class ResultBarController(
     private var panel: View? = null
     private var before: String = ""
     private var after: String = ""
+    private var shownAt = 0L
     private val hideRunnable = Runnable { dismiss() }
 
     private fun dp(value: Int): Int = (value * density).toInt()
@@ -96,8 +97,20 @@ class ResultBarController(
         }
         if (runCatching { windowManager.addView(row, params) }.isSuccess) {
             bar = row
+            shownAt = android.os.SystemClock.uptimeMillis()
             row.postDelayed(hideRunnable, SHOW_MS)
         }
+    }
+
+    /**
+     * Dismiss triggered by window-change events. The result toast, the IME
+     * and this bar itself all fire such events right after a fix - a grace
+     * period keeps them from killing the bar the moment it appears.
+     */
+    fun dismissIfStale() {
+        if (bar == null) return
+        if (android.os.SystemClock.uptimeMillis() - shownAt < 2000L) return
+        dismiss()
     }
 
     fun dismiss() {
