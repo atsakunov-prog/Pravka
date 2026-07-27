@@ -27,12 +27,14 @@ fun prop(key: String, default: String? = null): String? =
 // incremented on every assemble/install/deliver invocation.
 // versionCode = buildNumber, versionName = 1.0.<buildNumber>
 // ---------------------------------------------------------------------------
+// CI passes -PbuildNumber=<run number> instead of touching version.properties.
 val versionFile = rootProject.file("version.properties")
 val versionProps = Properties().apply { versionFile.inputStream().use { load(it) } }
-val bumpRequested = gradle.startParameter.taskNames.any { t ->
+val overrideBuildNumber = (project.findProperty("buildNumber") as? String)?.toIntOrNull()
+val bumpRequested = overrideBuildNumber == null && gradle.startParameter.taskNames.any { t ->
     listOf("assemble", "install", "deliver", "bundle").any { t.contains(it, ignoreCase = true) }
 }
-val buildNumber: Int = run {
+val buildNumber: Int = overrideBuildNumber ?: run {
     var n = versionProps.getProperty("buildNumber", "1").trim().toInt()
     if (bumpRequested) {
         n += 1

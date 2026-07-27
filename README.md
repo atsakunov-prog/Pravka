@@ -74,6 +74,14 @@ APK лежит в `app/build/outputs/apk/debug/app-debug.apk`.
 .\scripts\reconnect.ps1
 ```
 
+### Канал 0: GitHub Actions (основной во время облачной разработки)
+
+Каждый пуш в любую ветку собирает подписанный debug APK и кладёт его в ветку
+`apk-builds` (файл `pravka-debug.apk` + `build-info.txt`). Для CI-сборок
+`versionCode = номер запуска workflow`, поэтому каждая следующая сборка
+ставится поверх предыдущей. Скачать можно также из вкладки Actions
+(артефакт `pravka-debug-apk`).
+
 ### Канал 2: Telegram-бот
 
 1. Создай бота через `@BotFather`, получи токен.
