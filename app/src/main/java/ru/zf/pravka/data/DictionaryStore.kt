@@ -30,6 +30,7 @@ class DictionaryStore(private val context: Context) {
     private var loaded = false
     private var entries = mutableListOf<DictEntry>()
     private var nextId = 1L
+    private var seedVersion = 1
 
     private val _entriesFlow = MutableStateFlow<List<DictEntry>>(emptyList())
     val entriesFlow: StateFlow<List<DictEntry>> = _entriesFlow
@@ -104,16 +105,41 @@ class DictionaryStore(private val context: Context) {
     private suspend fun ensureLoaded() {
         if (loaded) return
         withContext(Dispatchers.IO) {
-            val json = when {
-                file.exists() -> file.readText()
-                else -> context.assets.open(SEED_ASSET).bufferedReader().use { it.readText() }
-            }
-            entries = runCatching { parseEntries(JSONObject(json)) }
-                .getOrElse { mutableListOf() }
+            val seedRoot = runCatching {
+                JSONObject(context.assets.open(SEED_ASSET).bufferedReader().use { it.readText() })
+            }.getOrNull()
+            val assetSeedVersion = seedRoot?.optInt("seedVersion", 1) ?: 1
+
+            val fileRoot = if (file.exists()) {
+                runCatching { JSONObject(file.readText()) }.getOrNull()
+            } else null
+
+            entries = (fileRoot ?: seedRoot)
+                ?.let { runCatching { parseEntries(it) }.getOrNull() }
+                .orEmpty()
                 .mapIndexed { i, e -> if (e.id == 0L) e.copy(id = (i + 1).toLong()) else e }
                 .toMutableList()
             nextId = (entries.maxOfOrNull { it.id } ?: 0L) + 1
-            if (!file.exists()) persistBlocking()
+            seedVersion = fileRoot?.optInt("seedVersion", 1) ?: assetSeedVersion
+
+            // New factory words must reach existing installs too: when the
+            // bundled seed is newer than what this dictionary last saw, merge
+            // the entries missing locally (deleted-by-owner entries do NOT
+            // resurrect unless the seed version was bumped again).
+            if (fileRoot != null && seedRoot != null && assetSeedVersion > seedVersion) {
+                val existing = entries.map { it.from.lowercase() to it.mode }.toHashSet()
+                for (e in parseEntries(seedRoot)) {
+                    if ((e.from.lowercase() to e.mode) !in existing) {
+                        entries.add(e.copy(id = nextId++, createdAt = System.currentTimeMillis()))
+                    }
+                }
+                seedVersion = assetSeedVersion
+                persistBlocking()
+            }
+            if (fileRoot == null) {
+                seedVersion = assetSeedVersion
+                persistBlocking()
+            }
         }
         loaded = true
         _entriesFlow.value = entries.toList()
@@ -157,6 +183,7 @@ class DictionaryStore(private val context: Context) {
     private fun toJson(list: List<DictEntry>): JSONObject = JSONObject().apply {
         put("format", FORMAT)
         put("version", 1)
+        put("seedVersion", seedVersion)
         put(
             "entries",
             JSONArray().apply {

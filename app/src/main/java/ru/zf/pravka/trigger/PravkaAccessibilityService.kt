@@ -1,6 +1,5 @@
 package ru.zf.pravka.trigger
 
-import android.accessibilityservice.AccessibilityButtonController
 import android.accessibilityservice.AccessibilityService
 import android.content.res.Configuration
 import android.view.accessibility.AccessibilityEvent
@@ -22,8 +21,9 @@ import ru.zf.pravka.ui.Haptics
 
 // The core of the app (spec 5.2): reads and writes the focused editable field,
 // keeps a cache of the last focused node (for triggers that steal focus) and
-// handles the system accessibility button - the single trigger, per the
-// owner's decision (the floating button duplicated it and was removed).
+// hosts the floating "П" button - the single visible trigger, Whisper-style:
+// the service does NOT request the system accessibility button (the two
+// buttons duplicated each other; the owner chose the floating one).
 class PravkaAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -32,6 +32,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var floatingButton: FloatingButtonController? = null
     private var undoChip: UndoChipController? = null
     private var busy = false
 
@@ -42,17 +43,23 @@ class PravkaAccessibilityService : AccessibilityService() {
     var cachedFocusText: String? = null
         private set
 
-    private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
-        override fun onClicked(controller: AccessibilityButtonController) {
-            runProofread(ProofreadMode.CLEAN)
-        }
-    }
-
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         undoChip = UndoChipController(this, ::undoLast)
-        accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback)
+        floatingButton = FloatingButtonController(
+            service = this,
+            scope = scope,
+            settings = (application as PravkaApp).settings,
+            onMode = ::runProofread,
+            onUndo = ::undoLast,
+            onOpenApp = {
+                startActivity(
+                    android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            },
+        )
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -62,6 +69,9 @@ class PravkaAccessibilityService : AccessibilityService() {
                 if (source.isEditable) {
                     cachedFocus = WeakReference(source)
                     cachedFocusText = source.text?.toString()
+                    floatingButton?.show()
+                } else {
+                    floatingButton?.hide()
                 }
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
@@ -72,8 +82,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // App or window switched: the field the chip would undo is gone.
+                // App or window switched: the field the chip would undo is
+                // gone; only keep the button when a field is still focused.
                 undoChip?.dismiss()
+                if (liveFocusedEditableNode() != null) floatingButton?.show()
+                else floatingButton?.hide()
             }
         }
     }
@@ -95,13 +108,15 @@ class PravkaAccessibilityService : AccessibilityService() {
         val app = application as PravkaApp
         scope.launch {
             busy = true
+            floatingButton?.setBusy(true)
             Haptics.start(this@PravkaAccessibilityService)
             selectAllInFocusedField()
             val outcome = app.engine.proofread(AccessibilityTarget(this@PravkaAccessibilityService), mode)
+            floatingButton?.setBusy(false)
             busy = false
             Feedback.report(this@PravkaAccessibilityService, outcome)
             // Something was written into the field - offer a one-tap undo
-            // for a few seconds (the removed floating-button menu carried it).
+            // for a few seconds on top of the long-press menu item.
             if (outcome is ProofreadEngine.Outcome.Applied) undoChip?.show()
         }
     }
@@ -146,8 +161,9 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        // The foldable changes configuration on fold/unfold.
+        // The foldable changes configuration on fold/unfold - reposition.
         undoChip?.dismiss()
+        floatingButton?.onConfigurationChanged()
     }
 
     override fun onInterrupt() = Unit
@@ -156,6 +172,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         instance = null
         undoChip?.dismiss()
         undoChip = null
+        floatingButton?.destroy()
+        floatingButton = null
         scope.cancel()
         super.onDestroy()
     }
