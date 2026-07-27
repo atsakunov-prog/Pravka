@@ -1,6 +1,9 @@
+import java.net.HttpURLConnection
+import java.net.URL
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.android.application)
@@ -87,13 +90,15 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 
@@ -125,8 +130,8 @@ fun lastCommitSubject(): String {
 
 fun sendDocumentToTelegram(token: String, chatId: String, file: File, caption: String) {
     val boundary = "----PravkaBoundary${System.currentTimeMillis()}"
-    val conn = java.net.URL("https://api.telegram.org/bot$token/sendDocument")
-        .openConnection() as java.net.HttpURLConnection
+    val conn = URL("https://api.telegram.org/bot$token/sendDocument")
+        .openConnection() as HttpURLConnection
     conn.requestMethod = "POST"
     conn.doOutput = true
     conn.connectTimeout = 15_000
