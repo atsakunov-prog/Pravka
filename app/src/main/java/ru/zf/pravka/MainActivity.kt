@@ -35,23 +35,44 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import ru.zf.pravka.data.Settings
 
-// Stage 1: minimal settings surface - API key and CLEAN model choice.
-// The full four-screen UI (Prompts, Dictionary, Settings, Diagnostics)
-// arrives in stages 5-8.
+// Minimal settings surface - API key, CLEAN model choice, accessibility
+// service status. The full four-screen UI (Prompts, Dictionary, Settings,
+// Diagnostics) arrives in stages 5-8.
 class MainActivity : ComponentActivity() {
+
+    private val serviceEnabled = mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val settings = (application as PravkaApp).settings
         setContent {
             MaterialTheme {
-                SettingsLiteScreen(settings)
+                SettingsLiteScreen(
+                    settings = settings,
+                    serviceEnabled = serviceEnabled.value,
+                    onOpenAccessibilitySettings = {
+                        startActivity(
+                            android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    },
+                )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        serviceEnabled.value = ru.zf.pravka.trigger.PravkaAccessibilityService.instance != null
     }
 }
 
 @Composable
-private fun SettingsLiteScreen(settings: Settings) {
+private fun SettingsLiteScreen(
+    settings: Settings,
+    serviceEnabled: Boolean,
+    onOpenAccessibilitySettings: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     var apiKey by remember { mutableStateOf("") }
     var model by remember { mutableStateOf(Settings.MODEL_SONNET) }
@@ -74,6 +95,23 @@ private fun SettingsLiteScreen(settings: Settings) {
         Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge)
         Text(
             stringResource(R.string.build_info, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, BuildConfig.BUILD_TIME),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Spacer(Modifier.height(24.dp))
+
+        Text(
+            stringResource(if (serviceEnabled) R.string.service_status_on else R.string.service_status_off),
+            style = MaterialTheme.typography.titleMedium,
+            color = if (serviceEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+        )
+        if (!serviceEnabled) {
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onOpenAccessibilitySettings) {
+                Text(stringResource(R.string.service_enable))
+            }
+        }
+        Text(
+            stringResource(R.string.service_hint),
             style = MaterialTheme.typography.bodySmall,
         )
         Spacer(Modifier.height(24.dp))

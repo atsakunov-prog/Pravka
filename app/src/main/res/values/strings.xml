@@ -19,5 +19,18 @@
     <string name="settings_model_haiku">Haiku 4.5 — быстрее и дешевле, может упрощать</string>
     <string name="settings_save">Сохранить</string>
     <string name="settings_saved">Сохранено ✓</string>
+    <string name="accessibility_description">Правка читает текст из активного поля ввода и заменяет его исправленным по нажатию плавающей кнопки или кнопки доступности. Текст отправляется только в настроенный API правки.</string>
+    <string name="fab_menu_business">Деловой стиль</string>
+    <string name="fab_menu_soften">Мягче</string>
+    <string name="fab_menu_undo">Откатить последнюю правку</string>
+    <string name="toast_nothing_to_undo">Нечего откатывать в этом поле</string>
+    <string name="toast_undone">Откатил</string>
+    <string name="toast_undo_failed">Не смог откатить — поле не даёт записать текст</string>
+
+    <string name="service_status_on">Служба доступности включена ✓</string>
+    <string name="service_status_off">Служба доступности выключена — плавающая кнопка не работает</string>
+    <string name="service_enable">Включить службу</string>
+    <string name="service_hint">Настройки → Спец. возможности → Правка → Включить. После этого в поле ввода появляется плавающая кнопка «П»: короткое нажатие — чистка, долгое — меню режимов и откат.</string>
+
     <string name="settings_usage_hint">Как пользоваться: надиктуй текст в любом приложении, выдели его и выбери «Правка» в меню выделения. Текст заменится исправленным. Если пункта нет в меню — у этого приложения своё меню выделения, остальные способы вызова появятся на следующих этапах.</string>
 </resources>

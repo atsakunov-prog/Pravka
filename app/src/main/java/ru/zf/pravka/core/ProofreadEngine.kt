@@ -55,6 +55,7 @@ class ProofreadEngine(
         if (!result.changed) return Outcome.Unchanged(result)
 
         return if (target.write(cleaned)) {
+            UndoStack.push(before = input, after = cleaned)
             Outcome.Applied(result)
         } else {
             clipboardFallback.write(cleaned)

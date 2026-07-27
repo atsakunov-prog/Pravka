@@ -3,7 +3,6 @@ package ru.zf.pravka.trigger
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -18,13 +17,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
-import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.R
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.target.TextTarget
+import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.Haptics
 
 // "Правка" item in the text selection menu (ACTION_PROCESS_TEXT, spec 5.1).
@@ -65,38 +64,9 @@ class ProcessTextActivity : ComponentActivity() {
 
         val app = application as PravkaApp
         lifecycleScope.launch {
-            when (val outcome = app.engine.proofread(target, ProofreadMode.CLEAN)) {
-                is ProofreadEngine.Outcome.Applied -> {
-                    Haptics.success(this@ProcessTextActivity)
-                    val seconds = String.format(Locale.forLanguageTag("ru"), "%.1f", outcome.result.latencyMs / 1000.0)
-                    toast(getString(R.string.toast_done, seconds))
-                }
-                is ProofreadEngine.Outcome.CopiedToClipboard -> {
-                    Haptics.success(this@ProcessTextActivity)
-                    toast(getString(R.string.toast_copied))
-                }
-                is ProofreadEngine.Outcome.Unchanged -> {
-                    Haptics.success(this@ProcessTextActivity)
-                    toast(getString(R.string.toast_no_changes))
-                }
-                ProofreadEngine.Outcome.Rejected -> {
-                    Haptics.error(this@ProcessTextActivity)
-                }
-                is ProofreadEngine.Outcome.Failed -> {
-                    Haptics.error(this@ProcessTextActivity)
-                    toast(outcome.message, long = true)
-                }
-            }
+            Feedback.report(this@ProcessTextActivity, app.engine.proofread(target, ProofreadMode.CLEAN))
             finish()
         }
-    }
-
-    private fun toast(message: String, long: Boolean = false) {
-        Toast.makeText(
-            applicationContext,
-            message,
-            if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
-        ).show()
     }
 }
 
