@@ -3,6 +3,7 @@ package ru.zf.pravka.data
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
@@ -18,6 +19,11 @@ class Settings(private val context: Context) {
 
         private val KEY_API_KEY = stringPreferencesKey("anthropic_api_key")
         private val KEY_CLEAN_MODEL = stringPreferencesKey("clean_model")
+        private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
+        private val KEY_FAB_ALPHA = floatPreferencesKey("fab_alpha")
+
+        const val FAB_SIZE_DEFAULT = 48
+        const val FAB_ALPHA_DEFAULT = 0.35f
     }
 
     val apiKeyFlow = context.dataStore.data.map { it[KEY_API_KEY] ?: "" }
@@ -36,19 +42,29 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_CLEAN_MODEL] = value }
     }
 
-    // Floating button position, stored separately per screen size (the
-    // foldable has two - folded and unfolded, spec 5.3). side: left/right,
-    // y as a fraction of the available height.
-    suspend fun fabPosition(screenKey: String): Pair<String, Float> {
-        val prefs = context.dataStore.data.first()
-        val side = prefs[stringPreferencesKey("fab_side_$screenKey")] ?: "right"
-        val y = prefs[floatPreferencesKey("fab_y_$screenKey")] ?: 0.45f
-        return side to y
+    val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }
+    val fabAlphaFlow = context.dataStore.data.map { it[KEY_FAB_ALPHA] ?: FAB_ALPHA_DEFAULT }
+
+    suspend fun setFabSize(dp: Int) {
+        context.dataStore.edit { it[KEY_FAB_SIZE] = dp.coerceIn(36, 72) }
     }
 
-    suspend fun setFabPosition(screenKey: String, side: String, yFraction: Float) {
+    suspend fun setFabAlpha(alpha: Float) {
+        context.dataStore.edit { it[KEY_FAB_ALPHA] = alpha.coerceIn(0.15f, 1f) }
+    }
+
+    // Floating button position - free placement, stored as x/y fractions of
+    // the screen, separately per screen size (the foldable has two).
+    suspend fun fabPosition(screenKey: String): Pair<Float, Float> {
+        val prefs = context.dataStore.data.first()
+        val x = prefs[floatPreferencesKey("fab_x_$screenKey")] ?: 0.92f
+        val y = prefs[floatPreferencesKey("fab_y_$screenKey")] ?: 0.45f
+        return x to y
+    }
+
+    suspend fun setFabPosition(screenKey: String, xFraction: Float, yFraction: Float) {
         context.dataStore.edit {
-            it[stringPreferencesKey("fab_side_$screenKey")] = side
+            it[floatPreferencesKey("fab_x_$screenKey")] = xFraction
             it[floatPreferencesKey("fab_y_$screenKey")] = yFraction
         }
     }

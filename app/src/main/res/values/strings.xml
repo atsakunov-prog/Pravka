@@ -32,5 +32,41 @@
     <string name="service_enable">Включить службу</string>
     <string name="service_hint">Настройки → Спец. возможности → Правка → Включить. После этого в поле ввода появляется плавающая кнопка «П»: короткое нажатие — чистка, долгое — меню режимов и откат.</string>
 
+    <string name="tab_settings">Настройки</string>
+    <string name="tab_prompts">Промпты</string>
+    <string name="tab_stats">Статистика</string>
+
+    <string name="settings_fab_title">Плавающая кнопка</string>
+    <string name="settings_fab_size">Размер: %1$d dp</string>
+    <string name="settings_fab_alpha">Прозрачность в покое: %1$d%%</string>
+
+    <string name="prompts_header">Промпты</string>
+    <string name="prompts_subheader">Это точные инструкции, которые уходят модели вместе с твоим текстом. Правь осторожно: {INPUT} — место подстановки текста, {DICT} — место для словаря.</string>
+    <string name="prompt_title_clean_claude">Чистка (Claude)</string>
+    <string name="prompt_title_clean_nano">Чистка (Nano, офлайн)</string>
+    <string name="prompt_title_business">Деловой стиль</string>
+    <string name="prompt_title_soften">Мягче</string>
+    <string name="prompt_modified">изменён</string>
+    <string name="prompt_char_count">%1$d символов · ~%2$d токенов</string>
+    <string name="prompt_back">← Назад</string>
+    <string name="prompt_error_no_input">В промпте обязателен плейсхолдер {INPUT} — без него модель не получит текст.</string>
+    <string name="prompt_warning_no_dict">Сохранено, но без {DICT} подсказки словаря не будут попадать в промпт.</string>
+    <string name="prompt_warning_nano_long">Сохранено, но промпт длиннее 800 символов съедает лимит входа Nano.</string>
+    <string name="prompt_reset">Вернуть заводской</string>
+    <string name="prompt_reset_confirm">Точно вернуть?</string>
+
+    <string name="stats_header">Статистика</string>
+    <string name="stats_total">Всего правок</string>
+    <string name="stats_clean">— чистка</string>
+    <string name="stats_business">— деловой стиль</string>
+    <string name="stats_soften">— мягче</string>
+    <string name="stats_unchanged">Без изменений</string>
+    <string name="stats_errors">Ошибок</string>
+    <string name="stats_chars">Обработано символов</string>
+    <string name="stats_latency">Средняя задержка</string>
+    <string name="stats_log_header">Последние правки</string>
+    <string name="stats_log_hint">Хранятся только в памяти, очищаются при перезапуске. В постоянной статистике текстов нет.</string>
+    <string name="stats_log_empty">Пока пусто — сделай правку в любом поле.</string>
+
     <string name="settings_usage_hint">Как пользоваться: надиктуй текст в любом приложении, выдели его и выбери «Правка» в меню выделения. Текст заменится исправленным. Если пункта нет в меню — у этого приложения своё меню выделения, остальные способы вызова появятся на следующих этапах.</string>
 </resources>

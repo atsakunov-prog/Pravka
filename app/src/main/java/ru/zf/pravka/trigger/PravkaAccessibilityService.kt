@@ -108,11 +108,26 @@ class PravkaAccessibilityService : AccessibilityService() {
             busy = true
             floatingButton?.setBusy(true)
             Haptics.start(this@PravkaAccessibilityService)
+            selectAllInFocusedField()
             val outcome = app.engine.proofread(AccessibilityTarget(this@PravkaAccessibilityService), mode)
             floatingButton?.setBusy(false)
             busy = false
             Feedback.report(this@PravkaAccessibilityService, outcome)
         }
+    }
+
+    // Visual feedback: highlight the whole field the moment proofreading
+    // starts, so it is obvious what is being processed. The engine reads
+    // the entire field regardless of selection.
+    private fun selectAllInFocusedField() {
+        val node = focusedEditableNode() ?: return
+        val length = node.text?.length ?: return
+        if (length == 0) return
+        val args = android.os.Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, length)
+        }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
     }
 
     private fun undoLast() {

@@ -36,15 +36,15 @@ class FloatingButtonController(
 ) {
 
     companion object {
-        private const val IDLE_ALPHA = 0.35f
-        private const val BUTTON_SIZE_DP = 48
         private const val LONG_PRESS_MS = 450L
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val density = service.resources.displayMetrics.density
-    private val buttonSize = dp(BUTTON_SIZE_DP)
     private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
+
+    private var buttonSize = dp(Settings.FAB_SIZE_DEFAULT)
+    private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
 
     private var button: FrameLayout? = null
     private var label: TextView? = null
@@ -86,14 +86,14 @@ class FloatingButtonController(
         busy = value
         label?.visibility = if (value) View.GONE else View.VISIBLE
         progress?.visibility = if (value) View.VISIBLE else View.GONE
-        button?.alpha = if (value) 1f else IDLE_ALPHA
+        button?.alpha = if (value) 1f else idleAlpha
     }
 
     fun onConfigurationChanged() {
         val p = params ?: return
         scope.launch {
-            val (side, yFraction) = settings.fabPosition(positionKey())
-            applyPosition(p, side, yFraction)
+            val (xFraction, yFraction) = settings.fabPosition(positionKey())
+            applyPosition(p, xFraction, yFraction)
             button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
         }
     }
@@ -113,7 +113,7 @@ class FloatingButtonController(
         }
         container.background = background
         container.elevation = dp(4).toFloat()
-        container.alpha = IDLE_ALPHA
+        container.alpha = idleAlpha
 
         label = TextView(service).apply {
             text = "П"
@@ -157,17 +157,33 @@ class FloatingButtonController(
         container.visibility = View.GONE
 
         scope.launch {
-            val (side, yFraction) = settings.fabPosition(positionKey())
-            applyPosition(p, side, yFraction)
+            val (xFraction, yFraction) = settings.fabPosition(positionKey())
+            applyPosition(p, xFraction, yFraction)
             runCatching { windowManager.updateViewLayout(container, p) }
+        }
+        // Owner-adjustable size and transparency (app settings) apply live.
+        scope.launch {
+            settings.fabSizeFlow.collect { sizeDp ->
+                buttonSize = dp(sizeDp)
+                p.width = buttonSize
+                p.height = buttonSize
+                label?.textSize = 12f + sizeDp / 4f
+                runCatching { windowManager.updateViewLayout(container, p) }
+            }
+        }
+        scope.launch {
+            settings.fabAlphaFlow.collect { alpha ->
+                idleAlpha = alpha
+                if (!busy) container.alpha = idleAlpha
+            }
         }
 
         container.setOnTouchListener(DragTouchListener())
     }
 
-    private fun applyPosition(p: WindowManager.LayoutParams, side: String, yFraction: Float) {
+    private fun applyPosition(p: WindowManager.LayoutParams, xFraction: Float, yFraction: Float) {
         val (w, h) = screenSize()
-        p.x = if (side == "left") 0 else w - buttonSize
+        p.x = ((w - buttonSize) * xFraction.coerceIn(0f, 1f)).toInt()
         p.y = ((h - buttonSize) * yFraction.coerceIn(0f, 1f)).toInt()
     }
 
@@ -211,9 +227,9 @@ class FloatingButtonController(
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     view.removeCallbacks(longPressRunnable)
-                    if (!busy) view.alpha = IDLE_ALPHA
+                    if (!busy) view.alpha = idleAlpha
                     if (dragging) {
-                        snapToEdgeAndSave(view, p)
+                        savePosition(view, p)
                     } else if (!longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
                         if (!busy) onMode(ProofreadMode.CLEAN)
                     }
@@ -223,14 +239,16 @@ class FloatingButtonController(
         }
     }
 
-    private fun snapToEdgeAndSave(view: View, p: WindowManager.LayoutParams) {
+    // Free positioning - the button stays exactly where the owner drops it
+    // (kept inside the screen), no edge snapping.
+    private fun savePosition(view: View, p: WindowManager.LayoutParams) {
         val (w, h) = screenSize()
-        val side = if (p.x + buttonSize / 2 < w / 2) "left" else "right"
-        p.x = if (side == "left") 0 else w - buttonSize
+        p.x = p.x.coerceIn(0, w - buttonSize)
         p.y = p.y.coerceIn(0, h - buttonSize)
         runCatching { windowManager.updateViewLayout(view, p) }
+        val xFraction = p.x.toFloat() / (w - buttonSize).coerceAtLeast(1)
         val yFraction = p.y.toFloat() / (h - buttonSize).coerceAtLeast(1)
-        scope.launch { settings.setFabPosition(positionKey(), side, yFraction) }
+        scope.launch { settings.setFabPosition(positionKey(), xFraction, yFraction) }
     }
 
     // Long-press menu: a second small accessibility overlay next to the button.

@@ -13,6 +13,7 @@ import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.ProofreadProvider
 import ru.zf.pravka.core.ProofreadResult
 import ru.zf.pravka.core.Prompts
+import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
 
 // Direct Anthropic Messages API client. The API key is entered by the owner
@@ -20,6 +21,7 @@ import ru.zf.pravka.data.Settings
 // from spec section 10 - no VPS proxy).
 class ClaudeProvider(
     private val settings: Settings,
+    private val promptStore: PromptStore,
     private val client: OkHttpClient,
 ) : ProofreadProvider {
 
@@ -40,8 +42,10 @@ class ClaudeProvider(
                     ProofreadMode.CLEAN -> settings.cleanModel()
                     else -> Settings.MODEL_SONNET
                 }
+                // Owner-edited override if present, factory text otherwise.
                 // Dictionary block arrives in stage 5; empty for now.
-                val parts = Prompts.assemble(Prompts.template(mode, forNano = false), dictBlock = "")
+                val template = promptStore.effective(mode, forNano = false)
+                val parts = Prompts.assemble(template, dictBlock = "")
 
                 val started = System.currentTimeMillis()
                 val text = requestWithOneRetry(apiKey, model, parts, input)
