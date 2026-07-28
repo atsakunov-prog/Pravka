@@ -85,6 +85,10 @@
     <string name="tab_dictionary">Словарь</string>
     <string name="tab_prompts">Промпты</string>
     <string name="tab_stats">Статистика</string>
+    <string name="tab_transcripts">Расшифровки</string>
+    <string name="transcripts_hint">Все правки и расшифровки, свежие сверху. Нажми на любую — текст скопируется.</string>
+    <string name="transcripts_empty">Пока пусто — сделай правку или диктовку.</string>
+    <string name="transcript_copied">Скопировано</string>
 
     <string name="dict_add">+ Запись</string>
     <string name="dict_edit">Запись словаря</string>

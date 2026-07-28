@@ -58,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -124,6 +125,7 @@ private enum class Tab(val titleRes: Int) {
     SETTINGS(R.string.tab_settings),
     DICTIONARY(R.string.tab_dictionary),
     PROMPTS(R.string.tab_prompts),
+    TRANSCRIPTS(R.string.tab_transcripts),
     STATS(R.string.tab_stats),
 }
 
@@ -165,6 +167,12 @@ private fun MainScreen(
                     label = { Text(stringResource(Tab.PROMPTS.titleRes)) },
                 )
                 NavigationBarItem(
+                    selected = tab == Tab.TRANSCRIPTS,
+                    onClick = { tab = Tab.TRANSCRIPTS },
+                    icon = { Icon(painterResource(R.drawable.ic_transcripts), contentDescription = null) },
+                    label = { Text(stringResource(Tab.TRANSCRIPTS.titleRes)) },
+                )
+                NavigationBarItem(
                     selected = tab == Tab.STATS,
                     onClick = { tab = Tab.STATS },
                     icon = { Icon(Icons.Filled.Info, contentDescription = null) },
@@ -178,6 +186,7 @@ private fun MainScreen(
                 Tab.SETTINGS -> SettingsTab(settings, nanoProvider, speechProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore)
                 Tab.PROMPTS -> PromptsTab(promptStore)
+                Tab.TRANSCRIPTS -> TranscriptsTab(historyLog)
                 Tab.STATS -> StatsTab(stats, historyLog)
             }
         }
@@ -992,12 +1001,59 @@ private fun PromptEditor(
 // Statistics
 // ---------------------------------------------------------------------------
 
+// Full text of every fix/dictation, newest first - tap a card to copy its
+// result to the clipboard (owner's request, Wispr-style history).
+@Composable
+private fun TranscriptsTab(historyLog: HistoryLog) {
+    val context = LocalContext.current
+    val log = remember { historyLog.readLast(100) }
+    val loc = Locale.forLanguageTag("ru")
+
+    fun copy(text: String) {
+        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("Правка", text))
+        Feedback.toast(context, context.getString(R.string.transcript_copied))
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        ScreenTitle(stringResource(R.string.tab_transcripts))
+        HintText(stringResource(R.string.transcripts_hint))
+        if (log.isEmpty()) {
+            Text(stringResource(R.string.transcripts_empty), style = MaterialTheme.typography.bodyMedium)
+        }
+        for (entry in log) {
+            val body = entry.output.ifBlank { entry.input }
+            if (body.isBlank()) continue
+            Card(onClick = { copy(body) }, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(
+                        entry.ts.replace('T', ' ').take(16) +
+                            (entry.error?.let { " · ошибка" } ?: ""),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (entry.error != null) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    entry.error?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(body, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun StatsTab(stats: Stats, historyLog: HistoryLog) {
     val context = LocalContext.current
     val snapshot by stats.snapshotFlow.collectAsState(initial = null)
-    // Persistent history from the JSONL file - survives restarts and updates.
-    val log = remember { historyLog.readLast(30) }
     val ru = Locale.forLanguageTag("ru")
 
     Column(
@@ -1064,57 +1120,6 @@ private fun StatsTab(stats: Stats, historyLog: HistoryLog) {
                 Text(stringResource(R.string.stats_share_history))
             }
             HintText(stringResource(R.string.stats_history_hint))
-        }
-
-        Column {
-            SectionLabel(stringResource(R.string.stats_log_header))
-            HintText(stringResource(R.string.stats_log_hint))
-            Spacer(Modifier.height(8.dp))
-            if (log.isEmpty()) {
-                Text(stringResource(R.string.stats_log_empty), style = MaterialTheme.typography.bodyMedium)
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (entry in log) {
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    entry.mode,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = if (entry.error != null) {
-                                        MaterialTheme.colorScheme.error
-                                    } else {
-                                        MaterialTheme.colorScheme.primary
-                                    },
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    entry.ts.replace('T', ' ').take(19) +
-                                        " · ${entry.model.ifBlank { entry.providerId }}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Text(
-                                String.format(
-                                    ru, "%.1f с · %d/%d ток · $%.4f",
-                                    entry.latencyMs / 1000.0, entry.inputTokens, entry.outputTokens, entry.costUsd,
-                                ),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            entry.error?.let {
-                                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            Text("← " + entry.input.take(80), style = MaterialTheme.typography.bodySmall)
-                            if (entry.output.isNotEmpty()) {
-                                Text("→ " + entry.output.take(80), style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }
