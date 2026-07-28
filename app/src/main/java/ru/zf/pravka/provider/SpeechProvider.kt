@@ -60,6 +60,7 @@ class SpeechProvider(
                 if (s is DownloadStatus.DownloadFailed) failure = s.e
             }
             failure?.let { throw it }
+            Unit
         }
     }
 

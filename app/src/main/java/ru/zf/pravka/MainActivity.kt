@@ -78,6 +78,7 @@ import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
+import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PravkaTheme
 
@@ -489,7 +490,8 @@ private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceE
     val context = LocalContext.current
     var items by remember { mutableStateOf(recordings.list()) }
     var busyId by remember { mutableStateOf<String?>(null) }
-    val ru = Locale.forLanguageTag("ru")
+    // NB: not named `ru` - that would shadow the `ru.zf.pravka` package.
+    val loc = Locale.forLanguageTag("ru")
     if (items.isEmpty()) return
 
     SectionCard(label = stringResource(R.string.rec_header)) {
@@ -501,7 +503,7 @@ private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceE
                     Text(
                         stringResource(
                             R.string.rec_item,
-                            java.text.SimpleDateFormat("dd.MM HH:mm", ru).format(java.util.Date(item.startedAt)),
+                            java.text.SimpleDateFormat("dd.MM HH:mm", loc).format(java.util.Date(item.startedAt)),
                             (item.durationMs / 1000),
                         ),
                         style = MaterialTheme.typography.bodyMedium,
@@ -513,13 +515,13 @@ private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceE
                 TextButton(
                     enabled = busyId == null,
                     onClick = {
-                        val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                        val service = PravkaAccessibilityService.instance
                         if (service == null || !serviceEnabled) {
                             Feedback.toast(context, context.getString(R.string.rec_need_service))
                             return@TextButton
                         }
                         busyId = item.id
-                        service.retryRecording(item.file) { ok, msg ->
+                        service.retryRecording(item.file) { ok: Boolean, msg: String ->
                             busyId = null
                             items = recordings.list()
                             if (!ok) Feedback.toast(context, context.getString(R.string.rec_failed, msg))
