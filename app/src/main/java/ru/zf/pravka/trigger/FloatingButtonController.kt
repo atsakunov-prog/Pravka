@@ -10,39 +10,36 @@ import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.TextView
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
-import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.data.Settings
 
 // Floating button drawn from the accessibility service as a
 // TYPE_ACCESSIBILITY_OVERLAY window (spec 5.3): no SYSTEM_ALERT_WINDOW
-// permission, no foreground service. Visible only while an editable field
-// is focused. Short tap = CLEAN, long press = mode menu, drag = move
-// (snaps to the nearest edge, position saved per screen size - the
-// foldable has two of them).
+// permission. Gestures (owner's decision):
+//   short tap  -> dictate (record, transcribe, fix)
+//   long press -> fix the text already in the field (CLEAN)
+//   drag       -> move (free positioning, saved per screen size)
+// While recording it turns into a red stop button and stays visible in
+// EVERY app, not only when a field is focused (Wispr-style).
 class FloatingButtonController(
     private val service: PravkaAccessibilityService,
     private val scope: CoroutineScope,
     private val settings: Settings,
-    private val onMode: (ProofreadMode) -> Unit,
-    private val onUndo: () -> Unit,
-    private val onOpenApp: () -> Unit,
+    private val onShortTap: () -> Unit,
+    private val onLongPress: () -> Unit,
 ) {
 
     companion object {
         private const val LONG_PRESS_MS = 450L
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
-        // the button IS the launcher icon - vermilion circle, paper-white
-        // geometric "П" (owner's request, matching the screenshot).
-        private val INK_MENU = 0xF5241F19.toInt()
+        // vermilion circle, paper-white geometric "П"; deep red while recording.
         private val VERMILION = 0xFFC13B2A.toInt()
+        private val REC_RED = 0xFFD8342A.toInt()
         private val PAPER = 0xFFF7F3EA.toInt()
     }
 
@@ -54,11 +51,13 @@ class FloatingButtonController(
     private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
 
     private var button: FrameLayout? = null
+    private var background: GradientDrawable? = null
     private var label: ImageView? = null
+    private var recDot: View? = null
     private var progress: ProgressBar? = null
     private var params: WindowManager.LayoutParams? = null
-    private var menu: View? = null
     private var busy = false
+    private var recording = false
     private var visible = false
 
     private fun dp(value: Int): Int = (value * density).toInt()
@@ -82,7 +81,8 @@ class FloatingButtonController(
     }
 
     fun hide() {
-        dismissMenu()
+        // While recording the stop button must stay up in every app.
+        if (recording) return
         if (visible && !busy) {
             button?.visibility = View.GONE
             visible = false
@@ -91,9 +91,19 @@ class FloatingButtonController(
 
     fun setBusy(value: Boolean) {
         busy = value
-        label?.visibility = if (value) View.GONE else View.VISIBLE
+        label?.visibility = if (value || recording) View.GONE else View.VISIBLE
         progress?.visibility = if (value) View.VISIBLE else View.GONE
         button?.alpha = if (value) 1f else idleAlpha
+    }
+
+    /** Recording on: red stop dot, full opacity, pinned visible everywhere. */
+    fun setRecording(value: Boolean) {
+        recording = value
+        background?.setColor(if (value) REC_RED else VERMILION)
+        recDot?.visibility = if (value) View.VISIBLE else View.GONE
+        label?.visibility = if (value || busy) View.GONE else View.VISIBLE
+        button?.alpha = if (value) 1f else idleAlpha
+        if (value) show()
     }
 
     fun onConfigurationChanged() {
@@ -106,7 +116,6 @@ class FloatingButtonController(
     }
 
     fun destroy() {
-        dismissMenu()
         button?.let { runCatching { windowManager.removeView(it) } }
         button = null
     }
@@ -114,11 +123,12 @@ class FloatingButtonController(
     @SuppressLint("ClickableViewAccessibility")
     private fun create() {
         val container = FrameLayout(service)
-        val background = GradientDrawable().apply {
+        val bg = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(VERMILION)
         }
-        container.background = background
+        background = bg
+        container.background = bg
         container.elevation = dp(4).toFloat()
         container.alpha = idleAlpha
 
@@ -132,6 +142,17 @@ class FloatingButtonController(
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
+        // White square "stop" glyph, shown only while recording.
+        recDot = View(service).apply {
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                setColor(PAPER)
+                cornerRadius = dp(3).toFloat()
+            }
+        }
+        val dotSize = dp(16)
+        container.addView(recDot, FrameLayout.LayoutParams(dotSize, dotSize, Gravity.CENTER))
+
         progress = ProgressBar(service).apply {
             visibility = View.GONE
             indeterminateTintList = android.content.res.ColorStateList.valueOf(PAPER)
@@ -164,7 +185,6 @@ class FloatingButtonController(
             applyPosition(p, xFraction, yFraction)
             runCatching { windowManager.updateViewLayout(container, p) }
         }
-        // Owner-adjustable size and transparency (app settings) apply live.
         scope.launch {
             settings.fabSizeFlow.collect { sizeDp ->
                 buttonSize = dp(sizeDp)
@@ -176,7 +196,7 @@ class FloatingButtonController(
         scope.launch {
             settings.fabAlphaFlow.collect { alpha ->
                 idleAlpha = alpha
-                if (!busy) container.alpha = idleAlpha
+                if (!busy && !recording) container.alpha = idleAlpha
             }
         }
 
@@ -198,7 +218,8 @@ class FloatingButtonController(
         private var longPressFired = false
         private val longPressRunnable = Runnable {
             longPressFired = true
-            showMenu()
+            // Long press = fix the field; not available while recording.
+            if (!busy && !recording) onLongPress()
         }
 
         override fun onTouch(view: View, event: MotionEvent): Boolean {
@@ -229,11 +250,11 @@ class FloatingButtonController(
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     view.removeCallbacks(longPressRunnable)
-                    if (!busy) view.alpha = idleAlpha
+                    if (!busy && !recording) view.alpha = idleAlpha
                     if (dragging) {
                         savePosition(view, p)
                     } else if (!longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
-                        if (!busy) onMode(ProofreadMode.CLEAN)
+                        if (!busy) onShortTap()
                     }
                 }
             }
@@ -241,8 +262,7 @@ class FloatingButtonController(
         }
     }
 
-    // Free positioning - the button stays exactly where the owner drops it
-    // (kept inside the screen), no edge snapping.
+    // Free positioning - the button stays exactly where the owner drops it.
     private fun savePosition(view: View, p: WindowManager.LayoutParams) {
         val (w, h) = screenSize()
         p.x = p.x.coerceIn(0, w - buttonSize)
@@ -251,69 +271,5 @@ class FloatingButtonController(
         val xFraction = p.x.toFloat() / (w - buttonSize).coerceAtLeast(1)
         val yFraction = p.y.toFloat() / (h - buttonSize).coerceAtLeast(1)
         scope.launch { settings.setFabPosition(positionKey(), xFraction, yFraction) }
-    }
-
-    // Long-press menu: a second small accessibility overlay next to the button.
-    private fun showMenu() {
-        if (menu != null || busy) return
-        val p = params ?: return
-
-        val list = LinearLayout(service).apply {
-            orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
-                setColor(INK_MENU)
-                cornerRadius = dp(14).toFloat()
-                setStroke(dp(1), VERMILION)
-            }
-            elevation = dp(6).toFloat()
-        }
-        fun item(textRes: Int, action: () -> Unit) {
-            val item = TextView(service).apply {
-                text = service.getString(textRes)
-                setTextColor(PAPER)
-                textSize = 15f
-                setPadding(dp(16), dp(12), dp(16), dp(12))
-                setOnClickListener {
-                    dismissMenu()
-                    action()
-                }
-            }
-            list.addView(item)
-        }
-        item(R.string.fab_menu_business) { onMode(ProofreadMode.BUSINESS) }
-        item(R.string.fab_menu_soften) { onMode(ProofreadMode.SOFTEN) }
-        item(R.string.fab_menu_undo) { onUndo() }
-        item(R.string.fab_menu_open_app) { onOpenApp() }
-
-        val (w, h) = screenSize()
-        val menuParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = if (p.x < w / 2) p.x + buttonSize + dp(8) else p.x - dp(180)
-            y = p.y.coerceIn(0, h - dp(180))
-        }
-
-        list.setOnTouchListener { _, event ->
-            if (event.actionMasked == MotionEvent.ACTION_OUTSIDE) {
-                dismissMenu()
-                true
-            } else {
-                false
-            }
-        }
-
-        menu = list
-        windowManager.addView(list, menuParams)
-    }
-
-    private fun dismissMenu() {
-        menu?.let { runCatching { windowManager.removeView(it) } }
-        menu = null
     }
 }

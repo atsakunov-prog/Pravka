@@ -1,9 +1,14 @@
 package ru.zf.pravka.trigger
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.core.content.ContextCompat
+import java.io.File
 import java.lang.ref.WeakReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +48,11 @@ class PravkaAccessibilityService : AccessibilityService() {
     var cachedFocusText: String? = null
         private set
 
+    // The field to receive dictated text, captured when recording starts -
+    // the owner may switch apps while dictating, so we can't rely on focus
+    // at stop time.
+    private var dictationTarget: WeakReference<AccessibilityNodeInfo>? = null
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -51,14 +61,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             service = this,
             scope = scope,
             settings = (application as PravkaApp).settings,
-            onMode = ::runProofread,
-            onUndo = ::undoLast,
-            onOpenApp = {
-                startActivity(
-                    android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            },
+            onShortTap = ::onDictateTap,
+            onLongPress = { runProofread(ProofreadMode.CLEAN) },
         )
     }
 
@@ -111,6 +115,125 @@ class PravkaAccessibilityService : AccessibilityService() {
     fun trigger(mode: ProofreadMode) = runProofread(mode)
 
     fun triggerUndo() = undoLast()
+
+    // ---- Dictation (short tap): record -> transcribe -> insert -> fix ----
+
+    /** Short tap: stop if recording, else begin. */
+    private fun onDictateTap() {
+        if (DictationService.recording) {
+            floatingButton?.setBusy(true)
+            stopDictation()  // DictationService calls back onRecordingSaved()
+        } else {
+            beginDictation()
+        }
+    }
+
+    private fun hasMicPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun beginDictation() {
+        if (!hasMicPermission()) {
+            // Only an Activity can request a runtime permission; it calls
+            // startRecordingNow() back on grant.
+            startActivity(
+                android.content.Intent(this, MicPermissionActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            return
+        }
+        startRecordingNow()
+    }
+
+    /** Called by MicPermissionActivity after the permission is granted. */
+    fun startRecordingNow() {
+        dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
+        floatingButton?.setRecording(true)
+        Haptics.start(this)
+        startDictation()
+    }
+
+    /** DictationService hands the finished recording here (same process). */
+    fun onRecordingSaved(file: File?) {
+        floatingButton?.setRecording(false)
+        if (file == null) {
+            floatingButton?.setBusy(false)
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.dictation_empty))
+            return
+        }
+        floatingButton?.setBusy(true)
+        val app = application as PravkaApp
+        scope.launch {
+            val result = app.speechProvider.transcribe(file)
+            floatingButton?.setBusy(false)
+            result.onSuccess { text ->
+                app.recordings.delete(file.name)  // transcribed - drop the audio
+                insertDictated(text)
+            }.onFailure { e ->
+                // Audio stays in Recordings for a later retry (Wispr-style).
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(
+                    this@PravkaAccessibilityService,
+                    getString(R.string.dictation_saved_for_retry, e.message ?: ""),
+                )
+            }
+        }
+    }
+
+    /** Retry a saved recording from the app's "Записи" screen. */
+    fun retryRecording(file: File, onDone: (Boolean, String) -> Unit) {
+        val app = application as PravkaApp
+        scope.launch {
+            app.speechProvider.transcribe(file)
+                .onSuccess { text ->
+                    app.recordings.delete(file.name)
+                    insertDictated(text)
+                    onDone(true, text)
+                }
+                .onFailure { e -> onDone(false, e.message ?: "") }
+        }
+    }
+
+    // Insert dictated text into the remembered field at the cursor, select
+    // it, then run CLEAN over just that fragment. If the field is gone, the
+    // text goes to the clipboard so nothing is lost.
+    private suspend fun insertDictated(text: String) {
+        val node = dictationTarget?.get()?.takeIf { it.refresh() && it.isEditable }
+        if (node == null) {
+            ru.zf.pravka.target.ClipboardTarget(this).write(text)
+            Feedback.toast(this, getString(R.string.dictation_to_clipboard))
+            return
+        }
+        val existing = if (node.isShowingHintText) "" else node.text?.toString().orEmpty()
+        val selEnd = node.textSelectionEnd
+        val cursor = if (selEnd in 0..existing.length) selEnd else existing.length
+        val needsSpaceBefore = cursor > 0 && !existing[cursor - 1].isWhitespace()
+        val insert = (if (needsSpaceBefore) " " else "") + text
+        val newText = existing.substring(0, cursor) + insert + existing.substring(cursor)
+        val spanStart = cursor + (if (needsSpaceBefore) 1 else 0)
+        val spanEnd = spanStart + text.length
+
+        val setArgs = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
+        }
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setArgs)) {
+            ru.zf.pravka.target.ClipboardTarget(this).write(text)
+            Feedback.toast(this, getString(R.string.dictation_to_clipboard))
+            return
+        }
+        node.refresh()
+        val selArgs = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, spanStart)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, spanEnd.coerceAtMost(newText.length))
+        }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
+        Haptics.success(this)
+        // Fix the just-inserted fragment if the field is focused (it usually
+        // is - the owner tapped stop right in it). AccessibilityTarget reads
+        // the selection, so only the dictated span is proofread.
+        if (focusedEditableNode() == node) runProofread(ProofreadMode.CLEAN)
+    }
 
     private fun runProofread(mode: ProofreadMode) {
         if (busy) return

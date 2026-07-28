@@ -37,6 +37,34 @@
     <string name="dict_pair_added">В словарь: «%1$s» защищено, «%2$s» теперь заменяется на «%1$s»</string>
     <string name="toast_no_service">Сначала включи службу Правки в спец. возможностях</string>
     <string name="quick_clean">Чистка</string>
+
+    <string name="dictation_channel">Диктовка</string>
+    <string name="dictation_recording">Правка: идёт запись</string>
+    <string name="dictation_recording_hint">Говори, переключайся между приложениями. Нажми «П» ещё раз, чтобы вставить.</string>
+    <string name="dictation_stop">Остановить</string>
+    <string name="dictation_empty">Пустая запись</string>
+    <string name="dictation_saved_for_retry">Не расшифровал (%1$s). Аудио сохранено — расшифрую во вкладке «Записи».</string>
+    <string name="dictation_to_clipboard">Поле пропало — текст в буфере обмена</string>
+    <string name="dictation_no_mic_permission">Без доступа к микрофону диктовка не работает</string>
+
+    <string name="tab_recordings">Записи</string>
+    <string name="rec_header">Несохранённые записи</string>
+    <string name="rec_hint">Записи, которые не удалось расшифровать сразу. Открой поле ввода, поставь курсор и нажми «Расшифровать» — текст вставится туда.</string>
+    <string name="rec_empty">Нет неразобранных записей.</string>
+    <string name="rec_item">%1$s · %2$d с</string>
+    <string name="rec_transcribe">Расшифровать</string>
+    <string name="rec_delete">Удалить</string>
+    <string name="rec_transcribing">Расшифровываю…</string>
+    <string name="rec_failed">Не вышло: %1$s</string>
+    <string name="rec_need_service">Включи службу Правки в спец. возможностях</string>
+
+    <string name="settings_speech_title">Распознавание речи (Gemini Nano)</string>
+    <string name="speech_download">Скачать модель распознавания</string>
+    <string name="speech_downloading">Скачивается…</string>
+    <string name="speech_refresh">Обновить статус</string>
+    <string name="speech_download_done">Модель распознавания скачана</string>
+    <string name="speech_download_failed">Не удалось скачать: %1$s</string>
+    <string name="speech_hint">Диктовка на устройстве, офлайн. Короткое нажатие плавающей кнопки — запись, ещё раз — вставка и правка. Долгое нажатие — только правка уже написанного.</string>
     <string name="fab_menu_business">Деловой стиль</string>
     <string name="fab_menu_soften">Мягче</string>
     <string name="fab_menu_undo">Откатить последнюю правку</string>

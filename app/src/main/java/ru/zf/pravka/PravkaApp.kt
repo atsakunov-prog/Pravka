@@ -8,10 +8,12 @@ import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.PromptStore
+import ru.zf.pravka.data.Recordings
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.provider.ClaudeProvider
 import ru.zf.pravka.provider.NanoProvider
+import ru.zf.pravka.provider.SpeechProvider
 import ru.zf.pravka.target.ClipboardTarget
 
 // Plain service locator - the dependency graph is small enough
@@ -36,6 +38,8 @@ class PravkaApp : Application() {
 
     val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient) }
     val nanoProvider by lazy { NanoProvider(this, promptStore) }
+    val speechProvider by lazy { SpeechProvider(this, settings) }
+    val recordings by lazy { Recordings(this) }
 
     val engine by lazy {
         ProofreadEngine(

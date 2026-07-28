@@ -99,6 +99,8 @@ class MainActivity : ComponentActivity() {
                     dictionaryStore = app.dictionaryStore,
                     historyLog = app.historyLog,
                     nanoProvider = app.nanoProvider,
+                    speechProvider = app.speechProvider,
+                    recordings = app.recordings,
                     serviceEnabled = serviceEnabled.value,
                     onOpenAccessibilitySettings = {
                         startActivity(
@@ -132,6 +134,8 @@ private fun MainScreen(
     dictionaryStore: DictionaryStore,
     historyLog: HistoryLog,
     nanoProvider: ru.zf.pravka.provider.NanoProvider,
+    speechProvider: ru.zf.pravka.provider.SpeechProvider,
+    recordings: ru.zf.pravka.data.Recordings,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
 ) {
@@ -170,7 +174,7 @@ private fun MainScreen(
     ) { padding ->
         Column(Modifier.padding(padding)) {
             when (tab) {
-                Tab.SETTINGS -> SettingsTab(settings, nanoProvider, serviceEnabled, onOpenAccessibilitySettings)
+                Tab.SETTINGS -> SettingsTab(settings, nanoProvider, speechProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore)
                 Tab.PROMPTS -> PromptsTab(promptStore)
                 Tab.STATS -> StatsTab(stats, historyLog)
@@ -253,6 +257,8 @@ private fun HintText(text: String) {
 private fun SettingsTab(
     settings: Settings,
     nanoProvider: ru.zf.pravka.provider.NanoProvider,
+    speechProvider: ru.zf.pravka.provider.SpeechProvider,
+    recordings: ru.zf.pravka.data.Recordings,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
 ) {
@@ -433,7 +439,101 @@ private fun SettingsTab(
             )
         }
 
+        SpeechSection(speechProvider)
+
+        RecordingsSection(recordings, serviceEnabled)
+
         HintText(stringResource(R.string.settings_usage_hint))
+    }
+}
+
+@Composable
+private fun SpeechSection(speechProvider: ru.zf.pravka.provider.SpeechProvider) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf("…") }
+    var downloading by remember { mutableStateOf(false) }
+    LaunchedEffect(downloading) { status = speechProvider.statusText() }
+
+    SectionCard(label = stringResource(R.string.settings_speech_title)) {
+        Text("Gemini Nano: $status", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                enabled = !downloading,
+                onClick = {
+                    downloading = true
+                    scope.launch {
+                        val result = speechProvider.download()
+                        downloading = false
+                        Feedback.toast(
+                            context,
+                            if (result.isSuccess) context.getString(R.string.speech_download_done)
+                            else context.getString(R.string.speech_download_failed, result.exceptionOrNull()?.message ?: ""),
+                        )
+                        status = speechProvider.statusText()
+                    }
+                },
+            ) { Text(stringResource(if (downloading) R.string.speech_downloading else R.string.speech_download)) }
+            OutlinedButton(onClick = { scope.launch { status = speechProvider.statusText() } }) {
+                Text(stringResource(R.string.speech_refresh))
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        HintText(stringResource(R.string.speech_hint))
+    }
+}
+
+@Composable
+private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceEnabled: Boolean) {
+    val context = LocalContext.current
+    var items by remember { mutableStateOf(recordings.list()) }
+    var busyId by remember { mutableStateOf<String?>(null) }
+    val ru = Locale.forLanguageTag("ru")
+    if (items.isEmpty()) return
+
+    SectionCard(label = stringResource(R.string.rec_header)) {
+        HintText(stringResource(R.string.rec_hint))
+        Spacer(Modifier.height(8.dp))
+        for (item in items) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(
+                            R.string.rec_item,
+                            java.text.SimpleDateFormat("dd.MM HH:mm", ru).format(java.util.Date(item.startedAt)),
+                            (item.durationMs / 1000),
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (busyId == item.id) {
+                        Text(stringResource(R.string.rec_transcribing), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                TextButton(
+                    enabled = busyId == null,
+                    onClick = {
+                        val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                        if (service == null || !serviceEnabled) {
+                            Feedback.toast(context, context.getString(R.string.rec_need_service))
+                            return@TextButton
+                        }
+                        busyId = item.id
+                        service.retryRecording(item.file) { ok, msg ->
+                            busyId = null
+                            items = recordings.list()
+                            if (!ok) Feedback.toast(context, context.getString(R.string.rec_failed, msg))
+                        }
+                    },
+                ) { Text(stringResource(R.string.rec_transcribe)) }
+                TextButton(onClick = {
+                    recordings.delete(item.id)
+                    items = recordings.list()
+                }) {
+                    Text(stringResource(R.string.rec_delete), color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
     }
 }
 

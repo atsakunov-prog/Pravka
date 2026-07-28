@@ -35,26 +35,6 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug -PbuildNumber=${{ github.run_number }} --no-daemon
 
-      # Temporary: print the GenAI Speech Recognition alpha API surface so
-      # the exact class/method names can be read from the build log.
-      # Remove once the dictation provider compiles.
-      - name: Dump GenAI Speech API (temporary)
-        if: always()
-        run: |
-          set +e
-          for name in genai-speech-recognition genai-common; do
-            aar=$(find /home/runner/.gradle -path "*${name}*" -name "*.aar" 2>/dev/null | head -1)
-            echo "=== ${name}: ${aar:-NOT FOUND}"
-            if [ -n "$aar" ]; then
-              rm -rf /tmp/apidump && mkdir -p /tmp/apidump && cd /tmp/apidump
-              unzip -o -q "$aar" classes.jar
-              for c in $(unzip -Z1 classes.jar | grep '\.class$' | grep -v '\$\$' | sed 's/\.class$//;s#/#.#g'); do
-                javap -classpath classes.jar "$c"
-              done
-            fi
-          done
-          true
-
       - name: Publish APK to apk-builds branch
         run: |
           APK=app/build/outputs/apk/debug/app-debug.apk
