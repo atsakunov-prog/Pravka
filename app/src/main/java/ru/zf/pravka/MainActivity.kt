@@ -102,6 +102,7 @@ class MainActivity : ComponentActivity() {
                     historyLog = app.historyLog,
                     nanoProvider = app.nanoProvider,
                     speechProvider = app.speechProvider,
+                    whisperProvider = app.whisperProvider,
                     recordings = app.recordings,
                     serviceEnabled = serviceEnabled.value,
                     onOpenAccessibilitySettings = {
@@ -138,6 +139,7 @@ private fun MainScreen(
     historyLog: HistoryLog,
     nanoProvider: ru.zf.pravka.provider.NanoProvider,
     speechProvider: ru.zf.pravka.provider.SpeechProvider,
+    whisperProvider: ru.zf.pravka.provider.WhisperProvider,
     recordings: ru.zf.pravka.data.Recordings,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
@@ -183,7 +185,7 @@ private fun MainScreen(
     ) { padding ->
         Column(Modifier.padding(padding)) {
             when (tab) {
-                Tab.SETTINGS -> SettingsTab(settings, nanoProvider, speechProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
+                Tab.SETTINGS -> SettingsTab(settings, nanoProvider, speechProvider, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore)
                 Tab.PROMPTS -> PromptsTab(promptStore)
                 Tab.TRANSCRIPTS -> TranscriptsTab(historyLog)
@@ -268,6 +270,7 @@ private fun SettingsTab(
     settings: Settings,
     nanoProvider: ru.zf.pravka.provider.NanoProvider,
     speechProvider: ru.zf.pravka.provider.SpeechProvider,
+    whisperProvider: ru.zf.pravka.provider.WhisperProvider,
     recordings: ru.zf.pravka.data.Recordings,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
@@ -449,7 +452,7 @@ private fun SettingsTab(
             )
         }
 
-        SpeechSection(speechProvider)
+        SpeechSection(settings, speechProvider, whisperProvider)
 
         RecordingsSection(recordings, serviceEnabled)
 
@@ -458,15 +461,43 @@ private fun SettingsTab(
 }
 
 @Composable
-private fun SpeechSection(speechProvider: ru.zf.pravka.provider.SpeechProvider) {
+private fun SpeechSection(
+    settings: Settings,
+    speechProvider: ru.zf.pravka.provider.SpeechProvider,
+    whisperProvider: ru.zf.pravka.provider.WhisperProvider,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val engine by settings.speechEngineFlow.collectAsState(initial = Settings.SPEECH_WHISPER_SMALL)
     var status by remember { mutableStateOf("…") }
     var downloading by remember { mutableStateOf(false) }
-    LaunchedEffect(downloading) { status = speechProvider.statusText() }
+
+    // Whisper needs its model downloaded per engine; Nano is managed by ML Kit.
+    val isNano = engine == Settings.SPEECH_NANO
+    LaunchedEffect(engine, downloading) {
+        status = if (isNano) speechProvider.statusText() else whisperProvider.statusText(engine)
+    }
 
     SectionCard(label = stringResource(R.string.settings_speech_title)) {
-        Text("Gemini Nano: $status", style = MaterialTheme.typography.bodySmall)
+        HintText(stringResource(R.string.speech_engine_label))
+        ModelOption(
+            label = stringResource(R.string.speech_engine_whisper_small),
+            selected = engine == Settings.SPEECH_WHISPER_SMALL,
+            onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_WHISPER_SMALL) } },
+        )
+        ModelOption(
+            label = stringResource(R.string.speech_engine_whisper_base),
+            selected = engine == Settings.SPEECH_WHISPER_BASE,
+            onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_WHISPER_BASE) } },
+        )
+        ModelOption(
+            label = stringResource(R.string.speech_engine_nano),
+            selected = engine == Settings.SPEECH_NANO,
+            onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_NANO) } },
+        )
+
+        Spacer(Modifier.height(8.dp))
+        Text(status, style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
@@ -474,18 +505,23 @@ private fun SpeechSection(speechProvider: ru.zf.pravka.provider.SpeechProvider) 
                 onClick = {
                     downloading = true
                     scope.launch {
-                        val result = speechProvider.download()
+                        val result = if (isNano) speechProvider.download()
+                        else whisperProvider.download(engine)
                         downloading = false
                         Feedback.toast(
                             context,
                             if (result.isSuccess) context.getString(R.string.speech_download_done)
                             else context.getString(R.string.speech_download_failed, result.exceptionOrNull()?.message ?: ""),
                         )
-                        status = speechProvider.statusText()
+                        status = if (isNano) speechProvider.statusText() else whisperProvider.statusText(engine)
                     }
                 },
             ) { Text(stringResource(if (downloading) R.string.speech_downloading else R.string.speech_download)) }
-            OutlinedButton(onClick = { scope.launch { status = speechProvider.statusText() } }) {
+            OutlinedButton(onClick = {
+                scope.launch {
+                    status = if (isNano) speechProvider.statusText() else whisperProvider.statusText(engine)
+                }
+            }) {
                 Text(stringResource(R.string.speech_refresh))
             }
         }

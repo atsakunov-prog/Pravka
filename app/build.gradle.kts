@@ -62,6 +62,30 @@ android {
         versionCode = buildNumber
         versionName = appVersionName
         buildConfigField("String", "BUILD_TIME", "\"$buildTimestamp\"")
+        // whisper.cpp is built only for the Pixel's arm64 - keeps the APK
+        // and the CI native build small (no x86/armv7 the owner never uses).
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+        externalNativeBuild {
+            cmake {
+                // Release flags for the on-device transcription hot path;
+                // NEON is on by default for arm64.
+                cppFlags += "-O3"
+                arguments += "-DANDROID_STL=c++_shared"
+            }
+        }
+    }
+
+    // NDK r27+ handles Android 15's 16 KB page alignment; pin so CI fetches
+    // a known-good one instead of whatever is preinstalled.
+    ndkVersion = "27.2.12479018"
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     // One shared keystore for ALL builds, debug included. Changing the signing

@@ -165,7 +165,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         floatingButton?.setBusy(true)
         val app = application as PravkaApp
         scope.launch {
-            val result = app.speechProvider.transcribe(file)
+            val result = app.transcribeDictation(file)
             floatingButton?.setBusy(false)
             result.onSuccess { text ->
                 app.recordings.delete(file.name)  // transcribed - drop the audio
@@ -185,7 +185,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     fun retryRecording(file: File, onDone: (Boolean, String) -> Unit) {
         val app = application as PravkaApp
         scope.launch {
-            app.speechProvider.transcribe(file)
+            app.transcribeDictation(file)
                 .onSuccess { text ->
                     app.recordings.delete(file.name)
                     insertDictated(text)

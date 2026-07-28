@@ -18,10 +18,16 @@ class Settings(private val context: Context) {
         const val MODEL_HAIKU = "claude-haiku-4-5"
         const val MODEL_NANO = "gemini-nano"
 
+        // Dictation engines.
+        const val SPEECH_WHISPER_SMALL = "whisper-small"
+        const val SPEECH_WHISPER_BASE = "whisper-base"
+        const val SPEECH_NANO = "nano"
+
         private val KEY_API_KEY = stringPreferencesKey("anthropic_api_key")
         private val KEY_CLEAN_MODEL = stringPreferencesKey("clean_model")
         private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
         private val KEY_FAB_ALPHA = floatPreferencesKey("fab_alpha")
+        private val KEY_SPEECH_ENGINE = stringPreferencesKey("speech_engine")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -41,6 +47,12 @@ class Settings(private val context: Context) {
 
     suspend fun setCleanModel(value: String) {
         context.dataStore.edit { it[KEY_CLEAN_MODEL] = value }
+    }
+
+    val speechEngineFlow = context.dataStore.data.map { it[KEY_SPEECH_ENGINE] ?: SPEECH_WHISPER_SMALL }
+    suspend fun speechEngine(): String = speechEngineFlow.first()
+    suspend fun setSpeechEngine(value: String) {
+        context.dataStore.edit { it[KEY_SPEECH_ENGINE] = value }
     }
 
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }

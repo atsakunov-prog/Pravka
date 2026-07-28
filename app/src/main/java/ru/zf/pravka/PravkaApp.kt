@@ -11,9 +11,11 @@ import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Recordings
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
+import java.io.File
 import ru.zf.pravka.provider.ClaudeProvider
 import ru.zf.pravka.provider.NanoProvider
 import ru.zf.pravka.provider.SpeechProvider
+import ru.zf.pravka.provider.WhisperProvider
 import ru.zf.pravka.target.ClipboardTarget
 
 // Plain service locator - the dependency graph is small enough
@@ -39,7 +41,17 @@ class PravkaApp : Application() {
     val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient) }
     val nanoProvider by lazy { NanoProvider(this, promptStore) }
     val speechProvider by lazy { SpeechProvider(this, settings) }
+    val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
+
+    // Dictation dispatcher: Whisper (file-based, owner's default) or the
+    // Nano speech recognizer, per the Settings choice.
+    suspend fun transcribeDictation(file: File): Result<String> =
+        if (settings.speechEngine() == Settings.SPEECH_NANO) {
+            speechProvider.transcribe(file)
+        } else {
+            whisperProvider.transcribe(file)
+        }
 
     val engine by lazy {
         ProofreadEngine(
