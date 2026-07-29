@@ -470,18 +470,30 @@ private fun SpeechSection(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val engine by settings.speechEngineFlow.collectAsState(initial = Settings.SPEECH_WHISPER_SMALL)
+    val engine by settings.speechEngineFlow.collectAsState(initial = Settings.SPEECH_GOOGLE)
     var status by remember { mutableStateOf("…") }
     var downloading by remember { mutableStateOf(false) }
 
-    // Whisper needs its model downloaded per engine; Nano is managed by ML Kit.
+    val isGoogle = engine == Settings.SPEECH_GOOGLE
     val isNano = engine == Settings.SPEECH_NANO
-    LaunchedEffect(engine, downloading) {
-        status = if (isNano) speechProvider.statusText() else whisperProvider.statusText(engine)
+
+    suspend fun statusFor(e: String): String = when {
+        e == Settings.SPEECH_GOOGLE ->
+            if (ru.zf.pravka.provider.GoogleSpeechSession.isAvailable(context)) context.getString(R.string.google_ready)
+            else context.getString(R.string.google_unavailable)
+        e == Settings.SPEECH_NANO -> speechProvider.statusText()
+        else -> whisperProvider.statusText(e)
     }
+
+    LaunchedEffect(engine, downloading) { status = statusFor(engine) }
 
     SectionCard(label = stringResource(R.string.settings_speech_title)) {
         HintText(stringResource(R.string.speech_engine_label))
+        ModelOption(
+            label = stringResource(R.string.speech_engine_google),
+            selected = isGoogle,
+            onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_GOOGLE) } },
+        )
         ModelOption(
             label = stringResource(R.string.speech_engine_whisper_small),
             selected = engine == Settings.SPEECH_WHISPER_SMALL,
@@ -494,7 +506,7 @@ private fun SpeechSection(
         )
         ModelOption(
             label = stringResource(R.string.speech_engine_nano),
-            selected = engine == Settings.SPEECH_NANO,
+            selected = isNano,
             onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_NANO) } },
         )
 
@@ -505,30 +517,45 @@ private fun SpeechSection(
             OutlinedButton(
                 enabled = !downloading,
                 onClick = {
-                    downloading = true
-                    scope.launch {
-                        val result = if (isNano) speechProvider.download()
-                        else whisperProvider.download(engine)
-                        downloading = false
-                        Feedback.toast(
-                            context,
-                            if (result.isSuccess) context.getString(R.string.speech_download_done)
-                            else context.getString(R.string.speech_download_failed, result.exceptionOrNull()?.message ?: ""),
-                        )
-                        status = if (isNano) speechProvider.statusText() else whisperProvider.statusText(engine)
+                    if (isGoogle) {
+                        // No 190MB download - just ask the system for the offline pack.
+                        ru.zf.pravka.provider.GoogleSpeechSession.triggerModelDownload(context)
+                        Feedback.toast(context, context.getString(R.string.google_prepare_started))
+                        scope.launch { status = statusFor(engine) }
+                    } else {
+                        downloading = true
+                        scope.launch {
+                            val result = if (isNano) speechProvider.download()
+                            else whisperProvider.download(engine)
+                            downloading = false
+                            Feedback.toast(
+                                context,
+                                if (result.isSuccess) context.getString(R.string.speech_download_done)
+                                else context.getString(R.string.speech_download_failed, result.exceptionOrNull()?.message ?: ""),
+                            )
+                            status = statusFor(engine)
+                        }
                     }
                 },
-            ) { Text(stringResource(if (downloading) R.string.speech_downloading else R.string.speech_download)) }
-            OutlinedButton(onClick = {
-                scope.launch {
-                    status = if (isNano) speechProvider.statusText() else whisperProvider.statusText(engine)
-                }
-            }) {
+            ) {
+                Text(
+                    when {
+                        isGoogle -> stringResource(R.string.google_prepare)
+                        downloading -> stringResource(R.string.speech_downloading)
+                        else -> stringResource(R.string.speech_download)
+                    }
+                )
+            }
+            OutlinedButton(onClick = { scope.launch { status = statusFor(engine) } }) {
                 Text(stringResource(R.string.speech_refresh))
             }
         }
         Spacer(Modifier.height(6.dp))
-        HintText(stringResource(R.string.speech_hint))
+        HintText(
+            stringResource(
+                if (isGoogle) R.string.speech_hint_google else R.string.speech_hint
+            )
+        )
     }
 }
 
@@ -1062,6 +1089,7 @@ private fun TranscriptsTab(transcriptionLog: ru.zf.pravka.data.TranscriptionLog)
     }
 
     fun engineLabel(engine: String): String = when (engine) {
+        Settings.SPEECH_GOOGLE -> "Google"
         Settings.SPEECH_WHISPER_SMALL -> "Whisper small"
         Settings.SPEECH_WHISPER_BASE -> "Whisper base"
         Settings.SPEECH_NANO -> "Gemini Nano"
@@ -1103,8 +1131,12 @@ private fun TranscriptsTab(transcriptionLog: ru.zf.pravka.data.TranscriptionLog)
                         append(engineLabel(entry.engine))
                         append(" · ")
                         append(String.format(ruLoc, "%.1f", entry.audioMs / 1000.0)).append(" с аудио")
-                        append(" · ")
-                        append(String.format(ruLoc, "%.1f", entry.transcribeMs / 1000.0)).append(" с расшифровка")
+                        // Whisper reports its transcription time; the Google
+                        // live engine is realtime, so it logs 0 - skip it there.
+                        if (entry.transcribeMs > 0) {
+                            append(" · ")
+                            append(String.format(ruLoc, "%.1f", entry.transcribeMs / 1000.0)).append(" с расшифровка")
+                        }
                         append(" · ")
                         append(entry.chars).append(" симв.")
                         if (entry.realtimeFactor > 0) {

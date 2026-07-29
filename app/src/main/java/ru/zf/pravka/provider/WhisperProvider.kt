@@ -86,7 +86,14 @@ class WhisperProvider(
             if (!WhisperNative.ensureLoaded()) {
                 throw WhisperException("Нативная библиотека распознавания недоступна.")
             }
-            val engine = settings.speechEngine().takeIf { it.startsWith("whisper") }
+            // Prefer the configured whisper model when it's present; otherwise
+            // fall back to whichever whisper model is actually downloaded (the
+            // Google engine has no model of its own, so its file-retries land
+            // here and small may not be the one on disk).
+            val configured = settings.speechEngine().takeIf { it.startsWith("whisper") }
+            val engine = configured?.takeIf { isDownloaded(it) }
+                ?: listOf(Settings.SPEECH_WHISPER_BASE, Settings.SPEECH_WHISPER_SMALL).firstOrNull { isDownloaded(it) }
+                ?: configured
                 ?: Settings.SPEECH_WHISPER_SMALL
             if (!isDownloaded(engine)) {
                 throw WhisperException("Модель распознавания не скачана. Открой Правку и скачай её в настройках.")

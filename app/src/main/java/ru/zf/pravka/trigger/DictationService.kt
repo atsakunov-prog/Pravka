@@ -31,6 +31,13 @@ class DictationService : Service() {
     companion object {
         const val ACTION_START = "ru.zf.pravka.DICTATE_START"
         const val ACTION_STOP = "ru.zf.pravka.DICTATE_STOP"
+        // Google-engine live dictation: we don't record a WAV, but we still
+        // need a foreground "microphone" service so the system recognizer may
+        // keep the mic while the owner switches apps. HOLD_START/STOP manage
+        // that empty holder; USER_STOP is the notification's Stop button.
+        const val ACTION_HOLD_START = "ru.zf.pravka.DICTATE_HOLD_START"
+        const val ACTION_HOLD_STOP = "ru.zf.pravka.DICTATE_HOLD_STOP"
+        const val ACTION_HOLD_USER_STOP = "ru.zf.pravka.DICTATE_HOLD_USER_STOP"
         private const val CHANNEL = "dictation"
         private const val NOTIF_ID = 42
 
@@ -51,12 +58,34 @@ class DictationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private var holding = false
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> start()
+            ACTION_HOLD_START -> holdStart()
+            ACTION_HOLD_STOP -> holdStop()
+            ACTION_HOLD_USER_STOP -> {
+                // The notification's Stop button during a Google take: let the
+                // accessibility service finalize the session (it tears down the
+                // hold afterwards via ACTION_HOLD_STOP).
+                PravkaAccessibilityService.instance?.stopGoogleDictation()
+            }
             ACTION_STOP, null -> stop()
         }
         return START_NOT_STICKY
+    }
+
+    private fun holdStart() {
+        if (holding) return
+        holding = true
+        startForegroundWithType(holdStop = true)
+    }
+
+    private fun holdStop() {
+        holding = false
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     @SuppressLint("MissingPermission") // RECORD_AUDIO is checked before the service is started
@@ -126,16 +155,17 @@ class DictationService : Service() {
         super.onDestroy()
     }
 
-    private fun startForegroundWithType() {
+    private fun startForegroundWithType(holdStop: Boolean = false) {
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CHANNEL) == null) {
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL, getString(R.string.dictation_channel), NotificationManager.IMPORTANCE_LOW)
             )
         }
+        val stopAction = if (holdStop) ACTION_HOLD_USER_STOP else ACTION_STOP
         val stopIntent = PendingIntent.getService(
-            this, 0,
-            Intent(this, DictationService::class.java).setAction(ACTION_STOP),
+            this, if (holdStop) 1 else 0,
+            Intent(this, DictationService::class.java).setAction(stopAction),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val notif: Notification = Notification.Builder(this, CHANNEL)
@@ -168,5 +198,18 @@ fun Context.startDictation() {
 fun Context.stopDictation() {
     startService(
         Intent(this, DictationService::class.java).setAction(DictationService.ACTION_STOP)
+    )
+}
+
+// Empty foreground-mic holder for the Google live engine (no WAV recorded).
+fun Context.startMicHold() {
+    startForegroundService(
+        Intent(this, DictationService::class.java).setAction(DictationService.ACTION_HOLD_START)
+    )
+}
+
+fun Context.stopMicHold() {
+    startService(
+        Intent(this, DictationService::class.java).setAction(DictationService.ACTION_HOLD_STOP)
     )
 }

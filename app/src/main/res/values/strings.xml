@@ -60,7 +60,8 @@
 
     <string name="settings_speech_title">Распознавание речи</string>
     <string name="speech_engine_label">Движок распознавания</string>
-    <string name="speech_engine_whisper_small">Whisper small (~190 МБ, точнее)</string>
+    <string name="speech_engine_google">Google — быстрый, как на клавиатуре (по умолчанию)</string>
+    <string name="speech_engine_whisper_small">Whisper small (~190 МБ, точнее, но медленно)</string>
     <string name="speech_engine_whisper_base">Whisper base (~60 МБ, быстрее)</string>
     <string name="speech_engine_nano">Gemini Nano (экспериментально)</string>
     <string name="speech_download">Скачать модель</string>
@@ -69,6 +70,11 @@
     <string name="speech_download_done">Модель распознавания скачана</string>
     <string name="speech_download_failed">Не удалось скачать: %1$s</string>
     <string name="speech_hint">Диктовка на устройстве, офлайн. Короткое нажатие плавающей кнопки — запись, ещё раз — вставка и правка. Долгое нажатие — только правка уже написанного. Аудио сохраняется всегда: если расшифровка не удалась, запись можно расшифровать позже во вкладке ниже.</string>
+    <string name="speech_hint_google">Быстрый потоковый движок Google (тот же, что в голосовом вводе клавиатуры). Работает в реальном времени, офлайн. Короткое нажатие плавающей кнопки — старт, ещё раз — стоп, вставка и правка. Долгое нажатие — только правка уже написанного. В этом режиме аудиофайл не сохраняется (движок сам держит микрофон).</string>
+    <string name="google_ready">Готово (тот же движок, что в голосовом вводе клавиатуры)</string>
+    <string name="google_unavailable">Недоступно. Включи офлайн-распознавание речи в настройках Android / Google.</string>
+    <string name="google_prepare">Подготовить русскую модель</string>
+    <string name="google_prepare_started">Запросил загрузку офлайн-пакета. Проверь статус через минуту.</string>
     <string name="fab_menu_business">Деловой стиль</string>
     <string name="fab_menu_soften">Мягче</string>
     <string name="fab_menu_undo">Откатить последнюю правку</string>

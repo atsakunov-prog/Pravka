@@ -48,21 +48,25 @@ class PravkaApp : Application() {
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
 
-    // Dictation dispatcher: Whisper (file-based, owner's default) or the
-    // Nano speech recognizer, per the Settings choice. Every attempt is logged
-    // with metrics (engine, audio length, transcription time, chars) so the
-    // owner can export and compare engines.
+    // File-based transcription: for saved recordings and retries. The live
+    // Google engine can't read a file, so under Google (and by default) saved
+    // files go through Whisper; Nano uses its own path. Every attempt is
+    // logged with metrics (engine, audio length, transcription time, chars).
     suspend fun transcribeDictation(file: File): Result<String> {
         val engine = settings.speechEngine()
+        val fileEngine = when (engine) {
+            Settings.SPEECH_NANO -> Settings.SPEECH_NANO
+            else -> engine.takeIf { it.startsWith("whisper") } ?: Settings.SPEECH_WHISPER_BASE
+        }
         val started = SystemClock.elapsedRealtime()
-        val result = if (engine == Settings.SPEECH_NANO) {
+        val result = if (fileEngine == Settings.SPEECH_NANO) {
             speechProvider.transcribe(file)
         } else {
             whisperProvider.transcribe(file)
         }
         val elapsed = SystemClock.elapsedRealtime() - started
         transcriptionLog.append(
-            engine = engine,
+            engine = fileEngine,
             audioMs = WavFile.durationMs(file),
             transcribeMs = elapsed,
             text = result.getOrNull().orEmpty(),

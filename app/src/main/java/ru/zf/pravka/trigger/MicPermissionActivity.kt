@@ -17,7 +17,7 @@ class MicPermissionActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            PravkaAccessibilityService.instance?.startRecordingNow()
+            PravkaAccessibilityService.instance?.onMicPermissionGranted()
         } else {
             Feedback.toast(this, getString(R.string.dictation_no_mic_permission))
         }
@@ -27,7 +27,7 @@ class MicPermissionActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            PravkaAccessibilityService.instance?.startRecordingNow()
+            PravkaAccessibilityService.instance?.onMicPermissionGranted()
             finish()
         } else {
             requestPermission.launch(Manifest.permission.RECORD_AUDIO)

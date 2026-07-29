@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.content.ContextCompat
@@ -20,6 +21,8 @@ import ru.zf.pravka.R
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.UndoStack
+import ru.zf.pravka.data.Settings
+import ru.zf.pravka.provider.GoogleSpeechSession
 import ru.zf.pravka.target.AccessibilityTarget
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.Haptics
@@ -52,6 +55,10 @@ class PravkaAccessibilityService : AccessibilityService() {
     // the owner may switch apps while dictating, so we can't rely on focus
     // at stop time.
     private var dictationTarget: WeakReference<AccessibilityNodeInfo>? = null
+
+    // Live Google (streaming) dictation session, when that engine is active.
+    private var googleSession: GoogleSpeechSession? = null
+    private var googleStartedAt = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -118,39 +125,123 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // ---- Dictation (short tap): record -> transcribe -> insert -> fix ----
 
-    /** Short tap: stop if recording, else begin. */
+    /** Short tap: stop the active session if any, else start per the engine. */
     private fun onDictateTap() {
+        if (googleSession != null) { stopGoogleDictation(); return }
         if (DictationService.recording) {
             floatingButton?.setBusy(true)
             stopDictation()  // DictationService calls back onRecordingSaved()
-        } else {
-            beginDictation()
+            return
+        }
+        // Starting: the engine choice is a suspend read.
+        scope.launch {
+            if (isGoogleEngine()) beginGoogleDictation() else beginDictation()
         }
     }
+
+    private suspend fun isGoogleEngine(): Boolean =
+        (application as PravkaApp).settings.speechEngine() == Settings.SPEECH_GOOGLE
 
     private fun hasMicPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
 
+    // Only an Activity can request a runtime permission; it calls back into
+    // onMicPermissionGranted(), which re-dispatches by the current engine.
+    private fun requestMicPermission() {
+        startActivity(
+            android.content.Intent(this, MicPermissionActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+
     private fun beginDictation() {
-        if (!hasMicPermission()) {
-            // Only an Activity can request a runtime permission; it calls
-            // startRecordingNow() back on grant.
-            startActivity(
-                android.content.Intent(this, MicPermissionActivity::class.java)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-            return
-        }
+        if (!hasMicPermission()) { requestMicPermission(); return }
         startRecordingNow()
     }
 
+    private fun beginGoogleDictation() {
+        if (!hasMicPermission()) { requestMicPermission(); return }
+        startGoogleNow()
+    }
+
     /** Called by MicPermissionActivity after the permission is granted. */
+    fun onMicPermissionGranted() {
+        scope.launch {
+            if (isGoogleEngine()) startGoogleNow() else startRecordingNow()
+        }
+    }
+
     fun startRecordingNow() {
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
         floatingButton?.setRecording(true)
         Haptics.start(this)
         startDictation()
+    }
+
+    // ---- Live Google (streaming) dictation ----
+
+    private fun startGoogleNow() {
+        if (googleSession != null) return
+        if (!GoogleSpeechSession.isAvailable(this)) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.google_unavailable))
+            return
+        }
+        dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
+        floatingButton?.setRecording(true)
+        Haptics.start(this)
+        // Foreground-mic holder so the recognizer survives app switches. If it
+        // can't start (rare FGS restrictions), recognition still works while
+        // Правка is foregrounded, so don't abort the session over it.
+        runCatching { startMicHold() }
+        googleStartedAt = SystemClock.elapsedRealtime()
+        val session = GoogleSpeechSession(this)
+        googleSession = session
+        session.start(
+            onPartial = { /* realtime text; kept internal for now */ },
+            onDone = { text -> onGoogleDone(text) },
+            onError = { msg -> onGoogleError(msg) },
+        )
+    }
+
+    /** Second tap or the notification's Stop button: finalize the session. */
+    fun stopGoogleDictation() {
+        val session = googleSession ?: return
+        floatingButton?.setRecording(false)
+        floatingButton?.setBusy(true)
+        session.stop()  // -> onGoogleDone
+    }
+
+    private fun onGoogleDone(text: String) {
+        googleSession = null
+        stopMicHold()
+        floatingButton?.setRecording(false)
+        floatingButton?.setBusy(false)
+        val app = application as PravkaApp
+        val wall = SystemClock.elapsedRealtime() - googleStartedAt
+        app.transcriptionLog.append(
+            engine = Settings.SPEECH_GOOGLE,
+            audioMs = wall,
+            transcribeMs = 0,
+            text = text,
+            error = if (text.isBlank()) "пустой результат" else null,
+        )
+        if (text.isBlank()) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.dictation_empty))
+            return
+        }
+        scope.launch { insertDictated(text) }
+    }
+
+    private fun onGoogleError(msg: String) {
+        googleSession = null
+        stopMicHold()
+        floatingButton?.setRecording(false)
+        floatingButton?.setBusy(false)
+        Haptics.error(this)
+        Feedback.toast(this, msg)
     }
 
     /** DictationService hands the finished recording here (same process). */
@@ -329,6 +420,9 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
+        googleSession?.stop()
+        googleSession = null
+        runCatching { stopMicHold() }
         resultBar?.dismiss()
         resultBar = null
         floatingButton?.destroy()
