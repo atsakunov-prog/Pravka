@@ -35,6 +35,7 @@ class FloatingButtonController(
 
     companion object {
         private const val LONG_PRESS_MS = 450L
+        private const val TICKER_ALPHA = 0.5f  // much more see-through than the button
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
         // vermilion circle, paper-white geometric "П"; deep red while recording.
@@ -134,7 +135,7 @@ class FloatingButtonController(
             tickerVisible = true
             t.visibility = View.VISIBLE
             t.alpha = 0f
-            t.animate().alpha(0.88f).setDuration(180).start()
+            t.animate().alpha(TICKER_ALPHA).setDuration(180).start()
         }
     }
 
@@ -165,7 +166,7 @@ class FloatingButtonController(
         pill.elevation = dp(4).toFloat()
         val tv = android.widget.TextView(service).apply {
             setTextColor(PAPER)
-            textSize = 13f
+            textSize = 17f
             setSingleLine(true)
             ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
             marqueeRepeatLimit = -1

@@ -101,6 +101,7 @@
     <string name="transcript_copied">Скопировано</string>
     <string name="transcripts_export_json">Выгрузить JSON</string>
     <string name="transcripts_export_csv">Выгрузить метрики (CSV)</string>
+    <string name="transcripts_export_log">Выгрузить лог диктовки</string>
     <string name="draft_header">Прерванная диктовка — восстановленный текст</string>
     <string name="draft_copy">Копировать</string>
     <string name="draft_delete">Удалить</string>

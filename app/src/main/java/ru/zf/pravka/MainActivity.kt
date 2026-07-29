@@ -102,6 +102,7 @@ class MainActivity : ComponentActivity() {
                     historyLog = app.historyLog,
                     transcriptionLog = app.transcriptionLog,
                     liveDraft = app.liveDraft,
+                    eventLog = app.eventLog,
                     nanoProvider = app.nanoProvider,
                     speechProvider = app.speechProvider,
                     whisperProvider = app.whisperProvider,
@@ -141,6 +142,7 @@ private fun MainScreen(
     historyLog: HistoryLog,
     transcriptionLog: ru.zf.pravka.data.TranscriptionLog,
     liveDraft: ru.zf.pravka.data.LiveDraft,
+    eventLog: ru.zf.pravka.data.EventLog,
     nanoProvider: ru.zf.pravka.provider.NanoProvider,
     speechProvider: ru.zf.pravka.provider.SpeechProvider,
     whisperProvider: ru.zf.pravka.provider.WhisperProvider,
@@ -192,7 +194,7 @@ private fun MainScreen(
                 Tab.SETTINGS -> SettingsTab(settings, nanoProvider, speechProvider, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore)
                 Tab.PROMPTS -> PromptsTab(promptStore)
-                Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft)
+                Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
                 Tab.STATS -> StatsTab(stats, historyLog)
             }
         }
@@ -1074,6 +1076,7 @@ private fun PromptEditor(
 private fun TranscriptsTab(
     transcriptionLog: ru.zf.pravka.data.TranscriptionLog,
     liveDraft: ru.zf.pravka.data.LiveDraft,
+    eventLog: ru.zf.pravka.data.EventLog,
 ) {
     val context = LocalContext.current
     val log = remember { transcriptionLog.readLast(200) }
@@ -1147,6 +1150,11 @@ private fun TranscriptsTab(
                     share(transcriptionLog.shareMetricsCsvIntent(), R.string.transcripts_export_csv)
                 }) { Text(stringResource(R.string.transcripts_export_csv)) }
             }
+        }
+        if (eventLog.exists()) {
+            OutlinedButton(onClick = {
+                share(eventLog.shareIntent(), R.string.transcripts_export_log)
+            }) { Text(stringResource(R.string.transcripts_export_log)) }
         }
 
         if (log.isEmpty()) {

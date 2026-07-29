@@ -39,9 +39,12 @@ class GoogleSpeechSession(
     private var onCheckpoint: (String) -> Unit = {}
     private var onDone: (String) -> Unit = {}
     private var onError: (String) -> Unit = {}
+    private var onLog: (String) -> Unit = {}
 
     companion object {
-        private const val MAX_ERROR_STREAK = 6
+        // Only give up after a long run of pure errors with no speech at all
+        // (a genuinely dead mic), never on a transient blip mid-dictation.
+        private const val MAX_ERROR_STREAK = 40
 
         private fun onDeviceSupported() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
@@ -71,14 +74,20 @@ class GoogleSpeechSession(
         onCheckpoint: (String) -> Unit,
         onDone: (String) -> Unit,
         onError: (String) -> Unit,
+        onLog: (String) -> Unit = {},
     ) {
         this.onPartial = onPartial
         this.onCheckpoint = onCheckpoint
         this.onDone = onDone
         this.onError = onError
+        this.onLog = onLog
         main.post {
+            val onDevice = onDeviceSupported() &&
+                runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
+            onLog("start onDevice=$onDevice biasing=${biasing.size}")
             val r = createRecognizer()
             if (r == null) {
+                onLog("start FAILED: no recognizer")
                 onError("Распознавание недоступно на устройстве")
                 return@post
             }
@@ -143,7 +152,10 @@ class GoogleSpeechSession(
 
     private fun restartSoon() {
         if (!active) { finish(); return }
-        main.postDelayed({ if (active) startListening() }, 250)
+        // Gentle backoff so a burst of errors doesn't hot-loop, but stay quick
+        // enough that a normal pause between phrases feels seamless.
+        val delay = (250L + errorStreak * 100L).coerceAtMost(800L)
+        main.postDelayed({ if (active) startListening() }, delay)
     }
 
     private fun firstResult(bundle: Bundle?): String? =
@@ -163,15 +175,16 @@ class GoogleSpeechSession(
         val r = recognizer
         recognizer = null
         runCatching { r?.destroy() }
+        onLog("finish len=${text.length}")
         onDone(text)
     }
 
     private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {}
-        override fun onBeginningOfSpeech() { errorStreak = 0 }
+        override fun onReadyForSpeech(params: Bundle?) { onLog("ready") }
+        override fun onBeginningOfSpeech() { errorStreak = 0; onLog("beginSpeech") }
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onEndOfSpeech() {}
+        override fun onEndOfSpeech() { onLog("endSpeech") }
 
         override fun onPartialResults(partialResults: Bundle?) {
             val partial = firstResult(partialResults) ?: return
@@ -183,27 +196,32 @@ class GoogleSpeechSession(
             errorStreak = 0
             appendSegment(results)
             val checkpoint = finalized.toString()
+            onLog("result total=${checkpoint.length} active=$active stopping=$stopping")
             onPartial(checkpoint)
             onCheckpoint(checkpoint)  // durable: persisted so a crash can't lose it
             if (active && !stopping) restartSoon() else finish()
         }
 
         override fun onError(error: Int) {
-            val benign = error == SpeechRecognizer.ERROR_NO_MATCH ||
-                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+            onLog("error code=$error active=$active stopping=$stopping streak=$errorStreak")
+            // If the user stopped, wrap up. Otherwise NEVER end the take on an
+            // error - a mid-dictation blip must not silently cut it off. Just
+            // keep restarting (with backoff); only surrender after a long run
+            // of pure errors with no speech at all (a truly dead mic).
             when {
                 stopping -> finish()
-                benign && active -> restartSoon()  // just a silent stretch
                 error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY && active -> main.postDelayed({
                     if (!active) { finish(); return@postDelayed }
+                    onLog("recreate (busy)")
                     runCatching { recognizer?.destroy() }
                     recognizer = createRecognizer()?.also { it.setRecognitionListener(this) }
                     if (recognizer != null) startListening() else finish()
                 }, 300)
                 active -> {
-                    // Bail out of a hot error loop rather than spin forever.
-                    if (++errorStreak >= MAX_ERROR_STREAK) {
+                    errorStreak++
+                    if (errorStreak >= MAX_ERROR_STREAK) {
                         val text = finalized.toString().trim()
+                        onLog("giveUp streak=$errorStreak len=${text.length}")
                         if (text.isEmpty()) { active = false; recognizer = null; onError(errorText(error)) }
                         else finish()
                     } else {

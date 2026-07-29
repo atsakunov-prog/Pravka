@@ -225,6 +225,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             onCheckpoint = { text -> app.liveDraft.save(text) },
             onDone = { text -> onGoogleDone(text) },
             onError = { msg -> onGoogleError(msg) },
+            onLog = { line -> app.eventLog.add(line) },
         )
     }
 
@@ -239,6 +240,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     /** Second tap or the notification's Stop button: finalize the session. */
     fun stopGoogleDictation() {
         val session = googleSession ?: return
+        (application as PravkaApp).eventLog.add("stop requested")
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(true)
         session.stop()  // -> onGoogleDone
@@ -333,8 +335,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             return
         }
         val existing = if (node.isShowingHintText) "" else node.text?.toString().orEmpty()
+        // Append at the end by default. After our own ACTION_SET_TEXT the field
+        // often reports the cursor back at 0, which made a follow-up dictation
+        // land at the START of the phrase. Only honour a genuine mid-text cursor
+        // (>0 and not already at the end); otherwise append.
         val selEnd = node.textSelectionEnd
-        val cursor = if (selEnd in 0..existing.length) selEnd else existing.length
+        val cursor = if (selEnd in 1..existing.length) selEnd else existing.length
         val needsSpaceBefore = cursor > 0 && !existing[cursor - 1].isWhitespace()
         val insert = (if (needsSpaceBefore) " " else "") + text
         val newText = existing.substring(0, cursor) + insert + existing.substring(cursor)

@@ -10,6 +10,7 @@ import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Recordings
 import ru.zf.pravka.data.Settings
+import ru.zf.pravka.data.EventLog
 import ru.zf.pravka.data.LiveDraft
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.TranscriptionLog
@@ -33,6 +34,7 @@ class PravkaApp : Application() {
     val historyLog by lazy { HistoryLog(this) }
     val transcriptionLog by lazy { TranscriptionLog(this) }
     val liveDraft by lazy { LiveDraft(this) }
+    val eventLog by lazy { EventLog(this) }
 
     val httpClient by lazy {
         OkHttpClient.Builder()
