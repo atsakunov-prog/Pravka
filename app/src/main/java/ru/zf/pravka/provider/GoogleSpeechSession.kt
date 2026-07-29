@@ -155,7 +155,19 @@ class GoogleSpeechSession(
         // Gentle backoff so a burst of errors doesn't hot-loop, but stay quick
         // enough that a normal pause between phrases feels seamless.
         val delay = (250L + errorStreak * 100L).coerceAtMost(800L)
-        main.postDelayed({ if (active) startListening() }, delay)
+        main.postDelayed({
+            if (!active) return@postDelayed
+            // A long take can exhaust the on-device recognizer (it looks like a
+            // hard stop ~1 min in). After consecutive errors, swap in a FRESH
+            // recognizer instead of reusing the stuck one.
+            if (errorStreak >= 2) {
+                onLog("recreate recognizer (streak=$errorStreak)")
+                runCatching { recognizer?.destroy() }
+                recognizer = createRecognizer()?.also { it.setRecognitionListener(listener) }
+                if (recognizer == null) { finish(); return@postDelayed }
+            }
+            startListening()
+        }, delay)
     }
 
     private fun firstResult(bundle: Bundle?): String? =

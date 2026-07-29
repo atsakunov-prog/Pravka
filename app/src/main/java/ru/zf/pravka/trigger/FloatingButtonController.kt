@@ -141,9 +141,8 @@ class FloatingButtonController(
 
     fun updateTicker(text: String) {
         val tv = tickerText ?: return
-        // Show the recent tail; marquee scrolls it leftwards like a ticker.
-        tv.text = text.takeLast(160)
-        tv.isSelected = true  // (re)start the marquee
+        // START-ellipsize keeps the newest words on the right; just set the tail.
+        tv.text = text.takeLast(200)
     }
 
     fun hideTicker() {
@@ -168,11 +167,12 @@ class FloatingButtonController(
             setTextColor(PAPER)
             textSize = 17f
             setSingleLine(true)
-            ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
-            marqueeRepeatLimit = -1
+            // Always keep the newest words visible on the right and truncate the
+            // OLD end with a leading ellipsis. This makes words flow in from the
+            // right (telegraph feel) with no jump-back-to-start that marquee had.
+            ellipsize = android.text.TextUtils.TruncateAt.START
             isHorizontalFadingEdgeEnabled = true
-            setHorizontallyScrolling(true)
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
             val padH = dp(14)
             setPadding(padH, 0, padH, 0)
         }
