@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Keep the CPU awake during dictation so recognition doesn't stall if
+         the device would otherwise doze. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Needed to see (and bind) the system speech recognition service on
          Android 11+; without it SpeechRecognizer reports "unavailable". -->

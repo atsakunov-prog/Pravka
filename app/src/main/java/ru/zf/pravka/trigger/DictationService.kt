@@ -55,6 +55,24 @@ class DictationService : Service() {
     private var worker: Thread? = null
     @Volatile private var active = false
     private lateinit var currentFile: File
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+
+    // A partial wake lock keeps the CPU running so dictation keeps recognizing
+    // even if the screen turns off / the device tries to doze. Timeout is a
+    // safety leak-guard; normal takes release it explicitly on stop.
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "pravka:dictation").apply {
+            setReferenceCounted(false)
+            runCatching { acquire(15 * 60 * 1000L) }
+        }
+    }
+
+    private fun releaseWakeLock() {
+        runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
+        wakeLock = null
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -80,10 +98,12 @@ class DictationService : Service() {
         if (holding) return
         holding = true
         startForegroundWithType(holdStop = true)
+        acquireWakeLock()
     }
 
     private fun holdStop() {
         holding = false
+        releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -92,6 +112,7 @@ class DictationService : Service() {
     private fun start() {
         if (active) return
         startForegroundWithType()
+        acquireWakeLock()
 
         currentFile = Recordings(this).newFile()
         val minBuf = AudioRecord.getMinBufferSize(
@@ -128,6 +149,7 @@ class DictationService : Service() {
     }
 
     private fun stop() {
+        releaseWakeLock()
         if (active) {
             active = false
             recording = false
@@ -152,6 +174,7 @@ class DictationService : Service() {
 
     override fun onDestroy() {
         if (active) stop()
+        releaseWakeLock()
         super.onDestroy()
     }
 

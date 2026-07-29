@@ -160,7 +160,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         startRecordingNow()
     }
 
-    private fun beginGoogleDictation() {
+    private suspend fun beginGoogleDictation() {
         if (!hasMicPermission()) { requestMicPermission(); return }
         startGoogleNow()
     }
@@ -172,6 +172,18 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    // Names/terms/brands the recognizer should be biased toward - the owner's
+    // dictionary (both protected forms and the correct sides of replacements).
+    private suspend fun collectBiasing(): List<String> = runCatching {
+        val app = application as PravkaApp
+        val words = LinkedHashSet<String>()
+        for (e in app.dictionaryStore.all()) {
+            e.from.takeIf { it.isNotBlank() }?.let { words.add(it) }
+            e.to.takeIf { it.isNotBlank() }?.let { words.add(it) }
+        }
+        words.toList()
+    }.getOrDefault(emptyList())
+
     fun startRecordingNow() {
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
         floatingButton?.setRecording(true)
@@ -181,15 +193,17 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // ---- Live Google (streaming) dictation ----
 
-    private fun startGoogleNow() {
+    private suspend fun startGoogleNow() {
         if (googleSession != null) return
         if (!GoogleSpeechSession.isAvailable(this)) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.google_unavailable))
             return
         }
+        val biasing = collectBiasing()
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
         floatingButton?.setRecording(true)
+        floatingButton?.showTicker()
         Haptics.start(this)
         // Foreground-mic holder so the recognizer survives app switches. If it
         // can't start (rare FGS restrictions), recognition still works while
@@ -198,13 +212,16 @@ class PravkaAccessibilityService : AccessibilityService() {
         googleStartedAt = SystemClock.elapsedRealtime()
         lastDraftAt = 0L
         val app = application as PravkaApp
-        val session = GoogleSpeechSession(this)
+        val session = GoogleSpeechSession(this, biasing = biasing)
         googleSession = session
         session.start(
-            // Throttle the in-progress text to disk (~1.2s) and force a durable
-            // save at every finalized segment, so an interrupted take (phone
-            // dies, process killed) can still be recovered from the app.
-            onPartial = { live -> saveDraftThrottled(live) },
+            // Live text feeds the on-screen ticker; throttle it to disk (~1.2s)
+            // and force a durable save at every finalized segment, so an
+            // interrupted take (phone dies, killed) can still be recovered.
+            onPartial = { live ->
+                floatingButton?.updateTicker(live)
+                saveDraftThrottled(live)
+            },
             onCheckpoint = { text -> app.liveDraft.save(text) },
             onDone = { text -> onGoogleDone(text) },
             onError = { msg -> onGoogleError(msg) },
@@ -230,6 +247,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     private fun onGoogleDone(text: String) {
         googleSession = null
         stopMicHold()
+        floatingButton?.hideTicker()
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(false)
         val app = application as PravkaApp
@@ -255,6 +273,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     private fun onGoogleError(msg: String) {
         googleSession = null
         stopMicHold()
+        floatingButton?.hideTicker()
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(false)
         Haptics.error(this)

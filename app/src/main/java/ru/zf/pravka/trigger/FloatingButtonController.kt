@@ -60,6 +60,13 @@ class FloatingButtonController(
     private var recording = false
     private var visible = false
 
+    // Live-dictation "telegraph": a translucent pill next to the button where
+    // recognized words crawl by (marquee) while the Google engine listens.
+    private var ticker: FrameLayout? = null
+    private var tickerText: android.widget.TextView? = null
+    private var tickerParams: WindowManager.LayoutParams? = null
+    private var tickerVisible = false
+
     private fun dp(value: Int): Int = (value * density).toInt()
 
     private fun screenSize(): Pair<Int, Int> {
@@ -115,9 +122,103 @@ class FloatingButtonController(
         }
     }
 
+    // ---- Live-dictation ticker (telegraph) ----
+
+    fun showTicker() {
+        if (ticker == null) createTicker()
+        positionTicker()
+        val t = ticker ?: return
+        tickerText?.text = ""
+        runCatching { windowManager.updateViewLayout(t, tickerParams) }
+        if (!tickerVisible) {
+            tickerVisible = true
+            t.visibility = View.VISIBLE
+            t.alpha = 0f
+            t.animate().alpha(0.88f).setDuration(180).start()
+        }
+    }
+
+    fun updateTicker(text: String) {
+        val tv = tickerText ?: return
+        // Show the recent tail; marquee scrolls it leftwards like a ticker.
+        tv.text = text.takeLast(160)
+        tv.isSelected = true  // (re)start the marquee
+    }
+
+    fun hideTicker() {
+        val t = ticker ?: return
+        if (!tickerVisible) return
+        tickerVisible = false
+        t.animate().alpha(0f).setDuration(220).withEndAction {
+            t.visibility = View.GONE
+        }.start()
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun createTicker() {
+        val pill = FrameLayout(service)
+        pill.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = buttonSize / 2f
+            setColor(VERMILION)
+        }
+        pill.elevation = dp(4).toFloat()
+        val tv = android.widget.TextView(service).apply {
+            setTextColor(PAPER)
+            textSize = 13f
+            setSingleLine(true)
+            ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+            marqueeRepeatLimit = -1
+            isHorizontalFadingEdgeEnabled = true
+            setHorizontallyScrolling(true)
+            gravity = Gravity.CENTER_VERTICAL
+            val padH = dp(14)
+            setPadding(padH, 0, padH, 0)
+        }
+        tickerText = tv
+        pill.addView(
+            tv,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        val p = WindowManager.LayoutParams(
+            buttonSize * 4,
+            buttonSize,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+        tickerParams = p
+        ticker = pill
+        runCatching { windowManager.addView(pill, p) }
+        pill.visibility = View.GONE
+    }
+
+    // Sit the pill beside the button, on the side that has room: button near
+    // the left edge -> ticker to its right, and vice versa.
+    private fun positionTicker() {
+        val bp = params ?: return
+        val tp = tickerParams ?: return
+        val (w, _) = screenSize()
+        val tickerW = buttonSize * 4
+        val gap = dp(8)
+        tp.width = tickerW
+        tp.height = buttonSize
+        tp.y = bp.y
+        val buttonCenterX = bp.x + buttonSize / 2
+        tp.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap
+        else bp.x - tickerW - gap
+        tp.x = tp.x.coerceIn(0, (w - tickerW).coerceAtLeast(0))
+    }
+
     fun destroy() {
         button?.let { runCatching { windowManager.removeView(it) } }
         button = null
+        ticker?.let { runCatching { windowManager.removeView(it) } }
+        ticker = null
     }
 
     @SuppressLint("ClickableViewAccessibility")

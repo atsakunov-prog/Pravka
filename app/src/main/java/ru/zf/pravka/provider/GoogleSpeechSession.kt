@@ -23,6 +23,10 @@ import android.speech.SpeechRecognizer
 class GoogleSpeechSession(
     private val context: Context,
     private val language: String = "ru-RU",
+    // Phrases to bias recognition toward (names, terms, brands from the
+    // dictionary). Improves rare-word/English accuracy on supporting devices;
+    // ignored where the extra isn't honored.
+    private val biasing: List<String> = emptyList(),
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
@@ -119,6 +123,17 @@ class GoogleSpeechSession(
         // owner draws breath; we restart on segment end regardless.
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Auto punctuation/capitalization, tuned for quality over latency -
+            // cleaner raw text for CLEAN to work from.
+            runCatching {
+                putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_QUALITY)
+            }
+            // Bias toward the owner's vocabulary (names, brands, terms).
+            if (biasing.isNotEmpty()) runCatching {
+                putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(biasing.take(100)))
+            }
+        }
     }
 
     private fun startListening() {
