@@ -11,6 +11,9 @@ import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Recordings
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
+import ru.zf.pravka.data.TranscriptionLog
+import ru.zf.pravka.data.WavFile
+import android.os.SystemClock
 import java.io.File
 import ru.zf.pravka.provider.ClaudeProvider
 import ru.zf.pravka.provider.NanoProvider
@@ -27,6 +30,7 @@ class PravkaApp : Application() {
     val stats by lazy { Stats(this) }
     val dictionaryStore by lazy { DictionaryStore(this) }
     val historyLog by lazy { HistoryLog(this) }
+    val transcriptionLog by lazy { TranscriptionLog(this) }
 
     val httpClient by lazy {
         OkHttpClient.Builder()
@@ -45,13 +49,27 @@ class PravkaApp : Application() {
     val recordings by lazy { Recordings(this) }
 
     // Dictation dispatcher: Whisper (file-based, owner's default) or the
-    // Nano speech recognizer, per the Settings choice.
-    suspend fun transcribeDictation(file: File): Result<String> =
-        if (settings.speechEngine() == Settings.SPEECH_NANO) {
+    // Nano speech recognizer, per the Settings choice. Every attempt is logged
+    // with metrics (engine, audio length, transcription time, chars) so the
+    // owner can export and compare engines.
+    suspend fun transcribeDictation(file: File): Result<String> {
+        val engine = settings.speechEngine()
+        val started = SystemClock.elapsedRealtime()
+        val result = if (engine == Settings.SPEECH_NANO) {
             speechProvider.transcribe(file)
         } else {
             whisperProvider.transcribe(file)
         }
+        val elapsed = SystemClock.elapsedRealtime() - started
+        transcriptionLog.append(
+            engine = engine,
+            audioMs = WavFile.durationMs(file),
+            transcribeMs = elapsed,
+            text = result.getOrNull().orEmpty(),
+            error = result.exceptionOrNull()?.message,
+        )
+        return result
+    }
 
     val engine by lazy {
         ProofreadEngine(

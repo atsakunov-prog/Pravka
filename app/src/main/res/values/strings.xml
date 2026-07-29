@@ -90,9 +90,11 @@
     <string name="tab_prompts">Промпты</string>
     <string name="tab_stats">Статистика</string>
     <string name="tab_transcripts">Расшифровки</string>
-    <string name="transcripts_hint">Все правки и расшифровки, свежие сверху. Нажми на любую — текст скопируется.</string>
-    <string name="transcripts_empty">Пока пусто — сделай правку или диктовку.</string>
+    <string name="transcripts_hint">Все расшифровки, свежие сверху. Нажми на любую — текст скопируется. Под каждой — движок, длина аудио, время расшифровки и число символов.</string>
+    <string name="transcripts_empty">Пока пусто — надиктуй что-нибудь.</string>
     <string name="transcript_copied">Скопировано</string>
+    <string name="transcripts_export_json">Выгрузить JSON</string>
+    <string name="transcripts_export_csv">Выгрузить метрики (CSV)</string>
 
     <string name="dict_add">+ Запись</string>
     <string name="dict_edit">Запись словаря</string>

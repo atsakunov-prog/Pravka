@@ -100,6 +100,7 @@ class MainActivity : ComponentActivity() {
                     stats = app.stats,
                     dictionaryStore = app.dictionaryStore,
                     historyLog = app.historyLog,
+                    transcriptionLog = app.transcriptionLog,
                     nanoProvider = app.nanoProvider,
                     speechProvider = app.speechProvider,
                     whisperProvider = app.whisperProvider,
@@ -137,6 +138,7 @@ private fun MainScreen(
     stats: Stats,
     dictionaryStore: DictionaryStore,
     historyLog: HistoryLog,
+    transcriptionLog: ru.zf.pravka.data.TranscriptionLog,
     nanoProvider: ru.zf.pravka.provider.NanoProvider,
     speechProvider: ru.zf.pravka.provider.SpeechProvider,
     whisperProvider: ru.zf.pravka.provider.WhisperProvider,
@@ -188,7 +190,7 @@ private fun MainScreen(
                 Tab.SETTINGS -> SettingsTab(settings, nanoProvider, speechProvider, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore)
                 Tab.PROMPTS -> PromptsTab(promptStore)
-                Tab.TRANSCRIPTS -> TranscriptsTab(historyLog)
+                Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog)
                 Tab.STATS -> StatsTab(stats, historyLog)
             }
         }
@@ -1040,15 +1042,30 @@ private fun PromptEditor(
 // Full text of every fix/dictation, newest first - tap a card to copy its
 // result to the clipboard (owner's request, Wispr-style history).
 @Composable
-private fun TranscriptsTab(historyLog: HistoryLog) {
+private fun TranscriptsTab(transcriptionLog: ru.zf.pravka.data.TranscriptionLog) {
     val context = LocalContext.current
-    val log = remember { historyLog.readLast(100) }
-    val loc = Locale.forLanguageTag("ru")
+    val log = remember { transcriptionLog.readLast(200) }
+    val ruLoc = Locale.forLanguageTag("ru")
 
     fun copy(text: String) {
         val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         cm.setPrimaryClip(android.content.ClipData.newPlainText("Правка", text))
         Feedback.toast(context, context.getString(R.string.transcript_copied))
+    }
+
+    fun share(intent: android.content.Intent, chooserRes: Int) {
+        runCatching {
+            context.startActivity(
+                android.content.Intent.createChooser(intent, context.getString(chooserRes))
+            )
+        }.onFailure { Feedback.toast(context, context.getString(R.string.transcripts_empty)) }
+    }
+
+    fun engineLabel(engine: String): String = when (engine) {
+        Settings.SPEECH_WHISPER_SMALL -> "Whisper small"
+        Settings.SPEECH_WHISPER_BASE -> "Whisper base"
+        Settings.SPEECH_NANO -> "Gemini Nano"
+        else -> engine
     }
 
     Column(
@@ -1060,26 +1077,60 @@ private fun TranscriptsTab(historyLog: HistoryLog) {
     ) {
         ScreenTitle(stringResource(R.string.tab_transcripts))
         HintText(stringResource(R.string.transcripts_hint))
+
+        if (transcriptionLog.exists()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    share(transcriptionLog.shareJsonIntent(), R.string.transcripts_export_json)
+                }) { Text(stringResource(R.string.transcripts_export_json)) }
+                OutlinedButton(onClick = {
+                    share(transcriptionLog.shareMetricsCsvIntent(), R.string.transcripts_export_csv)
+                }) { Text(stringResource(R.string.transcripts_export_csv)) }
+            }
+        }
+
         if (log.isEmpty()) {
             Text(stringResource(R.string.transcripts_empty), style = MaterialTheme.typography.bodyMedium)
         }
         for (entry in log) {
-            val body = entry.output.ifBlank { entry.input }
-            if (body.isBlank()) continue
-            Card(onClick = { copy(body) }, modifier = Modifier.fillMaxWidth()) {
+            Card(
+                onClick = { if (entry.text.isNotBlank()) copy(entry.text) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Column(Modifier.padding(14.dp)) {
+                    // Metrics line: engine · audio · transcription time · chars.
+                    val meta = buildString {
+                        append(engineLabel(entry.engine))
+                        append(" · ")
+                        append(String.format(ruLoc, "%.1f", entry.audioMs / 1000.0)).append(" с аудио")
+                        append(" · ")
+                        append(String.format(ruLoc, "%.1f", entry.transcribeMs / 1000.0)).append(" с расшифровка")
+                        append(" · ")
+                        append(entry.chars).append(" симв.")
+                        if (entry.realtimeFactor > 0) {
+                            append(" · ×")
+                            append(String.format(ruLoc, "%.2f", entry.realtimeFactor))
+                        }
+                    }
                     Text(
-                        entry.ts.replace('T', ' ').take(16) +
-                            (entry.error?.let { " · ошибка" } ?: ""),
+                        meta,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (entry.error != null) MaterialTheme.colorScheme.error
+                        color = if (!entry.ok) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Text(
+                        entry.ts.replace('T', ' ').take(16),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     entry.error?.let {
+                        Spacer(Modifier.height(4.dp))
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
-                    Spacer(Modifier.height(4.dp))
-                    Text(body, style = MaterialTheme.typography.bodyMedium)
+                    if (entry.text.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(entry.text, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
         }
