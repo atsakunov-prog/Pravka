@@ -143,7 +143,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (!hasMicPermission()) { requestMicPermission(); return }
         when ((application as PravkaApp).settings.speechEngine()) {
             Settings.SPEECH_GOOGLE -> startGoogleNow()
-            Settings.SPEECH_YANDEX -> startYandexNow()
+            Settings.SPEECH_YANDEX -> startGoogleNow()  // Yandex parked - fall back to Google
             else -> startRecordingNow()
         }
     }

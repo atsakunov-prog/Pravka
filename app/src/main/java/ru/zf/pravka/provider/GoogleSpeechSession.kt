@@ -35,6 +35,7 @@ class GoogleSpeechSession(
     private var stopping = false
     private var errorStreak = 0
     private var restartPending = false
+    private var producedAny = false   // did this session ever start recognizing?
 
     private var onPartial: (String) -> Unit = {}
     private var onCheckpoint: (String) -> Unit = {}
@@ -192,7 +193,7 @@ class GoogleSpeechSession(
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) { onLog("ready") }
-        override fun onBeginningOfSpeech() { errorStreak = 0; onLog("beginSpeech") }
+        override fun onBeginningOfSpeech() { errorStreak = 0; producedAny = true; onLog("beginSpeech") }
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() { onLog("endSpeech") }
@@ -205,6 +206,7 @@ class GoogleSpeechSession(
 
         override fun onResults(results: Bundle?) {
             errorStreak = 0
+            producedAny = true
             appendSegment(results)
             val checkpoint = finalized.toString()
             onLog("result total=${checkpoint.length} active=$active stopping=$stopping")
@@ -221,6 +223,20 @@ class GoogleSpeechSession(
             // at all (a genuinely dead mic).
             if (stopping || !active) { finish(); return }
             errorStreak++
+            // Wedged system recognizer (busy/client/disconnected) that never
+            // starts: fail fast with an actionable message instead of churning
+            // silently. Plain silence (NO_MATCH / SPEECH_TIMEOUT) is NOT this.
+            val wedged = error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+                error == SpeechRecognizer.ERROR_CLIENT ||
+                error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED
+            if (!producedAny && wedged && errorStreak >= 4) {
+                onLog("giveUp (never started, wedged) streak=$errorStreak code=$error")
+                active = false
+                val r = recognizer; recognizer = null
+                runCatching { r?.destroy() }
+                onError("Системный распознаватель занят. Выключи и включи «Правку» в Спец. возможностях (или перезагрузи телефон) и попробуй снова.")
+                return
+            }
             if (errorStreak >= MAX_ERROR_STREAK) {
                 val text = finalized.toString().trim()
                 onLog("giveUp streak=$errorStreak len=${text.length}")

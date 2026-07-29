@@ -496,6 +496,10 @@ private fun SpeechSection(
     }
 
     LaunchedEffect(engine, downloading, yaKey, yaFolder) { status = statusFor(engine) }
+    // Yandex is temporarily parked - move anyone still on it back to Google.
+    LaunchedEffect(engine) {
+        if (engine == Settings.SPEECH_YANDEX) settings.setSpeechEngine(Settings.SPEECH_GOOGLE)
+    }
 
     SectionCard(label = stringResource(R.string.settings_speech_title)) {
         HintText(stringResource(R.string.speech_engine_label))
@@ -503,11 +507,6 @@ private fun SpeechSection(
             label = stringResource(R.string.speech_engine_google),
             selected = isGoogle,
             onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_GOOGLE) } },
-        )
-        ModelOption(
-            label = stringResource(R.string.speech_engine_yandex),
-            selected = isYandex,
-            onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_YANDEX) } },
         )
         ModelOption(
             label = stringResource(R.string.speech_engine_whisper_small),
