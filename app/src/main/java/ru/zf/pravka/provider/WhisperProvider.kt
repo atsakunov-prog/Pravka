@@ -94,7 +94,10 @@ class WhisperProvider(
             val ctx = context(engine)
             val samples = decodeWav(wav)
             if (samples.isEmpty()) throw WhisperException("Пустая или нечитаемая запись.")
-            val threads = Runtime.getRuntime().availableProcessors().coerceIn(4, 8)
+            // 4 threads targets the phone's performance cores; piling on the
+            // little cores (availableProcessors is 8-9 on Tensor) just adds
+            // scheduling contention and runs slower.
+            val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
             val text = WhisperNative.transcribe(ctx, samples, threads, "ru").trim()
             if (text.isEmpty()) throw WhisperException("Распознавание вернуло пустой текст.")
             text
