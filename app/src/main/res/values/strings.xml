@@ -61,6 +61,13 @@
     <string name="settings_speech_title">Распознавание речи</string>
     <string name="speech_engine_label">Движок распознавания</string>
     <string name="speech_engine_google">Google — быстрый, как на клавиатуре (по умолчанию)</string>
+    <string name="speech_engine_yandex">Яндекс SpeechKit (облако, realtime)</string>
+    <string name="yandex_ready">Ключ задан — готово</string>
+    <string name="yandex_needs_creds">Введи API-ключ и Folder ID ниже</string>
+    <string name="yandex_no_creds">Не заданы ключ/Folder ID Яндекса — открой Настройки → Распознавание речи</string>
+    <string name="yandex_key_label">Яндекс API-ключ</string>
+    <string name="yandex_folder_label">Яндекс Folder ID</string>
+    <string name="speech_hint_yandex">Облачное потоковое распознавание Яндекса (realtime, нужен интернет). Ключ и Folder ID из Yandex Cloud, хранятся только на телефоне. Короткое нажатие — старт, ещё раз — стоп и вставка. Аудиофайл не сохраняется (текст пишется на лету для восстановления при обрыве).</string>
     <string name="speech_engine_whisper_small">Whisper small (~190 МБ, точнее, но медленно)</string>
     <string name="speech_engine_whisper_base">Whisper base (~60 МБ, быстрее)</string>
     <string name="speech_engine_nano">Gemini Nano (экспериментально)</string>

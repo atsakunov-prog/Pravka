@@ -480,16 +480,22 @@ private fun SpeechSection(
 
     val isGoogle = engine == Settings.SPEECH_GOOGLE
     val isNano = engine == Settings.SPEECH_NANO
+    val isYandex = engine == Settings.SPEECH_YANDEX
+    val yaKey by settings.yandexApiKeyFlow.collectAsState(initial = "")
+    val yaFolder by settings.yandexFolderFlow.collectAsState(initial = "")
 
     suspend fun statusFor(e: String): String = when {
         e == Settings.SPEECH_GOOGLE ->
             if (ru.zf.pravka.provider.GoogleSpeechSession.isAvailable(context)) context.getString(R.string.google_ready)
             else context.getString(R.string.google_unavailable)
+        e == Settings.SPEECH_YANDEX ->
+            if (yaKey.isNotBlank() && yaFolder.isNotBlank()) context.getString(R.string.yandex_ready)
+            else context.getString(R.string.yandex_needs_creds)
         e == Settings.SPEECH_NANO -> speechProvider.statusText()
         else -> whisperProvider.statusText(e)
     }
 
-    LaunchedEffect(engine, downloading) { status = statusFor(engine) }
+    LaunchedEffect(engine, downloading, yaKey, yaFolder) { status = statusFor(engine) }
 
     SectionCard(label = stringResource(R.string.settings_speech_title)) {
         HintText(stringResource(R.string.speech_engine_label))
@@ -497,6 +503,11 @@ private fun SpeechSection(
             label = stringResource(R.string.speech_engine_google),
             selected = isGoogle,
             onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_GOOGLE) } },
+        )
+        ModelOption(
+            label = stringResource(R.string.speech_engine_yandex),
+            selected = isYandex,
+            onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_YANDEX) } },
         )
         ModelOption(
             label = stringResource(R.string.speech_engine_whisper_small),
@@ -516,48 +527,74 @@ private fun SpeechSection(
 
         Spacer(Modifier.height(8.dp))
         Text(status, style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                enabled = !downloading,
-                onClick = {
-                    if (isGoogle) {
-                        // No 190MB download - just ask the system for the offline pack.
-                        ru.zf.pravka.provider.GoogleSpeechSession.triggerModelDownload(context)
-                        Feedback.toast(context, context.getString(R.string.google_prepare_started))
-                        scope.launch { status = statusFor(engine) }
-                    } else {
-                        downloading = true
-                        scope.launch {
-                            val result = if (isNano) speechProvider.download()
-                            else whisperProvider.download(engine)
-                            downloading = false
-                            Feedback.toast(
-                                context,
-                                if (result.isSuccess) context.getString(R.string.speech_download_done)
-                                else context.getString(R.string.speech_download_failed, result.exceptionOrNull()?.message ?: ""),
-                            )
-                            status = statusFor(engine)
+
+        if (isYandex) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = yaKey,
+                onValueChange = { scope.launch { settings.setYandexApiKey(it) } },
+                label = { Text(stringResource(R.string.yandex_key_label)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = yaFolder,
+                onValueChange = { scope.launch { settings.setYandexFolder(it) } },
+                label = { Text(stringResource(R.string.yandex_folder_label)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        // Download / prepare controls (not needed for Yandex - cloud, no model).
+        if (!isYandex) {
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    enabled = !downloading,
+                    onClick = {
+                        if (isGoogle) {
+                            ru.zf.pravka.provider.GoogleSpeechSession.triggerModelDownload(context)
+                            Feedback.toast(context, context.getString(R.string.google_prepare_started))
+                            scope.launch { status = statusFor(engine) }
+                        } else {
+                            downloading = true
+                            scope.launch {
+                                val result = if (isNano) speechProvider.download()
+                                else whisperProvider.download(engine)
+                                downloading = false
+                                Feedback.toast(
+                                    context,
+                                    if (result.isSuccess) context.getString(R.string.speech_download_done)
+                                    else context.getString(R.string.speech_download_failed, result.exceptionOrNull()?.message ?: ""),
+                                )
+                                status = statusFor(engine)
+                            }
                         }
-                    }
-                },
-            ) {
-                Text(
-                    when {
-                        isGoogle -> stringResource(R.string.google_prepare)
-                        downloading -> stringResource(R.string.speech_downloading)
-                        else -> stringResource(R.string.speech_download)
-                    }
-                )
-            }
-            OutlinedButton(onClick = { scope.launch { status = statusFor(engine) } }) {
-                Text(stringResource(R.string.speech_refresh))
+                    },
+                ) {
+                    Text(
+                        when {
+                            isGoogle -> stringResource(R.string.google_prepare)
+                            downloading -> stringResource(R.string.speech_downloading)
+                            else -> stringResource(R.string.speech_download)
+                        }
+                    )
+                }
+                OutlinedButton(onClick = { scope.launch { status = statusFor(engine) } }) {
+                    Text(stringResource(R.string.speech_refresh))
+                }
             }
         }
         Spacer(Modifier.height(6.dp))
         HintText(
             stringResource(
-                if (isGoogle) R.string.speech_hint_google else R.string.speech_hint
+                when {
+                    isGoogle -> R.string.speech_hint_google
+                    isYandex -> R.string.speech_hint_yandex
+                    else -> R.string.speech_hint
+                }
             )
         )
     }
@@ -1099,6 +1136,7 @@ private fun TranscriptsTab(
 
     fun engineLabel(engine: String): String = when (engine) {
         Settings.SPEECH_GOOGLE -> "Google"
+        Settings.SPEECH_YANDEX -> "Yandex"
         Settings.SPEECH_WHISPER_SMALL -> "Whisper small"
         Settings.SPEECH_WHISPER_BASE -> "Whisper base"
         Settings.SPEECH_NANO -> "Gemini Nano"

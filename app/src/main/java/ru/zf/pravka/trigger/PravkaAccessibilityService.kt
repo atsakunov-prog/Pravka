@@ -23,6 +23,7 @@ import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.UndoStack
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.provider.GoogleSpeechSession
+import ru.zf.pravka.provider.YandexSpeechSession
 import ru.zf.pravka.target.AccessibilityTarget
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.Haptics
@@ -56,8 +57,9 @@ class PravkaAccessibilityService : AccessibilityService() {
     // at stop time.
     private var dictationTarget: WeakReference<AccessibilityNodeInfo>? = null
 
-    // Live Google (streaming) dictation session, when that engine is active.
+    // Live streaming dictation sessions (only one active at a time).
     private var googleSession: GoogleSpeechSession? = null
+    private var yandexSession: YandexSpeechSession? = null
     private var googleStartedAt = 0L
 
     override fun onServiceConnected() {
@@ -127,20 +129,24 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Short tap: stop the active session if any, else start per the engine. */
     private fun onDictateTap() {
-        if (googleSession != null) { stopGoogleDictation(); return }
+        if (googleSession != null || yandexSession != null) { stopLiveDictation(); return }
         if (DictationService.recording) {
             floatingButton?.setBusy(true)
             stopDictation()  // DictationService calls back onRecordingSaved()
             return
         }
         // Starting: the engine choice is a suspend read.
-        scope.launch {
-            if (isGoogleEngine()) beginGoogleDictation() else beginDictation()
-        }
+        scope.launch { startForEngine() }
     }
 
-    private suspend fun isGoogleEngine(): Boolean =
-        (application as PravkaApp).settings.speechEngine() == Settings.SPEECH_GOOGLE
+    private suspend fun startForEngine() {
+        if (!hasMicPermission()) { requestMicPermission(); return }
+        when ((application as PravkaApp).settings.speechEngine()) {
+            Settings.SPEECH_GOOGLE -> startGoogleNow()
+            Settings.SPEECH_YANDEX -> startYandexNow()
+            else -> startRecordingNow()
+        }
+    }
 
     private fun hasMicPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
@@ -155,21 +161,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun beginDictation() {
-        if (!hasMicPermission()) { requestMicPermission(); return }
-        startRecordingNow()
-    }
-
-    private suspend fun beginGoogleDictation() {
-        if (!hasMicPermission()) { requestMicPermission(); return }
-        startGoogleNow()
-    }
-
     /** Called by MicPermissionActivity after the permission is granted. */
     fun onMicPermissionGranted() {
-        scope.launch {
-            if (isGoogleEngine()) startGoogleNow() else startRecordingNow()
-        }
+        scope.launch { startForEngine() }
     }
 
     // Names/terms/brands the recognizer should be biased toward - the owner's
@@ -223,8 +217,41 @@ class PravkaAccessibilityService : AccessibilityService() {
                 saveDraftThrottled(live)
             },
             onCheckpoint = { text -> app.liveDraft.save(text) },
-            onDone = { text -> onGoogleDone(text) },
-            onError = { msg -> onGoogleError(msg) },
+            onDone = { text -> onLiveDone(Settings.SPEECH_GOOGLE, text) },
+            onError = { msg -> onLiveError(msg) },
+            onLog = { line -> app.eventLog.add(line) },
+        )
+    }
+
+    // ---- Live Yandex SpeechKit (streaming, cloud) dictation ----
+
+    private suspend fun startYandexNow() {
+        if (yandexSession != null) return
+        val app = application as PravkaApp
+        val key = app.settings.yandexApiKey()
+        val folder = app.settings.yandexFolder()
+        if (key.isBlank() || folder.isBlank()) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.yandex_no_creds))
+            return
+        }
+        dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
+        floatingButton?.setRecording(true)
+        floatingButton?.showTicker()
+        Haptics.start(this)
+        runCatching { startMicHold() }
+        googleStartedAt = SystemClock.elapsedRealtime()
+        lastDraftAt = 0L
+        val session = YandexSpeechSession(key, folder)
+        yandexSession = session
+        session.start(
+            onPartial = { live ->
+                floatingButton?.updateTicker(live)
+                saveDraftThrottled(live)
+            },
+            onCheckpoint = { text -> app.liveDraft.save(text) },
+            onDone = { text -> onLiveDone(Settings.SPEECH_YANDEX, text) },
+            onError = { msg -> onLiveError(msg) },
             onLog = { line -> app.eventLog.add(line) },
         )
     }
@@ -237,17 +264,21 @@ class PravkaAccessibilityService : AccessibilityService() {
         (application as PravkaApp).liveDraft.save(text)
     }
 
-    /** Second tap or the notification's Stop button: finalize the session. */
-    fun stopGoogleDictation() {
-        val session = googleSession ?: return
+    /** Second tap or the notification's Stop button: finalize the live take. */
+    fun stopLiveDictation() {
+        val g = googleSession
+        val y = yandexSession
+        if (g == null && y == null) return
         (application as PravkaApp).eventLog.add("stop requested")
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(true)
-        session.stop()  // -> onGoogleDone
+        g?.stop()  // -> onLiveDone
+        y?.stop()
     }
 
-    private fun onGoogleDone(text: String) {
+    private fun onLiveDone(engine: String, text: String) {
         googleSession = null
+        yandexSession = null
         stopMicHold()
         floatingButton?.hideTicker()
         floatingButton?.setRecording(false)
@@ -255,7 +286,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         val app = application as PravkaApp
         val wall = SystemClock.elapsedRealtime() - googleStartedAt
         app.transcriptionLog.append(
-            engine = Settings.SPEECH_GOOGLE,
+            engine = engine,
             audioMs = wall,
             transcribeMs = 0,
             text = text,
@@ -272,8 +303,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch { insertDictated(text) }
     }
 
-    private fun onGoogleError(msg: String) {
+    private fun onLiveError(msg: String) {
         googleSession = null
+        yandexSession = null
         stopMicHold()
         floatingButton?.hideTicker()
         floatingButton?.setRecording(false)
@@ -472,6 +504,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         instance = null
         googleSession?.stop()
         googleSession = null
+        yandexSession?.stop()
+        yandexSession = null
         runCatching { stopMicHold() }
         resultBar?.dismiss()
         resultBar = null

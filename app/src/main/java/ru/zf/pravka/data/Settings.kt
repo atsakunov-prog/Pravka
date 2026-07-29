@@ -20,6 +20,7 @@ class Settings(private val context: Context) {
 
         // Dictation engines.
         const val SPEECH_GOOGLE = "google"          // live streaming, Gboard's engine
+        const val SPEECH_YANDEX = "yandex"          // live streaming, Yandex SpeechKit (cloud)
         const val SPEECH_WHISPER_SMALL = "whisper-small"
         const val SPEECH_WHISPER_BASE = "whisper-base"
         const val SPEECH_NANO = "nano"
@@ -29,6 +30,8 @@ class Settings(private val context: Context) {
         private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
         private val KEY_FAB_ALPHA = floatPreferencesKey("fab_alpha")
         private val KEY_SPEECH_ENGINE = stringPreferencesKey("speech_engine")
+        private val KEY_YANDEX_API_KEY = stringPreferencesKey("yandex_api_key")
+        private val KEY_YANDEX_FOLDER = stringPreferencesKey("yandex_folder_id")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -54,6 +57,18 @@ class Settings(private val context: Context) {
     suspend fun speechEngine(): String = speechEngineFlow.first()
     suspend fun setSpeechEngine(value: String) {
         context.dataStore.edit { it[KEY_SPEECH_ENGINE] = value }
+    }
+
+    // Yandex SpeechKit credentials - entered on-device, stored only here.
+    val yandexApiKeyFlow = context.dataStore.data.map { it[KEY_YANDEX_API_KEY] ?: "" }
+    val yandexFolderFlow = context.dataStore.data.map { it[KEY_YANDEX_FOLDER] ?: "" }
+    suspend fun yandexApiKey(): String = yandexApiKeyFlow.first()
+    suspend fun yandexFolder(): String = yandexFolderFlow.first()
+    suspend fun setYandexApiKey(value: String) {
+        context.dataStore.edit { it[KEY_YANDEX_API_KEY] = value.trim() }
+    }
+    suspend fun setYandexFolder(value: String) {
+        context.dataStore.edit { it[KEY_YANDEX_FOLDER] = value.trim() }
     }
 
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }

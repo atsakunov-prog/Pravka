@@ -87,7 +87,7 @@ class DictationService : Service() {
                 // The notification's Stop button during a Google take: let the
                 // accessibility service finalize the session (it tears down the
                 // hold afterwards via ACTION_HOLD_STOP).
-                PravkaAccessibilityService.instance?.stopGoogleDictation()
+                PravkaAccessibilityService.instance?.stopLiveDictation()
             }
             ACTION_STOP, null -> stop()
         }
