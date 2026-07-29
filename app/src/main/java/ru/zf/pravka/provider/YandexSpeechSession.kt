@@ -132,14 +132,18 @@ class YandexSpeechSession(
             override fun contentType() = "application/grpc".toMediaType()
             override fun isDuplex() = true
             override fun writeTo(sink: BufferedSink) {
+                var sent = 0
                 runCatching {
                     sink.write(grpcFrame(sessionOptions())); sink.flush()
+                    onLog("yandex sent session options")
                     while (true) {
                         val chunk = queue.take()
                         if (chunk === poison || chunk.isEmpty()) break
                         sink.write(grpcFrame(chunkRequest(chunk))); sink.flush()
+                        sent += chunk.size
                     }
-                }
+                }.onFailure { onLog("yandex write end: ${it.message}") }
+                onLog("yandex audio sent bytes=$sent")
                 // returning half-closes the request stream
             }
         }
@@ -165,30 +169,36 @@ class YandexSpeechSession(
 
     private fun readResponses(response: Response) {
         response.use { resp ->
+            onLog("yandex http code=${resp.code} proto=${resp.protocol} msg=${resp.message} ct=${resp.header("content-type")}")
             if (!resp.isSuccessful) {
-                onLog("yandex http ${resp.code}")
+                val errBody = runCatching { resp.body?.string()?.take(300) }.getOrNull()
+                onLog("yandex http-fail body=$errBody")
                 postError("Яндекс вернул HTTP ${resp.code}")
                 return
             }
             val source = resp.body?.source()
             if (source == null) { postError("Пустой ответ Яндекса"); return }
+            var frames = 0
             runCatching {
                 while (true) {
                     if (source.exhausted()) break
                     source.readByte()                 // compression flag
                     val len = source.readInt().toLong()  // big-endian length
                     val msg = source.readByteArray(len)
+                    frames++
                     handleResponseMessage(msg)
                 }
             }.onFailure { onLog("yandex read end: ${it.message}") }
             // gRPC status lives in the trailers.
             val status = runCatching { resp.trailers()["grpc-status"] }.getOrNull()
             val gmsg = runCatching { resp.trailers()["grpc-message"] }.getOrNull()
-            onLog("yandex done grpc-status=$status")
-            if (status != null && status != "0" && finals.isEmpty()) {
-                postError("Яндекс: ${gmsg ?: "код $status"}")
-            } else {
-                finish()
+            onLog("yandex done frames=$frames grpc-status=$status grpc-message=$gmsg finals=${finals.size}")
+            when {
+                status != null && status != "0" && finals.isEmpty() ->
+                    postError("Яндекс: ${gmsg ?: "код $status"}")
+                frames == 0 && finals.isEmpty() ->
+                    postError("Яндекс не прислал результат (HTTP ${resp.code}, ${resp.protocol}). Проверь ключ и Folder ID.")
+                else -> finish()
             }
         }
     }

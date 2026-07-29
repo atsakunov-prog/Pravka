@@ -34,6 +34,7 @@ class GoogleSpeechSession(
     @Volatile private var active = false
     private var stopping = false
     private var errorStreak = 0
+    private var restartPending = false
 
     private var onPartial: (String) -> Unit = {}
     private var onCheckpoint: (String) -> Unit = {}
@@ -154,21 +155,17 @@ class GoogleSpeechSession(
 
     private fun restartSoon() {
         if (!active) { finish(); return }
-        // Near-instant restart on a clean segment end (minimise the deaf gap
-        // that drops words); back off only when errors are piling up.
-        val delay = if (errorStreak == 0) 40L else (250L + errorStreak * 100L).coerceAtMost(800L)
+        // ONE restart in flight at a time. Errors can fire in bursts, and
+        // scheduling a restart per error (plus destroy/recreate) is exactly
+        // what caused the busy/disconnected storm that ate speech and left the
+        // recognizer poisoned for the next take. Reuse the same recognizer and
+        // never recreate mid-session.
+        if (restartPending) return
+        restartPending = true
+        val delay = if (errorStreak == 0) 300L else (450L + errorStreak * 150L).coerceAtMost(1500L)
         main.postDelayed({
-            if (!active) return@postDelayed
-            // A long take can exhaust the on-device recognizer (it looks like a
-            // hard stop ~1 min in). After consecutive errors, swap in a FRESH
-            // recognizer instead of reusing the stuck one.
-            if (errorStreak >= 2) {
-                onLog("recreate recognizer (streak=$errorStreak)")
-                runCatching { recognizer?.destroy() }
-                recognizer = createRecognizer()?.also { it.setRecognitionListener(listener) }
-                if (recognizer == null) { finish(); return@postDelayed }
-            }
-            startListening()
+            restartPending = false
+            if (active) startListening()
         }, delay)
     }
 
@@ -218,32 +215,26 @@ class GoogleSpeechSession(
 
         override fun onError(error: Int) {
             onLog("error code=$error active=$active stopping=$stopping streak=$errorStreak")
-            // If the user stopped, wrap up. Otherwise NEVER end the take on an
-            // error - a mid-dictation blip must not silently cut it off. Just
-            // keep restarting (with backoff); only surrender after a long run
-            // of pure errors with no speech at all (a truly dead mic).
-            when {
-                stopping -> finish()
-                error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY && active -> main.postDelayed({
-                    if (!active) { finish(); return@postDelayed }
-                    onLog("recreate (busy)")
-                    runCatching { recognizer?.destroy() }
-                    recognizer = createRecognizer()?.also { it.setRecognitionListener(this) }
-                    if (recognizer != null) startListening() else finish()
-                }, 300)
-                active -> {
-                    errorStreak++
-                    if (errorStreak >= MAX_ERROR_STREAK) {
-                        val text = finalized.toString().trim()
-                        onLog("giveUp streak=$errorStreak len=${text.length}")
-                        if (text.isEmpty()) { active = false; recognizer = null; onError(errorText(error)) }
-                        else finish()
-                    } else {
-                        restartSoon()
-                    }
+            // If the user stopped, wrap up. Otherwise just restart (reusing the
+            // same recognizer - NEVER destroy/recreate here; that was the storm)
+            // and only surrender after a long run of pure errors with no speech
+            // at all (a genuinely dead mic).
+            if (stopping || !active) { finish(); return }
+            errorStreak++
+            if (errorStreak >= MAX_ERROR_STREAK) {
+                val text = finalized.toString().trim()
+                onLog("giveUp streak=$errorStreak len=${text.length}")
+                if (text.isEmpty()) {
+                    active = false
+                    val r = recognizer; recognizer = null
+                    runCatching { r?.destroy() }
+                    onError(errorText(error))
+                } else {
+                    finish()
                 }
-                else -> finish()
+                return
             }
+            restartSoon()
         }
 
         override fun onEvent(eventType: Int, params: Bundle?) {}

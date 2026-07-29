@@ -35,7 +35,7 @@ class FloatingButtonController(
 
     companion object {
         private const val LONG_PRESS_MS = 450L
-        private const val TICKER_ALPHA = 0.4f   // more see-through than the button
+        private const val TICKER_ALPHA = 0.6f   // a touch see-through, still readable
         private const val TICKER_W_MULT = 6     // width in button-diameters
         private const val TICKER_H_MULT = 2     // height in button-diameters (two lines)
 
@@ -122,6 +122,7 @@ class FloatingButtonController(
             val (xFraction, yFraction) = settings.fabPosition(positionKey())
             applyPosition(p, xFraction, yFraction)
             button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
+            repositionTickerIfVisible()
         }
     }
 
@@ -143,17 +144,16 @@ class FloatingButtonController(
 
     fun updateTicker(text: String) {
         val tv = tickerText ?: return
+        // Steady, bottom-anchored tail - no per-update animation (the earlier
+        // "settle" nudge read as a jump-down every new word).
         tv.text = text.takeLast(240)
-        // Soft "flow": nudge the text up a touch and let it settle. Updates only
-        // arrive while speech is being recognized, so it drifts while the owner
-        // talks and comes to rest when he pauses - exactly the asked-for feel.
-        tv.animate().cancel()
-        tv.translationY = dp(7).toFloat()
-        tv.animate()
-            .translationY(0f)
-            .setDuration(650)
-            .setInterpolator(android.view.animation.DecelerateInterpolator())
-            .start()
+    }
+
+    /** Keep the pill glued to the button while it's dragged / on rotate. */
+    fun repositionTickerIfVisible() {
+        if (!tickerVisible) return
+        positionTicker()
+        ticker?.let { runCatching { windowManager.updateViewLayout(it, tickerParams) } }
     }
 
     fun hideTicker() {
@@ -361,6 +361,7 @@ class FloatingButtonController(
                         p.x = startX + dx.toInt()
                         p.y = startY + dy.toInt()
                         runCatching { windowManager.updateViewLayout(view, p) }
+                        repositionTickerIfVisible()  // the pill rides along
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
