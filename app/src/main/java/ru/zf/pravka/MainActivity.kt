@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
                     dictionaryStore = app.dictionaryStore,
                     historyLog = app.historyLog,
                     transcriptionLog = app.transcriptionLog,
+                    liveDraft = app.liveDraft,
                     nanoProvider = app.nanoProvider,
                     speechProvider = app.speechProvider,
                     whisperProvider = app.whisperProvider,
@@ -139,6 +140,7 @@ private fun MainScreen(
     dictionaryStore: DictionaryStore,
     historyLog: HistoryLog,
     transcriptionLog: ru.zf.pravka.data.TranscriptionLog,
+    liveDraft: ru.zf.pravka.data.LiveDraft,
     nanoProvider: ru.zf.pravka.provider.NanoProvider,
     speechProvider: ru.zf.pravka.provider.SpeechProvider,
     whisperProvider: ru.zf.pravka.provider.WhisperProvider,
@@ -190,7 +192,7 @@ private fun MainScreen(
                 Tab.SETTINGS -> SettingsTab(settings, nanoProvider, speechProvider, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore)
                 Tab.PROMPTS -> PromptsTab(promptStore)
-                Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog)
+                Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft)
                 Tab.STATS -> StatsTab(stats, historyLog)
             }
         }
@@ -1069,9 +1071,13 @@ private fun PromptEditor(
 // Full text of every fix/dictation, newest first - tap a card to copy its
 // result to the clipboard (owner's request, Wispr-style history).
 @Composable
-private fun TranscriptsTab(transcriptionLog: ru.zf.pravka.data.TranscriptionLog) {
+private fun TranscriptsTab(
+    transcriptionLog: ru.zf.pravka.data.TranscriptionLog,
+    liveDraft: ru.zf.pravka.data.LiveDraft,
+) {
     val context = LocalContext.current
     val log = remember { transcriptionLog.readLast(200) }
+    var draft by remember { mutableStateOf(liveDraft.read()) }
     val ruLoc = Locale.forLanguageTag("ru")
 
     fun copy(text: String) {
@@ -1105,6 +1111,32 @@ private fun TranscriptsTab(transcriptionLog: ru.zf.pravka.data.TranscriptionLog)
     ) {
         ScreenTitle(stringResource(R.string.tab_transcripts))
         HintText(stringResource(R.string.transcripts_hint))
+
+        // Recovery: text from a Google take that was interrupted before it
+        // could be inserted (phone died / app killed mid-dictation).
+        draft?.let { d ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(
+                        stringResource(R.string.draft_header),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(d, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { copy(d) }) { Text(stringResource(R.string.draft_copy)) }
+                        TextButton(onClick = { liveDraft.clear(); draft = null }) {
+                            Text(stringResource(R.string.draft_delete), color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        }
 
         if (transcriptionLog.exists()) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

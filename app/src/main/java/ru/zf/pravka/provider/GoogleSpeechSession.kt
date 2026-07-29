@@ -32,6 +32,7 @@ class GoogleSpeechSession(
     private var errorStreak = 0
 
     private var onPartial: (String) -> Unit = {}
+    private var onCheckpoint: (String) -> Unit = {}
     private var onDone: (String) -> Unit = {}
     private var onError: (String) -> Unit = {}
 
@@ -63,10 +64,12 @@ class GoogleSpeechSession(
 
     fun start(
         onPartial: (String) -> Unit,
+        onCheckpoint: (String) -> Unit,
         onDone: (String) -> Unit,
         onError: (String) -> Unit,
     ) {
         this.onPartial = onPartial
+        this.onCheckpoint = onCheckpoint
         this.onDone = onDone
         this.onError = onError
         main.post {
@@ -164,7 +167,9 @@ class GoogleSpeechSession(
         override fun onResults(results: Bundle?) {
             errorStreak = 0
             appendSegment(results)
-            onPartial(finalized.toString())
+            val checkpoint = finalized.toString()
+            onPartial(checkpoint)
+            onCheckpoint(checkpoint)  // durable: persisted so a crash can't lose it
             if (active && !stopping) restartSoon() else finish()
         }
 

@@ -196,13 +196,27 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Правка is foregrounded, so don't abort the session over it.
         runCatching { startMicHold() }
         googleStartedAt = SystemClock.elapsedRealtime()
+        lastDraftAt = 0L
+        val app = application as PravkaApp
         val session = GoogleSpeechSession(this)
         googleSession = session
         session.start(
-            onPartial = { /* realtime text; kept internal for now */ },
+            // Throttle the in-progress text to disk (~1.2s) and force a durable
+            // save at every finalized segment, so an interrupted take (phone
+            // dies, process killed) can still be recovered from the app.
+            onPartial = { live -> saveDraftThrottled(live) },
+            onCheckpoint = { text -> app.liveDraft.save(text) },
             onDone = { text -> onGoogleDone(text) },
             onError = { msg -> onGoogleError(msg) },
         )
+    }
+
+    private var lastDraftAt = 0L
+    private fun saveDraftThrottled(text: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastDraftAt < 1200) return
+        lastDraftAt = now
+        (application as PravkaApp).liveDraft.save(text)
     }
 
     /** Second tap or the notification's Stop button: finalize the session. */
@@ -227,6 +241,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             text = text,
             error = if (text.isBlank()) "пустой результат" else null,
         )
+        // Delivered (and logged to the transcripts) - the recovery draft is no
+        // longer needed.
+        app.liveDraft.clear()
         if (text.isBlank()) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.dictation_empty))
