@@ -35,7 +35,9 @@ class FloatingButtonController(
 
     companion object {
         private const val LONG_PRESS_MS = 450L
-        private const val TICKER_ALPHA = 0.5f  // much more see-through than the button
+        private const val TICKER_ALPHA = 0.4f   // more see-through than the button
+        private const val TICKER_W_MULT = 6     // width in button-diameters
+        private const val TICKER_H_MULT = 2     // height in button-diameters (two lines)
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
         // vermilion circle, paper-white geometric "П"; deep red while recording.
@@ -141,8 +143,17 @@ class FloatingButtonController(
 
     fun updateTicker(text: String) {
         val tv = tickerText ?: return
-        // START-ellipsize keeps the newest words on the right; just set the tail.
-        tv.text = text.takeLast(200)
+        tv.text = text.takeLast(240)
+        // Soft "flow": nudge the text up a touch and let it settle. Updates only
+        // arrive while speech is being recognized, so it drifts while the owner
+        // talks and comes to rest when he pauses - exactly the asked-for feel.
+        tv.animate().cancel()
+        tv.translationY = dp(7).toFloat()
+        tv.animate()
+            .translationY(0f)
+            .setDuration(650)
+            .setInterpolator(android.view.animation.DecelerateInterpolator())
+            .start()
     }
 
     fun hideTicker() {
@@ -166,15 +177,15 @@ class FloatingButtonController(
         val tv = android.widget.TextView(service).apply {
             setTextColor(PAPER)
             textSize = 17f
-            setSingleLine(true)
-            // Always keep the newest words visible on the right and truncate the
-            // OLD end with a leading ellipsis. This makes words flow in from the
-            // right (telegraph feel) with no jump-back-to-start that marquee had.
+            maxLines = 2
+            // Keep the newest words visible and truncate the OLD start with a
+            // leading ellipsis - no jump-back-to-start that marquee had.
             ellipsize = android.text.TextUtils.TruncateAt.START
-            isHorizontalFadingEdgeEnabled = true
-            gravity = Gravity.CENTER_VERTICAL or Gravity.END
-            val padH = dp(14)
-            setPadding(padH, 0, padH, 0)
+            gravity = Gravity.BOTTOM or Gravity.START
+            val padH = dp(16)
+            val padV = dp(8)
+            setPadding(padH, padV, padH, padV)
+            setLineSpacing(0f, 1.05f)
         }
         tickerText = tv
         pill.addView(
@@ -185,8 +196,8 @@ class FloatingButtonController(
             ),
         )
         val p = WindowManager.LayoutParams(
-            buttonSize * 4,
-            buttonSize,
+            buttonSize * TICKER_W_MULT,
+            buttonSize * TICKER_H_MULT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
@@ -203,12 +214,14 @@ class FloatingButtonController(
     private fun positionTicker() {
         val bp = params ?: return
         val tp = tickerParams ?: return
-        val (w, _) = screenSize()
-        val tickerW = buttonSize * 4
+        val (w, h) = screenSize()
+        val tickerW = buttonSize * TICKER_W_MULT
+        val tickerH = buttonSize * TICKER_H_MULT
         val gap = dp(8)
         tp.width = tickerW
-        tp.height = buttonSize
-        tp.y = bp.y
+        tp.height = tickerH
+        // Vertically centre the (taller) pill on the button.
+        tp.y = (bp.y - (tickerH - buttonSize) / 2).coerceIn(0, (h - tickerH).coerceAtLeast(0))
         val buttonCenterX = bp.x + buttonSize / 2
         tp.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap
         else bp.x - tickerW - gap

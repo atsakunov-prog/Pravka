@@ -128,10 +128,12 @@ class GoogleSpeechSession(
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        // Tolerate thinking pauses so a segment doesn't end the instant the
-        // owner draws breath; we restart on segment end regardless.
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+        // Keep ONE listening session alive across long pauses so we restart as
+        // rarely as possible - every restart has a tiny deaf gap where a word
+        // can be dropped. Insertion happens on the owner's stop, not per
+        // segment, so long segments don't add any latency.
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 6000L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 6000L)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // Auto punctuation/capitalization, tuned for quality over latency -
             // cleaner raw text for CLEAN to work from.
@@ -152,9 +154,9 @@ class GoogleSpeechSession(
 
     private fun restartSoon() {
         if (!active) { finish(); return }
-        // Gentle backoff so a burst of errors doesn't hot-loop, but stay quick
-        // enough that a normal pause between phrases feels seamless.
-        val delay = (250L + errorStreak * 100L).coerceAtMost(800L)
+        // Near-instant restart on a clean segment end (minimise the deaf gap
+        // that drops words); back off only when errors are piling up.
+        val delay = if (errorStreak == 0) 40L else (250L + errorStreak * 100L).coerceAtMost(800L)
         main.postDelayed({
             if (!active) return@postDelayed
             // A long take can exhaust the on-device recognizer (it looks like a

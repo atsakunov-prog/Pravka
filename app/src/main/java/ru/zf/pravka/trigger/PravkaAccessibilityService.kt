@@ -325,10 +325,13 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     // Insert dictated text into the remembered field at the cursor, select
-    // it, then run CLEAN over just that fragment. If the field is gone, the
-    // text goes to the clipboard so nothing is lost.
+    // it, then run CLEAN over just that fragment. Re-acquires the live focused
+    // field if the remembered one went stale (long take / app switch), and
+    // tries an automatic PASTE before giving up to the clipboard - the owner
+    // shouldn't have to paste large dictations by hand.
     private suspend fun insertDictated(text: String) {
-        val node = dictationTarget?.get()?.takeIf { it.refresh() && it.isEditable }
+        val node = (dictationTarget?.get()?.takeIf { it.refresh() && it.isEditable })
+            ?: focusedEditableNode()
         if (node == null) {
             ru.zf.pravka.target.ClipboardTarget(this).write(text)
             Feedback.toast(this, getString(R.string.dictation_to_clipboard))
@@ -351,8 +354,13 @@ class PravkaAccessibilityService : AccessibilityService() {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
         }
         if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setArgs)) {
-            ru.zf.pravka.target.ClipboardTarget(this).write(text)
-            Feedback.toast(this, getString(R.string.dictation_to_clipboard))
+            // Some fields reject a big ACTION_SET_TEXT. Put the fragment on the
+            // clipboard and try to PASTE it into the field automatically, so it
+            // still lands in the box without a manual paste.
+            ru.zf.pravka.target.ClipboardTarget(this).write(insert)
+            val pasted = runCatching { node.performAction(AccessibilityNodeInfo.ACTION_PASTE) }.getOrDefault(false)
+            if (!pasted) Feedback.toast(this, getString(R.string.dictation_to_clipboard))
+            else Haptics.success(this)
             return
         }
         node.refresh()
