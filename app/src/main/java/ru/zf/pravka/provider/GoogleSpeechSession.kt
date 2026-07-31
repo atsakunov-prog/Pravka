@@ -37,6 +37,7 @@ class GoogleSpeechSession(
     private var restartPending = false
     private var producedAny = false   // did this session ever start recognizing?
 
+    private var onReady: () -> Unit = {}
     private var onPartial: (String) -> Unit = {}
     private var onCheckpoint: (String) -> Unit = {}
     private var onDone: (String) -> Unit = {}
@@ -72,12 +73,14 @@ class GoogleSpeechSession(
     }
 
     fun start(
+        onReady: () -> Unit = {},
         onPartial: (String) -> Unit,
         onCheckpoint: (String) -> Unit,
         onDone: (String) -> Unit,
         onError: (String) -> Unit,
         onLog: (String) -> Unit = {},
     ) {
+        this.onReady = onReady
         this.onPartial = onPartial
         this.onCheckpoint = onCheckpoint
         this.onDone = onDone
@@ -192,7 +195,10 @@ class GoogleSpeechSession(
     }
 
     private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) { onLog("ready") }
+        override fun onReadyForSpeech(params: Bundle?) {
+            onLog("ready")
+            if (!producedAny) onReady()  // first ready = "you can speak now" cue
+        }
         override fun onBeginningOfSpeech() { errorStreak = 0; producedAny = true; onLog("beginSpeech") }
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}

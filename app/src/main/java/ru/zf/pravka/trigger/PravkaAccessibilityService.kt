@@ -38,6 +38,14 @@ class PravkaAccessibilityService : AccessibilityService() {
     companion object {
         var instance: PravkaAccessibilityService? = null
             private set
+
+        // Placeholders some apps report as the field's text when it's empty.
+        private val COMMON_PLACEHOLDERS = setOf(
+            "сообщение", "сообщение…", "сообщение...",
+            "введите сообщение", "напишите сообщение", "написать сообщение",
+            "message", "type a message", "aa",
+            "поиск", "search", "введите текст", "текст сообщения",
+        )
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -61,6 +69,9 @@ class PravkaAccessibilityService : AccessibilityService() {
     private var googleSession: GoogleSpeechSession? = null
     private var yandexSession: YandexSpeechSession? = null
     private var googleStartedAt = 0L
+    // Precomputed vocabulary bias, so starting a take is instant (no DataStore
+    // read on the tap -> speak path, which was clipping the first words).
+    @Volatile private var cachedBiasing: List<String> = emptyList()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -73,6 +84,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             onShortTap = ::onDictateTap,
             onLongPress = { runProofread(ProofreadMode.CLEAN) },
         )
+        scope.launch { cachedBiasing = collectBiasing() }  // warm the bias list
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -194,7 +206,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             Feedback.toast(this, getString(R.string.google_unavailable))
             return
         }
-        val biasing = collectBiasing()
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
         floatingButton?.setRecording(true)
         floatingButton?.showTicker()
@@ -206,9 +217,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         googleStartedAt = SystemClock.elapsedRealtime()
         lastDraftAt = 0L
         val app = application as PravkaApp
-        val session = GoogleSpeechSession(this, biasing = biasing)
+        val session = GoogleSpeechSession(this, biasing = cachedBiasing)
         googleSession = session
         session.start(
+            // A distinct tick the moment the recognizer is actually listening,
+            // so the owner knows when to start and stops clipping first words.
+            onReady = { Haptics.success(this) },
             // Live text feeds the on-screen ticker; throttle it to disk (~1.2s)
             // and force a durable save at every finalized segment, so an
             // interrupted take (phone dies, killed) can still be recovered.
@@ -370,11 +384,18 @@ class PravkaAccessibilityService : AccessibilityService() {
             return
         }
         // Treat a placeholder as empty. isShowingHintText is unreliable in some
-        // apps (messengers report the "Сообщение" hint as the field's text),
-        // so also compare the text against the node's hintText.
+        // apps (messengers surface the "Сообщение" hint as the field's text and
+        // set no hint metadata), so also match hintText / contentDescription and
+        // a short list of the usual placeholders.
         val raw = node.text?.toString().orEmpty()
-        val hint = node.hintText?.toString()
-        val existing = if (node.isShowingHintText || (!hint.isNullOrEmpty() && raw == hint)) "" else raw
+        val rawTrim = raw.trim()
+        val hint = node.hintText?.toString()?.trim()
+        val cd = node.contentDescription?.toString()?.trim()
+        val looksLikePlaceholder = node.isShowingHintText ||
+            (!hint.isNullOrEmpty() && rawTrim.equals(hint, ignoreCase = true)) ||
+            (!cd.isNullOrEmpty() && rawTrim.equals(cd, ignoreCase = true)) ||
+            rawTrim.lowercase() in COMMON_PLACEHOLDERS
+        val existing = if (looksLikePlaceholder) "" else raw
         // Append at the end by default. After our own ACTION_SET_TEXT the field
         // often reports the cursor back at 0, which made a follow-up dictation
         // land at the START of the phrase. Only honour a genuine mid-text cursor
@@ -446,6 +467,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             if ((wrong.lowercase() to ru.zf.pravka.core.DictMode.HARD) !in existing) {
                 store.add(wrong, correct, ru.zf.pravka.core.DictMode.HARD, "")
             }
+            cachedBiasing = collectBiasing()  // new words bias the recognizer too
             Haptics.success(this@PravkaAccessibilityService)
             Feedback.toast(
                 this@PravkaAccessibilityService,
