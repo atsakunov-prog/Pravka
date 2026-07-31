@@ -37,7 +37,7 @@ class FloatingButtonController(
         private const val LONG_PRESS_MS = 450L
         private const val TICKER_ALPHA = 0.6f   // a touch see-through, still readable
         private const val TICKER_W_MULT = 6     // width in button-diameters
-        private const val TICKER_H_MULT = 2     // height in button-diameters (two lines)
+        private const val TICKER_LINES = 4      // teleprompter: up to four lines tall
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
         // vermilion circle, paper-white geometric "П"; deep red while recording.
@@ -142,11 +142,15 @@ class FloatingButtonController(
         }
     }
 
+    // Height that fits TICKER_LINES lines of the ticker text plus padding.
+    private fun tickerHeightPx(): Int = dp(TICKER_LINES * 24 + 16)
+
     fun updateTicker(text: String) {
         val tv = tickerText ?: return
-        // Steady, bottom-anchored tail - no per-update animation (the earlier
-        // "settle" nudge read as a jump-down every new word).
-        tv.text = text.takeLast(240)
+        // Steady, bottom-anchored tail (teleprompter): newest words sit on the
+        // bottom line, older lines ride up and off the top. No per-update
+        // animation (the earlier "settle" nudge read as a jump-down).
+        tv.text = text.takeLast(400)
     }
 
     /** Keep the pill glued to the button while it's dragged / on rotate. */
@@ -177,7 +181,7 @@ class FloatingButtonController(
         val tv = android.widget.TextView(service).apply {
             setTextColor(PAPER)
             textSize = 17f
-            maxLines = 2
+            maxLines = TICKER_LINES
             // Keep the newest words visible and truncate the OLD start with a
             // leading ellipsis - no jump-back-to-start that marquee had.
             ellipsize = android.text.TextUtils.TruncateAt.START
@@ -197,7 +201,7 @@ class FloatingButtonController(
         )
         val p = WindowManager.LayoutParams(
             buttonSize * TICKER_W_MULT,
-            buttonSize * TICKER_H_MULT,
+            tickerHeightPx(),
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
@@ -216,7 +220,7 @@ class FloatingButtonController(
         val tp = tickerParams ?: return
         val (w, h) = screenSize()
         val tickerW = buttonSize * TICKER_W_MULT
-        val tickerH = buttonSize * TICKER_H_MULT
+        val tickerH = tickerHeightPx()
         val gap = dp(8)
         tp.width = tickerW
         tp.height = tickerH
