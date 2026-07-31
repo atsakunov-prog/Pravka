@@ -370,7 +370,6 @@ private fun SettingsTab(
                 onClick = {
                     scope.launch {
                         settings.setApiKey(apiKey)
-                        settings.setCleanModel(model)
                         savedMark = true
                     }
                 },
