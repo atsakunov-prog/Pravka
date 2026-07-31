@@ -14,7 +14,7 @@ class Recordings(private val context: Context) {
 
     fun newFile(): File = File(dir, "rec_${System.currentTimeMillis()}.wav")
 
-    data class Item(val file: File, val startedAt: Long, val sizeBytes: Long, val durationMs: Long) {
+    data class Item(val file: File, val startedAt: Long, val durationMs: Long) {
         val id: String get() = file.name
     }
 
@@ -27,13 +27,11 @@ class Recordings(private val context: Context) {
                     file = f,
                     startedAt = runCatching { f.name.removePrefix("rec_").removeSuffix(".wav").toLong() }
                         .getOrDefault(f.lastModified()),
-                    sizeBytes = f.length(),
                     durationMs = WavFile.durationMs(f),
                 )
             }
             .orEmpty()
 
-    fun hasPending(): Boolean = list().isNotEmpty()
 
     fun delete(id: String) {
         File(dir, id).takeIf { it.exists() }?.delete()

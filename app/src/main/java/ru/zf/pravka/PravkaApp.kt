@@ -57,16 +57,15 @@ class PravkaApp : Application() {
     // files go through Whisper; Nano uses its own path. Every attempt is
     // logged with metrics (engine, audio length, transcription time, chars).
     suspend fun transcribeDictation(file: File): Result<String> {
-        val engine = settings.speechEngine()
-        val fileEngine = when (engine) {
-            Settings.SPEECH_NANO -> Settings.SPEECH_NANO
-            else -> engine.takeIf { it.startsWith("whisper") } ?: Settings.SPEECH_WHISPER_BASE
-        }
+        val nano = settings.speechEngine() == Settings.SPEECH_NANO
+        // Ask Whisper which model will really run, so the logged engine matches
+        // the one that did the work.
+        val fileEngine = if (nano) Settings.SPEECH_NANO else whisperProvider.resolveEngine()
         val started = SystemClock.elapsedRealtime()
-        val result = if (fileEngine == Settings.SPEECH_NANO) {
+        val result = if (nano) {
             speechProvider.transcribe(file)
         } else {
-            whisperProvider.transcribe(file)
+            whisperProvider.transcribe(file, fileEngine)
         }
         val elapsed = SystemClock.elapsedRealtime() - started
         transcriptionLog.append(

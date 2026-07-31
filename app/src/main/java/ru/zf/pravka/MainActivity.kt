@@ -70,7 +70,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ru.zf.pravka.core.DictEntry
 import ru.zf.pravka.core.DictMode
 import ru.zf.pravka.core.Prompts
@@ -480,26 +482,15 @@ private fun SpeechSection(
 
     val isGoogle = engine == Settings.SPEECH_GOOGLE
     val isNano = engine == Settings.SPEECH_NANO
-    val isYandex = engine == Settings.SPEECH_YANDEX
-    val yaKey by settings.yandexApiKeyFlow.collectAsState(initial = "")
-    val yaFolder by settings.yandexFolderFlow.collectAsState(initial = "")
-
     suspend fun statusFor(e: String): String = when {
         e == Settings.SPEECH_GOOGLE ->
             if (ru.zf.pravka.provider.GoogleSpeechSession.isAvailable(context)) context.getString(R.string.google_ready)
             else context.getString(R.string.google_unavailable)
-        e == Settings.SPEECH_YANDEX ->
-            if (yaKey.isNotBlank() && yaFolder.isNotBlank()) context.getString(R.string.yandex_ready)
-            else context.getString(R.string.yandex_needs_creds)
         e == Settings.SPEECH_NANO -> speechProvider.statusText()
         else -> whisperProvider.statusText(e)
     }
 
-    LaunchedEffect(engine, downloading, yaKey, yaFolder) { status = statusFor(engine) }
-    // Yandex is temporarily parked - move anyone still on it back to Google.
-    LaunchedEffect(engine) {
-        if (engine == Settings.SPEECH_YANDEX) settings.setSpeechEngine(Settings.SPEECH_GOOGLE)
-    }
+    LaunchedEffect(engine, downloading) { status = statusFor(engine) }
 
     SectionCard(label = stringResource(R.string.settings_speech_title)) {
         HintText(stringResource(R.string.speech_engine_label))
@@ -527,73 +518,47 @@ private fun SpeechSection(
         Spacer(Modifier.height(8.dp))
         Text(status, style = MaterialTheme.typography.bodySmall)
 
-        if (isYandex) {
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = yaKey,
-                onValueChange = { scope.launch { settings.setYandexApiKey(it) } },
-                label = { Text(stringResource(R.string.yandex_key_label)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = yaFolder,
-                onValueChange = { scope.launch { settings.setYandexFolder(it) } },
-                label = { Text(stringResource(R.string.yandex_folder_label)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-
-        // Download / prepare controls (not needed for Yandex - cloud, no model).
-        if (!isYandex) {
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    enabled = !downloading,
-                    onClick = {
-                        if (isGoogle) {
-                            ru.zf.pravka.provider.GoogleSpeechSession.triggerModelDownload(context)
-                            Feedback.toast(context, context.getString(R.string.google_prepare_started))
-                            scope.launch { status = statusFor(engine) }
-                        } else {
-                            downloading = true
-                            scope.launch {
-                                val result = if (isNano) speechProvider.download()
-                                else whisperProvider.download(engine)
-                                downloading = false
-                                Feedback.toast(
-                                    context,
-                                    if (result.isSuccess) context.getString(R.string.speech_download_done)
-                                    else context.getString(R.string.speech_download_failed, result.exceptionOrNull()?.message ?: ""),
-                                )
-                                status = statusFor(engine)
-                            }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                enabled = !downloading,
+                onClick = {
+                    if (isGoogle) {
+                        ru.zf.pravka.provider.GoogleSpeechSession.triggerModelDownload(context)
+                        Feedback.toast(context, context.getString(R.string.google_prepare_started))
+                        scope.launch { status = statusFor(engine) }
+                    } else {
+                        downloading = true
+                        scope.launch {
+                            val result = if (isNano) speechProvider.download()
+                            else whisperProvider.download(engine)
+                            downloading = false
+                            Feedback.toast(
+                                context,
+                                if (result.isSuccess) context.getString(R.string.speech_download_done)
+                                else context.getString(R.string.speech_download_failed, result.exceptionOrNull()?.message ?: ""),
+                            )
+                            status = statusFor(engine)
                         }
-                    },
-                ) {
-                    Text(
-                        when {
-                            isGoogle -> stringResource(R.string.google_prepare)
-                            downloading -> stringResource(R.string.speech_downloading)
-                            else -> stringResource(R.string.speech_download)
-                        }
-                    )
-                }
-                OutlinedButton(onClick = { scope.launch { status = statusFor(engine) } }) {
-                    Text(stringResource(R.string.speech_refresh))
-                }
+                    }
+                },
+            ) {
+                Text(
+                    when {
+                        isGoogle -> stringResource(R.string.google_prepare)
+                        downloading -> stringResource(R.string.speech_downloading)
+                        else -> stringResource(R.string.speech_download)
+                    }
+                )
+            }
+            OutlinedButton(onClick = { scope.launch { status = statusFor(engine) } }) {
+                Text(stringResource(R.string.speech_refresh))
             }
         }
         Spacer(Modifier.height(6.dp))
         HintText(
             stringResource(
-                when {
-                    isGoogle -> R.string.speech_hint_google
-                    isYandex -> R.string.speech_hint_yandex
-                    else -> R.string.speech_hint
-                }
+                if (isGoogle) R.string.speech_hint_google else R.string.speech_hint
             )
         )
     }
@@ -602,10 +567,15 @@ private fun SpeechSection(
 @Composable
 private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceEnabled: Boolean) {
     val context = LocalContext.current
-    var items by remember { mutableStateOf(recordings.list()) }
+    // listFiles() plus a length() stat per file - off the composition pass.
+    var items by remember { mutableStateOf<List<ru.zf.pravka.data.Recordings.Item>>(emptyList()) }
     var busyId by remember { mutableStateOf<String?>(null) }
     // NB: not named `ru` - that would shadow the `ru.zf.pravka` package.
-    val loc = Locale.forLanguageTag("ru")
+    val loc = remember { Locale.forLanguageTag("ru") }
+    LaunchedEffect(Unit) {
+        val found = withContext(Dispatchers.IO) { recordings.list() }
+        items = found
+    }
     if (items.isEmpty()) return
 
     SectionCard(label = stringResource(R.string.rec_header)) {
@@ -1115,9 +1085,33 @@ private fun TranscriptsTab(
     eventLog: ru.zf.pravka.data.EventLog,
 ) {
     val context = LocalContext.current
-    val log = remember { transcriptionLog.readLast(200) }
-    var draft by remember { mutableStateOf(liveDraft.read()) }
-    val ruLoc = Locale.forLanguageTag("ru")
+    // Reading (and JSON-parsing) these files is real disk work; doing it during
+    // composition blocked the first frame of the tab.
+    var log by remember { mutableStateOf<List<ru.zf.pravka.data.TranscriptionLog.Entry>>(emptyList()) }
+    var draft by remember { mutableStateOf<String?>(null) }
+    var hasExports by remember { mutableStateOf(false) }
+    var hasEventLog by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        data class Loaded(
+            val entries: List<ru.zf.pravka.data.TranscriptionLog.Entry>,
+            val draft: String?,
+            val exports: Boolean,
+            val events: Boolean,
+        )
+        val loaded = withContext(Dispatchers.IO) {
+            Loaded(
+                entries = transcriptionLog.readLast(200),
+                draft = liveDraft.read(),
+                exports = transcriptionLog.exists(),
+                events = eventLog.exists(),
+            )
+        }
+        log = loaded.entries
+        draft = loaded.draft
+        hasExports = loaded.exports
+        hasEventLog = loaded.events
+    }
+    val ruLoc = remember { Locale.forLanguageTag("ru") }
 
     fun copy(text: String) {
         val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -1135,7 +1129,6 @@ private fun TranscriptsTab(
 
     fun engineLabel(engine: String): String = when (engine) {
         Settings.SPEECH_GOOGLE -> "Google"
-        Settings.SPEECH_YANDEX -> "Yandex"
         Settings.SPEECH_WHISPER_SMALL -> "Whisper small"
         Settings.SPEECH_WHISPER_BASE -> "Whisper base"
         Settings.SPEECH_NANO -> "Gemini Nano"
@@ -1178,7 +1171,7 @@ private fun TranscriptsTab(
             }
         }
 
-        if (transcriptionLog.exists()) {
+        if (hasExports) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = {
                     share(transcriptionLog.shareJsonIntent(), R.string.transcripts_export_json)
@@ -1188,7 +1181,7 @@ private fun TranscriptsTab(
                 }) { Text(stringResource(R.string.transcripts_export_csv)) }
             }
         }
-        if (eventLog.exists()) {
+        if (hasEventLog) {
             OutlinedButton(onClick = {
                 share(eventLog.shareIntent(), R.string.transcripts_export_log)
             }) { Text(stringResource(R.string.transcripts_export_log)) }
@@ -1250,7 +1243,12 @@ private fun TranscriptsTab(
 private fun StatsTab(stats: Stats, historyLog: HistoryLog) {
     val context = LocalContext.current
     val snapshot by stats.snapshotFlow.collectAsState(initial = null)
-    val ru = Locale.forLanguageTag("ru")
+    val ru = remember { Locale.forLanguageTag("ru") }
+    // Was a file stat on every recomposition.
+    var hasHistory by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        hasHistory = withContext(Dispatchers.IO) { historyLog.exists() }
+    }
 
     Column(
         modifier = Modifier
@@ -1311,7 +1309,7 @@ private fun StatsTab(stats: Stats, historyLog: HistoryLog) {
                         )
                     }.onFailure { Feedback.toast(context, context.getString(R.string.stats_history_empty)) }
                 },
-                enabled = historyLog.exists(),
+                enabled = hasHistory,
             ) {
                 Text(stringResource(R.string.stats_share_history))
             }

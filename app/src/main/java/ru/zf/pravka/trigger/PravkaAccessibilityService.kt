@@ -23,8 +23,8 @@ import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.UndoStack
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.provider.GoogleSpeechSession
-import ru.zf.pravka.provider.YandexSpeechSession
 import ru.zf.pravka.target.AccessibilityTarget
+import ru.zf.pravka.target.effectiveText
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.Haptics
 
@@ -38,14 +38,6 @@ class PravkaAccessibilityService : AccessibilityService() {
     companion object {
         var instance: PravkaAccessibilityService? = null
             private set
-
-        // Placeholders some apps report as the field's text when it's empty.
-        private val COMMON_PLACEHOLDERS = setOf(
-            "сообщение", "сообщение…", "сообщение...",
-            "введите сообщение", "напишите сообщение", "написать сообщение",
-            "message", "type a message", "aa",
-            "поиск", "search", "введите текст", "текст сообщения",
-        )
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -57,21 +49,21 @@ class PravkaAccessibilityService : AccessibilityService() {
     // TYPE_VIEW_FOCUSED / TYPE_VIEW_TEXT_CHANGED (spec 5.4: activities steal
     // focus, so triggers launched via Activity read from this cache).
     private var cachedFocus: WeakReference<AccessibilityNodeInfo>? = null
-    var cachedFocusText: String? = null
-        private set
-
     // The field to receive dictated text, captured when recording starts -
     // the owner may switch apps while dictating, so we can't rely on focus
     // at stop time.
     private var dictationTarget: WeakReference<AccessibilityNodeInfo>? = null
 
-    // Live streaming dictation sessions (only one active at a time).
+    // Live streaming dictation session.
     private var googleSession: GoogleSpeechSession? = null
-    private var yandexSession: YandexSpeechSession? = null
     private var googleStartedAt = 0L
-    // Precomputed vocabulary bias, so starting a take is instant (no DataStore
-    // read on the tap -> speak path, which was clipping the first words).
+    // Precomputed vocabulary bias and engine choice, so starting a take is
+    // instant: no DataStore read and no dictionary load on the tap -> speak
+    // path, which was clipping the first words.
     @Volatile private var cachedBiasing: List<String> = emptyList()
+    @Volatile private var cachedEngine: String = Settings.SPEECH_GOOGLE
+
+    private val app: PravkaApp by lazy { application as PravkaApp }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -80,11 +72,16 @@ class PravkaAccessibilityService : AccessibilityService() {
         floatingButton = FloatingButtonController(
             service = this,
             scope = scope,
-            settings = (application as PravkaApp).settings,
+            settings = app.settings,
             onShortTap = ::onDictateTap,
             onLongPress = { runProofread(ProofreadMode.CLEAN) },
         )
-        scope.launch { cachedBiasing = collectBiasing() }  // warm the bias list
+        // Warm everything the tap -> listening path needs, so that path touches
+        // no storage at all.
+        scope.launch { cachedBiasing = collectBiasing() }
+        scope.launch {
+            app.settings.speechEngineFlow.collect { cachedEngine = it }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -93,7 +90,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                 val source = event.source ?: return
                 if (source.isEditable) {
                     cachedFocus = WeakReference(source)
-                    cachedFocusText = source.text?.toString()
                     floatingButton?.show()
                 } else {
                     floatingButton?.hide()
@@ -103,7 +99,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                 val source = event.source ?: return
                 if (source.isEditable) {
                     cachedFocus = WeakReference(source)
-                    cachedFocusText = source.text?.toString()
                 }
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
@@ -114,6 +109,12 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // App or window switched: the field the bar describes is
                 // gone; only keep the button when a field is still focused.
                 resultBar?.dismissIfStale()
+                // While a take is live the button is pinned visible in every app
+                // and hide() early-returns anyway, so the tree walk below would
+                // be pure waste - and the owner is expected to switch apps
+                // mid-dictation, which is exactly when it would block the
+                // recognizer's callbacks.
+                if (googleSession != null || DictationService.recording) return
                 if (liveFocusedEditableNode() != null) floatingButton?.show()
                 else floatingButton?.hide()
             }
@@ -141,22 +142,24 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Short tap: stop the active session if any, else start per the engine. */
     private fun onDictateTap() {
-        if (googleSession != null || yandexSession != null) { stopLiveDictation(); return }
+        if (googleSession != null) { stopLiveDictation(); return }
         if (DictationService.recording) {
             floatingButton?.setBusy(true)
             stopDictation()  // DictationService calls back onRecordingSaved()
             return
         }
-        // Starting: the engine choice is a suspend read.
-        scope.launch { startForEngine() }
+        // No suspend hop here: the engine is cached, so a tap starts listening
+        // on this very main-loop message.
+        startForEngine()
     }
 
-    private suspend fun startForEngine() {
+    private fun startForEngine() {
         if (!hasMicPermission()) { requestMicPermission(); return }
-        when ((application as PravkaApp).settings.speechEngine()) {
-            Settings.SPEECH_GOOGLE -> startGoogleNow()
-            Settings.SPEECH_YANDEX -> startGoogleNow()  // Yandex parked - fall back to Google
-            else -> startRecordingNow()
+        // Whisper/Nano record to a file; everything else is the live engine.
+        if (cachedEngine.startsWith("whisper") || cachedEngine == Settings.SPEECH_NANO) {
+            startRecordingNow()
+        } else {
+            startGoogleNow()
         }
     }
 
@@ -174,14 +177,11 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     /** Called by MicPermissionActivity after the permission is granted. */
-    fun onMicPermissionGranted() {
-        scope.launch { startForEngine() }
-    }
+    fun onMicPermissionGranted() = startForEngine()
 
     // Names/terms/brands the recognizer should be biased toward - the owner's
     // dictionary (both protected forms and the correct sides of replacements).
     private suspend fun collectBiasing(): List<String> = runCatching {
-        val app = application as PravkaApp
         val words = LinkedHashSet<String>()
         for (e in app.dictionaryStore.all()) {
             e.from.takeIf { it.isNotBlank() }?.let { words.add(it) }
@@ -199,7 +199,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // ---- Live Google (streaming) dictation ----
 
-    private suspend fun startGoogleNow() {
+    private fun startGoogleNow() {
         if (googleSession != null) return
         if (!GoogleSpeechSession.isAvailable(this)) {
             Haptics.error(this)
@@ -207,6 +207,34 @@ class PravkaAccessibilityService : AccessibilityService() {
             return
         }
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
+        googleStartedAt = SystemClock.elapsedRealtime()
+        lastDraftAt = 0L
+        val session = GoogleSpeechSession(this, biasing = cachedBiasing)
+        googleSession = session
+        // Start listening FIRST, then dress the UI: the button, the ticker's
+        // first layout, the haptic and the foreground-service notification are
+        // all main-thread work, and any of it ahead of startListening() is time
+        // the mic is not yet capturing.
+        session.start(
+            // A distinct tick the moment the recognizer is actually listening,
+            // so the owner knows when to start and stops clipping first words.
+            onReady = { Haptics.success(this) },
+            // Live text feeds the on-screen ticker; a throttled copy goes to disk
+            // so an interrupted take (phone dies, killed) can still be recovered.
+            onPartial = { live ->
+                floatingButton?.updateTicker(live)
+                saveDraftThrottled(live)
+            },
+            // Finalized chunk: persist immediately (LiveDraft skips it if the
+            // partial already wrote the same string).
+            onCheckpoint = { text ->
+                lastDraftAt = SystemClock.elapsedRealtime()
+                app.liveDraft.save(text)
+            },
+            onDone = { text -> onLiveDone(Settings.SPEECH_GOOGLE, text) },
+            onError = { msg -> onLiveError(msg) },
+            onLog = { line -> app.eventLog.add(line) },
+        )
         floatingButton?.setRecording(true)
         floatingButton?.showTicker()
         Haptics.start(this)
@@ -214,60 +242,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         // can't start (rare FGS restrictions), recognition still works while
         // Правка is foregrounded, so don't abort the session over it.
         runCatching { startMicHold() }
-        googleStartedAt = SystemClock.elapsedRealtime()
-        lastDraftAt = 0L
-        val app = application as PravkaApp
-        val session = GoogleSpeechSession(this, biasing = cachedBiasing)
-        googleSession = session
-        session.start(
-            // A distinct tick the moment the recognizer is actually listening,
-            // so the owner knows when to start and stops clipping first words.
-            onReady = { Haptics.success(this) },
-            // Live text feeds the on-screen ticker; throttle it to disk (~1.2s)
-            // and force a durable save at every finalized segment, so an
-            // interrupted take (phone dies, killed) can still be recovered.
-            onPartial = { live ->
-                floatingButton?.updateTicker(live)
-                saveDraftThrottled(live)
-            },
-            onCheckpoint = { text -> app.liveDraft.save(text) },
-            onDone = { text -> onLiveDone(Settings.SPEECH_GOOGLE, text) },
-            onError = { msg -> onLiveError(msg) },
-            onLog = { line -> app.eventLog.add(line) },
-        )
-    }
-
-    // ---- Live Yandex SpeechKit (streaming, cloud) dictation ----
-
-    private suspend fun startYandexNow() {
-        if (yandexSession != null) return
-        val app = application as PravkaApp
-        val key = app.settings.yandexApiKey()
-        val folder = app.settings.yandexFolder()
-        if (key.isBlank() || folder.isBlank()) {
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.yandex_no_creds))
-            return
-        }
-        dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
-        floatingButton?.setRecording(true)
-        floatingButton?.showTicker()
-        Haptics.start(this)
-        runCatching { startMicHold() }
-        googleStartedAt = SystemClock.elapsedRealtime()
-        lastDraftAt = 0L
-        val session = YandexSpeechSession(key, folder)
-        yandexSession = session
-        session.start(
-            onPartial = { live ->
-                floatingButton?.updateTicker(live)
-                saveDraftThrottled(live)
-            },
-            onCheckpoint = { text -> app.liveDraft.save(text) },
-            onDone = { text -> onLiveDone(Settings.SPEECH_YANDEX, text) },
-            onError = { msg -> onLiveError(msg) },
-            onLog = { line -> app.eventLog.add(line) },
-        )
     }
 
     private var lastDraftAt = 0L
@@ -275,29 +249,29 @@ class PravkaAccessibilityService : AccessibilityService() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastDraftAt < 1200) return
         lastDraftAt = now
-        (application as PravkaApp).liveDraft.save(text)
+        app.liveDraft.save(text)
     }
 
     /** Second tap or the notification's Stop button: finalize the live take. */
     fun stopLiveDictation() {
-        val g = googleSession
-        val y = yandexSession
-        if (g == null && y == null) return
-        (application as PravkaApp).eventLog.add("stop requested")
+        val session = googleSession ?: return
+        // Acknowledge the tap before anything else touches storage.
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(true)
-        g?.stop()  // -> onLiveDone
-        y?.stop()
+        app.eventLog.add("stop requested")
+        session.stop()  // -> onLiveDone
     }
 
     private fun onLiveDone(engine: String, text: String) {
         googleSession = null
-        yandexSession = null
         stopMicHold()
         floatingButton?.hideTicker()
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(false)
-        val app = application as PravkaApp
+        // Get the text into the field first - the owner is waiting on it. The
+        // journals are queued on a background thread, so they cost nothing here,
+        // but they still go after the insert is under way.
+        if (text.isNotBlank()) scope.launch { insertDictated(text) }
         val wall = SystemClock.elapsedRealtime() - googleStartedAt
         app.transcriptionLog.append(
             engine = engine,
@@ -312,14 +286,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (text.isBlank()) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.dictation_empty))
-            return
         }
-        scope.launch { insertDictated(text) }
     }
 
     private fun onLiveError(msg: String) {
         googleSession = null
-        yandexSession = null
         stopMicHold()
         floatingButton?.hideTicker()
         floatingButton?.setRecording(false)
@@ -338,7 +309,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             return
         }
         floatingButton?.setBusy(true)
-        val app = application as PravkaApp
         scope.launch {
             val result = app.transcribeDictation(file)
             floatingButton?.setBusy(false)
@@ -358,7 +328,6 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Retry a saved recording from the app's "Записи" screen. */
     fun retryRecording(file: File, onDone: (Boolean, String) -> Unit) {
-        val app = application as PravkaApp
         scope.launch {
             app.transcribeDictation(file)
                 .onSuccess { text ->
@@ -383,19 +352,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             Feedback.toast(this, getString(R.string.dictation_to_clipboard))
             return
         }
-        // Treat a placeholder as empty. isShowingHintText is unreliable in some
-        // apps (messengers surface the "Сообщение" hint as the field's text and
-        // set no hint metadata), so also match hintText / contentDescription and
-        // a short list of the usual placeholders.
-        val raw = node.text?.toString().orEmpty()
-        val rawTrim = raw.trim()
-        val hint = node.hintText?.toString()?.trim()
-        val cd = node.contentDescription?.toString()?.trim()
-        val looksLikePlaceholder = node.isShowingHintText ||
-            (!hint.isNullOrEmpty() && rawTrim.equals(hint, ignoreCase = true)) ||
-            (!cd.isNullOrEmpty() && rawTrim.equals(cd, ignoreCase = true)) ||
-            rawTrim.lowercase() in COMMON_PLACEHOLDERS
-        val existing = if (looksLikePlaceholder) "" else raw
+        // A placeholder counts as empty - shared with the read path so CLEAN
+        // agrees about it too (see target/NodeText.kt).
+        val existing = node.effectiveText()
         // Append at the end by default. After our own ACTION_SET_TEXT the field
         // often reports the cursor back at 0, which made a follow-up dictation
         // land at the START of the phrase. Only honour a genuine mid-text cursor
@@ -428,15 +387,15 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
         Haptics.success(this)
-        // Fix the just-inserted fragment if the field is focused (it usually
-        // is - the owner tapped stop right in it). AccessibilityTarget reads
+        // Fix the just-inserted fragment. refresh() above already re-validated
+        // the node, so don't pay another rootInActiveWindow + findFocus round
+        // trip just to re-derive what we're holding. AccessibilityTarget reads
         // the selection, so only the dictated span is proofread.
-        if (focusedEditableNode() == node) runProofread(ProofreadMode.CLEAN)
+        runProofread(ProofreadMode.CLEAN)
     }
 
     private fun runProofread(mode: ProofreadMode) {
         if (busy) return
-        val app = application as PravkaApp
         scope.launch {
             busy = true
             floatingButton?.setBusy(true)
@@ -457,7 +416,6 @@ class PravkaAccessibilityService : AccessibilityService() {
     // Result-bar action: the model "fixed" a correct word - protect the
     // dictated form and hard-replace the wrong one back on future runs.
     private fun addPairToDictionary(correct: String, wrong: String) {
-        val app = application as PravkaApp
         scope.launch {
             val store = app.dictionaryStore
             val existing = store.all().map { it.from.lowercase() to it.mode }.toHashSet()
@@ -531,8 +489,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         instance = null
         googleSession?.stop()
         googleSession = null
-        yandexSession?.stop()
-        yandexSession = null
         runCatching { stopMicHold() }
         resultBar?.dismiss()
         resultBar = null

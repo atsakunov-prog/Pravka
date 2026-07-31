@@ -36,7 +36,9 @@ class AccessibilityTarget(private val service: PravkaAccessibilityService) : Tex
     override suspend fun read(): String? = withContext(Dispatchers.Main) {
         val n = service.focusedEditableNode() ?: return@withContext null
         node = n
-        fullText = if (n.isShowingHintText) "" else n.text?.toString().orEmpty()
+        // Shared with the dictation insert path, so a placeholder like
+        // "Сообщение" is never proofread as if it were the owner's text.
+        fullText = n.effectiveText()
         selStart = n.textSelectionStart
         selEnd = n.textSelectionEnd
         if (hasFragmentSelection) fullText.substring(selStart, selEnd) else fullText

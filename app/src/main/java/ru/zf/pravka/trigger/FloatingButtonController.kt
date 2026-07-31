@@ -72,9 +72,14 @@ class FloatingButtonController(
 
     private fun dp(value: Int): Int = (value * density).toInt()
 
-    private fun screenSize(): Pair<Int, Int> {
+    // currentWindowMetrics is a binder call to WindowManagerService, and this is
+    // read on every drag frame and every reposition. The bounds only change on a
+    // configuration change (fold/rotate), so cache and invalidate there.
+    private var cachedScreen: Pair<Int, Int>? = null
+
+    private fun screenSize(): Pair<Int, Int> = cachedScreen ?: run {
         val bounds = windowManager.currentWindowMetrics.bounds
-        return bounds.width() to bounds.height()
+        (bounds.width() to bounds.height()).also { cachedScreen = it }
     }
 
     private fun positionKey(): String {
@@ -117,6 +122,7 @@ class FloatingButtonController(
     }
 
     fun onConfigurationChanged() {
+        cachedScreen = null  // fold/rotate: re-measure once
         val p = params ?: return
         scope.launch {
             val (xFraction, yFraction) = settings.fabPosition(positionKey())
@@ -133,6 +139,8 @@ class FloatingButtonController(
         positionTicker()
         val t = ticker ?: return
         tickerText?.text = ""
+        lastTickerText = ""
+        lastTickerAt = 0L
         runCatching { windowManager.updateViewLayout(t, tickerParams) }
         if (!tickerVisible) {
             tickerVisible = true
@@ -145,12 +153,26 @@ class FloatingButtonController(
     // Height that fits TICKER_LINES lines of the ticker text plus padding.
     private fun tickerHeightPx(): Int = dp(TICKER_LINES * 24 + 16)
 
+    private var lastTickerText = ""
+    private var lastTickerAt = 0L
+
     fun updateTicker(text: String) {
         val tv = tickerText ?: return
+        // Partials arrive several times a second, and each assignment forces a
+        // full measure/layout/draw of a 4-line START-ellipsized TextView. Cap the
+        // refresh rate and skip identical text (the recognizer re-emits the same
+        // partial often), so the overlay stops competing with recognition for the
+        // main thread.
+        val tail = text.takeLast(400)
+        if (tail == lastTickerText) return
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastTickerAt < 120) return
+        lastTickerAt = now
+        lastTickerText = tail
         // Steady, bottom-anchored tail (teleprompter): newest words sit on the
         // bottom line, older lines ride up and off the top. No per-update
         // animation (the earlier "settle" nudge read as a jump-down).
-        tv.text = text.takeLast(400)
+        tv.text = tail
     }
 
     /** Keep the pill glued to the button while it's dragged / on rotate. */

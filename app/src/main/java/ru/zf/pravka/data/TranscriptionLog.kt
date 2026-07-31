@@ -2,7 +2,6 @@ package ru.zf.pravka.data
 
 import android.content.Context
 import android.content.Intent
-import androidx.core.content.FileProvider
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -23,15 +22,13 @@ class TranscriptionLog(private val context: Context) {
     companion object {
         private const val FILE_NAME = "transcriptions.jsonl"
         private const val MAX_BYTES = 5L * 1024 * 1024
-        private const val AUTHORITY = "ru.zf.pravka.files"
     }
 
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
 
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File by lazy { File(context.filesDir, FILE_NAME) }
 
     /** One record per transcription attempt (success or failure). */
-    @Synchronized
     fun append(
         engine: String,
         audioMs: Long,
@@ -39,25 +36,40 @@ class TranscriptionLog(private val context: Context) {
         text: String,
         error: String?,
     ) {
-        runCatching {
+        // Queued off the main thread: this runs on the stop tap, right before the
+        // text has to land in the field.
+        val at = System.currentTimeMillis()
+        DiskWriter.post {
             if (file.exists() && file.length() > MAX_BYTES) {
                 val backup = File(context.filesDir, "$FILE_NAME.1")
                 backup.delete()
                 file.renameTo(backup)
             }
             val entry = JSONObject().apply {
-                put("ts", timestampFormat.format(Date()))
+                put("ts", timestampFormat.format(Date(at)))
                 put("engine", engine)
                 put("audio_ms", audioMs)
                 put("transcribe_ms", transcribeMs)
                 put("chars", text.length)
-                put("words", if (text.isBlank()) 0 else text.trim().split(Regex("\\s+")).size)
+                put("words", countWords(text))
                 put("ok", error == null)
                 put("text", text)
                 if (error != null) put("error", error)
             }
             file.appendText(entry.toString() + "\n")
         }
+    }
+
+    // Counts whitespace-separated runs without compiling a Regex or allocating
+    // the split list (the transcript can be thousands of chars).
+    private fun countWords(s: String): Int {
+        var n = 0
+        var inWord = false
+        for (c in s) {
+            if (c.isWhitespace()) inWord = false
+            else if (!inWord) { inWord = true; n++ }
+        }
+        return n
     }
 
     fun exists(): Boolean = file.exists() && file.length() > 0
@@ -105,14 +117,7 @@ class TranscriptionLog(private val context: Context) {
     }
 
     /** Shares the raw JSONL (transcripts + metrics) for prompt tuning. */
-    fun shareJsonIntent(): Intent {
-        val uri = FileProvider.getUriForFile(context, AUTHORITY, file)
-        return Intent(Intent.ACTION_SEND).apply {
-            type = "application/json"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-    }
+    fun shareJsonIntent(): Intent = shareFileIntent(context, file, "application/json")
 
     /**
      * Writes a metrics-only CSV (no transcript text) to the cache and returns a
@@ -140,11 +145,6 @@ class TranscriptionLog(private val context: Context) {
         }
         val out = File(context.cacheDir, "pravka-transcription-metrics.csv")
         out.writeText(csv)
-        val uri = FileProvider.getUriForFile(context, AUTHORITY, out)
-        return Intent(Intent.ACTION_SEND).apply {
-            type = "text/csv"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+        return shareFileIntent(context, out, "text/csv")
     }
 }

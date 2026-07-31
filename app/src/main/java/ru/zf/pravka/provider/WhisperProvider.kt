@@ -73,28 +73,27 @@ class WhisperProvider(
         }
     }
 
-    fun deleteModel(engine: String) {
-        modelFile(engine).delete()
-        loaded?.takeIf { it.engine == engine }?.let {
-            WhisperNative.freeContext(it.ptr)
-            loaded = null
-        }
+
+    /**
+     * The whisper model that would actually do the work: the configured one when
+     * it is downloaded, else whichever one is. Resolved in ONE place so the
+     * caller can log the engine that really ran - it used to be derived here and
+     * again by the caller, with different fallback rules, so the metrics CSV
+     * could claim `whisper-base` while `whisper-small` did the transcription.
+     */
+    suspend fun resolveEngine(): String {
+        val configured = settings.speechEngine().takeIf { it.startsWith("whisper") }
+        return configured?.takeIf { isDownloaded(it) }
+            ?: listOf(Settings.SPEECH_WHISPER_BASE, Settings.SPEECH_WHISPER_SMALL).firstOrNull { isDownloaded(it) }
+            ?: configured
+            ?: Settings.SPEECH_WHISPER_SMALL
     }
 
-    suspend fun transcribe(wav: File): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun transcribe(wav: File, engine: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             if (!WhisperNative.ensureLoaded()) {
                 throw WhisperException("Нативная библиотека распознавания недоступна.")
             }
-            // Prefer the configured whisper model when it's present; otherwise
-            // fall back to whichever whisper model is actually downloaded (the
-            // Google engine has no model of its own, so its file-retries land
-            // here and small may not be the one on disk).
-            val configured = settings.speechEngine().takeIf { it.startsWith("whisper") }
-            val engine = configured?.takeIf { isDownloaded(it) }
-                ?: listOf(Settings.SPEECH_WHISPER_BASE, Settings.SPEECH_WHISPER_SMALL).firstOrNull { isDownloaded(it) }
-                ?: configured
-                ?: Settings.SPEECH_WHISPER_SMALL
             if (!isDownloaded(engine)) {
                 throw WhisperException("Модель распознавания не скачана. Открой Правку и скачай её в настройках.")
             }

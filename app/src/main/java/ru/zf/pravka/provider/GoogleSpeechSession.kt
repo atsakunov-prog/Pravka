@@ -11,15 +11,20 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
 // Live, streaming on-device speech recognition via Android's SpeechRecognizer -
-// the same fast engine Gboard uses. Unlike Whisper this is realtime and never
-// touches a file; the accepted tradeoff is that no WAV is saved during a live
-// take. Recognition runs inside the system RecognitionService (mic-owning
-// process); we just drive it and stitch the finalized segments together.
+// the same fast engine Gboard uses. Realtime, never touches a file; the accepted
+// tradeoff is that no WAV is saved during a live take.
 //
-// SpeechRecognizer is main-thread-only and single-utterance: it ends each
-// segment on a pause. For continuous dictation (the owner reads a doc and
-// dictates comments, with pauses) we restart listening after every segment and
-// keep appending until the caller explicitly stops the session.
+// Two modes, in order of preference:
+//
+//  1. SEGMENTED SESSION (Android 13+, EXTRA_SEGMENTED_SESSION). The recognizer
+//     stays listening across pauses and streams finalized chunks via
+//     onSegmentResults(), ending only when we stop it. This is what Gboard-style
+//     continuous dictation needs: ONE session, so there is no deaf gap between
+//     utterances and no per-utterance re-initialization.
+//  2. FALLBACK: the classic single-utterance behavior, where the recognizer ends
+//     on a pause and we restart it. Restarting is what dropped words and (when
+//     it was combined with destroy/recreate) caused a BUSY error storm, so it is
+//     only used where segmented mode isn't honored.
 class GoogleSpeechSession(
     private val context: Context,
     private val language: String = "ru-RU",
@@ -31,11 +36,18 @@ class GoogleSpeechSession(
     private val main = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
     private val finalized = StringBuilder()
+    // finalized.toString() is rebuilt only when a segment lands, not on every
+    // partial (partials arrive several times a second and the transcript grows
+    // to thousands of chars - rebuilding it each time was pure GC churn).
+    private var head = ""
+    private var lastPartial = ""
     @Volatile private var active = false
     private var stopping = false
     private var errorStreak = 0
     private var restartPending = false
     private var producedAny = false   // did this session ever start recognizing?
+    private var readyFired = false
+    private var segmented = false     // segmented mode confirmed working
 
     private var onReady: () -> Unit = {}
     private var onPartial: (String) -> Unit = {}
@@ -49,12 +61,31 @@ class GoogleSpeechSession(
         // (a genuinely dead mic), never on a transient blip mid-dictation.
         private const val MAX_ERROR_STREAK = 40
 
+        // In segmented mode this is what ends the whole session, so it must be
+        // far longer than any thinking pause (the owner dictates while reading).
+        // An explicit stop is the normal way a take ends; this is just a backstop.
+        private const val SEGMENTED_SILENCE_MS = 30_000L
+
         private fun onDeviceSupported() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
-        fun isAvailable(context: Context): Boolean = runCatching {
-            (onDeviceSupported() && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) ||
+        // Availability is a binder round trip (and isRecognitionAvailable does a
+        // PackageManager query); it cannot change while the app runs, so probe
+        // once instead of on every tap and every recognizer creation.
+        @Volatile private var onDeviceCached: Boolean? = null
+        @Volatile private var anyCached: Boolean? = null
+
+        private fun onDeviceAvailable(context: Context): Boolean =
+            onDeviceCached ?: runCatching {
+                onDeviceSupported() && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+            }.getOrDefault(false).also { onDeviceCached = it }
+
+        private fun anyAvailable(context: Context): Boolean =
+            anyCached ?: runCatching {
                 SpeechRecognizer.isRecognitionAvailable(context)
-        }.getOrDefault(false)
+            }.getOrDefault(false).also { anyCached = it }
+
+        fun isAvailable(context: Context): Boolean =
+            onDeviceAvailable(context) || anyAvailable(context)
 
         /** Asks the system to fetch the offline language pack, if that API exists. */
         fun triggerModelDownload(context: Context, language: String = "ru-RU") {
@@ -72,6 +103,11 @@ class GoogleSpeechSession(
         }
     }
 
+    /** Runs now when already on the main thread, instead of costing a looper hop. */
+    private inline fun onMain(crossinline block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post { block() }
+    }
+
     fun start(
         onReady: () -> Unit = {},
         onPartial: (String) -> Unit,
@@ -86,79 +122,89 @@ class GoogleSpeechSession(
         this.onDone = onDone
         this.onError = onError
         this.onLog = onLog
-        main.post {
-            val onDevice = onDeviceSupported() &&
-                runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
-            onLog("start onDevice=$onDevice biasing=${biasing.size}")
+        onMain {
             val r = createRecognizer()
             if (r == null) {
                 onLog("start FAILED: no recognizer")
                 onError("Распознавание недоступно на устройстве")
-                return@post
+                return@onMain
             }
             recognizer = r
             r.setRecognitionListener(listener)
             active = true
             stopping = false
             errorStreak = 0
+            onLog("start onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} segmentedRequested=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU}")
             startListening()
         }
     }
 
     /** Ends the session; the accumulated text is delivered via onDone. */
     fun stop() {
-        main.post {
-            if (!active && recognizer == null) return@post
+        onMain {
+            if (!active && recognizer == null) return@onMain
             stopping = true
             active = false
             runCatching { recognizer?.stopListening() }
-            // Safety net: if neither onResults nor onError lands, deliver anyway.
+            // Safety net: if no terminal callback lands, deliver anyway.
             main.postDelayed({ if (recognizer != null) finish() }, 2500)
         }
     }
 
     private fun createRecognizer(): SpeechRecognizer? = runCatching {
         when {
-            onDeviceSupported() && SpeechRecognizer.isOnDeviceRecognitionAvailable(context) ->
-                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-            SpeechRecognizer.isRecognitionAvailable(context) ->
-                SpeechRecognizer.createSpeechRecognizer(context)
+            onDeviceAvailable(context) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            anyAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
             else -> null
         }
     }.getOrNull()
 
-    private fun buildIntent(): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        // Keep ONE listening session alive across long pauses so we restart as
-        // rarely as possible - every restart has a tiny deaf gap where a word
-        // can be dropped. Insertion happens on the owner's stop, not per
-        // segment, so long segments don't add any latency.
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 6000L)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 6000L)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Auto punctuation/capitalization, tuned for quality over latency -
-            // cleaner raw text for CLEAN to work from.
-            runCatching {
-                putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_QUALITY)
-            }
-            // Bias toward the owner's vocabulary (names, brands, terms).
-            if (biasing.isNotEmpty()) runCatching {
-                putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(biasing.take(100)))
+    // Invariant for the whole session (language and biasing never change), so
+    // build it once. It used to be rebuilt per restart, copying the bias list
+    // twice each time.
+    private val intent: Intent by lazy {
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // Continuous dictation: keep one session alive across pauses and
+                // receive finalized chunks via onSegmentResults(). The extra named
+                // here must also be set, hence the silence length below.
+                putExtra(
+                    RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+                    RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                )
+                putExtra(
+                    RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                    SEGMENTED_SILENCE_MS,
+                )
+                // Punctuation/capitalization tuned for LATENCY: the quality mode
+                // is documented to increase latency, which is the wrong trade for
+                // live dictation (CLEAN polishes the text afterwards anyway).
+                putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY)
+                // Bias toward the owner's vocabulary (names, brands, terms).
+                if (biasing.isNotEmpty()) {
+                    putStringArrayListExtra(
+                        RecognizerIntent.EXTRA_BIASING_STRINGS,
+                        ArrayList(biasing.take(100)),
+                    )
+                }
             }
         }
     }
 
     private fun startListening() {
         val r = recognizer ?: return
-        runCatching { r.startListening(buildIntent()) }.onFailure { restartSoon() }
+        runCatching { r.startListening(intent) }.onFailure { restartSoon() }
     }
 
     private fun restartSoon() {
         if (!active) { finish(); return }
+        // Segmented mode never needs a restart - the session is continuous.
+        if (segmented) return
         // ONE restart in flight at a time. Errors can fire in bursts, and
         // scheduling a restart per error (plus destroy/recreate) is exactly
         // what caused the busy/disconnected storm that ate speech and left the
@@ -166,38 +212,60 @@ class GoogleSpeechSession(
         // never recreate mid-session.
         if (restartPending) return
         restartPending = true
-        val delay = if (errorStreak == 0) 300L else (450L + errorStreak * 150L).coerceAtMost(1500L)
-        main.postDelayed({
+        val resume = {
             restartPending = false
             if (active) startListening()
-        }, delay)
+        }
+        // Clean segment end: resume on the very next looper message (any delay
+        // here is a window where speech is not being heard). Back off only when
+        // errors are actually piling up.
+        if (errorStreak == 0) main.post(resume)
+        else main.postDelayed(resume, (450L + errorStreak * 150L).coerceAtMost(1500L))
     }
 
     private fun firstResult(bundle: Bundle?): String? =
         bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
 
-    private fun appendSegment(bundle: Bundle?) {
+    /** Appends a finalized chunk and publishes a durable checkpoint. */
+    private fun commitSegment(bundle: Bundle?, tag: String) {
+        errorStreak = 0
+        producedAny = true
         val text = firstResult(bundle)?.trim().orEmpty()
         if (text.isNotEmpty()) {
             if (finalized.isNotEmpty()) finalized.append(' ')
             finalized.append(text)
+            head = finalized.toString()
         }
+        lastPartial = ""
+        onLog("$tag total=${head.length} active=$active stopping=$stopping")
+        // One value, one write: onCheckpoint persists it and the caller mirrors
+        // it to the ticker, so we don't also push it through onPartial.
+        onCheckpoint(head)
     }
+
+    private fun liveText(): String =
+        if (lastPartial.isEmpty()) head
+        else if (head.isEmpty()) lastPartial
+        else "$head $lastPartial"
 
     private fun finish() {
         active = false
-        val text = finalized.toString().trim()
+        // Include a partial that never got finalized, so the last utterance is
+        // never silently dropped when the session ends mid-phrase.
+        val text = liveText().trim()
         val r = recognizer
         recognizer = null
         runCatching { r?.destroy() }
-        onLog("finish len=${text.length}")
+        onLog("finish len=${text.length} segmented=$segmented")
         onDone(text)
     }
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
             onLog("ready")
-            if (!producedAny) onReady()  // first ready = "you can speak now" cue
+            // Fire the "you can speak now" cue once per session, not on every
+            // restart (that vibrated repeatedly through a silent lead-in).
+            if (!readyFired) { readyFired = true; onReady() }
         }
         override fun onBeginningOfSpeech() { errorStreak = 0; producedAny = true; onLog("beginSpeech") }
         override fun onRmsChanged(rmsdB: Float) {}
@@ -206,18 +274,29 @@ class GoogleSpeechSession(
 
         override fun onPartialResults(partialResults: Bundle?) {
             val partial = firstResult(partialResults) ?: return
-            val head = finalized.toString()
-            onPartial((if (head.isEmpty()) partial else "$head $partial").trim())
+            lastPartial = partial
+            onPartial(liveText())
+        }
+
+        // Segmented mode (Android 13+): a chunk finalized but the session keeps
+        // listening. No restart, no deaf gap.
+        override fun onSegmentResults(segmentResults: Bundle) {
+            if (!segmented) { segmented = true; onLog("segmented mode active") }
+            commitSegment(segmentResults, "segment")
+            onPartial(head)
+        }
+
+        override fun onEndOfSegmentedSession() {
+            onLog("endOfSegmentedSession")
+            finish()
         }
 
         override fun onResults(results: Bundle?) {
-            errorStreak = 0
-            producedAny = true
-            appendSegment(results)
-            val checkpoint = finalized.toString()
-            onLog("result total=${checkpoint.length} active=$active stopping=$stopping")
-            onPartial(checkpoint)
-            onCheckpoint(checkpoint)  // durable: persisted so a crash can't lose it
+            commitSegment(results, "result")
+            onPartial(head)
+            // In segmented mode the session continues; otherwise this was the end
+            // of one utterance and we restart to keep dictating.
+            if (segmented) return
             if (active && !stopping) restartSoon() else finish()
         }
 
@@ -244,9 +323,8 @@ class GoogleSpeechSession(
                 return
             }
             if (errorStreak >= MAX_ERROR_STREAK) {
-                val text = finalized.toString().trim()
-                onLog("giveUp streak=$errorStreak len=${text.length}")
-                if (text.isEmpty()) {
+                onLog("giveUp streak=$errorStreak len=${head.length}")
+                if (liveText().isBlank()) {
                     active = false
                     val r = recognizer; recognizer = null
                     runCatching { r?.destroy() }

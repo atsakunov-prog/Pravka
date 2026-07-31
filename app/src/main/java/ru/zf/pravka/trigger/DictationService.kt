@@ -44,10 +44,6 @@ class DictationService : Service() {
         @Volatile var recording: Boolean = false
             private set
 
-        // The file of the recording that just finished, for the service to
-        // hand to the transcriber. Read once on STOP.
-        @Volatile var lastFile: File? = null
-            private set
     }
 
     private var record: AudioRecord? = null
@@ -160,7 +156,6 @@ class DictationService : Service() {
             record = null
             writer = null
             val saved = currentFile.takeIf { it.exists() && it.length() > 44 }
-            lastFile = saved
             // Hand the file to the accessibility service (same process) for
             // transcription + insertion. The file is the source of truth: if
             // this fails, it stays on disk for a later retry.

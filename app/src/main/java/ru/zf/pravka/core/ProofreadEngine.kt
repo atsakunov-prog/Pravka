@@ -1,6 +1,5 @@
 package ru.zf.pravka.core
 
-import ru.zf.pravka.data.DebugLog
 import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.Stats
@@ -9,8 +8,8 @@ import ru.zf.pravka.target.TextTarget
 // The single orchestrator every trigger goes through (spec section 4):
 // read from the target -> apply HARD dictionary replacements -> collect the
 // {DICT} hint block -> call the provider -> clean the reply -> write back
-// (clipboard fallback) -> increment dictionary hits, record debug log,
-// history file, usage counters, undo stack.
+// (clipboard fallback) -> increment dictionary hits, history file,
+// usage counters, undo stack.
 class ProofreadEngine(
     private val claude: ProofreadProvider,
     private val nano: ProofreadProvider,
@@ -67,18 +66,15 @@ class ProofreadEngine(
                 // succeeds - otherwise "why does everything go through
                 // Sonnet?" is undiagnosable from the history.
                 val nanoMessage = primaryError.message ?: "Nano: неизвестная ошибка"
-                log(mode, input, "", 0, nano.id, prepared.firedIds, nanoMessage)
                 history.append(mode.name, nano.id, "gemini-nano", 0, 0, 0, 0.0, false, input, "", "fallback to Claude: $nanoMessage")
                 claude.proofread(prepared.text, mode, prepared.dictBlock).getOrElse { claudeError ->
                     val message = "Nano: ${primaryError.message}\nClaude: ${claudeError.message}"
-                    log(mode, input, "", 0, "nano+claude", prepared.firedIds, message)
                     history.append(mode.name, "nano+claude", "", 0, 0, 0, 0.0, false, input, "", message)
                     stats.recordError()
                     return Outcome.Failed(message)
                 }
             } else {
                 val message = primaryError.message ?: "Неизвестная ошибка"
-                log(mode, input, "", 0, primary.id, prepared.firedIds, message)
                 history.append(mode.name, primary.id, "", 0, 0, 0, 0.0, false, input, "", message)
                 stats.recordError()
                 return Outcome.Failed(message)
@@ -87,7 +83,6 @@ class ProofreadEngine(
 
         val cleaned = ResponseCleaner.clean(rawResult.text, prepared.text)
         if (cleaned == null) {
-            log(mode, input, rawResult.text, rawResult.latencyMs, rawResult.providerId, prepared.firedIds, "response corrupted")
             history.append(
                 mode.name, rawResult.providerId, rawResult.modelId, rawResult.latencyMs,
                 rawResult.inputTokens, rawResult.outputTokens, rawResult.costUsd,
@@ -104,7 +99,6 @@ class ProofreadEngine(
             changed = cleaned != input,
             appliedDictEntries = prepared.firedIds,
         )
-        log(mode, input, cleaned, result.latencyMs, result.providerId, prepared.firedIds, null)
         history.append(
             mode.name, result.providerId, result.modelId, result.latencyMs,
             result.inputTokens, result.outputTokens, result.costUsd,
@@ -127,26 +121,4 @@ class ProofreadEngine(
         }
     }
 
-    private fun log(
-        mode: ProofreadMode,
-        input: String,
-        output: String,
-        latency: Long,
-        provider: String,
-        firedIds: List<Long>,
-        error: String?,
-    ) {
-        DebugLog.add(
-            DebugLog.Entry(
-                timestamp = System.currentTimeMillis(),
-                mode = mode,
-                providerId = provider,
-                latencyMs = latency,
-                input = input,
-                output = output,
-                appliedDictEntries = firedIds,
-                error = error,
-            )
-        )
-    }
 }
