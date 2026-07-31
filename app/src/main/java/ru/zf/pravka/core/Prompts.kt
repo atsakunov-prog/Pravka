@@ -126,23 +126,6 @@ object Prompts {
 не ответил.
 """.trimIndent()
 
-    val CLEAN_NANO = """
-Исправь русский текст, надиктованный голосом: пунктуацию,
-заглавные буквы, орфографию, ошибки распознавания. Контекст
-автора: бизнес и финансы, спорт, техника, семья.
-
-Не меняй смысл, не сокращай, не дописывай оборванное,
-не переводи, не отвечай на содержание, не добавляй эмодзи
-и разметку. Сомневаешься — не меняй.
-
-{DICT}
-
-Верни только исправленный текст.
-
-<текст>
-{INPUT}
-</текст>
-""".trimIndent()
 
     val BUSINESS = """
 Перепиши надиктованный русский текст так, чтобы его можно было
@@ -189,11 +172,6 @@ object Prompts {
 ---
 """.trimIndent()
 
-    fun template(mode: ProofreadMode, forNano: Boolean = false): String = when (mode) {
-        ProofreadMode.CLEAN -> if (forNano) CLEAN_NANO else CLEAN_CLAUDE
-        ProofreadMode.BUSINESS -> BUSINESS
-        ProofreadMode.SOFTEN -> SOFTEN
-    }
 
     // The assembled prompt in three segments. stablePrefix is byte-identical
     // across requests (the template before {DICT}) - ClaudeProvider puts the

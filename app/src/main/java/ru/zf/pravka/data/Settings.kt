@@ -15,17 +15,13 @@ class Settings(private val context: Context) {
 
     companion object {
         const val MODEL_SONNET = "claude-sonnet-5"
-        const val MODEL_HAIKU = "claude-haiku-4-5"
-        const val MODEL_NANO = "gemini-nano"
 
         // Dictation engines.
         const val SPEECH_GOOGLE = "google"          // live streaming, Gboard's engine
         const val SPEECH_WHISPER_SMALL = "whisper-small"
         const val SPEECH_WHISPER_BASE = "whisper-base"
-        const val SPEECH_NANO = "nano"
 
         private val KEY_API_KEY = stringPreferencesKey("anthropic_api_key")
-        private val KEY_CLEAN_MODEL = stringPreferencesKey("clean_model")
         private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
         private val KEY_FAB_ALPHA = floatPreferencesKey("fab_alpha")
         private val KEY_SPEECH_ENGINE = stringPreferencesKey("speech_engine")
@@ -35,19 +31,11 @@ class Settings(private val context: Context) {
     }
 
     val apiKeyFlow = context.dataStore.data.map { it[KEY_API_KEY] ?: "" }
-    val cleanModelFlow = context.dataStore.data.map { it[KEY_CLEAN_MODEL] ?: MODEL_SONNET }
 
     suspend fun apiKey(): String = apiKeyFlow.first()
 
-    // Model for CLEAN mode; BUSINESS/SOFTEN are always Sonnet (spec section 10).
-    suspend fun cleanModel(): String = cleanModelFlow.first()
-
     suspend fun setApiKey(value: String) {
         context.dataStore.edit { it[KEY_API_KEY] = value.trim() }
-    }
-
-    suspend fun setCleanModel(value: String) {
-        context.dataStore.edit { it[KEY_CLEAN_MODEL] = value }
     }
 
     val speechEngineFlow = context.dataStore.data.map { it[KEY_SPEECH_ENGINE] ?: SPEECH_GOOGLE }

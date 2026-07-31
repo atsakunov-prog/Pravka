@@ -6,7 +6,7 @@ import java.io.File
 // Saved dictation audio. Every recording is written to disk BEFORE it is
 // transcribed and deleted only after the text successfully lands in a field
 // (owner's request, Wispr-style): if transcription fails - no network to the
-// home Whisper, Nano stumbled, the app was killed - the .wav stays here and
+// transcription stumbled or the app was killed - the .wav stays here and
 // the app can retry it later from the "Записи" screen.
 class Recordings(private val context: Context) {
 

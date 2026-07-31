@@ -105,8 +105,6 @@ class MainActivity : ComponentActivity() {
                     transcriptionLog = app.transcriptionLog,
                     liveDraft = app.liveDraft,
                     eventLog = app.eventLog,
-                    nanoProvider = app.nanoProvider,
-                    speechProvider = app.speechProvider,
                     whisperProvider = app.whisperProvider,
                     recordings = app.recordings,
                     serviceEnabled = serviceEnabled.value,
@@ -145,8 +143,6 @@ private fun MainScreen(
     transcriptionLog: ru.zf.pravka.data.TranscriptionLog,
     liveDraft: ru.zf.pravka.data.LiveDraft,
     eventLog: ru.zf.pravka.data.EventLog,
-    nanoProvider: ru.zf.pravka.provider.NanoProvider,
-    speechProvider: ru.zf.pravka.provider.SpeechProvider,
     whisperProvider: ru.zf.pravka.provider.WhisperProvider,
     recordings: ru.zf.pravka.data.Recordings,
     serviceEnabled: Boolean,
@@ -193,7 +189,7 @@ private fun MainScreen(
     ) { padding ->
         Column(Modifier.padding(padding)) {
             when (tab) {
-                Tab.SETTINGS -> SettingsTab(settings, nanoProvider, speechProvider, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
+                Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore)
                 Tab.PROMPTS -> PromptsTab(promptStore)
                 Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
@@ -276,8 +272,6 @@ private fun HintText(text: String) {
 @Composable
 private fun SettingsTab(
     settings: Settings,
-    nanoProvider: ru.zf.pravka.provider.NanoProvider,
-    speechProvider: ru.zf.pravka.provider.SpeechProvider,
     whisperProvider: ru.zf.pravka.provider.WhisperProvider,
     recordings: ru.zf.pravka.data.Recordings,
     serviceEnabled: Boolean,
@@ -285,7 +279,6 @@ private fun SettingsTab(
 ) {
     val scope = rememberCoroutineScope()
     var apiKey by remember { mutableStateOf("") }
-    var model by remember { mutableStateOf(Settings.MODEL_SONNET) }
     var keyVisible by remember { mutableStateOf(false) }
     var savedMark by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
@@ -297,7 +290,6 @@ private fun SettingsTab(
 
     LaunchedEffect(Unit) {
         apiKey = settings.apiKey()
-        model = settings.cleanModel()
         loaded = true
     }
 
@@ -388,58 +380,6 @@ private fun SettingsTab(
             }
         }
 
-        SectionCard(label = stringResource(R.string.settings_model_title)) {
-            // Model choice applies immediately - waiting for a "Save" press was
-            // a trap: the owner picked Nano, never pressed Save, and every
-            // request silently kept going to Sonnet.
-            fun pickModel(value: String) {
-                model = value
-                scope.launch { settings.setCleanModel(value) }
-            }
-            ModelOption(stringResource(R.string.settings_model_sonnet), model == Settings.MODEL_SONNET) {
-                pickModel(Settings.MODEL_SONNET)
-            }
-            ModelOption(stringResource(R.string.settings_model_haiku), model == Settings.MODEL_HAIKU) {
-                pickModel(Settings.MODEL_HAIKU)
-            }
-            ModelOption(stringResource(R.string.settings_model_nano), model == Settings.MODEL_NANO) {
-                pickModel(Settings.MODEL_NANO)
-            }
-            if (model == Settings.MODEL_NANO) {
-                var nanoStatus by remember { mutableStateOf("…") }
-                var downloading by remember { mutableStateOf(false) }
-                val nanoScope = rememberCoroutineScope()
-                val context = LocalContext.current
-                LaunchedEffect(downloading) { nanoStatus = nanoProvider.statusText() }
-                Spacer(Modifier.height(4.dp))
-                Text("Gemini Nano: $nanoStatus", style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        enabled = !downloading,
-                        onClick = {
-                            downloading = true
-                            nanoScope.launch {
-                                val result = nanoProvider.download()
-                                downloading = false
-                                Feedback.toast(
-                                    context,
-                                    if (result.isSuccess) context.getString(R.string.nano_download_done)
-                                    else context.getString(R.string.nano_download_failed, result.exceptionOrNull()?.message ?: ""),
-                                )
-                                nanoStatus = nanoProvider.statusText()
-                            }
-                        },
-                    ) { Text(stringResource(if (downloading) R.string.nano_downloading else R.string.nano_download)) }
-                    OutlinedButton(onClick = { nanoScope.launch { nanoStatus = nanoProvider.statusText() } }) {
-                        Text(stringResource(R.string.nano_refresh))
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                HintText(stringResource(R.string.nano_hint))
-            }
-        }
-
         SectionCard(label = stringResource(R.string.settings_fab_title)) {
             Text(stringResource(R.string.settings_fab_size, sizeSlider.toInt()), style = MaterialTheme.typography.bodyMedium)
             Slider(
@@ -460,7 +400,7 @@ private fun SettingsTab(
             )
         }
 
-        SpeechSection(settings, speechProvider, whisperProvider)
+        SpeechSection(settings, whisperProvider)
 
         RecordingsSection(recordings, serviceEnabled)
 
@@ -471,7 +411,6 @@ private fun SettingsTab(
 @Composable
 private fun SpeechSection(
     settings: Settings,
-    speechProvider: ru.zf.pravka.provider.SpeechProvider,
     whisperProvider: ru.zf.pravka.provider.WhisperProvider,
 ) {
     val context = LocalContext.current
@@ -481,12 +420,10 @@ private fun SpeechSection(
     var downloading by remember { mutableStateOf(false) }
 
     val isGoogle = engine == Settings.SPEECH_GOOGLE
-    val isNano = engine == Settings.SPEECH_NANO
     suspend fun statusFor(e: String): String = when {
         e == Settings.SPEECH_GOOGLE ->
             if (ru.zf.pravka.provider.GoogleSpeechSession.isAvailable(context)) context.getString(R.string.google_ready)
             else context.getString(R.string.google_unavailable)
-        e == Settings.SPEECH_NANO -> speechProvider.statusText()
         else -> whisperProvider.statusText(e)
     }
 
@@ -509,11 +446,6 @@ private fun SpeechSection(
             selected = engine == Settings.SPEECH_WHISPER_BASE,
             onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_WHISPER_BASE) } },
         )
-        ModelOption(
-            label = stringResource(R.string.speech_engine_nano),
-            selected = isNano,
-            onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_NANO) } },
-        )
 
         Spacer(Modifier.height(8.dp))
         Text(status, style = MaterialTheme.typography.bodySmall)
@@ -530,8 +462,7 @@ private fun SpeechSection(
                     } else {
                         downloading = true
                         scope.launch {
-                            val result = if (isNano) speechProvider.download()
-                            else whisperProvider.download(engine)
+                            val result = whisperProvider.download(engine)
                             downloading = false
                             Feedback.toast(
                                 context,
@@ -905,7 +836,6 @@ private fun DictEntryDialog(
 
 private val promptTitles = mapOf(
     PromptStore.PromptId.CLEAN_CLAUDE to R.string.prompt_title_clean_claude,
-    PromptStore.PromptId.CLEAN_NANO to R.string.prompt_title_clean_nano,
     PromptStore.PromptId.BUSINESS to R.string.prompt_title_business,
     PromptStore.PromptId.SOFTEN to R.string.prompt_title_soften,
 )
@@ -1042,7 +972,6 @@ private fun PromptEditor(
                 }
                 warning = when {
                     !text.contains(Prompts.PLACEHOLDER_DICT) -> R.string.prompt_warning_no_dict
-                    id == PromptStore.PromptId.CLEAN_NANO && text.length > 800 -> R.string.prompt_warning_nano_long
                     else -> null
                 }
                 scope.launch {
@@ -1131,7 +1060,6 @@ private fun TranscriptsTab(
         Settings.SPEECH_GOOGLE -> "Google"
         Settings.SPEECH_WHISPER_SMALL -> "Whisper small"
         Settings.SPEECH_WHISPER_BASE -> "Whisper base"
-        Settings.SPEECH_NANO -> "Gemini Nano"
         else -> engine
     }
 

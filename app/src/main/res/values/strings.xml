@@ -14,16 +14,6 @@
     <string name="settings_api_key_hint">Хранится только на этом устройстве. Создай отдельный ключ с лимитом трат на console.anthropic.com.</string>
     <string name="settings_show">показать</string>
     <string name="settings_hide">скрыть</string>
-    <string name="settings_model_title">Модель для режима «Чистка»</string>
-    <string name="settings_model_sonnet">Sonnet 5 — по умолчанию, лучше держит авторский голос</string>
-    <string name="settings_model_haiku">Haiku 4.5 — быстрее и дешевле, может упрощать</string>
-    <string name="settings_model_nano">Gemini Nano — офлайн, бесплатно, правит кусками (эксперимент)</string>
-    <string name="nano_download">Скачать модель</string>
-    <string name="nano_downloading">Скачивается…</string>
-    <string name="nano_refresh">Обновить статус</string>
-    <string name="nano_download_done">Модель Nano скачана</string>
-    <string name="nano_download_failed">Не удалось скачать: %1$s</string>
-    <string name="nano_hint">Эксперимент запаркован: AICore блокирует вызовы из фоновых приложений (ошибка 30), а правка работает из фоновой службы. Выбор Nano будет просто уходить в Claude. Оставлено на случай, если Google откроет фоновый доступ.</string>
     <string name="settings_save">Сохранить</string>
     <string name="settings_saved">Сохранено ✓</string>
     <string name="accessibility_description">Правка читает текст из активного поля ввода и заменяет его исправленным по нажатию плавающей кнопки «П». Текст отправляется только в настроенный API правки.</string>
@@ -61,7 +51,6 @@
     <string name="speech_engine_google">Google — быстрый, как на клавиатуре (по умолчанию)</string>
     <string name="speech_engine_whisper_small">Whisper small (~190 МБ, точнее, но медленно)</string>
     <string name="speech_engine_whisper_base">Whisper base (~60 МБ, быстрее)</string>
-    <string name="speech_engine_nano">Gemini Nano (экспериментально)</string>
     <string name="speech_download">Скачать модель</string>
     <string name="speech_downloading">Скачивается…</string>
     <string name="speech_refresh">Обновить статус</string>
@@ -136,7 +125,6 @@
     <string name="prompts_header">Промпты</string>
     <string name="prompts_subheader">Это точные инструкции, которые уходят модели вместе с твоим текстом. Правь осторожно: {INPUT} — место подстановки текста, {DICT} — место для словаря.</string>
     <string name="prompt_title_clean_claude">Чистка (Claude)</string>
-    <string name="prompt_title_clean_nano">Чистка (Nano, офлайн)</string>
     <string name="prompt_title_business">Деловой стиль</string>
     <string name="prompt_title_soften">Мягче</string>
     <string name="prompt_modified">изменён</string>
@@ -144,7 +132,6 @@
     <string name="prompt_back">← Назад</string>
     <string name="prompt_error_no_input">В промпте обязателен плейсхолдер {INPUT} — без него модель не получит текст.</string>
     <string name="prompt_warning_no_dict">Сохранено, но без {DICT} подсказки словаря не будут попадать в промпт.</string>
-    <string name="prompt_warning_nano_long">Сохранено, но промпт длиннее 800 символов съедает лимит входа Nano.</string>
     <string name="prompt_reset">Вернуть заводской</string>
     <string name="prompt_reset_confirm">Точно вернуть?</string>
 

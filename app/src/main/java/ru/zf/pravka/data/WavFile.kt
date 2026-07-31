@@ -4,7 +4,7 @@ import java.io.File
 import java.io.RandomAccessFile
 
 // Minimal 16 kHz mono 16-bit PCM WAV writer/reader. 16k mono PCM is the
-// lingua franca of on-device ASR - both Gemini Nano's speech recognizer and
+// lingua franca of on-device ASR - both whisper.cpp and
 // a home Whisper accept it without transcoding. The header is written with a
 // placeholder size and patched on close(), so a recording killed mid-write
 // is still a valid (if truncated) WAV.

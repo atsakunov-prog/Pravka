@@ -155,8 +155,8 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     private fun startForEngine() {
         if (!hasMicPermission()) { requestMicPermission(); return }
-        // Whisper/Nano record to a file; everything else is the live engine.
-        if (cachedEngine.startsWith("whisper") || cachedEngine == Settings.SPEECH_NANO) {
+        // Whisper records to a file; Google is the live streaming engine.
+        if (cachedEngine.startsWith("whisper")) {
             startRecordingNow()
         } else {
             startGoogleNow()

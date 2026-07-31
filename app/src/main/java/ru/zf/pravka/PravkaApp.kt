@@ -18,8 +18,6 @@ import ru.zf.pravka.data.WavFile
 import android.os.SystemClock
 import java.io.File
 import ru.zf.pravka.provider.ClaudeProvider
-import ru.zf.pravka.provider.NanoProvider
-import ru.zf.pravka.provider.SpeechProvider
 import ru.zf.pravka.provider.WhisperProvider
 import ru.zf.pravka.target.ClipboardTarget
 
@@ -47,26 +45,18 @@ class PravkaApp : Application() {
     }
 
     val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient) }
-    val nanoProvider by lazy { NanoProvider(this, promptStore) }
-    val speechProvider by lazy { SpeechProvider(this, settings) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
 
     // File-based transcription: for saved recordings and retries. The live
-    // Google engine can't read a file, so under Google (and by default) saved
-    // files go through Whisper; Nano uses its own path. Every attempt is
-    // logged with metrics (engine, audio length, transcription time, chars).
+    // Google engine can't read a file, so saved files go through Whisper.
+    // Every attempt is logged with metrics (engine, audio length, time, chars).
     suspend fun transcribeDictation(file: File): Result<String> {
-        val nano = settings.speechEngine() == Settings.SPEECH_NANO
         // Ask Whisper which model will really run, so the logged engine matches
         // the one that did the work.
-        val fileEngine = if (nano) Settings.SPEECH_NANO else whisperProvider.resolveEngine()
+        val fileEngine = whisperProvider.resolveEngine()
         val started = SystemClock.elapsedRealtime()
-        val result = if (nano) {
-            speechProvider.transcribe(file)
-        } else {
-            whisperProvider.transcribe(file, fileEngine)
-        }
+        val result = whisperProvider.transcribe(file, fileEngine)
         val elapsed = SystemClock.elapsedRealtime() - started
         transcriptionLog.append(
             engine = fileEngine,
@@ -81,8 +71,6 @@ class PravkaApp : Application() {
     val engine by lazy {
         ProofreadEngine(
             claude = claudeProvider,
-            nano = nanoProvider,
-            settings = settings,
             clipboardFallback = ClipboardTarget(this),
             stats = stats,
             dictionary = DictionaryApplier(dictionaryStore),

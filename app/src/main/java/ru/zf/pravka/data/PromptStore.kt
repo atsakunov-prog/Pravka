@@ -19,13 +19,12 @@ class PromptStore(private val context: Context) {
 
     enum class PromptId(val storageKey: String) {
         CLEAN_CLAUDE("clean_claude"),
-        CLEAN_NANO("clean_nano"),
         BUSINESS("business"),
         SOFTEN("soften");
 
         companion object {
-            fun of(mode: ProofreadMode, forNano: Boolean): PromptId = when (mode) {
-                ProofreadMode.CLEAN -> if (forNano) CLEAN_NANO else CLEAN_CLAUDE
+            fun of(mode: ProofreadMode): PromptId = when (mode) {
+                ProofreadMode.CLEAN -> CLEAN_CLAUDE
                 ProofreadMode.BUSINESS -> BUSINESS
                 ProofreadMode.SOFTEN -> SOFTEN
             }
@@ -34,7 +33,6 @@ class PromptStore(private val context: Context) {
 
     fun factory(id: PromptId): String = when (id) {
         PromptId.CLEAN_CLAUDE -> Prompts.CLEAN_CLAUDE
-        PromptId.CLEAN_NANO -> Prompts.CLEAN_NANO
         PromptId.BUSINESS -> Prompts.BUSINESS
         PromptId.SOFTEN -> Prompts.SOFTEN
     }
@@ -45,8 +43,8 @@ class PromptStore(private val context: Context) {
     suspend fun effective(id: PromptId): String =
         overrideFlow(id).first() ?: factory(id)
 
-    suspend fun effective(mode: ProofreadMode, forNano: Boolean = false): String =
-        effective(PromptId.of(mode, forNano))
+    suspend fun effective(mode: ProofreadMode): String =
+        effective(PromptId.of(mode))
 
     suspend fun setOverride(id: PromptId, text: String) {
         context.promptDataStore.edit { it[stringPreferencesKey(id.storageKey)] = text }

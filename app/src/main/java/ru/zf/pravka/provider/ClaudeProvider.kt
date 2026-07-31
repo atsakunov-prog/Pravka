@@ -29,8 +29,6 @@ class ClaudeProvider(
 
     class ApiException(message: String, val retryable: Boolean = false) : Exception(message)
 
-    override suspend fun isAvailable(): Boolean = settings.apiKey().isNotBlank()
-
     private data class ApiReply(
         val text: String,
         val inputTokens: Int,       // uncached, billed at full price
@@ -43,7 +41,6 @@ class ClaudeProvider(
         input: String,
         mode: ProofreadMode,
         dictBlock: String,
-        onPartial: (suspend (String) -> Unit)?,  // single-shot provider, unused
     ): Result<ProofreadResult> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -51,16 +48,10 @@ class ClaudeProvider(
                 if (apiKey.isBlank()) {
                     throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
                 }
-                // When Nano is selected but Claude runs (rewrite modes or
-                // fallback), Sonnet is the sane default.
-                val model = when (mode) {
-                    ProofreadMode.CLEAN -> settings.cleanModel()
-                        .takeIf { it == Settings.MODEL_SONNET || it == Settings.MODEL_HAIKU }
-                        ?: Settings.MODEL_SONNET
-                    else -> Settings.MODEL_SONNET
-                }
+                // Sonnet for every mode - the only model the owner uses.
+                val model = Settings.MODEL_SONNET
                 // Owner-edited override if present, factory text otherwise.
-                val template = promptStore.effective(mode, forNano = false)
+                val template = promptStore.effective(mode)
                 val parts = Prompts.assemble(template, dictBlock)
 
                 val started = System.currentTimeMillis()
@@ -85,7 +76,6 @@ class ClaudeProvider(
     // the input price: 1h-TTL writes cost 2x, reads 0.1x.
     private val prices = mapOf(
         Settings.MODEL_SONNET to (3.0 to 15.0),
-        Settings.MODEL_HAIKU to (1.0 to 5.0),
     )
 
     private fun costUsd(model: String, reply: ApiReply): Double {

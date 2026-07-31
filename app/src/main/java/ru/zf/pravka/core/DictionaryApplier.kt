@@ -6,7 +6,7 @@ import ru.zf.pravka.data.DictionaryStore
 // HARD entries are replaced deterministically before the model sees the
 // text; HINT/PROTECT entries that actually occur in the text are collected
 // into the {DICT} block. Pre-filtering is mandatory - the full dictionary
-// would eat Nano's input limit and waste money on Claude.
+// would bloat the prompt and waste money on Claude.
 class DictionaryApplier(private val store: DictionaryStore) {
 
     data class Prepared(
