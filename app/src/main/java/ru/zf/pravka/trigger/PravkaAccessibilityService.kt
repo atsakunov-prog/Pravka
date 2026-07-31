@@ -369,7 +369,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             Feedback.toast(this, getString(R.string.dictation_to_clipboard))
             return
         }
-        val existing = if (node.isShowingHintText) "" else node.text?.toString().orEmpty()
+        // Treat a placeholder as empty. isShowingHintText is unreliable in some
+        // apps (messengers report the "Сообщение" hint as the field's text),
+        // so also compare the text against the node's hintText.
+        val raw = node.text?.toString().orEmpty()
+        val hint = node.hintText?.toString()
+        val existing = if (node.isShowingHintText || (!hint.isNullOrEmpty() && raw == hint)) "" else raw
         // Append at the end by default. After our own ACTION_SET_TEXT the field
         // often reports the cursor back at 0, which made a follow-up dictation
         // land at the START of the phrase. Only honour a genuine mid-text cursor
