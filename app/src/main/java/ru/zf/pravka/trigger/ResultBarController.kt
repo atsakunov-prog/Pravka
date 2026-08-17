@@ -17,7 +17,7 @@ import ru.zf.pravka.core.WordDiff
 // bar appears bottom-center for a few seconds with three actions - undo,
 // "what changed" (word diff sheet) and quick add-to-dictionary (tap a
 // wrongly-"fixed" word pair to protect it). Editorial palette: ink,
-// vermilion ring, paper text - same as the button and the icon.
+// orange ring, paper text - same as the button and the icon.
 class ResultBarController(
     private val service: PravkaAccessibilityService,
     private val onUndo: () -> Unit,
@@ -28,7 +28,7 @@ class ResultBarController(
     companion object {
         private const val SHOW_MS = 12_000L
         private val INK = 0xF5241F19.toInt()
-        private val VERMILION = 0xFFC13B2A.toInt()
+        private val ACCENT = 0xFFEA580C.toInt()
         private val PAPER = 0xFFF7F3EA.toInt()
         private val PAPER_DIM = 0xFFB9AF9E.toInt()
     }
@@ -48,7 +48,7 @@ class ResultBarController(
     private fun pillBackground(): GradientDrawable = GradientDrawable().apply {
         setColor(INK)
         cornerRadius = dp(24).toFloat()
-        setStroke(dp(1), VERMILION)
+        setStroke(dp(1), ACCENT)
     }
 
     private fun chip(text: String, onClick: () -> Unit): TextView =
@@ -181,7 +181,7 @@ class ResultBarController(
             background = GradientDrawable().apply {
                 setColor(INK)
                 cornerRadius = dp(16).toFloat()
-                setStroke(dp(1), VERMILION)
+                setStroke(dp(1), ACCENT)
             }
             elevation = dp(8).toFloat()
             setPadding(dp(16), dp(12), dp(16), dp(12))

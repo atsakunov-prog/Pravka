@@ -181,10 +181,11 @@ class GoogleSpeechSession(
                     RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
                     SEGMENTED_SILENCE_MS,
                 )
-                // Punctuation/capitalization tuned for LATENCY: the quality mode
-                // is documented to increase latency, which is the wrong trade for
-                // live dictation (CLEAN polishes the text afterwards anyway).
-                putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY)
+                // EXTRA_ENABLE_FORMATTING deliberately NOT set: the formatter
+                // drops a period wherever the speaker pauses (each silence
+                // closes a segment) and those false sentence breaks actively
+                // misled the cleanup model. A raw word stream is an honest
+                // input - CLEAN rebuilds punctuation, caps and numbers anyway.
                 // A dictation tool must not censor: by default the recognizer
                 // masks "offensive" words with asterisks.
                 putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)

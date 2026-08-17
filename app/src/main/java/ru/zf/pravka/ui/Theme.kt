@@ -14,13 +14,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// Editorial identity: paper, ink, and the proofreader's red pen.
-// The wide "П" mark, serif headings and the vermilion accent carry the same
+// Editorial identity: paper, ink, and the proofreader's orange pen.
+// The wide "П" mark, serif headings and the orange accent carry the same
 // language as the launcher icon and the floating button.
 
-private val Vermilion = Color(0xFFC13B2A)
-private val VermilionDeep = Color(0xFF8F2517)
-private val VermilionBright = Color(0xFFE0654E)
+private val Accent = Color(0xFFEA580C)
+private val AccentDeep = Color(0xFF9A3412)
+private val AccentBright = Color(0xFFFB923C)
 
 private val Paper = Color(0xFFF7F3EA)
 private val PaperCard = Color(0xFFFEFCF6)
@@ -40,10 +40,10 @@ private val NightLine = Color(0xFF3B342A)
 private val OchreBright = Color(0xFFD4A54F)
 
 private val LightColors = lightColorScheme(
-    primary = Vermilion,
+    primary = Accent,
     onPrimary = Color(0xFFFFF8F0),
-    primaryContainer = Color(0xFFF6DCD3),
-    onPrimaryContainer = VermilionDeep,
+    primaryContainer = Color(0xFFFAE1CB),
+    onPrimaryContainer = AccentDeep,
     secondary = InkSoft,
     onSecondary = Paper,
     secondaryContainer = PaperDim,
@@ -72,10 +72,10 @@ private val LightColors = lightColorScheme(
 )
 
 private val DarkColors = darkColorScheme(
-    primary = VermilionBright,
-    onPrimary = Color(0xFF33110A),
-    primaryContainer = Color(0xFF5C1D11),
-    onPrimaryContainer = Color(0xFFF6C9BD),
+    primary = AccentBright,
+    onPrimary = Color(0xFF381603),
+    primaryContainer = Color(0xFF6B2E0B),
+    onPrimaryContainer = Color(0xFFFAD6B4),
     secondary = NightTextSoft,
     onSecondary = NightBg,
     secondaryContainer = NightCardHigh,

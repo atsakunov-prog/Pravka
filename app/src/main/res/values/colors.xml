@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Proofreader's red pen - the brand accent. -->
-    <color name="ic_launcher_background">#C13B2A</color>
+    <color name="ic_launcher_background">#EA580C</color>
     <color name="pravka_window_bg">#F7F3EA</color>
 </resources>

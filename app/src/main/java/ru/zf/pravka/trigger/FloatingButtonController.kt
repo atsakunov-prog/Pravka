@@ -35,13 +35,13 @@ class FloatingButtonController(
 
     companion object {
         private const val LONG_PRESS_MS = 450L
-        private const val TICKER_ALPHA = 0.6f   // a touch see-through, still readable
+        private const val TICKER_ALPHA = 0.82f  // near-opaque, owner found 0.6 too see-through
         private const val TICKER_W_MULT = 6     // width in button-diameters
         private const val TICKER_LINES = 4      // teleprompter: up to four lines tall
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
-        // vermilion circle, paper-white geometric "П"; deep red while recording.
-        private val VERMILION = 0xFFC13B2A.toInt()
+        // orange circle, paper-white geometric "П"; deep red while recording.
+        private val ACCENT = 0xFFEA580C.toInt()
         private val REC_RED = 0xFFD8342A.toInt()
         private val PAPER = 0xFFF7F3EA.toInt()
     }
@@ -120,7 +120,7 @@ class FloatingButtonController(
     /** Recording on: red stop dot, full opacity, pinned visible everywhere. */
     fun setRecording(value: Boolean) {
         recording = value
-        background?.setColor(if (value) REC_RED else VERMILION)
+        background?.setColor(if (value) REC_RED else ACCENT)
         recDot?.visibility = if (value) View.VISIBLE else View.GONE
         label?.visibility = if (value || busy) View.GONE else View.VISIBLE
         button?.alpha = if (value) 1f else idleAlpha
@@ -238,7 +238,7 @@ class FloatingButtonController(
                 textSize = 15f
                 background = GradientDrawable().apply {
                     cornerRadius = dp(18).toFloat()
-                    setColor(VERMILION)
+                    setColor(ACCENT)
                 }
                 alpha = 0.92f
                 val padH = dp(16)
@@ -286,7 +286,7 @@ class FloatingButtonController(
         pill.background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = buttonSize / 2f
-            setColor(VERMILION)
+            setColor(ACCENT)
         }
         pill.elevation = dp(4).toFloat()
         val tv = android.widget.TextView(service).apply {
@@ -355,7 +355,7 @@ class FloatingButtonController(
         val container = FrameLayout(service)
         val bg = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(VERMILION)
+            setColor(ACCENT)
         }
         background = bg
         container.background = bg
