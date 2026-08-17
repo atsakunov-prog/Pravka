@@ -100,6 +100,10 @@ class ProofreadEngine(
             target.write(cleaned) -> {
                 val (undoBefore, undoAfter) = target.undoPair(input, cleaned)
                 UndoStack.push(before = undoBefore, after = undoAfter)
+                // Owner's request: every delivered result also lands on the
+                // clipboard - insurance against a flaky field write and a free
+                // way to paste the same text elsewhere.
+                clipboardFallback.write(cleaned)
                 Outcome.Applied(result)
             }
             else -> {

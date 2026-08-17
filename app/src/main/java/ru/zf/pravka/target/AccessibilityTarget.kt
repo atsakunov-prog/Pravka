@@ -43,11 +43,19 @@ class AccessibilityTarget(
             !(selStart == 0 && selEnd == fullText.length)
 
     override suspend fun read(): String? = withContext(Dispatchers.Main) {
+        // Node calls throw when the host window died (screen off, app killed);
+        // that is "no field", not a crash.
+        runCatching { readInner() }
+            .onFailure { service.logEvent("read: threw ${it.javaClass.simpleName}") }
+            .getOrNull()
+    }
+
+    private fun readInner(): String? {
         val n = pinnedNode?.takeIf { it.refresh() && it.isEditable }
             ?: (if (pinnedNode != null) null else service.focusedEditableNode())
             ?: run {
                 service.logEvent("read: no node (pinned=${pinnedNode != null})")
-                return@withContext null
+                return null
             }
         node = n
         // Shared with the dictation insert path, so a placeholder like
@@ -55,14 +63,21 @@ class AccessibilityTarget(
         fullText = n.effectiveText()
         selStart = n.textSelectionStart
         selEnd = n.textSelectionEnd
-        if (hasFragmentSelection) fullText.substring(selStart, selEnd) else fullText
+        return if (hasFragmentSelection) fullText.substring(selStart, selEnd) else fullText
     }
 
     override suspend fun write(text: String): Boolean = withContext(Dispatchers.Main) {
-        val n = node ?: return@withContext false
+        // Same as read(): a dead window must degrade to the clipboard fallback.
+        runCatching { writeInner(text) }
+            .onFailure { service.logEvent("write: threw ${it.javaClass.simpleName}") }
+            .getOrDefault(false)
+    }
+
+    private fun writeInner(text: String): Boolean {
+        val n = node ?: return false
         if (!n.refresh() || !n.isEditable) {
             service.logEvent("write: node gone or not editable")
-            return@withContext false
+            return false
         }
 
         // Never write into a field the user has already left. A pinned node is
@@ -71,7 +86,7 @@ class AccessibilityTarget(
             val currentFocus = service.focusedEditableNode()
             if (currentFocus == null || currentFocus != n) {
                 service.logEvent("write: focus moved (focus=${currentFocus != null})")
-                return@withContext false
+                return false
             }
         }
 
@@ -86,7 +101,7 @@ class AccessibilityTarget(
             service.logEvent(
                 "write: field changed mid-flight (now=${current.length} was=${fullText.length})"
             )
-            return@withContext false
+            return false
         }
 
         // The engine trims what it reads, so restore the selection's own
@@ -124,7 +139,7 @@ class AccessibilityTarget(
             }
             n.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selectionArgs)
         }
-        ok
+        return ok
     }
 
     // Undo must restore the whole field, not just the fragment: a later

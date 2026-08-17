@@ -40,7 +40,15 @@ class PravkaAccessibilityService : AccessibilityService() {
             private set
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    // An uncaught exception in any launched job used to kill the whole app
+    // process SILENTLY (screen-off mid-take -> dead window -> node call threw ->
+    // the take vanished with no journal line). Log it instead and stay alive.
+    private val crashLogger = kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+        runCatching {
+            app.eventLog.add("CRASH ${e.javaClass.simpleName}: ${e.message} @ ${e.stackTrace.firstOrNull()}")
+        }
+    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + crashLogger)
     private var floatingButton: FloatingButtonController? = null
     private var resultBar: ResultBarController? = null
     private var busy = false
@@ -68,6 +76,9 @@ class PravkaAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        // A fresh "connected" after takes were mid-flight = the process died
+        // and the system rebound the service. Makes crashes visible in the log.
+        app.eventLog.add("service connected")
         resultBar = ResultBarController(this, ::undoLast, ::addPairToDictionary, ::redoWithDirective)
         floatingButton = FloatingButtonController(
             service = this,
@@ -273,8 +284,12 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     private fun onLiveDone(engine: String, text: String) {
         googleSession = null
-        stopMicHold()
-        floatingButton?.hideTicker()
+        // Every step below runs on the binder callback that delivers the take:
+        // one throw here (screen off -> dead window/FGS token) used to kill the
+        // process before the transcript was even journaled. Nothing on this
+        // path is allowed to take the text down with it.
+        runCatching { stopMicHold() }
+        runCatching { floatingButton?.hideTicker() }
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(false)
         // Get the text into the field first - the owner is waiting on it. The
@@ -356,9 +371,16 @@ class PravkaAccessibilityService : AccessibilityService() {
     private suspend fun insertDictated(rawText: String) {
         // Dictated formatting commands ("с новой строки", "абзац") become real
         // breaks locally - instant and free, before the model ever sees them.
+        app.eventLog.add("insert: begin len=${rawText.length}")
         val text = ru.zf.pravka.core.VoiceCommands.apply(rawText)
-        val pinned = dictationTarget?.get()?.takeIf { it.refresh() && it.isEditable }
-        val node = pinned ?: focusedEditableNode()
+        // Node calls throw when the window died mid-take (screen off, app
+        // killed) - that must degrade to the no-field path, not crash.
+        val pinned = runCatching { dictationTarget?.get()?.takeIf { it.refresh() && it.isEditable } }
+            .onFailure { app.eventLog.add("insert: pinned threw ${it.javaClass.simpleName}") }
+            .getOrNull()
+        val node = pinned ?: runCatching { focusedEditableNode() }
+            .onFailure { app.eventLog.add("insert: focus lookup threw ${it.javaClass.simpleName}") }
+            .getOrNull()
         app.eventLog.add(
             "insert: node=${if (pinned != null) "pinned" else if (node != null) "focus" else "NONE"} len=${text.length}"
         )
@@ -367,13 +389,20 @@ class PravkaAccessibilityService : AccessibilityService() {
             return
         }
         // A placeholder counts as empty - shared with the read path so CLEAN
-        // agrees about it too (see target/NodeText.kt).
-        val existing = node.effectiveText()
+        // agrees about it too (see target/NodeText.kt). Reading a node whose
+        // window just died throws - degrade to the no-field path.
+        val state = runCatching { node.effectiveText() to node.textSelectionEnd }
+            .onFailure { app.eventLog.add("insert: node read threw ${it.javaClass.simpleName}") }
+            .getOrNull()
+        if (state == null) {
+            cleanWithoutField(text)
+            return
+        }
         // Append at the end by default. After our own ACTION_SET_TEXT the field
         // often reports the cursor back at 0, which made a follow-up dictation
         // land at the START of the phrase. Only honour a genuine mid-text cursor
         // (>0 and not already at the end); otherwise append.
-        val selEnd = node.textSelectionEnd
+        val (existing, selEnd) = state
         val cursor = if (selEnd in 1..existing.length) selEnd else existing.length
         val needsSpaceBefore = cursor > 0 && !existing[cursor - 1].isWhitespace()
         val insert = (if (needsSpaceBefore) " " else "") + text
@@ -384,7 +413,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         val setArgs = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
         }
-        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setArgs)) {
+        val setOk = runCatching { node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setArgs) }
+            .getOrDefault(false)
+        if (!setOk) {
             // Some fields reject a big ACTION_SET_TEXT. Put the fragment on the
             // clipboard and try to PASTE it into the field automatically, so it
             // still lands in the box without a manual paste.
@@ -395,12 +426,13 @@ class PravkaAccessibilityService : AccessibilityService() {
             else Haptics.success(this)
             return
         }
-        node.refresh()
+        runCatching { node.refresh() }
         val selArgs = Bundle().apply {
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, spanStart)
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, spanEnd.coerceAtMost(newText.length))
         }
-        val selected = node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
+        val selected = runCatching { node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs) }
+            .getOrDefault(false)
         app.eventLog.add(
             "insert: ok existing=${existing.length} selection=$selected -> clean=${selected || existing.isEmpty()}"
         )
@@ -422,7 +454,11 @@ class PravkaAccessibilityService : AccessibilityService() {
     private suspend fun cleanWithoutField(text: String) {
         floatingButton?.setBusy(true)
         val target = ru.zf.pravka.target.PlainTextTarget(text)
-        val outcome = app.engine.proofread(target, ProofreadMode.CLEAN)
+        val outcome = runCatching { app.engine.proofread(target, ProofreadMode.CLEAN) }
+            .getOrElse { e ->
+                app.eventLog.add("cleanWithoutField threw ${e.javaClass.simpleName}")
+                ProofreadEngine.Outcome.Failed(e.message ?: "Неизвестная ошибка")
+            }
         floatingButton?.setBusy(false)
         val final = target.result ?: text
         ru.zf.pravka.target.ClipboardTarget(this).write(final)
@@ -505,11 +541,18 @@ class PravkaAccessibilityService : AccessibilityService() {
             val onDelta: (String) -> Unit = { partial ->
                 scope.launch { floatingButton?.updateTicker(partial) }
             }
-            val outcome = app.engine.proofread(
-                AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode), mode, onDelta,
-                directive = directive,
-                modelOverride = if (strongModel) Settings.MODEL_OPUS else null,
-            )
+            // A throw anywhere below must never leave busy=true forever (a
+            // wedged button until service restart) - degrade to Failed.
+            val outcome = runCatching {
+                app.engine.proofread(
+                    AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode), mode, onDelta,
+                    directive = directive,
+                    modelOverride = if (strongModel) Settings.MODEL_OPUS else null,
+                )
+            }.getOrElse { e ->
+                app.eventLog.add("proofread threw ${e.javaClass.simpleName}: ${e.message}")
+                ProofreadEngine.Outcome.Failed(e.message ?: "Неизвестная ошибка")
+            }
             floatingButton?.hideTicker()
             floatingButton?.setBusy(false)
             busy = false
