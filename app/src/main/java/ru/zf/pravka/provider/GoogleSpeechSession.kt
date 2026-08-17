@@ -64,7 +64,11 @@ class GoogleSpeechSession(
         // In segmented mode this is what ends the whole session, so it must be
         // far longer than any thinking pause (the owner dictates while reading).
         // An explicit stop is the normal way a take ends; this is just a backstop.
-        private const val SEGMENTED_SILENCE_MS = 30_000L
+        // MUST be an Int: the framework reads the extra with getInt(), and a
+        // Long silently reads back as "not set" - that single character (30_000L)
+        // is why segmented mode never engaged (112 takes, segmented=false on all)
+        // and every pause cost a ~1.5s deaf restart gap.
+        private const val SEGMENTED_SILENCE_MS = 30_000
 
         private fun onDeviceSupported() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
@@ -277,7 +281,14 @@ class GoogleSpeechSession(
         else if (head.isEmpty()) lastPartial
         else "$head $lastPartial"
 
+    private var finished = false
+
     private fun finish() {
+        // Exactly one delivery per session: an error during stopping plus the
+        // stop() safety net both funnel here, and a double onDone() logged the
+        // take twice and inserted it twice (2026-07-29, twice in the journal).
+        if (finished) return
+        finished = true
         active = false
         // Include a partial that never got finalized, so the last utterance is
         // never silently dropped when the session ends mid-phrase.
