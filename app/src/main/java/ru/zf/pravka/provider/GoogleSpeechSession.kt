@@ -185,6 +185,9 @@ class GoogleSpeechSession(
                 // is documented to increase latency, which is the wrong trade for
                 // live dictation (CLEAN polishes the text afterwards anyway).
                 putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY)
+                // A dictation tool must not censor: by default the recognizer
+                // masks "offensive" words with asterisks.
+                putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
                 // Bias toward the owner's vocabulary (names, brands, terms).
                 if (biasing.isNotEmpty()) {
                     putStringArrayListExtra(
@@ -198,13 +201,16 @@ class GoogleSpeechSession(
 
     private fun startListening() {
         val r = recognizer ?: return
-        runCatching { r.startListening(intent) }.onFailure { restartSoon() }
+        runCatching { r.startListening(intent) }.onFailure { restartSoon(afterError = true) }
     }
 
-    private fun restartSoon() {
+    private fun restartSoon(afterError: Boolean = false) {
         if (!active) { finish(); return }
-        // Segmented mode never needs a restart - the session is continuous.
-        if (segmented) return
+        // Segmented mode never needs a restart on the success path - the session
+        // is continuous. But an ERROR kills that session: without a restart the
+        // recognizer sat dead while the UI still showed "recording" and
+        // everything said after the error was lost (the zombie-session bug).
+        if (segmented && !afterError) return
         // ONE restart in flight at a time. Errors can fire in bursts, and
         // scheduling a restart per error (plus destroy/recreate) is exactly
         // what caused the busy/disconnected storm that ate speech and left the
@@ -235,11 +241,33 @@ class GoogleSpeechSession(
             if (finalized.isNotEmpty()) finalized.append(' ')
             finalized.append(text)
             head = finalized.toString()
+            lastPartial = ""
+        } else {
+            // A BLANK final (stop mid-word, endpointer gave up on rare words)
+            // used to wipe lastPartial - words the owner had already watched on
+            // the ticker vanished from the take. The engine committed nothing
+            // for that audio, so promoting the partial cannot duplicate.
+            promoteOrphanedPartial("blank final ($tag)")
         }
-        lastPartial = ""
         onLog("$tag total=${head.length} active=$active stopping=$stopping")
         // One value, one write: onCheckpoint persists it and the caller mirrors
         // it to the ticker, so we don't also push it through onPartial.
+        onCheckpoint(head)
+    }
+
+    // The recognizer refused to finalize an utterance (NO_MATCH on rare words,
+    // timeouts). Its partials were real recognition output the owner watched on
+    // the ticker - promote them to the transcript instead of letting the next
+    // utterance overwrite them. This was the "2-3 words vanish mid-take on
+    // uncommon words" bug.
+    private fun promoteOrphanedPartial(reason: String) {
+        val p = lastPartial.trim()
+        if (p.isEmpty()) return
+        if (finalized.isNotEmpty()) finalized.append(' ')
+        finalized.append(p)
+        head = finalized.toString()
+        lastPartial = ""
+        onLog("promoted partial (${p.length} ch) after $reason")
         onCheckpoint(head)
     }
 
@@ -307,6 +335,9 @@ class GoogleSpeechSession(
             // and only surrender after a long run of pure errors with no speech
             // at all (a genuinely dead mic).
             if (stopping || !active) { finish(); return }
+            // Words the recognizer refused to finalize (NO_MATCH on rare words)
+            // are still in lastPartial - rescue them before anything else.
+            promoteOrphanedPartial("error $error")
             errorStreak++
             // Wedged system recognizer (busy/client/disconnected) that never
             // starts: fail fast with an actionable message instead of churning
@@ -334,7 +365,7 @@ class GoogleSpeechSession(
                 }
                 return
             }
-            restartSoon()
+            restartSoon(afterError = true)
         }
 
         override fun onEvent(eventType: Int, params: Bundle?) {}

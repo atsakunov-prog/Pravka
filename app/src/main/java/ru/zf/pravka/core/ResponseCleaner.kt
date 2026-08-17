@@ -35,8 +35,13 @@ object ResponseCleaner {
         }
 
         if (text.isEmpty()) return null
+        // Length sanity gate with absolute slack: a pure ratio rejected CORRECT
+        // replies for short fragments where formatting legitimately changes
+        // length a lot ("в 5" -> "в 17:00", sums, dates). The gate exists to
+        // catch the model eating a paragraph, which only matters at paragraph
+        // scale anyway.
         val origLen = original.trim().length
-        if (text.length < origLen / 2 || text.length > origLen * 2) return null
+        if (text.length < origLen / 2 - 40 || text.length > origLen * 2 + 40) return null
         return text
     }
 }

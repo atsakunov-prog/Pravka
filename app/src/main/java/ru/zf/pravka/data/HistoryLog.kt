@@ -23,7 +23,6 @@ class HistoryLog(private val context: Context) {
 
     private val file: File by lazy { File(context.filesDir, FILE_NAME) }
 
-    @Synchronized
     fun append(
         mode: String,
         providerId: String,
@@ -39,14 +38,18 @@ class HistoryLog(private val context: Context) {
         cacheWriteTokens: Int = 0,
         cacheReadTokens: Int = 0,
     ) {
-        runCatching {
+        // Off the caller thread (this runs right after a proofread lands):
+        // DiskWriter's single thread also provides the ordering @Synchronized
+        // used to. Timestamp captured here so entries carry the real time.
+        val at = Date()
+        DiskWriter.post {
             if (file.exists() && file.length() > MAX_BYTES) {
                 val backup = File(context.filesDir, "$FILE_NAME.1")
                 backup.delete()
                 file.renameTo(backup)
             }
             val entry = JSONObject().apply {
-                put("ts", timestampFormat.format(Date()))
+                put("ts", timestampFormat.format(at))
                 put("mode", mode)
                 put("provider", providerId)
                 put("model", model)

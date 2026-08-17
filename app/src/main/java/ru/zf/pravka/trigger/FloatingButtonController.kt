@@ -173,6 +173,18 @@ class FloatingButtonController(
         // bottom line, older lines ride up and off the top. No per-update
         // animation (the earlier "settle" nudge read as a jump-down).
         tv.text = tail
+        // ellipsize=START is silently ignored on a multi-line TextView, so once
+        // the text exceeded 4 lines the view showed the FIRST 4 lines forever -
+        // the newest words never appeared (read as huge recognition lag). Trim
+        // leading lines after layout so the tail is what stays visible.
+        tv.post {
+            val layout = tv.layout ?: return@post
+            if (layout.lineCount > TICKER_LINES) {
+                val cut = layout.getLineStart(layout.lineCount - TICKER_LINES)
+                val current = tv.text?.toString() ?: return@post
+                if (cut in 1 until current.length) tv.text = current.substring(cut)
+            }
+        }
     }
 
     /** Keep the pill glued to the button while it's dragged / on rotate. */
@@ -204,9 +216,8 @@ class FloatingButtonController(
             setTextColor(PAPER)
             textSize = 17f
             maxLines = TICKER_LINES
-            // Keep the newest words visible and truncate the OLD start with a
-            // leading ellipsis - no jump-back-to-start that marquee had.
-            ellipsize = android.text.TextUtils.TruncateAt.START
+            // NOTE: TruncateAt.START is ignored on multi-line TextViews - the
+            // tail-trimming in updateTicker() is what keeps new words visible.
             gravity = Gravity.BOTTOM or Gravity.START
             val padH = dp(16)
             val padV = dp(8)

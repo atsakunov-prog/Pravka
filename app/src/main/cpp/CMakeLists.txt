@@ -18,7 +18,12 @@ set(BUILD_SHARED_LIBS      OFF CACHE BOOL "" FORCE)   # statically link into our
 # -O3 + NDEBUG on every target added below (add_compile_options propagates
 # into the FetchContent subdirectory), regardless of the APK variant. Placed
 # before FetchContent_MakeAvailable so whisper and ggml inherit it.
-add_compile_options(-O3 -DNDEBUG)
+#
+# -march: the default arm64 baseline (armv8-a) leaves ggml without its
+# SDOT/FP16/SMMLA kernels. The one target device is a Pixel 10 Pro Fold
+# (Tensor G5, armv9 cores), which supports all of them - roughly 2-4x faster
+# matrix kernels for the same model.
+add_compile_options(-O3 -DNDEBUG -march=armv8.2-a+fp16+dotprod+i8mm)
 
 FetchContent_Declare(
     whisper

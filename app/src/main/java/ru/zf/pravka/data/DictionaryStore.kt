@@ -78,7 +78,16 @@ class DictionaryStore(private val context: Context) {
         entries = entries.map { e ->
             if (e.id in idSet) e.copy(hits = e.hits + 1) else e
         }.toMutableList()
-        persist()
+        // A hit counter is cosmetic: serialize under the mutex, but let the
+        // file write happen on the DiskWriter thread instead of holding the
+        // hot-path caller (and the mutex) through a full-dictionary rewrite.
+        val json = toJson(entries).toString(2)
+        _entriesFlow.value = entries.toList()
+        DiskWriter.post {
+            val tmp = File(context.filesDir, "$FILE_NAME.tmp")
+            tmp.writeText(json)
+            tmp.renameTo(file)
+        }
     }
 
     suspend fun exportJson(): String = mutex.withLock {

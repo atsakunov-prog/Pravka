@@ -92,10 +92,17 @@ class ClaudeProvider(
         parts: Prompts.PromptParts,
         input: String,
     ): ApiReply {
-        // Spec 6.1: one retry on network error or timeout; none on 4xx.
+        // Spec 6.1: one retry on network error or timeout; none on client 4xx.
+        // Transient server blips (429/500/529 "overloaded") last seconds - one
+        // short-backoff retry turns them from a user-visible failure into
+        // nothing. Previously only IOException retried and these failed hard.
         return try {
             request(apiKey, model, parts, input)
         } catch (e: IOException) {
+            request(apiKey, model, parts, input)
+        } catch (e: ApiException) {
+            if (!e.retryable) throw e
+            Thread.sleep(1500)
             request(apiKey, model, parts, input)
         }
     }
@@ -163,7 +170,8 @@ class ClaudeProvider(
         client.newCall(request).execute().use { response ->
             val responseBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw ApiException(humanReadableError(response.code, responseBody))
+                val transient = response.code == 429 || response.code in 500..599
+                throw ApiException(humanReadableError(response.code, responseBody), retryable = transient)
             }
             val json = JSONObject(responseBody)
             when (val stopReason = json.optString("stop_reason")) {

@@ -1,5 +1,9 @@
 package ru.zf.pravka.core
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.Stats
@@ -76,6 +80,22 @@ class ProofreadEngine(
             changed = cleaned != input,
             appliedDictEntries = prepared.firedIds,
         )
+        // Deliver the text FIRST - the user is waiting on it - then journal.
+        // Journaling used to sit between the network reply and the field write,
+        // adding disk latency at exactly the wrong moment.
+        val outcome: Outcome = when {
+            !result.changed -> Outcome.Unchanged(result)
+            target.write(cleaned) -> {
+                val (undoBefore, undoAfter) = target.undoPair(input, cleaned)
+                UndoStack.push(before = undoBefore, after = undoAfter)
+                Outcome.Applied(result)
+            }
+            else -> {
+                clipboardFallback.write(cleaned)
+                Outcome.CopiedToClipboard(result)
+            }
+        }
+
         history.append(
             mode.name, result.providerId, result.modelId, result.latencyMs,
             result.inputTokens, result.outputTokens, result.costUsd,
@@ -83,19 +103,14 @@ class ProofreadEngine(
             cacheWriteTokens = result.cacheWriteTokens,
             cacheReadTokens = result.cacheReadTokens,
         )
-        stats.recordSuccess(mode, result.latencyMs, input.length, result.changed, result.inputTokens, result.outputTokens, result.costUsd)
-        dictionaryStore.incrementHits(prepared.firedIds)
-
-        if (!result.changed) return Outcome.Unchanged(result)
-
-        return if (target.write(cleaned)) {
-            val (undoBefore, undoAfter) = target.undoPair(input, cleaned)
-            UndoStack.push(before = undoBefore, after = undoAfter)
-            Outcome.Applied(result)
-        } else {
-            clipboardFallback.write(cleaned)
-            Outcome.CopiedToClipboard(result)
+        journalScope.launch {
+            stats.recordSuccess(mode, result.latencyMs, input.length, result.changed, result.inputTokens, result.outputTokens, result.costUsd)
+            dictionaryStore.incrementHits(prepared.firedIds)
         }
+
+        return outcome
     }
 
+    // Bookkeeping that nothing user-visible waits on.
+    private val journalScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 }

@@ -48,6 +48,27 @@ class PravkaApp : Application() {
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
 
+    // The connection pool keeps sockets ~5 min; after a longer gap the CLEAN
+    // request pays DNS+TCP+TLS (~300-800ms on LTE). A dictation lasts seconds,
+    // so warming the connection when a take STARTS makes the stop->fix hop skip
+    // the handshake entirely. Any response counts - only the socket matters.
+    @Volatile private var lastWarmAt = 0L
+    fun warmClaudeConnection() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastWarmAt < 4 * 60 * 1000L) return  // pool still warm
+        lastWarmAt = now
+        val request = okhttp3.Request.Builder()
+            .url("https://api.anthropic.com/v1/messages")
+            .head()
+            .build()
+        httpClient.newCall(request).enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {}
+            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                response.close()
+            }
+        })
+    }
+
     // File-based transcription: for saved recordings and retries. The live
     // Google engine can't read a file, so saved files go through Whisper.
     // Every attempt is logged with metrics (engine, audio length, time, chars).

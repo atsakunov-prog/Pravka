@@ -206,7 +206,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             Feedback.toast(this, getString(R.string.google_unavailable))
             return
         }
-        dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
         googleStartedAt = SystemClock.elapsedRealtime()
         lastDraftAt = 0L
         val session = GoogleSpeechSession(this, biasing = cachedBiasing)
@@ -235,6 +234,10 @@ class PravkaAccessibilityService : AccessibilityService() {
             onError = { msg -> onLiveError(msg) },
             onLog = { line -> app.eventLog.add(line) },
         )
+        // The tree walk to capture the target field is 1-3 binder IPCs into the
+        // host app - deliberately AFTER startListening() is already issued, so
+        // it can't clip the first word.
+        dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
         floatingButton?.setRecording(true)
         floatingButton?.showTicker()
         Haptics.start(this)
@@ -242,6 +245,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         // can't start (rare FGS restrictions), recognition still works while
         // Правка is foregrounded, so don't abort the session over it.
         runCatching { startMicHold() }
+        // Warm the TLS connection to the API now, so the CLEAN request after
+        // stop skips the handshake.
+        app.warmClaudeConnection()
     }
 
     private var lastDraftAt = 0L
@@ -385,23 +391,28 @@ class PravkaAccessibilityService : AccessibilityService() {
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, spanStart)
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, spanEnd.coerceAtMost(newText.length))
         }
-        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
+        val selected = node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
         Haptics.success(this)
-        // Fix the just-inserted fragment. refresh() above already re-validated
-        // the node, so don't pay another rootInActiveWindow + findFocus round
-        // trip just to re-derive what we're holding. AccessibilityTarget reads
-        // the selection, so only the dictated span is proofread.
-        runProofread(ProofreadMode.CLEAN)
+        // Fix the just-inserted fragment ON THIS NODE. The proofread path must
+        // not re-derive the target from input focus - after an app switch that
+        // is a different field in a different app, and CLEAN would rewrite it.
+        // If the selection could not be set AND the field held other text, skip
+        // CLEAN entirely: with a collapsed cursor the whole field would be
+        // selected and pre-existing paragraphs rewritten, not just the take.
+        if (selected || existing.isEmpty()) {
+            runProofread(ProofreadMode.CLEAN, pinnedNode = node)
+        }
     }
 
-    private fun runProofread(mode: ProofreadMode) {
+    private fun runProofread(mode: ProofreadMode, pinnedNode: AccessibilityNodeInfo? = null) {
         if (busy) return
         scope.launch {
             busy = true
             floatingButton?.setBusy(true)
             Haptics.start(this@PravkaAccessibilityService)
-            selectAllInFocusedField()
-            val outcome = app.engine.proofread(AccessibilityTarget(this@PravkaAccessibilityService), mode)
+            // The pinned (dictation) path arrives with its selection already set.
+            if (pinnedNode == null) selectAllInFocusedField()
+            val outcome = app.engine.proofread(AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode), mode)
             floatingButton?.setBusy(false)
             busy = false
             Feedback.report(this@PravkaAccessibilityService, outcome)
