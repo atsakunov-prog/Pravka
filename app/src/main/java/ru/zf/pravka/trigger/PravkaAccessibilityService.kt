@@ -68,13 +68,13 @@ class PravkaAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        resultBar = ResultBarController(this, ::undoLast, ::addPairToDictionary)
+        resultBar = ResultBarController(this, ::undoLast, ::addPairToDictionary, ::redoWithDirective)
         floatingButton = FloatingButtonController(
             service = this,
             scope = scope,
             settings = app.settings,
             onShortTap = ::onDictateTap,
-            onLongPress = { runProofread(ProofreadMode.CLEAN) },
+            onLongPress = ::showFabMenu,
         )
         // Warm everything the tap -> listening path needs, so that path touches
         // no storage at all.
@@ -350,12 +350,14 @@ class PravkaAccessibilityService : AccessibilityService() {
     // field if the remembered one went stale (long take / app switch), and
     // tries an automatic PASTE before giving up to the clipboard - the owner
     // shouldn't have to paste large dictations by hand.
-    private suspend fun insertDictated(text: String) {
+    private suspend fun insertDictated(rawText: String) {
+        // Dictated formatting commands ("с новой строки", "абзац") become real
+        // breaks locally - instant and free, before the model ever sees them.
+        val text = ru.zf.pravka.core.VoiceCommands.apply(rawText)
         val node = (dictationTarget?.get()?.takeIf { it.refresh() && it.isEditable })
             ?: focusedEditableNode()
         if (node == null) {
-            ru.zf.pravka.target.ClipboardTarget(this).write(text)
-            Feedback.toast(this, getString(R.string.dictation_to_clipboard))
+            cleanWithoutField(text)
             return
         }
         // A placeholder counts as empty - shared with the read path so CLEAN
@@ -404,7 +406,77 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun runProofread(mode: ProofreadMode, pinnedNode: AccessibilityNodeInfo? = null) {
+    // No editable field survived the take (folded phone, app died): still run
+    // the full CLEAN, then clipboard + a notification that holds the text -
+    // a walk-dictated paragraph must not depend on a 3-second toast.
+    private suspend fun cleanWithoutField(text: String) {
+        floatingButton?.setBusy(true)
+        val target = ru.zf.pravka.target.PlainTextTarget(text)
+        val outcome = app.engine.proofread(target, ProofreadMode.CLEAN)
+        floatingButton?.setBusy(false)
+        val final = target.result ?: text
+        ru.zf.pravka.target.ClipboardTarget(this).write(final)
+        showNoFieldNotification(final)
+        Haptics.success(this)
+        Feedback.toast(this, getString(R.string.nofield_done))
+        if (outcome is ProofreadEngine.Outcome.Failed) {
+            // Raw text is still on the clipboard and in the notification.
+            Feedback.toast(this, outcome.message)
+        }
+    }
+
+    private fun showNoFieldNotification(text: String) {
+        val nm = getSystemService(android.app.NotificationManager::class.java)
+        val channelId = "pravka-results"
+        if (nm.getNotificationChannel(channelId) == null) {
+            nm.createNotificationChannel(
+                android.app.NotificationChannel(
+                    channelId, getString(R.string.nofield_channel),
+                    android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                )
+            )
+        }
+        val open = android.app.PendingIntent.getActivity(
+            this, 2,
+            android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            android.app.PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notif = android.app.Notification.Builder(this, channelId)
+            .setContentTitle(getString(R.string.nofield_title))
+            .setContentText(text.take(120))
+            .setStyle(android.app.Notification.BigTextStyle().bigText(text))
+            .setSmallIcon(R.drawable.ic_tile)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        nm.notify(43, notif)
+    }
+
+    /** Result-bar chips and the FAB menu: one-tap redo on a stronger model. */
+    fun redoWithDirective(directive: String) =
+        runProofread(ProofreadMode.CLEAN, directive = directive, strongModel = true)
+
+    // Long press = "the text is already in the field": clean it with the
+    // standard model, or run a one-tap rework on the stronger one.
+    private fun showFabMenu() {
+        floatingButton?.toggleMenu(
+            listOf(
+                getString(R.string.quick_clean) to { runProofread(ProofreadMode.CLEAN) },
+                getString(R.string.redo_shorter) to { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_SHORTER) },
+                getString(R.string.redo_longer) to { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_LONGER) },
+                getString(R.string.redo_polish) to { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
+                getString(R.string.fab_menu_undo) to { undoLast() },
+            )
+        )
+    }
+
+    private fun runProofread(
+        mode: ProofreadMode,
+        pinnedNode: AccessibilityNodeInfo? = null,
+        directive: String = "",
+        strongModel: Boolean = false,
+    ) {
         if (busy) return
         scope.launch {
             busy = true
@@ -422,6 +494,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             val outcome = app.engine.proofread(
                 AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode), mode, onDelta,
+                directive = directive,
+                modelOverride = if (strongModel) Settings.MODEL_OPUS else null,
             )
             floatingButton?.hideTicker()
             floatingButton?.setBusy(false)

@@ -70,5 +70,23 @@ class HistoryLog(private val context: Context) {
 
     fun exists(): Boolean = file.exists() && file.length() > 0
 
+    /**
+     * Last [limit] successful CHANGED fixes as (dictated input, final output) -
+     * the raw material the dictionary miner looks for recurring ASR
+     * misrecognitions in.
+     */
+    fun readPairs(limit: Int): List<Pair<String, String>> {
+        if (!file.exists()) return emptyList()
+        return runCatching {
+            file.readLines().asReversed().asSequence()
+                .mapNotNull { line -> runCatching { JSONObject(line) }.getOrNull() }
+                .filter { !it.has("error") && it.optBoolean("changed") }
+                .map { it.optString("input") to it.optString("output") }
+                .filter { it.first.isNotBlank() && it.second.isNotBlank() }
+                .take(limit)
+                .toList()
+        }.getOrElse { emptyList() }
+    }
+
     fun shareIntent(): Intent = shareFileIntent(context, file, "application/json")
 }

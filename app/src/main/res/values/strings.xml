@@ -145,5 +145,21 @@
     <string name="stats_chars">Обработано символов</string>
     <string name="stats_latency">Средняя задержка</string>
 
+    <string name="redo_shorter">Короче</string>
+    <string name="redo_longer">Длиннее</string>
+    <string name="redo_polish">Причесать стиль</string>
+
+    <string name="dict_mine">Предложить из истории</string>
+    <string name="dict_mine_running">Ищу в истории…</string>
+    <string name="dict_mine_empty">Новых кандидатов в словарь не нашлось</string>
+    <string name="dict_mine_failed">Не получилось: %1$s</string>
+    <string name="dict_mine_title">Кандидаты в словарь</string>
+    <string name="dict_mine_add">Добавить</string>
+    <string name="dict_mine_added">Добавлено в словарь: %1$d</string>
+
+    <string name="nofield_channel">Диктовка без поля</string>
+    <string name="nofield_title">Правка готова — текст в буфере</string>
+    <string name="nofield_done">Готово: текст в буфере и в уведомлении</string>
+
     <string name="settings_usage_hint">Как пользоваться: надиктуй текст в любое поле и нажми плавающую кнопку «П». Текст заменится исправленным, а на несколько секунд появится кнопка «Откатить». Запасной путь — выделить текст и выбрать «Правка» в меню выделения, где оно есть.</string>
 </resources>

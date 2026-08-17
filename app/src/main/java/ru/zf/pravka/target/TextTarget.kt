@@ -17,4 +17,11 @@ interface TextTarget {
      * selected - deliberate enough to skip the minimum-length guard.
      */
     fun isExplicitFragment(): Boolean = false
+
+    /**
+     * Up to ~300 chars standing in the field BEFORE the fragment read() 
+     * returned - lets the model pick the right capitalization and joint
+     * punctuation for a mid-field insert. Empty when whole-field.
+     */
+    fun contextBefore(): String = ""
 }

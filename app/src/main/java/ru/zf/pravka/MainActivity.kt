@@ -35,6 +35,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -102,6 +103,7 @@ class MainActivity : ComponentActivity() {
                     stats = app.stats,
                     dictionaryStore = app.dictionaryStore,
                     historyLog = app.historyLog,
+                    dictMiner = app.dictMiner,
                     transcriptionLog = app.transcriptionLog,
                     liveDraft = app.liveDraft,
                     eventLog = app.eventLog,
@@ -140,6 +142,7 @@ private fun MainScreen(
     stats: Stats,
     dictionaryStore: DictionaryStore,
     historyLog: HistoryLog,
+    dictMiner: ru.zf.pravka.provider.DictMiner,
     transcriptionLog: ru.zf.pravka.data.TranscriptionLog,
     liveDraft: ru.zf.pravka.data.LiveDraft,
     eventLog: ru.zf.pravka.data.EventLog,
@@ -190,7 +193,7 @@ private fun MainScreen(
         Column(Modifier.padding(padding)) {
             when (tab) {
                 Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
-                Tab.DICTIONARY -> DictionaryTab(dictionaryStore)
+                Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
                 Tab.PROMPTS -> PromptsTab(promptStore)
                 Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
                 Tab.STATS -> StatsTab(stats, historyLog)
@@ -576,13 +579,20 @@ private fun dictModeColor(mode: DictMode) = when (mode) {
 }
 
 @Composable
-private fun DictionaryTab(store: DictionaryStore) {
+private fun DictionaryTab(
+    store: DictionaryStore,
+    historyLog: HistoryLog,
+    dictMiner: ru.zf.pravka.provider.DictMiner,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val entries by store.entriesFlow.collectAsState()
     var search by remember { mutableStateOf("") }
     var dialogEntry by remember { mutableStateOf<DictEntry?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var mining by remember { mutableStateOf(false) }
+    var suggestions by remember { mutableStateOf<List<ru.zf.pravka.provider.DictMiner.Suggestion>?>(null) }
+    var picked by remember { mutableStateOf<Set<Int>>(emptySet()) }
 
     LaunchedEffect(Unit) { store.all() }  // triggers initial load
 
@@ -642,6 +652,36 @@ private fun DictionaryTab(store: DictionaryStore) {
                 TextButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }) {
                     Text(stringResource(R.string.dict_import))
                 }
+                TextButton(
+                    enabled = !mining,
+                    onClick = {
+                        mining = true
+                        scope.launch {
+                            val pairs = withContext(Dispatchers.IO) { historyLog.readPairs(100) }
+                            val result = dictMiner.mine(pairs)
+                            mining = false
+                            result.onSuccess { found ->
+                                if (found.isEmpty()) {
+                                    Feedback.toast(context, context.getString(R.string.dict_mine_empty))
+                                } else {
+                                    // Skip what the dictionary already has.
+                                    val known = store.all().map { it.from.lowercase() }.toHashSet()
+                                    val fresh = found.filter { it.from.lowercase() !in known }
+                                    if (fresh.isEmpty()) {
+                                        Feedback.toast(context, context.getString(R.string.dict_mine_empty))
+                                    } else {
+                                        suggestions = fresh
+                                        picked = fresh.indices.toSet()
+                                    }
+                                }
+                            }.onFailure {
+                                Feedback.toast(context, context.getString(R.string.dict_mine_failed, it.message ?: ""))
+                            }
+                        }
+                    },
+                ) {
+                    Text(stringResource(if (mining) R.string.dict_mine_running else R.string.dict_mine))
+                }
             }
             OutlinedTextField(
                 value = search,
@@ -686,6 +726,57 @@ private fun DictionaryTab(store: DictionaryStore) {
                 })
             }
         }
+    }
+
+    suggestions?.let { list ->
+        AlertDialog(
+            onDismissRequest = { suggestions = null },
+            title = { Text(stringResource(R.string.dict_mine_title)) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    list.forEachIndexed { i, sug ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        ) {
+                            Checkbox(
+                                checked = i in picked,
+                                onCheckedChange = { on ->
+                                    picked = if (on) picked + i else picked - i
+                                },
+                            )
+                            Column {
+                                Text(
+                                    if (sug.mode == DictMode.PROTECT) "\u0417\u0430\u0449\u0438\u0442\u0430: ${sug.from}"
+                                    else "${sug.from} \u2192 ${sug.to}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                if (sug.note.isNotBlank()) {
+                                    Text(
+                                        sug.note,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val chosen = list.filterIndexed { i, _ -> i in picked }
+                    suggestions = null
+                    scope.launch {
+                        for (sug in chosen) store.add(sug.from, sug.to, sug.mode, sug.note)
+                        Feedback.toast(context, context.getString(R.string.dict_mine_added, chosen.size))
+                    }
+                }) { Text(stringResource(R.string.dict_mine_add)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { suggestions = null }) { Text(stringResource(R.string.dict_cancel)) }
+            },
+        )
     }
 
     if (showAddDialog) {
@@ -965,13 +1056,17 @@ private fun PromptEditor(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
-                if (!text.contains(Prompts.PLACEHOLDER_INPUT)) {
-                    error = R.string.prompt_error_no_input
-                    return@Button
-                }
-                warning = when {
-                    !text.contains(Prompts.PLACEHOLDER_DICT) -> R.string.prompt_warning_no_dict
-                    else -> null
+                // Placeholders live only in the CLEAN master prompt; BUSINESS
+                // and SOFTEN are directives layered on top of it.
+                if (id == PromptStore.PromptId.CLEAN_CLAUDE) {
+                    if (!text.contains(Prompts.PLACEHOLDER_INPUT)) {
+                        error = R.string.prompt_error_no_input
+                        return@Button
+                    }
+                    warning = when {
+                        !text.contains(Prompts.PLACEHOLDER_DICT) -> R.string.prompt_warning_no_dict
+                        else -> null
+                    }
                 }
                 scope.launch {
                     promptStore.setOverride(id, text)

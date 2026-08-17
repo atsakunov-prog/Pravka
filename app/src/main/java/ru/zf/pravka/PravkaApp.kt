@@ -18,6 +18,7 @@ import ru.zf.pravka.data.WavFile
 import android.os.SystemClock
 import java.io.File
 import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.provider.DictMiner
 import ru.zf.pravka.provider.WhisperProvider
 import ru.zf.pravka.target.ClipboardTarget
 
@@ -45,6 +46,7 @@ class PravkaApp : Application() {
     }
 
     val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient) }
+    val dictMiner by lazy { DictMiner(settings, httpClient) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
 

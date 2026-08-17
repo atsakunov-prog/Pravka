@@ -22,6 +22,7 @@ class ResultBarController(
     private val service: PravkaAccessibilityService,
     private val onUndo: () -> Unit,
     private val onAddToDict: (correct: String, wrong: String) -> Unit,
+    private val onRedo: (directive: String) -> Unit,
 ) {
 
     companion object {
@@ -85,6 +86,45 @@ class ResultBarController(
         divider()
         row.addView(chip(service.getString(R.string.result_dict)) { showDictPanel() })
 
+        // Second row: one-tap reworks on the stronger model.
+        val redoRow = LinearLayout(service).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = pillBackground()
+            elevation = dp(6).toFloat()
+        }
+        fun redoDivider() {
+            redoRow.addView(
+                View(service).apply { setBackgroundColor(PAPER_DIM) },
+                LinearLayout.LayoutParams(dp(1), dp(20)).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                },
+            )
+        }
+        redoRow.addView(chip(service.getString(R.string.redo_shorter)) {
+            dismiss(); onRedo(ru.zf.pravka.core.Prompts.REDO_SHORTER)
+        })
+        redoDivider()
+        redoRow.addView(chip(service.getString(R.string.redo_longer)) {
+            dismiss(); onRedo(ru.zf.pravka.core.Prompts.REDO_LONGER)
+        })
+        redoDivider()
+        redoRow.addView(chip(service.getString(R.string.redo_polish)) {
+            dismiss(); onRedo(ru.zf.pravka.core.Prompts.REDO_POLISH)
+        })
+
+        val column = LinearLayout(service).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        column.addView(row)
+        column.addView(
+            redoRow,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(8) },
+        )
+
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -95,10 +135,10 @@ class ResultBarController(
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
             y = dp(120)
         }
-        if (runCatching { windowManager.addView(row, params) }.isSuccess) {
-            bar = row
+        if (runCatching { windowManager.addView(column, params) }.isSuccess) {
+            bar = column
             shownAt = android.os.SystemClock.uptimeMillis()
-            row.postDelayed(hideRunnable, SHOW_MS)
+            column.postDelayed(hideRunnable, SHOW_MS)
         }
     }
 

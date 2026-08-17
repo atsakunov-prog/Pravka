@@ -48,6 +48,8 @@ class ProofreadEngine(
         target: TextTarget,
         mode: ProofreadMode,
         onDelta: ((String) -> Unit)? = null,
+        directive: String = "",
+        modelOverride: String? = null,
     ): Outcome {
         val input = target.read()?.trim().orEmpty()
         // A deliberately selected fragment may be a single word - the
@@ -59,14 +61,20 @@ class ProofreadEngine(
 
         // One provider, one model: Sonnet (the owner's choice - Haiku simplified
         // too much and the Nano experiment was a dead end).
-        val rawResult = claude.proofread(prepared.text, mode, prepared.dictBlock, onDelta).getOrElse { error ->
+        val rawResult = claude.proofread(
+            prepared.text, mode, prepared.dictBlock, onDelta,
+            directive = directive,
+            contextBefore = target.contextBefore(),
+            modelOverride = modelOverride,
+        ).getOrElse { error ->
             val message = error.message ?: "Неизвестная ошибка"
             history.append(mode.name, claude.id, "", 0, 0, 0, 0.0, false, input, "", message)
             stats.recordError()
             return Outcome.Failed(message)
         }
 
-        val cleaned = ResponseCleaner.clean(rawResult.text, prepared.text)
+        // Directive rewrites legally move length far outside the sanity gate.
+        val cleaned = ResponseCleaner.clean(rawResult.text, prepared.text, lenient = directive.isNotBlank())
         if (cleaned == null) {
             history.append(
                 mode.name, rawResult.providerId, rawResult.modelId, rawResult.latencyMs,

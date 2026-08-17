@@ -42,6 +42,9 @@ class ClaudeProvider(
         mode: ProofreadMode,
         dictBlock: String,
         onDelta: ((String) -> Unit)?,
+        directive: String,
+        contextBefore: String,
+        modelOverride: String?,
     ): Result<ProofreadResult> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -49,11 +52,17 @@ class ClaudeProvider(
                 if (apiKey.isBlank()) {
                     throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
                 }
-                // Sonnet for every mode - the only model the owner uses.
-                val model = Settings.MODEL_SONNET
-                // Owner-edited override if present, factory text otherwise.
-                val template = promptStore.effective(mode)
-                val parts = Prompts.assemble(template, dictBlock)
+                // Sonnet by default; redo chips pass Opus for extra quality.
+                val model = modelOverride ?: Settings.MODEL_SONNET
+                // ONE master template (CLEAN) for every mode; BUSINESS/SOFTEN
+                // are style directives riding in the uncached slot, so all
+                // modes share the same cached prefix.
+                val template = promptStore.effective(ProofreadMode.CLEAN)
+                val styleDirective = if (mode == ProofreadMode.CLEAN) "" else promptStore.effective(mode)
+                val fullDirective = listOf(styleDirective, directive)
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n\n")
+                val parts = Prompts.assemble(template, dictBlock, fullDirective, contextBefore)
 
                 val started = System.currentTimeMillis()
                 val reply = requestWithOneRetry(apiKey, model, parts, input, onDelta)
@@ -77,6 +86,7 @@ class ClaudeProvider(
     // the input price: 1h-TTL writes cost 2x, reads 0.1x.
     private val prices = mapOf(
         Settings.MODEL_SONNET to (3.0 to 15.0),
+        Settings.MODEL_OPUS to (5.0 to 25.0),
     )
 
     private fun costUsd(model: String, reply: ApiReply): Double {
@@ -127,9 +137,13 @@ class ClaudeProvider(
             // a second, and the 90s readTimeout becomes a per-chunk timeout
             // instead of a hard ceiling on total generation time.
             put("stream", true)
-            // Proofreading is mechanical; thinking would only add latency and cost.
-            // Sonnet 5 runs adaptive thinking by default when the field is omitted.
-            put("thinking", JSONObject().put("type", "disabled"))
+            // Proofreading is mechanical; thinking would only add latency and
+            // cost, so it is disabled on Sonnet. On Opus (redo chips) the
+            // parameter is omitted: adaptive thinking is its default, and an
+            // explicit "disabled" there has documented failure modes.
+            if (model == Settings.MODEL_SONNET) {
+                put("thinking", JSONObject().put("type", "disabled"))
+            }
             put(
                 "messages",
                 JSONArray().put(
@@ -148,10 +162,15 @@ class ClaudeProvider(
                                     JSONObject().apply {
                                         put("type", "text")
                                         put("text", parts.stablePrefix)
-                                        put(
-                                            "cache_control",
-                                            JSONObject().put("type", "ephemeral").put("ttl", "1h"),
-                                        )
+                                        // Cache only the everyday Sonnet path: a
+                                        // rare Opus redo would pay the 2x cache
+                                        // write and likely never read it back.
+                                        if (model == Settings.MODEL_SONNET) {
+                                            put(
+                                                "cache_control",
+                                                JSONObject().put("type", "ephemeral").put("ttl", "1h"),
+                                            )
+                                        }
                                     }
                                 )
                                 put(

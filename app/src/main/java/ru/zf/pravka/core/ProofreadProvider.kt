@@ -8,10 +8,16 @@ interface ProofreadProvider {
     // onDelta, when set, receives the ACCUMULATED reply text as it streams in -
     // display-only (the ticker); the final write still happens once, from the
     // returned result.
+    // directive: extra task on top of the fix (style modes, redo chips).
+    // contextBefore: read-only text standing before a mid-field insert.
+    // modelOverride: redo chips run on a stronger model.
     suspend fun proofread(
         input: String,
         mode: ProofreadMode,
         dictBlock: String = "",
         onDelta: ((String) -> Unit)? = null,
+        directive: String = "",
+        contextBefore: String = "",
+        modelOverride: String? = null,
     ): Result<ProofreadResult>
 }

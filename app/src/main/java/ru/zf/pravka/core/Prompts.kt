@@ -7,7 +7,10 @@ object Prompts {
     const val PLACEHOLDER_INPUT = "{INPUT}"
     const val PLACEHOLDER_DICT = "{DICT}"
 
-    // Factory CLEAN v1.8: fixes systematic UNDER-correction the owner reported
+    // Factory CLEAN v1.9: rule 1 now declares source punctuation untrusted -
+    // the live recognizer drops a period/comma wherever the speaker pauses
+    // mid-sentence (each silence closes a segment), and those periods were
+    // surviving into the cleaned text. v1.8 fixed systematic UNDER-correction
     // ("иногда слишком мало делает"). Root causes addressed:
     //  - the closing self-check listed only don't-touch items, so the model
     //    exited in caution mode -> now symmetric (missed-fixes check first);
@@ -37,7 +40,14 @@ object Prompts {
 ЧТО ИСПРАВЛЯТЬ — смело, без колебаний
 
 1. Пунктуация, заглавные буквы, границы предложений,
-   орфография.
+   орфография. Знаки в исходнике расставил распознаватель
+   речи, а не автор: он ставит точку или запятую там, где
+   диктующий просто сделал паузу, чтобы подумать, — часто
+   посреди предложения. Расставляй пунктуацию заново по смыслу:
+   точку, разорвавшую одну мысль, убирай и сшивай предложение
+   обратно, а ложную заглавную после неё — в строчную.
+   Настоящие границы предложений определяй по смыслу,
+   а не по точкам исходника.
 2. Ошибки распознавания: слово, созвучное написанному
    и подходящее по смыслу и теме. Место, где фраза теряет
    смысл, — почти наверняка такая ошибка: подбери созвучную
@@ -118,7 +128,10 @@ object Prompts {
     нумерованным списком: каждый пункт с новой строки, вместо
     слова-маркера — номер с точкой ("1.", "2."). Пример:
     "во-первых позвони Мише во-вторых скинь отчёт" — это две
-    строки, "1. Позвони Мише." и "2. Скинь отчёт." Это
+    строки, "1. Позвони Мише." и "2. Скинь отчёт." Если списку
+    предшествует вводная фраза, заверши её двоеточием:
+    "надо сделать три вещи первое…" — "Надо сделать три вещи:"
+    и дальше список. Это
     единственный случай, когда слово исходника заменяется
     номером. Список — только когда такие маркеры цепочкой
     размечают пункты; одиночное "первое" внутри фразы
@@ -153,49 +166,50 @@ object Prompts {
 """.trimIndent()
 
 
+    // BUSINESS and SOFTEN are no longer standalone templates: they are style
+    // DIRECTIVES appended after the master CLEAN prefix's cache breakpoint
+    // (same slot mechanics as {DICT}). One shared cached prefix serves every
+    // mode - switching modes no longer pays a cold 2x cache write.
     val BUSINESS = """
-Перепиши надиктованный русский текст так, чтобы его можно было
-отправить деловому контакту.
-
-Правила:
-1. Сохрани без изменений все факты, цифры, имена, названия
-   компаний, даты и договорённости.
-2. Убери разговорное и сорняки диктовки, сделай формулировки
-   собранными. Но не превращай в канцелярит: нужен живой деловой
-   язык, а не бюрократический.
-3. Не добавляй приветствие и подпись, если их нет в исходнике.
-4. Не сокращай содержание — меняй только форму.
-5. Кавычки — обычные "лапки".
-
-{DICT}
-
-Формат ответа: только текст, без пояснений.
-
-Текст:
----
-{INPUT}
----
+После починки записи перепиши результат так, чтобы его можно
+было отправить деловому контакту: убери разговорное и сорняки,
+сделай формулировки собранными — живой деловой язык,
+не канцелярит. Для этого задания правила 8 и 9 снимаются:
+формулировки можно менять. Факты, цифры, имена, названия
+компаний, даты и договорённости — без изменений. Не добавляй
+приветствие и подпись, если их нет. Содержание не сокращай.
 """.trimIndent()
 
     val SOFTEN = """
-Перепиши надиктованный русский текст, сохранив смысл и все факты,
-но сделав тон мягче и теплее.
+После починки записи перепиши результат мягче и теплее:
+убери резкость и категоричность, не превращая текст
+в извинение и не делая его заискивающим. Для этого задания
+правила 8 и 9 снимаются: формулировки можно менять. Смысл,
+факты и содержание — без изменений; не сокращай. Смайлы,
+эмодзи и восклицательные знаки не добавляй.
+""".trimIndent()
 
-Правила:
-1. Убери резкость и категоричность, не превращая текст
-   в извинение и не делая его заискивающим.
-2. Не добавляй смайлов, эмодзи и восклицательных знаков.
-3. Не сокращай содержание.
-4. Кавычки — обычные "лапки".
+    // One-tap redo directives (result-bar chips / FAB menu). Same slot.
+    val REDO_SHORTER = """
+После починки записи сожми результат: убери повторы
+и словесную воду, оставь все факты, цифры, имена
+и договорённости. Для этого задания правила 8 и 9 снимаются.
+Цель — заметно короче, но ничего важного не потерять.
+""".trimIndent()
 
-{DICT}
+    val REDO_LONGER = """
+После починки записи разверни результат: раскрой мысли чуть
+подробнее, добавь связки, чтобы текст читался полнее
+и убедительнее. Новых фактов не выдумывай. Для этого задания
+правила 8 и 9 снимаются.
+""".trimIndent()
 
-Формат ответа: только текст, без пояснений.
-
-Текст:
----
-{INPUT}
----
+    val REDO_POLISH = """
+После починки записи причеши стиль: выправи корявые
+и громоздкие формулировки, убери канцелярит и повторы,
+сохрани голос автора и разговорные связки, несущие интонацию.
+Смысл, факты и порядок мыслей — без изменений. Для этого
+задания правило 8 снимается в части формулировок.
 """.trimIndent()
 
 
@@ -215,7 +229,19 @@ object Prompts {
     // Splits at {DICT} and {INPUT} (empty dict block leaves no stray blank
     // lines). If a user-edited template loses {INPUT}, the input is appended
     // at the end - never silently dropped.
-    fun assemble(template: String, dictBlock: String): PromptParts {
+    //
+    // [directive]: a style/redo task (BUSINESS, SOFTEN, redo chips) that rides
+    // in the UNCACHED slot right after the dict block - every mode shares the
+    // one cached CLEAN prefix.
+    // [context]: what already stands in the field before a mid-field insert;
+    // read-only for the model, used to get the capital letter and punctuation
+    // right at the seam.
+    fun assemble(
+        template: String,
+        dictBlock: String,
+        directive: String = "",
+        context: String = "",
+    ): PromptParts {
         val inputIdx = template.indexOf(PLACEHOLDER_INPUT)
         val before = if (inputIdx >= 0) template.substring(0, inputIdx) else template
         val after = if (inputIdx >= 0) {
@@ -223,18 +249,31 @@ object Prompts {
         } else ""
 
         val dict = if (dictBlock.isBlank()) "" else dictBlock.trim() + "\n\n"
+        var extras = ""
+        if (directive.isNotBlank()) {
+            extras += "ДОПОЛНИТЕЛЬНОЕ ЗАДАНИЕ ПОВЕРХ ПРАВКИ:\n" + directive.trim() + "\n\n"
+        }
+        if (context.isNotBlank()) {
+            extras += "Перед текстом для правки в поле уже стоит текст (ниже " +
+                "в тегах <контекст>). Используй его ТОЛЬКО чтобы правильно " +
+                "выбрать заглавную или строчную букву и пунктуацию на стыке. " +
+                "Контекст не правь и в ответ не включай.\n" +
+                "<контекст>\n" + context + "\n</контекст>\n\n"
+        }
+
         val match = Regex("\\n*\\{DICT\\}\\n*").find(before)
         return if (match != null) {
             val stable = before.substring(0, match.range.first).trim() + "\n\n"
             val rest = before.substring(match.range.last + 1).trimStart()
             // Without {INPUT} the input is appended after the template tail.
             val tail = if (inputIdx >= 0) rest else rest.trimEnd() + "\n\n"
-            PromptParts(stable, dict + tail, after)
+            PromptParts(stable, dict + extras + tail, after)
         } else {
             // No {DICT} placeholder: the dict block is dropped, matching the
-            // editor warning ("без {DICT} подсказки не попадают в промпт").
+            // editor warning ("без {DICT} подсказки не попадают в промпт") -
+            // but a style directive / field context must never be lost.
             val stable = if (inputIdx >= 0) before else before.trimEnd() + "\n\n"
-            PromptParts(stable, "", after)
+            PromptParts(stable, extras, after)
         }
     }
 }

@@ -65,6 +65,12 @@ class FloatingButtonController(
 
     // Live-dictation "telegraph": a translucent pill next to the button where
     // recognized words crawl by (marquee) while the Google engine listens.
+    // Long-press menu: a vertical stack of pills beside the button.
+    private var menu: android.widget.LinearLayout? = null
+    private var menuParams: WindowManager.LayoutParams? = null
+    private var menuVisible = false
+    private val menuDismiss = Runnable { hideMenu() }
+
     private var ticker: FrameLayout? = null
     private var tickerText: android.widget.TextView? = null
     private var tickerParams: WindowManager.LayoutParams? = null
@@ -206,6 +212,74 @@ class FloatingButtonController(
         }.start()
     }
 
+    // ---- Long-press menu ----
+
+    fun toggleMenu(items: List<Pair<String, () -> Unit>>) {
+        if (menuVisible) hideMenu() else showMenu(items)
+    }
+
+    fun hideMenu() {
+        val m = menu ?: return
+        menuVisible = false
+        m.removeCallbacks(menuDismiss)
+        runCatching { windowManager.removeView(m) }
+        menu = null
+    }
+
+    private fun showMenu(items: List<Pair<String, () -> Unit>>) {
+        hideMenu()
+        val column = android.widget.LinearLayout(service).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+        }
+        for ((label, action) in items) {
+            val pill = android.widget.TextView(service).apply {
+                text = label
+                setTextColor(PAPER)
+                textSize = 15f
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(18).toFloat()
+                    setColor(VERMILION)
+                }
+                alpha = 0.92f
+                val padH = dp(16)
+                val padV = dp(9)
+                setPadding(padH, padV, padH, padV)
+                setOnClickListener {
+                    hideMenu()
+                    action()
+                }
+            }
+            val lp = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(6) }
+            column.addView(pill, lp)
+        }
+        val p = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+        // Beside the button, on the side with room (same rule as the ticker),
+        // vertically clamped on screen.
+        val bp = params
+        val (w, h) = screenSize()
+        if (bp != null) {
+            val buttonCenterX = bp.x + buttonSize / 2
+            p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + dp(8)
+            else (bp.x - dp(180)).coerceAtLeast(0)
+            p.y = bp.y.coerceIn(0, (h - dp(48) * items.size).coerceAtLeast(0))
+        }
+        menuParams = p
+        menu = column
+        menuVisible = true
+        runCatching { windowManager.addView(column, p) }
+        // Not modal (the overlay can't see outside taps) - fade away on its own.
+        column.postDelayed(menuDismiss, 6000)
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun createTicker() {
         val pill = FrameLayout(service)
@@ -269,6 +343,7 @@ class FloatingButtonController(
     }
 
     fun destroy() {
+        hideMenu()
         button?.let { runCatching { windowManager.removeView(it) } }
         button = null
         ticker?.let { runCatching { windowManager.removeView(it) } }

@@ -116,4 +116,7 @@ class AccessibilityTarget(
         if (fullAfter.isNotEmpty() || fullBefore.isNotEmpty()) fullBefore to fullAfter else input to output
 
     override fun isExplicitFragment(): Boolean = hasFragmentSelection
+
+    override fun contextBefore(): String =
+        if (hasFragmentSelection) fullText.substring(maxOf(0, selStart - 300), selStart) else ""
 }

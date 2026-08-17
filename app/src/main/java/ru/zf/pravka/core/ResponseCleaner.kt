@@ -10,7 +10,7 @@ object ResponseCleaner {
 
     // Returns the cleaned text, or null when the reply must be considered
     // corrupted (last line of defense against the model eating a paragraph).
-    fun clean(raw: String, original: String): String? {
+    fun clean(raw: String, original: String, lenient: Boolean = false): String? {
         var text = raw.trim()
 
         // Markdown fences around the whole reply.
@@ -35,6 +35,9 @@ object ResponseCleaner {
         }
 
         if (text.isEmpty()) return null
+        // Directive rewrites ("короче", "длиннее") legally move length far
+        // beyond the ratio gate - only the empty check applies to them.
+        if (lenient) return text
         // Length sanity gate with absolute slack: a pure ratio rejected CORRECT
         // replies for short fragments where formatting legitimately changes
         // length a lot ("в 5" -> "в 17:00", sums, dates). The gate exists to
