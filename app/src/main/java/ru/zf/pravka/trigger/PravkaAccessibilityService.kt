@@ -133,6 +133,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         return if (node.isEditable) node else null
     }
 
+    /** Insert/write diagnostics land in the same exportable dictation journal. */
+    fun logEvent(line: String) = app.eventLog.add(line)
+
     /** External triggers (quick settings tile) land here too. */
     fun trigger(mode: ProofreadMode) = runProofread(mode)
 
@@ -354,8 +357,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Dictated formatting commands ("с новой строки", "абзац") become real
         // breaks locally - instant and free, before the model ever sees them.
         val text = ru.zf.pravka.core.VoiceCommands.apply(rawText)
-        val node = (dictationTarget?.get()?.takeIf { it.refresh() && it.isEditable })
-            ?: focusedEditableNode()
+        val pinned = dictationTarget?.get()?.takeIf { it.refresh() && it.isEditable }
+        val node = pinned ?: focusedEditableNode()
+        app.eventLog.add(
+            "insert: node=${if (pinned != null) "pinned" else if (node != null) "focus" else "NONE"} len=${text.length}"
+        )
         if (node == null) {
             cleanWithoutField(text)
             return
@@ -384,6 +390,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             // still lands in the box without a manual paste.
             ru.zf.pravka.target.ClipboardTarget(this).write(insert)
             val pasted = runCatching { node.performAction(AccessibilityNodeInfo.ACTION_PASTE) }.getOrDefault(false)
+            app.eventLog.add("insert: SET_TEXT rejected -> paste=$pasted")
             if (!pasted) Feedback.toast(this, getString(R.string.dictation_to_clipboard))
             else Haptics.success(this)
             return
@@ -394,6 +401,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, spanEnd.coerceAtMost(newText.length))
         }
         val selected = node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
+        app.eventLog.add(
+            "insert: ok existing=${existing.length} selection=$selected -> clean=${selected || existing.isEmpty()}"
+        )
         Haptics.success(this)
         // Fix the just-inserted fragment ON THIS NODE. The proofread path must
         // not re-derive the target from input focus - after an app switch that
@@ -489,6 +499,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             // a silent spinner for the whole generation. Deltas arrive on an IO
             // thread; the ticker is a View, so hop to main.
             floatingButton?.showTicker()
+            // Opus thinks before it writes: no text deltas for several seconds.
+            // Show a pulse so the wait doesn't read as a hang.
+            if (strongModel) floatingButton?.updateTicker("…")
             val onDelta: (String) -> Unit = { partial ->
                 scope.launch { floatingButton?.updateTicker(partial) }
             }
@@ -500,6 +513,10 @@ class PravkaAccessibilityService : AccessibilityService() {
             floatingButton?.hideTicker()
             floatingButton?.setBusy(false)
             busy = false
+            app.eventLog.add(
+                "proofread ${mode.name}${if (directive.isNotBlank()) "+redo" else ""}" +
+                    "${if (strongModel) "(opus)" else ""}: ${outcome.javaClass.simpleName}"
+            )
             Feedback.report(this@PravkaAccessibilityService, outcome)
             // Something was written into the field - offer undo, the word
             // diff and quick add-to-dictionary for a few seconds (spec 9.2).

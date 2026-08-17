@@ -45,7 +45,10 @@ class AccessibilityTarget(
     override suspend fun read(): String? = withContext(Dispatchers.Main) {
         val n = pinnedNode?.takeIf { it.refresh() && it.isEditable }
             ?: (if (pinnedNode != null) null else service.focusedEditableNode())
-            ?: return@withContext null
+            ?: run {
+                service.logEvent("read: no node (pinned=${pinnedNode != null})")
+                return@withContext null
+            }
         node = n
         // Shared with the dictation insert path, so a placeholder like
         // "Сообщение" is never proofread as if it were the owner's text.
@@ -57,21 +60,34 @@ class AccessibilityTarget(
 
     override suspend fun write(text: String): Boolean = withContext(Dispatchers.Main) {
         val n = node ?: return@withContext false
-        if (!n.refresh() || !n.isEditable) return@withContext false
+        if (!n.refresh() || !n.isEditable) {
+            service.logEvent("write: node gone or not editable")
+            return@withContext false
+        }
 
         // Never write into a field the user has already left. A pinned node is
         // its own authority - it was valid at insert time and just re-validated.
         if (pinnedNode == null) {
             val currentFocus = service.focusedEditableNode()
-            if (currentFocus == null || currentFocus != n) return@withContext false
+            if (currentFocus == null || currentFocus != n) {
+                service.logEvent("write: focus moved (focus=${currentFocus != null})")
+                return@withContext false
+            }
         }
 
         // Never write over text that changed during the API round trip: the
         // reply below is a rewrite of the OLD field content, and SET_TEXT
         // replaces the whole field - anything typed in the meantime would be
         // destroyed with no undo entry containing it. Clipboard fallback is the
-        // designed degradation.
-        if (n.effectiveText() != fullText) return@withContext false
+        // designed degradation. Whitespace-insensitive: single-line fields
+        // legally flatten "\n" to a space, which is not the user typing.
+        val current = n.effectiveText()
+        if (normalizedWs(current) != normalizedWs(fullText)) {
+            service.logEvent(
+                "write: field changed mid-flight (now=${current.length} was=${fullText.length})"
+            )
+            return@withContext false
+        }
 
         // The engine trims what it reads, so restore the selection's own
         // edge whitespace - otherwise words merge at the splice points.
@@ -98,6 +114,7 @@ class AccessibilityTarget(
         // ACTION_SET_TEXT is flaky in WebView and some Compose fields -
         // ALWAYS check the return value (spec 5.2).
         val ok = n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (!ok) service.logEvent("write: SET_TEXT rejected (len=${newFull.length})")
         if (ok) {
             fullBefore = fullText
             fullAfter = newFull
@@ -119,4 +136,10 @@ class AccessibilityTarget(
 
     override fun contextBefore(): String =
         if (hasFragmentSelection) fullText.substring(maxOf(0, selStart - 300), selStart) else ""
+
+    private fun normalizedWs(s: String): String = s.replace(WS, " ").trim()
+
+    private companion object {
+        val WS = Regex("\\s+")
+    }
 }

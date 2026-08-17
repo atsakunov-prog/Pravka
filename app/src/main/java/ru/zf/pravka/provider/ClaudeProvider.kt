@@ -128,7 +128,13 @@ class ClaudeProvider(
     ): ApiReply {
         // Rough token estimate for Russian text (~2.5 chars/token) + 30% headroom.
         val estimatedInputTokens = input.length / 2 + 1
-        val maxTokens = (estimatedInputTokens * 13 / 10 + 300).coerceIn(1024, 8192)
+        // Opus (redo chips) thinks adaptively by default, and thinking tokens
+        // count toward max_tokens: without headroom a 350-char redo burned the
+        // whole budget on thinking and died with stop_reason=max_tokens before
+        // emitting a single word (owner saw an endless spinner, 2026-08-18).
+        val thinkingHeadroom = if (model == Settings.MODEL_SONNET) 0 else 8000
+        val maxTokens = (estimatedInputTokens * 13 / 10 + 300 + thinkingHeadroom)
+            .coerceIn(1024, 16384)
 
         val body = JSONObject().apply {
             put("model", model)
