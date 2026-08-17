@@ -199,7 +199,10 @@ class FloatingButtonController(
         if (!tickerVisible) return
         tickerVisible = false
         t.animate().alpha(0f).setDuration(220).withEndAction {
-            t.visibility = View.GONE
+            // hide -> immediate re-show (dictation ends, CLEAN streaming starts)
+            // cancels this fade; the end action can still run and must not hide
+            // the ticker that showTicker() just brought back.
+            if (!tickerVisible) t.visibility = View.GONE
         }.start()
     }
 

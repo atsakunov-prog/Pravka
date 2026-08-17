@@ -44,7 +44,11 @@ class ProofreadEngine(
         data class Failed(val message: String) : Outcome
     }
 
-    suspend fun proofread(target: TextTarget, mode: ProofreadMode): Outcome {
+    suspend fun proofread(
+        target: TextTarget,
+        mode: ProofreadMode,
+        onDelta: ((String) -> Unit)? = null,
+    ): Outcome {
         val input = target.read()?.trim().orEmpty()
         // A deliberately selected fragment may be a single word - the
         // minimum-length guard only protects against accidental triggers.
@@ -55,7 +59,7 @@ class ProofreadEngine(
 
         // One provider, one model: Sonnet (the owner's choice - Haiku simplified
         // too much and the Nano experiment was a dead end).
-        val rawResult = claude.proofread(prepared.text, mode, prepared.dictBlock).getOrElse { error ->
+        val rawResult = claude.proofread(prepared.text, mode, prepared.dictBlock, onDelta).getOrElse { error ->
             val message = error.message ?: "Неизвестная ошибка"
             history.append(mode.name, claude.id, "", 0, 0, 0, 0.0, false, input, "", message)
             stats.recordError()

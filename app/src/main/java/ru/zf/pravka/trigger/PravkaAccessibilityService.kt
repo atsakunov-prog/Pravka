@@ -412,7 +412,18 @@ class PravkaAccessibilityService : AccessibilityService() {
             Haptics.start(this@PravkaAccessibilityService)
             // The pinned (dictation) path arrives with its selection already set.
             if (pinnedNode == null) selectAllInFocusedField()
-            val outcome = app.engine.proofread(AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode), mode)
+            // Stream the corrected text across the ticker while it generates -
+            // the first words appear well under a second after stop, instead of
+            // a silent spinner for the whole generation. Deltas arrive on an IO
+            // thread; the ticker is a View, so hop to main.
+            floatingButton?.showTicker()
+            val onDelta: (String) -> Unit = { partial ->
+                scope.launch { floatingButton?.updateTicker(partial) }
+            }
+            val outcome = app.engine.proofread(
+                AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode), mode, onDelta,
+            )
+            floatingButton?.hideTicker()
             floatingButton?.setBusy(false)
             busy = false
             Feedback.report(this@PravkaAccessibilityService, outcome)
