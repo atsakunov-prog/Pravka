@@ -1,6 +1,7 @@
 package ru.zf.pravka.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -26,6 +27,8 @@ class Settings(private val context: Context) {
         private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
         private val KEY_FAB_ALPHA = floatPreferencesKey("fab_alpha")
         private val KEY_SPEECH_ENGINE = stringPreferencesKey("speech_engine")
+        private val KEY_SPEECH_SEGMENTED = booleanPreferencesKey("speech_segmented")
+        private val KEY_SPEECH_FORMATTING = booleanPreferencesKey("speech_formatting")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -43,6 +46,19 @@ class Settings(private val context: Context) {
     suspend fun speechEngine(): String = speechEngineFlow.first()
     suspend fun setSpeechEngine(value: String) {
         context.dataStore.edit { it[KEY_SPEECH_ENGINE] = value }
+    }
+
+    // Recognition mode knobs. Defaults are EXACTLY build 55 - the owner's
+    // "распознаёт идеально" configuration: continuous session, raw word
+    // stream (no recognizer formatting).
+    val speechSegmentedFlow = context.dataStore.data.map { it[KEY_SPEECH_SEGMENTED] ?: true }
+    suspend fun setSpeechSegmented(value: Boolean) {
+        context.dataStore.edit { it[KEY_SPEECH_SEGMENTED] = value }
+    }
+
+    val speechFormattingFlow = context.dataStore.data.map { it[KEY_SPEECH_FORMATTING] ?: false }
+    suspend fun setSpeechFormatting(value: Boolean) {
+        context.dataStore.edit { it[KEY_SPEECH_FORMATTING] = value }
     }
 
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }

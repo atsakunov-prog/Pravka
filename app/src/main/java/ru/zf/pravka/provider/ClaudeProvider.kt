@@ -82,6 +82,43 @@ class ClaudeProvider(
             }
         }
 
+    /**
+     * Free-form assist task (summarize / reply / translate): [instruction]
+     * plus [content] in tags, NO CLEAN template. Returns a ProofreadResult so
+     * the history journal and cost accounting reuse the same shape.
+     */
+    suspend fun assist(
+        instruction: String,
+        content: String,
+        onDelta: ((String) -> Unit)? = null,
+    ): Result<ProofreadResult> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val apiKey = settings.apiKey()
+                if (apiKey.isBlank()) {
+                    throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+                }
+                val model = Settings.MODEL_SONNET
+                val prompt = instruction.trim() + "\n\n<текст>\n" + content + "\n</текст>"
+                val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+                val started = System.currentTimeMillis()
+                val reply = requestWithOneRetry(apiKey, model, parts, "", onDelta)
+                ProofreadResult(
+                    text = reply.text,
+                    providerId = id,
+                    latencyMs = System.currentTimeMillis() - started,
+                    changed = true,
+                    appliedDictEntries = emptyList(),
+                    modelId = model,
+                    inputTokens = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                    outputTokens = reply.outputTokens,
+                    costUsd = costUsd(model, reply),
+                    cacheWriteTokens = reply.cacheWriteTokens,
+                    cacheReadTokens = reply.cacheReadTokens,
+                )
+            }
+        }
+
     // USD per million tokens: input to output. Cache pricing derives from
     // the input price: 1h-TTL writes cost 2x, reads 0.1x.
     private val prices = mapOf(
@@ -164,7 +201,9 @@ class ClaudeProvider(
                                 // the owner's real gaps between fixes run up to ~30
                                 // min, which the default 5m TTL would keep missing.
                                 // Below Sonnet's 1024-token minimum it is a no-op.
-                                put(
+                                // Assist tasks have no stable prefix - an empty text
+                                // block would be rejected by the API, so skip it.
+                                if (parts.stablePrefix.isNotBlank()) put(
                                     JSONObject().apply {
                                         put("type", "text")
                                         put("text", parts.stablePrefix)

@@ -32,17 +32,13 @@ class GoogleSpeechSession(
     // dictionary). Improves rare-word/English accuracy on supporting devices;
     // ignored where the extra isn't honored.
     private val biasing: List<String> = emptyList(),
-    // Recognizer's own punctuation/caps. Its pause-periods are untrusted by
-    // CLEAN v1.9 anyway, and the formatted pipeline PROVED more accurate on
-    // words: the 4-14 Aug takes (formatting on) are clean, the 18 Aug takes
-    // (formatting off) are garbled. Default matches the good era.
-    private val formatting: Boolean = true,
+    // Recognizer's own punctuation/caps. Build 55 - the owner's "распознаёт
+    // идеально" configuration - runs the RAW stream (no formatting), so that
+    // is the default; the settings expose it for side-by-side comparison.
+    private val formatting: Boolean = false,
     // One continuous session across pauses (Android 13+). The restart mode it
-    // replaced went deaf on every pause (~20s of lost mic per 106s take) and
-    // swallowed phrases mid-take - that is WHY the owner moved to continuous.
-    // The 18 Aug garbling coincided with formatting going OFF in the same
-    // release; formatting is the quality lever, so continuous stays default
-    // and the truncated-final rescue below covers its boundary defects.
+    // replaced went deaf on every pause and swallowed phrases mid-take; the
+    // settings expose the choice for comparison, continuous is the default.
     private val segmentedSession: Boolean = true,
 ) {
     private val main = Handler(Looper.getMainLooper())

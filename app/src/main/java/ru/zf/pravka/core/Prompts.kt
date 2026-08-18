@@ -213,6 +213,31 @@ object Prompts {
 """.trimIndent()
 
 
+    // ---- assist tasks (FAB menu, orange column): free-form actions on the
+    // selected text / field / clipboard. NOT the CLEAN template.
+
+    val ASSIST_SUMMARY = """
+Перескажи текст в тегах коротко по-русски: суть в 2–4 предложениях
+или маркированным списком, если в тексте несколько разных пунктов.
+Ничего не выдумывай, не комментируй. Ответ — только пересказ.
+""".trimIndent()
+
+    val ASSIST_REPLY = """
+В тегах — входящее сообщение или переписка (последние реплики —
+самые свежие). Составь короткий уместный ответ от моего лица:
+разговорный живой русский, по делу, без канцелярита и без лишних
+расшаркиваний. Если в сообщении вопрос — ответь на него по
+содержанию переписки; если контекста не хватает — предложи
+нейтральный вежливый ответ, продвигающий разговор. Ответ — только
+текст ответа, без пояснений и вариантов.
+""".trimIndent()
+
+    val ASSIST_TRANSLATE = """
+Переведи текст в тегах: если он на русском — на английский,
+иначе — на русский. Сохрани тон и форматирование. Ответ — только
+перевод, без пояснений.
+""".trimIndent()
+
     // The assembled prompt in three segments. stablePrefix is byte-identical
     // across requests (the template before {DICT}) - ClaudeProvider puts the
     // cache_control breakpoint there. dictPart varies per request (matched

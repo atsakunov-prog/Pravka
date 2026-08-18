@@ -488,6 +488,37 @@ private fun SpeechSection(
                 Text(stringResource(R.string.speech_refresh))
             }
         }
+        if (isGoogle) {
+            Spacer(Modifier.height(12.dp))
+            // Recognition mode: continuous (build 55, "распознаёт идеально")
+            // vs per-segment restarts - side-by-side comparison by the owner.
+            val segmented by settings.speechSegmentedFlow.collectAsState(initial = true)
+            val formatting by settings.speechFormattingFlow.collectAsState(initial = false)
+            HintText("Режим распознавания")
+            ModelOption(
+                label = "Непрерывный — одна сессия, без перезапусков (как в сборке 55)",
+                selected = segmented,
+                onSelect = { scope.launch { settings.setSpeechSegmented(true) } },
+            )
+            ModelOption(
+                label = "Посегментный — перезапуск на каждой паузе",
+                selected = !segmented,
+                onSelect = { scope.launch { settings.setSpeechSegmented(false) } },
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = formatting,
+                    onCheckedChange = { on -> scope.launch { settings.setSpeechFormatting(on) } },
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Пунктуация распознавателя", style = MaterialTheme.typography.bodyMedium)
+            }
+            HintText(
+                "Выключено (как в сборке 55): распознаватель отдаёт сырой поток слов, " +
+                    "знаки расставляет Правка. Действует со следующей диктовки."
+            )
+        }
         Spacer(Modifier.height(6.dp))
         HintText(
             stringResource(

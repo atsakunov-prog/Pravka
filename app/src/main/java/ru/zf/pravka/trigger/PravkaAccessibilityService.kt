@@ -70,6 +70,10 @@ class PravkaAccessibilityService : AccessibilityService() {
     // path, which was clipping the first words.
     @Volatile private var cachedBiasing: List<String> = emptyList()
     @Volatile private var cachedEngine: String = Settings.SPEECH_GOOGLE
+    // Recognition mode knobs (defaults = build 55), cached like the engine so
+    // the tap -> listening path touches no storage.
+    @Volatile private var cachedSegmented: Boolean = true
+    @Volatile private var cachedFormatting: Boolean = false
 
     private val app: PravkaApp by lazy { application as PravkaApp }
 
@@ -92,6 +96,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch { cachedBiasing = collectBiasing() }
         scope.launch {
             app.settings.speechEngineFlow.collect { cachedEngine = it }
+        }
+        scope.launch {
+            app.settings.speechSegmentedFlow.collect { cachedSegmented = it }
+        }
+        scope.launch {
+            app.settings.speechFormattingFlow.collect { cachedFormatting = it }
         }
     }
 
@@ -222,7 +232,13 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         googleStartedAt = SystemClock.elapsedRealtime()
         lastDraftAt = 0L
-        val session = GoogleSpeechSession(this, biasing = cachedBiasing)
+        discardTake = false
+        val session = GoogleSpeechSession(
+            this,
+            biasing = cachedBiasing,
+            formatting = cachedFormatting,
+            segmentedSession = cachedSegmented,
+        )
         googleSession = session
         // Start listening FIRST, then dress the UI: the button, the ticker's
         // first layout, the haptic and the foreground-service notification are
@@ -254,6 +270,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
         floatingButton?.setRecording(true)
         floatingButton?.showTicker()
+        floatingButton?.showCancelBubble { cancelLiveDictation() }
         Haptics.start(this)
         // Foreground-mic holder so the recognizer survives app switches. If it
         // can't start (rare FGS restrictions), recognition still works while
@@ -270,6 +287,16 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (now - lastDraftAt < 1200) return
         lastDraftAt = now
         app.liveDraft.save(text)
+    }
+
+    // The gray "отмена" bubble beside the ticker: throw the take away.
+    @Volatile private var discardTake = false
+
+    fun cancelLiveDictation() {
+        if (googleSession == null) return
+        discardTake = true
+        app.eventLog.add("cancel requested")
+        stopLiveDictation()
     }
 
     /** Second tap or the notification's Stop button: finalize the live take. */
@@ -290,8 +317,18 @@ class PravkaAccessibilityService : AccessibilityService() {
         // path is allowed to take the text down with it.
         runCatching { stopMicHold() }
         runCatching { floatingButton?.hideTicker() }
+        runCatching { floatingButton?.hideCancelBubble() }
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(false)
+        if (discardTake) {
+            // The gray "отмена" bubble: nothing is inserted or journaled as a
+            // take; the draft goes too. Deliberate discard, not a lost take.
+            discardTake = false
+            app.eventLog.add("take discarded (${text.length} ch)")
+            app.liveDraft.clear()
+            Feedback.toast(this, "Отменено")
+            return
+        }
         // Get the text into the field first - the owner is waiting on it. The
         // journals are queued on a background thread, so they cost nothing here,
         // but they still go after the insert is under way.
@@ -317,6 +354,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         googleSession = null
         stopMicHold()
         floatingButton?.hideTicker()
+        floatingButton?.hideCancelBubble()
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(false)
         Haptics.error(this)
@@ -506,15 +544,94 @@ class PravkaAccessibilityService : AccessibilityService() {
     // Long press = "the text is already in the field": clean it with the
     // standard model, or run a one-tap rework on the stronger one.
     private fun showFabMenu() {
+        val red = FloatingButtonController.REC_RED
+        val orange = FloatingButtonController.ACCENT
         floatingButton?.toggleMenu(
             listOf(
-                getString(R.string.quick_clean) to { runProofread(ProofreadMode.CLEAN) },
-                getString(R.string.redo_shorter) to { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_SHORTER) },
-                getString(R.string.redo_longer) to { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_LONGER) },
-                getString(R.string.redo_polish) to { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
-                getString(R.string.fab_menu_undo) to { undoLast() },
+                // Editing actions (red). A selection in the field narrows every
+                // one of them to just that fragment (AccessibilityTarget keeps
+                // an existing selection as the work item).
+                listOf(
+                    FloatingButtonController.MenuItem(getString(R.string.quick_clean), red) { runProofread(ProofreadMode.CLEAN) },
+                    FloatingButtonController.MenuItem(getString(R.string.redo_shorter), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_SHORTER) },
+                    FloatingButtonController.MenuItem(getString(R.string.redo_longer), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_LONGER) },
+                    FloatingButtonController.MenuItem(getString(R.string.redo_polish), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
+                    FloatingButtonController.MenuItem(getString(R.string.fab_menu_undo), red) { undoLast() },
+                ),
+                // AI actions (orange): work on the selection, else the whole
+                // field, else the clipboard; the answer goes to the clipboard.
+                listOf(
+                    FloatingButtonController.MenuItem("Коротко", orange) { runAssist("summary", ru.zf.pravka.core.Prompts.ASSIST_SUMMARY) },
+                    FloatingButtonController.MenuItem("Ответить", orange) { runAssist("reply", ru.zf.pravka.core.Prompts.ASSIST_REPLY) },
+                    FloatingButtonController.MenuItem("Перевод", orange) { runAssist("translate", ru.zf.pravka.core.Prompts.ASSIST_TRANSLATE) },
+                ),
             )
         )
+    }
+
+    // ---- AI actions: selection > field > clipboard; result to the clipboard ----
+
+    private suspend fun assistContent(): String {
+        focusedEditableNode()?.let { node ->
+            val text = runCatching { node.effectiveText() }.getOrDefault("")
+            val start = node.textSelectionStart
+            val end = node.textSelectionEnd
+            if (start in 0 until end && end <= text.length) return text.substring(start, end)
+            if (text.isNotBlank()) return text
+        }
+        return runCatching { ru.zf.pravka.target.ClipboardTarget(this).read().orEmpty() }.getOrDefault("")
+    }
+
+    private fun runAssist(tag: String, instruction: String) {
+        if (busy) return
+        scope.launch {
+            busy = true
+            floatingButton?.setBusy(true)
+            Haptics.start(this@PravkaAccessibilityService)
+            val content = assistContent()
+            if (content.isBlank()) {
+                busy = false
+                floatingButton?.setBusy(false)
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(this@PravkaAccessibilityService, "Нет текста: ни выделения, ни поля, ни буфера.")
+                return@launch
+            }
+            floatingButton?.showTicker()
+            floatingButton?.updateTicker("…")
+            val onDelta: (String) -> Unit = { partial ->
+                scope.launch { floatingButton?.updateTicker(partial) }
+            }
+            val result = runCatching { app.claudeProvider.assist(instruction, content, onDelta) }
+                .getOrElse { Result.failure(it) }
+            floatingButton?.hideTicker()
+            floatingButton?.setBusy(false)
+            busy = false
+            result.onSuccess { r ->
+                ru.zf.pravka.target.ClipboardTarget(this@PravkaAccessibilityService).write(r.text)
+                app.historyLog.append(
+                    mode = "ASSIST_" + tag.uppercase(),
+                    providerId = r.providerId,
+                    model = r.modelId,
+                    latencyMs = r.latencyMs,
+                    inputTokens = r.inputTokens,
+                    outputTokens = r.outputTokens,
+                    costUsd = r.costUsd,
+                    changed = true,
+                    input = content.take(2000),
+                    output = r.text,
+                    error = null,
+                    cacheWriteTokens = r.cacheWriteTokens,
+                    cacheReadTokens = r.cacheReadTokens,
+                )
+                app.eventLog.add("assist $tag ok ${r.text.length} ch")
+                Haptics.success(this@PravkaAccessibilityService)
+                Feedback.toast(this@PravkaAccessibilityService, "Готово — ответ в буфере обмена")
+            }.onFailure { e ->
+                app.eventLog.add("assist $tag failed: ${e.message}")
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(this@PravkaAccessibilityService, e.message ?: "Ошибка")
+            }
+        }
     }
 
     private fun runProofread(

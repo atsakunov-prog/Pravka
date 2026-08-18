@@ -41,9 +41,10 @@ class FloatingButtonController(
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
         // orange circle, paper-white geometric "П"; deep red while recording.
-        private val ACCENT = 0xFFEA580C.toInt()
-        private val REC_RED = 0xFFD8342A.toInt()
+        val ACCENT = 0xFFEA580C.toInt()
+        val REC_RED = 0xFFD8342A.toInt()
         private val PAPER = 0xFFF7F3EA.toInt()
+        private val GRAY = 0xFF6E6659.toInt()  // ink-soft: the cancel bubble
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -212,10 +213,12 @@ class FloatingButtonController(
         }.start()
     }
 
-    // ---- Long-press menu ----
+    // ---- Long-press menu: colored columns side by side ----
 
-    fun toggleMenu(items: List<Pair<String, () -> Unit>>) {
-        if (menuVisible) hideMenu() else showMenu(items)
+    class MenuItem(val label: String, val color: Int, val onClick: () -> Unit)
+
+    fun toggleMenu(groups: List<List<MenuItem>>) {
+        if (menuVisible) hideMenu() else showMenu(groups)
     }
 
     fun hideMenu() {
@@ -226,35 +229,48 @@ class FloatingButtonController(
         menu = null
     }
 
-    private fun showMenu(items: List<Pair<String, () -> Unit>>) {
+    private fun showMenu(groups: List<List<MenuItem>>) {
         hideMenu()
-        val column = android.widget.LinearLayout(service).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
+        // Editing actions in red, AI actions in orange - two columns side by
+        // side (owner's design).
+        val row = android.widget.LinearLayout(service).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
         }
-        for ((label, action) in items) {
-            val pill = android.widget.TextView(service).apply {
-                text = label
-                setTextColor(PAPER)
-                textSize = 15f
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(18).toFloat()
-                    setColor(ACCENT)
-                }
-                alpha = 0.92f
-                val padH = dp(16)
-                val padV = dp(9)
-                setPadding(padH, padV, padH, padV)
-                setOnClickListener {
-                    hideMenu()
-                    action()
-                }
+        for (group in groups) {
+            val column = android.widget.LinearLayout(service).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
             }
-            val lp = android.widget.LinearLayout.LayoutParams(
+            for (item in group) {
+                val pill = android.widget.TextView(service).apply {
+                    text = item.label
+                    setTextColor(PAPER)
+                    textSize = 15f
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(18).toFloat()
+                        setColor(item.color)
+                    }
+                    alpha = 0.92f
+                    val padH = dp(16)
+                    val padV = dp(9)
+                    setPadding(padH, padV, padH, padV)
+                    setOnClickListener {
+                        hideMenu()
+                        item.onClick()
+                    }
+                }
+                val lp = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(6) }
+                column.addView(pill, lp)
+            }
+            val clp = android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(6) }
-            column.addView(pill, lp)
+            ).apply { marginEnd = dp(8) }
+            row.addView(column, clp)
         }
+        val column = row
         val p = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -270,7 +286,7 @@ class FloatingButtonController(
             val buttonCenterX = bp.x + buttonSize / 2
             p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + dp(8)
             else (bp.x - dp(180)).coerceAtLeast(0)
-            p.y = bp.y.coerceIn(0, (h - dp(48) * items.size).coerceAtLeast(0))
+            p.y = bp.y.coerceIn(0, (h - dp(48) * (groups.maxOfOrNull { it.size } ?: 1)).coerceAtLeast(0))
         }
         menuParams = p
         menu = column
@@ -342,7 +358,49 @@ class FloatingButtonController(
         tp.x = tp.x.coerceIn(0, (w - tickerW).coerceAtLeast(0))
     }
 
+    // ---- The gray "отмена" bubble, shown only while recording ----
+
+    private var cancelBubble: android.widget.TextView? = null
+
+    fun showCancelBubble(onCancel: () -> Unit) {
+        hideCancelBubble()
+        val bp = params ?: return
+        val pill = android.widget.TextView(service).apply {
+            text = "отмена"
+            setTextColor(PAPER)
+            textSize = 13f
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(GRAY)
+            }
+            alpha = 0.9f
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            setOnClickListener { onCancel() }
+        }
+        val p = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            val (w, h) = screenSize()
+            // Right under the button, clamped on screen.
+            x = bp.x.coerceIn(0, (w - dp(90)).coerceAtLeast(0))
+            y = (bp.y + buttonSize + dp(8)).coerceAtMost(h - dp(44))
+        }
+        cancelBubble = pill
+        runCatching { windowManager.addView(pill, p) }
+    }
+
+    fun hideCancelBubble() {
+        cancelBubble?.let { runCatching { windowManager.removeView(it) } }
+        cancelBubble = null
+    }
+
     fun destroy() {
+        hideCancelBubble()
         hideMenu()
         button?.let { runCatching { windowManager.removeView(it) } }
         button = null
