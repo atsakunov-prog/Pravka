@@ -32,6 +32,17 @@ class GoogleSpeechSession(
     // dictionary). Improves rare-word/English accuracy on supporting devices;
     // ignored where the extra isn't honored.
     private val biasing: List<String> = emptyList(),
+    // Recognizer's own punctuation/caps. Its pause-periods are untrusted by
+    // CLEAN v1.9 anyway, and the formatted pipeline PROVED more accurate on
+    // words: the 4-14 Aug takes (formatting on) are clean, the 18 Aug takes
+    // (formatting off) are garbled. Default matches the good era.
+    private val formatting: Boolean = true,
+    // One continuous session across pauses (Android 13+). When it finally
+    // engaged for real (the Int fix), long takes started stalling on rare
+    // words and losing/gluing tail words at segment boundaries - the exact
+    // "спотыкается и застревает" regression. Off by default: the hardened
+    // fast-restart loop is the configuration that worked for weeks.
+    private val segmentedSession: Boolean = false,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
@@ -138,7 +149,10 @@ class GoogleSpeechSession(
             active = true
             stopping = false
             errorStreak = 0
-            onLog("start onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} segmentedRequested=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU}")
+            onLog(
+                "start onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} " +
+                    "formatting=$formatting segmentedRequested=$segmentedSession"
+            )
             startListening()
         }
     }
@@ -174,22 +188,30 @@ class GoogleSpeechSession(
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                // Continuous dictation: keep one session alive across pauses and
-                // receive finalized chunks via onSegmentResults(). The extra named
-                // here must also be set, hence the silence length below.
-                putExtra(
-                    RecognizerIntent.EXTRA_SEGMENTED_SESSION,
-                    RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                )
-                putExtra(
-                    RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                    SEGMENTED_SILENCE_MS,
-                )
-                // EXTRA_ENABLE_FORMATTING deliberately NOT set: the formatter
-                // drops a period wherever the speaker pauses (each silence
-                // closes a segment) and those false sentence breaks actively
-                // misled the cleanup model. A raw word stream is an honest
-                // input - CLEAN rebuilds punctuation, caps and numbers anyway.
+                if (segmentedSession) {
+                    // Continuous dictation: keep one session alive across pauses
+                    // and receive finalized chunks via onSegmentResults(). The
+                    // silence length is what ends the whole session, so both
+                    // extras belong to this mode ONLY - in restart mode a 30s
+                    // complete-silence would delay every utterance end.
+                    putExtra(
+                        RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+                        RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                    )
+                    putExtra(
+                        RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                        SEGMENTED_SILENCE_MS,
+                    )
+                }
+                // The recognizer's own punctuation/caps: its word accuracy is
+                // measurably better with the formatted pipeline, and CLEAN v1.9
+                // distrusts source punctuation anyway (pause-periods rebuilt).
+                if (formatting) {
+                    putExtra(
+                        RecognizerIntent.EXTRA_ENABLE_FORMATTING,
+                        RecognizerIntent.FORMATTING_OPTIMIZE_QUALITY,
+                    )
+                }
                 // A dictation tool must not censor: by default the recognizer
                 // masks "offensive" words with asterisks.
                 putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
@@ -237,11 +259,27 @@ class GoogleSpeechSession(
     private fun firstResult(bundle: Bundle?): String? =
         bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
 
+    // Case/punctuation-insensitive word stream, for comparing hypotheses that
+    // differ only in the formatter's decisions.
+    private fun normalizedWords(s: String): String =
+        s.lowercase().replace(Regex("[^\\p{L}\\p{Nd}]+"), " ").trim()
+
     /** Appends a finalized chunk and publishes a durable checkpoint. */
     private fun commitSegment(bundle: Bundle?, tag: String) {
         errorStreak = 0
         producedAny = true
-        val text = firstResult(bundle)?.trim().orEmpty()
+        var text = firstResult(bundle)?.trim().orEmpty()
+        // The engine sometimes finalizes LESS than the partial the owner already
+        // watched on the ticker (tail words cut mid-word, rare words dropped).
+        // When the watched partial strictly extends the final, keep the partial -
+        // the final committed nothing for that extra audio, so no duplication.
+        val watched = lastPartial.trim()
+        if (text.isNotEmpty() && watched.length > text.length &&
+            normalizedWords(watched).startsWith(normalizedWords(text))
+        ) {
+            onLog("$tag final(${text.length}) shorter than watched partial(${watched.length}) - keeping partial")
+            text = watched
+        }
         if (text.isNotEmpty()) {
             if (finalized.isNotEmpty()) finalized.append(' ')
             finalized.append(text)
