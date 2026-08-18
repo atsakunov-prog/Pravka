@@ -561,11 +561,9 @@ class PravkaAccessibilityService : AccessibilityService() {
                     "${if (strongModel) "(opus)" else ""}: ${outcome.javaClass.simpleName}"
             )
             Feedback.report(this@PravkaAccessibilityService, outcome)
-            // Something was written into the field - offer undo, the word
-            // diff and quick add-to-dictionary for a few seconds (spec 9.2).
-            if (outcome is ProofreadEngine.Outcome.Applied) {
-                UndoStack.last()?.let { resultBar?.show(it.before, it.after) }
-            }
+            // The post-fix result bar is gone (owner: it covered the keyboard).
+            // Undo lives in the long-press FAB menu; the word diff and quick
+            // add-to-dictionary went with the bar.
         }
     }
 
