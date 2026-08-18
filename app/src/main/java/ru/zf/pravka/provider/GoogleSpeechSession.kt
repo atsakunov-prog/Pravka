@@ -37,12 +37,13 @@ class GoogleSpeechSession(
     // words: the 4-14 Aug takes (formatting on) are clean, the 18 Aug takes
     // (formatting off) are garbled. Default matches the good era.
     private val formatting: Boolean = true,
-    // One continuous session across pauses (Android 13+). When it finally
-    // engaged for real (the Int fix), long takes started stalling on rare
-    // words and losing/gluing tail words at segment boundaries - the exact
-    // "спотыкается и застревает" regression. Off by default: the hardened
-    // fast-restart loop is the configuration that worked for weeks.
-    private val segmentedSession: Boolean = false,
+    // One continuous session across pauses (Android 13+). The restart mode it
+    // replaced went deaf on every pause (~20s of lost mic per 106s take) and
+    // swallowed phrases mid-take - that is WHY the owner moved to continuous.
+    // The 18 Aug garbling coincided with formatting going OFF in the same
+    // release; formatting is the quality lever, so continuous stays default
+    // and the truncated-final rescue below covers its boundary defects.
+    private val segmentedSession: Boolean = true,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
