@@ -30,12 +30,18 @@ object EvalRunner {
                 val rows = mutableListOf<EvalStore.ResultRow>()
                 var exact = 0
                 var sum = 0.0
+                var spend = 0.0
                 for (item in items) {
                     val prepared = applier.prepare(item.input)
-                    val actual = app.claudeProvider.proofread(
+                    val res = app.claudeProvider.proofread(
                         prepared.text, ProofreadMode.CLEAN, prepared.dictBlock,
                         onDelta = null, directive = "", contextBefore = "", modelOverride = null,
-                    ).getOrNull()?.text ?: ""
+                    ).getOrNull()
+                    if (res != null) {
+                        spend += res.costUsd
+                        app.stats.recordAux(res.costUsd, res.inputTokens, res.outputTokens)
+                    }
+                    val actual = res?.text ?: ""
                     val score = similarity(item.expected, actual)
                     if (normalized(item.expected) == normalized(actual)) exact++
                     sum += score
@@ -46,7 +52,8 @@ object EvalRunner {
                 val avg = if (rows.isEmpty()) 0.0 else sum / rows.size
                 app.evalStore.saveRun("текущий", avg, exact, rows.size, rows.sortedBy { it.score })
                 app.learnLog.add(
-                    "эвал завершён: средний ${"%.1f".format(avg * 100)}%, точных $exact из ${rows.size}"
+                    "эвал завершён: средний ${"%.1f".format(avg * 100)}%, точных $exact из ${rows.size}, " +
+                        "стоил $" + "%.4f".format(java.util.Locale.US, spend)
                 )
             } finally {
                 running = false

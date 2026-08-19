@@ -57,7 +57,7 @@ class PravkaApp : Application() {
     val editWatch by lazy { ru.zf.pravka.data.EditWatchStore(this) }
     val evalStore by lazy { ru.zf.pravka.data.EvalStore(this) }
     val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient, rulesStore) }
-    val dictMiner by lazy { DictMiner(settings, httpClient) }
+    val dictMiner by lazy { DictMiner(settings, httpClient, stats) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
 

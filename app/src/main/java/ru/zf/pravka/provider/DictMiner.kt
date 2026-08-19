@@ -18,6 +18,7 @@ import ru.zf.pravka.data.Settings
 class DictMiner(
     private val settings: Settings,
     private val client: OkHttpClient,
+    private val stats: ru.zf.pravka.data.Stats,
 ) {
 
     data class Suggestion(
@@ -76,7 +77,15 @@ $samples
                 client.newCall(request).execute().use { response ->
                     val text = response.body?.string().orEmpty()
                     require(response.isSuccessful) { "API ${response.code}" }
-                    val content = JSONObject(text).getJSONArray("content")
+                    val root = JSONObject(text)
+                    // Count the miner's spend into the same statistics.
+                    root.optJSONObject("usage")?.let { u ->
+                        val tIn = u.optInt("input_tokens")
+                        val tOut = u.optInt("output_tokens")
+                        val cost = tIn / 1_000_000.0 * 3.0 + tOut / 1_000_000.0 * 15.0
+                        stats.recordAux(cost, tIn, tOut)
+                    }
+                    val content = root.getJSONArray("content")
                     val sb = StringBuilder()
                     for (i in 0 until content.length()) {
                         val block = content.getJSONObject(i)

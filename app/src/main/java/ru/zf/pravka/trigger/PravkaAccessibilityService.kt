@@ -695,6 +695,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             result.onSuccess { proposals ->
                 internal.edit().putLong("last_learn_batch", System.currentTimeMillis()).apply()
                 app.editWatch.remove(ripe.take(5).map { it.id })
+                app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
+                app.learnLog.add("батч-анализ стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
                 val added = queueProposals(proposals)
                 app.eventLog.add("learn batch: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
                 if (added > 0) {
@@ -825,6 +827,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             busy = false
             floatingButton?.setBusy(false)
             result.onSuccess { proposals ->
+                app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
+                app.learnLog.add("разбор стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
                 val added = queueProposals(proposals)
                 app.eventLog.add("learn: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
                 if (added > 0) refreshLearnBadge()
@@ -900,6 +904,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             floatingButton?.setBusy(false)
             busy = false
             result.onSuccess { r ->
+                app.stats.recordAux(r.costUsd, r.inputTokens, r.outputTokens)
                 ru.zf.pravka.target.ClipboardTarget(this@PravkaAccessibilityService).write(r.text)
                 app.historyLog.append(
                     mode = "ASSIST_" + tag.uppercase(),

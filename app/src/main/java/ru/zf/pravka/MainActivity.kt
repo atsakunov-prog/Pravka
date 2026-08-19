@@ -852,6 +852,68 @@ private fun LearningTab(app: PravkaApp) {
             } else {
                 HintText("×N — сколько раз правило подтвердилось новыми правками.")
                 Spacer(Modifier.height(6.dp))
+                var optimizing by remember { mutableStateOf(false) }
+                var optimized by remember {
+                    mutableStateOf<ru.zf.pravka.provider.ClaudeProvider.OptimizedRules?>(null)
+                }
+                if (rules.size >= 2) {
+                    Button(
+                        enabled = !optimizing,
+                        onClick = {
+                            optimizing = true
+                            app.appScope.launch {
+                                val result = app.claudeProvider.optimizeRules(rules)
+                                optimizing = false
+                                result.onSuccess { opt ->
+                                    app.stats.recordAux(opt.costUsd, opt.tokensIn, opt.tokensOut)
+                                    app.learnLog.add(
+                                        "оптимизация правил: ${rules.size} → ${opt.rules.size}, стоила $" +
+                                            "%.4f".format(java.util.Locale.US, opt.costUsd)
+                                    )
+                                    optimized = opt
+                                }.onFailure { e ->
+                                    Feedback.toast(ctx, e.message ?: "Не получилось оптимизировать")
+                                }
+                            }
+                        },
+                    ) { Text(if (optimizing) "Оптимизирую (Опус)…" else "Оптимизировать набор") }
+                    Spacer(Modifier.height(6.dp))
+                }
+                optimized?.let { opt ->
+                    AlertDialog(
+                        onDismissRequest = { optimized = null },
+                        title = { Text("Оптимизированный набор: ${rules.size} → ${opt.rules.size}") },
+                        text = {
+                            Column(Modifier.verticalScroll(rememberScrollState())) {
+                                opt.rules.forEachIndexed { i, r ->
+                                    Text("${i + 1}. ${r.text}", style = MaterialTheme.typography.bodyMedium)
+                                    if (r.before.isNotBlank()) {
+                                        Text(
+                                            "«${r.before}» → «${r.after}»",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(onClick = {
+                                val chosen = opt.rules
+                                optimized = null
+                                app.appScope.launch {
+                                    app.rulesStore.replaceAll(chosen.map { Triple(it.text, it.before, it.after) })
+                                    app.learnLog.add("набор правил ЗАМЕНЁН оптимизированным (${chosen.size})")
+                                    loadTick++
+                                }
+                            }) { Text("Заменить набор") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { optimized = null }) { Text("Отмена") }
+                        },
+                    )
+                }
                 for (rule in rules) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -867,14 +929,13 @@ private fun LearningTab(app: PravkaApp) {
                                 )
                             }
                         }
-                        if (rule.hits > 0) {
-                            Text(
-                                "×${rule.hits}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.tertiary,
-                                modifier = Modifier.padding(horizontal = 6.dp),
-                            )
-                        }
+                        Text(
+                            "×${rule.hits}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (rule.hits > 0) MaterialTheme.colorScheme.tertiary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 6.dp),
+                        )
                         Switch(
                             checked = rule.enabled,
                             onCheckedChange = { on ->

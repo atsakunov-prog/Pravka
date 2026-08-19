@@ -121,6 +121,20 @@ class Stats(private val context: Context) {
         }
     }
 
+    /** Cost/token accounting for non-proofread API calls: assist actions,
+     *  learning (Opus), the dictionary miner and eval runs. Money and tokens
+     *  land in the same counters the owner reads in Статистика. */
+    suspend fun recordAux(costUsd: Double, tokensIn: Int, tokensOut: Int) {
+        context.statsDataStore.edit { p ->
+            p[Keys.TOKENS_IN] = (p[Keys.TOKENS_IN] ?: 0) + tokensIn
+            p[Keys.TOKENS_OUT] = (p[Keys.TOKENS_OUT] ?: 0) + tokensOut
+            val micros = (costUsd * 1_000_000).toLong()
+            val todayKey = longPreferencesKey(dayKey(0))
+            p[todayKey] = (p[todayKey] ?: 0) + micros
+            p[Keys.COST_TOTAL] = (p[Keys.COST_TOTAL] ?: 0) + micros
+        }
+    }
+
     suspend fun recordError() {
         context.statsDataStore.edit { p ->
             p[Keys.ERRORS] = (p[Keys.ERRORS] ?: 0) + 1

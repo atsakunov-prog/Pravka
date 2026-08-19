@@ -141,6 +141,10 @@ class ClaudeProvider(
     data class LearnProposals(
         val dict: List<DictProposal>,
         val rules: List<RuleProposal>,
+        // Cost accounting: learning runs on Opus and must be counted too.
+        val costUsd: Double = 0.0,
+        val tokensIn: Int = 0,
+        val tokensOut: Int = 0,
     )
 
     data class DictProposal(val mode: String, val from: String, val to: String, val note: String)
@@ -207,7 +211,74 @@ $casesBlock
 """.trimIndent()
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
             val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
-            parseLearn(reply.text)
+            parseLearn(reply.text).copy(
+                costUsd = costUsd(Settings.MODEL_OPUS, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+            )
+        }
+    }
+
+    // ---- rule-set optimization: many accumulated rules -> a tight set ----
+
+    data class OptimizedRules(
+        val rules: List<RuleProposal>,
+        val costUsd: Double,
+        val tokensIn: Int,
+        val tokensOut: Int,
+    )
+
+    /**
+     * Opus consolidates the accumulated rules: merges overlaps, generalizes,
+     * drops contradictions, keeps the strongest example per rule, caps the
+     * set. Returns the PROPOSED new set - nothing is applied without the
+     * owner's confirmation.
+     */
+    suspend fun optimizeRules(
+        rules: List<ru.zf.pravka.data.RulesStore.Rule>,
+    ): Result<OptimizedRules> = withContext(Dispatchers.IO) {
+        runCatching {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+            require(rules.size >= 2) { "Оптимизировать нечего: правил меньше двух." }
+            val listing = buildString {
+                rules.forEachIndexed { i, r ->
+                    append(i + 1).append(". ").append(r.text)
+                    if (r.hits > 0) append(" [подтверждений: ").append(r.hits).append("]")
+                    if (r.exampleBefore.isNotBlank()) {
+                        append("\n   Пример: «").append(r.exampleBefore)
+                            .append("» → «").append(r.exampleAfter).append("»")
+                    }
+                    append('\n')
+                }
+            }.trim()
+            val prompt = """
+Ниже — накопленные правила владельца для системы чистки диктовок.
+Они добавлялись по одному и наверняка пересекаются. Приведи набор
+в порядок:
+— слей дубли и пересечения в одно правило (подтверждения и хороший
+  пример — признак важности);
+— обобщай НАМЕРЕНИЕ с условием применимости, а не буквальные слова;
+— убери противоречия (оставь более подтверждённое);
+— каждое правило — императив не длиннее 140 символов, по-русски,
+  с лучшим примером из имеющихся (before/after до 120 символов);
+— в итоге не больше 12 правил, самые важные первыми.
+
+Ответ — СТРОГО JSON без пояснений:
+{"rules": [{"rule": "...", "before": "...", "after": "..."}]}
+
+$listing
+""".trimIndent()
+            val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+            val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+            val parsed = parseLearn(reply.text)
+            require(parsed.rules.isNotEmpty()) { "Опус не вернул правил — набор не тронут." }
+            OptimizedRules(
+                rules = parsed.rules,
+                costUsd = costUsd(Settings.MODEL_OPUS, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+            )
         }
     }
 

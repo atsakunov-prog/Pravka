@@ -102,6 +102,23 @@ class RulesStore(private val context: Context) {
             }
         }
 
+    /** Wholesale swap after the owner confirmed an optimized set. */
+    suspend fun replaceAll(newRules: List<Triple<String, String, String>>) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            ensureLoaded()
+            rules.clear()
+            var id = 1L
+            val now = System.currentTimeMillis()
+            for ((text, before, after) in newRules) {
+                val t = text.trim()
+                if (t.isEmpty()) continue
+                rules.add(Rule(id++, t, enabled = true, createdTs = now,
+                    exampleBefore = before.take(160), exampleAfter = after.take(160)))
+            }
+            persist()
+        }
+    }
+
     /**
      * A fresh learning round proposed a rule matching an existing one - the
      * rule CONFIRMED itself. Returns true when a match was found.
