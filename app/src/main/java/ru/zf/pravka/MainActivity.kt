@@ -427,6 +427,18 @@ private fun SettingsTab(
                     "Только ошибки распознавания, орфография и пунктуация. " +
                     "Промпт режима редактируется во вкладке «Промпты»."
             )
+            if (prose) {
+                val rulesInProse by settings.rulesInProseFlow.collectAsState(initial = false)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = rulesInProse,
+                        onCheckedChange = { on -> scope.launch { settings.setRulesInProse(on) } },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Правила обучения в прозе", style = MaterialTheme.typography.bodyMedium)
+                }
+                HintText("Выключено: правила оформления (списки и т.п.) не применяются к художественному тексту.")
+            }
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(
@@ -663,10 +675,17 @@ private fun LearningSection(
                         Text(sug.note, style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    if (sug.exampleBefore.isNotBlank() && sug.exampleAfter.isNotBlank()) {
+                        Text(
+                            "«${sug.exampleBefore}» → «${sug.exampleAfter}»",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Row {
                         TextButton(onClick = {
                             scope.launch {
-                                if (sug.kind == "rule") rulesStore.add(sug.text)
+                                if (sug.kind == "rule") rulesStore.add(sug.text, sug.exampleBefore, sug.exampleAfter)
                                 else dictionaryStore.add(
                                     sug.from, sug.to,
                                     if (sug.mode == "PROTECT") DictMode.PROTECT else DictMode.HARD,
@@ -694,6 +713,13 @@ private fun LearningSection(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(rule.text, style = MaterialTheme.typography.bodyMedium)
+                        if (rule.exampleBefore.isNotBlank() && rule.exampleAfter.isNotBlank()) {
+                            Text(
+                                "«${rule.exampleBefore}» → «${rule.exampleAfter}»",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                     Switch(
                         checked = rule.enabled,

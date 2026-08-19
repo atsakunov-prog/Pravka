@@ -20,6 +20,10 @@ class RulesStore(private val context: Context) {
         val text: String,
         val enabled: Boolean = true,
         val createdTs: Long = 0L,
+        // A mini before/after from the owner's actual edit: few-shot for the
+        // model, and lets the owner judge what the rule really does.
+        val exampleBefore: String = "",
+        val exampleAfter: String = "",
     )
 
     private val mutex = Mutex()
@@ -45,6 +49,8 @@ class RulesStore(private val context: Context) {
                         text = text,
                         enabled = o.optBoolean("enabled", true),
                         createdTs = o.optLong("created"),
+                        exampleBefore = o.optString("before"),
+                        exampleAfter = o.optString("after"),
                     )
                 )
             }
@@ -61,6 +67,8 @@ class RulesStore(private val context: Context) {
                         put("text", r.text)
                         put("enabled", r.enabled)
                         put("created", r.createdTs)
+                        put("before", r.exampleBefore)
+                        put("after", r.exampleAfter)
                     }
                 )
             }
@@ -72,17 +80,23 @@ class RulesStore(private val context: Context) {
         mutex.withLock { ensureLoaded(); rules.toList() }
     }
 
-    suspend fun add(text: String) = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            ensureLoaded()
-            val t = text.trim()
-            if (t.isNotEmpty() && rules.none { it.text.equals(t, ignoreCase = true) }) {
-                val id = (rules.maxOfOrNull { it.id } ?: 0L) + 1
-                rules.add(Rule(id, t, enabled = true, createdTs = System.currentTimeMillis()))
-                persist()
+    suspend fun add(text: String, exampleBefore: String = "", exampleAfter: String = "") =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                ensureLoaded()
+                val t = text.trim()
+                if (t.isNotEmpty() && rules.none { it.text.equals(t, ignoreCase = true) }) {
+                    val id = (rules.maxOfOrNull { it.id } ?: 0L) + 1
+                    rules.add(
+                        Rule(
+                            id, t, enabled = true, createdTs = System.currentTimeMillis(),
+                            exampleBefore = exampleBefore.take(160), exampleAfter = exampleAfter.take(160),
+                        )
+                    )
+                    persist()
+                }
             }
         }
-    }
 
     suspend fun setEnabled(id: Long, on: Boolean) = withContext(Dispatchers.IO) {
         mutex.withLock {
@@ -111,9 +125,14 @@ class RulesStore(private val context: Context) {
             val sb = StringBuilder("Постоянные правила владельца (соблюдай):\n")
             var used = 0
             for (r in active) {
-                if (used + r.text.length > 1500) break
+                val cost = r.text.length + r.exampleBefore.length + r.exampleAfter.length
+                if (used + cost > 2000) break
                 sb.append("- ").append(r.text).append('\n')
-                used += r.text.length
+                if (r.exampleBefore.isNotBlank() && r.exampleAfter.isNotBlank()) {
+                    sb.append("  Пример: «").append(r.exampleBefore).append("» → «")
+                        .append(r.exampleAfter).append("»\n")
+                }
+                used += cost
             }
             sb.toString().trim()
         }

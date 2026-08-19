@@ -47,6 +47,7 @@ class PravkaApp : Application() {
 
     val rulesStore by lazy { ru.zf.pravka.data.RulesStore(this) }
     val learnStore by lazy { ru.zf.pravka.data.LearnStore(this) }
+    val editWatch by lazy { ru.zf.pravka.data.EditWatchStore(this) }
     val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient, rulesStore) }
     val dictMiner by lazy { DictMiner(settings, httpClient) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }

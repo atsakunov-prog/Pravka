@@ -126,6 +126,18 @@ class PravkaAccessibilityService : AccessibilityService() {
                 val source = event.source ?: return
                 if (source.isEditable) {
                     cachedFocus = WeakReference(source)
+                    // Learning auto-capture: the owner may be hand-editing a
+                    // text we just delivered. Throttled: at most one field read
+                    // per second, and only within the watch window of a take.
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastWatchProbeAt > 1000 && now - lastDeliveryAt < ru.zf.pravka.data.EditWatchStore.WATCH_WINDOW_MS) {
+                        lastWatchProbeAt = now
+                        val pkg = runCatching { source.packageName?.toString() }.getOrNull()
+                        val current = runCatching { source.effectiveText() }.getOrDefault("")
+                        if (!pkg.isNullOrBlank() && current.isNotBlank()) {
+                            scope.launch { app.editWatch.onFieldText(pkg, current, ::wordOverlap) }
+                        }
+                    }
                 }
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
@@ -329,6 +341,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         return sb.toString().trim()
     }
 
+    // Edit-watch throttling: probing the field on every keystroke would be
+    // wasteful, and irrelevant once no delivery is recent.
+    @Volatile private var lastWatchProbeAt = 0L
+    @Volatile private var lastDeliveryAt = 0L
+
     // The gray "отмена" bubble beside the ticker: throw the take away.
     @Volatile private var discardTake = false
 
@@ -528,7 +545,10 @@ class PravkaAccessibilityService : AccessibilityService() {
             val convoCtx = convoContextFor(pkg)
             convoRemember(pkg, text)
             if (convoCtx.isNotBlank()) app.eventLog.add("convo context: ${convoCtx.length} ch")
-            runProofread(ProofreadMode.CLEAN, pinnedNode = node, conversationContext = convoCtx)
+            runProofread(
+                ProofreadMode.CLEAN, pinnedNode = node,
+                conversationContext = convoCtx, watchDictated = text,
+            )
         }
     }
 
@@ -618,6 +638,92 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // ---- Learning: the owner hand-edited our output; extract what to keep ----
 
+    // Lazy daily batch: when ripe hand-edits accumulated and the last batch
+    // was long ago, one Opus call digests them all into pending suggestions.
+    private var learnBatchRunning = false
+
+    private fun maybeRunLearnBatch() {
+        if (learnBatchRunning) return
+        scope.launch {
+            val internal = getSharedPreferences("pravka_internal", MODE_PRIVATE)
+            val last = internal.getLong("last_learn_batch", 0L)
+            if (System.currentTimeMillis() - last < 12L * 3600 * 1000) return@launch
+            val ripe = app.editWatch.ripe(quietMs = 10L * 60 * 1000)
+            if (ripe.isEmpty()) return@launch
+            learnBatchRunning = true
+            val cases = ripe.take(5).map { Triple(it.dictated, it.cleaned, it.lastSeen) }
+            app.eventLog.add("learn batch: ${cases.size} edits")
+            val result = app.claudeProvider.learnBatch(cases)
+            learnBatchRunning = false
+            result.onSuccess { proposals ->
+                internal.edit().putLong("last_learn_batch", System.currentTimeMillis()).apply()
+                app.editWatch.remove(ripe.take(5).map { it.id })
+                val added = queueProposals(proposals)
+                app.eventLog.add("learn batch: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
+                if (added > 0) showLearnNotification(added)
+            }.onFailure { e ->
+                app.eventLog.add("learn batch failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Dedups against the dictionary/rules and stores the rest as pending. */
+    private suspend fun queueProposals(proposals: ru.zf.pravka.provider.ClaudeProvider.LearnProposals): Int {
+        val known = app.dictionaryStore.all().map { it.from.lowercase() }.toHashSet()
+        val fresh = mutableListOf<ru.zf.pravka.data.LearnStore.Suggestion>()
+        proposals.dict
+            .filter { it.from.lowercase() !in known }
+            .forEach { d ->
+                fresh.add(
+                    ru.zf.pravka.data.LearnStore.Suggestion(
+                        id = 0, kind = "dict", mode = d.mode,
+                        from = d.from, to = d.to, note = d.note,
+                    )
+                )
+            }
+        val knownRules = app.rulesStore.all().map { it.text.lowercase() }.toHashSet()
+        proposals.rules
+            .filter { it.text.lowercase() !in knownRules }
+            .forEach {
+                fresh.add(
+                    ru.zf.pravka.data.LearnStore.Suggestion(
+                        id = 0, kind = "rule", text = it.text,
+                        exampleBefore = it.before, exampleAfter = it.after,
+                    )
+                )
+            }
+        return app.learnStore.add(fresh)
+    }
+
+    private fun showLearnNotification(count: Int) {
+        runCatching {
+            val nm = getSystemService(android.app.NotificationManager::class.java)
+            val channelId = "pravka-learning"
+            if (nm.getNotificationChannel(channelId) == null) {
+                nm.createNotificationChannel(
+                    android.app.NotificationChannel(
+                        channelId, "Обучение Правки",
+                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                    )
+                )
+            }
+            val open = android.app.PendingIntent.getActivity(
+                this, 3,
+                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                android.app.PendingIntent.FLAG_IMMUTABLE,
+            )
+            val notif = android.app.Notification.Builder(this, channelId)
+                .setContentTitle("Правка научилась новому")
+                .setContentText("Предложений из твоих правок: $count — открой раздел «Обучение».")
+                .setSmallIcon(android.R.drawable.ic_menu_edit)
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(3, notif)
+        }
+    }
+
     private fun learnFromField() {
         if (busy) return
         scope.launch {
@@ -652,23 +758,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             busy = false
             floatingButton?.setBusy(false)
             result.onSuccess { proposals ->
-                val known = app.dictionaryStore.all().map { it.from.lowercase() }.toHashSet()
-                val fresh = mutableListOf<ru.zf.pravka.data.LearnStore.Suggestion>()
-                proposals.dict
-                    .filter { it.from.lowercase() !in known }
-                    .forEach { d ->
-                        fresh.add(
-                            ru.zf.pravka.data.LearnStore.Suggestion(
-                                id = 0, kind = "dict", mode = d.mode,
-                                from = d.from, to = d.to, note = d.note,
-                            )
-                        )
-                    }
-                val knownRules = app.rulesStore.all().map { it.text.lowercase() }.toHashSet()
-                proposals.rules
-                    .filter { it.lowercase() !in knownRules }
-                    .forEach { fresh.add(ru.zf.pravka.data.LearnStore.Suggestion(id = 0, kind = "rule", text = it)) }
-                val added = app.learnStore.add(fresh)
+                val added = queueProposals(proposals)
                 app.eventLog.add("learn: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
                 if (added == 0) {
                     Feedback.toast(this@PravkaAccessibilityService, "Ничего системного в правках не нашлось.")
@@ -766,6 +856,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         directive: String = "",
         strongModel: Boolean = false,
         conversationContext: String = "",
+        // Dictated raw text: when set and the CLEAN succeeds, the delivered
+        // field goes under edit-watch so hand-edits feed the learning loop.
+        watchDictated: String? = null,
     ) {
         if (busy) return
         scope.launch {
@@ -806,6 +899,16 @@ class PravkaAccessibilityService : AccessibilityService() {
                     "${if (strongModel) "(opus)" else ""}: ${outcome.javaClass.simpleName}"
             )
             Feedback.report(this@PravkaAccessibilityService, outcome)
+            // Auto-capture for learning: remember what we delivered; if the
+            // owner hand-edits it, the edit ripens into a learning suggestion.
+            if (watchDictated != null && outcome is ProofreadEngine.Outcome.Applied) {
+                val pkg = runCatching { pinnedNode?.packageName?.toString() }.getOrNull()
+                if (!pkg.isNullOrBlank()) {
+                    app.editWatch.watch(pkg, watchDictated, outcome.result.text)
+                    lastDeliveryAt = SystemClock.elapsedRealtime()
+                }
+            }
+            maybeRunLearnBatch()
             // The post-fix result bar is gone (owner: it covered the keyboard).
             // Undo lives in the long-press FAB menu; the word diff and quick
             // add-to-dictionary went with the bar.

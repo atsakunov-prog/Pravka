@@ -31,6 +31,7 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_FORMATTING = booleanPreferencesKey("speech_formatting")
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
+        private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -67,6 +68,13 @@ class Settings(private val context: Context) {
     val proseModeFlow = context.dataStore.data.map { it[KEY_PROSE_MODE] ?: false }
     suspend fun setProseMode(value: Boolean) {
         context.dataStore.edit { it[KEY_PROSE_MODE] = value }
+    }
+
+    // Formatting rules are usually message-oriented and would fight the prose
+    // directive - off in prose mode unless the owner flips this.
+    val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }
+    suspend fun setRulesInProse(value: Boolean) {
+        context.dataStore.edit { it[KEY_RULES_IN_PROSE] = value }
     }
 
     // Conversation context: recent takes in the same app ride along with the

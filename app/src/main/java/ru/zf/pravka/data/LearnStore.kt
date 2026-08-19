@@ -22,8 +22,10 @@ class LearnStore(private val context: Context) {
         val from: String = "",
         val to: String = "",
         val note: String = "",
-        // rule field
+        // rule fields
         val text: String = "",
+        val exampleBefore: String = "",
+        val exampleAfter: String = "",
     )
 
     private val mutex = Mutex()
@@ -37,7 +39,20 @@ class LearnStore(private val context: Context) {
         loaded = true
         runCatching {
             val f = file()
-            if (!f.exists()) return
+            if (!f.exists()) {
+                // First run: pre-seed the owner's known preference so it is one
+                // tap away instead of waiting for the learning loop to find it.
+                items.add(
+                    Suggestion(
+                        id = 1, kind = "rule",
+                        text = "Устные перечисления («во-первых, во-вторых…») в сообщениях-перечнях оформляй нумерованным списком: каждый пункт с новой строки — «1.», «2.».",
+                        exampleBefore = "во-первых надо подписать договор во-вторых согласовать сроки",
+                        exampleAfter = "1. Надо подписать договор.\n2. Согласовать сроки.",
+                    )
+                )
+                persist()
+                return
+            }
             val array = JSONArray(f.readText())
             for (i in 0 until array.length()) {
                 val o = array.optJSONObject(i) ?: continue
@@ -50,6 +65,8 @@ class LearnStore(private val context: Context) {
                         to = o.optString("to"),
                         note = o.optString("note"),
                         text = o.optString("text"),
+                        exampleBefore = o.optString("before"),
+                        exampleAfter = o.optString("after"),
                     )
                 )
             }
@@ -69,6 +86,8 @@ class LearnStore(private val context: Context) {
                         put("to", s.to)
                         put("note", s.note)
                         put("text", s.text)
+                        put("before", s.exampleBefore)
+                        put("after", s.exampleAfter)
                     }
                 )
             }

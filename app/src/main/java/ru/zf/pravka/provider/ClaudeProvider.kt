@@ -63,16 +63,19 @@ class ClaudeProvider(
                 val styleDirective = if (mode == ProofreadMode.CLEAN) "" else promptStore.effective(mode)
                 // Fiction mode (settings toggle): the PROSE directive rides on
                 // top of the plain CLEAN pass; explicit style modes win over it.
+                val proseOn = mode == ProofreadMode.CLEAN && settings.proseModeFlow.first()
                 val proseDirective =
-                    if (mode == ProofreadMode.CLEAN && settings.proseModeFlow.first())
-                        promptStore.effective(PromptStore.PromptId.PROSE)
-                    else ""
+                    if (proseOn) promptStore.effective(PromptStore.PromptId.PROSE) else ""
                 val fullDirective = listOf(styleDirective, proseDirective, directive)
                     .filter { it.isNotBlank() }
                     .joinToString("\n\n")
                 // Approved learned rules ride in the same uncached slot as the
                 // dictionary block, so the cached CLEAN prefix stays byte-stable.
-                val rulesBlock = rulesStore.enabledBlock()
+                // In prose mode they are message-formatting advice fighting the
+                // prose directive - skipped unless the owner enabled them there.
+                val rulesBlock =
+                    if (proseOn && !settings.rulesInProseFlow.first()) ""
+                    else rulesStore.enabledBlock()
                 val dictAndRules = listOf(dictBlock, rulesBlock)
                     .filter { it.isNotBlank() }
                     .joinToString("\n\n")
@@ -137,10 +140,12 @@ class ClaudeProvider(
 
     data class LearnProposals(
         val dict: List<DictProposal>,
-        val rules: List<String>,
+        val rules: List<RuleProposal>,
     )
 
     data class DictProposal(val mode: String, val from: String, val to: String, val note: String)
+
+    data class RuleProposal(val text: String, val before: String, val after: String)
 
     /**
      * Compares the recognizer's raw text, our cleaned output and the owner's
@@ -152,17 +157,32 @@ class ClaudeProvider(
         dictated: String,
         cleaned: String,
         final: String,
+    ): Result<LearnProposals> = learnBatch(listOf(Triple(dictated, cleaned, final)))
+
+    /** Batch flavor: the daily auto-capture analysis sends several edits at once. */
+    suspend fun learnBatch(
+        cases: List<Triple<String, String, String>>,
     ): Result<LearnProposals> = withContext(Dispatchers.IO) {
         runCatching {
             val apiKey = settings.apiKey()
             if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+            require(cases.isNotEmpty()) { "Нет правок для анализа." }
+            val casesBlock = buildString {
+                cases.forEachIndexed { i, (dictated, cleaned, final) ->
+                    append("СЛУЧАЙ ").append(i + 1).append(":\n")
+                    append("<dictated>\n").append(dictated).append("\n</dictated>\n")
+                    append("<cleaned>\n").append(cleaned).append("\n</cleaned>\n")
+                    append("<final>\n").append(final).append("\n</final>\n\n")
+                }
+            }.trim()
             val prompt = """
-Три версии одного текста из системы диктовки:
+Ниже случаи из системы диктовки. В каждом три версии одного текста:
 - dictated: что выдало распознавание речи;
 - cleaned: что сделала автоматическая чистка (модель);
 - final: как в итоге поправил текст сам владелец. Это эталон.
 
-Сравни cleaned и final и извлеки, чему стоит научиться НАСОВСЕМ:
+Сравни cleaned и final в каждом случае и извлеки, чему стоит
+научиться НАСОВСЕМ:
 
 1. "dict" — словарные записи для ПОВТОРЯЕМЫХ ошибок распознавания
    (имена, термины, которые распознаватель пишет неверно):
@@ -170,24 +190,20 @@ class ClaudeProvider(
    HARD: from — неверная форма, to — верная. PROTECT: from — редкое
    правильное слово, to — пустая строка.
 
-2. "rules" — короткие правила для промпта чистки (каждое — императив
-   не длиннее 120 символов, по-русски), отражающие СИСТЕМНЫЕ
-   предпочтения владельца, видимые из его правок: оформление, стиль,
-   что не трогать. Разовые правки по смыслу правилом НЕ являются.
+2. "rules" — правила для промпта чистки. Каждое правило:
+   {"rule": "...", "before": "...", "after": "..."}
+   - "rule": императив не длиннее 140 символов, по-русски. Обобщай
+     НАМЕРЕНИЕ владельца и указывай УСЛОВИЕ применимости («в
+     сообщениях-перечнях…», «в деловой переписке…»), а не буквальную
+     подстановку слов. Разовая правка по смыслу правилом НЕ является.
+   - "before"/"after": короткий фрагмент (до 120 символов) из правок
+     владельца, показывающий правило в действии.
 
 Ответ — СТРОГО JSON без пояснений:
-{"dict": [...], "rules": ["..."]}
+{"dict": [...], "rules": [...]}
 Если учиться нечему — пустые массивы.
 
-<dictated>
-$dictated
-</dictated>
-<cleaned>
-$cleaned
-</cleaned>
-<final>
-$final
-</final>
+$casesBlock
 """.trimIndent()
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
             val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
@@ -214,11 +230,18 @@ $final
                 dict.add(DictProposal(mode, from, d.optString("to").trim(), d.optString("note").trim()))
             }
         }
-        val rules = mutableListOf<String>()
+        val rules = mutableListOf<RuleProposal>()
         o.optJSONArray("rules")?.let { array ->
             for (i in 0 until array.length()) {
-                val r = array.optString(i).trim()
-                if (r.isNotEmpty() && r.length <= 200) rules.add(r)
+                // Accept both the object form and a bare string.
+                array.optJSONObject(i)?.let { r ->
+                    val text = r.optString("rule").trim()
+                    if (text.isNotEmpty() && text.length <= 240) {
+                        rules.add(RuleProposal(text, r.optString("before").trim(), r.optString("after").trim()))
+                    }
+                } ?: array.optString(i).trim().takeIf { it.isNotEmpty() && it.length <= 240 }?.let {
+                    rules.add(RuleProposal(it, "", ""))
+                }
             }
         }
         return LearnProposals(dict, rules)
