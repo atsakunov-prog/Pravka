@@ -693,10 +693,15 @@ private fun LearningSection(
                                 )
                                 learnStore.remove(sug.id)
                                 loadTick++
+                                ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.refreshLearnBadge()
                             }
                         }) { Text("Принять") }
                         TextButton(onClick = {
-                            scope.launch { learnStore.remove(sug.id); loadTick++ }
+                            scope.launch {
+                                learnStore.remove(sug.id)
+                                loadTick++
+                                ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.refreshLearnBadge()
+                            }
                         }) { Text("Отклонить", color = MaterialTheme.colorScheme.error) }
                     }
                 }

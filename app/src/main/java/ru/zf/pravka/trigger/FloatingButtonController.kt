@@ -100,6 +100,10 @@ class FloatingButtonController(
             button?.visibility = View.VISIBLE
             visible = true
         }
+        if (badgeWanted) {
+            repositionLearnBadge()
+            learnBadge?.visibility = View.VISIBLE
+        }
     }
 
     fun hide() {
@@ -108,6 +112,7 @@ class FloatingButtonController(
         if (visible && !busy) {
             button?.visibility = View.GONE
             visible = false
+            learnBadge?.visibility = View.GONE
         }
     }
 
@@ -136,6 +141,7 @@ class FloatingButtonController(
             applyPosition(p, xFraction, yFraction)
             button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
             repositionTickerIfVisible()
+            repositionLearnBadge()
         }
     }
 
@@ -358,6 +364,53 @@ class FloatingButtonController(
         tp.x = tp.x.coerceIn(0, (w - tickerW).coerceAtLeast(0))
     }
 
+    // ---- Learn badge: 💡 (есть предложения) / ⭐ (новое правило) above the
+    // button - "у неё идея возникла". Tap opens the learning section. ----
+
+    private var learnBadge: android.widget.TextView? = null
+    private var learnBadgeParams: WindowManager.LayoutParams? = null
+    private var badgeWanted = false
+
+    fun showLearnBadge(emoji: String, onTap: () -> Unit) {
+        badgeWanted = true
+        if (learnBadge == null) {
+            val pill = android.widget.TextView(service).apply {
+                textSize = 16f
+                gravity = Gravity.CENTER
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+            }
+            val p = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT,
+            ).apply { gravity = Gravity.TOP or Gravity.START }
+            learnBadgeParams = p
+            learnBadge = pill
+            runCatching { windowManager.addView(pill, p) }
+        }
+        learnBadge?.text = emoji
+        learnBadge?.setOnClickListener { onTap() }
+        repositionLearnBadge()
+        learnBadge?.visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
+    fun hideLearnBadge() {
+        badgeWanted = false
+        learnBadge?.visibility = View.GONE
+    }
+
+    /** Perches on the button's top-right corner, clamped on screen. */
+    private fun repositionLearnBadge() {
+        val bp = params ?: return
+        val p = learnBadgeParams ?: return
+        val (w, _) = screenSize()
+        p.x = (bp.x + buttonSize - dp(14)).coerceIn(0, (w - dp(30)).coerceAtLeast(0))
+        p.y = (bp.y - dp(26)).coerceAtLeast(0)
+        learnBadge?.let { runCatching { windowManager.updateViewLayout(it, p) } }
+    }
+
     // ---- The gray "отмена" bubble, shown only while recording ----
 
     private var cancelBubble: android.widget.TextView? = null
@@ -400,6 +453,8 @@ class FloatingButtonController(
     }
 
     fun destroy() {
+        learnBadge?.let { runCatching { windowManager.removeView(it) } }
+        learnBadge = null
         hideCancelBubble()
         hideMenu()
         button?.let { runCatching { windowManager.removeView(it) } }
@@ -535,6 +590,7 @@ class FloatingButtonController(
                         p.y = startY + dy.toInt()
                         runCatching { windowManager.updateViewLayout(view, p) }
                         repositionTickerIfVisible()  // the pill rides along
+                        repositionLearnBadge()
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {

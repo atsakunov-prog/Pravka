@@ -109,6 +109,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch {
             app.settings.convoContextFlow.collect { cachedConvoContext = it }
         }
+        refreshLearnBadge()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -660,9 +661,30 @@ class PravkaAccessibilityService : AccessibilityService() {
                 app.editWatch.remove(ripe.take(5).map { it.id })
                 val added = queueProposals(proposals)
                 app.eventLog.add("learn batch: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
-                if (added > 0) showLearnNotification(added)
+                if (added > 0) {
+                    showLearnNotification(added)
+                    refreshLearnBadge()
+                }
             }.onFailure { e ->
                 app.eventLog.add("learn batch failed: ${e.message}")
+            }
+        }
+    }
+
+    /** 💡/⭐ over the button while suggestions await review; gone when done. */
+    fun refreshLearnBadge() {
+        scope.launch {
+            val pending = app.learnStore.all()
+            if (pending.isEmpty()) {
+                floatingButton?.hideLearnBadge()
+            } else {
+                val emoji = if (pending.any { it.kind == "rule" }) "⭐" else "💡"
+                floatingButton?.showLearnBadge(emoji) {
+                    startActivity(
+                        android.content.Intent(this@PravkaAccessibilityService, ru.zf.pravka.MainActivity::class.java)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
             }
         }
     }
@@ -760,6 +782,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             result.onSuccess { proposals ->
                 val added = queueProposals(proposals)
                 app.eventLog.add("learn: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
+                if (added > 0) refreshLearnBadge()
                 if (added == 0) {
                     Feedback.toast(this@PravkaAccessibilityService, "Ничего системного в правках не нашлось.")
                 } else {
