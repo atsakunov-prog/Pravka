@@ -136,7 +136,13 @@ class PravkaAccessibilityService : AccessibilityService() {
                         val pkg = runCatching { source.packageName?.toString() }.getOrNull()
                         val current = runCatching { source.effectiveText() }.getOrDefault("")
                         if (!pkg.isNullOrBlank() && current.isNotBlank()) {
-                            scope.launch { app.editWatch.onFieldText(pkg, current, ::wordOverlap) }
+                            scope.launch {
+                                val firstEdit = app.editWatch.onFieldText(pkg, current, ::wordOverlap)
+                                if (firstEdit) {
+                                    app.learnLog.add("правка замечена: поле в $pkg, ${current.length} зн. — созреет через 10 мин")
+                                    scheduleRipenessCheck()
+                                }
+                            }
                         }
                     }
                 }
@@ -641,16 +647,38 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // Lazy daily batch: when ripe hand-edits accumulated and the last batch
     // was long ago, one Opus call digests them all into pending suggestions.
+    // A detected edit also schedules a check for right after it ripens, so
+    // the batch does not have to wait for the next dictation.
     private var learnBatchRunning = false
+    private val ripenessCheck = Runnable { maybeRunLearnBatch() }
 
-    private fun maybeRunLearnBatch() {
+    private fun scheduleRipenessCheck() {
+        val h = android.os.Handler(android.os.Looper.getMainLooper())
+        h.removeCallbacks(ripenessCheck)
+        h.postDelayed(ripenessCheck, 11L * 60 * 1000)
+    }
+
+    /** The learning tab's "Разобрать сейчас": no 12h gate, no quiet wait. */
+    fun runLearnBatchNow() = maybeRunLearnBatch(force = true)
+
+    private fun maybeRunLearnBatch(force: Boolean = false) {
         if (learnBatchRunning) return
         scope.launch {
             val internal = getSharedPreferences("pravka_internal", MODE_PRIVATE)
             val last = internal.getLong("last_learn_batch", 0L)
-            if (System.currentTimeMillis() - last < 12L * 3600 * 1000) return@launch
-            val ripe = app.editWatch.ripe(quietMs = 10L * 60 * 1000)
-            if (ripe.isEmpty()) return@launch
+            if (!force && System.currentTimeMillis() - last < 12L * 3600 * 1000) return@launch
+            val ripe = app.editWatch.ripe(quietMs = if (force) 0L else 10L * 60 * 1000)
+            if (ripe.isEmpty()) {
+                if (force) {
+                    val watched = app.editWatch.all()
+                    app.learnLog.add(
+                        "разбор вручную: зрелых правок нет (в наблюдении ${watched.size}, " +
+                            "изменённых ${watched.count { it.editedTs > 0 }})"
+                    )
+                    Feedback.toast(this@PravkaAccessibilityService, "Разбирать нечего: изменённых текстов нет.")
+                }
+                return@launch
+            }
             learnBatchRunning = true
             val cases = ripe.take(5).map { Triple(it.dictated, it.cleaned, it.lastSeen) }
             app.eventLog.add("learn batch: ${cases.size} edits")

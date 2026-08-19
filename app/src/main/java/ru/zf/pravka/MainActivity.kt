@@ -661,6 +661,7 @@ private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceE
 // run on the APP scope - they must survive tab switches and screen closes.
 @Composable
 private fun LearningTab(app: PravkaApp) {
+    val ctx = LocalContext.current
     var pending by remember { mutableStateOf<List<ru.zf.pravka.data.LearnStore.Suggestion>>(emptyList()) }
     var rules by remember { mutableStateOf<List<ru.zf.pravka.data.RulesStore.Rule>>(emptyList()) }
     var loadTick by remember { mutableStateOf(0) }
@@ -699,6 +700,43 @@ private fun LearningTab(app: PravkaApp) {
                 "раз в ~12 часов, «Обучить» в меню кнопки — сразу. Ничего не " +
                 "применяется без твоего одобрения."
         )
+
+        SectionCard(label = "Автообучение — что происходит сейчас") {
+            var watch by remember { mutableStateOf<List<ru.zf.pravka.data.EditWatchStore.Entry>>(emptyList()) }
+            var watchTick by remember { mutableStateOf(0) }
+            LaunchedEffect(watchTick, loadTick) { watch = app.editWatch.all() }
+            val internal = ctx.getSharedPreferences("pravka_internal", android.content.Context.MODE_PRIVATE)
+            val lastBatch = internal.getLong("last_learn_batch", 0L)
+            val fmt = remember { java.text.SimpleDateFormat("dd.MM HH:mm", Locale.forLanguageTag("ru")) }
+            val edited = watch.count { it.editedTs > 0 }
+            Text(
+                "Наблюдается текстов: ${watch.size}, из них ты правил: $edited." +
+                    (watch.filter { it.editedTs > 0 }.minOfOrNull { it.editedTs }
+                        ?.let { "\nБлижайшая правка созреет: " + fmt.format(java.util.Date(it + 10 * 60 * 1000)) + "." } ?: "") +
+                    (if (lastBatch > 0) "\nПоследний авторазбор: " + fmt.format(java.util.Date(lastBatch)) +
+                        ", следующий не раньше " + fmt.format(java.util.Date(lastBatch + 12L * 3600 * 1000)) + "."
+                    else "\nАвторазбор ещё не запускался."),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    val svc = PravkaAccessibilityService.instance
+                    if (svc == null) {
+                        Feedback.toast(ctx, "Служба доступности выключена.")
+                    } else {
+                        svc.runLearnBatchNow()
+                    }
+                    watchTick++
+                }) { Text("Разобрать сейчас") }
+                OutlinedButton(onClick = { watchTick++; loadTick++ }) { Text("Обновить") }
+            }
+            HintText(
+                "Авторазбор идёт Опусом: сам — не чаще раза в 12 часов и через " +
+                    "10 минут после правки; «Разобрать сейчас» — без ожиданий. " +
+                    "Каждый шаг виден в Логи → Обучение."
+            )
+        }
 
         SectionCard(label = "Предложения (${pending.size})") {
             if (pending.isEmpty()) {
@@ -856,6 +894,84 @@ private fun LogsTab(app: PravkaApp) {
             ScreenTitle(stringResource(R.string.tab_logs))
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = { loadTick++ }) { Text("Обновить") }
+        }
+
+        SectionCard(label = "Эвал промпта") {
+            var items by remember { mutableStateOf<List<ru.zf.pravka.data.EvalStore.Item>>(emptyList()) }
+            var evalTick by remember { mutableStateOf(0) }
+            var showSet by remember { mutableStateOf(false) }
+            var running by remember { mutableStateOf(ru.zf.pravka.core.EvalRunner.running) }
+            var progress by remember { mutableStateOf(0 to 0) }
+            LaunchedEffect(evalTick) { items = app.evalStore.all() }
+            LaunchedEffect(running) {
+                while (ru.zf.pravka.core.EvalRunner.running) {
+                    progress = ru.zf.pravka.core.EvalRunner.done to ru.zf.pravka.core.EvalRunner.total
+                    kotlinx.coroutines.delay(1500)
+                }
+                running = false
+                evalTick++
+            }
+            HintText(
+                "Золотой набор: вход диктовки и эталонный результат. Каждое " +
+                    "изменение промпта прогоняется по набору и меряется цифрой."
+            )
+            Spacer(Modifier.height(6.dp))
+            Text("Эталонов: ${items.size}", style = MaterialTheme.typography.bodyMedium)
+            val last = remember(evalTick) { app.evalStore.lastRun() }
+            if (last != null) {
+                Text(
+                    "Последний прогон: средний ${"%.1f".format(last.optDouble("avg") * 100)}%, " +
+                        "точных ${last.optInt("exact")} из ${last.optInt("total")}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (running) {
+                Text("Идёт прогон: ${progress.first}/${progress.second}…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    enabled = !running && items.isNotEmpty(),
+                    onClick = {
+                        ru.zf.pravka.core.EvalRunner.start(app)
+                        running = true
+                    },
+                ) { Text(if (running) "Идёт…" else "Прогнать") }
+                OutlinedButton(onClick = {
+                    app.appScope.launch {
+                        val added = app.evalStore.addAll(
+                            withContext(Dispatchers.IO) { app.historyLog.readPairs(40) }
+                        )
+                        Feedback.toast(context, "Добавлено эталонов: $added")
+                        evalTick++
+                    }
+                }) { Text("Набрать из истории") }
+            }
+            Row {
+                TextButton(onClick = { showSet = !showSet }) {
+                    Text(if (showSet) "Скрыть набор" else "Показать набор")
+                }
+            }
+            if (showSet) {
+                for (item in items) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    ) {
+                        Text(
+                            item.input.take(80),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = {
+                            app.appScope.launch { app.evalStore.remove(item.id); evalTick++ }
+                        }) { Text("×", color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+            }
         }
 
         SectionCard(label = "Распознавание и вставка") {

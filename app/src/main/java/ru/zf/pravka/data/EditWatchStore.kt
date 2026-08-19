@@ -100,22 +100,40 @@ class EditWatchStore(private val context: Context) {
      * newest watch entry this text is recognizably an edit of.
      * [overlap] scores similarity in [0..1].
      */
+    /** Returns true when this call detected the FIRST real edit of an entry. */
     suspend fun onFieldText(
         pkg: String,
         current: String,
         overlap: (String, String) -> Double,
-    ) = withContext(Dispatchers.IO) {
+    ): Boolean = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureLoaded()
             val now = System.currentTimeMillis()
             val candidate = entries.lastOrNull {
                 it.pkg == pkg && now - it.createdTs < WATCH_WINDOW_MS && overlap(it.cleaned, current) > 0.4
-            } ?: return@withLock
-            if (candidate.lastSeen == current) return@withLock
+            } ?: return@withLock false
+            if (candidate.lastSeen == current) return@withLock false
             val i = entries.indexOf(candidate)
+            // Our own delivery echoes back as a TEXT_CHANGED with the cleaned
+            // fragment embedded in the field's other text - that is a baseline,
+            // not an owner's edit. Absorb it without arming the entry.
+            if (candidate.editedTs == 0L && current.contains(candidate.cleaned.trim())) {
+                // Re-baseline BOTH sides: the later Opus comparison must see
+                // like-for-like (field-with-our-fragment vs field-after-edits).
+                entries[i] = candidate.copy(cleaned = current.take(2000), lastSeen = current.take(2000))
+                persist()
+                return@withLock false
+            }
+            val firstEdit = candidate.editedTs == 0L
             entries[i] = candidate.copy(lastSeen = current.take(2000), editedTs = now)
             persist()
+            firstEdit
         }
+    }
+
+    /** Live snapshot for the learning status card. */
+    suspend fun all(): List<Entry> = withContext(Dispatchers.IO) {
+        mutex.withLock { ensureLoaded(); entries.toList() }
     }
 
     /**
