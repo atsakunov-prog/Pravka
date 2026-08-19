@@ -654,6 +654,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             learnBatchRunning = true
             val cases = ripe.take(5).map { Triple(it.dictated, it.cleaned, it.lastSeen) }
             app.eventLog.add("learn batch: ${cases.size} edits")
+            app.learnLog.add("батч-анализ: правок к разбору — ${cases.size}")
             val result = app.claudeProvider.learnBatch(cases)
             learnBatchRunning = false
             result.onSuccess { proposals ->
@@ -667,6 +668,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
             }.onFailure { e ->
                 app.eventLog.add("learn batch failed: ${e.message}")
+                app.learnLog.add("батч-анализ НЕ УДАЛСЯ: ${e.message} (правки не потеряны)")
             }
         }
     }
@@ -689,7 +691,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Dedups against the dictionary/rules and stores the rest as pending. */
+    /**
+     * Dedups against the dictionary and rules, stores the rest as pending.
+     * A rule proposal matching an EXISTING rule counts as a confirmation
+     * (its ×N grows) instead of being silently dropped.
+     */
     private suspend fun queueProposals(proposals: ru.zf.pravka.provider.ClaudeProvider.LearnProposals): Int {
         val known = app.dictionaryStore.all().map { it.from.lowercase() }.toHashSet()
         val fresh = mutableListOf<ru.zf.pravka.data.LearnStore.Suggestion>()
@@ -702,18 +708,21 @@ class PravkaAccessibilityService : AccessibilityService() {
                         from = d.from, to = d.to, note = d.note,
                     )
                 )
+                app.learnLog.add("предложение (словарь): ${d.from} → ${d.to} [${d.mode}]")
             }
-        val knownRules = app.rulesStore.all().map { it.text.lowercase() }.toHashSet()
-        proposals.rules
-            .filter { it.text.lowercase() !in knownRules }
-            .forEach {
-                fresh.add(
-                    ru.zf.pravka.data.LearnStore.Suggestion(
-                        id = 0, kind = "rule", text = it.text,
-                        exampleBefore = it.before, exampleAfter = it.after,
-                    )
+        for (r in proposals.rules) {
+            if (app.rulesStore.confirm(r.text)) {
+                app.learnLog.add("правило ПОДТВЕРДИЛОСЬ: ${r.text}")
+                continue
+            }
+            fresh.add(
+                ru.zf.pravka.data.LearnStore.Suggestion(
+                    id = 0, kind = "rule", text = r.text,
+                    exampleBefore = r.before, exampleAfter = r.after,
                 )
-            }
+            )
+            app.learnLog.add("предложение (правило): ${r.text}")
+        }
         return app.learnStore.add(fresh)
     }
 
@@ -772,6 +781,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             floatingButton?.setBusy(true)
             Haptics.start(this@PravkaAccessibilityService)
             Feedback.toast(this@PravkaAccessibilityService, "Учусь на твоих правках (Опус)…")
+            app.learnLog.add("ручной разбор («Обучить»): текст ${current.length} зн., совпадение с журналом ${"%.2f".format(overlap)}")
             val result = app.claudeProvider.learn(
                 dictated = match.first,
                 cleaned = match.second,

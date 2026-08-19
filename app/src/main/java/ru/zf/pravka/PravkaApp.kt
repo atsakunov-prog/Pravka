@@ -45,6 +45,13 @@ class PravkaApp : Application() {
             .build()
     }
 
+    // UI-independent scope: learning accept/reject must survive tab switches
+    // and the settings screen closing (rememberCoroutineScope dies with them -
+    // that was the "принял четыре правила, записалось одно" bug).
+    val appScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main
+    )
+    val learnLog by lazy { ru.zf.pravka.data.EventLog(this, "learning.log") }
     val rulesStore by lazy { ru.zf.pravka.data.RulesStore(this) }
     val learnStore by lazy { ru.zf.pravka.data.LearnStore(this) }
     val editWatch by lazy { ru.zf.pravka.data.EditWatchStore(this) }

@@ -27,10 +27,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -82,6 +84,7 @@ import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
+import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PravkaTheme
@@ -98,6 +101,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             PravkaTheme {
                 MainScreen(
+                    app = app,
                     settings = app.settings,
                     promptStore = app.promptStore,
                     stats = app.stats,
@@ -134,11 +138,14 @@ private enum class Tab(val titleRes: Int) {
     DICTIONARY(R.string.tab_dictionary),
     PROMPTS(R.string.tab_prompts),
     TRANSCRIPTS(R.string.tab_transcripts),
+    LEARNING(R.string.tab_learning),
+    LOGS(R.string.tab_logs),
     STATS(R.string.tab_stats),
 }
 
 @Composable
 private fun MainScreen(
+    app: PravkaApp,
     settings: Settings,
     promptStore: PromptStore,
     stats: Stats,
@@ -186,6 +193,18 @@ private fun MainScreen(
                     label = { Text(stringResource(Tab.TRANSCRIPTS.titleRes)) },
                 )
                 NavigationBarItem(
+                    selected = tab == Tab.LEARNING,
+                    onClick = { tab = Tab.LEARNING },
+                    icon = { Icon(Icons.Filled.Star, contentDescription = null) },
+                    label = { Text(stringResource(Tab.LEARNING.titleRes)) },
+                )
+                NavigationBarItem(
+                    selected = tab == Tab.LOGS,
+                    onClick = { tab = Tab.LOGS },
+                    icon = { Icon(Icons.Filled.Build, contentDescription = null) },
+                    label = { Text(stringResource(Tab.LOGS.titleRes)) },
+                )
+                NavigationBarItem(
                     selected = tab == Tab.STATS,
                     onClick = { tab = Tab.STATS },
                     icon = { Icon(Icons.Filled.Info, contentDescription = null) },
@@ -196,10 +215,12 @@ private fun MainScreen(
     ) { padding ->
         Column(Modifier.padding(padding)) {
             when (tab) {
-                Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings, learnStore, rulesStore, dictionaryStore)
+                Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
                 Tab.PROMPTS -> PromptsTab(promptStore)
                 Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
+                Tab.LEARNING -> LearningTab(app)
+                Tab.LOGS -> LogsTab(app)
                 Tab.STATS -> StatsTab(stats, historyLog)
             }
         }
@@ -283,9 +304,6 @@ private fun SettingsTab(
     recordings: ru.zf.pravka.data.Recordings,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
-    learnStore: ru.zf.pravka.data.LearnStore,
-    rulesStore: ru.zf.pravka.data.RulesStore,
-    dictionaryStore: DictionaryStore,
 ) {
     val scope = rememberCoroutineScope()
     var apiKey by remember { mutableStateOf("") }
@@ -454,7 +472,6 @@ private fun SettingsTab(
             )
         }
 
-        LearningSection(learnStore, rulesStore, dictionaryStore)
 
         RecordingsSection(recordings, serviceEnabled)
 
@@ -639,104 +656,242 @@ private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceE
     }
 }
 
-// Pending "Обучить" proposals (approve/reject) and the approved rules that
-// ride into every CLEAN request. Nothing applies without the owner's tap.
+// The learning tab: pending proposals (approve/reject, one by one or all at
+// once) and the approved rules with their confirmation counters. All actions
+// run on the APP scope - they must survive tab switches and screen closes.
 @Composable
-private fun LearningSection(
-    learnStore: ru.zf.pravka.data.LearnStore,
-    rulesStore: ru.zf.pravka.data.RulesStore,
-    dictionaryStore: DictionaryStore,
-) {
-    val scope = rememberCoroutineScope()
+private fun LearningTab(app: PravkaApp) {
     var pending by remember { mutableStateOf<List<ru.zf.pravka.data.LearnStore.Suggestion>>(emptyList()) }
     var rules by remember { mutableStateOf<List<ru.zf.pravka.data.RulesStore.Rule>>(emptyList()) }
     var loadTick by remember { mutableStateOf(0) }
     LaunchedEffect(loadTick) {
-        pending = learnStore.all()
-        rules = rulesStore.all()
+        pending = app.learnStore.all()
+        rules = app.rulesStore.all()
     }
-    if (pending.isEmpty() && rules.isEmpty()) return
 
-    SectionCard(label = "Обучение") {
-        if (pending.isNotEmpty()) {
-            HintText("Предложения после «Обучить» — применяются только после одобрения.")
-            Spacer(Modifier.height(6.dp))
-            for (sug in pending) {
-                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    Text(
-                        when {
-                            sug.kind == "rule" -> "Правило: ${sug.text}"
-                            sug.mode == "PROTECT" -> "Защита: ${sug.from}"
-                            else -> "${sug.from} → ${sug.to}"
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    if (sug.note.isNotBlank()) {
-                        Text(sug.note, style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (sug.exampleBefore.isNotBlank() && sug.exampleAfter.isNotBlank()) {
-                        Text(
-                            "«${sug.exampleBefore}» → «${sug.exampleAfter}»",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Row {
-                        TextButton(onClick = {
-                            scope.launch {
-                                if (sug.kind == "rule") rulesStore.add(sug.text, sug.exampleBefore, sug.exampleAfter)
-                                else dictionaryStore.add(
-                                    sug.from, sug.to,
-                                    if (sug.mode == "PROTECT") DictMode.PROTECT else DictMode.HARD,
-                                    sug.note,
-                                )
-                                learnStore.remove(sug.id)
-                                loadTick++
-                                ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.refreshLearnBadge()
-                            }
-                        }) { Text("Принять") }
-                        TextButton(onClick = {
-                            scope.launch {
-                                learnStore.remove(sug.id)
-                                loadTick++
-                                ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.refreshLearnBadge()
-                            }
-                        }) { Text("Отклонить", color = MaterialTheme.colorScheme.error) }
-                    }
-                }
-            }
+    fun refresh() { loadTick++ }
+
+    suspend fun accept(sug: ru.zf.pravka.data.LearnStore.Suggestion) {
+        if (sug.kind == "rule") {
+            app.rulesStore.add(sug.text, sug.exampleBefore, sug.exampleAfter)
+            app.learnLog.add("ПРИНЯТО правило: ${sug.text}")
+        } else {
+            app.dictionaryStore.add(
+                sug.from, sug.to,
+                if (sug.mode == "PROTECT") DictMode.PROTECT else DictMode.HARD,
+                sug.note,
+            )
+            app.learnLog.add("ПРИНЯТО в словарь: ${sug.from} → ${sug.to} [${sug.mode}]")
         }
-        if (rules.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            HintText("Принятые правила — уходят в каждый запрос чистки.")
-            Spacer(Modifier.height(6.dp))
-            for (rule in rules) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(rule.text, style = MaterialTheme.typography.bodyMedium)
-                        if (rule.exampleBefore.isNotBlank() && rule.exampleAfter.isNotBlank()) {
+        app.learnStore.remove(sug.id)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        ScreenTitle(stringResource(R.string.tab_learning))
+        HintText(
+            "Правка учится на твоих правках: авто-снимки разбираются Опусом " +
+                "раз в ~12 часов, «Обучить» в меню кнопки — сразу. Ничего не " +
+                "применяется без твоего одобрения."
+        )
+
+        SectionCard(label = "Предложения (${pending.size})") {
+            if (pending.isEmpty()) {
+                HintText("Пока пусто. Появятся после разбора твоих правок.")
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        app.appScope.launch {
+                            for (sug in app.learnStore.all()) accept(sug)
+                            refresh()
+                            PravkaAccessibilityService.instance?.refreshLearnBadge()
+                        }
+                    }) { Text("Принять все") }
+                    TextButton(onClick = {
+                        app.appScope.launch {
+                            for (sug in app.learnStore.all()) {
+                                app.learnLog.add("отклонено: ${if (sug.kind == "rule") sug.text else sug.from}")
+                                app.learnStore.remove(sug.id)
+                            }
+                            refresh()
+                            PravkaAccessibilityService.instance?.refreshLearnBadge()
+                        }
+                    }) { Text("Отклонить все", color = MaterialTheme.colorScheme.error) }
+                }
+                Spacer(Modifier.height(6.dp))
+                for (sug in pending) {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Text(
+                            when {
+                                sug.kind == "rule" -> "Правило: ${sug.text}"
+                                sug.mode == "PROTECT" -> "Защита: ${sug.from}"
+                                else -> "${sug.from} → ${sug.to}"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (sug.note.isNotBlank()) {
+                            Text(sug.note, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (sug.exampleBefore.isNotBlank() && sug.exampleAfter.isNotBlank()) {
                             Text(
-                                "«${rule.exampleBefore}» → «${rule.exampleAfter}»",
+                                "«${sug.exampleBefore}» → «${sug.exampleAfter}»",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        Row {
+                            TextButton(onClick = {
+                                app.appScope.launch {
+                                    accept(sug)
+                                    refresh()
+                                    PravkaAccessibilityService.instance?.refreshLearnBadge()
+                                }
+                            }) { Text("Принять") }
+                            TextButton(onClick = {
+                                app.appScope.launch {
+                                    app.learnLog.add("отклонено: ${if (sug.kind == "rule") sug.text else sug.from}")
+                                    app.learnStore.remove(sug.id)
+                                    refresh()
+                                    PravkaAccessibilityService.instance?.refreshLearnBadge()
+                                }
+                            }) { Text("Отклонить", color = MaterialTheme.colorScheme.error) }
+                        }
                     }
-                    Switch(
-                        checked = rule.enabled,
-                        onCheckedChange = { on ->
-                            scope.launch { rulesStore.setEnabled(rule.id, on); loadTick++ }
-                        },
-                    )
-                    TextButton(onClick = {
-                        scope.launch { rulesStore.delete(rule.id); loadTick++ }
-                    }) { Text("×", color = MaterialTheme.colorScheme.error) }
                 }
             }
+        }
+
+        SectionCard(label = "Принятые правила (${rules.size})") {
+            if (rules.isEmpty()) {
+                HintText("Принятые правила появятся здесь и будут уходить в каждый запрос чистки.")
+            } else {
+                HintText("×N — сколько раз правило подтвердилось новыми правками.")
+                Spacer(Modifier.height(6.dp))
+                for (rule in rules) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(rule.text, style = MaterialTheme.typography.bodyMedium)
+                            if (rule.exampleBefore.isNotBlank() && rule.exampleAfter.isNotBlank()) {
+                                Text(
+                                    "«${rule.exampleBefore}» → «${rule.exampleAfter}»",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        if (rule.hits > 0) {
+                            Text(
+                                "×${rule.hits}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.padding(horizontal = 6.dp),
+                            )
+                        }
+                        Switch(
+                            checked = rule.enabled,
+                            onCheckedChange = { on ->
+                                app.appScope.launch { app.rulesStore.setEnabled(rule.id, on); refresh() }
+                            },
+                        )
+                        TextButton(onClick = {
+                            app.appScope.launch {
+                                app.learnLog.add("правило удалено: ${rule.text}")
+                                app.rulesStore.delete(rule.id)
+                                refresh()
+                            }
+                        }) { Text("×", color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The logs tab: the few logs that matter, each with copy and file export -
+// "нажал и показал" instead of hunting through screens.
+@Composable
+private fun LogsTab(app: PravkaApp) {
+    val context = LocalContext.current
+    var eventTail by remember { mutableStateOf<List<String>>(emptyList()) }
+    var learnTail by remember { mutableStateOf<List<String>>(emptyList()) }
+    var loadTick by remember { mutableStateOf(0) }
+    LaunchedEffect(loadTick) {
+        withContext(Dispatchers.IO) {
+            val e = app.eventLog.readLast(150)
+            val l = app.learnLog.readLast(150)
+            eventTail = e
+            learnTail = l
+        }
+    }
+
+    fun copy(text: String) {
+        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("Правка", text))
+        Feedback.toast(context, "Скопировано")
+    }
+
+    fun share(intent: android.content.Intent, title: String) {
+        runCatching {
+            context.startActivity(android.content.Intent.createChooser(intent, title))
+        }.onFailure { Feedback.toast(context, "Лог пуст") }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ScreenTitle(stringResource(R.string.tab_logs))
+            Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = { loadTick++ }) { Text("Обновить") }
+        }
+
+        SectionCard(label = "Распознавание и вставка") {
+            HintText("Сессии распознавания, сегменты, ошибки, путь вставки.")
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (eventTail.isEmpty()) "Пусто." else eventTail.joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+            )
+            Row {
+                TextButton(onClick = { copy(eventTail.joinToString("\n")) }) { Text("Копировать") }
+                TextButton(onClick = { share(app.eventLog.shareIntent(), "Журнал событий") }) { Text("Файлом") }
+            }
+        }
+
+        SectionCard(label = "Обучение") {
+            HintText("Снимки правок, батчи, предложения, решения, подтверждения правил.")
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (learnTail.isEmpty()) "Пусто." else learnTail.joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+            )
+            Row {
+                TextButton(onClick = { copy(learnTail.joinToString("\n")) }) { Text("Копировать") }
+                TextButton(onClick = { share(app.learnLog.shareIntent(), "Журнал обучения") }) { Text("Файлом") }
+            }
+        }
+
+        SectionCard(label = "История правок") {
+            HintText("Полный журнал в JSONL — для разбора качества.")
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(onClick = {
+                share(app.historyLog.shareIntent(), "История правок")
+            }) { Text("Выгрузить JSONL") }
         }
     }
 }

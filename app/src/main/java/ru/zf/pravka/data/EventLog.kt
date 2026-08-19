@@ -18,10 +18,12 @@ import java.util.Locale
 // Writes go through DiskWriter (a recognizer callback must never block on the
 // filesystem) and keep one handle open instead of reopening per line. Each line
 // is still flushed - the whole point of this log is to survive a crash.
-class EventLog(private val context: Context) {
+class EventLog(
+    private val context: Context,
+    private val fileName: String = "dictation-events.log",
+) {
 
     companion object {
-        private const val FILE_NAME = "dictation-events.log"
         private const val MAX_BYTES = 512L * 1024
     }
 
@@ -30,7 +32,7 @@ class EventLog(private val context: Context) {
     private var writer: BufferedWriter? = null
     private var written = -1L   // -1 = not yet measured
 
-    private val file: File by lazy { File(context.filesDir, FILE_NAME) }
+    private val file: File by lazy { File(context.filesDir, fileName) }
 
     fun add(line: String) {
         // Timestamp on the caller's thread so the ordering the owner reads is
@@ -52,13 +54,18 @@ class EventLog(private val context: Context) {
     private fun rotate() {
         runCatching { writer?.close() }
         writer = null
-        val backup = File(context.filesDir, "$FILE_NAME.1")
+        val backup = File(context.filesDir, "$fileName.1")
         backup.delete()
         file.renameTo(backup)
         written = 0L
     }
 
     fun exists(): Boolean = file.exists() && file.length() > 0
+
+    /** Newest [n] lines for the on-screen log viewer (call off the main thread). */
+    fun readLast(n: Int): List<String> = runCatching {
+        if (!file.exists()) emptyList() else file.readLines().takeLast(n)
+    }.getOrDefault(emptyList())
 
     fun shareIntent(): Intent = shareFileIntent(context, file, "text/plain")
 }
