@@ -38,6 +38,9 @@ class PravkaAccessibilityService : AccessibilityService() {
     companion object {
         var instance: PravkaAccessibilityService? = null
             private set
+
+        // A reply chain: entries closer than this are one conversation.
+        private const val CONVO_GAP_MS = 10L * 60 * 1000
     }
 
     // An uncaught exception in any launched job used to kill the whole app
@@ -102,6 +105,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         scope.launch {
             app.settings.speechFormattingFlow.collect { cachedFormatting = it }
+        }
+        scope.launch {
+            app.settings.convoContextFlow.collect { cachedConvoContext = it }
         }
     }
 
@@ -287,6 +293,40 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (now - lastDraftAt < 1200) return
         lastDraftAt = now
         app.liveDraft.save(text)
+    }
+
+    // ---- Conversation memory (owner's request): my recent takes in the SAME
+    // app form a chain; a new dictation carries the chain as read-only context
+    // so replies keep the thread's tone and referents. In-memory only.
+    private data class ConvoEntry(val pkg: String, val at: Long, val text: String)
+    private val convo = ArrayDeque<ConvoEntry>()
+    @Volatile private var cachedConvoContext: Boolean = true
+
+    private fun convoRemember(pkg: String?, text: String) {
+        if (pkg.isNullOrBlank() || text.isBlank()) return
+        val now = SystemClock.elapsedRealtime()
+        // A new chain starts after a long gap or in another app.
+        val last = convo.lastOrNull()
+        if (last != null && (last.pkg != pkg || now - last.at > CONVO_GAP_MS)) convo.clear()
+        convo.addLast(ConvoEntry(pkg, now, text.take(500)))
+        while (convo.size > 6) convo.removeFirst()
+    }
+
+    private fun convoContextFor(pkg: String?): String {
+        if (!cachedConvoContext || pkg.isNullOrBlank()) return ""
+        val now = SystemClock.elapsedRealtime()
+        val last = convo.lastOrNull() ?: return ""
+        if (last.pkg != pkg || now - last.at > CONVO_GAP_MS) return ""
+        val recent = convo.filter { it.pkg == pkg }.takeLast(4)
+        if (recent.isEmpty()) return ""
+        val sb = StringBuilder("Мои предыдущие сообщения в этом разговоре (только для тона и связности, их не менять):\n")
+        var used = 0
+        for (e in recent) {
+            if (used + e.text.length > 800) break
+            sb.append("— ").append(e.text).append('\n')
+            used += e.text.length
+        }
+        return sb.toString().trim()
     }
 
     // The gray "отмена" bubble beside the ticker: throw the take away.
@@ -482,7 +522,13 @@ class PravkaAccessibilityService : AccessibilityService() {
         // CLEAN entirely: with a collapsed cursor the whole field would be
         // selected and pre-existing paragraphs rewritten, not just the take.
         if (selected || existing.isEmpty()) {
-            runProofread(ProofreadMode.CLEAN, pinnedNode = node)
+            // Conversation context: previous takes in THIS app (built before the
+            // current take joins the chain, so it isn't its own context).
+            val pkg = runCatching { node.packageName?.toString() }.getOrNull()
+            val convoCtx = convoContextFor(pkg)
+            convoRemember(pkg, text)
+            if (convoCtx.isNotBlank()) app.eventLog.add("convo context: ${convoCtx.length} ch")
+            runProofread(ProofreadMode.CLEAN, pinnedNode = node, conversationContext = convoCtx)
         }
     }
 
@@ -557,6 +603,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                     FloatingButtonController.MenuItem(getString(R.string.redo_longer), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_LONGER) },
                     FloatingButtonController.MenuItem(getString(R.string.redo_polish), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
                     FloatingButtonController.MenuItem(getString(R.string.fab_menu_undo), red) { undoLast() },
+                    FloatingButtonController.MenuItem("Обучить", red) { learnFromField() },
                 ),
                 // AI actions (orange): work on the selection, else the whole
                 // field, else the clipboard; the answer goes to the clipboard.
@@ -567,6 +614,85 @@ class PravkaAccessibilityService : AccessibilityService() {
                 ),
             )
         )
+    }
+
+    // ---- Learning: the owner hand-edited our output; extract what to keep ----
+
+    private fun learnFromField() {
+        if (busy) return
+        scope.launch {
+            val node = focusedEditableNode()
+            val current = node?.let { runCatching { it.effectiveText() }.getOrDefault("") }.orEmpty()
+            if (current.isBlank()) {
+                Feedback.toast(this@PravkaAccessibilityService, "Нет текста в поле — открой поле с поправленным текстом.")
+                return@launch
+            }
+            // Find the journal entry whose OUTPUT this text is an edit of:
+            // word-overlap similarity against recent outputs.
+            val recent = kotlinx.coroutines.withContext(Dispatchers.IO) { app.historyLog.readPairs(30) }
+            val match = recent.maxByOrNull { (_, out) -> wordOverlap(out, current) }
+            val overlap = match?.let { wordOverlap(it.second, current) } ?: 0.0
+            if (match == null || overlap < 0.4) {
+                Feedback.toast(this@PravkaAccessibilityService, "Не нашёл в истории версию, из которой сделан этот текст.")
+                return@launch
+            }
+            if (match.second.trim() == current.trim()) {
+                Feedback.toast(this@PravkaAccessibilityService, "Текст не отличается от версии Правки — учиться не на чем.")
+                return@launch
+            }
+            busy = true
+            floatingButton?.setBusy(true)
+            Haptics.start(this@PravkaAccessibilityService)
+            Feedback.toast(this@PravkaAccessibilityService, "Учусь на твоих правках (Опус)…")
+            val result = app.claudeProvider.learn(
+                dictated = match.first,
+                cleaned = match.second,
+                final = current,
+            )
+            busy = false
+            floatingButton?.setBusy(false)
+            result.onSuccess { proposals ->
+                val known = app.dictionaryStore.all().map { it.from.lowercase() }.toHashSet()
+                val fresh = mutableListOf<ru.zf.pravka.data.LearnStore.Suggestion>()
+                proposals.dict
+                    .filter { it.from.lowercase() !in known }
+                    .forEach { d ->
+                        fresh.add(
+                            ru.zf.pravka.data.LearnStore.Suggestion(
+                                id = 0, kind = "dict", mode = d.mode,
+                                from = d.from, to = d.to, note = d.note,
+                            )
+                        )
+                    }
+                val knownRules = app.rulesStore.all().map { it.text.lowercase() }.toHashSet()
+                proposals.rules
+                    .filter { it.lowercase() !in knownRules }
+                    .forEach { fresh.add(ru.zf.pravka.data.LearnStore.Suggestion(id = 0, kind = "rule", text = it)) }
+                val added = app.learnStore.add(fresh)
+                app.eventLog.add("learn: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
+                if (added == 0) {
+                    Feedback.toast(this@PravkaAccessibilityService, "Ничего системного в правках не нашлось.")
+                } else {
+                    Haptics.success(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "Предложений: $added — одобри их в Правке (раздел «Обучение»).",
+                    )
+                }
+            }.onFailure { e ->
+                app.eventLog.add("learn failed: ${e.message}")
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(this@PravkaAccessibilityService, e.message ?: "Ошибка обучения")
+            }
+        }
+    }
+
+    /** Jaccard word overlap in [0..1] - enough to match an edited output. */
+    private fun wordOverlap(a: String, b: String): Double {
+        val wa = a.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 2 }.toSet()
+        val wb = b.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 2 }.toSet()
+        if (wa.isEmpty() || wb.isEmpty()) return 0.0
+        return wa.intersect(wb).size.toDouble() / wa.union(wb).size
     }
 
     // ---- AI actions: selection > field > clipboard; result to the clipboard ----
@@ -639,6 +765,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         pinnedNode: AccessibilityNodeInfo? = null,
         directive: String = "",
         strongModel: Boolean = false,
+        conversationContext: String = "",
     ) {
         if (busy) return
         scope.launch {
@@ -665,6 +792,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                     AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode), mode, onDelta,
                     directive = directive,
                     modelOverride = if (strongModel) Settings.MODEL_OPUS else null,
+                    conversationContext = conversationContext,
                 )
             }.getOrElse { e ->
                 app.eventLog.add("proofread threw ${e.javaClass.simpleName}: ${e.message}")

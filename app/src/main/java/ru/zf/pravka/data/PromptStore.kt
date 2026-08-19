@@ -20,7 +20,8 @@ class PromptStore(private val context: Context) {
     enum class PromptId(val storageKey: String) {
         CLEAN_CLAUDE("clean_claude"),
         BUSINESS("business"),
-        SOFTEN("soften");
+        SOFTEN("soften"),
+        PROSE("prose");
 
         companion object {
             fun of(mode: ProofreadMode): PromptId = when (mode) {
@@ -35,6 +36,7 @@ class PromptStore(private val context: Context) {
         PromptId.CLEAN_CLAUDE -> Prompts.CLEAN_CLAUDE
         PromptId.BUSINESS -> Prompts.BUSINESS
         PromptId.SOFTEN -> Prompts.SOFTEN
+        PromptId.PROSE -> Prompts.PROSE
     }
 
     fun overrideFlow(id: PromptId): Flow<String?> =

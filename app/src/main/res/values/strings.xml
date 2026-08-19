@@ -127,6 +127,7 @@
     <string name="prompt_title_clean_claude">Чистка (Claude)</string>
     <string name="prompt_title_business">Деловой стиль</string>
     <string name="prompt_title_soften">Мягче</string>
+    <string name="prompt_title_prose">Художественная проза</string>
     <string name="prompt_modified">изменён</string>
     <string name="prompt_char_count">%1$d символов · ~%2$d токенов</string>
     <string name="prompt_back">← Назад</string>

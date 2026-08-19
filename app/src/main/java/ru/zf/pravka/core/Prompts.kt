@@ -213,6 +213,20 @@ object Prompts {
 """.trimIndent()
 
 
+    // Fiction mode (settings toggle): the owner writes prose, where CLEAN's
+    // "collected business Russian" instincts are actively harmful. A style
+    // directive on top of the same cached CLEAN prefix, editable like any
+    // prompt.
+    val PROSE = """
+Это художественная проза. Правь ТОЛЬКО ошибки распознавания,
+орфографию и пунктуацию. Авторский стиль неприкосновенен:
+сохраняй ритм фразы, инверсии, повторы-приёмы, разговорные и
+просторечные формы, длину предложений и абзацы как есть.
+Не выпрямляй метафоры, не заменяй слова на «более точные»,
+не убирай междометия и частицы. Правила 8 и 9 действуют строго:
+никакой редактуры смысла и формулировок.
+""".trimIndent()
+
     // ---- assist tasks (FAB menu, orange column): free-form actions on the
     // selected text / field / clipboard. NOT the CLEAN template.
 

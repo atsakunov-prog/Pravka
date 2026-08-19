@@ -29,6 +29,8 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_ENGINE = stringPreferencesKey("speech_engine")
         private val KEY_SPEECH_SEGMENTED = booleanPreferencesKey("speech_segmented")
         private val KEY_SPEECH_FORMATTING = booleanPreferencesKey("speech_formatting")
+        private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
+        private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -59,6 +61,19 @@ class Settings(private val context: Context) {
     val speechFormattingFlow = context.dataStore.data.map { it[KEY_SPEECH_FORMATTING] ?: false }
     suspend fun setSpeechFormatting(value: Boolean) {
         context.dataStore.edit { it[KEY_SPEECH_FORMATTING] = value }
+    }
+
+    // Fiction mode: CLEAN gets the PROSE style directive (owner writes prose).
+    val proseModeFlow = context.dataStore.data.map { it[KEY_PROSE_MODE] ?: false }
+    suspend fun setProseMode(value: Boolean) {
+        context.dataStore.edit { it[KEY_PROSE_MODE] = value }
+    }
+
+    // Conversation context: recent takes in the same app ride along with the
+    // next dictation, so replies keep the thread's tone and referents.
+    val convoContextFlow = context.dataStore.data.map { it[KEY_CONVO_CONTEXT] ?: true }
+    suspend fun setConvoContext(value: Boolean) {
+        context.dataStore.edit { it[KEY_CONVO_CONTEXT] = value }
     }
 
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }

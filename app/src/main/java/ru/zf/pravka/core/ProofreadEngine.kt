@@ -50,6 +50,9 @@ class ProofreadEngine(
         onDelta: ((String) -> Unit)? = null,
         directive: String = "",
         modelOverride: String? = null,
+        // Recent takes from the same conversation (owner's request): read-only
+        // context so a reply keeps the thread's tone and referents.
+        conversationContext: String = "",
     ): Outcome {
         val input = target.read()?.trim().orEmpty()
         // A deliberately selected fragment may be a single word - the
@@ -64,7 +67,9 @@ class ProofreadEngine(
         val rawResult = claude.proofread(
             prepared.text, mode, prepared.dictBlock, onDelta,
             directive = directive,
-            contextBefore = target.contextBefore(),
+            contextBefore = listOf(conversationContext, target.contextBefore())
+                .filter { it.isNotBlank() }
+                .joinToString("\n\n"),
             modelOverride = modelOverride,
         ).getOrElse { error ->
             val message = error.message ?: "Неизвестная ошибка"

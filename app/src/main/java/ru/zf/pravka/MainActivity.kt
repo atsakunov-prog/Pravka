@@ -104,6 +104,8 @@ class MainActivity : ComponentActivity() {
                     dictionaryStore = app.dictionaryStore,
                     historyLog = app.historyLog,
                     dictMiner = app.dictMiner,
+                    learnStore = app.learnStore,
+                    rulesStore = app.rulesStore,
                     transcriptionLog = app.transcriptionLog,
                     liveDraft = app.liveDraft,
                     eventLog = app.eventLog,
@@ -143,6 +145,8 @@ private fun MainScreen(
     dictionaryStore: DictionaryStore,
     historyLog: HistoryLog,
     dictMiner: ru.zf.pravka.provider.DictMiner,
+    learnStore: ru.zf.pravka.data.LearnStore,
+    rulesStore: ru.zf.pravka.data.RulesStore,
     transcriptionLog: ru.zf.pravka.data.TranscriptionLog,
     liveDraft: ru.zf.pravka.data.LiveDraft,
     eventLog: ru.zf.pravka.data.EventLog,
@@ -192,7 +196,7 @@ private fun MainScreen(
     ) { padding ->
         Column(Modifier.padding(padding)) {
             when (tab) {
-                Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
+                Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings, learnStore, rulesStore, dictionaryStore)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
                 Tab.PROMPTS -> PromptsTab(promptStore)
                 Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
@@ -279,6 +283,9 @@ private fun SettingsTab(
     recordings: ru.zf.pravka.data.Recordings,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
+    learnStore: ru.zf.pravka.data.LearnStore,
+    rulesStore: ru.zf.pravka.data.RulesStore,
+    dictionaryStore: DictionaryStore,
 ) {
     val scope = rememberCoroutineScope()
     var apiKey by remember { mutableStateOf("") }
@@ -403,6 +410,39 @@ private fun SettingsTab(
         }
 
         SpeechSection(settings, whisperProvider)
+
+        SectionCard(label = "Правка текста") {
+            val prose by settings.proseModeFlow.collectAsState(initial = false)
+            val convo by settings.convoContextFlow.collectAsState(initial = true)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = prose,
+                    onCheckedChange = { on -> scope.launch { settings.setProseMode(on) } },
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Художественная проза", style = MaterialTheme.typography.bodyMedium)
+            }
+            HintText(
+                "Чистка бережёт авторский стиль: ритм, инверсии, повторы. " +
+                    "Только ошибки распознавания, орфография и пунктуация. " +
+                    "Промпт режима редактируется во вкладке «Промпты»."
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = convo,
+                    onCheckedChange = { on -> scope.launch { settings.setConvoContext(on) } },
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Контекст разговора", style = MaterialTheme.typography.bodyMedium)
+            }
+            HintText(
+                "Твои недавние сообщения в том же приложении (пауза до 10 минут) " +
+                    "уходят с новой диктовкой как контекст — ответы держат нить разговора."
+            )
+        }
+
+        LearningSection(learnStore, rulesStore, dictionaryStore)
 
         RecordingsSection(recordings, serviceEnabled)
 
@@ -581,6 +621,89 @@ private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceE
                     items = recordings.list()
                 }) {
                     Text(stringResource(R.string.rec_delete), color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+    }
+}
+
+// Pending "Обучить" proposals (approve/reject) and the approved rules that
+// ride into every CLEAN request. Nothing applies without the owner's tap.
+@Composable
+private fun LearningSection(
+    learnStore: ru.zf.pravka.data.LearnStore,
+    rulesStore: ru.zf.pravka.data.RulesStore,
+    dictionaryStore: DictionaryStore,
+) {
+    val scope = rememberCoroutineScope()
+    var pending by remember { mutableStateOf<List<ru.zf.pravka.data.LearnStore.Suggestion>>(emptyList()) }
+    var rules by remember { mutableStateOf<List<ru.zf.pravka.data.RulesStore.Rule>>(emptyList()) }
+    var loadTick by remember { mutableStateOf(0) }
+    LaunchedEffect(loadTick) {
+        pending = learnStore.all()
+        rules = rulesStore.all()
+    }
+    if (pending.isEmpty() && rules.isEmpty()) return
+
+    SectionCard(label = "Обучение") {
+        if (pending.isNotEmpty()) {
+            HintText("Предложения после «Обучить» — применяются только после одобрения.")
+            Spacer(Modifier.height(6.dp))
+            for (sug in pending) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Text(
+                        when {
+                            sug.kind == "rule" -> "Правило: ${sug.text}"
+                            sug.mode == "PROTECT" -> "Защита: ${sug.from}"
+                            else -> "${sug.from} → ${sug.to}"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (sug.note.isNotBlank()) {
+                        Text(sug.note, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Row {
+                        TextButton(onClick = {
+                            scope.launch {
+                                if (sug.kind == "rule") rulesStore.add(sug.text)
+                                else dictionaryStore.add(
+                                    sug.from, sug.to,
+                                    if (sug.mode == "PROTECT") DictMode.PROTECT else DictMode.HARD,
+                                    sug.note,
+                                )
+                                learnStore.remove(sug.id)
+                                loadTick++
+                            }
+                        }) { Text("Принять") }
+                        TextButton(onClick = {
+                            scope.launch { learnStore.remove(sug.id); loadTick++ }
+                        }) { Text("Отклонить", color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+            }
+        }
+        if (rules.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            HintText("Принятые правила — уходят в каждый запрос чистки.")
+            Spacer(Modifier.height(6.dp))
+            for (rule in rules) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(rule.text, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Switch(
+                        checked = rule.enabled,
+                        onCheckedChange = { on ->
+                            scope.launch { rulesStore.setEnabled(rule.id, on); loadTick++ }
+                        },
+                    )
+                    TextButton(onClick = {
+                        scope.launch { rulesStore.delete(rule.id); loadTick++ }
+                    }) { Text("×", color = MaterialTheme.colorScheme.error) }
                 }
             }
         }
@@ -959,6 +1082,7 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.CLEAN_CLAUDE to R.string.prompt_title_clean_claude,
     PromptStore.PromptId.BUSINESS to R.string.prompt_title_business,
     PromptStore.PromptId.SOFTEN to R.string.prompt_title_soften,
+    PromptStore.PromptId.PROSE to R.string.prompt_title_prose,
 )
 
 @Composable

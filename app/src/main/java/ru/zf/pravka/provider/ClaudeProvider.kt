@@ -2,6 +2,7 @@ package ru.zf.pravka.provider
 
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -23,6 +24,7 @@ class ClaudeProvider(
     private val settings: Settings,
     private val promptStore: PromptStore,
     private val client: OkHttpClient,
+    private val rulesStore: ru.zf.pravka.data.RulesStore,
 ) : ProofreadProvider {
 
     override val id = "claude"
@@ -59,10 +61,22 @@ class ClaudeProvider(
                 // modes share the same cached prefix.
                 val template = promptStore.effective(ProofreadMode.CLEAN)
                 val styleDirective = if (mode == ProofreadMode.CLEAN) "" else promptStore.effective(mode)
-                val fullDirective = listOf(styleDirective, directive)
+                // Fiction mode (settings toggle): the PROSE directive rides on
+                // top of the plain CLEAN pass; explicit style modes win over it.
+                val proseDirective =
+                    if (mode == ProofreadMode.CLEAN && settings.proseModeFlow.first())
+                        promptStore.effective(PromptStore.PromptId.PROSE)
+                    else ""
+                val fullDirective = listOf(styleDirective, proseDirective, directive)
                     .filter { it.isNotBlank() }
                     .joinToString("\n\n")
-                val parts = Prompts.assemble(template, dictBlock, fullDirective, contextBefore)
+                // Approved learned rules ride in the same uncached slot as the
+                // dictionary block, so the cached CLEAN prefix stays byte-stable.
+                val rulesBlock = rulesStore.enabledBlock()
+                val dictAndRules = listOf(dictBlock, rulesBlock)
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n\n")
+                val parts = Prompts.assemble(template, dictAndRules, fullDirective, contextBefore)
 
                 val started = System.currentTimeMillis()
                 val reply = requestWithOneRetry(apiKey, model, parts, input, onDelta)
@@ -118,6 +132,97 @@ class ClaudeProvider(
                 )
             }
         }
+
+    // ---- learning: the owner edited our output; Opus extracts what to keep ----
+
+    data class LearnProposals(
+        val dict: List<DictProposal>,
+        val rules: List<String>,
+    )
+
+    data class DictProposal(val mode: String, val from: String, val to: String, val note: String)
+
+    /**
+     * Compares the recognizer's raw text, our cleaned output and the owner's
+     * hand-corrected final. Returns dictionary proposals (recurring
+     * recognition errors) and short prompt rules (systematic preferences).
+     * Runs on Opus - this is rare, quality matters more than cost.
+     */
+    suspend fun learn(
+        dictated: String,
+        cleaned: String,
+        final: String,
+    ): Result<LearnProposals> = withContext(Dispatchers.IO) {
+        runCatching {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+            val prompt = """
+Три версии одного текста из системы диктовки:
+- dictated: что выдало распознавание речи;
+- cleaned: что сделала автоматическая чистка (модель);
+- final: как в итоге поправил текст сам владелец. Это эталон.
+
+Сравни cleaned и final и извлеки, чему стоит научиться НАСОВСЕМ:
+
+1. "dict" — словарные записи для ПОВТОРЯЕМЫХ ошибок распознавания
+   (имена, термины, которые распознаватель пишет неверно):
+   {"mode": "HARD" | "PROTECT", "from": "...", "to": "...", "note": "..."}
+   HARD: from — неверная форма, to — верная. PROTECT: from — редкое
+   правильное слово, to — пустая строка.
+
+2. "rules" — короткие правила для промпта чистки (каждое — императив
+   не длиннее 120 символов, по-русски), отражающие СИСТЕМНЫЕ
+   предпочтения владельца, видимые из его правок: оформление, стиль,
+   что не трогать. Разовые правки по смыслу правилом НЕ являются.
+
+Ответ — СТРОГО JSON без пояснений:
+{"dict": [...], "rules": ["..."]}
+Если учиться нечему — пустые массивы.
+
+<dictated>
+$dictated
+</dictated>
+<cleaned>
+$cleaned
+</cleaned>
+<final>
+$final
+</final>
+""".trimIndent()
+            val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+            val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+            parseLearn(reply.text)
+        }
+    }
+
+    private fun parseLearn(raw: String): LearnProposals {
+        var text = raw.trim()
+        if (text.startsWith("```")) {
+            text = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        }
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start < 0 || end <= start) return LearnProposals(emptyList(), emptyList())
+        val o = JSONObject(text.substring(start, end + 1))
+        val dict = mutableListOf<DictProposal>()
+        o.optJSONArray("dict")?.let { array ->
+            for (i in 0 until array.length()) {
+                val d = array.optJSONObject(i) ?: continue
+                val mode = d.optString("mode")
+                val from = d.optString("from").trim()
+                if (from.isEmpty() || mode !in listOf("HARD", "PROTECT")) continue
+                dict.add(DictProposal(mode, from, d.optString("to").trim(), d.optString("note").trim()))
+            }
+        }
+        val rules = mutableListOf<String>()
+        o.optJSONArray("rules")?.let { array ->
+            for (i in 0 until array.length()) {
+                val r = array.optString(i).trim()
+                if (r.isNotEmpty() && r.length <= 200) rules.add(r)
+            }
+        }
+        return LearnProposals(dict, rules)
+    }
 
     // USD per million tokens: input to output. Cache pricing derives from
     // the input price: 1h-TTL writes cost 2x, reads 0.1x.
