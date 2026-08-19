@@ -32,6 +32,7 @@ class Settings(private val context: Context) {
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
+        private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -75,6 +76,12 @@ class Settings(private val context: Context) {
     val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }
     suspend fun setRulesInProse(value: Boolean) {
         context.dataStore.edit { it[KEY_RULES_IN_PROSE] = value }
+    }
+
+    // How often the auto-learning batch may run (hours). Owner-picked.
+    val learnPeriodHoursFlow = context.dataStore.data.map { it[KEY_LEARN_PERIOD_H] ?: 3 }
+    suspend fun setLearnPeriodHours(value: Int) {
+        context.dataStore.edit { it[KEY_LEARN_PERIOD_H] = value.coerceIn(1, 24) }
     }
 
     // Conversation context: recent takes in the same app ride along with the

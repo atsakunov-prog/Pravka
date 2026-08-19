@@ -713,26 +713,67 @@ private fun LearningTab(app: PravkaApp) {
                 "Наблюдается текстов: ${watch.size}, из них ты правил: $edited." +
                     (watch.filter { it.editedTs > 0 }.minOfOrNull { it.editedTs }
                         ?.let { "\nБлижайшая правка созреет: " + fmt.format(java.util.Date(it + 10 * 60 * 1000)) + "." } ?: "") +
-                    (if (lastBatch > 0) "\nПоследний авторазбор: " + fmt.format(java.util.Date(lastBatch)) +
-                        ", следующий не раньше " + fmt.format(java.util.Date(lastBatch + 12L * 3600 * 1000)) + "."
+                    (if (lastBatch > 0) "\nПоследний авторазбор: " + fmt.format(java.util.Date(lastBatch)) + "."
                     else "\nАвторазбор ещё не запускался."),
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    val svc = PravkaAccessibilityService.instance
-                    if (svc == null) {
-                        Feedback.toast(ctx, "Служба доступности выключена.")
-                    } else {
-                        svc.runLearnBatchNow()
+            var analyzing by remember { mutableStateOf(false) }
+            LaunchedEffect(analyzing) {
+                if (analyzing) {
+                    // Give the forced batch a moment to start, then track it.
+                    kotlinx.coroutines.delay(1200)
+                    while (PravkaAccessibilityService.instance?.learnBatchRunning == true) {
+                        kotlinx.coroutines.delay(1000)
                     }
+                    analyzing = false
                     watchTick++
-                }) { Text("Разобрать сейчас") }
-                OutlinedButton(onClick = { watchTick++; loadTick++ }) { Text("Обновить") }
+                    loadTick++
+                }
+            }
+            if (analyzing) {
+                Text(
+                    "Идёт разбор (Опус)… результат появится в «Предложениях».",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    enabled = !analyzing,
+                    onClick = {
+                        val svc = PravkaAccessibilityService.instance
+                        if (svc == null) {
+                            Feedback.toast(ctx, "Служба доступности выключена.")
+                        } else {
+                            svc.runLearnBatchNow()
+                            analyzing = true
+                        }
+                    },
+                ) { Text(if (analyzing) "Разбираю…" else "Разобрать сейчас") }
+                OutlinedButton(onClick = {
+                    watchTick++
+                    loadTick++
+                    Feedback.toast(ctx, "Обновлено")
+                }) { Text("Обновить") }
+            }
+            Spacer(Modifier.height(10.dp))
+            val period by app.settings.learnPeriodHoursFlow.collectAsState(initial = 3)
+            HintText("Период авторазбора")
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (h in listOf(1, 3, 12)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(
+                            selected = period == h,
+                            onClick = { app.appScope.launch { app.settings.setLearnPeriodHours(h) } },
+                        )
+                        Text("$h ч", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
             HintText(
-                "Авторазбор идёт Опусом: сам — не чаще раза в 12 часов и через " +
+                "Авторазбор идёт Опусом: сам — не чаще выбранного периода и через " +
                     "10 минут после правки; «Разобрать сейчас» — без ожиданий. " +
                     "Каждый шаг виден в Логи → Обучение."
             )

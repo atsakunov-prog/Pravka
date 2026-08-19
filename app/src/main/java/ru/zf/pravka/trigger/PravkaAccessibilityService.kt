@@ -109,6 +109,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch {
             app.settings.convoContextFlow.collect { cachedConvoContext = it }
         }
+        scope.launch {
+            app.settings.learnPeriodHoursFlow.collect { cachedLearnPeriodH = it }
+        }
         refreshLearnBadge()
     }
 
@@ -320,6 +323,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     private data class ConvoEntry(val pkg: String, val at: Long, val text: String)
     private val convo = ArrayDeque<ConvoEntry>()
     @Volatile private var cachedConvoContext: Boolean = true
+    @Volatile private var cachedLearnPeriodH: Int = 3
 
     private fun convoRemember(pkg: String?, text: String) {
         if (pkg.isNullOrBlank() || text.isBlank()) return
@@ -631,6 +635,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                     FloatingButtonController.MenuItem(getString(R.string.redo_polish), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
                     FloatingButtonController.MenuItem(getString(R.string.fab_menu_undo), red) { undoLast() },
                     FloatingButtonController.MenuItem("Обучить", red) { learnFromField() },
+                    FloatingButtonController.MenuItem("Сброс", red) { resetStuck() },
                 ),
                 // AI actions (orange): work on the selection, else the whole
                 // field, else the clipboard; the answer goes to the clipboard.
@@ -649,7 +654,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     // was long ago, one Opus call digests them all into pending suggestions.
     // A detected edit also schedules a check for right after it ripens, so
     // the batch does not have to wait for the next dictation.
-    private var learnBatchRunning = false
+    @Volatile var learnBatchRunning = false
+        private set
     private val ripenessCheck = Runnable { maybeRunLearnBatch() }
 
     private fun scheduleRipenessCheck() {
@@ -666,7 +672,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch {
             val internal = getSharedPreferences("pravka_internal", MODE_PRIVATE)
             val last = internal.getLong("last_learn_batch", 0L)
-            if (!force && System.currentTimeMillis() - last < 12L * 3600 * 1000) return@launch
+            if (!force && System.currentTimeMillis() - last < cachedLearnPeriodH * 3600_000L) return@launch
             val ripe = app.editWatch.ripe(quietMs = if (force) 0L else 10L * 60 * 1000)
             if (ripe.isEmpty()) {
                 if (force) {
@@ -683,6 +689,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             val cases = ripe.take(5).map { Triple(it.dictated, it.cleaned, it.lastSeen) }
             app.eventLog.add("learn batch: ${cases.size} edits")
             app.learnLog.add("батч-анализ: правок к разбору — ${cases.size}")
+            if (force) Feedback.toast(this@PravkaAccessibilityService, "Разбираю правок: ${cases.size} (Опус)…")
             val result = app.claudeProvider.learnBatch(cases)
             learnBatchRunning = false
             result.onSuccess { proposals ->
@@ -821,6 +828,15 @@ class PravkaAccessibilityService : AccessibilityService() {
                 val added = queueProposals(proposals)
                 app.eventLog.add("learn: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
                 if (added > 0) refreshLearnBadge()
+                // This edit is analyzed - close its auto-watch so the batch
+                // doesn't re-analyze the same text later.
+                val closed = app.editWatch.all()
+                    .filter { wordOverlap(it.lastSeen, current) > 0.5 }
+                    .map { it.id }
+                if (closed.isNotEmpty()) {
+                    app.editWatch.remove(closed)
+                    app.learnLog.add("наблюдение закрыто: разобрано вручную (${closed.size})")
+                }
                 if (added == 0) {
                     Feedback.toast(this@PravkaAccessibilityService, "Ничего системного в правках не нашлось.")
                 } else {
@@ -861,7 +877,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     private fun runAssist(tag: String, instruction: String) {
         if (busy) return
-        scope.launch {
+        activeJob = scope.launch {
             busy = true
             floatingButton?.setBusy(true)
             Haptics.start(this@PravkaAccessibilityService)
@@ -911,6 +927,25 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    // The active API round trip - cancellable by the "Сброс" menu item when
+    // a dead-zone network leaves the button spinning.
+    private var activeJob: kotlinx.coroutines.Job? = null
+
+    /** Menu "Сброс": cancel whatever is in flight and unfreeze the button. */
+    fun resetStuck() {
+        app.eventLog.add("manual reset (button)")
+        app.learnLog.add("ручной сброс кнопки")
+        runCatching { activeJob?.cancel() }
+        activeJob = null
+        runCatching { googleSession?.stop() }
+        busy = false
+        floatingButton?.setRecording(false)
+        floatingButton?.setBusy(false)
+        floatingButton?.hideTicker()
+        floatingButton?.hideCancelBubble()
+        Feedback.toast(this, "Сброшено. Результат зависшего запроса, если он дойдёт, будет отброшен.")
+    }
+
     private fun runProofread(
         mode: ProofreadMode,
         pinnedNode: AccessibilityNodeInfo? = null,
@@ -922,7 +957,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         watchDictated: String? = null,
     ) {
         if (busy) return
-        scope.launch {
+        activeJob = scope.launch {
             busy = true
             floatingButton?.setBusy(true)
             Haptics.start(this@PravkaAccessibilityService)
