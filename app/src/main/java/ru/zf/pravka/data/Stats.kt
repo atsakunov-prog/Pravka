@@ -1,8 +1,10 @@
 package ru.zf.pravka.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import java.util.Calendar
 import java.util.Locale
@@ -118,6 +120,7 @@ class Stats(private val context: Context) {
             val todayKey = longPreferencesKey(dayKey(0))
             p[todayKey] = (p[todayKey] ?: 0) + micros
             p[Keys.COST_TOTAL] = (p[Keys.COST_TOTAL] ?: 0) + micros
+            pruneOldDayKeys(p)
         }
     }
 
@@ -132,7 +135,22 @@ class Stats(private val context: Context) {
             val todayKey = longPreferencesKey(dayKey(0))
             p[todayKey] = (p[todayKey] ?: 0) + micros
             p[Keys.COST_TOTAL] = (p[Keys.COST_TOTAL] ?: 0) + micros
+            pruneOldDayKeys(p)
         }
+    }
+
+    // Day buckets used to accumulate forever (one key per day, deserialized
+    // on every stats read). Anything past the month view is already rolled
+    // into COST_TOTAL - drop it. Runs at most once per day.
+    private fun pruneOldDayKeys(p: MutablePreferences) {
+        val marker = stringPreferencesKey("cost_prune_marker")
+        val today = dayKey(0)
+        if (p[marker] == today) return
+        p[marker] = today
+        val cutoff = dayKey(62)
+        p.asMap().keys
+            .filter { it.name.length == cutoff.length && it.name.startsWith("cost_2") && it.name < cutoff }
+            .forEach { p.remove(longPreferencesKey(it.name)) }
     }
 
     suspend fun recordError() {

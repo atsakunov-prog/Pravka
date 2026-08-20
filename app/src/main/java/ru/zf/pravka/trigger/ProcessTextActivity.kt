@@ -20,7 +20,6 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.R
-import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.target.TextTarget
 import ru.zf.pravka.ui.Feedback
@@ -40,7 +39,7 @@ class ProcessTextActivity : ComponentActivity() {
         val text = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString().orEmpty()
         val readonly = intent.getBooleanExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, false)
 
-        if (text.trim().length < ProofreadEngine.MIN_INPUT_LENGTH) {
+        if (text.isBlank()) {
             Haptics.error(this)
             finish()
             return
@@ -60,6 +59,13 @@ class ProcessTextActivity : ComponentActivity() {
                 )
                 return true
             }
+
+            // The selection menu only appears on a REAL selection - the
+            // owner deliberately picked this fragment, so a single word is
+            // legitimate work (same contract as a selection under the FAB).
+            // The old pre-check rejected short selections that the FAB path
+            // happily fixed.
+            override fun isExplicitFragment(): Boolean = true
         }
 
         val app = application as PravkaApp

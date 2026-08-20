@@ -56,7 +56,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -305,7 +304,11 @@ private fun SettingsTab(
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
+    // App-lifetime scope for persistence: rememberCoroutineScope dies with
+    // the composition and cancels DataStore/file writes mid-flight when the
+    // owner switches tabs (the "принял четыре правила, записалось одно" bug
+    // class - fixed in Learning, but these older tabs kept the old scope).
+    val scope = (LocalContext.current.applicationContext as PravkaApp).appScope
     var apiKey by remember { mutableStateOf("") }
     var keyVisible by remember { mutableStateOf(false) }
     var savedMark by remember { mutableStateOf(false) }
@@ -485,7 +488,11 @@ private fun SpeechSection(
     whisperProvider: ru.zf.pravka.provider.WhisperProvider,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // App-lifetime scope for persistence: rememberCoroutineScope dies with
+    // the composition and cancels DataStore/file writes mid-flight when the
+    // owner switches tabs (the "принял четыре правила, записалось одно" bug
+    // class - fixed in Learning, but these older tabs kept the old scope).
+    val scope = (LocalContext.current.applicationContext as PravkaApp).appScope
     val engine by settings.speechEngineFlow.collectAsState(initial = Settings.SPEECH_GOOGLE)
     var status by remember { mutableStateOf("…") }
     var downloading by remember { mutableStateOf(false) }
@@ -605,7 +612,8 @@ private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceE
     var busyId by remember { mutableStateOf<String?>(null) }
     // NB: not named `ru` - that would shadow the `ru.zf.pravka` package.
     val loc = remember { Locale.forLanguageTag("ru") }
-    LaunchedEffect(Unit) {
+    var refreshTick by remember { mutableStateOf(0) }
+    LaunchedEffect(refreshTick) {
         val found = withContext(Dispatchers.IO) { recordings.list() }
         items = found
     }
@@ -640,14 +648,14 @@ private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceE
                         busyId = item.id
                         service.retryRecording(item.file) { ok: Boolean, msg: String ->
                             busyId = null
-                            items = recordings.list()
+                            refreshTick++
                             if (!ok) Feedback.toast(context, context.getString(R.string.rec_failed, msg))
                         }
                     },
                 ) { Text(stringResource(R.string.rec_transcribe)) }
                 TextButton(onClick = {
                     recordings.delete(item.id)
-                    items = recordings.list()
+                    refreshTick++
                 }) {
                     Text(stringResource(R.string.rec_delete), color = MaterialTheme.colorScheme.error)
                 }
@@ -668,6 +676,14 @@ private fun LearningTab(app: PravkaApp) {
     LaunchedEffect(loadTick) {
         pending = app.learnStore.all()
         rules = app.rulesStore.all()
+    }
+    // The SERVICE adds pending suggestions on its own schedule (auto batches);
+    // without this the open tab never noticed them until a manual "Обновить".
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(5000)
+            loadTick++
+        }
     }
 
     fun refresh() { loadTick++ }
@@ -697,22 +713,28 @@ private fun LearningTab(app: PravkaApp) {
         ScreenTitle(stringResource(R.string.tab_learning))
         HintText(
             "Правка учится на твоих правках: авто-снимки разбираются Опусом " +
-                "раз в ~12 часов, «Обучить» в меню кнопки — сразу. Ничего не " +
-                "применяется без твоего одобрения."
+                "по периоду, выбранному ниже, «Обучить» в меню кнопки — сразу. " +
+                "Ничего не применяется без твоего одобрения."
         )
 
         SectionCard(label = "Автообучение — что происходит сейчас") {
             var watch by remember { mutableStateOf<List<ru.zf.pravka.data.EditWatchStore.Entry>>(emptyList()) }
             var watchTick by remember { mutableStateOf(0) }
-            LaunchedEffect(watchTick, loadTick) { watch = app.editWatch.all() }
-            val internal = ctx.getSharedPreferences("pravka_internal", android.content.Context.MODE_PRIVATE)
-            val lastBatch = internal.getLong("last_learn_batch", 0L)
+            var lastBatch by remember { mutableStateOf(0L) }
+            LaunchedEffect(watchTick, loadTick) {
+                watch = app.editWatch.all()
+                // Prefs read off the composition pass: recomposition is not
+                // the place for disk IO.
+                lastBatch = ctx.getSharedPreferences(
+                    PravkaAccessibilityService.PREFS_INTERNAL, android.content.Context.MODE_PRIVATE,
+                ).getLong(PravkaAccessibilityService.KEY_LAST_LEARN_BATCH, 0L)
+            }
             val fmt = remember { java.text.SimpleDateFormat("dd.MM HH:mm", Locale.forLanguageTag("ru")) }
             val edited = watch.count { it.editedTs > 0 }
             Text(
                 "Наблюдается текстов: ${watch.size}, из них ты правил: $edited." +
                     (watch.filter { it.editedTs > 0 }.minOfOrNull { it.editedTs }
-                        ?.let { "\nБлижайшая правка созреет: " + fmt.format(java.util.Date(it + 10 * 60 * 1000)) + "." } ?: "") +
+                        ?.let { "\nБлижайшая правка созреет: " + fmt.format(java.util.Date(it + ru.zf.pravka.data.EditWatchStore.RIPE_QUIET_MS)) + "." } ?: "") +
                     (if (lastBatch > 0) "\nПоследний авторазбор: " + fmt.format(java.util.Date(lastBatch)) + "."
                     else "\nАвторазбор ещё не запускался."),
                 style = MaterialTheme.typography.bodyMedium,
@@ -1004,7 +1026,12 @@ private fun LogsTab(app: PravkaApp) {
             var showSet by remember { mutableStateOf(false) }
             var running by remember { mutableStateOf(ru.zf.pravka.core.EvalRunner.running) }
             var progress by remember { mutableStateOf(0 to 0) }
-            LaunchedEffect(evalTick) { items = app.evalStore.all() }
+            var last by remember { mutableStateOf<org.json.JSONObject?>(null) }
+            LaunchedEffect(evalTick) {
+                items = app.evalStore.all()
+                // File read off the composition pass.
+                last = withContext(Dispatchers.IO) { app.evalStore.lastRun() }
+            }
             LaunchedEffect(running) {
                 while (ru.zf.pravka.core.EvalRunner.running) {
                     progress = ru.zf.pravka.core.EvalRunner.done to ru.zf.pravka.core.EvalRunner.total
@@ -1019,11 +1046,10 @@ private fun LogsTab(app: PravkaApp) {
             )
             Spacer(Modifier.height(6.dp))
             Text("Эталонов: ${items.size}", style = MaterialTheme.typography.bodyMedium)
-            val last = remember(evalTick) { app.evalStore.lastRun() }
-            if (last != null) {
+            last?.let { run ->
                 Text(
-                    "Последний прогон: средний ${"%.1f".format(last.optDouble("avg") * 100)}%, " +
-                        "точных ${last.optInt("exact")} из ${last.optInt("total")}",
+                    "Последний прогон: средний ${"%.1f".format(run.optDouble("avg") * 100)}%, " +
+                        "точных ${run.optInt("exact")} из ${run.optInt("total")}",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -1143,7 +1169,11 @@ private fun DictionaryTab(
     dictMiner: ru.zf.pravka.provider.DictMiner,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    // App-lifetime scope for persistence: rememberCoroutineScope dies with
+    // the composition and cancels DataStore/file writes mid-flight when the
+    // owner switches tabs (the "принял четыре правила, записалось одно" bug
+    // class - fixed in Learning, but these older tabs kept the old scope).
+    val scope = (LocalContext.current.applicationContext as PravkaApp).appScope
     val entries by store.entriesFlow.collectAsState()
     var search by remember { mutableStateOf("") }
     var dialogEntry by remember { mutableStateOf<DictEntry?>(null) }
@@ -1558,7 +1588,11 @@ private fun PromptEditor(
     id: PromptStore.PromptId,
     onBack: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
+    // App-lifetime scope for persistence: rememberCoroutineScope dies with
+    // the composition and cancels DataStore/file writes mid-flight when the
+    // owner switches tabs (the "принял четыре правила, записалось одно" bug
+    // class - fixed in Learning, but these older tabs kept the old scope).
+    val scope = (LocalContext.current.applicationContext as PravkaApp).appScope
     var text by remember { mutableStateOf("") }
     var loaded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<Int?>(null) }

@@ -15,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.R
@@ -41,6 +42,10 @@ class PravkaAccessibilityService : AccessibilityService() {
 
         // A reply chain: entries closer than this are one conversation.
         private const val CONVO_GAP_MS = 10L * 60 * 1000
+
+        // Internal bookkeeping prefs, read by the Learning tab too.
+        const val PREFS_INTERNAL = "pravka_internal"
+        const val KEY_LAST_LEARN_BATCH = "last_learn_batch"
     }
 
     // An uncaught exception in any launched job used to kill the whole app
@@ -53,7 +58,6 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + crashLogger)
     private var floatingButton: FloatingButtonController? = null
-    private var resultBar: ResultBarController? = null
     private var busy = false
 
     // Weak cache of the last focused editable node and its text, updated on
@@ -86,7 +90,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         // A fresh "connected" after takes were mid-flight = the process died
         // and the system rebound the service. Makes crashes visible in the log.
         app.eventLog.add("service connected")
-        resultBar = ResultBarController(this, ::undoLast, ::addPairToDictionary, ::redoWithDirective)
         floatingButton = FloatingButtonController(
             service = this,
             scope = scope,
@@ -142,7 +145,10 @@ class PravkaAccessibilityService : AccessibilityService() {
                             scope.launch {
                                 val firstEdit = app.editWatch.onFieldText(pkg, current, ::wordOverlap)
                                 if (firstEdit) {
-                                    app.learnLog.add("правка замечена: поле в $pkg, ${current.length} зн. — созреет через 10 мин")
+                                    app.learnLog.add(
+                                        "правка замечена: поле в $pkg, ${current.length} зн. — созреет через " +
+                                            "${ru.zf.pravka.data.EditWatchStore.RIPE_QUIET_MS / 60000} мин"
+                                    )
                                     scheduleRipenessCheck()
                                 }
                             }
@@ -152,12 +158,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 // Toasts and our own overlays fire this event too - ignore
-                // ourselves, or the result bar dies the moment it appears
-                // (the owner never saw it at all before this check).
+                // ourselves, or our own UI appearing would count as an app
+                // switch and hide the button.
                 if (event.packageName == packageName) return
-                // App or window switched: the field the bar describes is
-                // gone; only keep the button when a field is still focused.
-                resultBar?.dismissIfStale()
                 // While a take is live the button is pinned visible in every app
                 // and hide() early-returns anyway, so the tree walk below would
                 // be pure waste - and the owner is expected to switch apps
@@ -400,7 +403,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Get the text into the field first - the owner is waiting on it. The
         // journals are queued on a background thread, so they cost nothing here,
         // but they still go after the insert is under way.
-        if (text.isNotBlank()) scope.launch { insertDictated(text) }
+        //
+        // If the SERVICE was destroyed mid-take (system rebind), the scope is
+        // cancelled and this launch is a silent no-op - the take would vanish.
+        // Keep the recovery draft in that case: that is exactly what it is for.
+        val scopeAlive = scope.isActive
+        if (text.isNotBlank() && scopeAlive) scope.launch { insertDictated(text) }
         val wall = SystemClock.elapsedRealtime() - googleStartedAt
         app.transcriptionLog.append(
             engine = engine,
@@ -410,8 +418,10 @@ class PravkaAccessibilityService : AccessibilityService() {
             error = if (text.isBlank()) "пустой результат" else null,
         )
         // Delivered (and logged to the transcripts) - the recovery draft is no
-        // longer needed.
-        app.liveDraft.clear()
+        // longer needed. Unless the service died mid-take: then nothing was
+        // delivered and the draft is the only surviving copy.
+        if (scopeAlive) app.liveDraft.clear()
+        else app.eventLog.add("сервис погиб посреди тейка — черновик сохранён для восстановления")
         if (text.isBlank()) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.dictation_empty))
@@ -567,13 +577,18 @@ class PravkaAccessibilityService : AccessibilityService() {
     // the full CLEAN, then clipboard + a notification that holds the text -
     // a walk-dictated paragraph must not depend on a 3-second toast.
     private suspend fun cleanWithoutField(text: String) {
+        // Same single-flight guard as the field path: external triggers must
+        // not start a second proofread while this one runs.
+        busy = true
         floatingButton?.setBusy(true)
         val target = ru.zf.pravka.target.PlainTextTarget(text)
         val outcome = runCatching { app.engine.proofread(target, ProofreadMode.CLEAN) }
             .getOrElse { e ->
+                if (e is kotlinx.coroutines.CancellationException) { busy = false; throw e }
                 app.eventLog.add("cleanWithoutField threw ${e.javaClass.simpleName}")
                 ProofreadEngine.Outcome.Failed(e.message ?: "Неизвестная ошибка")
             }
+        busy = false
         floatingButton?.setBusy(false)
         val final = target.result ?: text
         ru.zf.pravka.target.ClipboardTarget(this).write(final)
@@ -657,11 +672,14 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile var learnBatchRunning = false
         private set
     private val ripenessCheck = Runnable { maybeRunLearnBatch() }
+    // ONE handler instance: removeCallbacks matches by handler, so a fresh
+    // Handler per call never actually debounced, and onDestroy could not
+    // clear the pending posts (they pinned the dead service for 11 minutes).
+    private val ripenessHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private fun scheduleRipenessCheck() {
-        val h = android.os.Handler(android.os.Looper.getMainLooper())
-        h.removeCallbacks(ripenessCheck)
-        h.postDelayed(ripenessCheck, 11L * 60 * 1000)
+        ripenessHandler.removeCallbacks(ripenessCheck)
+        ripenessHandler.postDelayed(ripenessCheck, 11L * 60 * 1000)
     }
 
     /** The learning tab's "Разобрать сейчас": no 12h gate, no quiet wait. */
@@ -669,43 +687,51 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     private fun maybeRunLearnBatch(force: Boolean = false) {
         if (learnBatchRunning) return
+        // Set BEFORE the launch: the old check-then-launch gap (the flag was
+        // set only after several suspensions) let a proofread's trailing call
+        // and the tab's "Разобрать сейчас" run TWO Opus batches over the same
+        // edits - double spend, double rule confirmations.
+        learnBatchRunning = true
         scope.launch {
-            val internal = getSharedPreferences("pravka_internal", MODE_PRIVATE)
-            val last = internal.getLong("last_learn_batch", 0L)
-            if (!force && System.currentTimeMillis() - last < cachedLearnPeriodH * 3600_000L) return@launch
-            val ripe = app.editWatch.ripe(quietMs = if (force) 0L else 10L * 60 * 1000)
-            if (ripe.isEmpty()) {
-                if (force) {
-                    val watched = app.editWatch.all()
-                    app.learnLog.add(
-                        "разбор вручную: зрелых правок нет (в наблюдении ${watched.size}, " +
-                            "изменённых ${watched.count { it.editedTs > 0 }})"
-                    )
-                    Feedback.toast(this@PravkaAccessibilityService, "Разбирать нечего: изменённых текстов нет.")
+            try {
+                val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
+                val last = internal.getLong(KEY_LAST_LEARN_BATCH, 0L)
+                if (!force && System.currentTimeMillis() - last < cachedLearnPeriodH * 3600_000L) return@launch
+                val ripe = app.editWatch.ripe(quietMs = if (force) 0L else ru.zf.pravka.data.EditWatchStore.RIPE_QUIET_MS)
+                if (ripe.isEmpty()) {
+                    if (force) {
+                        val watched = app.editWatch.all()
+                        app.learnLog.add(
+                            "разбор вручную: зрелых правок нет (в наблюдении ${watched.size}, " +
+                                "изменённых ${watched.count { it.editedTs > 0 }})"
+                        )
+                        Feedback.toast(this@PravkaAccessibilityService, "Разбирать нечего: изменённых текстов нет.")
+                    }
+                    return@launch
                 }
-                return@launch
-            }
-            learnBatchRunning = true
-            val cases = ripe.take(5).map { Triple(it.dictated, it.cleaned, it.lastSeen) }
-            app.eventLog.add("learn batch: ${cases.size} edits")
-            app.learnLog.add("батч-анализ: правок к разбору — ${cases.size}")
-            if (force) Feedback.toast(this@PravkaAccessibilityService, "Разбираю правок: ${cases.size} (Опус)…")
-            val result = app.claudeProvider.learnBatch(cases)
-            learnBatchRunning = false
-            result.onSuccess { proposals ->
-                internal.edit().putLong("last_learn_batch", System.currentTimeMillis()).apply()
-                app.editWatch.remove(ripe.take(5).map { it.id })
-                app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
-                app.learnLog.add("батч-анализ стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
-                val added = queueProposals(proposals)
-                app.eventLog.add("learn batch: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
-                if (added > 0) {
-                    showLearnNotification(added)
-                    refreshLearnBadge()
+                val cases = ripe.take(5).map { Triple(it.dictated, it.cleaned, it.lastSeen) }
+                app.eventLog.add("learn batch: ${cases.size} edits")
+                app.learnLog.add("батч-анализ: правок к разбору — ${cases.size}")
+                if (force) Feedback.toast(this@PravkaAccessibilityService, "Разбираю правок: ${cases.size} (Опус)…")
+                val result = app.claudeProvider.learnBatch(cases)
+                result.onSuccess { proposals ->
+                    internal.edit().putLong(KEY_LAST_LEARN_BATCH, System.currentTimeMillis()).apply()
+                    app.editWatch.remove(ripe.take(5).map { it.id })
+                    app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
+                    app.learnLog.add("батч-анализ стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
+                    val added = queueProposals(proposals)
+                    app.eventLog.add("learn batch: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
+                    if (added > 0) {
+                        showLearnNotification(added)
+                        refreshLearnBadge()
+                    }
+                }.onFailure { e ->
+                    app.stats.recordError()
+                    app.eventLog.add("learn batch failed: ${e.message}")
+                    app.learnLog.add("батч-анализ НЕ УДАЛСЯ: ${e.message} (правки не потеряны)")
                 }
-            }.onFailure { e ->
-                app.eventLog.add("learn batch failed: ${e.message}")
-                app.learnLog.add("батч-анализ НЕ УДАЛСЯ: ${e.message} (правки не потеряны)")
+            } finally {
+                learnBatchRunning = false
             }
         }
     }
@@ -794,10 +820,14 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     private fun learnFromField() {
         if (busy) return
+        // Held through the probe phase too: the old late set let a proofread
+        // start mid-probe and then get its guard force-cleared by this path.
+        busy = true
         scope.launch {
-            val node = focusedEditableNode()
+            val node = runCatching { focusedEditableNode() }.getOrNull()
             val current = node?.let { runCatching { it.effectiveText() }.getOrDefault("") }.orEmpty()
             if (current.isBlank()) {
+                busy = false
                 Feedback.toast(this@PravkaAccessibilityService, "Нет текста в поле — открой поле с поправленным текстом.")
                 return@launch
             }
@@ -807,14 +837,15 @@ class PravkaAccessibilityService : AccessibilityService() {
             val match = recent.maxByOrNull { (_, out) -> wordOverlap(out, current) }
             val overlap = match?.let { wordOverlap(it.second, current) } ?: 0.0
             if (match == null || overlap < 0.4) {
+                busy = false
                 Feedback.toast(this@PravkaAccessibilityService, "Не нашёл в истории версию, из которой сделан этот текст.")
                 return@launch
             }
             if (match.second.trim() == current.trim()) {
+                busy = false
                 Feedback.toast(this@PravkaAccessibilityService, "Текст не отличается от версии Правки — учиться не на чем.")
                 return@launch
             }
-            busy = true
             floatingButton?.setBusy(true)
             Haptics.start(this@PravkaAccessibilityService)
             Feedback.toast(this@PravkaAccessibilityService, "Учусь на твоих правках (Опус)…")
@@ -851,6 +882,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                     )
                 }
             }.onFailure { e ->
+                app.stats.recordError()
                 app.eventLog.add("learn failed: ${e.message}")
                 Haptics.error(this@PravkaAccessibilityService)
                 Feedback.toast(this@PravkaAccessibilityService, e.message ?: "Ошибка обучения")
@@ -881,11 +913,11 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     private fun runAssist(tag: String, instruction: String) {
         if (busy) return
+        busy = true
         activeJob = scope.launch {
-            busy = true
             floatingButton?.setBusy(true)
             Haptics.start(this@PravkaAccessibilityService)
-            val content = assistContent()
+            val content = runCatching { assistContent() }.getOrDefault("")
             if (content.isBlank()) {
                 busy = false
                 floatingButton?.setBusy(false)
@@ -899,7 +931,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 scope.launch { floatingButton?.updateTicker(partial) }
             }
             val result = runCatching { app.claudeProvider.assist(instruction, content, onDelta) }
-                .getOrElse { Result.failure(it) }
+                .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it; Result.failure(it) }
             floatingButton?.hideTicker()
             floatingButton?.setBusy(false)
             busy = false
@@ -925,6 +957,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 Haptics.success(this@PravkaAccessibilityService)
                 Feedback.toast(this@PravkaAccessibilityService, "Готово — ответ в буфере обмена")
             }.onFailure { e ->
+                app.stats.recordError()
                 app.eventLog.add("assist $tag failed: ${e.message}")
                 Haptics.error(this@PravkaAccessibilityService)
                 Feedback.toast(this@PravkaAccessibilityService, e.message ?: "Ошибка")
@@ -942,6 +975,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         app.learnLog.add("ручной сброс кнопки")
         runCatching { activeJob?.cancel() }
         activeJob = null
+        // Close the sockets too: cancelling the job alone left a zombie HTTP
+        // stream billing in the background for up to 90 seconds.
+        runCatching { app.claudeProvider.cancelActive() }
         runCatching { googleSession?.stop() }
         busy = false
         floatingButton?.setRecording(false)
@@ -962,12 +998,16 @@ class PravkaAccessibilityService : AccessibilityService() {
         watchDictated: String? = null,
     ) {
         if (busy) return
+        // Set synchronously: the old set-inside-launch left a dispatch-wide
+        // window where a second trigger slipped past the guard.
+        busy = true
         activeJob = scope.launch {
-            busy = true
             floatingButton?.setBusy(true)
             Haptics.start(this@PravkaAccessibilityService)
-            // The pinned (dictation) path arrives with its selection already set.
-            if (pinnedNode == null) selectAllInFocusedField()
+            // The pinned (dictation) path arrives with its selection already
+            // set. Node calls throw on a dead window - that must not leave
+            // busy=true forever (the wedge "Сброс" was built to rescue).
+            if (pinnedNode == null) runCatching { selectAllInFocusedField() }
             // Stream the corrected text across the ticker while it generates -
             // the first words appear well under a second after stop, instead of
             // a silent spinner for the whole generation. Deltas arrive on an IO
@@ -981,6 +1021,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             // A throw anywhere below must never leave busy=true forever (a
             // wedged button until service restart) - degrade to Failed.
+            // EXCEPT cancellation: a job killed by "Сброс" must die silently
+            // here, not run this epilogue against the job that replaced it.
             val outcome = runCatching {
                 app.engine.proofread(
                     AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode), mode, onDelta,
@@ -989,6 +1031,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                     conversationContext = conversationContext,
                 )
             }.getOrElse { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 app.eventLog.add("proofread threw ${e.javaClass.simpleName}: ${e.message}")
                 ProofreadEngine.Outcome.Failed(e.message ?: "Неизвестная ошибка")
             }
@@ -1013,27 +1056,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             // The post-fix result bar is gone (owner: it covered the keyboard).
             // Undo lives in the long-press FAB menu; the word diff and quick
             // add-to-dictionary went with the bar.
-        }
-    }
-
-    // Result-bar action: the model "fixed" a correct word - protect the
-    // dictated form and hard-replace the wrong one back on future runs.
-    private fun addPairToDictionary(correct: String, wrong: String) {
-        scope.launch {
-            val store = app.dictionaryStore
-            val existing = store.all().map { it.from.lowercase() to it.mode }.toHashSet()
-            if ((correct.lowercase() to ru.zf.pravka.core.DictMode.PROTECT) !in existing) {
-                store.add(correct, "", ru.zf.pravka.core.DictMode.PROTECT, "")
-            }
-            if ((wrong.lowercase() to ru.zf.pravka.core.DictMode.HARD) !in existing) {
-                store.add(wrong, correct, ru.zf.pravka.core.DictMode.HARD, "")
-            }
-            cachedBiasing = collectBiasing()  // new words bias the recognizer too
-            Haptics.success(this@PravkaAccessibilityService)
-            Feedback.toast(
-                this@PravkaAccessibilityService,
-                getString(R.string.dict_pair_added, correct, wrong),
-            )
         }
     }
 
@@ -1082,7 +1104,6 @@ class PravkaAccessibilityService : AccessibilityService() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         // The foldable changes configuration on fold/unfold - reposition.
-        resultBar?.dismiss()
         floatingButton?.onConfigurationChanged()
     }
 
@@ -1090,11 +1111,10 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
+        ripenessHandler.removeCallbacks(ripenessCheck)
         googleSession?.stop()
         googleSession = null
         runCatching { stopMicHold() }
-        resultBar?.dismiss()
-        resultBar = null
         floatingButton?.destroy()
         floatingButton = null
         scope.cancel()

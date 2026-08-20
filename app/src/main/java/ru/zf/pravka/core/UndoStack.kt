@@ -16,10 +16,6 @@ object UndoStack {
         entries.addLast(Entry(before, after))
     }
 
-    /** The most recent fix - the one the result bar's diff and dict actions describe. */
-    @Synchronized
-    fun last(): Entry? = entries.lastOrNull()
-
     /** The most recent entry whose result matches the field's current text. */
     @Synchronized
     fun matchByCurrentText(current: String?): Entry? {

@@ -48,7 +48,9 @@ class EventLog(
         val w = writer ?: BufferedWriter(FileWriter(file, true)).also { writer = it }
         w.write(text)
         w.flush()
-        written += text.length
+        // Bytes, not chars: Cyrillic is ~2 bytes/char in UTF-8, and counting
+        // chars let the file grow to double the stated cap before rotating.
+        written += text.toByteArray(Charsets.UTF_8).size
     }
 
     private fun rotate() {
