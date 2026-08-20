@@ -358,16 +358,21 @@ class PravkaAccessibilityService : AccessibilityService() {
         val now = SystemClock.elapsedRealtime()
         val last = convo.lastOrNull() ?: return ""
         if (last.pkg != pkg || now - last.at > CONVO_GAP_MS) return ""
-        val recent = convo.filter { it.pkg == pkg }.takeLast(4)
+        // Deliberately tight (owner's request): every request already carries
+        // the template, the dictionary and the rules - the conversation tail
+        // is a tone/gender hint, not a transcript. Two most recent takes,
+        // each clipped, ~400 chars ceiling total.
+        val recent = convo.filter { it.pkg == pkg }.takeLast(2)
         if (recent.isEmpty()) return ""
         // Bare lines: the prompt assembler wraps them in the <разговор>
         // envelope with its own instruction - no header needed here.
         val sb = StringBuilder()
         var used = 0
         for (e in recent) {
-            if (used + e.text.length > 800) break
-            sb.append("— ").append(e.text).append('\n')
-            used += e.text.length
+            val clipped = e.text.take(240)
+            if (used + clipped.length > 400) break
+            sb.append("— ").append(clipped).append('\n')
+            used += clipped.length
         }
         return sb.toString().trim()
     }
@@ -777,7 +782,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // Weekly housekeeping (owner's request): when the rule set has grown,
     // Opus consolidates it automatically - dubs merged, contradictions out,
-    // numbered core of at most 12. Runs after a successful learn batch, at
+    // no hard size cap. Runs after a successful learn batch, at
     // most once per RULES_OPT_PERIOD_MS; the result is applied directly and
     // logged (the manual button with its preview dialog stays available).
     private suspend fun maybeAutoOptimizeRules(internal: android.content.SharedPreferences) {

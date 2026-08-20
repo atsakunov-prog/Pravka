@@ -271,9 +271,10 @@ $existingBlock$casesBlock
 
     /**
      * Opus consolidates the accumulated rules: merges overlaps, generalizes,
-     * drops contradictions, keeps the strongest example per rule, caps the
-     * set. Returns the PROPOSED new set - nothing is applied without the
-     * owner's confirmation.
+     * drops contradictions, keeps the strongest example per rule. No hard
+     * size cap (owner's call) - every surviving rule must carry its own
+     * distinct meaning. Used by the manual preview button AND the weekly
+     * auto-optimization.
      */
     suspend fun optimizeRules(
         rules: List<ru.zf.pravka.data.RulesStore.Rule>,
@@ -302,7 +303,9 @@ $existingBlock$casesBlock
 — убери противоречия (оставь более конкретное и полезное);
 — каждое правило — императив не длиннее 140 символов, по-русски,
   с лучшим примером из имеющихся (before/after до 120 символов);
-— в итоге не больше 12 правил, самые важные первыми.
+— оставь столько правил, сколько реально нужно — искусственного
+  лимита нет, но каждое должно нести отдельный смысл; самые важные
+  первыми.
 
 Ответ — СТРОГО JSON без пояснений:
 {"rules": [{"rule": "...", "before": "...", "after": "..."}]}
