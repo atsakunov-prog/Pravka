@@ -719,10 +719,13 @@ class PravkaAccessibilityService : AccessibilityService() {
                     app.editWatch.remove(ripe.take(5).map { it.id })
                     app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
                     app.learnLog.add("батч-анализ стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
-                    val added = queueProposals(proposals)
-                    app.eventLog.add("learn batch: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
-                    if (added > 0) {
-                        showLearnNotification(added)
+                    val q = queueProposals(proposals)
+                    app.eventLog.add(
+                        "learn batch: dict=${proposals.dict.size} rules=${proposals.rules.size} " +
+                            "auto+=${q.autoDict} pending+=${q.pendingRules}"
+                    )
+                    if (q.autoDict > 0 || q.pendingRules > 0) {
+                        showLearnNotification(q)
                         refreshLearnBadge()
                     }
                 }.onFailure { e ->
@@ -754,25 +757,32 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    data class QueueResult(val autoDict: Int, val pendingRules: Int)
+
     /**
-     * Dedups against the dictionary and rules, stores the rest as pending.
-     * A rule proposal matching an EXISTING rule counts as a confirmation
-     * (its ×N grows) instead of being silently dropped.
+     * Owner's split (2026-08-20): dictionary findings ("Поли" -> "Полли",
+     * "фор раннер" -> "Forerunner") are mechanical - they go STRAIGHT into
+     * the dictionary, marked "авто" so they're easy to review or delete.
+     * RULES are judgment calls - they stay pending until approved. A rule
+     * proposal matching an EXISTING rule counts as a confirmation (its ×N
+     * grows) instead of being silently dropped.
      */
-    private suspend fun queueProposals(proposals: ru.zf.pravka.provider.ClaudeProvider.LearnProposals): Int {
+    private suspend fun queueProposals(proposals: ru.zf.pravka.provider.ClaudeProvider.LearnProposals): QueueResult {
         val known = app.dictionaryStore.all().map { it.from.lowercase() }.toHashSet()
-        val fresh = mutableListOf<ru.zf.pravka.data.LearnStore.Suggestion>()
+        var autoDict = 0
         proposals.dict
-            .filter { it.from.lowercase() !in known }
+            .filter { it.from.isNotBlank() && it.from.lowercase() !in known }
             .forEach { d ->
-                fresh.add(
-                    ru.zf.pravka.data.LearnStore.Suggestion(
-                        id = 0, kind = "dict", mode = d.mode,
-                        from = d.from, to = d.to, note = d.note,
-                    )
-                )
-                app.learnLog.add("предложение (словарь): ${d.from} → ${d.to} [${d.mode}]")
+                val mode = if (d.mode == "PROTECT") ru.zf.pravka.core.DictMode.PROTECT
+                    else ru.zf.pravka.core.DictMode.HARD
+                val note = listOf(d.note.trim(), "авто-обучение").filter { it.isNotBlank() }.joinToString(" · ")
+                app.dictionaryStore.add(d.from, d.to, mode, note)
+                autoDict++
+                app.learnLog.add("В СЛОВАРЬ автоматически: ${d.from} → ${d.to} [${d.mode}]")
             }
+        // New words must bias the recognizer too, same as a manual add.
+        if (autoDict > 0) cachedBiasing = collectBiasing()
+        val fresh = mutableListOf<ru.zf.pravka.data.LearnStore.Suggestion>()
         for (r in proposals.rules) {
             if (app.rulesStore.confirm(r.text)) {
                 app.learnLog.add("правило ПОДТВЕРДИЛОСЬ: ${r.text}")
@@ -786,10 +796,18 @@ class PravkaAccessibilityService : AccessibilityService() {
             )
             app.learnLog.add("предложение (правило): ${r.text}")
         }
-        return app.learnStore.add(fresh)
+        return QueueResult(autoDict, app.learnStore.add(fresh))
     }
 
-    private fun showLearnNotification(count: Int) {
+    /** One human sentence out of a learn round's outcome. */
+    private fun learnSummary(q: QueueResult): String {
+        val parts = mutableListOf<String>()
+        if (q.autoDict > 0) parts.add("в словарь добавлено: ${q.autoDict}")
+        if (q.pendingRules > 0) parts.add("правил на одобрение: ${q.pendingRules} (раздел «Обучение»)")
+        return parts.joinToString(", ").replaceFirstChar { it.uppercase() } + "."
+    }
+
+    private fun showLearnNotification(q: QueueResult) {
         runCatching {
             val nm = getSystemService(android.app.NotificationManager::class.java)
             val channelId = "pravka-learning"
@@ -809,7 +827,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             )
             val notif = android.app.Notification.Builder(this, channelId)
                 .setContentTitle("Правка научилась новому")
-                .setContentText("Предложений из твоих правок: $count — открой раздел «Обучение».")
+                .setContentText(learnSummary(q))
                 .setSmallIcon(android.R.drawable.ic_menu_edit)
                 .setContentIntent(open)
                 .setAutoCancel(true)
@@ -860,9 +878,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             result.onSuccess { proposals ->
                 app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
                 app.learnLog.add("разбор стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
-                val added = queueProposals(proposals)
-                app.eventLog.add("learn: dict=${proposals.dict.size} rules=${proposals.rules.size} pending+=$added")
-                if (added > 0) refreshLearnBadge()
+                val q = queueProposals(proposals)
+                app.eventLog.add(
+                    "learn: dict=${proposals.dict.size} rules=${proposals.rules.size} " +
+                        "auto+=${q.autoDict} pending+=${q.pendingRules}"
+                )
+                if (q.pendingRules > 0) refreshLearnBadge()
                 // This edit is analyzed - close its auto-watch so the batch
                 // doesn't re-analyze the same text later.
                 val closed = app.editWatch.all()
@@ -872,14 +893,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                     app.editWatch.remove(closed)
                     app.learnLog.add("наблюдение закрыто: разобрано вручную (${closed.size})")
                 }
-                if (added == 0) {
+                if (q.autoDict == 0 && q.pendingRules == 0) {
                     Feedback.toast(this@PravkaAccessibilityService, "Ничего системного в правках не нашлось.")
                 } else {
                     Haptics.success(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "Предложений: $added — одобри их в Правке (раздел «Обучение»).",
-                    )
+                    Feedback.toast(this@PravkaAccessibilityService, learnSummary(q))
                 }
             }.onFailure { e ->
                 app.stats.recordError()
