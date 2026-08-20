@@ -356,6 +356,11 @@ object Prompts {
         dictBlock: String,
         directive: String = "",
         context: String = "",
+        // Previous takes in the same chat. A SEPARATE envelope from [context]:
+        // field context is "punctuation at the seam" material, conversation
+        // context is "tone, gender, what we're talking about" material -
+        // stuffing both under the seam instruction neutered the second.
+        conversation: String = "",
     ): PromptParts {
         val inputIdx = template.indexOf(PLACEHOLDER_INPUT)
         val before = if (inputIdx >= 0) template.substring(0, inputIdx) else template
@@ -367,6 +372,13 @@ object Prompts {
         var extras = ""
         if (directive.isNotBlank()) {
             extras += "ДОПОЛНИТЕЛЬНОЕ ЗАДАНИЕ ПОВЕРХ ПРАВКИ:\n" + directive.trim() + "\n\n"
+        }
+        if (conversation.isNotBlank()) {
+            extras += "Ниже в тегах <разговор> — предыдущие сообщения автора в этом же " +
+                "чате. Используй их, чтобы понять, о чём идёт речь, выдержать тон и " +
+                "правильно согласовать род и имена (автор — мужчина, «говорил», а не " +
+                "«говорила»). Сами сообщения не правь и в ответ не включай.\n" +
+                "<разговор>\n" + conversation.trim() + "\n</разговор>\n\n"
         }
         if (context.isNotBlank()) {
             extras += "Перед текстом для правки в поле уже стоит текст (ниже " +

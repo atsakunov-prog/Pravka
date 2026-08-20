@@ -67,10 +67,13 @@ class ProofreadEngine(
         val rawResult = claude.proofread(
             prepared.text, mode, prepared.dictBlock, onDelta,
             directive = directive,
-            contextBefore = listOf(conversationContext, target.contextBefore())
-                .filter { it.isNotBlank() }
-                .joinToString("\n\n"),
+            // Two different envelopes downstream: field context carries the
+            // "seam punctuation" instruction, conversation context the
+            // "tone/gender/referents" one. Merging them (the old way) put the
+            // conversation under the seam instruction and neutered it.
+            contextBefore = target.contextBefore(),
             modelOverride = modelOverride,
+            conversationContext = conversationContext,
         ).getOrElse { error ->
             val message = error.message ?: "Неизвестная ошибка"
             history.append(mode.name, claude.id, "", 0, 0, 0, 0.0, false, input, "", message)

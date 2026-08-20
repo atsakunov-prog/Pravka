@@ -876,7 +876,10 @@ private fun LearningTab(app: PravkaApp) {
             if (rules.isEmpty()) {
                 HintText("Принятые правила появятся здесь и будут уходить в каждый запрос чистки.")
             } else {
-                HintText("×N — сколько раз правило подтвердилось новыми правками.")
+                HintText(
+                    "Набор оптимизируется сам раз в неделю (Опус сливает дубли и " +
+                        "противоречия); кнопка ниже — то же вручную, с предпросмотром."
+                )
                 Spacer(Modifier.height(6.dp))
                 var optimizing by remember { mutableStateOf(false) }
                 var optimized by remember {
@@ -930,6 +933,15 @@ private fun LearningTab(app: PravkaApp) {
                                 optimized = null
                                 app.appScope.launch {
                                     app.rulesStore.replaceAll(chosen.map { Triple(it.text, it.before, it.after) })
+                                    // The weekly auto-optimizer counts from here too,
+                                    // so it doesn't redo the work right after.
+                                    ctx.getSharedPreferences(
+                                        PravkaAccessibilityService.PREFS_INTERNAL,
+                                        android.content.Context.MODE_PRIVATE,
+                                    ).edit().putLong(
+                                        PravkaAccessibilityService.KEY_LAST_RULES_OPT,
+                                        System.currentTimeMillis(),
+                                    ).apply()
                                     app.learnLog.add("набор правил ЗАМЕНЁН оптимизированным (${chosen.size})")
                                     loadTick++
                                 }
@@ -940,13 +952,13 @@ private fun LearningTab(app: PravkaApp) {
                         },
                     )
                 }
-                for (rule in rules) {
+                rules.forEachIndexed { i, rule ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text(rule.text, style = MaterialTheme.typography.bodyMedium)
+                            Text("${i + 1}. ${rule.text}", style = MaterialTheme.typography.bodyMedium)
                             if (rule.exampleBefore.isNotBlank() && rule.exampleAfter.isNotBlank()) {
                                 Text(
                                     "«${rule.exampleBefore}» → «${rule.exampleAfter}»",
@@ -955,13 +967,6 @@ private fun LearningTab(app: PravkaApp) {
                                 )
                             }
                         }
-                        Text(
-                            "×${rule.hits}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (rule.hits > 0) MaterialTheme.colorScheme.tertiary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 6.dp),
-                        )
                         Switch(
                             checked = rule.enabled,
                             onCheckedChange = { on ->

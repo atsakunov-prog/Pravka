@@ -24,8 +24,6 @@ class RulesStore(private val context: Context) {
         // model, and lets the owner judge what the rule really does.
         val exampleBefore: String = "",
         val exampleAfter: String = "",
-        // How many times learning re-derived this rule from fresh edits.
-        val hits: Int = 0,
     )
 
     private val mutex = Mutex()
@@ -54,7 +52,6 @@ class RulesStore(private val context: Context) {
                         createdTs = o.optLong("created"),
                         exampleBefore = o.optString("before"),
                         exampleAfter = o.optString("after"),
-                        hits = o.optInt("hits"),
                     )
                 )
             }
@@ -75,7 +72,6 @@ class RulesStore(private val context: Context) {
                         put("created", r.createdTs)
                         put("before", r.exampleBefore)
                         put("after", r.exampleAfter)
-                        put("hits", r.hits)
                     }
                 )
             }
@@ -122,21 +118,6 @@ class RulesStore(private val context: Context) {
         }
     }
 
-    /**
-     * A fresh learning round proposed a rule matching an existing one - the
-     * rule CONFIRMED itself. Returns true when a match was found.
-     */
-    suspend fun confirm(text: String): Boolean = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            ensureLoaded()
-            val i = rules.indexOfFirst { it.text.equals(text.trim(), ignoreCase = true) }
-            if (i < 0) return@withLock false
-            rules[i] = rules[i].copy(hits = rules[i].hits + 1)
-            persist()
-            true
-        }
-    }
-
     suspend fun setEnabled(id: Long, on: Boolean) = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureLoaded()
@@ -163,10 +144,12 @@ class RulesStore(private val context: Context) {
             if (active.isEmpty()) return@withLock ""
             val sb = StringBuilder("Постоянные правила владельца (соблюдай):\n")
             var used = 0
-            for (r in active) {
+            // Numbered (owner's request): the optimized core reads as a list -
+            // "1., 2., 3. ..." - both here and on the Learning tab.
+            for ((i, r) in active.withIndex()) {
                 val cost = r.text.length + r.exampleBefore.length + r.exampleAfter.length
                 if (used + cost > 2000) break
-                sb.append("- ").append(r.text).append('\n')
+                sb.append(i + 1).append(". ").append(r.text).append('\n')
                 if (r.exampleBefore.isNotBlank() && r.exampleAfter.isNotBlank()) {
                     sb.append("  Пример: «").append(r.exampleBefore).append("» → «")
                         .append(r.exampleAfter).append("»\n")

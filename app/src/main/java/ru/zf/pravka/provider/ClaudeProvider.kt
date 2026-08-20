@@ -74,6 +74,7 @@ class ClaudeProvider(
         directive: String,
         contextBefore: String,
         modelOverride: String?,
+        conversationContext: String,
     ): Result<ProofreadResult> =
         withContext(Dispatchers.IO) {
             runCatchingApi {
@@ -106,7 +107,7 @@ class ClaudeProvider(
                 val dictAndRules = listOf(dictBlock, rulesBlock)
                     .filter { it.isNotBlank() }
                     .joinToString("\n\n")
-                val parts = Prompts.assemble(template, dictAndRules, fullDirective, contextBefore)
+                val parts = Prompts.assemble(template, dictAndRules, fullDirective, contextBefore, conversationContext)
 
                 val started = System.currentTimeMillis()
                 val reply = requestWithOneRetry(apiKey, model, parts, input, onDelta)
@@ -198,6 +199,19 @@ class ClaudeProvider(
             val apiKey = settings.apiKey()
             if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
             require(cases.isNotEmpty()) { "Нет правок для анализа." }
+            // The analyst must SEE the current rule set, or it keeps
+            // re-deriving rules the owner already approved (the gender
+            // agreement rule came back every round before this).
+            val existingRules = rulesStore.all().filter { it.enabled }
+            val existingBlock = if (existingRules.isEmpty()) "" else buildString {
+                append("УЖЕ ДЕЙСТВУЮЩИЕ правила (менять их не надо):\n")
+                existingRules.forEachIndexed { i, r -> append(i + 1).append(". ").append(r.text).append('\n') }
+                append(
+                    "НЕ предлагай эти правила снова — ни дословно, ни перефразированными, " +
+                        "ни их частные случаи. Если правка владельца лишь подтверждает " +
+                        "действующее правило — пропусти её. Предлагай только то, чего в списке нет.\n\n"
+                )
+            }
             val casesBlock = buildString {
                 cases.forEachIndexed { i, (dictated, cleaned, final) ->
                     append("СЛУЧАЙ ").append(i + 1).append(":\n")
@@ -234,7 +248,7 @@ class ClaudeProvider(
 {"dict": [...], "rules": [...]}
 Если учиться нечему — пустые массивы.
 
-$casesBlock
+$existingBlock$casesBlock
 """.trimIndent()
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
             val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
@@ -271,7 +285,6 @@ $casesBlock
             val listing = buildString {
                 rules.forEachIndexed { i, r ->
                     append(i + 1).append(". ").append(r.text)
-                    if (r.hits > 0) append(" [подтверждений: ").append(r.hits).append("]")
                     if (r.exampleBefore.isNotBlank()) {
                         append("\n   Пример: «").append(r.exampleBefore)
                             .append("» → «").append(r.exampleAfter).append("»")
@@ -283,10 +296,10 @@ $casesBlock
 Ниже — накопленные правила владельца для системы чистки диктовок.
 Они добавлялись по одному и наверняка пересекаются. Приведи набор
 в порядок:
-— слей дубли и пересечения в одно правило (подтверждения и хороший
-  пример — признак важности);
+— слей дубли и пересечения в одно правило (хороший пример — признак
+  важности);
 — обобщай НАМЕРЕНИЕ с условием применимости, а не буквальные слова;
-— убери противоречия (оставь более подтверждённое);
+— убери противоречия (оставь более конкретное и полезное);
 — каждое правило — императив не длиннее 140 символов, по-русски,
   с лучшим примером из имеющихся (before/after до 120 символов);
 — в итоге не больше 12 правил, самые важные первыми.

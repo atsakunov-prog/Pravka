@@ -46,6 +46,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Internal bookkeeping prefs, read by the Learning tab too.
         const val PREFS_INTERNAL = "pravka_internal"
         const val KEY_LAST_LEARN_BATCH = "last_learn_batch"
+        const val KEY_LAST_RULES_OPT = "last_rules_opt"
+        const val RULES_OPT_PERIOD_MS = 7L * 24 * 3600 * 1000
+        const val RULES_OPT_MIN_COUNT = 6
     }
 
     // An uncaught exception in any launched job used to kill the whole app
@@ -338,6 +341,18 @@ class PravkaAccessibilityService : AccessibilityService() {
         while (convo.size > 6) convo.removeFirst()
     }
 
+    // The chain remembers the RAW dictation at insert time; once the CLEAN
+    // lands, swap in the cleaned text - that is what actually stands in the
+    // chat, and what the next take's context should quote.
+    private fun convoUpdateLast(pkg: String?, cleaned: String) {
+        if (pkg.isNullOrBlank() || cleaned.isBlank()) return
+        val last = convo.lastOrNull() ?: return
+        if (last.pkg == pkg) {
+            convo.removeLast()
+            convo.addLast(last.copy(text = cleaned.take(500)))
+        }
+    }
+
     private fun convoContextFor(pkg: String?): String {
         if (!cachedConvoContext || pkg.isNullOrBlank()) return ""
         val now = SystemClock.elapsedRealtime()
@@ -345,7 +360,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (last.pkg != pkg || now - last.at > CONVO_GAP_MS) return ""
         val recent = convo.filter { it.pkg == pkg }.takeLast(4)
         if (recent.isEmpty()) return ""
-        val sb = StringBuilder("Мои предыдущие сообщения в этом разговоре (только для тона и связности, их не менять):\n")
+        // Bare lines: the prompt assembler wraps them in the <разговор>
+        // envelope with its own instruction - no header needed here.
+        val sb = StringBuilder()
         var used = 0
         for (e in recent) {
             if (used + e.text.length > 800) break
@@ -728,6 +745,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                         showLearnNotification(q)
                         refreshLearnBadge()
                     }
+                    maybeAutoOptimizeRules(internal)
                 }.onFailure { e ->
                     app.stats.recordError()
                     app.eventLog.add("learn batch failed: ${e.message}")
@@ -757,6 +775,33 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    // Weekly housekeeping (owner's request): when the rule set has grown,
+    // Opus consolidates it automatically - dubs merged, contradictions out,
+    // numbered core of at most 12. Runs after a successful learn batch, at
+    // most once per RULES_OPT_PERIOD_MS; the result is applied directly and
+    // logged (the manual button with its preview dialog stays available).
+    private suspend fun maybeAutoOptimizeRules(internal: android.content.SharedPreferences) {
+        val last = internal.getLong(KEY_LAST_RULES_OPT, 0L)
+        if (System.currentTimeMillis() - last < RULES_OPT_PERIOD_MS) return
+        val rules = app.rulesStore.all()
+        if (rules.size < RULES_OPT_MIN_COUNT) return
+        app.learnLog.add("автооптимизация набора правил (раз в неделю): ${rules.size} шт., запускаю Опус…")
+        app.claudeProvider.optimizeRules(rules)
+            .onSuccess { opt ->
+                app.stats.recordAux(opt.costUsd, opt.tokensIn, opt.tokensOut)
+                app.rulesStore.replaceAll(opt.rules.map { Triple(it.text, it.before, it.after) })
+                internal.edit().putLong(KEY_LAST_RULES_OPT, System.currentTimeMillis()).apply()
+                app.learnLog.add(
+                    "АВТООПТИМИЗАЦИЯ: набор заменён, ${rules.size} → ${opt.rules.size}, " +
+                        "стоила $" + "%.4f".format(java.util.Locale.US, opt.costUsd)
+                )
+            }
+            .onFailure { e ->
+                app.stats.recordError()
+                app.learnLog.add("автооптимизация НЕ УДАЛАСЬ: ${e.message} (набор не тронут)")
+            }
+    }
+
     data class QueueResult(val autoDict: Int, val pendingRules: Int)
 
     /**
@@ -782,12 +827,11 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         // New words must bias the recognizer too, same as a manual add.
         if (autoDict > 0) cachedBiasing = collectBiasing()
+        // Duplicates of EXISTING rules are prevented at the source now: the
+        // learn prompt carries the current rule set with a "don't re-propose"
+        // instruction (the old confirm-counter never worked usefully).
         val fresh = mutableListOf<ru.zf.pravka.data.LearnStore.Suggestion>()
         for (r in proposals.rules) {
-            if (app.rulesStore.confirm(r.text)) {
-                app.learnLog.add("правило ПОДТВЕРДИЛОСЬ: ${r.text}")
-                continue
-            }
             fresh.add(
                 ru.zf.pravka.data.LearnStore.Suggestion(
                     id = 0, kind = "rule", text = r.text,
@@ -1068,6 +1112,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 if (!pkg.isNullOrBlank()) {
                     app.editWatch.watch(pkg, watchDictated, outcome.result.text)
                     lastDeliveryAt = SystemClock.elapsedRealtime()
+                    convoUpdateLast(pkg, outcome.result.text)
                 }
             }
             maybeRunLearnBatch()

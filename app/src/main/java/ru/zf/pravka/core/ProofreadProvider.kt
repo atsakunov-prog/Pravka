@@ -10,6 +10,9 @@ interface ProofreadProvider {
     // returned result.
     // directive: extra task on top of the fix (style modes, redo chips).
     // contextBefore: read-only text standing before a mid-field insert.
+    // conversationContext: the owner's previous takes in the same chat -
+    //   separate from contextBefore because its INSTRUCTION differs (tone,
+    //   gender, referents - not seam punctuation).
     // modelOverride: redo chips run on a stronger model.
     suspend fun proofread(
         input: String,
@@ -19,5 +22,6 @@ interface ProofreadProvider {
         directive: String = "",
         contextBefore: String = "",
         modelOverride: String? = null,
+        conversationContext: String = "",
     ): Result<ProofreadResult>
 }
