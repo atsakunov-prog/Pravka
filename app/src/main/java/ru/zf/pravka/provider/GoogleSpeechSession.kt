@@ -356,7 +356,11 @@ class GoogleSpeechSession(
         // Segmented mode (Android 13+): a chunk finalized but the session keeps
         // listening. No restart, no deaf gap.
         override fun onSegmentResults(segmentResults: Bundle) {
-            if (!segmented) { segmented = true; onLog("segmented mode active") }
+            // "Segmented session" is Google's API name for CONTINUOUS
+            // dictation (one session, many segments) - i.e. the good v55
+            // mode. Log it in the settings-toggle vocabulary so the owner
+            // doesn't read it as the restart-per-phrase mode.
+            if (!segmented) { segmented = true; onLog("непрерывная сессия активна (segmented API)") }
             commitSegment(segmentResults, "segment")
             onPartial(head)
         }
