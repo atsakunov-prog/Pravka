@@ -81,13 +81,7 @@ class DictionaryStore(private val context: Context) {
         // A hit counter is cosmetic: serialize under the mutex, but let the
         // file write happen on the DiskWriter thread instead of holding the
         // hot-path caller (and the mutex) through a full-dictionary rewrite.
-        val json = toJson(entries).toString(2)
-        _entriesFlow.value = entries.toList()
-        DiskWriter.post {
-            val tmp = File(context.filesDir, "$FILE_NAME.tmp")
-            tmp.writeText(json)
-            tmp.renameTo(file)
-        }
+        persist()
     }
 
     suspend fun exportJson(): String = mutex.withLock {
@@ -119,9 +113,9 @@ class DictionaryStore(private val context: Context) {
             }.getOrNull()
             val assetSeedVersion = seedRoot?.optInt("seedVersion", 1) ?: 1
 
-            val fileRoot = if (file.exists()) {
-                runCatching { JSONObject(file.readText()) }.getOrNull()
-            } else null
+            // A corrupt dictionary quarantines to .corrupt instead of staying
+            // in place: the reseed below then can't overwrite the owner's data.
+            val fileRoot = StoreFiles.readOrQuarantine(file) { JSONObject(it) }
 
             entries = (fileRoot ?: seedRoot)
                 ?.let { runCatching { parseEntries(it) }.getOrNull() }
@@ -143,26 +137,30 @@ class DictionaryStore(private val context: Context) {
                     }
                 }
                 seedVersion = assetSeedVersion
-                persistBlocking()
+                persistQueued()
             }
             if (fileRoot == null) {
                 seedVersion = assetSeedVersion
-                persistBlocking()
+                persistQueued()
             }
         }
         loaded = true
         _entriesFlow.value = entries.toList()
     }
 
-    private suspend fun persist() {
-        withContext(Dispatchers.IO) { persistBlocking() }
+    // EVERY dictionary write goes through the single DiskWriter thread, with
+    // the JSON serialized while the mutex is still held: state order == write
+    // order, and two writers can never interleave on the tmp file. (The old
+    // split - persistBlocking on Dispatchers.IO racing incrementHits' posted
+    // write - was the one way to corrupt this file.)
+    private fun persist() {
+        persistQueued()
         _entriesFlow.value = entries.toList()
     }
 
-    private fun persistBlocking() {
-        val tmp = File(context.filesDir, "$FILE_NAME.tmp")
-        tmp.writeText(toJson(entries).toString(2))
-        tmp.renameTo(file)
+    private fun persistQueued() {
+        val json = toJson(entries).toString(2)
+        DiskWriter.post { StoreFiles.writeAtomic(file, json) }
     }
 
     private fun parseEntries(root: JSONObject): MutableList<DictEntry> {

@@ -28,6 +28,8 @@ class EvalStore(private val context: Context) {
     private fun ensureLoaded() {
         if (loaded) return
         loaded = true
+        // JSONL is line-resilient (a torn line drops alone), but the write
+        // must still be atomic so a kill can't truncate the whole set.
         runCatching {
             val f = file()
             if (!f.exists()) return
@@ -42,7 +44,8 @@ class EvalStore(private val context: Context) {
 
     private fun persist() {
         runCatching {
-            file().writeText(
+            StoreFiles.writeAtomic(
+                file(),
                 items.joinToString("\n") { i ->
                     JSONObject().put("id", i.id).put("input", i.input).put("expected", i.expected).toString()
                 } + if (items.isEmpty()) "" else "\n"
@@ -105,7 +108,7 @@ class EvalStore(private val context: Context) {
                     }
                 })
             }
-            resultsFile().writeText(o.toString())
+            StoreFiles.writeAtomic(resultsFile(), o.toString())
         }
     }
 

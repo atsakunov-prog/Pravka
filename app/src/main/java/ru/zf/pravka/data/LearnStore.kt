@@ -37,26 +37,26 @@ class LearnStore(private val context: Context) {
     private fun ensureLoaded() {
         if (loaded) return
         loaded = true
-        runCatching {
-            val f = file()
-            if (!f.exists()) {
-                // First run: pre-seed the owner's known preference so it is one
-                // tap away instead of waiting for the learning loop to find it.
-                items.add(
-                    Suggestion(
-                        id = 1, kind = "rule",
-                        text = "Устные перечисления («во-первых, во-вторых…») в сообщениях-перечнях оформляй нумерованным списком: каждый пункт с новой строки — «1.», «2.».",
-                        exampleBefore = "во-первых надо подписать договор во-вторых согласовать сроки",
-                        exampleAfter = "1. Надо подписать договор.\n2. Согласовать сроки.",
-                    )
+        if (!file().exists()) {
+            // First run: pre-seed the owner's known preference so it is one
+            // tap away instead of waiting for the learning loop to find it.
+            items.add(
+                Suggestion(
+                    id = 1, kind = "rule",
+                    text = "Устные перечисления («во-первых, во-вторых…») в сообщениях-перечнях оформляй нумерованным списком: каждый пункт с новой строки — «1.», «2.».",
+                    exampleBefore = "во-первых надо подписать договор во-вторых согласовать сроки",
+                    exampleAfter = "1. Надо подписать договор.\n2. Согласовать сроки.",
                 )
-                persist()
-                return
-            }
-            val array = JSONArray(f.readText())
+            )
+            persist()
+            return
+        }
+        val parsed = StoreFiles.readOrQuarantine(file()) { text ->
+            val array = JSONArray(text)
+            val out = mutableListOf<Suggestion>()
             for (i in 0 until array.length()) {
                 val o = array.optJSONObject(i) ?: continue
-                items.add(
+                out.add(
                     Suggestion(
                         id = o.optLong("id"),
                         kind = o.optString("kind"),
@@ -70,7 +70,9 @@ class LearnStore(private val context: Context) {
                     )
                 )
             }
+            out
         }
+        if (parsed != null) items.addAll(parsed)
     }
 
     private fun persist() {
@@ -91,7 +93,7 @@ class LearnStore(private val context: Context) {
                     }
                 )
             }
-            file().writeText(array.toString())
+            StoreFiles.writeAtomic(file(), array.toString())
         }
     }
 

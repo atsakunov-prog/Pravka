@@ -32,16 +32,19 @@ class EditWatchStore(private val context: Context) {
 
     private fun file() = File(context.filesDir, "pravka-edit-watch.json")
 
+    // Monotonic within the process: prevents ID reuse when the max entry is
+    // removed while a learn batch still holds the old IDs for deferred remove().
+    private var lastIssuedId = 0L
+
     private fun ensureLoaded() {
         if (loaded) return
         loaded = true
-        runCatching {
-            val f = file()
-            if (!f.exists()) return
-            val array = JSONArray(f.readText())
+        val parsed = StoreFiles.readOrQuarantine(file()) { text ->
+            val array = JSONArray(text)
+            val out = mutableListOf<Entry>()
             for (i in 0 until array.length()) {
                 val o = array.optJSONObject(i) ?: continue
-                entries.add(
+                out.add(
                     Entry(
                         id = o.optLong("id"),
                         pkg = o.optString("pkg"),
@@ -53,7 +56,10 @@ class EditWatchStore(private val context: Context) {
                     )
                 )
             }
+            out
         }
+        if (parsed != null) entries.addAll(parsed)
+        lastIssuedId = entries.maxOfOrNull { it.id } ?: 0L
     }
 
     private fun persist() {
@@ -72,7 +78,7 @@ class EditWatchStore(private val context: Context) {
                     }
                 )
             }
-            file().writeText(array.toString())
+            StoreFiles.writeAtomic(file(), array.toString())
         }
     }
 
@@ -81,7 +87,8 @@ class EditWatchStore(private val context: Context) {
         mutex.withLock {
             ensureLoaded()
             prune()
-            val id = (entries.maxOfOrNull { it.id } ?: 0L) + 1
+            lastIssuedId = maxOf(lastIssuedId, entries.maxOfOrNull { it.id } ?: 0L) + 1
+            val id = lastIssuedId
             entries.add(
                 Entry(
                     id = id, pkg = pkg,
@@ -170,5 +177,10 @@ class EditWatchStore(private val context: Context) {
     companion object {
         // How long after delivery an edit still counts as "editing our text".
         const val WATCH_WINDOW_MS = 15L * 60 * 1000
+
+        // How long an edit must stay quiet before it is ripe for the batch.
+        // Shared by the service (gate) and the UI (the "созреет к..." label) -
+        // it used to live as a re-typed 10-minute literal on both sides.
+        const val RIPE_QUIET_MS = 10L * 60 * 1000
     }
 }

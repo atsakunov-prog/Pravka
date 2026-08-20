@@ -37,18 +37,19 @@ class RulesStore(private val context: Context) {
     private fun ensureLoaded() {
         if (loaded) return
         loaded = true
-        runCatching {
-            val f = file()
-            if (!f.exists()) return
-            val array = JSONArray(f.readText())
+        // A corrupt file is quarantined, never silently replaced by the next
+        // persist: these rules are the learning loop's whole memory.
+        val parsed = StoreFiles.readOrQuarantine(file()) { text ->
+            val array = JSONArray(text)
+            val out = mutableListOf<Rule>()
             for (i in 0 until array.length()) {
                 val o = array.optJSONObject(i) ?: continue
-                val text = o.optString("text").trim()
-                if (text.isEmpty()) continue
-                rules.add(
+                val t = o.optString("text").trim()
+                if (t.isEmpty()) continue
+                out.add(
                     Rule(
                         id = o.optLong("id"),
-                        text = text,
+                        text = t,
                         enabled = o.optBoolean("enabled", true),
                         createdTs = o.optLong("created"),
                         exampleBefore = o.optString("before"),
@@ -57,7 +58,9 @@ class RulesStore(private val context: Context) {
                     )
                 )
             }
+            out
         }
+        if (parsed != null) rules.addAll(parsed)
     }
 
     private fun persist() {
@@ -76,7 +79,7 @@ class RulesStore(private val context: Context) {
                     }
                 )
             }
-            file().writeText(array.toString())
+            StoreFiles.writeAtomic(file(), array.toString())
         }
     }
 
