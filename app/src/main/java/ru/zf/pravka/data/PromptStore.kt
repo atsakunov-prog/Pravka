@@ -21,7 +21,10 @@ class PromptStore(private val context: Context) {
         CLEAN_CLAUDE("clean_claude"),
         BUSINESS("business"),
         SOFTEN("soften"),
-        PROSE("prose");
+        PROSE("prose"),
+        // Meeting transcripts (Whisper on the owner's computer) - used only
+        // by the "copy full prompt" button, never sent from the app itself.
+        MEETING("meeting");
 
         companion object {
             fun of(mode: ProofreadMode): PromptId = when (mode) {
@@ -37,6 +40,7 @@ class PromptStore(private val context: Context) {
         PromptId.BUSINESS -> Prompts.BUSINESS
         PromptId.SOFTEN -> Prompts.SOFTEN
         PromptId.PROSE -> Prompts.PROSE
+        PromptId.MEETING -> Prompts.MEETING
     }
 
     fun overrideFlow(id: PromptId): Flow<String?> =

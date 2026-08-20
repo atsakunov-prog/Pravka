@@ -122,6 +122,7 @@
     <string name="prompt_title_business">Деловой стиль</string>
     <string name="prompt_title_soften">Мягче</string>
     <string name="prompt_title_prose">Художественная проза</string>
+    <string name="prompt_title_meeting">Встреча (расшифровка)</string>
     <string name="tab_learning">Обучение</string>
     <string name="tab_logs">Логи</string>
     <string name="prompt_modified">изменён</string>

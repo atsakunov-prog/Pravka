@@ -1526,6 +1526,7 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.BUSINESS to R.string.prompt_title_business,
     PromptStore.PromptId.SOFTEN to R.string.prompt_title_soften,
     PromptStore.PromptId.PROSE to R.string.prompt_title_prose,
+    PromptStore.PromptId.MEETING to R.string.prompt_title_meeting,
 )
 
 @Composable
@@ -1550,6 +1551,50 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
     ) {
         ScreenTitle(stringResource(R.string.prompts_header))
         HintText(stringResource(R.string.prompts_subheader))
+
+        // Business-season workflow: Whisper transcribes meetings on the
+        // owner's computer; this assembles the MEETING prompt + the FULL
+        // current dictionary + the approved rules into one clipboard-ready
+        // request for a Claude chat. Nothing is sent from the app.
+        SectionCard(label = "Для встреч") {
+            val ctx = LocalContext.current
+            val app = ctx.applicationContext as PravkaApp
+            HintText(
+                "Собирает полный запрос для чистки расшифровки встречи — промпт " +
+                    "«Встреча» + весь текущий словарь + принятые правила — и кладёт " +
+                    "в буфер. Вставь его в чат с Клодом и добавь расшифровку."
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = {
+                app.appScope.launch {
+                    val template = promptStore.effective(PromptStore.PromptId.MEETING)
+                    val entries = app.dictionaryStore.all().filter { it.enabled }
+                    val dictListing = if (entries.isEmpty()) "—" else buildString {
+                        for (e in entries) {
+                            when (e.mode) {
+                                DictMode.HARD -> append("«").append(e.from).append("» → «").append(e.to).append("»")
+                                DictMode.HINT -> {
+                                    append("«").append(e.from).append("» → «").append(e.to).append("»")
+                                    if (e.note.isNotBlank()) append(" (").append(e.note).append(")")
+                                }
+                                DictMode.PROTECT -> append("«").append(e.from)
+                                    .append("» — правильное написание, не менять")
+                            }
+                            append('\n')
+                        }
+                    }.trim()
+                    val rulesBlock = app.rulesStore.enabledBlock()
+                    val full = buildString {
+                        append(template.replace(Prompts.PLACEHOLDER_DICT, dictListing))
+                        if (rulesBlock.isNotBlank()) append("\n\n").append(rulesBlock)
+                        append("\n\n=== РАСШИФРОВКА ВСТРЕЧИ (вставь ниже) ===\n")
+                    }
+                    ru.zf.pravka.target.ClipboardTarget(ctx).write(full)
+                    Feedback.toast(ctx, "Скопировано: ${full.length} зн., словарь: ${entries.size}. Вставь в чат с Клодом.")
+                }
+            }) { Text("Скопировать промпт для встречи") }
+        }
+
         for (id in PromptStore.PromptId.entries) {
             val override by promptStore.overrideFlow(id).collectAsState(initial = null)
             val effective = override ?: promptStore.factory(id)
