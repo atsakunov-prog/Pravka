@@ -1,5 +1,6 @@
 package ru.zf.pravka.core
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.data.EvalStore
@@ -21,7 +22,9 @@ object EvalRunner {
         if (running) return
         running = true
         done = 0
-        app.appScope.launch {
+        // Default dispatcher: dictionary regexes and the word-LCS scorer are
+        // CPU work that has no business on the main thread.
+        app.appScope.launch(Dispatchers.Default) {
             try {
                 val items = app.evalStore.all()
                 total = items.size
@@ -31,30 +34,43 @@ object EvalRunner {
                 var exact = 0
                 var sum = 0.0
                 var spend = 0.0
+                var failures = 0
                 for (item in items) {
                     val prepared = applier.prepare(item.input)
                     val res = app.claudeProvider.proofread(
                         prepared.text, ProofreadMode.CLEAN, prepared.dictBlock,
                         onDelta = null, directive = "", contextBefore = "", modelOverride = null,
                     ).getOrNull()
-                    if (res != null) {
-                        spend += res.costUsd
-                        app.stats.recordAux(res.costUsd, res.inputTokens, res.outputTokens)
+                    done++
+                    if (res == null) {
+                        // A transient API failure must not score as 0% - that
+                        // records a catastrophic prompt regression that never
+                        // happened. Skip the item and say so.
+                        failures++
+                        app.stats.recordError()
+                        app.learnLog.add("эвал ${done}/${total}: сбой запроса, пункт пропущен")
+                        continue
                     }
-                    val actual = res?.text ?: ""
+                    spend += res.costUsd
+                    app.stats.recordAux(res.costUsd, res.inputTokens, res.outputTokens)
+                    val actual = res.text
                     val score = similarity(item.expected, actual)
                     if (normalized(item.expected) == normalized(actual)) exact++
                     sum += score
                     rows.add(EvalStore.ResultRow(item.id, score, actual))
-                    done++
                     app.learnLog.add("эвал ${done}/${total}: ${"%.0f".format(score * 100)}%")
                 }
-                val avg = if (rows.isEmpty()) 0.0 else sum / rows.size
-                app.evalStore.saveRun("текущий", avg, exact, rows.size, rows.sortedBy { it.score })
-                app.learnLog.add(
-                    "эвал завершён: средний ${"%.1f".format(avg * 100)}%, точных $exact из ${rows.size}, " +
-                        "стоил $" + "%.4f".format(java.util.Locale.US, spend)
-                )
+                if (rows.isEmpty()) {
+                    app.learnLog.add("эвал не удался: все ${failures} запросов провалились, результат не сохранён")
+                } else {
+                    val avg = sum / rows.size
+                    app.evalStore.saveRun("текущий", avg, exact, rows.size, rows.sortedBy { it.score })
+                    val failNote = if (failures > 0) ", сбоев сети: $failures (не в счёте)" else ""
+                    app.learnLog.add(
+                        "эвал завершён: средний ${"%.1f".format(avg * 100)}%, точных $exact из ${rows.size}$failNote, " +
+                            "стоил $" + "%.4f".format(java.util.Locale.US, spend)
+                    )
+                }
             } finally {
                 running = false
             }

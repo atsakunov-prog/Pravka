@@ -36,4 +36,28 @@ class Recordings(private val context: Context) {
     fun delete(id: String) {
         File(dir, id).takeIf { it.exists() }?.delete()
     }
+
+    /**
+     * Keeps the retry stash bounded (16 kHz mono is ~2 MB per minute of
+     * speech; a week of failed transcriptions used to accumulate forever):
+     * - header-only files (a crash before any audio) can never transcribe -
+     *   deleted right away;
+     * - everything older than [maxAgeDays] goes: a retry the owner has not
+     *   made in two weeks is not going to happen;
+     * - beyond that, the oldest files go until the total fits [maxTotalBytes].
+     */
+    fun prune(maxAgeDays: Int = 14, maxTotalBytes: Long = 200L * 1024 * 1024) {
+        val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".wav") } ?: return
+        val cutoff = System.currentTimeMillis() - maxAgeDays * 24L * 3600 * 1000
+        val survivors = mutableListOf<File>()
+        for (f in files) {
+            if (f.length() <= 44L || f.lastModified() < cutoff) f.delete() else survivors.add(f)
+        }
+        var total = survivors.sumOf { it.length() }
+        for (f in survivors.sortedBy { it.lastModified() }) {
+            if (total <= maxTotalBytes) break
+            total -= f.length()
+            f.delete()
+        }
+    }
 }

@@ -76,14 +76,17 @@ $samples
 
                 client.newCall(request).execute().use { response ->
                     val text = response.body?.string().orEmpty()
-                    require(response.isSuccessful) { "API ${response.code}" }
-                    val root = JSONObject(text)
+                    require(response.isSuccessful) {
+                        if (response.code == 429) "Слишком много запросов, подожди немного."
+                        else "Сервер Anthropic ответил ошибкой ${response.code}."
+                    }
+                    val root = runCatching { JSONObject(text) }
+                        .getOrElse { throw IllegalStateException("Не получилось разобрать ответ модели.") }
                     // Count the miner's spend into the same statistics.
                     root.optJSONObject("usage")?.let { u ->
                         val tIn = u.optInt("input_tokens")
                         val tOut = u.optInt("output_tokens")
-                        val cost = tIn / 1_000_000.0 * 3.0 + tOut / 1_000_000.0 * 15.0
-                        stats.recordAux(cost, tIn, tOut)
+                        stats.recordAux(Pricing.costUsd(Settings.MODEL_SONNET, tIn, tOut), tIn, tOut)
                     }
                     val content = root.getJSONArray("content")
                     val sb = StringBuilder()
@@ -104,7 +107,8 @@ $samples
         val start = text.indexOf('[')
         val end = text.lastIndexOf(']')
         if (start < 0 || end <= start) return emptyList()
-        val array = JSONArray(text.substring(start, end + 1))
+        val array = runCatching { JSONArray(text.substring(start, end + 1)) }
+            .getOrElse { throw IllegalStateException("Модель вернула не тот формат — попробуй ещё раз.") }
         val out = mutableListOf<Suggestion>()
         for (i in 0 until array.length()) {
             val o = array.optJSONObject(i) ?: continue

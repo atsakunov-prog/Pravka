@@ -29,7 +29,34 @@ class ClaudeProvider(
 
     override val id = "claude"
 
-    class ApiException(message: String, val retryable: Boolean = false) : Exception(message)
+    class ApiException(
+        message: String,
+        val retryable: Boolean = false,
+        // 429 backs off longer than a 5xx blip - an instant retry during real
+        // rate limiting just buys a second 429.
+        val retryDelayMs: Long = 1500,
+    ) : Exception(message)
+
+    // runCatching would swallow CancellationException too - then a job killed
+    // by "Сброс" finishes its epilogue as a Failed result and fights the job
+    // that replaced it. Cancellation must stay cancellation.
+    private inline fun <T> runCatchingApi(block: () -> T): Result<T> =
+        try {
+            Result.success(block())
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+
+    // In-flight HTTP calls, so "Сброс" can close the socket for real instead
+    // of letting a zombie stream bill to completion in the background.
+    private val activeCalls = java.util.concurrent.CopyOnWriteArraySet<okhttp3.Call>()
+
+    /** Hard-cancels every in-flight API call. */
+    fun cancelActive() {
+        activeCalls.forEach { runCatching { it.cancel() } }
+    }
 
     private data class ApiReply(
         val text: String,
@@ -49,7 +76,7 @@ class ClaudeProvider(
         modelOverride: String?,
     ): Result<ProofreadResult> =
         withContext(Dispatchers.IO) {
-            runCatching {
+            runCatchingApi {
                 val apiKey = settings.apiKey()
                 if (apiKey.isBlank()) {
                     throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
@@ -110,7 +137,7 @@ class ClaudeProvider(
         onDelta: ((String) -> Unit)? = null,
     ): Result<ProofreadResult> =
         withContext(Dispatchers.IO) {
-            runCatching {
+            runCatchingApi {
                 val apiKey = settings.apiKey()
                 if (apiKey.isBlank()) {
                     throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
@@ -167,7 +194,7 @@ class ClaudeProvider(
     suspend fun learnBatch(
         cases: List<Triple<String, String, String>>,
     ): Result<LearnProposals> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingApi {
             val apiKey = settings.apiKey()
             if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
             require(cases.isNotEmpty()) { "Нет правок для анализа." }
@@ -237,7 +264,7 @@ $casesBlock
     suspend fun optimizeRules(
         rules: List<ru.zf.pravka.data.RulesStore.Rule>,
     ): Result<OptimizedRules> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingApi {
             val apiKey = settings.apiKey()
             if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
             require(rules.size >= 2) { "Оптимизировать нечего: правил меньше двух." }
@@ -290,7 +317,8 @@ $listing
         val start = text.indexOf('{')
         val end = text.lastIndexOf('}')
         if (start < 0 || end <= start) return LearnProposals(emptyList(), emptyList())
-        val o = JSONObject(text.substring(start, end + 1))
+        val o = runCatching { JSONObject(text.substring(start, end + 1)) }
+            .getOrElse { throw ApiException("Модель вернула не тот формат — попробуй разобрать ещё раз.") }
         val dict = mutableListOf<DictProposal>()
         o.optJSONArray("dict")?.let { array ->
             for (i in 0 until array.length()) {
@@ -318,20 +346,13 @@ $listing
         return LearnProposals(dict, rules)
     }
 
-    // USD per million tokens: input to output. Cache pricing derives from
-    // the input price: 1h-TTL writes cost 2x, reads 0.1x.
-    private val prices = mapOf(
-        Settings.MODEL_SONNET to (3.0 to 15.0),
-        Settings.MODEL_OPUS to (5.0 to 25.0),
+    private fun costUsd(model: String, reply: ApiReply): Double = Pricing.costUsd(
+        model,
+        inputTokens = reply.inputTokens,
+        outputTokens = reply.outputTokens,
+        cacheWriteTokens = reply.cacheWriteTokens,
+        cacheReadTokens = reply.cacheReadTokens,
     )
-
-    private fun costUsd(model: String, reply: ApiReply): Double {
-        val (pIn, pOut) = prices[model] ?: return 0.0
-        val inputCost =
-            (reply.inputTokens + 2.0 * reply.cacheWriteTokens + 0.1 * reply.cacheReadTokens) /
-                1_000_000.0 * pIn
-        return inputCost + reply.outputTokens / 1_000_000.0 * pOut
-    }
 
     private fun requestWithOneRetry(
         apiKey: String,
@@ -343,14 +364,16 @@ $listing
         // Spec 6.1: one retry on network error or timeout; none on client 4xx.
         // Transient server blips (429/500/529 "overloaded") last seconds - one
         // short-backoff retry turns them from a user-visible failure into
-        // nothing. Previously only IOException retried and these failed hard.
+        // nothing. A short pause before the network retry too: an instant
+        // re-POST into the same dead socket just fails the same way.
         return try {
             request(apiKey, model, parts, input, onDelta)
         } catch (e: IOException) {
+            Thread.sleep(1000)
             request(apiKey, model, parts, input, onDelta)
         } catch (e: ApiException) {
             if (!e.retryable) throw e
-            Thread.sleep(1500)
+            Thread.sleep(e.retryDelayMs)
             request(apiKey, model, parts, input, onDelta)
         }
     }
@@ -363,7 +386,10 @@ $listing
         onDelta: ((String) -> Unit)?,
     ): ApiReply {
         // Rough token estimate for Russian text (~2.5 chars/token) + 30% headroom.
-        val estimatedInputTokens = input.length / 2 + 1
+        // Counts BOTH slots: assist/learn tasks carry all their content in
+        // dictPart with input="" - estimating from input alone collapsed their
+        // budget to the 1024 floor, deterministically truncating long texts.
+        val estimatedInputTokens = (parts.dictPart.length + input.length) / 2 + 1
         // Opus (redo chips) thinks adaptively by default, and thinking tokens
         // count toward max_tokens: without headroom a 350-char redo burned the
         // whole budget on thinking and died with stop_reason=max_tokens before
@@ -437,11 +463,37 @@ $listing
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        client.newCall(request).execute().use { response ->
+        val call = client.newCall(request)
+        activeCalls.add(call)
+        try {
+            return executeStreaming(call, onDelta)
+        } catch (e: IOException) {
+            // "Сброс" closed the socket: that is a cancellation, not a network
+            // error - it must NOT fall into the retry path and re-bill.
+            if (call.isCanceled()) throw kotlin.coroutines.cancellation.CancellationException("Отменено")
+            if (e is java.io.InterruptedIOException) {
+                // Read timeout after 90s of silence: the server almost
+                // certainly finished (and billed) the generation - a blind
+                // re-POST doubles the cost for an answer the owner stopped
+                // waiting for long ago. Fail honestly instead.
+                throw ApiException("Сеть молчала до таймаута. Проверь интернет и попробуй ещё раз.")
+            }
+            throw e
+        } finally {
+            activeCalls.remove(call)
+        }
+    }
+
+    private fun executeStreaming(call: okhttp3.Call, onDelta: ((String) -> Unit)?): ApiReply {
+        call.execute().use { response ->
             if (!response.isSuccessful) {
                 val responseBody = response.body?.string().orEmpty()
                 val transient = response.code == 429 || response.code in 500..599
-                throw ApiException(humanReadableError(response.code, responseBody), retryable = transient)
+                throw ApiException(
+                    humanReadableError(response.code, responseBody),
+                    retryable = transient,
+                    retryDelayMs = if (response.code == 429) 4000 else 1500,
+                )
             }
             val source = response.body?.source() ?: throw ApiException("Пустой ответ API.")
 
@@ -488,10 +540,14 @@ $listing
                     }
                     "error" -> {
                         val err = event.optJSONObject("error")
-                        val overloaded = err?.optString("type") == "overloaded_error"
+                        // A mid-stream server error is the SSE face of a 5xx:
+                        // same failures retry whether they arrive as an HTTP
+                        // status or inside the stream.
+                        val type = err?.optString("type").orEmpty()
+                        val transient = type == "overloaded_error" || type == "api_error"
                         throw ApiException(
                             "Anthropic: ${err?.optString("message") ?: "ошибка стрима"}",
-                            retryable = overloaded,
+                            retryable = transient,
                         )
                     }
                     // ping / content_block_start / content_block_stop / message_stop
@@ -501,6 +557,9 @@ $listing
                 "end_turn", "stop_sequence" -> Unit
                 "max_tokens" -> throw ApiException("Ответ модели обрезан по длине. Попробуй ещё раз или сократи текст.")
                 "refusal" -> throw ApiException("Модель отказалась обрабатывать этот текст.")
+                // Clean connection drop before message_delta: same event as an
+                // IOException mid-stream, so it retries the same way.
+                "" -> throw ApiException("Соединение оборвалось на середине ответа.", retryable = true)
                 else -> throw ApiException("Неожиданный ответ модели ($stopReason).")
             }
             if (sb.isEmpty()) throw ApiException("Модель вернула пустой ответ.")

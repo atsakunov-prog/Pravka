@@ -110,7 +110,10 @@ class DictationService : Service() {
         startForegroundWithType()
         acquireWakeLock()
 
-        currentFile = Recordings(this).newFile()
+        val recordings = Recordings(this)
+        // Cheap directory sweep at the start of a take, never in its hot path.
+        runCatching { recordings.prune() }
+        currentFile = recordings.newFile()
         val minBuf = AudioRecord.getMinBufferSize(
             WavFile.SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
@@ -137,9 +140,15 @@ class DictationService : Service() {
         recorder.startRecording()
         worker = thread(name = "pravka-mic") {
             val buf = ByteArray(minBuf)
-            while (active) {
-                val n = recorder.read(buf, 0, buf.size)
-                if (n > 0) out.write(buf, n)
+            // The write is guarded: if stop() outwaits the 500ms join while
+            // this thread is blocked in read(), the writer may already be
+            // closed when the read returns - an uncaught IOException on this
+            // raw thread would kill the whole process mid-handoff.
+            runCatching {
+                while (active) {
+                    val n = recorder.read(buf, 0, buf.size)
+                    if (n > 0 && active) out.write(buf, n)
+                }
             }
         }
     }

@@ -376,6 +376,19 @@ object Prompts {
                 "<контекст>\n" + context + "\n</контекст>\n\n"
         }
 
+        // The standard template wraps {DICT} in <словарь> tags. Those tags must
+        // travel WITH the dict content into the variable slot: splitting after
+        // the opening tag used to leave it in the stable prefix, so the style
+        // directive and the conversation context were injected INSIDE the
+        // dictionary tags - the model was told they were dictionary entries.
+        val tagged = Regex("<словарь>\\n*\\{DICT\\}\\n*</словарь>\\n*").find(before)
+        if (tagged != null) {
+            val stable = before.substring(0, tagged.range.first).trim() + "\n\n"
+            val rest = before.substring(tagged.range.last + 1).trimStart()
+            val tail = if (inputIdx >= 0) rest else rest.trimEnd() + "\n\n"
+            val taggedDict = "<словарь>\n" + dictBlock.trim() + "\n</словарь>\n\n"
+            return PromptParts(stable, taggedDict + extras + tail, after)
+        }
         val match = Regex("\\n*\\{DICT\\}\\n*").find(before)
         return if (match != null) {
             val stable = before.substring(0, match.range.first).trim() + "\n\n"
