@@ -61,6 +61,13 @@ class PravkaAccessibilityService : AccessibilityService() {
 
         // Chrome flavors whose url bar the per-site watcher reads.
         private val CHROME_PKGS = setOf("com.android.chrome", "com.chrome.beta", "com.chrome.dev")
+
+        // Windows that never host our text fields. Querying their node tree
+        // is not just useless - during a fold/lock transition their process
+        // is at its busiest, and a synchronous a11y query into it can hang
+        // for the full accessibility timeout and freeze the transition (the
+        // owner's 3-10s black screen on fold/unfold).
+        private val SYSTEM_WINDOW_PKGS = setOf("android", "com.android.systemui")
         const val RULES_OPT_PERIOD_MS = 7L * 24 * 3600 * 1000
         const val RULES_OPT_MIN_COUNT = 6
     }
@@ -196,6 +203,20 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        // Watchdog: the a11y pipeline serializes on this method - anything
+        // slow here stalls system transitions. Slow events land in the log
+        // so the next freeze report comes with a culprit attached.
+        val startedAt = SystemClock.uptimeMillis()
+        handleAccessibilityEvent(event)
+        val took = SystemClock.uptimeMillis() - startedAt
+        if (took > 200) {
+            runCatching {
+                app.eventLog.add("МЕДЛЕННОЕ a11y-событие ${event.eventType} из ${event.packageName}: $took мс")
+            }
+        }
+    }
+
+    private fun handleAccessibilityEvent(event: AccessibilityEvent) {
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
                 val source = event.source ?: return
@@ -234,19 +255,31 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                val pkg = event.packageName?.toString()
                 // Toasts and our own overlays fire this event too - ignore
                 // ourselves, or our own UI appearing would count as an app
                 // switch and hide the button.
-                if (event.packageName == packageName) return
+                if (pkg == packageName) return
                 // Chrome came to the front: start counting per-site time.
-                event.packageName?.toString()?.let { if (it in CHROME_PKGS) startSitePolling() }
+                if (pkg != null && pkg in CHROME_PKGS) startSitePolling()
+                // Keyguard/SystemUI windows storm this event exactly while
+                // their process is busiest (fold, lock) - never query them.
+                if (pkg == null || pkg in SYSTEM_WINDOW_PKGS ||
+                    pkg.contains("keyguard", ignoreCase = true)
+                ) return
                 // While a take is live the button is pinned visible in every app
                 // and hide() early-returns anyway, so the tree walk below would
                 // be pure waste - and the owner is expected to switch apps
                 // mid-dictation, which is exactly when it would block the
                 // recognizer's callbacks.
                 if (googleSession != null || zSession != null || DictationService.recording) return
-                if (liveFocusedEditableNode() != null) floatingButton?.show()
+                // Window storms (fold, app launch animations) collapse to one
+                // probe per quarter second; the focus events keep the button
+                // honest in between.
+                val nowUp = SystemClock.uptimeMillis()
+                if (nowUp - lastWindowProbeAt < 250) return
+                lastWindowProbeAt = nowUp
+                if (runCatching { liveFocusedEditableNode() }.getOrNull() != null) floatingButton?.show()
                 else floatingButton?.hide()
             }
         }
@@ -475,6 +508,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     // wasteful, and irrelevant once no delivery is recent.
     @Volatile private var lastWatchProbeAt = 0L
     @Volatile private var lastDeliveryAt = 0L
+    @Volatile private var lastWindowProbeAt = 0L
 
     // The gray "отмена" bubble beside the ticker: throw the take away.
     @Volatile private var discardTake = false
@@ -1447,12 +1481,17 @@ class PravkaAccessibilityService : AccessibilityService() {
     // (scrolling, fullscreen) the last domain keeps accruing; when Chrome
     // leaves the front the poller counts misses and stops itself.
 
-    private val siteBuckets = HashMap<String, Long>()  // domain -> ms, pending flush
+    // The whole poller lives on its own thread: node queries are synchronous
+    // binder calls into Chrome's process and may block for seconds when that
+    // process is busy - the service MAIN thread must never wait on them (a
+    // stalled a11y main thread freezes system transitions; see the fold bug).
+    private val siteThread = android.os.HandlerThread("pravka-sites").apply { start() }
+    private val siteHandler by lazy { android.os.Handler(siteThread.looper) }
+    private val siteBuckets = HashMap<String, Long>()  // domain -> ms; site thread only
     private var siteCurrentDomain: String? = null
     private var siteLastTick = 0L
-    private var sitePolling = false
+    @Volatile private var sitePolling = false
     private var siteMisses = 0
-    private val siteHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val sitePoll = object : Runnable {
         override fun run() {
             pollChromeSite()
@@ -1463,17 +1502,19 @@ class PravkaAccessibilityService : AccessibilityService() {
     private fun startSitePolling() {
         if (sitePolling) return
         sitePolling = true
-        siteMisses = 0
-        siteCurrentDomain = null
-        siteLastTick = System.currentTimeMillis()
         siteHandler.removeCallbacks(sitePoll)
+        siteHandler.post {
+            siteMisses = 0
+            siteCurrentDomain = null
+            siteLastTick = System.currentTimeMillis()
+        }
         siteHandler.post(sitePoll)
     }
 
     private fun stopSitePolling() {
         sitePolling = false
         siteHandler.removeCallbacks(sitePoll)
-        flushSiteTime(System.currentTimeMillis(), null, force = true)
+        siteHandler.post { flushSiteTime(System.currentTimeMillis(), null, force = true) }
     }
 
     private fun pollChromeSite() {
@@ -1858,6 +1899,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         // The foldable changes configuration on fold/unfold - reposition.
         floatingButton?.onConfigurationChanged()
         zButton?.onConfigurationChanged()
+        // A fold means displays are switching - no site polling until Chrome
+        // shows up again on the other screen.
+        stopSitePolling()
     }
 
     override fun onInterrupt() = Unit
@@ -1869,6 +1913,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         pomodoroHandler.removeCallbacks(pomodoroTicker)
         // Flush the pending per-site minutes before the scope dies with us.
         runCatching { stopSitePolling() }
+        runCatching { siteThread.quitSafely() }
         googleSession?.stop()
         googleSession = null
         zSession?.stop()
