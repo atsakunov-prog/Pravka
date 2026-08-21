@@ -83,7 +83,7 @@ class ZasechkaEngine(
                         // chain's own day; a named end also closes an open дело.
                         val newStart = timeOnDay(first.start, p.startTime)
                         val newEnd = timeOnDay(first.start, p.endTime)
-                        var shown = target
+                        var shown: ZasechkaStore.Entry = target
                         for (f in chain) {
                             var nf = f.copy(
                                 title = p.title.ifBlank { f.title },
