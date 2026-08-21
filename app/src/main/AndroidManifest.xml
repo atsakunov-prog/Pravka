@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -10,6 +11,13 @@
     <!-- Keep the CPU awake during dictation so recognition doesn't stall if
          the device would otherwise doze. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Засечка, телефонный слой: статистика использования приложений
+         (спец-доступ, выдаётся в настройках) и журнал звонков - звонки
+         вставляются в ленту как прерывания с продолжением дела. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
 
     <!-- Needed to see (and bind) the system speech recognition service on
          Android 11+; without it SpeechRecognizer reports "unavailable". -->

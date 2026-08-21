@@ -68,6 +68,13 @@ class PravkaApp : Application() {
         ru.zf.pravka.core.ZasechkaEngine(claudeProvider, zasechkaStore, stats, eventLog, zasechkaSync, appScope)
     }
 
+    // The phone layer: app time, pickups, distractions; attention eaters and
+    // calls cross into the ribbon via the sweeper.
+    val phoneStore by lazy { ru.zf.pravka.data.PhoneStore(this) }
+    val phoneSweeper by lazy {
+        ru.zf.pravka.data.PhoneSweeper(this, phoneStore, zasechkaStore, settings, eventLog, zasechkaSync, appScope)
+    }
+
     // The connection pool keeps sockets ~5 min; after a longer gap the CLEAN
     // request pays DNS+TCP+TLS (~300-800ms on LTE). A dictation lasts seconds,
     // so warming the connection when a take STARTS makes the stop->fix hop skip

@@ -170,6 +170,74 @@ class ZasechkaStore(private val context: Context) {
         return closed
     }
 
+    /**
+     * A phone-detected interruption (attention-eater session, a call) lands
+     * in the ribbon retroactively. If an open entry covers [start], it is cut
+     * at [start]; with [resumePrevious] (calls) a copy of it reopens at [end]
+     * - the conversation pauses the work, it does not kill it. An open entry
+     * that STARTED inside the interruption wins instead: the auto entry is
+     * clamped to its start and nothing is spliced (the owner spoke - the
+     * owner is right).
+     *
+     * Returns null when an equal auto entry is already there (re-sweep).
+     */
+    suspend fun insertInterruption(
+        start: Long,
+        end: Long,
+        title: String,
+        category: String,
+        resumePrevious: Boolean,
+    ): Entry? = mutex.withLock {
+        ensureLoaded()
+        if (end <= start) return@withLock null
+        if (entries.any {
+                it.source == "auto" && it.title == title && kotlin.math.abs(it.start - start) < 60_000
+            }
+        ) return@withLock null
+        var actualEnd = end
+        var resumeTemplate: Entry? = null
+        val openIndex = entries.indexOfLast { it.open }
+        if (openIndex >= 0) {
+            val open = entries[openIndex]
+            if (open.start <= start) {
+                entries[openIndex] = open.copy(end = start.coerceAtLeast(open.start), synced = false)
+                if (resumePrevious) resumeTemplate = open
+            } else if (open.start < end) {
+                actualEnd = open.start
+                if (actualEnd <= start) return@withLock null
+            }
+        }
+        val entry = Entry(
+            id = nextId(),
+            start = start,
+            end = actualEnd,
+            raw = "",
+            title = title.trim(),
+            category = category.trim(),
+            client = "",
+            useful = 0,
+            source = "auto",
+            synced = false,
+            createdAt = System.currentTimeMillis(),
+        )
+        entries.add(entry)
+        resumeTemplate?.let { t ->
+            entries.add(
+                t.copy(
+                    id = nextId(),
+                    start = actualEnd,
+                    end = 0L,
+                    source = "auto",
+                    synced = false,
+                    createdAt = System.currentTimeMillis(),
+                )
+            )
+        }
+        entries.sortBy { it.start }
+        persist()
+        entry
+    }
+
     /** Full replace by id. Any content change makes the row sync again. */
     suspend fun update(entry: Entry): Unit = mutex.withLock {
         ensureLoaded()

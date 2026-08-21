@@ -40,6 +40,9 @@ class Settings(private val context: Context) {
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
         private val KEY_Z_WEBHOOK = stringPreferencesKey("z_webhook_url")
+        private val KEY_Z_CALLS = booleanPreferencesKey("z_calls_to_ribbon")
+        private val KEY_Z_CALL_CATEGORY = stringPreferencesKey("z_call_category")
+        private val KEY_Z_IMMERSIVE_MIN = intPreferencesKey("z_immersive_min")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -129,6 +132,23 @@ class Settings(private val context: Context) {
     suspend fun zWebhook(): String = zWebhookFlow.first()
     suspend fun setZWebhook(value: String) {
         context.dataStore.edit { it[KEY_Z_WEBHOOK] = value.trim() }
+    }
+
+    /** Calls >= 1 min land in the ribbon (needs the call-log permission). */
+    val zCallsFlow = context.dataStore.data.map { it[KEY_Z_CALLS] ?: true }
+    suspend fun setZCalls(value: Boolean) {
+        context.dataStore.edit { it[KEY_Z_CALLS] = value }
+    }
+
+    val zCallCategoryFlow = context.dataStore.data.map { it[KEY_Z_CALL_CATEGORY] ?: "Звонки" }
+    suspend fun setZCallCategory(value: String) {
+        context.dataStore.edit { it[KEY_Z_CALL_CATEGORY] = value.trim().ifEmpty { "Звонки" } }
+    }
+
+    /** An attention-eater session shorter than this stays out of the ribbon. */
+    val zImmersiveMinFlow = context.dataStore.data.map { it[KEY_Z_IMMERSIVE_MIN] ?: 3 }
+    suspend fun setZImmersiveMin(value: Int) {
+        context.dataStore.edit { it[KEY_Z_IMMERSIVE_MIN] = value.coerceIn(1, 30) }
     }
 
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }

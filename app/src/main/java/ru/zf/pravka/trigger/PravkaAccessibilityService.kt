@@ -1415,11 +1415,20 @@ class PravkaAccessibilityService : AccessibilityService() {
     private fun zTime(ms: Long): String =
         java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))
 
+    private fun zDur(ms: Long): String {
+        val min = ms / 60_000
+        return if (min >= 60) "${min / 60} ч ${min % 60} м" else "$min м"
+    }
+
     // ---- Засечка reminders: the button itself nags about the gaps ----
 
     private val zReminderHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val zReminderTick = object : Runnable {
         override fun run() {
+            // The phone sweep first: it may close a gap (a YouTube session or
+            // a call becomes an entry) that the reminder would otherwise nag
+            // about. Fire-and-forget - the reminder check reads current data.
+            scope.launch { app.phoneSweeper.sweep() }
             zasechkaReminderCheck()
             zReminderHandler.postDelayed(this, 5 * 60_000L)
         }
@@ -1450,9 +1459,14 @@ class PravkaAccessibilityService : AccessibilityService() {
                     internal.getString(KEY_Z_EVENING_DAY, "") != todayKey
                 ) {
                     internal.edit().putString(KEY_Z_EVENING_DAY, todayKey).apply()
+                    // The evening nudge doubles as the day's phone summary.
+                    val phoneDay = app.phoneStore.daysFlow.value[ru.zf.pravka.data.phoneDayKey(now)]
+                    val phoneLine = phoneDay?.let {
+                        "\nЭкран: ${zDur(it.screenMs)} · подъёмов ${it.pickups} · отвлечений ${it.glances}"
+                    }.orEmpty()
                     zNotify(
                         getString(R.string.z_notify_evening_title),
-                        getString(R.string.z_notify_evening_text, open.title),
+                        getString(R.string.z_notify_evening_text, open.title) + phoneLine,
                     )
                 }
                 return@launch
@@ -1519,6 +1533,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             val notif = android.app.Notification.Builder(this, channelId)
                 .setContentTitle(title)
                 .setContentText(text)
+                // Evening summaries run to several lines.
+                .setStyle(android.app.Notification.BigTextStyle().bigText(text))
                 .setSmallIcon(R.drawable.ic_tile)
                 .setContentIntent(open)
                 .addAction(

@@ -1,5 +1,8 @@
 package ru.zf.pravka
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -59,8 +62,10 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import ru.zf.pravka.data.Settings
+import ru.zf.pravka.data.PhoneStore
+import ru.zf.pravka.data.PhoneSweeper
 import ru.zf.pravka.data.ZasechkaStore
+import ru.zf.pravka.data.phoneDayKey
 import ru.zf.pravka.ui.Feedback
 
 // Вкладка «Засечка»: the owner's day as a ribbon of entries, the numbers he
@@ -354,6 +359,12 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     Spacer(Modifier.height(12.dp))
                 }
             }
+        }
+
+        // ---- the phone layer: separate from the ribbon by design ----
+        item {
+            PhoneSection(app, dayStart, weekMode, now)
+            Spacer(Modifier.height(12.dp))
         }
 
         // ---- the ribbon itself ----
@@ -651,6 +662,255 @@ private fun EditableList(
             enabled = newValue.isNotBlank(),
         ) { Text("OK") }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The phone layer: screen time, pickups, отвлечения and per-app minutes.
+// A separate ledger from the ribbon (owner's design): most app time is
+// tooling inside a bigger activity. Tapping an app row promotes it to an
+// "attention eater" - its sessions then auto-claim ribbon time.
+// ---------------------------------------------------------------------------
+
+private fun aggregatePhoneDays(
+    days: Map<String, PhoneStore.Day>,
+    keys: List<String>,
+): PhoneStore.Day {
+    var screenMs = 0L
+    var pickups = 0
+    var glances = 0
+    val apps = HashMap<String, Long>()
+    val appSessions = HashMap<String, Int>()
+    val glanceApps = HashMap<String, Int>()
+    for (key in keys) {
+        val d = days[key] ?: continue
+        screenMs += d.screenMs
+        pickups += d.pickups
+        glances += d.glances
+        for ((p, v) in d.apps) apps[p] = (apps[p] ?: 0L) + v
+        for ((p, v) in d.appSessions) appSessions[p] = (appSessions[p] ?: 0) + v
+        for ((p, v) in d.glanceApps) glanceApps[p] = (glanceApps[p] ?: 0) + v
+    }
+    return PhoneStore.Day(screenMs, pickups, glances, apps, appSessions, glanceApps)
+}
+
+@Composable
+private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now: Long) {
+    val context = LocalContext.current
+    val days by app.phoneStore.daysFlow.collectAsState()
+    val immersive by app.phoneStore.immersiveFlow.collectAsState()
+    val labels by app.phoneStore.labelsFlow.collectAsState()
+    val categories by app.zasechkaStore.categoriesFlow.collectAsState()
+    var usageGranted by remember { mutableStateOf(PhoneSweeper.hasUsageAccess(context)) }
+    var callGranted by remember { mutableStateOf(PhoneSweeper.hasCallLogAccess(context)) }
+    var editingApp by remember { mutableStateOf<String?>(null) }
+
+    // Re-check permissions and freshen the aggregates while the tab is open
+    // (the `now` clock ticks every 30 seconds).
+    LaunchedEffect(now, dayStart, weekMode) {
+        usageGranted = PhoneSweeper.hasUsageAccess(context)
+        callGranted = PhoneSweeper.hasCallLogAccess(context)
+        if (usageGranted) app.phoneSweeper.sweep()
+    }
+
+    Text("Телефон", style = MaterialTheme.typography.titleSmall)
+    if (!usageGranted) {
+        Text(
+            "Дай Правке доступ к статистике использования — появятся время в приложениях, " +
+                "подъёмы телефона и счётчик отвлечений. Пожиратели внимания (YouTube) и звонки " +
+                "будут сами вставать в ленту.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(onClick = {
+            runCatching {
+                context.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                )
+            }
+        }) { Text("Дать доступ к статистике") }
+        return
+    }
+
+    val keys =
+        if (weekMode) (0..6).map { phoneDayKey(dayStart - it * 86_400_000L) }
+        else listOf(phoneDayKey(dayStart))
+    val agg = aggregatePhoneDays(days, keys)
+
+    Text(
+        "Экран: ${fmtDur(agg.screenMs / 60_000)} · подъёмов ${agg.pickups} · отвлечений ${agg.glances}",
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+    Text(
+        "Отвлечение = взял телефон и убрал быстрее чем за 2 минуты",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    val topApps = agg.apps.entries.sortedByDescending { it.value }.take(8)
+    val maxMs = topApps.firstOrNull()?.value ?: 0L
+    for ((pkg, ms) in topApps) {
+        val label = labels[pkg] ?: pkg.substringAfterLast('.')
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { editingApp = pkg }
+                .padding(vertical = 2.dp),
+        ) {
+            Text(
+                (if (immersive.containsKey(pkg)) "⚡ " else "") + label,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.width(130.dp),
+                maxLines = 1,
+            )
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(10.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(5.dp)),
+            ) {
+                val fraction = if (maxMs > 0) ms.toFloat() / maxMs else 0f
+                Box(
+                    Modifier
+                        .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
+                        .height(10.dp)
+                        .background(
+                            if (immersive.containsKey(pkg)) Color(0xFFB4551E) else Color(0xFF54628F),
+                            RoundedCornerShape(5.dp),
+                        ),
+                )
+            }
+            Text(
+                fmtDur(ms / 60_000),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(start = 8.dp).width(64.dp),
+            )
+        }
+    }
+    if (topApps.isEmpty()) {
+        Text(
+            "Данных пока нет — они появятся в течение нескольких минут.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        Text(
+            "Тап по приложению — сделать «пожирателем внимания» (авто-запись в ленту).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    val topGlance = agg.glanceApps.entries.sortedByDescending { it.value }.take(3)
+    if (topGlance.isNotEmpty()) {
+        Text(
+            "Чаще всего отвлекали: " + topGlance.joinToString(", ") {
+                "${labels[it.key] ?: it.key.substringAfterLast('.')} ×${it.value}"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+
+    // ---- calls: interruption entries that resume the paused activity ----
+    val callsOn by app.settings.zCallsFlow.collectAsState(initial = true)
+    val callCategory by app.settings.zCallCategoryFlow.collectAsState(initial = "Звонки")
+    val callPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> callGranted = granted }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text("Звонки в ленту", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "Разговор ≥1 мин прерывает дело и продолжает его после",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (!callGranted) {
+            TextButton(onClick = { callPermission.launch(Manifest.permission.READ_CALL_LOG) }) {
+                Text("Разрешить")
+            }
+        } else {
+            Switch(checked = callsOn, onCheckedChange = { v ->
+                app.appScope.launch { app.settings.setZCalls(v) }
+            })
+        }
+    }
+    if (callGranted && callsOn) {
+        var callCatMenu by remember { mutableStateOf(false) }
+        Box {
+            TextButton(onClick = { callCatMenu = true }) { Text("Категория звонков: $callCategory") }
+            DropdownMenu(expanded = callCatMenu, onDismissRequest = { callCatMenu = false }) {
+                for (c in (listOf("Звонки") + categories).distinct()) {
+                    DropdownMenuItem(text = { Text(c) }, onClick = {
+                        callCatMenu = false
+                        app.appScope.launch { app.settings.setZCallCategory(c) }
+                    })
+                }
+            }
+        }
+    }
+
+    editingApp?.let { pkg ->
+        ImmersiveAppDialog(
+            label = labels[pkg] ?: pkg.substringAfterLast('.'),
+            currentCategory = immersive[pkg],
+            categories = categories,
+            onDismiss = { editingApp = null },
+            onSave = { category ->
+                editingApp = null
+                app.appScope.launch { app.phoneStore.setImmersive(pkg, category) }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ImmersiveAppDialog(
+    label: String,
+    currentCategory: String?,
+    categories: List<String>,
+    onDismiss: () -> Unit,
+    onSave: (String?) -> Unit,
+) {
+    var enabled by remember { mutableStateOf(currentCategory != null) }
+    var category by remember { mutableStateOf(currentCategory ?: "Отдых") }
+    var menu by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(label) },
+        text = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Пожиратель внимания", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Сессия в этом приложении сама прерывает текущее дело и встаёт в ленту",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = enabled, onCheckedChange = { enabled = it })
+                }
+                if (enabled) {
+                    Box {
+                        OutlinedButton(onClick = { menu = true }) { Text("Категория: $category") }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            for (c in (listOf("Отдых") + categories).distinct()) {
+                                DropdownMenuItem(text = { Text(c) }, onClick = { category = c; menu = false })
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(if (enabled) category else null) }) { Text("Сохранить") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+    )
 }
 
 // ---------------------------------------------------------------------------
