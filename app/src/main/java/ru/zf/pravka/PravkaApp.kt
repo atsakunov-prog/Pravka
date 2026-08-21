@@ -61,6 +61,13 @@ class PravkaApp : Application() {
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
 
+    // Засечка (timesheet): store, Sheets mirror, phrase -> entry pipeline.
+    val zasechkaStore by lazy { ru.zf.pravka.data.ZasechkaStore(this) }
+    val zasechkaSync by lazy { ru.zf.pravka.data.ZasechkaSync(settings, zasechkaStore, httpClient, eventLog) }
+    val zasechkaEngine by lazy {
+        ru.zf.pravka.core.ZasechkaEngine(claudeProvider, zasechkaStore, stats, eventLog, zasechkaSync, appScope)
+    }
+
     // The connection pool keeps sockets ~5 min; after a longer gap the CLEAN
     // request pays DNS+TCP+TLS (~300-800ms on LTE). A dictation lasts seconds,
     // so warming the connection when a take STARTS makes the stop->fix hop skip

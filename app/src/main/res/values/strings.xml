@@ -160,4 +160,19 @@
     <string name="nofield_done">Готово: текст в буфере и в уведомлении</string>
 
     <string name="settings_usage_hint">Как пользоваться: надиктуй текст в любое поле и нажми плавающую кнопку «П». Текст заменится исправленным, а на несколько секунд появится кнопка «Откатить». Запасной путь — выделить текст и выбрать «Правка» в меню выделения, где оно есть.</string>
+
+    <!-- Засечка (таймшит) -->
+    <string name="tab_zasechka">Засечка</string>
+    <string name="z_channel">Засечка</string>
+    <string name="z_record_action">Надиктовать</string>
+    <string name="z_busy_pravka">Идёт запись Засечки — останови её кнопкой «З»</string>
+    <string name="z_busy_zasechka">Идёт диктовка Правки — сначала заверши её</string>
+    <string name="z_saved_raw">Записал без категории (%1$s) — разбери во вкладке «Засечка»</string>
+    <string name="z_record_failed">Не записалось — попробуй ещё раз</string>
+    <string name="z_notify_morning_title">День начался?</string>
+    <string name="z_notify_morning_text">Нажми «З» и скажи, с чего начал день.</string>
+    <string name="z_notify_evening_title">Закрыть день?</string>
+    <string name="z_notify_evening_text">«%1$s» всё ещё идёт. Закрой день или надиктуй последнее дело.</string>
+    <string name="z_notify_gap_title">Что ты делал с %1$s?</string>
+    <string name="z_notify_gap_text">Уже %1$d мин без записи. Нажми «Надиктовать» и скажи.</string>
 </resources>

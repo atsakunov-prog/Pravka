@@ -83,6 +83,13 @@
             android:noHistory="true"
             android:exported="false" />
 
+        <activity
+            android:name=".trigger.ZasechkaQuickActivity"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false" />
+
         <service
             android:name=".trigger.DictationService"
             android:foregroundServiceType="microphone"

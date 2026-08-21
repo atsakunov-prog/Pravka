@@ -34,6 +34,13 @@ class Settings(private val context: Context) {
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
 
+        // Засечка (timesheet).
+        private val KEY_Z_ENABLED = booleanPreferencesKey("z_enabled")
+        private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
+        private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
+        private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
+        private val KEY_Z_WEBHOOK = stringPreferencesKey("z_webhook_url")
+
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
     }
@@ -91,6 +98,39 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_CONVO_CONTEXT] = value }
     }
 
+    // ---- Засечка (timesheet) ----
+
+    /** The always-on timesheet button. */
+    val zEnabledFlow = context.dataStore.data.map { it[KEY_Z_ENABLED] ?: true }
+    suspend fun setZEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_Z_ENABLED] = value }
+    }
+
+    /** Remind after this many minutes without a running entry; 0 = never. */
+    val zGapMinFlow = context.dataStore.data.map { it[KEY_Z_GAP_MIN] ?: 45 }
+    suspend fun setZGapMin(value: Int) {
+        context.dataStore.edit { it[KEY_Z_GAP_MIN] = value.coerceIn(0, 240) }
+    }
+
+    // Active-day window: reminders fire only inside it; the morning nudge at
+    // its start, the "закрыть день" one after its end.
+    val zDayStartFlow = context.dataStore.data.map { it[KEY_Z_DAY_START] ?: 9 }
+    suspend fun setZDayStart(value: Int) {
+        context.dataStore.edit { it[KEY_Z_DAY_START] = value.coerceIn(0, 23) }
+    }
+
+    val zDayEndFlow = context.dataStore.data.map { it[KEY_Z_DAY_END] ?: 23 }
+    suspend fun setZDayEnd(value: Int) {
+        context.dataStore.edit { it[KEY_Z_DAY_END] = value.coerceIn(1, 24) }
+    }
+
+    /** Apps Script web-app URL; blank = Sheets mirror off. */
+    val zWebhookFlow = context.dataStore.data.map { it[KEY_Z_WEBHOOK] ?: "" }
+    suspend fun zWebhook(): String = zWebhookFlow.first()
+    suspend fun setZWebhook(value: String) {
+        context.dataStore.edit { it[KEY_Z_WEBHOOK] = value.trim() }
+    }
+
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }
     val fabAlphaFlow = context.dataStore.data.map { it[KEY_FAB_ALPHA] ?: FAB_ALPHA_DEFAULT }
 
@@ -115,6 +155,22 @@ class Settings(private val context: Context) {
         context.dataStore.edit {
             it[floatPreferencesKey("fab_x_$screenKey")] = xFraction
             it[floatPreferencesKey("fab_y_$screenKey")] = yFraction
+        }
+    }
+
+    // The Засечка button has its own spot (default: below Правка's default),
+    // stored the same per-screen way.
+    suspend fun zFabPosition(screenKey: String): Pair<Float, Float> {
+        val prefs = context.dataStore.data.first()
+        val x = prefs[floatPreferencesKey("zfab_x_$screenKey")] ?: 0.92f
+        val y = prefs[floatPreferencesKey("zfab_y_$screenKey")] ?: 0.62f
+        return x to y
+    }
+
+    suspend fun setZFabPosition(screenKey: String, xFraction: Float, yFraction: Float) {
+        context.dataStore.edit {
+            it[floatPreferencesKey("zfab_x_$screenKey")] = xFraction
+            it[floatPreferencesKey("zfab_y_$screenKey")] = yFraction
         }
     }
 }

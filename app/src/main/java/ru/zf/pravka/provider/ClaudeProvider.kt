@@ -325,6 +325,109 @@ $listing
         }
     }
 
+    // ---- Засечка: one dictated phrase -> a structured timesheet entry ----
+
+    data class ZasechkaParse(
+        val title: String,
+        val category: String,      // "" when the model failed to pick one
+        val client: String,
+        val useful: Int,           // 0 = not rated
+        val startOffsetMin: Int,   // how far back the activity started
+        val costUsd: Double,
+        val tokensIn: Int,
+        val tokensOut: Int,
+    )
+
+    /**
+     * Sonnet turns "созвон с Ивановым по отчёту, последние полчаса" into
+     * {title, category, client, useful, start_offset_min}. Cheap and
+     * mechanical - same no-thinking Sonnet setup as CLEAN. The caller still
+     * saves the raw text if this fails: a take must never be lost to a
+     * network blip.
+     */
+    suspend fun zasechka(
+        raw: String,
+        categories: List<String>,
+        clients: List<String>,
+        nowLocal: String,
+        previousTitle: String,
+    ): Result<ZasechkaParse> = withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+            val categoriesBlock = categories.joinToString("\n") { "- $it" }
+            val clientsBlock =
+                if (clients.isEmpty()) "(список пуст)"
+                else clients.joinToString("\n") { "- $it" }
+            val previousBlock =
+                if (previousTitle.isBlank()) "" else "Предыдущее дело владельца: «$previousTitle».\n"
+            val prompt = """
+Ты — секретарь личного тайм-трекера. Владелец наговорил, чем он сейчас занят.
+Разбери фразу в структуру для таймшита.
+
+Сейчас: $nowLocal.
+$previousBlock
+Категории (выбери РОВНО одну, слово в слово из списка):
+$categoriesBlock
+
+Клиенты и проекты владельца:
+$clientsBlock
+
+Правила:
+- "title": короткое название дела, 2–6 слов, с маленькой буквы, без точки —
+  так, чтобы в отчёте за неделю было понятно, что это было.
+- "category": одна строка из списка категорий, БУКВА В БУКВУ. Если ничего
+  не подходит — пустая строка.
+- "client": имя из списка клиентов, если дело явно про него. Если владелец
+  назвал клиента/проект не из списка — верни как услышано. Иначе пустая строка.
+- "useful": целое 1–5, только если владелец сам оценил пользу («полезность
+  четыре», «пустая трата времени» = 1, «очень продуктивно» = 5). Иначе 0.
+- "start_offset_min": на сколько минут НАЗАД от текущего времени дело
+  началось. «Последние сорок минут…» = 40; «с 13:00…» — посчитай от
+  текущего времени; если о прошлом ничего не сказано = 0.
+
+Ответ — СТРОГО JSON без пояснений:
+{"title": "...", "category": "...", "client": "...", "useful": 0, "start_offset_min": 0}
+
+Фраза владельца:
+<фраза>
+$raw
+</фраза>
+""".trimIndent()
+            val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+            val reply = requestWithOneRetry(apiKey, Settings.MODEL_SONNET, parts, "", null)
+            parseZasechka(reply.text).copy(
+                costUsd = costUsd(Settings.MODEL_SONNET, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+            )
+        }
+    }
+
+    private fun parseZasechka(raw: String): ZasechkaParse {
+        var text = raw.trim()
+        if (text.startsWith("```")) {
+            text = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        }
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start < 0 || end <= start) throw ApiException("Модель вернула не тот формат.")
+        val o = runCatching { JSONObject(text.substring(start, end + 1)) }
+            .getOrElse { throw ApiException("Модель вернула не тот формат.") }
+        return ZasechkaParse(
+            title = o.optString("title").trim(),
+            category = o.optString("category").trim(),
+            client = o.optString("client").trim(),
+            useful = o.optInt("useful", 0).coerceIn(0, 5),
+            // 12 hours is the sanity ceiling for "how far back" - anything
+            // larger is a parse hallucination, not a real day.
+            startOffsetMin = o.optInt("start_offset_min", 0).coerceIn(0, 12 * 60),
+            costUsd = 0.0,
+            tokensIn = 0,
+            tokensOut = 0,
+        )
+    }
+
     private fun parseLearn(raw: String): LearnProposals {
         var text = raw.trim()
         if (text.startsWith("```")) {

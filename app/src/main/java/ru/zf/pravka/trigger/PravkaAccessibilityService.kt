@@ -47,6 +47,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         const val PREFS_INTERNAL = "pravka_internal"
         const val KEY_LAST_LEARN_BATCH = "last_learn_batch"
         const val KEY_LAST_RULES_OPT = "last_rules_opt"
+
+        // Засечка reminder anti-spam: one morning/evening nudge per day, one
+        // gap nudge per distinct gap.
+        private const val KEY_Z_MORNING_DAY = "z_morning_day"
+        private const val KEY_Z_EVENING_DAY = "z_evening_day"
+        private const val KEY_Z_GAP_NOTIFIED = "z_gap_notified_end"
         const val RULES_OPT_PERIOD_MS = 7L * 24 * 3600 * 1000
         const val RULES_OPT_MIN_COUNT = 6
     }
@@ -62,6 +68,19 @@ class PravkaAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + crashLogger)
     private var floatingButton: FloatingButtonController? = null
     private var busy = false
+
+    // Засечка (timesheet): its own button, its own capture session. A take
+    // here never touches the focused field - the transcript goes to the
+    // categorizer and the timesheet store instead.
+    private var zButton: ZasechkaButtonController? = null
+    private var zSession: GoogleSpeechSession? = null
+    @Volatile private var zWhisperRecording = false
+    @Volatile private var cachedZEnabled = true
+    @Volatile private var cachedZGapMin = 45
+    @Volatile private var cachedZDayStart = 9
+    @Volatile private var cachedZDayEnd = 23
+    @Volatile private var zCategoriesCached: List<String> = emptyList()
+    @Volatile private var zClientsCached: List<String> = emptyList()
 
     // Weak cache of the last focused editable node and its text, updated on
     // TYPE_VIEW_FOCUSED / TYPE_VIEW_TEXT_CHANGED (spec 5.4: activities steal
@@ -119,6 +138,37 @@ class PravkaAccessibilityService : AccessibilityService() {
             app.settings.learnPeriodHoursFlow.collect { cachedLearnPeriodH = it }
         }
         refreshLearnBadge()
+
+        // Засечка: the second button, visible everywhere while enabled.
+        zButton = ZasechkaButtonController(
+            service = this,
+            scope = scope,
+            settings = app.settings,
+            onShortTap = ::onZasechkaTap,
+            onLongPress = {
+                startActivity(
+                    android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                        .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            },
+        )
+        scope.launch {
+            app.settings.zEnabledFlow.collect {
+                cachedZEnabled = it
+                zButton?.setEnabled(it)
+            }
+        }
+        scope.launch { app.settings.zGapMinFlow.collect { cachedZGapMin = it } }
+        scope.launch { app.settings.zDayStartFlow.collect { cachedZDayStart = it } }
+        scope.launch { app.settings.zDayEndFlow.collect { cachedZDayEnd = it } }
+        // Force-load the store once, then keep the recognizer bias lists warm.
+        scope.launch {
+            app.zasechkaStore.all()
+            launch { app.zasechkaStore.categoriesFlow.collect { zCategoriesCached = it } }
+            launch { app.zasechkaStore.clientsFlow.collect { zClientsCached = it } }
+        }
+        zReminderHandler.postDelayed(zReminderTick, 60_000)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -169,7 +219,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // be pure waste - and the owner is expected to switch apps
                 // mid-dictation, which is exactly when it would block the
                 // recognizer's callbacks.
-                if (googleSession != null || DictationService.recording) return
+                if (googleSession != null || zSession != null || DictationService.recording) return
                 if (liveFocusedEditableNode() != null) floatingButton?.show()
                 else floatingButton?.hide()
             }
@@ -200,6 +250,13 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Short tap: stop the active session if any, else start per the engine. */
     private fun onDictateTap() {
+        // One microphone, one take at a time: a Засечка recording must be
+        // stopped from its own button, not silently hijacked by this one.
+        if (zSession != null || zWhisperRecording) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.z_busy_pravka))
+            return
+        }
         if (googleSession != null) { stopLiveDictation(); return }
         if (DictationService.recording) {
             floatingButton?.setBusy(true)
@@ -234,8 +291,19 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
     }
 
+    // The permission dialog serves two buttons; remember whose tap asked for
+    // it, or a Засечка tap would grant the mic and then start a Правка take.
+    private var micRequestForZasechka = false
+
     /** Called by MicPermissionActivity after the permission is granted. */
-    fun onMicPermissionGranted() = startForEngine()
+    fun onMicPermissionGranted() {
+        if (micRequestForZasechka) {
+            micRequestForZasechka = false
+            startZasechkaCapture()
+        } else {
+            startForEngine()
+        }
+    }
 
     // Names/terms/brands the recognizer should be biased toward - the owner's
     // dictionary (both protected forms and the correct sides of replacements).
@@ -463,6 +531,35 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** DictationService hands the finished recording here (same process). */
     fun onRecordingSaved(file: File?) {
+        // A Засечка take on the Whisper engine comes through the same service;
+        // the flag set at start routes it away from the field-insert path.
+        if (zWhisperRecording) {
+            zWhisperRecording = false
+            zButton?.setRecording(false)
+            if (file == null) {
+                zButton?.setBusy(false)
+                Haptics.error(this)
+                Feedback.toast(this, getString(R.string.dictation_empty))
+                return
+            }
+            zButton?.setBusy(true)
+            scope.launch {
+                val result = app.transcribeDictation(file)
+                result.onSuccess { text ->
+                    app.recordings.delete(file.name)
+                    onZasechkaText(text)
+                }.onFailure { e ->
+                    zButton?.setBusy(false)
+                    // Audio stays in Recordings, like a failed Правка take.
+                    Haptics.error(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        getString(R.string.dictation_saved_for_retry, e.message ?: ""),
+                    )
+                }
+            }
+            return
+        }
         floatingButton?.setRecording(false)
         if (file == null) {
             floatingButton?.setBusy(false)
@@ -1169,10 +1266,279 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ---- Засечка: tap -> capture -> categorize -> timesheet (no field) ----
+
+    /** The "З" button, the notification action and the tab's mic button. */
+    fun onZasechkaTap() {
+        if (zSession != null) { stopZasechkaLive(); return }
+        if (zWhisperRecording && DictationService.recording) {
+            zButton?.setBusy(true)
+            stopDictation()  // -> onRecordingSaved, routed by the flag
+            return
+        }
+        // One microphone: while a Правка take runs, the "З" tap only nags.
+        if (googleSession != null || DictationService.recording) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.z_busy_zasechka))
+            return
+        }
+        if (!hasMicPermission()) {
+            micRequestForZasechka = true
+            requestMicPermission()
+            return
+        }
+        startZasechkaCapture()
+    }
+
+    private fun startZasechkaCapture() {
+        if (cachedEngine.startsWith("whisper")) {
+            zWhisperRecording = true
+            zButton?.setRecording(true)
+            Haptics.start(this)
+            startDictation()
+        } else {
+            startZasechkaGoogle()
+        }
+        // The categorizer call comes right after stop - skip its handshake.
+        app.warmClaudeConnection()
+    }
+
+    private fun startZasechkaGoogle() {
+        if (zSession != null) return
+        if (!GoogleSpeechSession.isAvailable(this)) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.google_unavailable))
+            return
+        }
+        val session = GoogleSpeechSession(
+            this,
+            // Client and category names are exactly the words these takes are
+            // full of - bias the recognizer toward them, same as the dictionary.
+            biasing = (cachedBiasing + zClientsCached + zCategoriesCached).distinct(),
+            formatting = cachedFormatting,
+            segmentedSession = cachedSegmented,
+        )
+        zSession = session
+        session.start(
+            onReady = { Haptics.success(this) },
+            onPartial = { live -> zButton?.updateTicker(live) },
+            // No recovery draft here: a lost 5-second take is re-spoken in
+            // seconds, unlike a lost dictation paragraph.
+            onCheckpoint = { },
+            onDone = { text -> onZasechkaLiveDone(text) },
+            onError = { msg -> onZasechkaLiveError(msg) },
+            onLog = { line -> app.eventLog.add("засечка: $line") },
+        )
+        zButton?.setRecording(true)
+        zButton?.showTicker()
+        Haptics.start(this)
+        runCatching { startMicHold() }
+    }
+
+    private fun stopZasechkaLive() {
+        val session = zSession ?: return
+        zButton?.setRecording(false)
+        zButton?.setBusy(true)
+        session.stop()  // -> onZasechkaLiveDone
+    }
+
+    /** The mic-hold notification's Stop: finalize whichever live take runs. */
+    fun stopAnyLive() {
+        if (zSession != null) stopZasechkaLive() else stopLiveDictation()
+    }
+
+    private fun onZasechkaLiveDone(text: String) {
+        zSession = null
+        runCatching { stopMicHold() }
+        runCatching { zButton?.hideTicker() }
+        zButton?.setRecording(false)
+        onZasechkaText(text)
+    }
+
+    private fun onZasechkaLiveError(msg: String) {
+        zSession = null
+        runCatching { stopMicHold() }
+        zButton?.hideTicker()
+        zButton?.setRecording(false)
+        zButton?.setBusy(false)
+        Haptics.error(this)
+        Feedback.toast(this, msg)
+    }
+
+    /** Transcript in hand (either engine): categorize, store, confirm. */
+    private fun onZasechkaText(raw: String) {
+        val text = raw.trim()
+        if (text.isBlank()) {
+            zButton?.setBusy(false)
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.dictation_empty))
+            return
+        }
+        if (!scope.isActive) return
+        zButton?.setBusy(true)
+        scope.launch {
+            val outcome = runCatching { app.zasechkaEngine.record(text, "voice") }
+                .getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    app.eventLog.add("засечка: record threw ${e.javaClass.simpleName}: ${e.message}")
+                    null
+                }
+            zButton?.setBusy(false)
+            if (outcome == null) {
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(this@PravkaAccessibilityService, getString(R.string.z_record_failed))
+                return@launch
+            }
+            zButton?.setRemind(false)
+            val entry = outcome.entry
+            if (outcome.categorized) {
+                Haptics.success(this@PravkaAccessibilityService)
+                val tail = listOf(entry.category, entry.client)
+                    .filter { it.isNotBlank() }
+                    .joinToString(" · ")
+                Feedback.toast(
+                    this@PravkaAccessibilityService,
+                    "⏱ ${entry.title}" + (if (tail.isBlank()) "" else " — $tail") +
+                        " (с ${zTime(entry.start)})",
+                )
+            } else {
+                // Saved raw: quieter success, the owner sorts it in the tab.
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(
+                    this@PravkaAccessibilityService,
+                    getString(R.string.z_saved_raw, outcome.error ?: ""),
+                )
+            }
+        }
+    }
+
+    private fun zTime(ms: Long): String =
+        java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))
+
+    // ---- Засечка reminders: the button itself nags about the gaps ----
+
+    private val zReminderHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val zReminderTick = object : Runnable {
+        override fun run() {
+            zasechkaReminderCheck()
+            zReminderHandler.postDelayed(this, 5 * 60_000L)
+        }
+    }
+
+    private fun zasechkaReminderCheck() {
+        val gapMin = cachedZGapMin
+        scope.launch {
+            // Reminders die with the toggle or with a zero interval.
+            if (!cachedZEnabled || gapMin <= 0) {
+                zButton?.setRemind(false)
+                return@launch
+            }
+            val now = System.currentTimeMillis()
+            val cal = java.util.Calendar.getInstance()
+            cal.timeInMillis = now
+            val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+            val open = app.zasechkaStore.openEntry()
+            val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
+            val todayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
+                .format(java.util.Date(now))
+
+            // Outside the active day the button never pulses; the one evening
+            // nudge asks to close a still-running entry.
+            if (hour >= cachedZDayEnd || hour < cachedZDayStart) {
+                zButton?.setRemind(false)
+                if (open != null && hour >= cachedZDayEnd &&
+                    internal.getString(KEY_Z_EVENING_DAY, "") != todayKey
+                ) {
+                    internal.edit().putString(KEY_Z_EVENING_DAY, todayKey).apply()
+                    zNotify(
+                        getString(R.string.z_notify_evening_title),
+                        getString(R.string.z_notify_evening_text, open.title),
+                    )
+                }
+                return@launch
+            }
+            if (open != null) {
+                zButton?.setRemind(false)
+                return@launch
+            }
+            val todays = app.zasechkaStore.forRange(ru.zf.pravka.data.dayStartMs(now), now)
+            if (todays.isEmpty()) {
+                zButton?.setRemind(true)
+                if (internal.getString(KEY_Z_MORNING_DAY, "") != todayKey) {
+                    internal.edit().putString(KEY_Z_MORNING_DAY, todayKey).apply()
+                    zNotify(
+                        getString(R.string.z_notify_morning_title),
+                        getString(R.string.z_notify_morning_text),
+                    )
+                }
+                return@launch
+            }
+            val lastEnd = todays.maxOf { it.end }
+            val gapMs = now - lastEnd
+            if (gapMs >= gapMin * 60_000L) {
+                zButton?.setRemind(true)
+                // One notification per distinct gap; the pulse keeps nagging.
+                if (internal.getLong(KEY_Z_GAP_NOTIFIED, 0L) != lastEnd) {
+                    internal.edit().putLong(KEY_Z_GAP_NOTIFIED, lastEnd).apply()
+                    zNotify(
+                        getString(R.string.z_notify_gap_title, zTime(lastEnd)),
+                        getString(R.string.z_notify_gap_text, gapMs / 60_000L),
+                    )
+                }
+            } else {
+                zButton?.setRemind(false)
+            }
+        }
+    }
+
+    private fun zNotify(title: String, text: String) {
+        runCatching {
+            val nm = getSystemService(android.app.NotificationManager::class.java)
+            val channelId = "pravka-zasechka"
+            if (nm.getNotificationChannel(channelId) == null) {
+                nm.createNotificationChannel(
+                    android.app.NotificationChannel(
+                        channelId, getString(R.string.z_channel),
+                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                    )
+                )
+            }
+            val open = android.app.PendingIntent.getActivity(
+                this, 5,
+                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                    .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val record = android.app.PendingIntent.getActivity(
+                this, 6,
+                android.content.Intent(this, ZasechkaQuickActivity::class.java)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                android.app.PendingIntent.FLAG_IMMUTABLE,
+            )
+            val notif = android.app.Notification.Builder(this, channelId)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setSmallIcon(R.drawable.ic_tile)
+                .setContentIntent(open)
+                .addAction(
+                    android.app.Notification.Action.Builder(
+                        null as android.graphics.drawable.Icon?,
+                        getString(R.string.z_record_action),
+                        record,
+                    ).build()
+                )
+                .setAutoCancel(true)
+                .build()
+            nm.notify(44, notif)
+        }
+    }
+
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         // The foldable changes configuration on fold/unfold - reposition.
         floatingButton?.onConfigurationChanged()
+        zButton?.onConfigurationChanged()
     }
 
     override fun onInterrupt() = Unit
@@ -1180,11 +1546,16 @@ class PravkaAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         instance = null
         ripenessHandler.removeCallbacks(ripenessCheck)
+        zReminderHandler.removeCallbacks(zReminderTick)
         googleSession?.stop()
         googleSession = null
+        zSession?.stop()
+        zSession = null
         runCatching { stopMicHold() }
         floatingButton?.destroy()
         floatingButton = null
+        zButton?.destroy()
+        zButton = null
         scope.cancel()
         super.onDestroy()
     }

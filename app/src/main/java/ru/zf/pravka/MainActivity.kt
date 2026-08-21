@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
@@ -88,19 +89,35 @@ import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PravkaTheme
 
-// Four tabs: Settings, Dictionary, Prompts, Statistics.
+// Tabs: Засечка (the daily surface), then the Правка service tabs.
 // Editorial "proofreader" design: paper, ink, red pen (ui/Theme.kt).
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        // The Засечка button's long press and its notifications land straight
+        // on the timesheet tab.
+        const val EXTRA_TAB = "tab"
+        const val TAB_ZASECHKA = "zasechka"
+        const val TAB_SETTINGS = "settings"
+    }
 
     private val serviceEnabled = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as PravkaApp
+        val initialTab = when (intent?.getStringExtra(EXTRA_TAB)) {
+            TAB_SETTINGS -> Tab.SETTINGS
+            TAB_ZASECHKA -> Tab.ZASECHKA
+            // The timesheet is the screen the owner opens daily; everything
+            // else is service tooling.
+            else -> Tab.ZASECHKA
+        }
         setContent {
             PravkaTheme {
                 MainScreen(
                     app = app,
+                    initialTab = initialTab,
                     settings = app.settings,
                     promptStore = app.promptStore,
                     stats = app.stats,
@@ -132,7 +149,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Tab(val titleRes: Int) {
+internal enum class Tab(val titleRes: Int) {
+    ZASECHKA(R.string.tab_zasechka),
     SETTINGS(R.string.tab_settings),
     DICTIONARY(R.string.tab_dictionary),
     PROMPTS(R.string.tab_prompts),
@@ -145,6 +163,7 @@ private enum class Tab(val titleRes: Int) {
 @Composable
 private fun MainScreen(
     app: PravkaApp,
+    initialTab: Tab,
     settings: Settings,
     promptStore: PromptStore,
     stats: Stats,
@@ -161,12 +180,18 @@ private fun MainScreen(
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
 ) {
-    var tab by remember { mutableStateOf(Tab.SETTINGS) }
+    var tab by remember { mutableStateOf(initialTab) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             NavigationBar {
+                NavigationBarItem(
+                    selected = tab == Tab.ZASECHKA,
+                    onClick = { tab = Tab.ZASECHKA },
+                    icon = { Icon(Icons.Filled.DateRange, contentDescription = null) },
+                    label = { Text(stringResource(Tab.ZASECHKA.titleRes)) },
+                )
                 NavigationBarItem(
                     selected = tab == Tab.SETTINGS,
                     onClick = { tab = Tab.SETTINGS },
@@ -214,6 +239,7 @@ private fun MainScreen(
     ) { padding ->
         Column(Modifier.padding(padding)) {
             when (tab) {
+                Tab.ZASECHKA -> ZasechkaTab(app)
                 Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
                 Tab.PROMPTS -> PromptsTab(promptStore)
