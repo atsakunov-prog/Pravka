@@ -328,6 +328,8 @@ $listing
     // ---- Засечка: one dictated phrase -> a structured timesheet entry ----
 
     data class ZasechkaParse(
+        val action: String,        // "new" | "edit" | "delete"
+        val entryIndex: Int,       // 1-based index into today's list (edit/delete)
         val title: String,
         val category: String,      // "" when the model failed to pick one
         val client: String,
@@ -353,6 +355,9 @@ $listing
         clients: List<String>,
         nowLocal: String,
         previousTitle: String,
+        // Numbered lines of today's entries - the edit/delete intents point
+        // at one of them by its number.
+        todayEntries: List<String>,
     ): Result<ZasechkaParse> = withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
@@ -365,12 +370,19 @@ $listing
                 else clients.joinToString("\n") { "- $it" }
             val previousBlock =
                 if (previousTitle.isBlank()) "" else "Предыдущее дело владельца: «$previousTitle».\n"
+            val todayBlock =
+                if (todayEntries.isEmpty()) "(записей сегодня ещё нет)"
+                else todayEntries.joinToString("\n")
             val prompt = """
-Ты — секретарь личного тайм-трекера. Владелец наговорил, чем он сейчас занят.
-Разбери фразу в структуру для таймшита.
+Ты — секретарь личного тайм-трекера. Владелец наговорил фразу. Обычно это
+«чем я сейчас занят», но иногда — просьба ИСПРАВИТЬ или УДАЛИТЬ уже
+существующую запись.
 
 Сейчас: $nowLocal.
 $previousBlock
+Записи сегодня (№ · время · категория · название):
+$todayBlock
+
 Категории (после тире — пояснение, что сюда относится; выбери РОВНО одну
 и верни ТОЛЬКО её название — текст в «кавычках», без пояснения):
 $categoriesBlock
@@ -378,7 +390,17 @@ $categoriesBlock
 Клиенты и проекты владельца:
 $clientsBlock
 
-Правила:
+Сначала определи намерение ("action"):
+- "new" — владелец говорит, чем занят сейчас или был занят (обычный случай).
+- "edit" — просит поменять существующую запись: «поменяй…», «исправь…»,
+  «это была не …, а …», «переименуй…», «запись с 16:00 — это на самом
+  деле …». Укажи "entry" — номер записи из списка выше (по времени или
+  названию, которое он назвал). В ответ включай ТОЛЬКО те поля, которые
+  он просит поменять; остальные — пустые ("" или 0).
+- "delete" — просит удалить запись: «удали…», «убери запись…». Укажи "entry".
+- Если сомневаешься между new и edit — выбирай "new": данные важнее.
+
+Правила полей:
 - "title": короткое название дела, 2–6 слов, с большой буквы, без точки —
   так, чтобы в отчёте за неделю было понятно, что это было.
 - "category": название категории из списка, БУКВА В БУКВУ (без «кавычек»
@@ -387,12 +409,14 @@ $clientsBlock
   назвал клиента/проект не из списка — верни как услышано. Иначе пустая строка.
 - "useful": целое 1–5, только если владелец сам оценил пользу («полезность
   четыре», «пустая трата времени» = 1, «очень продуктивно» = 5). Иначе 0.
-- "start_offset_min": на сколько минут НАЗАД от текущего времени дело
-  началось. «Последние сорок минут…» = 40; «с 13:00…» — посчитай от
-  текущего времени; если о прошлом ничего не сказано = 0.
+- "start_offset_min" (только для new): на сколько минут НАЗАД от текущего
+  времени дело началось. «Последние сорок минут…» = 40; «с 13:00…» —
+  посчитай от текущего времени; если о прошлом ничего не сказано = 0.
 
-Ответ — СТРОГО JSON без пояснений:
-{"title": "...", "category": "...", "client": "...", "useful": 0, "start_offset_min": 0}
+Ответ — СТРОГО JSON без пояснений, по форме намерения:
+new:    {"action": "new", "title": "...", "category": "...", "client": "...", "useful": 0, "start_offset_min": 0}
+edit:   {"action": "edit", "entry": 7, "title": "...", "category": "...", "client": "...", "useful": 0}
+delete: {"action": "delete", "entry": 7}
 
 Фраза владельца:
 <фраза>
@@ -420,6 +444,9 @@ $raw
         val o = runCatching { JSONObject(text.substring(start, end + 1)) }
             .getOrElse { throw ApiException("Модель вернула не тот формат.") }
         return ZasechkaParse(
+            action = o.optString("action", "new").trim().lowercase(java.util.Locale.US)
+                .takeIf { it in listOf("new", "edit", "delete") } ?: "new",
+            entryIndex = o.optInt("entry", 0),
             title = o.optString("title").trim(),
             // The prompt shows categories as «Название» - strip the quotes if
             // the model echoes them back.

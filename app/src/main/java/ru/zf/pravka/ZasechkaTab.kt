@@ -187,6 +187,10 @@ internal fun ZasechkaTab(app: PravkaApp) {
             processing = false
             when {
                 outcome == null -> Feedback.toast(app, app.getString(R.string.z_record_failed))
+                outcome.action == "edit" ->
+                    Feedback.toast(app, "✏️ «${outcome.previousTitle}» → «${outcome.entry.title}»")
+                outcome.action == "delete" ->
+                    Feedback.toast(app, "🗑 «${outcome.entry.title}» удалена")
                 !outcome.categorized ->
                     Feedback.toast(app, app.getString(R.string.z_saved_raw, outcome.error ?: ""))
                 else -> Feedback.toast(app, "⏱ ${outcome.entry.title}")

@@ -1451,23 +1451,37 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             zButton?.setRemind(false)
             val entry = outcome.entry
-            if (outcome.categorized) {
-                Haptics.success(this@PravkaAccessibilityService)
-                val tail = listOf(entry.category, entry.client)
-                    .filter { it.isNotBlank() }
-                    .joinToString(" · ")
-                Feedback.toast(
-                    this@PravkaAccessibilityService,
-                    "⏱ ${entry.title}" + (if (tail.isBlank()) "" else " — $tail") +
-                        " (с ${zTime(entry.start)})",
-                )
-            } else {
-                // Saved raw: quieter success, the owner sorts it in the tab.
-                Haptics.error(this@PravkaAccessibilityService)
-                Feedback.toast(
-                    this@PravkaAccessibilityService,
-                    getString(R.string.z_saved_raw, outcome.error ?: ""),
-                )
+            when {
+                outcome.action == "edit" -> {
+                    Haptics.success(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "✏️ «${outcome.previousTitle}» → «${entry.title}» [${entry.category}]",
+                    )
+                }
+                outcome.action == "delete" -> {
+                    Haptics.success(this@PravkaAccessibilityService)
+                    Feedback.toast(this@PravkaAccessibilityService, "🗑 «${entry.title}» удалена")
+                }
+                outcome.categorized -> {
+                    Haptics.success(this@PravkaAccessibilityService)
+                    val tail = listOf(entry.category, entry.client)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" · ")
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "⏱ ${entry.title}" + (if (tail.isBlank()) "" else " — $tail") +
+                            " (с ${zTime(entry.start)})",
+                    )
+                }
+                else -> {
+                    // Saved raw: quieter success, the owner sorts it in the tab.
+                    Haptics.error(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        getString(R.string.z_saved_raw, outcome.error ?: ""),
+                    )
+                }
             }
         }
     }
