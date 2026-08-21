@@ -152,11 +152,12 @@ class ZasechkaStore(private val context: Context) {
      * than the open entry's own start clamps its end to its start (a 0-minute
      * entry the owner can delete) rather than going negative.
      *
-     * A retroactive start also ABSORBS robot facts it covers: "обедаю с
-     * 16:43", said at 16:53, owns the YouTube auto entry 16:43-16:50 - the
-     * owner said what those minutes were, so the robot's guess comes off the
-     * ribbon (an auto entry only clipped at the edge is trimmed, not removed).
-     * Manual entries are never touched - owner vs owner is the owner's fight.
+     * A robot fact the retroactive window covers is NOT erased: "обедаю с
+     * 16:43", said at 16:53, keeps the YouTube auto entry 16:43-16:50 - it
+     * really happened, in parallel with the meal - and the ribbon nests it
+     * under the new entry as a parallel row. Only an auto entry straddling
+     * the start is trimmed to it, so the boundary stays clean. Manual entries
+     * are never touched - owner vs owner is the owner's fight.
      */
     suspend fun startEntry(
         start: Long,
@@ -169,18 +170,10 @@ class ZasechkaStore(private val context: Context) {
     ): Entry = mutex.withLock {
         ensureLoaded()
         closeOpenLocked(start)
-        val nowMs = System.currentTimeMillis()
-        if (start < nowMs) {
-            entries.removeAll { e ->
-                e.source == "auto" && !e.open &&
-                    (kotlin.math.min(e.end, nowMs) - kotlin.math.max(e.start, start))
-                        .coerceAtLeast(0L) * 2 >= e.end - e.start
-            }
-            for (i in entries.indices) {
-                val e = entries[i]
-                if (e.source == "auto" && !e.open && e.start < start && e.end > start) {
-                    entries[i] = e.copy(end = start, synced = false, notionSynced = false)
-                }
+        for (i in entries.indices) {
+            val e = entries[i]
+            if (e.source == "auto" && !e.open && e.start < start && e.end > start) {
+                entries[i] = e.copy(end = start, synced = false, notionSynced = false)
             }
         }
         val entry = Entry(
@@ -255,19 +248,19 @@ class ZasechkaStore(private val context: Context) {
                     )
             }
         ) return@withLock null
-        // The owner's RETROACTIVE claim beats a robot fact from before the
-        // claim: an entry declared AFTER this span ended, whose time covers
-        // the span, has already absorbed it - a re-sweep of the call log must
-        // not paste it back. A fact newer than the claim (a call DURING the
-        // running lunch) still splices in as usual.
-        if (entries.any { o ->
-                o.source != "auto" && o.start <= start && o.createdAt >= end &&
-                    (if (o.open) Long.MAX_VALUE else o.end) >= end
-            }
-        ) return@withLock null
+        // A fact that ended BEFORE the covering claim was even made cuts
+        // nothing: "обедаю с 16:43", said at 16:53, already declared those
+        // minutes - a YouTube session 16:44-16:51 swept afterwards is stored
+        // as-is and the ribbon nests it under the meal as a parallel row.
+        // A fact newer than the claim (a call DURING the running lunch) still
+        // splices in as usual.
+        val parallel = entries.any { o ->
+            o.source != "auto" && o.start <= start && o.createdAt >= end &&
+                (if (o.open) Long.MAX_VALUE else o.end) >= end
+        }
         var actualEnd = end
         var resumeTemplate: Entry? = null
-        val openIndex = entries.indexOfLast { it.open }
+        val openIndex = if (parallel) -1 else entries.indexOfLast { it.open }
         if (openIndex >= 0) {
             val open = entries[openIndex]
             if (open.start <= start) {
@@ -496,25 +489,6 @@ class ZasechkaStore(private val context: Context) {
             if (cleaned.size != entries.size) {
                 entries = cleaned.toMutableList()
                 persistQueued()
-            }
-            // Retro-claim hygiene over the last week: a manual entry declared
-            // AFTER an auto fact ended, covering its whole span, absorbs it -
-            // heals overlaps recorded before startEntry learned to absorb
-            // (the owner's YouTube-under-lunch screenshot).
-            val weekAgo = System.currentTimeMillis() - 7 * 86_400_000L
-            val claims = entries.filter { it.source != "auto" && it.createdAt >= weekAgo }
-            if (claims.isNotEmpty()) {
-                val healed = entries.filter { e ->
-                    e.source != "auto" || e.open || e.start < weekAgo ||
-                        claims.none { o ->
-                            o.start <= e.start && o.createdAt >= e.end &&
-                                (if (o.open) Long.MAX_VALUE else o.end) >= e.end
-                        }
-                }
-                if (healed.size != entries.size) {
-                    entries = healed.toMutableList()
-                    persistQueued()
-                }
             }
             lastId = entries.maxOfOrNull { it.id } ?: 0L
             if (root == null) persistQueued()

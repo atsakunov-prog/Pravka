@@ -106,6 +106,8 @@ private val CATEGORY_HUES = mapOf(
     "быт" to 235f,
     "отдых" to 262f,
     "секс: соло" to 278f,
+    // Legacy v1/v2 name still alive on the device - keep it with "соло".
+    "секс" to 278f,
 )
 
 /** Position on the effectiveness rainbow, 0 (red) .. 280 (violet). */
@@ -161,11 +163,11 @@ private data class DayUnit(
     val fragments: List<ZasechkaStore.Entry>,
     val interruptions: List<ZasechkaStore.Entry>,
 ) {
-    val chain: Boolean get() = fragments.size > 1
+    val chain: Boolean get() = fragments.size > 1 || interruptions.isNotEmpty()
     val start: Long get() = fragments.first().start
     val open: Boolean get() = fragments.last().open
     fun endMs(now: Long): Long = fragments.last().let { if (it.open) now else it.end }
-    /** Net minutes of the activity itself - interruptions not counted. */
+    /** Minutes of the activity's own fragments - interruptions not counted. */
     fun totalMin(now: Long): Long = fragments.sumOf { it.durationMin(now) }
 }
 
@@ -177,8 +179,13 @@ private fun entrySig(e: ZasechkaStore.Entry): String =
  * sit between two fragments of the same activity - a manual entry in between
  * means the owner really switched, and that breaks the chain. Buffered autos
  * that are never followed by a resume stay ordinary standalone rows.
+ *
+ * Second pass - parallel facts: a closed auto entry whose whole span lies
+ * INSIDE another unit's span ("обедаю с 16:43", said at 16:53, over a logged
+ * YouTube 16:43-16:50) nests under that unit as a parallel row instead of
+ * standing alone; the host keeps its full own time.
  */
-private fun buildDayUnits(asc: List<ZasechkaStore.Entry>): List<DayUnit> {
+private fun buildDayUnits(asc: List<ZasechkaStore.Entry>, now: Long): List<DayUnit> {
     val units = ArrayList<DayUnit>()
     var fragments = ArrayList<ZasechkaStore.Entry>()
     var interruptions = ArrayList<ZasechkaStore.Entry>()
@@ -222,7 +229,32 @@ private fun buildDayUnits(asc: List<ZasechkaStore.Entry>): List<DayUnit> {
         }
     }
     flush()
-    return units
+
+    fun loneAuto(u: DayUnit): Boolean =
+        u.fragments.size == 1 && u.interruptions.isEmpty() &&
+            u.fragments[0].source == "auto" && !u.fragments[0].open
+    val hostOf = HashMap<Int, Int>()
+    for (i in units.indices) {
+        val u = units[i]
+        if (!loneAuto(u)) continue
+        val e = u.fragments[0]
+        val host = units.indices.firstOrNull { j ->
+            j != i && units[j].fragments.any { it.source != "auto" } &&
+                units[j].start <= e.start && units[j].endMs(now) >= e.end
+        }
+        if (host != null) hostOf[i] = host
+    }
+    if (hostOf.isEmpty()) return units
+    val out = ArrayList<DayUnit>(units.size)
+    for (j in units.indices) {
+        if (j in hostOf) continue
+        val kids = hostOf.entries.filter { it.value == j }.map { units[it.key].fragments[0] }
+        out.add(
+            if (kids.isEmpty()) units[j]
+            else units[j].copy(interruptions = (units[j].interruptions + kids).sortedBy { it.start })
+        )
+    }
+    return out
 }
 
 @Composable
@@ -260,8 +292,10 @@ internal fun ZasechkaTab(app: PravkaApp) {
         entries.filter { it.start in rangeStart until dayEnd }.sortedBy { it.start }
     }
     // Day view groups the ribbon into units (chains + singles), newest first.
-    val dayUnits = remember(rangeEntries, weekMode) {
-        if (weekMode) emptyList() else buildDayUnits(rangeEntries).asReversed()
+    // `now` is a key: nesting of parallel facts under an OPEN entry depends
+    // on its live end.
+    val dayUnits = remember(rangeEntries, weekMode, now) {
+        if (weekMode) emptyList() else buildDayUnits(rangeEntries, now).asReversed()
     }
 
     val submitText: () -> Unit = submit@{
@@ -576,11 +610,14 @@ internal fun ZasechkaTab(app: PravkaApp) {
                             source = "edit",
                         )
                         if (f.id == first.id) {
-                            nf = nf.copy(start = updated.start.coerceAtMost(f.end))
+                            // An open fragment has end=0 - never clamp against it.
+                            nf = nf.copy(
+                                start = if (f.open) updated.start else updated.start.coerceAtMost(f.end),
+                            )
                         }
                         if (f.id == last.id) {
                             nf = nf.copy(
-                                end = if (updated.end > 0) updated.end.coerceAtLeast(f.start) else updated.end,
+                                end = if (updated.end > 0) updated.end.coerceAtLeast(nf.start) else updated.end,
                             )
                         }
                         store.update(nf)
