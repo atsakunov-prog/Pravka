@@ -41,13 +41,32 @@ class NotionSync(
 
     private val running = AtomicBoolean(false)
 
+    // A permanently rejected config (bad database id, bad token) must not be
+    // re-tried on every kick - the log was drowning in the same 404. The sync
+    // pauses until the owner changes the token or the id.
+    @Volatile private var blockedConfig: String? = null
+
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
 
     /** Pushes unsynced closed entries. Returns how many pages were upserted. */
     suspend fun syncNow(): Result<Int> {
         val token = settings.notionToken()
-        val db = settings.notionDb()
-        if (token.isBlank() || db.isBlank()) return Result.success(0)
+        val rawDb = settings.notionDb()
+        if (token.isBlank() || rawDb.isBlank()) return Result.success(0)
+        // The owner pastes whatever Notion gave him - a page URL, a dashed
+        // UUID, a bare id. Normalize to the 32 hex chars Notion wants.
+        val db = normalizeDbId(rawDb)
+        if (db == null) {
+            val cfg = "$token|$rawDb"
+            if (blockedConfig != cfg) {
+                blockedConfig = cfg
+                eventLog.add("notion: «$rawDb» не похож на id базы — жду правильный в настройках")
+                _statusFlow.value = "${timeNow()} · id базы не похож на Notion-id"
+            }
+            return Result.success(0)
+        }
+        val cfg = "$token|$db"
+        if (cfg == blockedConfig) return Result.success(0)
         if (!running.compareAndSet(false, true)) return Result.success(0)
         try {
             return withContext(Dispatchers.IO) {
@@ -57,8 +76,21 @@ class NotionSync(
                     val result = runCatching { upsert(token, db, entry) }
                     if (result.isFailure) {
                         val message = result.exceptionOrNull()?.message ?: "ошибка сети"
-                        eventLog.add("notion: не удалось ($message), в очереди ещё ${batch.size - total}")
-                        _statusFlow.value = "${timeNow()} · не удалось: $message"
+                        // Config-level rejections never heal on retry - pause
+                        // until the settings change; network blips keep retrying.
+                        if (message.contains("Could not find database") ||
+                            message.contains("HTTP 401")
+                        ) {
+                            blockedConfig = cfg
+                            eventLog.add(
+                                "notion: настройка отвергнута ($message) — синк на паузе до смены id/токена"
+                            )
+                            _statusFlow.value =
+                                "${timeNow()} · база не найдена: проверь id и Connections интеграции"
+                        } else {
+                            eventLog.add("notion: не удалось ($message), в очереди ещё ${batch.size - total}")
+                            _statusFlow.value = "${timeNow()} · не удалось: $message"
+                        }
                         return@withContext Result.failure(
                             result.exceptionOrNull() ?: Exception(message)
                         )
@@ -75,6 +107,13 @@ class NotionSync(
         } finally {
             running.set(false)
         }
+    }
+
+    // "https://notion.so/ws/5b11be11...?v=..." | dashed UUID | bare id -> the
+    // 32 hex chars, or null when nothing id-shaped is in the string.
+    private fun normalizeDbId(raw: String): String? {
+        val undashed = raw.trim().substringBefore('?').replace("-", "")
+        return Regex("[0-9a-fA-F]{32}").find(undashed)?.value?.lowercase(Locale.US)
     }
 
     private fun upsert(token: String, db: String, entry: ZasechkaStore.Entry) {
