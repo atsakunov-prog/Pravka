@@ -47,6 +47,10 @@ class ZasechkaButtonController(
         private val AMBER = 0xFFB45309.toInt()      // remind pulse
         private val REC_RED = FloatingButtonController.REC_RED
         private val PAPER = 0xFFF7F3EA.toInt()
+
+        // Pomodoro faces: pine for focus, ink-soft for the break.
+        val POMO_FOCUS = 0xFF2F6B5E.toInt()
+        val POMO_BREAK = 0xFF6E6659.toInt()
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -120,12 +124,25 @@ class ZasechkaButtonController(
         applyIdleLook()
     }
 
-    // One place decides color/alpha/pulse from the state triple, so the
-    // states can flip in any order without leaving a stale look behind.
+    // ---- Pomodoro face: the glyph becomes the minutes-left counter ----
+
+    private var pomodoroColor: Int? = null
+
+    /** text = minutes left ("17"); null returns the "З" glyph. */
+    fun setPomodoro(text: String?, color: Int?) {
+        pomodoroColor = if (text != null) color else null
+        label?.text = text ?: "З"
+        label?.textSize = if (text != null) 16f else 20f
+        applyIdleLook()
+    }
+
+    // One place decides color/alpha/pulse from the state set, so the states
+    // can flip in any order without leaving a stale look behind.
     private fun applyIdleLook() {
         val b = button ?: return
         pulse?.cancel()
         pulse = null
+        val pomo = pomodoroColor
         when {
             recording -> {
                 background?.setColor(REC_RED)
@@ -145,11 +162,77 @@ class ZasechkaButtonController(
                     start()
                 }
             }
+            pomo != null -> {
+                background?.setColor(pomo)
+                b.alpha = 0.9f
+            }
             else -> {
                 background?.setColor(OCHRE)
                 b.alpha = idleAlpha
             }
         }
+    }
+
+    // ---- Long-press menu: a single column of ochre pills ----
+
+    class MenuItem(val label: String, val onClick: () -> Unit)
+
+    private var menu: android.widget.LinearLayout? = null
+    private val menuDismiss = Runnable { hideMenu() }
+
+    fun hideMenu() {
+        val m = menu ?: return
+        m.removeCallbacks(menuDismiss)
+        runCatching { windowManager.removeView(m) }
+        menu = null
+    }
+
+    fun showMenu(items: List<MenuItem>) {
+        hideMenu()
+        val column = android.widget.LinearLayout(service).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+        }
+        for (item in items) {
+            val pill = TextView(service).apply {
+                text = item.label
+                setTextColor(PAPER)
+                textSize = 15f
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(18).toFloat()
+                    setColor(OCHRE)
+                }
+                alpha = 0.94f
+                setPadding(dp(16), dp(9), dp(16), dp(9))
+                setOnClickListener {
+                    hideMenu()
+                    item.onClick()
+                }
+            }
+            val lp = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(6) }
+            column.addView(pill, lp)
+        }
+        val p = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+        val bp = params
+        val (w, h) = screenSize()
+        if (bp != null) {
+            val buttonCenterX = bp.x + buttonSize / 2
+            p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + dp(8)
+            else (bp.x - dp(170)).coerceAtLeast(0)
+            p.y = bp.y.coerceIn(0, (h - dp(48) * items.size).coerceAtLeast(0))
+        }
+        menu = column
+        runCatching { windowManager.addView(column, p) }
+        // Not modal (the overlay can't see outside taps) - fades on its own.
+        column.postDelayed(menuDismiss, 6000)
     }
 
     fun onConfigurationChanged() {
@@ -225,6 +308,7 @@ class ZasechkaButtonController(
     fun destroy() {
         pulse?.cancel()
         pulse = null
+        hideMenu()
         button?.let { runCatching { windowManager.removeView(it) } }
         button = null
         ticker?.let { runCatching { windowManager.removeView(it) } }

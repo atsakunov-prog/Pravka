@@ -75,6 +75,11 @@ class PravkaApp : Application() {
         ru.zf.pravka.data.PhoneSweeper(this, phoneStore, zasechkaStore, settings, eventLog, zasechkaSync, appScope)
     }
 
+    // intervals.icu: workouts land in the ribbon, Garmin sleep annotates it.
+    val icuSweeper by lazy {
+        ru.zf.pravka.data.IcuSweeper(settings, zasechkaStore, httpClient, eventLog, zasechkaSync, appScope)
+    }
+
     // The connection pool keeps sockets ~5 min; after a longer gap the CLEAN
     // request pays DNS+TCP+TLS (~300-800ms on LTE). A dictation lasts seconds,
     // so warming the connection when a take STARTS makes the stop->fix hop skip

@@ -32,23 +32,42 @@ class ZasechkaStore(private val context: Context) {
         const val FORMAT = "pravka-zasechka"
         private const val FILE_NAME = "zasechka.json"
 
-        // Starter set - fully editable in the tab. Deliberately life-wide,
-        // not work-only: the owner tracks the whole day, meals included.
+        // The owner's taxonomy (2026-08-21), with hints the categorizer sees.
+        // A hint is the difference between "поговорил с Марианой" landing in
+        // Семья and landing in Социальное - names live here, not in code.
+        private const val CAT_SEED_VERSION = 2
         val DEFAULT_CATEGORIES = listOf(
-            "Встречи",
-            "Контент",
-            "Операционка",
-            "Почта и мессенджеры",
-            "Планирование",
-            "Личное",
-            "Семья",
-            "Еда",
-            "Спорт",
-            "Дорога",
-            "Отдых",
-            "Перерыв",
+            Category("Сон", ""),
+            Category("Спорт: силовая", "тренажёрка, железо, ОФП"),
+            Category("Спорт: бег", ""),
+            Category("Спорт: вело", "велотренировка"),
+            Category("Спорт: прочее", "плавание, лыжи, остальной спорт"),
+            Category("Передвижение: пешком", "ходьба, дойти куда-то"),
+            Category("Передвижение: вело", "велосипед как транспорт"),
+            Category("Передвижение: транспорт", "машина, такси, метро, поезд, самолёт"),
+            Category("Еда", "завтрак, обед, ужин, перекус, готовка"),
+            Category("Быт", "домашние дела, покупки, уборка, документы, врачи"),
+            Category("Семья", "время и разговоры с Марианой, с Серёжей, с родными"),
+            Category("Социальное: внешнее", "друзья, знакомые, встречи и переписка вне работы"),
+            Category("Работа: привлечение", "маркетинг, контент, продажи, новые клиенты"),
+            Category("Работа: текущая", "работа по действующим клиентам и проектам"),
+            Category("Работа: планирование", "планирование, стратегия, разборы, финансы бизнеса"),
+            Category("Чтение", "книги, статьи"),
+            Category("Секс", ""),
+            Category("Отдых", "кино, сериалы, ютуб, игры, гуляние без цели"),
+            Category("Звонки", "телефонный разговор, если непонятно с кем и о чём"),
+        )
+
+        // The v1 seed, kept only to recognize an UNTOUCHED list during the
+        // seed migration - an edited list is never overwritten.
+        private val SEED_V1_NAMES = setOf(
+            "Встречи", "Контент", "Операционка", "Почта и мессенджеры",
+            "Планирование", "Личное", "Семья", "Еда", "Спорт", "Дорога",
+            "Отдых", "Перерыв",
         )
     }
+
+    data class Category(val name: String, val hint: String)
 
     data class Entry(
         val id: Long,
@@ -59,9 +78,10 @@ class ZasechkaStore(private val context: Context) {
         val category: String,     // one of the category list ("" = unsorted)
         val client: String,       // "" when none
         val useful: Int,          // 1..5, 0 = not rated
-        val source: String,       // "voice" | "text" | "edit"
+        val source: String,       // "voice" | "text" | "edit" | "auto"
         val synced: Boolean,      // delivered to the Sheets webhook
         val createdAt: Long,
+        val pomodoros: Int = 0,   // 🍅 completed while this entry ran
     ) {
         val open: Boolean get() = end == 0L
         fun durationMin(now: Long = System.currentTimeMillis()): Long =
@@ -71,14 +91,15 @@ class ZasechkaStore(private val context: Context) {
     private val mutex = Mutex()
     private var loaded = false
     private var entries = mutableListOf<Entry>()
-    private var categories = mutableListOf<String>()
+    private var categories = mutableListOf<Category>()
     private var clients = mutableListOf<String>()
+    private var catSeedVersion = 1
     private var lastId = 0L
 
     private val _entriesFlow = MutableStateFlow<List<Entry>>(emptyList())
     val entriesFlow: StateFlow<List<Entry>> = _entriesFlow
-    private val _categoriesFlow = MutableStateFlow<List<String>>(emptyList())
-    val categoriesFlow: StateFlow<List<String>> = _categoriesFlow
+    private val _categoriesFlow = MutableStateFlow<List<Category>>(emptyList())
+    val categoriesFlow: StateFlow<List<Category>> = _categoriesFlow
     private val _clientsFlow = MutableStateFlow<List<String>>(emptyList())
     val clientsFlow: StateFlow<List<String>> = _clientsFlow
 
@@ -89,7 +110,7 @@ class ZasechkaStore(private val context: Context) {
         entries.toList()
     }
 
-    suspend fun categories(): List<String> = mutex.withLock {
+    suspend fun categories(): List<Category> = mutex.withLock {
         ensureLoaded()
         categories.toList()
     }
@@ -99,9 +120,13 @@ class ZasechkaStore(private val context: Context) {
         clients.toList()
     }
 
-    suspend fun setCategories(value: List<String>): Unit = mutex.withLock {
+    suspend fun setCategories(value: List<Category>): Unit = mutex.withLock {
         ensureLoaded()
-        categories = value.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
+        categories = value
+            .map { Category(it.name.trim(), it.hint.trim()) }
+            .filter { it.name.isNotEmpty() }
+            .distinctBy { it.name.lowercase() }
+            .toMutableList()
         persist()
     }
 
@@ -254,6 +279,16 @@ class ZasechkaStore(private val context: Context) {
         if (entries.removeAll { it.id == id }) persist()
     }
 
+    /** A completed 🍅 is credited to the entry that was running. */
+    suspend fun incrementPomodoro(id: Long): Unit = mutex.withLock {
+        ensureLoaded()
+        val index = entries.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            entries[index] = entries[index].copy(pomodoros = entries[index].pomodoros + 1)
+            persist()
+        }
+    }
+
     /** Entries overlapping [from, to) - for the day view and the digests. */
     suspend fun forRange(from: Long, to: Long): List<Entry> = mutex.withLock {
         ensureLoaded()
@@ -261,6 +296,21 @@ class ZasechkaStore(private val context: Context) {
             val effectiveEnd = if (e.open) Long.MAX_VALUE else e.end
             e.start < to && effectiveEnd > from
         }
+    }
+
+    /**
+     * True when the owner's own CLOSED entries already claim most of
+     * [from, to) - the shared "human beats robot" rule every auto-inserter
+     * (attention eaters, calls, sleep, workouts) checks before writing.
+     */
+    suspend fun coveredByOwner(from: Long, to: Long): Boolean {
+        if (to <= from) return true
+        val manualMs = forRange(from, to)
+            .filter { !it.open && it.source != "auto" }
+            .sumOf {
+                (kotlin.math.min(it.end, to) - kotlin.math.max(it.start, from)).coerceAtLeast(0L)
+            }
+        return manualMs * 2 >= to - from
     }
 
     /** Closed entries the Sheets mirror has not seen yet, oldest first. */
@@ -321,8 +371,18 @@ class ZasechkaStore(private val context: Context) {
         if (loaded) return
         withContext(Dispatchers.IO) {
             val root = StoreFiles.readOrQuarantine(file) { JSONObject(it) }
-            categories = root?.optJSONArray("categories")?.toStringList()
-                ?.toMutableList() ?: DEFAULT_CATEGORIES.toMutableList()
+            categories = root?.optJSONArray("categories")?.toCategoryList()?.toMutableList()
+                ?: DEFAULT_CATEGORIES.toMutableList()
+            catSeedVersion = root?.optInt("catSeed", 1) ?: CAT_SEED_VERSION
+            // Seed upgrade: the owner's real taxonomy replaced the v1 draft.
+            // Applies only to a list the owner never touched - hand edits win.
+            if (root != null && catSeedVersion < CAT_SEED_VERSION) {
+                if (categories.map { it.name }.toSet() == SEED_V1_NAMES) {
+                    categories = DEFAULT_CATEGORIES.toMutableList()
+                }
+                catSeedVersion = CAT_SEED_VERSION
+                persistQueued()
+            }
             clients = root?.optJSONArray("clients")?.toStringList()?.toMutableList() ?: mutableListOf()
             entries = mutableListOf()
             root?.optJSONArray("entries")?.let { array ->
@@ -343,6 +403,7 @@ class ZasechkaStore(private val context: Context) {
                             source = o.optString("source", "voice"),
                             synced = o.optBoolean("synced", false),
                             createdAt = o.optLong("createdAt", start),
+                            pomodoros = o.optInt("pomodoros", 0),
                         )
                     )
                 }
@@ -374,7 +435,15 @@ class ZasechkaStore(private val context: Context) {
     private fun toJson(): JSONObject = JSONObject().apply {
         put("format", FORMAT)
         put("version", 1)
-        put("categories", JSONArray(categories))
+        put("catSeed", catSeedVersion)
+        put(
+            "categories",
+            JSONArray().apply {
+                for (c in categories) {
+                    put(JSONObject().apply { put("name", c.name); put("hint", c.hint) })
+                }
+            }
+        )
         put("clients", JSONArray(clients))
         put(
             "entries",
@@ -393,6 +462,7 @@ class ZasechkaStore(private val context: Context) {
                             put("source", e.source)
                             put("synced", e.synced)
                             put("createdAt", e.createdAt)
+                            if (e.pomodoros > 0) put("pomodoros", e.pomodoros)
                         }
                     )
                 }
@@ -403,6 +473,15 @@ class ZasechkaStore(private val context: Context) {
 
 private fun JSONArray.toStringList(): List<String> =
     (0 until length()).mapNotNull { optString(it).takeIf { s -> s.isNotBlank() } }
+
+// Categories were plain strings in v1 files; both shapes stay readable.
+private fun JSONArray.toCategoryList(): List<ZasechkaStore.Category> =
+    (0 until length()).mapNotNull { i ->
+        optJSONObject(i)?.let { o ->
+            o.optString("name").trim().takeIf { it.isNotEmpty() }
+                ?.let { ZasechkaStore.Category(it, o.optString("hint").trim()) }
+        } ?: optString(i).trim().takeIf { it.isNotEmpty() }?.let { ZasechkaStore.Category(it, "") }
+    }
 
 /** Start of the local calendar day containing [at]. */
 fun dayStartMs(at: Long): Long {

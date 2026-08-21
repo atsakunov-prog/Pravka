@@ -53,6 +53,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         private const val KEY_Z_MORNING_DAY = "z_morning_day"
         private const val KEY_Z_EVENING_DAY = "z_evening_day"
         private const val KEY_Z_GAP_NOTIFIED = "z_gap_notified_end"
+
+        // Pomodoro survives a service restart: the deadline is on disk.
+        private const val KEY_Z_POMO_ENDS = "z_pomo_ends"
+        private const val KEY_Z_POMO_BREAK = "z_pomo_break"
+        private const val KEY_Z_POMO_DAY_PREFIX = "z_pomo_n_"
         const val RULES_OPT_PERIOD_MS = 7L * 24 * 3600 * 1000
         const val RULES_OPT_MIN_COUNT = 6
     }
@@ -145,13 +150,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             scope = scope,
             settings = app.settings,
             onShortTap = ::onZasechkaTap,
-            onLongPress = {
-                startActivity(
-                    android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                        .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            },
+            onLongPress = ::showZasechkaMenu,
         )
         scope.launch {
             app.settings.zEnabledFlow.collect {
@@ -169,6 +168,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             launch { app.zasechkaStore.clientsFlow.collect { zClientsCached = it } }
         }
         zReminderHandler.postDelayed(zReminderTick, 60_000)
+        restorePomodoro()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -1412,6 +1412,173 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ---- Помидоры: the "З" button doubles as a pomodoro timer ----
+
+    private var pomodoroEndsAt = 0L
+    private var pomodoroIsBreak = false
+    private val pomodoroHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val pomodoroTicker = object : Runnable {
+        override fun run() {
+            tickPomodoro()
+            if (pomodoroEndsAt > 0) pomodoroHandler.postDelayed(this, 15_000)
+        }
+    }
+
+    private fun showZasechkaMenu() {
+        val openTab = ZasechkaButtonController.MenuItem("Открыть Засечку") {
+            startActivity(
+                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                    .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
+        val items = if (pomodoroEndsAt > 0) {
+            listOf(
+                ZasechkaButtonController.MenuItem(
+                    if (pomodoroIsBreak) "Стоп: перерыв" else "Стоп: помидор"
+                ) { stopPomodoro(byUser = true) },
+                openTab,
+            )
+        } else {
+            listOf(
+                ZasechkaButtonController.MenuItem("🍅 25 минут") { startPomodoro(25, isBreak = false) },
+                ZasechkaButtonController.MenuItem("🍅 50 минут") { startPomodoro(50, isBreak = false) },
+                ZasechkaButtonController.MenuItem("Перерыв 5") { startPomodoro(5, isBreak = true) },
+                openTab,
+            )
+        }
+        zButton?.showMenu(items)
+    }
+
+    fun startPomodoro(minutes: Int, isBreak: Boolean) {
+        pomodoroEndsAt = System.currentTimeMillis() + minutes * 60_000L
+        pomodoroIsBreak = isBreak
+        getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE).edit()
+            .putLong(KEY_Z_POMO_ENDS, pomodoroEndsAt)
+            .putBoolean(KEY_Z_POMO_BREAK, isBreak)
+            .apply()
+        Haptics.start(this)
+        Feedback.toast(this, if (isBreak) "Перерыв $minutes мин" else "🍅 $minutes мин — поехали")
+        pomodoroHandler.removeCallbacks(pomodoroTicker)
+        pomodoroTicker.run()
+    }
+
+    fun stopPomodoro(byUser: Boolean) {
+        clearPomodoro()
+        if (byUser) Feedback.toast(this, "Таймер остановлен")
+    }
+
+    private fun clearPomodoro() {
+        pomodoroEndsAt = 0
+        pomodoroHandler.removeCallbacks(pomodoroTicker)
+        getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE).edit()
+            .remove(KEY_Z_POMO_ENDS).remove(KEY_Z_POMO_BREAK).apply()
+        zButton?.setPomodoro(null, null)
+    }
+
+    private fun tickPomodoro() {
+        if (pomodoroEndsAt <= 0) return
+        val left = pomodoroEndsAt - System.currentTimeMillis()
+        if (left <= 0) {
+            completePomodoro()
+            return
+        }
+        val minutesLeft = (left + 59_999) / 60_000
+        zButton?.setPomodoro(
+            minutesLeft.toString(),
+            if (pomodoroIsBreak) ZasechkaButtonController.POMO_BREAK
+            else ZasechkaButtonController.POMO_FOCUS,
+        )
+    }
+
+    private fun completePomodoro() {
+        val wasBreak = pomodoroIsBreak
+        clearPomodoro()
+        Haptics.success(this)
+        if (wasBreak) {
+            zPomodoroNotify("Перерыв кончился", "Ещё помидор?")
+            return
+        }
+        scope.launch {
+            val open = app.zasechkaStore.openEntry()
+            if (open != null) app.zasechkaStore.incrementPomodoro(open.id)
+            val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
+            val dayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
+                .format(java.util.Date(System.currentTimeMillis()))
+            val n = internal.getInt(KEY_Z_POMO_DAY_PREFIX + dayKey, 0) + 1
+            internal.edit().putInt(KEY_Z_POMO_DAY_PREFIX + dayKey, n).apply()
+            app.eventLog.add("помидор №$n готов" + (open?.let { " («${it.title}»)" } ?: ""))
+            zPomodoroNotify(
+                "Помидор №$n готов 🍅",
+                open?.let { "«${it.title}» — сделано. Перерыв?" } ?: "Перерыв?",
+            )
+        }
+    }
+
+    /** Missed deadline while the service was dead: credit it quietly. */
+    private fun restorePomodoro() {
+        val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
+        val ends = internal.getLong(KEY_Z_POMO_ENDS, 0L)
+        if (ends <= 0) return
+        pomodoroIsBreak = internal.getBoolean(KEY_Z_POMO_BREAK, false)
+        if (ends > System.currentTimeMillis()) {
+            pomodoroEndsAt = ends
+            pomodoroHandler.removeCallbacks(pomodoroTicker)
+            pomodoroTicker.run()
+        } else {
+            val wasBreak = pomodoroIsBreak
+            clearPomodoro()
+            if (!wasBreak) {
+                val dayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
+                    .format(java.util.Date(ends))
+                val n = internal.getInt(KEY_Z_POMO_DAY_PREFIX + dayKey, 0) + 1
+                internal.edit().putInt(KEY_Z_POMO_DAY_PREFIX + dayKey, n).apply()
+            }
+        }
+    }
+
+    private fun zPomodoroNotify(title: String, text: String) {
+        runCatching {
+            val nm = getSystemService(android.app.NotificationManager::class.java)
+            val channelId = "pravka-zasechka"
+            if (nm.getNotificationChannel(channelId) == null) {
+                nm.createNotificationChannel(
+                    android.app.NotificationChannel(
+                        channelId, getString(R.string.z_channel),
+                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                    )
+                )
+            }
+            fun quick(what: String, code: Int): android.app.PendingIntent =
+                android.app.PendingIntent.getActivity(
+                    this, code,
+                    android.content.Intent(this, ZasechkaQuickActivity::class.java)
+                        .putExtra(ZasechkaQuickActivity.EXTRA_WHAT, what)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                    android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+                )
+            val notif = android.app.Notification.Builder(this, channelId)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setSmallIcon(R.drawable.ic_tile)
+                .addAction(
+                    android.app.Notification.Action.Builder(
+                        null as android.graphics.drawable.Icon?, "Перерыв 5",
+                        quick(ZasechkaQuickActivity.W_BREAK5, 7),
+                    ).build()
+                )
+                .addAction(
+                    android.app.Notification.Action.Builder(
+                        null as android.graphics.drawable.Icon?, "🍅 25",
+                        quick(ZasechkaQuickActivity.W_POMO25, 8),
+                    ).build()
+                )
+                .setAutoCancel(true)
+                .build()
+            nm.notify(45, notif)
+        }
+    }
+
     private fun zTime(ms: Long): String =
         java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))
 
@@ -1425,10 +1592,11 @@ class PravkaAccessibilityService : AccessibilityService() {
     private val zReminderHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val zReminderTick = object : Runnable {
         override fun run() {
-            // The phone sweep first: it may close a gap (a YouTube session or
-            // a call becomes an entry) that the reminder would otherwise nag
-            // about. Fire-and-forget - the reminder check reads current data.
+            // The sweeps first: they may close a gap (a YouTube session, a
+            // call, a workout becomes an entry) that the reminder would
+            // otherwise nag about. Fire-and-forget - the check reads current data.
             scope.launch { app.phoneSweeper.sweep() }
+            scope.launch { app.icuSweeper.sweep() }
             zasechkaReminderCheck()
             zReminderHandler.postDelayed(this, 5 * 60_000L)
         }
@@ -1563,6 +1731,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         instance = null
         ripenessHandler.removeCallbacks(ripenessCheck)
         zReminderHandler.removeCallbacks(zReminderTick)
+        pomodoroHandler.removeCallbacks(pomodoroTicker)
         googleSession?.stop()
         googleSession = null
         zSession?.stop()

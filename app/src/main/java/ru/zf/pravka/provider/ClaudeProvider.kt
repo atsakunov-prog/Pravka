@@ -347,7 +347,9 @@ $listing
      */
     suspend fun zasechka(
         raw: String,
-        categories: List<String>,
+        // name -> hint ("что сюда относится"); the hint rides only in the
+        // prompt, the reply must return the bare name.
+        categories: List<Pair<String, String>>,
         clients: List<String>,
         nowLocal: String,
         previousTitle: String,
@@ -355,7 +357,9 @@ $listing
         runCatchingApi {
             val apiKey = settings.apiKey()
             if (apiKey.isBlank()) throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
-            val categoriesBlock = categories.joinToString("\n") { "- $it" }
+            val categoriesBlock = categories.joinToString("\n") { (name, hint) ->
+                "- «$name»" + (if (hint.isBlank()) "" else " — $hint")
+            }
             val clientsBlock =
                 if (clients.isEmpty()) "(список пуст)"
                 else clients.joinToString("\n") { "- $it" }
@@ -367,7 +371,8 @@ $listing
 
 Сейчас: $nowLocal.
 $previousBlock
-Категории (выбери РОВНО одну, слово в слово из списка):
+Категории (после тире — пояснение, что сюда относится; выбери РОВНО одну
+и верни ТОЛЬКО её название — текст в «кавычках», без пояснения):
 $categoriesBlock
 
 Клиенты и проекты владельца:
@@ -376,8 +381,8 @@ $clientsBlock
 Правила:
 - "title": короткое название дела, 2–6 слов, с маленькой буквы, без точки —
   так, чтобы в отчёте за неделю было понятно, что это было.
-- "category": одна строка из списка категорий, БУКВА В БУКВУ. Если ничего
-  не подходит — пустая строка.
+- "category": название категории из списка, БУКВА В БУКВУ (без «кавычек»
+  и без пояснения). Если ничего не подходит — пустая строка.
 - "client": имя из списка клиентов, если дело явно про него. Если владелец
   назвал клиента/проект не из списка — верни как услышано. Иначе пустая строка.
 - "useful": целое 1–5, только если владелец сам оценил пользу («полезность
@@ -416,7 +421,9 @@ $raw
             .getOrElse { throw ApiException("Модель вернула не тот формат.") }
         return ZasechkaParse(
             title = o.optString("title").trim(),
-            category = o.optString("category").trim(),
+            // The prompt shows categories as «Название» - strip the quotes if
+            // the model echoes them back.
+            category = o.optString("category").trim().trim('«', '»').trim(),
             client = o.optString("client").trim(),
             useful = o.optInt("useful", 0).coerceIn(0, 5),
             // 12 hours is the sanity ceiling for "how far back" - anything

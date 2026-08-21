@@ -126,6 +126,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
     val store = app.zasechkaStore
     val entries by store.entriesFlow.collectAsState()
     val categories by store.categoriesFlow.collectAsState()
+    val categoryNames = remember(categories) { categories.map { it.name } }
     val clients by store.clientsFlow.collectAsState()
     val syncStatus by app.zasechkaSync.statusFlow.collectAsState()
     LaunchedEffect(Unit) { store.all() }  // first read triggers the load
@@ -291,8 +292,17 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 .mapValues { (_, list) -> list.sumOf { it.durationMin(now) } }
                 .entries.sortedByDescending { it.value }
             val total = byCategory.sumOf { it.value }
+            // Day pomodoro counters live in the service's internal prefs.
+            val pomoCount = remember(now, dayStart, weekMode) {
+                val prefs = context.getSharedPreferences("pravka_internal", android.content.Context.MODE_PRIVATE)
+                val fmt = SimpleDateFormat("yyyyMMdd", Locale.US)
+                (0 until if (weekMode) 7 else 1).sumOf {
+                    prefs.getInt("z_pomo_n_" + fmt.format(Date(dayStart - it * 86_400_000L)), 0)
+                }
+            }
             Text(
-                (if (weekMode) "За неделю" else "За день") + ": ${fmtDur(total)} · записей: ${rangeEntries.size}",
+                (if (weekMode) "За неделю" else "За день") + ": ${fmtDur(total)} · записей: ${rangeEntries.size}" +
+                    (if (pomoCount > 0) " · 🍅 $pomoCount" else ""),
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(bottom = 6.dp),
             )
@@ -421,6 +431,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
                             if (entry.category.isNotBlank()) add(entry.category) else add("без категории")
                             if (entry.client.isNotBlank()) add(entry.client)
                             if (entry.useful > 0) add("★${entry.useful}")
+                            if (entry.pomodoros > 0) add("🍅×${entry.pomodoros}")
                         }.joinToString(" · ")
                         Text(
                             details,
@@ -452,7 +463,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
     editing?.let { entry ->
         EditEntryDialog(
             entry = entry,
-            categories = categories,
+            categories = categoryNames,
             onDismiss = { editing = null },
             onSave = { updated ->
                 editing = null
@@ -490,7 +501,7 @@ private fun CategoryChip(category: String) {
 @Composable
 private fun ZasechkaConfig(
     app: PravkaApp,
-    categories: List<String>,
+    categories: List<ZasechkaStore.Category>,
     clients: List<String>,
     syncStatus: String,
     entries: List<ZasechkaStore.Entry>,
@@ -558,10 +569,8 @@ private fun ZasechkaConfig(
         )
 
         Spacer(Modifier.height(8.dp))
-        EditableList(
-            title = "Категории",
-            hint = "Сонет выбирает строго из этого списка",
-            values = categories,
+        CategoriesEditor(
+            categories = categories,
             onChange = { app.appScope.launch { app.zasechkaStore.setCategories(it) } },
         )
         Spacer(Modifier.height(8.dp))
@@ -612,11 +621,152 @@ private fun ZasechkaConfig(
         )
 
         Spacer(Modifier.height(12.dp))
+        Text("intervals.icu", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Тренировки за последние двое суток сами встают в ленту (бег, вело, силовая, ходьба), " +
+                "а Garmin-длительность сна дописывается к записи «сон». Ключ: intervals.icu → " +
+                "Settings → Developer Settings → API Key.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val icuAthlete by app.settings.icuAthleteFlow.collectAsState(initial = "")
+        val icuKey by app.settings.icuKeyFlow.collectAsState(initial = "")
+        var athleteField by remember(icuAthlete) { mutableStateOf(icuAthlete) }
+        var keyField by remember(icuKey) { mutableStateOf(icuKey) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = athleteField,
+                onValueChange = { athleteField = it },
+                label = { Text("Athlete ID (i…)") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = keyField,
+                onValueChange = { keyField = it },
+                label = { Text("API Key") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        TextButton(onClick = {
+            app.appScope.launch {
+                app.settings.setIcuAthlete(athleteField)
+                app.settings.setIcuKey(keyField)
+                Feedback.toast(app, "Сохранено — тренировки подтянутся в ближайший свип")
+                app.icuSweeper.sweep(force = true)
+            }
+        }) { Text("Сохранить и проверить") }
+
+        Spacer(Modifier.height(12.dp))
         OutlinedButton(onClick = {
             app.appScope.launch {
                 context.startActivity(app.zasechkaStore.shareCsvIntent())
             }
         }) { Text("Выгрузить CSV") }
+    }
+}
+
+@Composable
+private fun CategoriesEditor(
+    categories: List<ZasechkaStore.Category>,
+    onChange: (List<ZasechkaStore.Category>) -> Unit,
+) {
+    var editing by remember { mutableStateOf<ZasechkaStore.Category?>(null) }
+    Text("Категории", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "Сонет выбирает строго из этого списка; пояснение — подсказка ему, что сюда относится. Тап — править.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    for (category in categories) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { editing = category },
+        ) {
+            Column(Modifier.weight(1f).padding(vertical = 3.dp)) {
+                Text(category.name, style = MaterialTheme.typography.bodyMedium)
+                if (category.hint.isNotBlank()) {
+                    Text(
+                        category.hint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
+            IconButton(onClick = { onChange(categories.filter { it.name != category.name }) }) {
+                Icon(
+                    Icons.Filled.Clear,
+                    contentDescription = "удалить",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+    var newName by remember { mutableStateOf("") }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = newName,
+            onValueChange = { newName = it },
+            label = { Text("Добавить категорию") },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(
+            onClick = {
+                val v = newName.trim()
+                if (v.isNotEmpty()) {
+                    onChange(categories + ZasechkaStore.Category(v, ""))
+                    newName = ""
+                }
+            },
+            enabled = newName.isNotBlank(),
+        ) { Text("OK") }
+    }
+    editing?.let { original ->
+        var name by remember(original) { mutableStateOf(original.name) }
+        var hint by remember(original) { mutableStateOf(original.hint) }
+        AlertDialog(
+            onDismissRequest = { editing = null },
+            title = { Text("Категория") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Название") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = hint,
+                        onValueChange = { hint = it },
+                        label = { Text("Что сюда относится (подсказка Сонету)") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    editing = null
+                    val trimmed = name.trim()
+                    if (trimmed.isNotEmpty()) {
+                        onChange(
+                            categories.map {
+                                if (it.name == original.name) ZasechkaStore.Category(trimmed, hint.trim())
+                                else it
+                            }
+                        )
+                    }
+                }) { Text("Сохранить") }
+            },
+            dismissButton = { TextButton(onClick = { editing = null }) { Text("Отмена") } },
+        )
     }
 }
 
@@ -699,7 +849,8 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
     val days by app.phoneStore.daysFlow.collectAsState()
     val immersive by app.phoneStore.immersiveFlow.collectAsState()
     val labels by app.phoneStore.labelsFlow.collectAsState()
-    val categories by app.zasechkaStore.categoriesFlow.collectAsState()
+    val categoryEntries by app.zasechkaStore.categoriesFlow.collectAsState()
+    val categories = remember(categoryEntries) { categoryEntries.map { it.name } }
     var usageGranted by remember { mutableStateOf(PhoneSweeper.hasUsageAccess(context)) }
     var callGranted by remember { mutableStateOf(PhoneSweeper.hasCallLogAccess(context)) }
     var editingApp by remember { mutableStateOf<String?>(null) }

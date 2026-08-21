@@ -43,6 +43,8 @@ class Settings(private val context: Context) {
         private val KEY_Z_CALLS = booleanPreferencesKey("z_calls_to_ribbon")
         private val KEY_Z_CALL_CATEGORY = stringPreferencesKey("z_call_category")
         private val KEY_Z_IMMERSIVE_MIN = intPreferencesKey("z_immersive_min")
+        private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
+        private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -149,6 +151,19 @@ class Settings(private val context: Context) {
     val zImmersiveMinFlow = context.dataStore.data.map { it[KEY_Z_IMMERSIVE_MIN] ?: 3 }
     suspend fun setZImmersiveMin(value: Int) {
         context.dataStore.edit { it[KEY_Z_IMMERSIVE_MIN] = value.coerceIn(1, 30) }
+    }
+
+    // intervals.icu: workouts into the ribbon, Garmin sleep as an annotation.
+    val icuAthleteFlow = context.dataStore.data.map { it[KEY_ICU_ATHLETE] ?: "" }
+    suspend fun icuAthlete(): String = icuAthleteFlow.first()
+    suspend fun setIcuAthlete(value: String) {
+        context.dataStore.edit { it[KEY_ICU_ATHLETE] = value.trim() }
+    }
+
+    val icuKeyFlow = context.dataStore.data.map { it[KEY_ICU_KEY] ?: "" }
+    suspend fun icuKey(): String = icuKeyFlow.first()
+    suspend fun setIcuKey(value: String) {
+        context.dataStore.edit { it[KEY_ICU_KEY] = value.trim() }
     }
 
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }

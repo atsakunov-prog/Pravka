@@ -41,12 +41,13 @@ class ZasechkaEngine(
         val now = System.currentTimeMillis()
         val text = raw.trim()
         val categories = store.categories()
+        val categoryNames = categories.map { it.name }
         val clients = store.clients()
         val previousTitle = store.all().lastOrNull()?.title.orEmpty()
 
         val parsed = claude.zasechka(
             raw = text,
-            categories = categories,
+            categories = categories.map { it.name to it.hint },
             clients = clients,
             nowLocal = nowFormat.format(Date(now)),
             previousTitle = previousTitle,
@@ -61,7 +62,7 @@ class ZasechkaEngine(
                     raw = text,
                     title = p.title.ifBlank { fallbackTitle(text) },
                     // Canonical casing when the model matched a known value.
-                    category = categories.firstOrNull { it.equals(p.category, ignoreCase = true) }
+                    category = categoryNames.firstOrNull { it.equals(p.category, ignoreCase = true) }
                         ?: p.category,
                     client = clients.firstOrNull { it.equals(p.client, ignoreCase = true) }
                         ?: p.client,

@@ -236,10 +236,11 @@ class PhoneSweeper(
         // ---- crossover into the ribbon ----
 
         var insertedAny = false
+        if (detectSleep(now, usm)) insertedAny = true
         val allLabels = knownLabels + newLabels
         candidates.sortBy { it.start }
         for (c in candidates) {
-            if (coveredByOwner(c.start, c.end)) continue
+            if (zasechkaStore.coveredByOwner(c.start, c.end)) continue
             val label = allLabels[c.pkg] ?: c.pkg.substringAfterLast('.')
             val inserted = zasechkaStore.insertInterruption(
                 start = c.start,
@@ -261,13 +262,59 @@ class PhoneSweeper(
         if (insertedAny) sync.kickSoon(scope)
     }
 
-    /** True when the owner's own CLOSED entries already claim most of [start, end). */
-    private suspend fun coveredByOwner(start: Long, end: Long): Boolean {
-        val overlapping = zasechkaStore.forRange(start, end)
-        val manualMs = overlapping
-            .filter { !it.open && it.source != "auto" }
-            .sumOf { (min(it.end, end) - max(it.start, start)).coerceAtLeast(0L) }
-        return manualMs * 2 >= end - start
+    /**
+     * The night's sleep, read off the screen: the longest lights-out gap
+     * between 18:00 yesterday and now. The phone knows when the owner really
+     * fell asleep and woke up better than any API - intervals.icu only has
+     * the duration (IcuSweeper annotates it onto this entry later). Runs once
+     * per day after 05:00; closing the evening's open entry at lights-out is
+     * the automatic "закрыть день".
+     */
+    private suspend fun detectSleep(now: Long, usm: UsageStatsManager): Boolean {
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = now
+        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        if (hour < 5) return false
+        val prefs = context.getSharedPreferences("pravka_internal", Context.MODE_PRIVATE)
+        val todayKey = phoneDayKey(now)
+        if (prefs.getString("z_sleep_day", "") == todayKey) return false
+        val from = dayStartMs(now) - 6 * 3600_000L
+        val events = usm.queryEvents(from, now)
+        val event = UsageEvents.Event()
+        var lastOff = 0L
+        var bestStart = 0L
+        var bestEnd = 0L
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            when (event.eventType) {
+                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> lastOff = event.timeStamp
+                UsageEvents.Event.SCREEN_INTERACTIVE -> {
+                    if (lastOff > 0 && event.timeStamp - lastOff > bestEnd - bestStart) {
+                        bestStart = lastOff
+                        bestEnd = event.timeStamp
+                    }
+                    lastOff = 0
+                }
+            }
+        }
+        if (bestEnd - bestStart < 3 * 3600_000L) {
+            // No convincing night gap; stop looking for today after noon.
+            if (hour >= 12) prefs.edit().putString("z_sleep_day", todayKey).apply()
+            return false
+        }
+        prefs.edit().putString("z_sleep_day", todayKey).apply()
+        if (zasechkaStore.coveredByOwner(bestStart, bestEnd)) return false
+        val entry = zasechkaStore.insertInterruption(
+            start = bestStart,
+            end = bestEnd,
+            title = "сон",
+            category = "Сон",
+            resumePrevious = false,
+        )
+        if (entry != null) {
+            eventLog.add("телефон: сон ${(bestEnd - bestStart) / 60_000} мин → в ленту")
+        }
+        return entry != null
     }
 
     private suspend fun sweepCalls(now: Long, lastCallSweep: Long): Boolean {
@@ -297,7 +344,7 @@ class PhoneSweeper(
                     if (durationSec < MIN_CALL_SEC) continue
                     val end = min(date + durationSec * 1000, now)
                     if (end <= date) continue
-                    if (runCatching { coveredByOwner(date, end) }.getOrDefault(false)) continue
+                    if (runCatching { zasechkaStore.coveredByOwner(date, end) }.getOrDefault(false)) continue
                     val title = "звонок" + (name?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
                     val entry = zasechkaStore.insertInterruption(
                         start = date,
