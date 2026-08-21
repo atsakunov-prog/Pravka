@@ -14,9 +14,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// Editorial identity: paper, ink, and the proofreader's orange pen.
-// The wide "П" mark, serif headings and the orange accent carry the same
-// language as the launcher icon and the floating button.
+// Editorial identity: paper, ink, and the proofreader's warm pens - the
+// red-orange "П", the amber "З", gold and terracotta in the charts, plus one
+// голубой accent (tertiary) for contrast. Serif headings carry the same
+// language as the launcher icon and the floating buttons.
 
 private val Accent = Color(0xFFEA580C)
 private val AccentDeep = Color(0xFF9A3412)
@@ -28,8 +29,10 @@ private val PaperDim = Color(0xFFEFE9DC)
 private val Ink = Color(0xFF241F19)
 private val InkSoft = Color(0xFF6E6659)
 private val PaperLine = Color(0xFFDDD5C4)
-private val Ochre = Color(0xFF8F6A1E)
-private val OchrePale = Color(0xFFF0E3C8)
+private val Sand = Color(0xFFF6E3C3)
+private val Wave = Color(0xFF0E7490)
+private val WavePale = Color(0xFFD3ECF4)
+private val WaveDeep = Color(0xFF0F4C5C)
 
 private val NightBg = Color(0xFF181511)
 private val NightCard = Color(0xFF231F19)
@@ -37,7 +40,7 @@ private val NightCardHigh = Color(0xFF2A251E)
 private val NightText = Color(0xFFECE5D8)
 private val NightTextSoft = Color(0xFFA79D8C)
 private val NightLine = Color(0xFF3B342A)
-private val OchreBright = Color(0xFFD4A54F)
+private val WaveBright = Color(0xFF6CC3DD)
 
 private val LightColors = lightColorScheme(
     primary = Accent,
@@ -46,12 +49,12 @@ private val LightColors = lightColorScheme(
     onPrimaryContainer = AccentDeep,
     secondary = InkSoft,
     onSecondary = Paper,
-    secondaryContainer = PaperDim,
-    onSecondaryContainer = Ink,
-    tertiary = Ochre,
-    onTertiary = Paper,
-    tertiaryContainer = OchrePale,
-    onTertiaryContainer = Color(0xFF57400F),
+    secondaryContainer = Sand,
+    onSecondaryContainer = Color(0xFF5C3A10),
+    tertiary = Wave,
+    onTertiary = Color(0xFFF4FBFD),
+    tertiaryContainer = WavePale,
+    onTertiaryContainer = WaveDeep,
     background = Paper,
     onBackground = Ink,
     surface = Paper,
@@ -78,12 +81,12 @@ private val DarkColors = darkColorScheme(
     onPrimaryContainer = Color(0xFFFAD6B4),
     secondary = NightTextSoft,
     onSecondary = NightBg,
-    secondaryContainer = NightCardHigh,
-    onSecondaryContainer = NightText,
-    tertiary = OchreBright,
-    onTertiary = Color(0xFF2E2205),
-    tertiaryContainer = Color(0xFF4A3A12),
-    onTertiaryContainer = Color(0xFFEFDBAE),
+    secondaryContainer = Color(0xFF42351F),
+    onSecondaryContainer = Color(0xFFEEDFC2),
+    tertiary = WaveBright,
+    onTertiary = Color(0xFF06333F),
+    tertiaryContainer = Color(0xFF0B4A5A),
+    onTertiaryContainer = Color(0xFFC9EAF4),
     background = NightBg,
     onBackground = NightText,
     surface = NightBg,

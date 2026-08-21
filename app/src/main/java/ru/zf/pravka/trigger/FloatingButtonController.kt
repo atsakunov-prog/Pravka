@@ -97,12 +97,84 @@ class FloatingButtonController(
     fun show() {
         if (button == null) create()
         if (!visible) {
+            // Pair placement (owner's design): the "П" appears docked right
+            // above the "З", so the two read as one linked pair of bubbles.
+            pairAnchor?.invoke()?.let { (x, y) ->
+                params?.let { p ->
+                    val (w, h) = screenSize()
+                    p.x = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
+                    p.y = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
+                    button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
+                }
+            }
             button?.visibility = View.VISIBLE
             visible = true
         }
         if (badgeWanted) {
             repositionLearnBadge()
             learnBadge?.visibility = View.VISIBLE
+        }
+    }
+
+    // ---- Elastic pair: trail the "З" button on a rubber band ----
+
+    /** Fired while the owner drags THIS button (and once more on drop). */
+    var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
+
+    /** Where this button should appear when it shows up (docked over "З"). */
+    var pairAnchor: (() -> Pair<Int, Int>?)? = null
+
+    fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
+
+    fun buttonSizePx(): Int = buttonSize
+
+    private var followTargetX = 0
+    private var followTargetY = 0
+    private var followSettle = false
+    private var following = false
+    private val followStep = object : Runnable {
+        override fun run() {
+            val p = params ?: return
+            val view = button ?: return
+            val dx = followTargetX - p.x
+            val dy = followTargetY - p.y
+            if (abs(dx) <= 2 && abs(dy) <= 2) {
+                p.x = followTargetX
+                p.y = followTargetY
+                runCatching { windowManager.updateViewLayout(view, p) }
+                repositionTickerIfVisible()
+                repositionLearnBadge()
+                following = false
+                if (followSettle) savePosition(view, p)
+                return
+            }
+            p.x += followInc(dx)
+            p.y += followInc(dy)
+            runCatching { windowManager.updateViewLayout(view, p) }
+            repositionTickerIfVisible()
+            repositionLearnBadge()
+            view.postDelayed(this, 16)
+        }
+    }
+
+    // ~30% of the remaining distance per frame - the rubber-band feel.
+    private fun followInc(d: Int): Int {
+        val step = (d * 0.30f).toInt()
+        return if (step != 0) step else if (d > 0) 1 else -1
+    }
+
+    /** No-op while hidden: an off-screen "П" must not chase the "З". */
+    fun followTo(x: Int, y: Int, settle: Boolean) {
+        if (!visible) return
+        val view = button ?: return
+        val (w, h) = screenSize()
+        followTargetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
+        followTargetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
+        followSettle = settle
+        if (!following) {
+            following = true
+            view.removeCallbacks(followStep)
+            view.post(followStep)
         }
     }
 
@@ -591,6 +663,7 @@ class FloatingButtonController(
                         runCatching { windowManager.updateViewLayout(view, p) }
                         repositionTickerIfVisible()  // the pill rides along
                         repositionLearnBadge()
+                        onDragged?.invoke(p.x, p.y, false)
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -598,6 +671,7 @@ class FloatingButtonController(
                     if (!busy && !recording) view.alpha = idleAlpha
                     if (dragging) {
                         savePosition(view, p)
+                        onDragged?.invoke(p.x, p.y, true)
                     } else if (!longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
                         if (!busy) onShortTap()
                     }

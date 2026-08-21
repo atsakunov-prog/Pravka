@@ -141,12 +141,18 @@ class PhoneSweeper(
         var currentAggFrom = begin
         var currentStartedAt = if (currentPkg != null) st.carryPkgStartedAt else 0L
         var screenOnAt = st.carryScreenOnAt
-        var lastClosedPkg: String? = null
+        // Per-screen-window app time: a glance's "who distracted me" is the
+        // app that held the screen LONGEST in that window, not whatever
+        // (launcher, player) happened to be up when it went dark.
+        val windowApps = HashMap<String, Long>()
 
         fun closeSession(pkg: String, at: Long) {
-            lastClosedPkg = pkg
-            if (pkg in excluded || at <= currentAggFrom) return
+            if (isExcluded(pkg, excluded) || at <= currentAggFrom) return
             addAppTime(pkg, currentAggFrom, at)
+            if (screenOnAt > 0) {
+                val overlap = at - max(currentAggFrom, screenOnAt)
+                if (overlap > 0) windowApps[pkg] = (windowApps[pkg] ?: 0L) + overlap
+            }
             val span = at - currentStartedAt
             if (span >= MIN_SESSION_MS) {
                 val d = delta(currentStartedAt)
@@ -181,11 +187,11 @@ class PhoneSweeper(
                 UsageEvents.Event.SCREEN_INTERACTIVE -> {
                     delta(ts).pickups += 1
                     screenOnAt = ts
+                    windowApps.clear()
                 }
                 UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
                     // Screen off = not watching: the app session ends here
                     // (background audio deliberately does not count).
-                    val glancePkg = currentPkg ?: lastClosedPkg
                     currentPkg?.let { closeSession(it, ts) }
                     currentPkg = null
                     if (screenOnAt > 0 && ts > screenOnAt) {
@@ -193,11 +199,13 @@ class PhoneSweeper(
                         if (ts - screenOnAt < GLANCE_MS) {
                             val d = delta(screenOnAt)
                             d.glances += 1
-                            if (glancePkg != null && glancePkg !in excluded) {
+                            val glancePkg = windowApps.maxByOrNull { it.value }?.key
+                            if (glancePkg != null) {
                                 d.glanceApps[glancePkg] = (d.glanceApps[glancePkg] ?: 0) + 1
                             }
                         }
                     }
+                    windowApps.clear()
                     screenOnAt = 0
                 }
             }
@@ -206,7 +214,7 @@ class PhoneSweeper(
         // Carry-out: count what is still open up to `now`, remember the real
         // starts so the next sweep continues seamlessly.
         currentPkg?.let { pkg ->
-            if (pkg !in excluded && now > currentAggFrom) addAppTime(pkg, currentAggFrom, now)
+            if (!isExcluded(pkg, excluded) && now > currentAggFrom) addAppTime(pkg, currentAggFrom, now)
         }
         if (screenOnAt > 0 && now > screenOnAt) addScreenTime(max(begin, screenOnAt), now)
 
@@ -370,7 +378,11 @@ class PhoneSweeper(
     }
 
     private fun excludedPackages(): Set<String> {
-        val set = hashSetOf(context.packageName, "com.android.systemui")
+        val set = hashSetOf(
+            context.packageName,
+            "com.android.systemui",
+            "com.google.android.apps.nexuslauncher",
+        )
         runCatching {
             val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
             context.packageManager.resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY)
@@ -378,6 +390,10 @@ class PhoneSweeper(
         }
         return set
     }
+
+    // Any launcher is furniture, not phone use - whatever package it ships as.
+    private fun isExcluded(pkg: String, set: Set<String>): Boolean =
+        pkg in set || pkg.contains("launcher", ignoreCase = true)
 
     private fun appLabel(pkg: String): String? = runCatching {
         val pm = context.packageManager

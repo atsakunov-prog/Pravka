@@ -10,11 +10,13 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import ru.zf.pravka.R
 import ru.zf.pravka.data.Settings
 
 // The Засечка (timesheet) button: Правка's little sibling, drawn from the
@@ -23,10 +25,11 @@ import ru.zf.pravka.data.Settings
 // not only in text fields - a timesheet must be reachable from anywhere,
 // including the home screen. Gestures mirror the big button:
 //   short tap  -> record an entry (speak, tap again to stop)
-//   long press -> open the Засечка tab
-//   drag       -> move (own saved spot, независимо от «П»)
-// States: idle ochre "З" / recording red stop / busy spinner / remind pulse
-// (a time gap is waiting to be filled - the button itself is the reminder).
+//   long press -> pomodoro menu + open the tab
+//   drag       -> move; the "П" trails behind on a rubber band (owner's
+//                 design: the two buttons travel as a linked pair)
+// States: idle amber "З" / recording red stop / busy spinner / remind pulse
+// (a time gap is waiting) / pomodoro countdown (the glyph becomes minutes).
 class ZasechkaButtonController(
     private val service: PravkaAccessibilityService,
     private val scope: CoroutineScope,
@@ -37,16 +40,17 @@ class ZasechkaButtonController(
 
     companion object {
         private const val LONG_PRESS_MS = 450L
-        private const val TICKER_ALPHA = 0.82f
+        private const val TICKER_ALPHA = 0.86f
         private const val TICKER_W_MULT = 6
         private const val TICKER_LINES = 3
 
-        // Editorial family, next shade over: ochre ink instead of red-pen
-        // orange, so the two buttons never get confused.
-        private val OCHRE = 0xFF8F6A1E.toInt()
-        private val AMBER = 0xFFB45309.toInt()      // remind pulse
+        // Warm pair with the "П": red-orange pen there, amber marker here.
+        // Ink-dark glyph and text - amber is too light for paper-white.
+        private val AMBER = 0xFFF59E0B.toInt()
+        private val AMBER_DEEP = 0xFFD97706.toInt()   // remind pulse
         private val REC_RED = FloatingButtonController.REC_RED
         private val PAPER = 0xFFF7F3EA.toInt()
+        private val INK = 0xFF241F19.toInt()
 
         // Pomodoro faces: pine for focus, ink-soft for the break.
         val POMO_FOCUS = 0xFF2F6B5E.toInt()
@@ -62,7 +66,8 @@ class ZasechkaButtonController(
 
     private var button: FrameLayout? = null
     private var background: GradientDrawable? = null
-    private var label: TextView? = null
+    private var glyph: ImageView? = null
+    private var counter: TextView? = null   // pomodoro minutes
     private var recDot: View? = null
     private var progress: ProgressBar? = null
     private var params: WindowManager.LayoutParams? = null
@@ -70,6 +75,8 @@ class ZasechkaButtonController(
     private var recording = false
     private var reminding = false
     private var enabled = false
+    private var pomodoroText: String? = null
+    private var pomodoroColor: Int? = null
     private var pulse: ValueAnimator? = null
 
     private var ticker: FrameLayout? = null
@@ -104,42 +111,40 @@ class ZasechkaButtonController(
 
     fun setBusy(value: Boolean) {
         busy = value
-        label?.visibility = if (value || recording) View.GONE else View.VISIBLE
         progress?.visibility = if (value) View.VISIBLE else View.GONE
-        applyIdleLook()
+        applyFaceAndLook()
     }
 
     /** Recording: red stop glyph at full opacity, like the big button. */
     fun setRecording(value: Boolean) {
         recording = value
         recDot?.visibility = if (value) View.VISIBLE else View.GONE
-        label?.visibility = if (value || busy) View.GONE else View.VISIBLE
-        applyIdleLook()
+        applyFaceAndLook()
     }
 
     /** A gap in the timesheet is waiting: amber pulse until an entry lands. */
     fun setRemind(value: Boolean) {
         if (reminding == value) return
         reminding = value
-        applyIdleLook()
+        applyFaceAndLook()
     }
-
-    // ---- Pomodoro face: the glyph becomes the minutes-left counter ----
-
-    private var pomodoroColor: Int? = null
 
     /** text = minutes left ("17"); null returns the "З" glyph. */
     fun setPomodoro(text: String?, color: Int?) {
+        pomodoroText = text
         pomodoroColor = if (text != null) color else null
-        label?.text = text ?: "З"
-        label?.textSize = if (text != null) 16f else 20f
-        applyIdleLook()
+        counter?.text = text ?: ""
+        applyFaceAndLook()
     }
 
-    // One place decides color/alpha/pulse from the state set, so the states
-    // can flip in any order without leaving a stale look behind.
-    private fun applyIdleLook() {
+    // One place decides face (glyph/counter/dot/spinner) and color/alpha from
+    // the state set, so states can flip in any order without a stale look.
+    private fun applyFaceAndLook() {
         val b = button ?: return
+        glyph?.visibility =
+            if (!busy && !recording && pomodoroText == null) View.VISIBLE else View.GONE
+        counter?.visibility =
+            if (!busy && !recording && pomodoroText != null) View.VISIBLE else View.GONE
         pulse?.cancel()
         pulse = null
         val pomo = pomodoroColor
@@ -149,11 +154,11 @@ class ZasechkaButtonController(
                 b.alpha = 1f
             }
             busy -> {
-                background?.setColor(OCHRE)
+                background?.setColor(AMBER)
                 b.alpha = 1f
             }
             reminding -> {
-                background?.setColor(AMBER)
+                background?.setColor(AMBER_DEEP)
                 pulse = ValueAnimator.ofFloat(0.45f, 1f).apply {
                     duration = 900
                     repeatCount = ValueAnimator.INFINITE
@@ -164,75 +169,13 @@ class ZasechkaButtonController(
             }
             pomo != null -> {
                 background?.setColor(pomo)
-                b.alpha = 0.9f
+                b.alpha = 0.92f
             }
             else -> {
-                background?.setColor(OCHRE)
+                background?.setColor(AMBER)
                 b.alpha = idleAlpha
             }
         }
-    }
-
-    // ---- Long-press menu: a single column of ochre pills ----
-
-    class MenuItem(val label: String, val onClick: () -> Unit)
-
-    private var menu: android.widget.LinearLayout? = null
-    private val menuDismiss = Runnable { hideMenu() }
-
-    fun hideMenu() {
-        val m = menu ?: return
-        m.removeCallbacks(menuDismiss)
-        runCatching { windowManager.removeView(m) }
-        menu = null
-    }
-
-    fun showMenu(items: List<MenuItem>) {
-        hideMenu()
-        val column = android.widget.LinearLayout(service).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-        }
-        for (item in items) {
-            val pill = TextView(service).apply {
-                text = item.label
-                setTextColor(PAPER)
-                textSize = 15f
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(18).toFloat()
-                    setColor(OCHRE)
-                }
-                alpha = 0.94f
-                setPadding(dp(16), dp(9), dp(16), dp(9))
-                setOnClickListener {
-                    hideMenu()
-                    item.onClick()
-                }
-            }
-            val lp = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(6) }
-            column.addView(pill, lp)
-        }
-        val p = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-        val bp = params
-        val (w, h) = screenSize()
-        if (bp != null) {
-            val buttonCenterX = bp.x + buttonSize / 2
-            p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + dp(8)
-            else (bp.x - dp(170)).coerceAtLeast(0)
-            p.y = bp.y.coerceIn(0, (h - dp(48) * items.size).coerceAtLeast(0))
-        }
-        menu = column
-        runCatching { windowManager.addView(column, p) }
-        // Not modal (the overlay can't see outside taps) - fades on its own.
-        column.postDelayed(menuDismiss, 6000)
     }
 
     fun onConfigurationChanged() {
@@ -243,6 +186,63 @@ class ZasechkaButtonController(
             applyPosition(p, xFraction, yFraction)
             button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
             repositionTickerIfVisible()
+        }
+    }
+
+    // ---- Elastic pair: this button can trail the other on a rubber band ----
+
+    /** Fired while the owner drags THIS button (and once more on drop). */
+    var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
+
+    fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
+
+    fun buttonSizePx(): Int = buttonSize
+
+    private var followTargetX = 0
+    private var followTargetY = 0
+    private var followSettle = false
+    private var following = false
+    private val followStep = object : Runnable {
+        override fun run() {
+            val p = params ?: return
+            val view = button ?: return
+            val dx = followTargetX - p.x
+            val dy = followTargetY - p.y
+            if (abs(dx) <= 2 && abs(dy) <= 2) {
+                p.x = followTargetX
+                p.y = followTargetY
+                runCatching { windowManager.updateViewLayout(view, p) }
+                repositionTickerIfVisible()
+                following = false
+                if (followSettle) savePosition(view, p)
+                return
+            }
+            p.x += followInc(dx)
+            p.y += followInc(dy)
+            runCatching { windowManager.updateViewLayout(view, p) }
+            repositionTickerIfVisible()
+            view.postDelayed(this, 16)
+        }
+    }
+
+    // ~30% of the remaining distance per frame: fast at first, soft landing -
+    // reads as a rubber band chasing the dragged button.
+    private fun followInc(d: Int): Int {
+        val step = (d * 0.30f).toInt()
+        return if (step != 0) step else if (d > 0) 1 else -1
+    }
+
+    fun followTo(x: Int, y: Int, settle: Boolean) {
+        if (!enabled) return
+        val view = button ?: return
+        val (w, h) = screenSize()
+        followTargetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
+        followTargetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
+        followSettle = settle
+        if (!following) {
+            following = true
+            view.removeCallbacks(followStep)
+            view.post(followStep)
         }
     }
 
@@ -305,6 +305,68 @@ class ZasechkaButtonController(
         }.start()
     }
 
+    // ---- Long-press menu: a single column of amber pills ----
+
+    class MenuItem(val label: String, val onClick: () -> Unit)
+
+    private var menu: android.widget.LinearLayout? = null
+    private val menuDismiss = Runnable { hideMenu() }
+
+    fun hideMenu() {
+        val m = menu ?: return
+        m.removeCallbacks(menuDismiss)
+        runCatching { windowManager.removeView(m) }
+        menu = null
+    }
+
+    fun showMenu(items: List<MenuItem>) {
+        hideMenu()
+        val column = android.widget.LinearLayout(service).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+        }
+        for (item in items) {
+            val pill = TextView(service).apply {
+                text = item.label
+                setTextColor(INK)
+                textSize = 15f
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(18).toFloat()
+                    setColor(AMBER)
+                }
+                alpha = 0.96f
+                setPadding(dp(16), dp(9), dp(16), dp(9))
+                setOnClickListener {
+                    hideMenu()
+                    item.onClick()
+                }
+            }
+            val lp = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(6) }
+            column.addView(pill, lp)
+        }
+        val p = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+        val bp = params
+        val (w, h) = screenSize()
+        if (bp != null) {
+            val buttonCenterX = bp.x + buttonSize / 2
+            p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + dp(8)
+            else (bp.x - dp(170)).coerceAtLeast(0)
+            p.y = bp.y.coerceIn(0, (h - dp(48) * items.size).coerceAtLeast(0))
+        }
+        menu = column
+        runCatching { windowManager.addView(column, p) }
+        // Not modal (the overlay can't see outside taps) - fades on its own.
+        column.postDelayed(menuDismiss, 6000)
+    }
+
     fun destroy() {
         pulse?.cancel()
         pulse = null
@@ -320,26 +382,36 @@ class ZasechkaButtonController(
         val container = FrameLayout(service)
         val bg = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(OCHRE)
+            setColor(AMBER)
         }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()
         container.alpha = idleAlpha
 
-        // The "З" mark - same serif black weight as the "П" brand glyph.
-        label = TextView(service).apply {
-            text = "З"
+        // The slab "З" - П's own geometry turned on its side (see the vector).
+        glyph = ImageView(service).apply {
+            setImageResource(R.drawable.ic_zfab_glyph)
+        }
+        container.addView(
+            glyph,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        counter = TextView(service).apply {
+            visibility = View.GONE
             setTextColor(PAPER)
             typeface = android.graphics.Typeface.create(
-                android.graphics.Typeface.SERIF,
+                android.graphics.Typeface.SANS_SERIF,
                 android.graphics.Typeface.BOLD,
             )
-            textSize = 20f
+            textSize = 16f
             gravity = Gravity.CENTER
         }
         container.addView(
-            label,
+            counter,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -357,7 +429,7 @@ class ZasechkaButtonController(
 
         progress = ProgressBar(service).apply {
             visibility = View.GONE
-            indeterminateTintList = android.content.res.ColorStateList.valueOf(PAPER)
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(INK)
         }
         val progressSize = dp(28)
         container.addView(
@@ -399,7 +471,9 @@ class ZasechkaButtonController(
         scope.launch {
             settings.fabAlphaFlow.collect { alpha ->
                 idleAlpha = alpha
-                if (!busy && !recording && !reminding) container.alpha = idleAlpha
+                if (!busy && !recording && !reminding && pomodoroText == null) {
+                    container.alpha = idleAlpha
+                }
             }
         }
 
@@ -418,11 +492,11 @@ class ZasechkaButtonController(
         pill.background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = buttonSize / 2f
-            setColor(OCHRE)
+            setColor(AMBER)
         }
         pill.elevation = dp(4).toFloat()
         val tv = TextView(service).apply {
-            setTextColor(PAPER)
+            setTextColor(INK)
             textSize = 17f
             maxLines = TICKER_LINES
             gravity = Gravity.BOTTOM or Gravity.START
@@ -507,13 +581,15 @@ class ZasechkaButtonController(
                         p.y = startY + dy.toInt()
                         runCatching { windowManager.updateViewLayout(view, p) }
                         repositionTickerIfVisible()
+                        onDragged?.invoke(p.x, p.y, false)
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     view.removeCallbacks(longPressRunnable)
-                    applyIdleLook()
+                    applyFaceAndLook()
                     if (dragging) {
                         savePosition(view, p)
+                        onDragged?.invoke(p.x, p.y, true)
                     } else if (!longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
                         if (!busy) onShortTap()
                     }

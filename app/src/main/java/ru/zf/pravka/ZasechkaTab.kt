@@ -22,12 +22,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
@@ -73,19 +74,20 @@ import ru.zf.pravka.ui.Feedback
 // and fixing - the tab is deliberately editable down to minutes, because the
 // voice pipeline is fast but not sacred.
 
-// Muted editorial palette for category chips/bars; a category keeps its color
-// between sessions because it is picked by name hash, not by list position.
+// Warm editorial palette (owner's taste: yellows, reds, oranges) with two
+// голубой accents for contrast; a category keeps its color between sessions
+// because it is picked by name hash, not by list position.
 private val CATEGORY_COLORS = listOf(
-    Color(0xFFB4551E), // терракота
-    Color(0xFF7A6A2F), // олива
-    Color(0xFF2F6B5E), // хвоя
-    Color(0xFF54628F), // сумеречный синий
-    Color(0xFF8A4E68), // брусника
-    Color(0xFF9A6A28), // охра
-    Color(0xFF5E7345), // мох
-    Color(0xFF396B7E), // волна
-    Color(0xFF7D5A9E), // вереск
-    Color(0xFF9C4A3C), // кирпич
+    Color(0xFFC2410C), // терракота
+    Color(0xFFB45309), // янтарь
+    Color(0xFFB91C1C), // томат
+    Color(0xFFA16207), // горчица
+    Color(0xFF9A3412), // кирпич
+    Color(0xFFD97706), // золото
+    Color(0xFF92400E), // корица
+    Color(0xFF7C2D12), // каштан
+    Color(0xFF0E7490), // волна (голубой акцент)
+    Color(0xFF155E75), // глубокая волна
 )
 
 private fun categoryColor(name: String): Color =
@@ -152,7 +154,6 @@ internal fun ZasechkaTab(app: PravkaApp) {
     val rangeEntries = remember(entries, rangeStart, dayEnd) {
         entries.filter { it.start in rangeStart until dayEnd }.sortedBy { it.start }
     }
-    val open = entries.lastOrNull { it.open }
 
     val submitText: () -> Unit = submit@{
         val text = draft.trim()
@@ -215,74 +216,152 @@ internal fun ZasechkaTab(app: PravkaApp) {
             Spacer(Modifier.height(12.dp))
         }
 
-        // ---- the running entry (today only) ----
+        // ---- quick add: one dense row, voice or typed ----
         if (!weekMode && dayOffset == 0) {
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(14.dp)) {
-                        if (open != null) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CategoryChip(open.category)
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    open.title.ifBlank { "(без названия)" },
-                                    style = MaterialTheme.typography.titleMedium,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                            val minutes = open.durationMin(now)
-                            Text(
-                                "идёт ${fmtDur(minutes)} · с ${fmtTime(open.start)}" +
-                                    (if (open.client.isNotBlank()) " · ${open.client}" else ""),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-                            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(onClick = {
-                                    app.appScope.launch { app.zasechkaEngine.closeOpen() }
-                                }) { Text("Завершить") }
-                                TextButton(onClick = { editing = open }) { Text("Править") }
-                            }
-                        } else {
-                            Text(
-                                "Сейчас ничего не записывается",
-                                style = MaterialTheme.typography.titleSmall,
-                            )
-                            Text(
-                                "Нажми «З» на экране или надиктуй/впиши дело ниже.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-            }
-
-            // ---- quick add: voice or typed ----
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = draft,
                         onValueChange = { draft = it },
                         modifier = Modifier.weight(1f),
-                        label = { Text(if (processing) "Разбираю…" else "Чем занят? (текстом)") },
+                        label = { Text(if (processing) "Разбираю…" else "Чем занят?") },
                         singleLine = true,
                         enabled = !processing,
                     )
                     IconButton(onClick = { submitText() }, enabled = !processing && draft.isNotBlank()) {
                         Icon(Icons.Filled.Send, contentDescription = "записать")
                     }
+                    IconButton(onClick = {
+                        val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                        if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
+                        else service.onZasechkaTap()
+                    }) { Text("🎙", fontSize = 18.sp) }
                 }
-                TextButton(onClick = {
-                    val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
-                    if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
-                    else service.onZasechkaTap()
-                }) { Text("🎙 Надиктовать") }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
             }
+        }
+
+        // ---- the day's history first (owner's layout), dense rows:
+        // time · category · task, then the classic ■ / ✎ / ✕ on the right ----
+        if (!weekMode) {
+            val dayList = rangeEntries
+            items(dayList, key = { it.id }) { entry ->
+                // A visible hole in the ribbon is the whole point of the app -
+                // show it between entries instead of papering over it.
+                val index = dayList.indexOf(entry)
+                if (index > 0) {
+                    val prev = dayList[index - 1]
+                    if (!prev.open) {
+                        val gapMin = (entry.start - prev.end) / 60_000L
+                        if (gapMin >= 5) {
+                            Text(
+                                "···  ${fmtDur(gapMin)} без записи",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 56.dp, top = 1.dp, bottom = 1.dp),
+                            )
+                        }
+                    }
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (entry.open) Modifier.background(
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                RoundedCornerShape(10.dp),
+                            ) else Modifier
+                        )
+                        .clickable { editing = entry }
+                        .padding(vertical = 3.dp),
+                ) {
+                    Column(Modifier.width(46.dp)) {
+                        Text(
+                            fmtTime(entry.start),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            if (entry.open) "…" else fmtTime(entry.end),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Box(
+                        Modifier
+                            .width(3.dp)
+                            .height(32.dp)
+                            .background(categoryColor(entry.category), RoundedCornerShape(2.dp)),
+                    )
+                    Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                        val meta = buildList {
+                            add(entry.category.ifBlank { "без категории" })
+                            add(fmtDur(entry.durationMin(now)))
+                            if (entry.client.isNotBlank()) add(entry.client)
+                        }.joinToString(" · ")
+                        Text(
+                            meta,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = categoryColor(entry.category),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        val suffix = buildString {
+                            if (entry.useful > 0) append("  ★${entry.useful}")
+                            if (entry.pomodoros > 0) append("  🍅×${entry.pomodoros}")
+                        }
+                        Text(
+                            entry.title.ifBlank { entry.raw.take(60) } + suffix,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (entry.open) {
+                        IconButton(
+                            onClick = { app.appScope.launch { app.zasechkaEngine.closeOpen() } },
+                            modifier = Modifier.size(30.dp),
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(11.dp)
+                                    .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp)),
+                            )
+                        }
+                    }
+                    IconButton(onClick = { editing = entry }, modifier = Modifier.size(30.dp)) {
+                        Icon(
+                            Icons.Filled.Edit,
+                            contentDescription = "править",
+                            modifier = Modifier.size(15.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(
+                        onClick = { app.appScope.launch { store.delete(entry.id) } },
+                        modifier = Modifier.size(30.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Clear,
+                            contentDescription = "удалить",
+                            modifier = Modifier.size(15.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            if (rangeEntries.isEmpty()) {
+                item {
+                    Text(
+                        "Записей за этот день нет.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
+            }
+            item { Spacer(Modifier.height(10.dp)) }
         }
 
         // ---- totals by category ----
@@ -377,82 +456,6 @@ internal fun ZasechkaTab(app: PravkaApp) {
             Spacer(Modifier.height(12.dp))
         }
 
-        // ---- the ribbon itself ----
-        if (!weekMode) {
-            val dayList = rangeEntries
-            items(dayList, key = { it.id }) { entry ->
-                // A visible hole in the ribbon is the whole point of the app -
-                // show it between entries instead of papering over it.
-                val index = dayList.indexOf(entry)
-                if (index > 0) {
-                    val prev = dayList[index - 1]
-                    if (!prev.open) {
-                        val gapMin = (entry.start - prev.end) / 60_000L
-                        if (gapMin >= 5) {
-                            Text(
-                                "···  ${fmtDur(gapMin)} без записи",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(start = 60.dp, top = 2.dp, bottom = 2.dp),
-                            )
-                        }
-                    }
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { editing = entry }
-                        .padding(vertical = 6.dp),
-                ) {
-                    Column(Modifier.width(52.dp)) {
-                        Text(fmtTime(entry.start), style = MaterialTheme.typography.bodySmall)
-                        Text(
-                            if (entry.open) "…" else fmtTime(entry.end),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Box(
-                        Modifier
-                            .width(4.dp)
-                            .height(36.dp)
-                            .background(categoryColor(entry.category), RoundedCornerShape(2.dp)),
-                    )
-                    Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                        Text(
-                            entry.title.ifBlank { entry.raw.take(60) },
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 2,
-                        )
-                        val details = buildList {
-                            add(fmtDur(entry.durationMin(now)))
-                            if (entry.category.isNotBlank()) add(entry.category) else add("без категории")
-                            if (entry.client.isNotBlank()) add(entry.client)
-                            if (entry.useful > 0) add("★${entry.useful}")
-                            if (entry.pomodoros > 0) add("🍅×${entry.pomodoros}")
-                        }.joinToString(" · ")
-                        Text(
-                            details,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-            if (rangeEntries.isEmpty()) {
-                item {
-                    Text(
-                        "Записей за этот день нет.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 8.dp),
-                    )
-                }
-            }
-        }
-
         // ---- settings for the whole Засечка mode ----
         item {
             Spacer(Modifier.height(16.dp))
@@ -476,19 +479,6 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 editing = null
                 app.appScope.launch { store.delete(entry.id) }
             },
-        )
-    }
-}
-
-@Composable
-private fun CategoryChip(category: String) {
-    Box(
-        Modifier.background(categoryColor(category).copy(alpha = 0.25f), RoundedCornerShape(8.dp)),
-    ) {
-        Text(
-            category.ifBlank { "—" },
-            fontSize = 12.sp,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
         )
     }
 }
@@ -821,6 +811,22 @@ private fun EditableList(
 // "attention eater" - its sessions then auto-claim ribbon time.
 // ---------------------------------------------------------------------------
 
+// WebView time is browsing rendered through a helper package - fold it into
+// Chrome so the list shows one honest "браузер" row.
+private val PKG_ALIAS = mapOf(
+    "com.google.android.webview" to "com.android.chrome",
+    "com.android.webview" to "com.android.chrome",
+)
+private val FRIENDLY_LABELS = mapOf("com.android.chrome" to "Chrome")
+
+private fun appLabelOf(labels: Map<String, String>, pkg: String): String =
+    labels[pkg] ?: FRIENDLY_LABELS[pkg] ?: pkg.substringAfterLast('.')
+
+// Launcher rows in "отвлекали" are furniture, not phone use (old stored data
+// may still carry them; fresh sweeps exclude at the source).
+private fun isNoisePkg(pkg: String): Boolean =
+    pkg.contains("launcher", ignoreCase = true) || pkg.contains("systemui")
+
 private fun aggregatePhoneDays(
     days: Map<String, PhoneStore.Day>,
     keys: List<String>,
@@ -836,9 +842,18 @@ private fun aggregatePhoneDays(
         screenMs += d.screenMs
         pickups += d.pickups
         glances += d.glances
-        for ((p, v) in d.apps) apps[p] = (apps[p] ?: 0L) + v
-        for ((p, v) in d.appSessions) appSessions[p] = (appSessions[p] ?: 0) + v
-        for ((p, v) in d.glanceApps) glanceApps[p] = (glanceApps[p] ?: 0) + v
+        for ((raw, v) in d.apps) {
+            val p = PKG_ALIAS[raw] ?: raw
+            apps[p] = (apps[p] ?: 0L) + v
+        }
+        for ((raw, v) in d.appSessions) {
+            val p = PKG_ALIAS[raw] ?: raw
+            appSessions[p] = (appSessions[p] ?: 0) + v
+        }
+        for ((raw, v) in d.glanceApps) {
+            val p = PKG_ALIAS[raw] ?: raw
+            glanceApps[p] = (glanceApps[p] ?: 0) + v
+        }
     }
     return PhoneStore.Day(screenMs, pickups, glances, apps, appSessions, glanceApps)
 }
@@ -855,6 +870,8 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
     var callGranted by remember { mutableStateOf(PhoneSweeper.hasCallLogAccess(context)) }
     var editingApp by remember { mutableStateOf<String?>(null) }
 
+    var expanded by remember { mutableStateOf(false) }
+
     // Re-check permissions and freshen the aggregates while the tab is open
     // (the `now` clock ticks every 30 seconds).
     LaunchedEffect(now, dayStart, weekMode) {
@@ -863,7 +880,24 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         if (usageGranted) app.phoneSweeper.sweep()
     }
 
-    Text("Телефон", style = MaterialTheme.typography.titleSmall)
+    val keys =
+        if (weekMode) (0..6).map { phoneDayKey(dayStart - it * 86_400_000L) }
+        else listOf(phoneDayKey(dayStart))
+    val agg = aggregatePhoneDays(days, keys)
+
+    // Collapsed by default (owner's ask) - the headline carries the numbers.
+    TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(0.dp)) {
+        Text(
+            (if (expanded) "▾ Телефон" else "▸ Телефон") +
+                when {
+                    !usageGranted -> " · нет доступа"
+                    agg.screenMs > 0 ->
+                        " · ${fmtDur(agg.screenMs / 60_000)} · ↑${agg.pickups} · отвл. ${agg.glances}"
+                    else -> ""
+                },
+        )
+    }
+    if (!expanded) return
     if (!usageGranted) {
         Text(
             "Дай Правке доступ к статистике использования — появятся время в приложениях, " +
@@ -882,16 +916,6 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         return
     }
 
-    val keys =
-        if (weekMode) (0..6).map { phoneDayKey(dayStart - it * 86_400_000L) }
-        else listOf(phoneDayKey(dayStart))
-    val agg = aggregatePhoneDays(days, keys)
-
-    Text(
-        "Экран: ${fmtDur(agg.screenMs / 60_000)} · подъёмов ${agg.pickups} · отвлечений ${agg.glances}",
-        style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier.padding(top = 4.dp),
-    )
     Text(
         "Отвлечение = взял телефон и убрал быстрее чем за 2 минуты",
         style = MaterialTheme.typography.bodySmall,
@@ -901,7 +925,7 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
     val topApps = agg.apps.entries.sortedByDescending { it.value }.take(8)
     val maxMs = topApps.firstOrNull()?.value ?: 0L
     for ((pkg, ms) in topApps) {
-        val label = labels[pkg] ?: pkg.substringAfterLast('.')
+        val label = appLabelOf(labels, pkg)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -914,6 +938,7 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.width(130.dp),
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Box(
                 Modifier
@@ -927,7 +952,9 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
                         .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
                         .height(10.dp)
                         .background(
-                            if (immersive.containsKey(pkg)) Color(0xFFB4551E) else Color(0xFF54628F),
+                            // Warm family: gold for tools, terracotta for the
+                            // attention eaters.
+                            if (immersive.containsKey(pkg)) Color(0xFFC2410C) else Color(0xFFD97706),
                             RoundedCornerShape(5.dp),
                         ),
                 )
@@ -953,11 +980,14 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         )
     }
 
-    val topGlance = agg.glanceApps.entries.sortedByDescending { it.value }.take(3)
+    val topGlance = agg.glanceApps.entries
+        .filter { !isNoisePkg(it.key) }
+        .sortedByDescending { it.value }
+        .take(3)
     if (topGlance.isNotEmpty()) {
         Text(
             "Чаще всего отвлекали: " + topGlance.joinToString(", ") {
-                "${labels[it.key] ?: it.key.substringAfterLast('.')} ×${it.value}"
+                "${appLabelOf(labels, it.key)} ×${it.value}"
             },
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = 4.dp),
@@ -1006,7 +1036,7 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
 
     editingApp?.let { pkg ->
         ImmersiveAppDialog(
-            label = labels[pkg] ?: pkg.substringAfterLast('.'),
+            label = appLabelOf(labels, pkg),
             currentCategory = immersive[pkg],
             categories = categories,
             onDismiss = { editingApp = null },

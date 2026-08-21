@@ -152,6 +152,23 @@ class PravkaAccessibilityService : AccessibilityService() {
             onShortTap = ::onZasechkaTap,
             onLongPress = ::showZasechkaMenu,
         )
+        // The linked pair (owner's design): drag either bubble and the other
+        // trails behind on a rubber band; the "П" always docks above the "З".
+        val pairGap = (8 * resources.displayMetrics.density).toInt()
+        floatingButton?.onDragged = { x, y, dropped ->
+            val size = floatingButton?.buttonSizePx() ?: 0
+            zButton?.followTo(x, y + size + pairGap, dropped)
+        }
+        zButton?.onDragged = { x, y, dropped ->
+            val size = floatingButton?.buttonSizePx() ?: 0
+            floatingButton?.followTo(x, y - size - pairGap, dropped)
+        }
+        floatingButton?.pairAnchor = anchor@{
+            if (!cachedZEnabled) return@anchor null
+            val (zx, zy) = zButton?.currentPosition() ?: return@anchor null
+            val size = floatingButton?.buttonSizePx() ?: return@anchor null
+            zx to (zy - size - pairGap)
+        }
         scope.launch {
             app.settings.zEnabledFlow.collect {
                 cachedZEnabled = it

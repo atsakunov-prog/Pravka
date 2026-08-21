@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Засечка's mark: the same geometric slab language as the "П" - the П
+     turned 90° (bars now horizontal, spine on the right) plus a half-length
+     middle bar, which reads as a squared "З". Ink-dark on the amber button. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+    <path
+        android:fillColor="#241F19"
+        android:pathData="M24,28 h52 v10 h-52 z M24,62 h52 v10 h-52 z M65,28 h11 v44 h-11 z M50,45 h26 v10 h-26 z" />
+</vector>
