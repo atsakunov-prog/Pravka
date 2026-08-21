@@ -194,11 +194,94 @@ class ZasechkaStore(private val context: Context) {
             createdAt = nowMs,
         )
         entries.add(opened)
-        spliceOverlapsLocked()
+        normalizeLocked()
         entries.sortBy { it.start }
         persist()
         // After the splice the running дело is the (only) open fragment.
         entries.lastOrNull { it.open } ?: opened
+    }
+
+    /**
+     * The second audit invariant: no entry crosses local midnight - each DAY
+     * must sum to 24 h on its own ("сон 23:30-07:00" used to sit entirely in
+     * yesterday). An entry spanning midnight splits into per-day segments:
+     * the head keeps the id (its mirror rows update in place) and the 🍅,
+     * later segments get fresh ids; an OPEN entry gets a closed head and the
+     * open tail keeps running in the new day. Runs in the same normalize
+     * pass as the overlap splice - split first, so an overnight auto fact
+     * (сон) becomes day-bounded before containment is checked.
+     */
+    private fun splitMidnightLocked(): Boolean {
+        val nowMs = System.currentTimeMillis()
+        var changed = false
+        val out = ArrayList<Entry>(entries.size)
+        for (e in entries) {
+            val effEnd = if (e.open) nowMs else e.end
+            var dayEnd = nextMidnightMs(e.start)
+            if (effEnd <= dayEnd) {
+                out.add(e)
+                continue
+            }
+            changed = true
+            var segStart = e.start
+            var first = true
+            while (dayEnd < effEnd) {
+                out.add(
+                    e.copy(
+                        id = if (first) e.id else nextId(),
+                        start = segStart,
+                        end = dayEnd,
+                        pomodoros = if (first) e.pomodoros else 0,
+                        synced = false,
+                        notionSynced = false,
+                    )
+                )
+                first = false
+                segStart = dayEnd
+                dayEnd = nextMidnightMs(segStart)
+            }
+            out.add(
+                e.copy(
+                    id = nextId(),
+                    start = segStart,
+                    end = if (e.open) 0L else e.end,
+                    pomodoros = 0,
+                    synced = false,
+                    notionSynced = false,
+                )
+            )
+        }
+        if (changed) {
+            entries = out
+            entries.sortBy { it.start }
+        }
+        return changed
+    }
+
+    // Next LOCAL midnight after [ms] - Calendar arithmetic survives DST.
+    private fun nextMidnightMs(ms: Long): Long {
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = ms
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+        return cal.timeInMillis
+    }
+
+    /** Both invariants in one locked pass; true when anything changed. */
+    private fun normalizeLocked(): Boolean =
+        splitMidnightLocked() or spliceOverlapsLocked()
+
+    /**
+     * Periodic nudge (the service's 5-min tick): just past midnight the
+     * running дело must split into yesterday's closed head and today's open
+     * tail even if nothing else mutates the store until morning.
+     */
+    suspend fun normalize(): Unit = mutex.withLock {
+        ensureLoaded()
+        if (normalizeLocked()) persist()
     }
 
     /**
@@ -270,7 +353,11 @@ class ZasechkaStore(private val context: Context) {
     suspend fun closeOpen(at: Long): Entry? = mutex.withLock {
         ensureLoaded()
         val closed = closeOpenLocked(at)
-        if (closed != null) persist()
+        if (closed != null) {
+            // An overnight дело closes across midnight - split it per day.
+            normalizeLocked()
+            persist()
+        }
         closed
     }
 
@@ -361,6 +448,9 @@ class ZasechkaStore(private val context: Context) {
                 )
             )
         }
+        // The night's сон spans midnight and the evening entry it cut may
+        // too - normalize right here, not only on the next load.
+        normalizeLocked()
         entries.sortBy { it.start }
         persist()
         entry
@@ -376,7 +466,7 @@ class ZasechkaStore(private val context: Context) {
         val index = entries.indexOfFirst { it.id == entry.id }
         if (index >= 0) {
             entries[index] = entry.copy(synced = false, notionSynced = false)
-            spliceOverlapsLocked()
+            normalizeLocked()
             entries.sortBy { it.start }
             persist()
         }
@@ -557,8 +647,9 @@ class ZasechkaStore(private val context: Context) {
                 persistQueued()
             }
             lastId = entries.maxOfOrNull { it.id } ?: 0L
-            // Repair overlaps from older builds with the same shared splice.
-            if (spliceOverlapsLocked()) persistQueued()
+            // Repair old data with the same shared pass: midnight-crossing
+            // entries split per day, overlaps splice around auto facts.
+            if (normalizeLocked()) persistQueued()
             if (root == null) persistQueued()
         }
         loaded = true

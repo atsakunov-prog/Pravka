@@ -1919,7 +1919,11 @@ class PravkaAccessibilityService : AccessibilityService() {
     private val zReminderHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val zReminderTick = object : Runnable {
         override fun run() {
-            // The sweeps first: they may close a gap (a YouTube session, a
+            // Midnight housekeeping first: a дело running across 00:00 splits
+            // into yesterday's closed head and today's open tail, so the new
+            // day's ribbon and totals are right from the first minutes.
+            scope.launch { runCatching { app.zasechkaStore.normalize() } }
+            // The sweeps next: they may close a gap (a YouTube session, a
             // call, a workout becomes an entry) that the reminder would
             // otherwise nag about. Fire-and-forget - the check reads current data.
             scope.launch { app.phoneSweeper.sweep() }
