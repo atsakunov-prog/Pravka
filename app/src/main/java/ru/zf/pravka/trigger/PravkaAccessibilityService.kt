@@ -1232,16 +1232,40 @@ class PravkaAccessibilityService : AccessibilityService() {
             // set. Node calls throw on a dead window - that must not leave
             // busy=true forever (the wedge "Сброс" was built to rescue).
             if (pinnedNode == null) runCatching { selectAllInFocusedField() }
-            // Stream the corrected text across the ticker while it generates -
-            // the first words appear well under a second after stop, instead of
-            // a silent spinner for the whole generation. Deltas arrive on an IO
-            // thread; the ticker is a View, so hop to main.
-            floatingButton?.showTicker()
+            // Stream the corrected text STRAIGHT INTO THE FIELD while it
+            // generates (owner: "чтобы сразу ушёл в текстбокс, без плашки") -
+            // the work item is replaced in place as the words arrive. The
+            // ticker plate is only the fallback: fields that reject SET_TEXT
+            // (WebView), a dead node, or the owner typing mid-stream flip the
+            // stream back onto the ticker. Deltas arrive on an IO thread; both
+            // the node write and the ticker are main-thread work, so hop.
+            val target = AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode)
             // Opus thinks before it writes: no text deltas for several seconds.
             // Show a pulse so the wait doesn't read as a hang.
-            if (strongModel) floatingButton?.updateTicker("…")
+            if (strongModel) {
+                floatingButton?.showTicker()
+                floatingButton?.updateTicker("…")
+            }
+            var previewAlive = true
+            var lastPreviewAt = 0L
             val onDelta: (String) -> Unit = { partial ->
-                scope.launch { floatingButton?.updateTicker(partial) }
+                scope.launch {
+                    if (previewAlive) {
+                        val t = SystemClock.elapsedRealtime()
+                        if (t - lastPreviewAt >= 150) {
+                            lastPreviewAt = t
+                            if (target.preview(partial)) {
+                                floatingButton?.hideTicker()
+                            } else {
+                                previewAlive = false
+                                floatingButton?.showTicker()
+                                floatingButton?.updateTicker(partial)
+                            }
+                        }
+                    } else {
+                        floatingButton?.updateTicker(partial)
+                    }
+                }
             }
             // A throw anywhere below must never leave busy=true forever (a
             // wedged button until service restart) - degrade to Failed.
@@ -1249,7 +1273,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             // here, not run this epilogue against the job that replaced it.
             val outcome = runCatching {
                 app.engine.proofread(
-                    AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode), mode, onDelta,
+                    target, mode, onDelta,
                     directive = directive,
                     modelOverride = if (strongModel) Settings.MODEL_OPUS else null,
                     conversationContext = conversationContext,

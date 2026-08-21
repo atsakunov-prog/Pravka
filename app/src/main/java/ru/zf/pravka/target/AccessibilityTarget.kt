@@ -37,6 +37,10 @@ class AccessibilityTarget(
     private var fullBefore: String = ""
     private var fullAfter: String = ""
 
+    // What the last live preview put into the field - the mid-flight guard
+    // must not mistake our own streaming for the user typing.
+    private var previewedFull: String = ""
+
     private val hasFragmentSelection: Boolean
         get() = selStart in 0 until selEnd &&
             selEnd <= fullText.length &&
@@ -64,6 +68,45 @@ class AccessibilityTarget(
         selStart = n.textSelectionStart
         selEnd = n.textSelectionEnd
         return if (hasFragmentSelection) fullText.substring(selStart, selEnd) else fullText
+    }
+
+    /**
+     * Live streaming (owner's request): the cleaned text pours straight into
+     * the field while it generates, replacing the work item in place - no
+     * plate. Best-effort: any failure (dead node, rejected SET_TEXT, the user
+     * typing mid-stream) returns false and the caller falls back to the
+     * ticker; the final [write] still decides the real outcome on its own.
+     */
+    suspend fun preview(partial: String): Boolean = withContext(Dispatchers.Main) {
+        runCatching { previewInner(partial) }
+            .onFailure { service.logEvent("preview: threw ${it.javaClass.simpleName}") }
+            .getOrDefault(false)
+    }
+
+    private fun previewInner(partial: String): Boolean {
+        if (partial.isEmpty()) return true
+        val n = node ?: return false
+        if (!n.refresh() || !n.isEditable) return false
+        if (pinnedNode == null) {
+            val currentFocus = service.focusedEditableNode()
+            if (currentFocus == null || currentFocus != n) return false
+        }
+        // Hands off the moment the field holds anything that is not the
+        // original text or our own previous preview - the user is typing.
+        val current = n.effectiveText()
+        if (normalizedWs(current) != normalizedWs(fullText) &&
+            normalizedWs(current) != normalizedWs(previewedFull)
+        ) return false
+        val newFull =
+            if (hasFragmentSelection) fullText.replaceRange(selStart, selEnd, partial)
+            else partial
+        if (newFull == current) return true
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newFull)
+        }
+        val ok = n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (ok) previewedFull = newFull
+        return ok
     }
 
     override suspend fun write(text: String): Boolean = withContext(Dispatchers.Main) {
@@ -96,8 +139,11 @@ class AccessibilityTarget(
         // destroyed with no undo entry containing it. Clipboard fallback is the
         // designed degradation. Whitespace-insensitive: single-line fields
         // legally flatten "\n" to a space, which is not the user typing.
+        // Our own live preview is not the user typing either.
         val current = n.effectiveText()
-        if (normalizedWs(current) != normalizedWs(fullText)) {
+        if (normalizedWs(current) != normalizedWs(fullText) &&
+            (previewedFull.isEmpty() || normalizedWs(current) != normalizedWs(previewedFull))
+        ) {
             service.logEvent(
                 "write: field changed mid-flight (now=${current.length} was=${fullText.length})"
             )
