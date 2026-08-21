@@ -164,7 +164,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Force-load the store once, then keep the recognizer bias lists warm.
         scope.launch {
             app.zasechkaStore.all()
-            launch { app.zasechkaStore.categoriesFlow.collect { zCategoriesCached = it } }
+            launch {
+                app.zasechkaStore.categoriesFlow.collect { list ->
+                    zCategoriesCached = list.map { it.name }
+                }
+            }
             launch { app.zasechkaStore.clientsFlow.collect { zClientsCached = it } }
         }
         zReminderHandler.postDelayed(zReminderTick, 60_000)
