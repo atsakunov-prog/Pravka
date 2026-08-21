@@ -8,9 +8,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,7 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
@@ -75,42 +77,44 @@ import ru.zf.pravka.ui.Feedback
 // and fixing - the tab is deliberately editable down to minutes, because the
 // voice pipeline is fast but not sacred.
 
-// Warm editorial palette (owner's taste: yellows, reds, oranges) with two
-// голубой accents for contrast; a category keeps its color between sessions
-// because it is picked by name hash, not by list position. Two brightness
-// tiers: deep inks on paper, bright markers on the night background - the
-// deep set was unreadable in the dark theme (owner's screenshot).
-private val CATEGORY_COLORS_LIGHT = listOf(
-    Color(0xFFC2410C), // терракота
-    Color(0xFFB45309), // янтарь
-    Color(0xFFB91C1C), // томат
-    Color(0xFFA16207), // горчица
-    Color(0xFF9A3412), // кирпич
-    Color(0xFFD97706), // золото
-    Color(0xFF92400E), // корица
-    Color(0xFF7C2D12), // каштан
-    Color(0xFF0E7490), // волна (голубой акцент)
-    Color(0xFF155E75), // глубокая волна
-)
-private val CATEGORY_COLORS_DARK = listOf(
-    Color(0xFFF97316), // оранж
-    Color(0xFFFBBF24), // янтарь
-    Color(0xFFEF4444), // томат
-    Color(0xFFEAB308), // горчица
-    Color(0xFFFB923C), // абрикос
-    Color(0xFFF59E0B), // золото
-    Color(0xFFFF8A65), // коралл
-    Color(0xFFF87171), // лосось
-    Color(0xFF22D3EE), // волна (голубой акцент)
-    Color(0xFF38BDF8), // небо
+// Owner's rainbow: every category sits on the spectrum by how well the hour
+// is spent. Work and study burn red, sport is orange, people are the warm
+// greens, recovery and logistics cool off through cyan and blue, and pure
+// leisure lands on violet. The hue is fixed per name; a custom category the
+// owner adds later gets a stable hash spot on the same rainbow. Light theme
+// dims the value (inks on paper), dark theme runs full brightness (markers).
+private val CATEGORY_HUES = mapOf(
+    "работа: привлечение" to 0f,
+    "работа: текущая" to 8f,
+    "работа: планирование" to 16f,
+    "работа: звонки" to 24f,
+    "чтение" to 32f,
+    "систематизация" to 40f,
+    "спорт: силовая" to 48f,
+    "спорт: бег" to 56f,
+    "спорт: вело" to 64f,
+    "спорт: прочее" to 72f,
+    "семья" to 88f,
+    "секс: с марианной" to 100f,
+    "социальное: внешнее" to 118f,
+    "звонки" to 135f,
+    "сон" to 155f,
+    "еда" to 170f,
+    "передвижение: пешком" to 190f,
+    "передвижение: вело" to 205f,
+    "передвижение: транспорт" to 220f,
+    "быт" to 235f,
+    "отдых" to 262f,
+    "секс: соло" to 278f,
 )
 
 @Composable
 private fun categoryColor(name: String): Color {
     val dark = isSystemInDarkTheme()
     if (name.isBlank()) return if (dark) Color(0xFF9A9184) else Color(0xFF8A8172)
-    val palette = if (dark) CATEGORY_COLORS_DARK else CATEGORY_COLORS_LIGHT
-    return palette[abs(name.lowercase().hashCode()) % palette.size]
+    val key = name.trim().lowercase()
+    val hue = CATEGORY_HUES[key] ?: (abs(key.hashCode()) % 281).toFloat()
+    return if (dark) Color.hsv(hue, 0.70f, 1f) else Color.hsv(hue, 0.88f, 0.70f)
 }
 
 private fun capFirst(s: String): String = s.replaceFirstChar { it.uppercase() }
@@ -143,6 +147,78 @@ private fun parseTimeOfDay(dayStart: Long, text: String): Long? {
     return dayStart + h * 3_600_000L + min * 60_000L
 }
 
+// An activity the phone's automation sliced up (call spliced in, YouTube ate a
+// piece, the owner re-said the same thing) reads back as ONE unit: fragments
+// share a signature, interruptions are the auto entries that filled the gaps
+// between them. A unit with a single fragment is just a plain ribbon row.
+private data class DayUnit(
+    val fragments: List<ZasechkaStore.Entry>,
+    val interruptions: List<ZasechkaStore.Entry>,
+) {
+    val chain: Boolean get() = fragments.size > 1
+    val start: Long get() = fragments.first().start
+    val open: Boolean get() = fragments.last().open
+    fun endMs(now: Long): Long = fragments.last().let { if (it.open) now else it.end }
+    /** Net minutes of the activity itself - interruptions not counted. */
+    fun totalMin(now: Long): Long = fragments.sumOf { it.durationMin(now) }
+}
+
+private fun entrySig(e: ZasechkaStore.Entry): String =
+    "${e.title.trim().lowercase()}|${e.category.trim().lowercase()}|${e.client.trim().lowercase()}"
+
+/**
+ * Folds the day's entries (ascending) into units. Only closed auto entries may
+ * sit between two fragments of the same activity - a manual entry in between
+ * means the owner really switched, and that breaks the chain. Buffered autos
+ * that are never followed by a resume stay ordinary standalone rows.
+ */
+private fun buildDayUnits(asc: List<ZasechkaStore.Entry>): List<DayUnit> {
+    val units = ArrayList<DayUnit>()
+    var fragments = ArrayList<ZasechkaStore.Entry>()
+    var interruptions = ArrayList<ZasechkaStore.Entry>()
+    var pending = ArrayList<ZasechkaStore.Entry>()
+
+    fun flush() {
+        if (fragments.isNotEmpty()) units.add(DayUnit(fragments, interruptions))
+        for (p in pending) units.add(DayUnit(listOf(p), emptyList()))
+        fragments = ArrayList(); interruptions = ArrayList(); pending = ArrayList()
+    }
+
+    for (e in asc) {
+        val lastFrag = fragments.lastOrNull()
+        if (lastFrag == null) {
+            fragments.add(e)
+            continue
+        }
+        when {
+            entrySig(e) == entrySig(lastFrag) && !lastFrag.open -> {
+                // Resume only counts if the buffered interruptions really cover
+                // the pause (± 5 min of splice slack) - otherwise the owner was
+                // simply away and the pieces stay separate.
+                val covered = pending.sumOf {
+                    (minOf(it.end, e.start) - maxOf(it.start, lastFrag.end)).coerceAtLeast(0L)
+                }
+                if (e.start - lastFrag.end - covered <= 5 * 60_000L) {
+                    interruptions.addAll(pending)
+                    pending = ArrayList()
+                    fragments.add(e)
+                } else {
+                    flush()
+                    fragments.add(e)
+                }
+            }
+            e.source == "auto" && !e.open && !lastFrag.open && pending.size < 6 ->
+                pending.add(e)
+            else -> {
+                flush()
+                fragments.add(e)
+            }
+        }
+    }
+    flush()
+    return units
+}
+
 @Composable
 internal fun ZasechkaTab(app: PravkaApp) {
     val context = LocalContext.current
@@ -157,6 +233,8 @@ internal fun ZasechkaTab(app: PravkaApp) {
     var dayOffset by remember { mutableStateOf(0) }
     var weekMode by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<ZasechkaStore.Entry?>(null) }
+    // Chain edit: the whole sliced-up activity at once, all fragments.
+    var editingChain by remember { mutableStateOf<List<ZasechkaStore.Entry>?>(null) }
     var draft by remember { mutableStateOf("") }
     var processing by remember { mutableStateOf(false) }
 
@@ -174,6 +252,10 @@ internal fun ZasechkaTab(app: PravkaApp) {
     val rangeStart = if (weekMode) dayStart - 6 * 86_400_000L else dayStart
     val rangeEntries = remember(entries, rangeStart, dayEnd) {
         entries.filter { it.start in rangeStart until dayEnd }.sortedBy { it.start }
+    }
+    // Day view groups the ribbon into units (chains + singles), newest first.
+    val dayUnits = remember(rangeEntries, weekMode) {
+        if (weekMode) emptyList() else buildDayUnits(rangeEntries).asReversed()
     }
 
     val submitText: () -> Unit = submit@{
@@ -266,112 +348,42 @@ internal fun ZasechkaTab(app: PravkaApp) {
             }
         }
 
-        // ---- the day's history first (owner's layout), newest on top, one
-        // dense line per entry: category · task, the classic ■ / ✎ / ✕ right ----
+        // ---- the day's history first (owner's layout), newest on top. An
+        // uninterrupted entry is one dense table line; a sliced-up activity is
+        // ONE block: a tall line for the whole span, the net Σ beside it, the
+        // interruptions as parallel indented rows (owner: "а то кусками") ----
         if (!weekMode) {
-            val dayList = rangeEntries.sortedByDescending { it.start }
-            items(dayList, key = { it.id }) { entry ->
-                val index = dayList.indexOf(entry)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(
-                            if (entry.open) Modifier.background(
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                                RoundedCornerShape(10.dp),
-                            ) else Modifier
-                        )
-                        .clickable { editing = entry }
-                        .padding(vertical = 2.dp),
-                ) {
-                    Column(Modifier.width(46.dp)) {
-                        Text(
-                            fmtTime(entry.start),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            if (entry.open) "…" else fmtTime(entry.end),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Box(
-                        Modifier
-                            .width(3.dp)
-                            .height(30.dp)
-                            .background(categoryColor(entry.category), RoundedCornerShape(2.dp)),
+            itemsIndexed(dayUnits, key = { _, u -> u.fragments.first().id }) { index, unit ->
+                val head = unit.fragments.first()
+                val doStop: () -> Unit = {
+                    app.appScope.launch { app.zasechkaEngine.closeOpen() }
+                }
+                if (unit.chain) {
+                    ChainBlock(
+                        unit = unit,
+                        now = now,
+                        onStop = if (unit.open) doStop else null,
+                        onEdit = { editingChain = unit.fragments },
+                        onDelete = {
+                            app.appScope.launch { unit.fragments.forEach { store.delete(it.id) } }
+                        },
+                        onEditInterruption = { editing = it },
                     )
-                    // A table, not a ragged line (owner's spec): category and
-                    // duration sit in fixed columns, the title takes the rest.
-                    Text(
-                        entry.category.ifBlank { "—" },
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = categoryColor(entry.category),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.width(104.dp).padding(start = 6.dp),
+                } else {
+                    EntryRow(
+                        entry = head,
+                        now = now,
+                        onStop = if (head.open) doStop else null,
+                        onEdit = { editing = head },
+                        onDelete = { app.appScope.launch { store.delete(head.id) } },
                     )
-                    Text(
-                        fmtDur(entry.durationMin(now)),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        modifier = Modifier.width(58.dp).padding(start = 4.dp),
-                    )
-                    val title = buildString {
-                        append(capFirst(entry.title.ifBlank { entry.raw.take(60) }))
-                        if (entry.client.isNotBlank()) append(" · ${entry.client}")
-                        if (entry.useful > 0) append(" ★${entry.useful}")
-                        if (entry.pomodoros > 0) append(" 🍅×${entry.pomodoros}")
-                    }
-                    Text(
-                        title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(start = 6.dp),
-                    )
-                    if (entry.open) {
-                        IconButton(
-                            onClick = { app.appScope.launch { app.zasechkaEngine.closeOpen() } },
-                            modifier = Modifier.size(30.dp),
-                        ) {
-                            Box(
-                                Modifier
-                                    .size(11.dp)
-                                    .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp)),
-                            )
-                        }
-                    }
-                    IconButton(onClick = { editing = entry }, modifier = Modifier.size(30.dp)) {
-                        Icon(
-                            Icons.Filled.Edit,
-                            contentDescription = "править",
-                            modifier = Modifier.size(15.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    IconButton(
-                        onClick = { app.appScope.launch { store.delete(entry.id) } },
-                        modifier = Modifier.size(30.dp),
-                    ) {
-                        Icon(
-                            Icons.Filled.Clear,
-                            contentDescription = "удалить",
-                            modifier = Modifier.size(15.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
                 // A visible hole in the ribbon is the whole point of the app -
-                // drawn between this entry and the chronologically older one.
-                if (index < dayList.size - 1) {
-                    val older = dayList[index + 1]
+                // drawn between this unit and the chronologically older one.
+                if (index < dayUnits.size - 1) {
+                    val older = dayUnits[index + 1]
                     if (!older.open) {
-                        val gapMin = (entry.start - older.end) / 60_000L
+                        val gapMin = (unit.start - older.endMs(now)) / 60_000L
                         if (gapMin >= 5) {
                             Text(
                                 "···  ${fmtDur(gapMin)} без записи",
@@ -514,6 +526,309 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 app.appScope.launch { store.delete(entry.id) }
             },
         )
+    }
+
+    // Chain edit: the dialog shows the activity as one whole (full span, first
+    // fragment's raw); saving fans the change out to EVERY fragment. Start
+    // moves the first fragment, end moves the last, the middles keep their
+    // splice times - only the words change there.
+    editingChain?.let { chain ->
+        val first = chain.first()
+        val last = chain.last()
+        EditEntryDialog(
+            entry = first.copy(end = if (last.open) 0L else last.end),
+            categories = categoryNames,
+            onDismiss = { editingChain = null },
+            onSave = { updated ->
+                editingChain = null
+                app.appScope.launch {
+                    for (f in chain) {
+                        var nf = f.copy(
+                            title = updated.title,
+                            category = updated.category,
+                            client = updated.client,
+                            useful = updated.useful,
+                            source = "edit",
+                        )
+                        if (f.id == first.id) {
+                            nf = nf.copy(start = updated.start.coerceAtMost(f.end))
+                        }
+                        if (f.id == last.id) {
+                            nf = nf.copy(
+                                end = if (updated.end > 0) updated.end.coerceAtLeast(f.start) else updated.end,
+                            )
+                        }
+                        store.update(nf)
+                    }
+                    app.zasechkaSync.kickSoon(app.appScope)
+                }
+            },
+            onDelete = {
+                editingChain = null
+                app.appScope.launch { chain.forEach { store.delete(it.id) } }
+            },
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ribbon rows: the plain one-line entry and the chain block (an activity the
+// automation sliced up, shown whole again).
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun EntryRow(
+    entry: ZasechkaStore.Entry,
+    now: Long,
+    onStop: (() -> Unit)?,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (entry.open) Modifier.background(
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    RoundedCornerShape(10.dp),
+                ) else Modifier
+            )
+            .clickable(onClick = onEdit)
+            .padding(vertical = 2.dp),
+    ) {
+        Column(Modifier.width(46.dp)) {
+            Text(
+                fmtTime(entry.start),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                if (entry.open) "…" else fmtTime(entry.end),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Box(
+            Modifier
+                .width(3.dp)
+                .height(30.dp)
+                .background(categoryColor(entry.category), RoundedCornerShape(2.dp)),
+        )
+        // A table, not a ragged line (owner's spec): category and
+        // duration sit in fixed columns, the title takes the rest.
+        Text(
+            entry.category.ifBlank { "—" },
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = categoryColor(entry.category),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.width(104.dp).padding(start = 6.dp),
+        )
+        Text(
+            fmtDur(entry.durationMin(now)),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.width(58.dp).padding(start = 4.dp),
+        )
+        val title = buildString {
+            append(capFirst(entry.title.ifBlank { entry.raw.take(60) }))
+            if (entry.client.isNotBlank()) append(" · ${entry.client}")
+            if (entry.useful > 0) append(" ★${entry.useful}")
+            if (entry.pomodoros > 0) append(" 🍅×${entry.pomodoros}")
+        }
+        Text(
+            title,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(start = 6.dp),
+        )
+        if (onStop != null) {
+            IconButton(onClick = onStop, modifier = Modifier.size(30.dp)) {
+                Box(
+                    Modifier
+                        .size(11.dp)
+                        .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp)),
+                )
+            }
+        }
+        IconButton(onClick = onEdit, modifier = Modifier.size(30.dp)) {
+            Icon(
+                Icons.Filled.Edit,
+                contentDescription = "править",
+                modifier = Modifier.size(15.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
+            Icon(
+                Icons.Filled.Clear,
+                contentDescription = "удалить",
+                modifier = Modifier.size(15.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// The whole interrupted activity as one block: the time column shows the full
+// span, one tall line runs beside it, the header line carries the NET Σ
+// (interruptions excluded), and each interruption is its own small parallel
+// row inside - tappable for its own edit. Header edit/✕ act on ALL fragments.
+@Composable
+private fun ChainBlock(
+    unit: DayUnit,
+    now: Long,
+    onStop: (() -> Unit)?,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onEditInterruption: (ZasechkaStore.Entry) -> Unit,
+) {
+    val head = unit.fragments.first()
+    val last = unit.fragments.last()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .then(
+                if (unit.open) Modifier.background(
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    RoundedCornerShape(10.dp),
+                ) else Modifier
+            )
+            .padding(vertical = 2.dp),
+    ) {
+        Column(Modifier.width(46.dp)) {
+            Text(
+                fmtTime(head.start),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                if (last.open) "…" else fmtTime(last.end),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Box(
+            Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(categoryColor(head.category), RoundedCornerShape(2.dp)),
+        )
+        Column(Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onEdit),
+            ) {
+                Text(
+                    head.category.ifBlank { "—" },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = categoryColor(head.category),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.width(104.dp).padding(start = 6.dp),
+                )
+                // The number he otherwise sums by hand: net time of the
+                // activity across all its fragments. Bold = it's a total.
+                Text(
+                    fmtDur(unit.totalMin(now)),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    modifier = Modifier.width(58.dp).padding(start = 4.dp),
+                )
+                val pomos = unit.fragments.sumOf { it.pomodoros }
+                val title = buildString {
+                    append(capFirst(head.title.ifBlank { head.raw.take(60) }))
+                    if (head.client.isNotBlank()) append(" · ${head.client}")
+                    if (head.useful > 0) append(" ★${head.useful}")
+                    if (pomos > 0) append(" 🍅×$pomos")
+                }
+                Text(
+                    title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = 6.dp),
+                )
+                if (onStop != null) {
+                    IconButton(onClick = onStop, modifier = Modifier.size(30.dp)) {
+                        Box(
+                            Modifier
+                                .size(11.dp)
+                                .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp)),
+                        )
+                    }
+                }
+                IconButton(onClick = onEdit, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        Icons.Filled.Edit,
+                        contentDescription = "править всё дело",
+                        modifier = Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        Icons.Filled.Clear,
+                        contentDescription = "удалить всё дело",
+                        modifier = Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            for (br in unit.interruptions) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEditInterruption(br) }
+                        .padding(vertical = 1.dp),
+                ) {
+                    Text(
+                        "${fmtTime(br.start)}–${fmtTime(br.end)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        modifier = Modifier.width(82.dp).padding(start = 6.dp),
+                    )
+                    Box(
+                        Modifier
+                            .width(2.dp)
+                            .height(14.dp)
+                            .background(categoryColor(br.category), RoundedCornerShape(1.dp)),
+                    )
+                    Text(
+                        br.category.ifBlank { "—" },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = categoryColor(br.category),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.width(90.dp).padding(start = 4.dp),
+                    )
+                    Text(
+                        fmtDur(br.durationMin(now)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        modifier = Modifier.width(50.dp).padding(start = 4.dp),
+                    )
+                    Text(
+                        capFirst(br.title.ifBlank { br.raw.take(60) }),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(start = 6.dp),
+                    )
+                }
+            }
+        }
     }
 }
 
