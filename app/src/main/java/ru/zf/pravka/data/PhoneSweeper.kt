@@ -250,12 +250,15 @@ class PhoneSweeper(
         for (c in candidates) {
             if (zasechkaStore.coveredByOwner(c.start, c.end)) continue
             val label = allLabels[c.pkg] ?: c.pkg.substringAfterLast('.')
+            // Owner's rule: an attention eater is an interruption exactly like
+            // a call - the active дело resumes after it. With nothing open it
+            // simply lands as its own row (its category, e.g. «Отдых»).
             val inserted = zasechkaStore.insertInterruption(
                 start = c.start,
                 end = c.end,
                 title = label,
                 category = immersive[c.pkg].orEmpty(),
-                resumePrevious = false,
+                resumePrevious = true,
             )
             if (inserted != null) {
                 insertedAny = true

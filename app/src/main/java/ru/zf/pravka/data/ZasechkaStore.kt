@@ -152,12 +152,15 @@ class ZasechkaStore(private val context: Context) {
      * than the open entry's own start clamps its end to its start (a 0-minute
      * entry the owner can delete) rather than going negative.
      *
-     * A robot fact the retroactive window covers is NOT erased: "обедаю с
-     * 16:43", said at 16:53, keeps the YouTube auto entry 16:43-16:50 - it
-     * really happened, in parallel with the meal - and the ribbon nests it
-     * under the new entry as a parallel row. Only an auto entry straddling
-     * the start is trimmed to it, so the boundary stays clean. Manual entries
-     * are never touched - owner vs owner is the owner's fight.
+     * The ribbon never overlaps - the day must sum to 24 hours (owner's audit
+     * rule). A robot fact inside the retroactive window is kept AND deducted:
+     * "обедаю с 16:43", said at 16:53 over a YouTube entry 16:43-16:50,
+     * splits the meal into fragments AROUND the robot's minutes. The chain
+     * view then shows one block with the net time and the interruption as a
+     * parallel row. An auto entry only straddling the start is trimmed to it.
+     * Manual entries are never touched - owner vs owner is the owner's fight.
+     *
+     * Returns the OPEN tail fragment (the running дело).
      */
     suspend fun startEntry(
         start: Long,
@@ -170,16 +173,24 @@ class ZasechkaStore(private val context: Context) {
     ): Entry = mutex.withLock {
         ensureLoaded()
         closeOpenLocked(start)
+        val nowMs = System.currentTimeMillis()
         for (i in entries.indices) {
             val e = entries[i]
             if (e.source == "auto" && !e.open && e.start < start && e.end > start) {
                 entries[i] = e.copy(end = start, synced = false, notionSynced = false)
             }
         }
-        val entry = Entry(
+        val covered =
+            if (start < nowMs) {
+                entries
+                    .filter { it.source == "auto" && !it.open && it.start >= start && it.end <= nowMs }
+                    .sortedBy { it.start }
+            } else emptyList()
+
+        fun fragment(segStart: Long, segEnd: Long) = Entry(
             id = nextId(),
-            start = start,
-            end = 0L,
+            start = segStart,
+            end = segEnd,
             raw = raw.trim(),
             title = title.trim(),
             category = category.trim(),
@@ -187,12 +198,25 @@ class ZasechkaStore(private val context: Context) {
             useful = useful.coerceIn(0, 5),
             source = source,
             synced = false,
-            createdAt = System.currentTimeMillis(),
+            createdAt = nowMs,
         )
-        entries.add(entry)
+
+        var cursor = start
+        var firstSeg = true
+        for (a in covered) {
+            // The head fragment is created even at zero length: it anchors the
+            // chain at the declared start ("обед начался в 16:43").
+            if (a.start > cursor || firstSeg) {
+                entries.add(fragment(cursor, a.start.coerceAtLeast(cursor)))
+                firstSeg = false
+            }
+            cursor = kotlin.math.max(cursor, a.end)
+        }
+        val tail = fragment(cursor, 0L)
+        entries.add(tail)
         entries.sortBy { it.start }
         persist()
-        entry
+        tail
     }
 
     /** Closes the running entry at [at]; null when nothing was open. */
@@ -248,19 +272,9 @@ class ZasechkaStore(private val context: Context) {
                     )
             }
         ) return@withLock null
-        // A fact that ended BEFORE the covering claim was even made cuts
-        // nothing: "обедаю с 16:43", said at 16:53, already declared those
-        // minutes - a YouTube session 16:44-16:51 swept afterwards is stored
-        // as-is and the ribbon nests it under the meal as a parallel row.
-        // A fact newer than the claim (a call DURING the running lunch) still
-        // splices in as usual.
-        val parallel = entries.any { o ->
-            o.source != "auto" && o.start <= start && o.createdAt >= end &&
-                (if (o.open) Long.MAX_VALUE else o.end) >= end
-        }
         var actualEnd = end
         var resumeTemplate: Entry? = null
-        val openIndex = if (parallel) -1 else entries.indexOfLast { it.open }
+        val openIndex = entries.indexOfLast { it.open }
         if (openIndex >= 0) {
             val open = entries[openIndex]
             if (open.start <= start) {
@@ -491,6 +505,64 @@ class ZasechkaStore(private val context: Context) {
                 persistQueued()
             }
             lastId = entries.maxOfOrNull { it.id } ?: 0L
+            // The ribbon must not overlap (the day sums to 24h - owner's audit
+            // rule). Data recorded while auto facts briefly lived "in parallel"
+            // is repaired the same way startEntry now splits: a manual entry
+            // is spliced around every closed auto fully inside its span; the
+            // head keeps the id (the Sheets row updates), tails get fresh ids,
+            // 🍅 stay on the last fragment.
+            val autosAsc = entries.filter { it.source == "auto" && !it.open }.sortedBy { it.start }
+            if (autosAsc.isNotEmpty()) {
+                val rebuilt = ArrayList<Entry>(entries.size)
+                var changed = false
+                for (m in entries) {
+                    if (m.source == "auto") {
+                        rebuilt.add(m)
+                        continue
+                    }
+                    val mEnd = if (m.open) Long.MAX_VALUE else m.end
+                    val inside = autosAsc.filter { a ->
+                        a.start >= m.start && a.end <= mEnd && a.start < mEnd && a.end > m.start
+                    }
+                    if (inside.isEmpty()) {
+                        rebuilt.add(m)
+                        continue
+                    }
+                    changed = true
+                    var cursor = m.start
+                    var firstSeg = true
+                    for (a in inside) {
+                        if (a.start > cursor || firstSeg) {
+                            rebuilt.add(
+                                m.copy(
+                                    id = if (firstSeg) m.id else nextId(),
+                                    start = cursor,
+                                    end = a.start.coerceAtLeast(cursor),
+                                    pomodoros = 0,
+                                    synced = false,
+                                    notionSynced = false,
+                                )
+                            )
+                            firstSeg = false
+                        }
+                        cursor = kotlin.math.max(cursor, a.end)
+                    }
+                    rebuilt.add(
+                        m.copy(
+                            id = if (firstSeg) m.id else nextId(),
+                            start = cursor,
+                            end = if (m.open) 0L else kotlin.math.max(m.end, cursor),
+                            synced = false,
+                            notionSynced = false,
+                        )
+                    )
+                }
+                if (changed) {
+                    entries = rebuilt
+                    entries.sortBy { it.start }
+                    persistQueued()
+                }
+            }
             if (root == null) persistQueued()
         }
         loaded = true

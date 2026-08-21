@@ -179,13 +179,8 @@ private fun entrySig(e: ZasechkaStore.Entry): String =
  * sit between two fragments of the same activity - a manual entry in between
  * means the owner really switched, and that breaks the chain. Buffered autos
  * that are never followed by a resume stay ordinary standalone rows.
- *
- * Second pass - parallel facts: a closed auto entry whose whole span lies
- * INSIDE another unit's span ("обедаю с 16:43", said at 16:53, over a logged
- * YouTube 16:43-16:50) nests under that unit as a parallel row instead of
- * standing alone; the host keeps its full own time.
  */
-private fun buildDayUnits(asc: List<ZasechkaStore.Entry>, now: Long): List<DayUnit> {
+private fun buildDayUnits(asc: List<ZasechkaStore.Entry>): List<DayUnit> {
     val units = ArrayList<DayUnit>()
     var fragments = ArrayList<ZasechkaStore.Entry>()
     var interruptions = ArrayList<ZasechkaStore.Entry>()
@@ -229,32 +224,7 @@ private fun buildDayUnits(asc: List<ZasechkaStore.Entry>, now: Long): List<DayUn
         }
     }
     flush()
-
-    fun loneAuto(u: DayUnit): Boolean =
-        u.fragments.size == 1 && u.interruptions.isEmpty() &&
-            u.fragments[0].source == "auto" && !u.fragments[0].open
-    val hostOf = HashMap<Int, Int>()
-    for (i in units.indices) {
-        val u = units[i]
-        if (!loneAuto(u)) continue
-        val e = u.fragments[0]
-        val host = units.indices.firstOrNull { j ->
-            j != i && units[j].fragments.any { it.source != "auto" } &&
-                units[j].start <= e.start && units[j].endMs(now) >= e.end
-        }
-        if (host != null) hostOf[i] = host
-    }
-    if (hostOf.isEmpty()) return units
-    val out = ArrayList<DayUnit>(units.size)
-    for (j in units.indices) {
-        if (j in hostOf) continue
-        val kids = hostOf.entries.filter { it.value == j }.map { units[it.key].fragments[0] }
-        out.add(
-            if (kids.isEmpty()) units[j]
-            else units[j].copy(interruptions = (units[j].interruptions + kids).sortedBy { it.start })
-        )
-    }
-    return out
+    return units
 }
 
 @Composable
@@ -289,13 +259,15 @@ internal fun ZasechkaTab(app: PravkaApp) {
     val dayEnd = dayStart + 86_400_000L
     val rangeStart = if (weekMode) dayStart - 6 * 86_400_000L else dayStart
     val rangeEntries = remember(entries, rangeStart, dayEnd) {
-        entries.filter { it.start in rangeStart until dayEnd }.sortedBy { it.start }
+        // Tie-break: on an equal start the owner's entry goes before the auto
+        // fact - a zero-length head fragment must precede the interruption it
+        // was split around, or the chain does not assemble.
+        entries.filter { it.start in rangeStart until dayEnd }
+            .sortedWith(compareBy({ it.start }, { it.source == "auto" }))
     }
     // Day view groups the ribbon into units (chains + singles), newest first.
-    // `now` is a key: nesting of parallel facts under an OPEN entry depends
-    // on its live end.
-    val dayUnits = remember(rangeEntries, weekMode, now) {
-        if (weekMode) emptyList() else buildDayUnits(rangeEntries, now).asReversed()
+    val dayUnits = remember(rangeEntries, weekMode) {
+        if (weekMode) emptyList() else buildDayUnits(rangeEntries).asReversed()
     }
 
     val submitText: () -> Unit = submit@{
