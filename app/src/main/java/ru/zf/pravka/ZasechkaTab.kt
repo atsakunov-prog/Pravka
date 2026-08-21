@@ -51,11 +51,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
@@ -79,8 +77,10 @@ import ru.zf.pravka.ui.Feedback
 
 // Warm editorial palette (owner's taste: yellows, reds, oranges) with two
 // голубой accents for contrast; a category keeps its color between sessions
-// because it is picked by name hash, not by list position.
-private val CATEGORY_COLORS = listOf(
+// because it is picked by name hash, not by list position. Two brightness
+// tiers: deep inks on paper, bright markers on the night background - the
+// deep set was unreadable in the dark theme (owner's screenshot).
+private val CATEGORY_COLORS_LIGHT = listOf(
     Color(0xFFC2410C), // терракота
     Color(0xFFB45309), // янтарь
     Color(0xFFB91C1C), // томат
@@ -92,10 +92,28 @@ private val CATEGORY_COLORS = listOf(
     Color(0xFF0E7490), // волна (голубой акцент)
     Color(0xFF155E75), // глубокая волна
 )
+private val CATEGORY_COLORS_DARK = listOf(
+    Color(0xFFF97316), // оранж
+    Color(0xFFFBBF24), // янтарь
+    Color(0xFFEF4444), // томат
+    Color(0xFFEAB308), // горчица
+    Color(0xFFFB923C), // абрикос
+    Color(0xFFF59E0B), // золото
+    Color(0xFFFF8A65), // коралл
+    Color(0xFFF87171), // лосось
+    Color(0xFF22D3EE), // волна (голубой акцент)
+    Color(0xFF38BDF8), // небо
+)
 
-private fun categoryColor(name: String): Color =
-    if (name.isBlank()) Color(0xFF8A8172)
-    else CATEGORY_COLORS[abs(name.lowercase().hashCode()) % CATEGORY_COLORS.size]
+@Composable
+private fun categoryColor(name: String): Color {
+    val dark = isSystemInDarkTheme()
+    if (name.isBlank()) return if (dark) Color(0xFF9A9184) else Color(0xFF8A8172)
+    val palette = if (dark) CATEGORY_COLORS_DARK else CATEGORY_COLORS_LIGHT
+    return palette[abs(name.lowercase().hashCode()) % palette.size]
+}
+
+private fun capFirst(s: String): String = s.replaceFirstChar { it.uppercase() }
 
 private val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
 private val dayLabelFormat = SimpleDateFormat("EEEE, d MMMM", Locale("ru"))
@@ -281,26 +299,36 @@ internal fun ZasechkaTab(app: PravkaApp) {
                             .height(30.dp)
                             .background(categoryColor(entry.category), RoundedCornerShape(2.dp)),
                     )
-                    val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
-                    val line = buildAnnotatedString {
-                        withStyle(SpanStyle(color = categoryColor(entry.category))) {
-                            append(entry.category.ifBlank { "без категории" })
-                            if (entry.client.isNotBlank()) append(" · ${entry.client}")
-                        }
-                        append("  ")
-                        append(entry.title.ifBlank { entry.raw.take(60) })
+                    // A table, not a ragged line (owner's spec): category and
+                    // duration sit in fixed columns, the title takes the rest.
+                    Text(
+                        entry.category.ifBlank { "—" },
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = categoryColor(entry.category),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.width(104.dp).padding(start = 6.dp),
+                    )
+                    Text(
+                        fmtDur(entry.durationMin(now)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        modifier = Modifier.width(58.dp).padding(start = 4.dp),
+                    )
+                    val title = buildString {
+                        append(capFirst(entry.title.ifBlank { entry.raw.take(60) }))
+                        if (entry.client.isNotBlank()) append(" · ${entry.client}")
                         if (entry.useful > 0) append(" ★${entry.useful}")
                         if (entry.pomodoros > 0) append(" 🍅×${entry.pomodoros}")
-                        withStyle(SpanStyle(color = mutedColor)) {
-                            append("  ${fmtDur(entry.durationMin(now))}")
-                        }
                     }
                     Text(
-                        line,
+                        title,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(start = 8.dp),
+                        modifier = Modifier.weight(1f).padding(start = 6.dp),
                     )
                     if (entry.open) {
                         IconButton(
@@ -344,7 +372,9 @@ internal fun ZasechkaTab(app: PravkaApp) {
                             Text(
                                 "···  ${fmtDur(gapMin)} без записи",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                // Deliberately faint: the holes must not
+                                // shout louder than the entries.
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
                                 modifier = Modifier.padding(start = 56.dp, top = 1.dp, bottom = 1.dp),
                             )
                         }
@@ -817,9 +847,17 @@ private val PKG_ALIAS = mapOf(
     "com.google.android.webview" to "com.android.chrome",
     "com.android.webview" to "com.android.chrome",
 )
+// Instant names for the frequent flyers even before the label resolver runs
+// (QUERY_ALL_PACKAGES makes the resolver work for the rest).
 private val FRIENDLY_LABELS = mapOf(
     "com.android.chrome" to "Chrome",
     "us.zoom.videomeetings" to "Zoom",
+    "org.telegram.messenger" to "Telegram",
+    "org.telegram.messenger.web" to "Telegram",
+    "com.google.android.youtube" to "YouTube",
+    "com.google.android.apps.docs.editors.docs" to "Google Docs",
+    "com.google.android.apps.docs" to "Google Drive",
+    "com.adobe.reader" to "Adobe Reader",
 )
 
 // Some packages (work profile, hidden components) refuse a label - the last
