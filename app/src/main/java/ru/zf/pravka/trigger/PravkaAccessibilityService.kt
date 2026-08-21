@@ -91,6 +91,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     private var zButton: ZasechkaButtonController? = null
     private var zSession: GoogleSpeechSession? = null
     @Volatile private var zWhisperRecording = false
+    // Tap on the live plate: kill the mic, type instead (confidential takes).
+    @Volatile private var zTypeInstead = false
     @Volatile private var cachedZEnabled = true
     @Volatile private var cachedZGapMin = 45
     @Volatile private var cachedZDayStart = 9
@@ -163,6 +165,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             onShortTap = ::onZasechkaTap,
             onLongPress = ::showZasechkaMenu,
         )
+        zButton?.onTickerTap = ::onZasechkaPlateTap
         // The linked pair (owner's design): drag either bubble and the other
         // trails behind on a rubber band; the "П" always docks above the "З".
         val pairGap = (8 * resources.displayMetrics.density).toInt()
@@ -614,6 +617,17 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (zWhisperRecording) {
             zWhisperRecording = false
             zButton?.setRecording(false)
+            // Plate tap mid-take: the audio is discarded UNTRANSCRIBED (the
+            // whole point is confidentiality) and the type-in box opens.
+            if (zTypeInstead) {
+                zTypeInstead = false
+                file?.let { app.recordings.delete(it.name) }
+                zButton?.hideTicker()
+                zButton?.setBusy(false)
+                openZasechkaTypeIn("")
+                return
+            }
+            zButton?.hideTicker()
             if (file == null) {
                 zButton?.setBusy(false)
                 Haptics.error(this)
@@ -1394,9 +1408,14 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     private fun startZasechkaCapture() {
+        zButton?.hideInput()
         if (cachedEngine.startsWith("whisper")) {
             zWhisperRecording = true
             zButton?.setRecording(true)
+            // Whisper has no live words - the plate still shows, because it
+            // is also the "type instead" tap target (confidential takes).
+            zButton?.showTicker()
+            zButton?.updateTicker("🎙 говори… (тап сюда — набрать текстом)")
             Haptics.start(this)
             startDictation()
         } else {
@@ -1434,6 +1453,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
         zButton?.setRecording(true)
         zButton?.showTicker()
+        zButton?.updateTicker("🎙 говори… (тап сюда — набрать текстом)")
         Haptics.start(this)
         runCatching { startMicHold() }
     }
@@ -1443,6 +1463,35 @@ class PravkaAccessibilityService : AccessibilityService() {
         zButton?.setRecording(false)
         zButton?.setBusy(true)
         session.stop()  // -> onZasechkaLiveDone
+    }
+
+    /**
+     * Tap on the live plate (owner's request): the dictation stops and the
+     * plate becomes a text box - some takes are typed, not said out loud.
+     * Whatever the recognizer already heard prefills the box (Google live);
+     * a Whisper take is discarded unheard - its audio never gets transcribed.
+     */
+    private fun onZasechkaPlateTap() {
+        when {
+            zSession != null -> {
+                zTypeInstead = true
+                stopZasechkaLive()   // -> onZasechkaLiveDone routes to the box
+            }
+            zWhisperRecording && DictationService.recording -> {
+                zTypeInstead = true
+                zButton?.setBusy(true)
+                stopDictation()      // -> onRecordingSaved routes to the box
+            }
+        }
+    }
+
+    // Confidential type-in: same engine, source "text" - the ribbon and the
+    // toasts behave exactly like after a voice take.
+    private fun openZasechkaTypeIn(prefill: String) {
+        zButton?.showInput(prefill) { typed ->
+            val text = typed.trim()
+            if (text.isNotEmpty()) onZasechkaText(text, source = "text")
+        }
     }
 
     /** The mic-hold notification's Stop: finalize whichever live take runs. */
@@ -1455,6 +1504,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         runCatching { stopMicHold() }
         runCatching { zButton?.hideTicker() }
         zButton?.setRecording(false)
+        if (zTypeInstead) {
+            zTypeInstead = false
+            zButton?.setBusy(false)
+            openZasechkaTypeIn(text.trim())
+            return
+        }
         onZasechkaText(text)
     }
 
@@ -1468,8 +1523,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         Feedback.toast(this, msg)
     }
 
-    /** Transcript in hand (either engine): categorize, store, confirm. */
-    private fun onZasechkaText(raw: String) {
+    /** Transcript in hand (either engine, or typed): categorize, store, confirm. */
+    private fun onZasechkaText(raw: String, source: String = "voice") {
         val text = raw.trim()
         if (text.isBlank()) {
             zButton?.setBusy(false)
@@ -1480,7 +1535,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (!scope.isActive) return
         zButton?.setBusy(true)
         scope.launch {
-            val outcome = runCatching { app.zasechkaEngine.record(text, "voice") }
+            val outcome = runCatching { app.zasechkaEngine.record(text, source) }
                 .getOrElse { e ->
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     app.eventLog.add("засечка: record threw ${e.javaClass.simpleName}: ${e.message}")

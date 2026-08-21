@@ -390,6 +390,7 @@ class ZasechkaButtonController(
         pulse?.cancel()
         pulse = null
         hideMenu()
+        hideInput()
         button?.let { runCatching { windowManager.removeView(it) } }
         button = null
         ticker?.let { runCatching { windowManager.removeView(it) } }
@@ -532,12 +533,15 @@ class ZasechkaButtonController(
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
+        // Unlike the "П" plate this one is TOUCHABLE: a tap mid-dictation
+        // kills the mic and swaps the plate for a type-in box (confidential
+        // takes are typed, not said out loud).
+        pill.setOnClickListener { onTickerTap?.invoke() }
         val p = WindowManager.LayoutParams(
-            buttonSize * TICKER_W_MULT,
+            tickerWidthPx(),
             tickerHeightPx(),
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT,
         ).apply { gravity = Gravity.TOP or Gravity.START }
         tickerParams = p
@@ -546,11 +550,18 @@ class ZasechkaButtonController(
         pill.visibility = View.GONE
     }
 
+    // Narrower than before (owner: on the cover screen the 6x plate ate the
+    // whole width): 4.5 diameters, capped so the button stays visible beside.
+    private fun tickerWidthPx(): Int {
+        val (w, _) = screenSize()
+        return minOf(buttonSize * 9 / 2, (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
+    }
+
     private fun positionTicker() {
         val bp = params ?: return
         val tp = tickerParams ?: return
         val (w, h) = screenSize()
-        val tickerW = buttonSize * TICKER_W_MULT
+        val tickerW = tickerWidthPx()
         val tickerH = tickerHeightPx()
         val gap = dp(8)
         tp.width = tickerW
@@ -560,6 +571,117 @@ class ZasechkaButtonController(
         tp.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap
         else bp.x - tickerW - gap
         tp.x = tp.x.coerceIn(0, (w - tickerW).coerceAtLeast(0))
+    }
+
+    // ---- Type-in plate: the mic died, the keyboard talks instead ----
+
+    /** Fired when the owner taps the live ticker plate mid-dictation. */
+    var onTickerTap: (() -> Unit)? = null
+
+    private var input: android.widget.LinearLayout? = null
+    private var inputEdit: android.widget.EditText? = null
+
+    fun showInput(prefill: String, onSubmit: (String) -> Unit) {
+        hideInput()
+        hideTicker()
+        val row = android.widget.LinearLayout(service).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = buttonSize / 2f
+                setColor(AMBER)
+            }
+            elevation = dp(4).toFloat()
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(2), dp(4), dp(2))
+        }
+        val edit = android.widget.EditText(service).apply {
+            setText(prefill)
+            setSelection(prefill.length)
+            setTextColor(PAPER)
+            setHintTextColor(0xB0F7F3EA.toInt())
+            hint = "Чем занят?"
+            textSize = 16f
+            background = null
+            isSingleLine = true
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                    val t = text?.toString().orEmpty()
+                    hideInput()
+                    onSubmit(t)
+                    true
+                } else false
+            }
+        }
+        inputEdit = edit
+        row.addView(
+            edit,
+            android.widget.LinearLayout.LayoutParams(
+                0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+            ),
+        )
+        row.addView(
+            TextView(service).apply {
+                text = "➤"
+                textSize = 18f
+                setTextColor(PAPER)
+                setPadding(dp(8), dp(6), dp(8), dp(6))
+                setOnClickListener {
+                    val t = edit.text?.toString().orEmpty()
+                    hideInput()
+                    onSubmit(t)
+                }
+            }
+        )
+        row.addView(
+            TextView(service).apply {
+                text = "✕"
+                textSize = 16f
+                setTextColor(PAPER)
+                alpha = 0.8f
+                setPadding(dp(6), dp(6), dp(10), dp(6))
+                setOnClickListener { hideInput() }
+            }
+        )
+        val p = WindowManager.LayoutParams(
+            tickerWidthPx(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            // Focusable (no NOT_FOCUSABLE): the IME must attach to the box.
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
+        }
+        positionInput(p)
+        input = row
+        runCatching { windowManager.addView(row, p) }
+        row.post {
+            edit.requestFocus()
+            service.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                ?.showSoftInput(edit, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
+
+    fun hideInput() {
+        input?.let { runCatching { windowManager.removeView(it) } }
+        input = null
+        inputEdit = null
+    }
+
+    private fun positionInput(p: WindowManager.LayoutParams) {
+        val bp = params ?: return
+        val (w, h) = screenSize()
+        val plateW = tickerWidthPx()
+        val plateH = dp(52)
+        val gap = dp(8)
+        p.y = (bp.y - (plateH - buttonSize) / 2).coerceIn(0, (h - plateH).coerceAtLeast(0))
+        val buttonCenterX = bp.x + buttonSize / 2
+        p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap
+        else bp.x - plateW - gap
+        p.x = p.x.coerceIn(0, (w - plateW).coerceAtLeast(0))
     }
 
     private inner class DragTouchListener : View.OnTouchListener {

@@ -418,7 +418,7 @@ class FloatingButtonController(
             ),
         )
         val p = WindowManager.LayoutParams(
-            buttonSize * TICKER_W_MULT,
+            tickerWidthPx(),
             tickerHeightPx(),
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -431,13 +431,21 @@ class FloatingButtonController(
         pill.visibility = View.GONE
     }
 
+    // Narrower than the button row (owner: on the cover screen the old 6x
+    // plate ate the whole width): 4.5 diameters, capped so the button and a
+    // margin always stay visible beside it.
+    private fun tickerWidthPx(): Int {
+        val (w, _) = screenSize()
+        return minOf(buttonSize * 9 / 2, (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
+    }
+
     // Sit the pill beside the button, on the side that has room: button near
     // the left edge -> ticker to its right, and vice versa.
     private fun positionTicker() {
         val bp = params ?: return
         val tp = tickerParams ?: return
         val (w, h) = screenSize()
-        val tickerW = buttonSize * TICKER_W_MULT
+        val tickerW = tickerWidthPx()
         val tickerH = tickerHeightPx()
         val gap = dp(8)
         tp.width = tickerW
