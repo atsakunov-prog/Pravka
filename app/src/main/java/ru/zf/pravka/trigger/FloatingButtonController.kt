@@ -652,6 +652,10 @@ class FloatingButtonController(
         }
 
         override fun onTouch(view: View, event: MotionEvent): Boolean {
+            // Lockscreen pocket guard: while idle, the whole gesture is
+            // swallowed - no tap, no menu, no drag (a running take keeps
+            // the button alive so its stop-tap still works).
+            if (service.isLockedIdle()) return true
             val p = params ?: return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {

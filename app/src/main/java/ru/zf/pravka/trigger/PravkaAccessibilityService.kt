@@ -308,8 +308,25 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // ---- Dictation (short tap): record -> transcribe -> insert -> fix ----
 
+    /**
+     * Pocket guard (owner's request): on the lockscreen both bubbles ignore
+     * touches COMPLETELY while idle - an accidental press must not start a
+     * take, open a menu or drag a button around. A take that is ALREADY
+     * running keeps its button alive: locking the screen mid-dictation is
+     * normal walking usage, and the stop-tap must still land.
+     */
+    fun isLockedIdle(): Boolean {
+        val locked = runCatching {
+            getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
+        }.getOrDefault(false)
+        if (!locked) return false
+        return googleSession == null && zSession == null &&
+            !zWhisperRecording && !DictationService.recording
+    }
+
     /** Short tap: stop the active session if any, else start per the engine. */
     private fun onDictateTap() {
+        if (isLockedIdle()) return
         // One microphone, one take at a time: a Засечка recording must be
         // stopped from its own button, not silently hijacked by this one.
         if (zSession != null || zWhisperRecording) {
@@ -1355,6 +1372,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** The "З" button, the notification action and the tab's mic button. */
     fun onZasechkaTap() {
+        if (isLockedIdle()) return
         if (zSession != null) { stopZasechkaLive(); return }
         if (zWhisperRecording && DictationService.recording) {
             zButton?.setBusy(true)
