@@ -44,9 +44,10 @@ class ZasechkaButtonController(
         private const val TICKER_W_MULT = 6
         private const val TICKER_LINES = 3
 
-        // Warm pair with the "П": red-orange pen there, bright orange marker
-        // here - same paper-white glyph on both (owner's spec).
-        private val AMBER = 0xFFF97316.toInt()
+        // Warm pair with the "П": red-orange pen there, a marker halfway
+        // between orange and yellow here (owner tuned it twice - this is the
+        // midpoint) - same paper-white glyph on both.
+        private val AMBER = 0xFFF78810.toInt()
         private val AMBER_DEEP = 0xFFEA580C.toInt()   // remind pulse
         private val REC_RED = FloatingButtonController.REC_RED
         private val PAPER = 0xFFF7F3EA.toInt()

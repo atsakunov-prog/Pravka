@@ -679,6 +679,54 @@ private fun ZasechkaConfig(
         }) { Text("Сохранить и проверить") }
 
         Spacer(Modifier.height(12.dp))
+        Text("Notion", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Зеркало записей в базу Notion (по одной странице на запись, правки обновляют " +
+                "страницу). Токен: notion.so/my-integrations → создать интеграцию → Internal " +
+                "Integration Secret; затем в базе ••• → Connections → добавить интеграцию.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        val notionToken by app.settings.notionTokenFlow.collectAsState(initial = "")
+        val notionDb by app.settings.notionDbFlow.collectAsState(initial = "")
+        var tokenField by remember(notionToken) { mutableStateOf(notionToken) }
+        var dbField by remember(notionDb) { mutableStateOf(notionDb) }
+        OutlinedTextField(
+            value = tokenField,
+            onValueChange = { tokenField = it },
+            label = { Text("Integration Secret (ntn_… / secret_…)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = dbField,
+            onValueChange = { dbField = it },
+            label = { Text("ID базы (32 знака из ссылки)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        val notionStatus by app.notionSync.statusFlow.collectAsState()
+        TextButton(onClick = {
+            app.appScope.launch {
+                app.settings.setNotionToken(tokenField)
+                app.settings.setNotionDb(dbField.replace("-", "").trim())
+                val result = app.notionSync.syncNow()
+                result.onSuccess { n ->
+                    Feedback.toast(app, if (n > 0) "В Notion отправлено: $n" else "Всё уже в Notion")
+                }.onFailure { e ->
+                    Feedback.toast(app, "Notion: ${e.message}")
+                }
+            }
+        }) { Text("Сохранить и проверить") }
+        if (notionStatus.isNotBlank()) {
+            Text(
+                "Последняя отправка в Notion: $notionStatus",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
         OutlinedButton(onClick = {
             app.appScope.launch {
                 context.startActivity(app.zasechkaStore.shareCsvIntent())

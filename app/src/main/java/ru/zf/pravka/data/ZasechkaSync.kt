@@ -37,6 +37,9 @@ class ZasechkaSync(
     private val _statusFlow = MutableStateFlow("")
     val statusFlow: StateFlow<String> = _statusFlow
 
+    // The Notion mirror rides every kick this class gets; wired in PravkaApp.
+    var notion: NotionSync? = null
+
     private val running = AtomicBoolean(false)
     private val kicked = AtomicBoolean(false)
 
@@ -53,8 +56,14 @@ class ZasechkaSync(
         }
     }
 
-    /** Pushes every unsynced closed entry. Returns how many rows went up. */
+    /** Pushes both mirrors. Returns the Sheets row count (its own status). */
     suspend fun syncNow(): Result<Int> {
+        val sheets = syncSheets()
+        runCatching { notion?.syncNow() }
+        return sheets
+    }
+
+    private suspend fun syncSheets(): Result<Int> {
         val url = settings.zWebhook()
         if (url.isBlank()) return Result.success(0)
         if (!running.compareAndSet(false, true)) return Result.success(0)

@@ -32,10 +32,10 @@ class ZasechkaStore(private val context: Context) {
         const val FORMAT = "pravka-zasechka"
         private const val FILE_NAME = "zasechka.json"
 
-        // The owner's taxonomy (2026-08-21), with hints the categorizer sees.
-        // A hint is the difference between "поговорил с Марианой" landing in
-        // Семья and landing in Социальное - names live here, not in code.
-        private const val CAT_SEED_VERSION = 2
+        // The owner's taxonomy, with hints the categorizer sees. A hint is
+        // the difference between "поговорил с Марианой" landing in Семья and
+        // landing in Социальное - names live here, not in code.
+        private const val CAT_SEED_VERSION = 3
         val DEFAULT_CATEGORIES = listOf(
             Category("Сон", ""),
             Category("Спорт: силовая", "тренажёрка, железо, ОФП"),
@@ -47,13 +47,16 @@ class ZasechkaStore(private val context: Context) {
             Category("Передвижение: транспорт", "машина, такси, метро, поезд, самолёт"),
             Category("Еда", "завтрак, обед, ужин, перекус, готовка"),
             Category("Быт", "домашние дела, покупки, уборка, документы, врачи"),
+            Category("Систематизация", "наведение порядка в жизни и работе: сборка и настройка Правки и Засечки, процессы, автоматизация, разгребание"),
             Category("Семья", "время и разговоры с Марианой, с Серёжей, с родными"),
             Category("Социальное: внешнее", "друзья, знакомые, встречи и переписка вне работы"),
             Category("Работа: привлечение", "маркетинг, контент, продажи, новые клиенты"),
             Category("Работа: текущая", "работа по действующим клиентам и проектам"),
             Category("Работа: планирование", "планирование, стратегия, разборы, финансы бизнеса"),
+            Category("Работа: звонки", "рабочие созвоны и звонки по клиентам"),
             Category("Чтение", "книги, статьи"),
-            Category("Секс", ""),
+            Category("Секс: с Марианной", "супружеский секс"),
+            Category("Секс: соло", "мастурбация"),
             Category("Отдых", "кино, сериалы, ютуб, игры, гуляние без цели"),
             Category("Звонки", "телефонный разговор, если непонятно с кем и о чём"),
         )
@@ -82,6 +85,7 @@ class ZasechkaStore(private val context: Context) {
         val synced: Boolean,      // delivered to the Sheets webhook
         val createdAt: Long,
         val pomodoros: Int = 0,   // 🍅 completed while this entry ran
+        val notionSynced: Boolean = false,  // delivered to the Notion mirror
     ) {
         val open: Boolean get() = end == 0L
         fun durationMin(now: Long = System.currentTimeMillis()): Long =
@@ -190,7 +194,7 @@ class ZasechkaStore(private val context: Context) {
         val index = entries.indexOfLast { it.open }
         if (index < 0) return null
         val open = entries[index]
-        val closed = open.copy(end = at.coerceAtLeast(open.start), synced = false)
+        val closed = open.copy(end = at.coerceAtLeast(open.start), synced = false, notionSynced = false)
         entries[index] = closed
         return closed
     }
@@ -268,6 +272,7 @@ class ZasechkaStore(private val context: Context) {
                     start = actualEnd,
                     end = 0L,
                     synced = false,
+                    notionSynced = false,
                     createdAt = System.currentTimeMillis(),
                 )
             )
@@ -282,7 +287,7 @@ class ZasechkaStore(private val context: Context) {
         ensureLoaded()
         val index = entries.indexOfFirst { it.id == entry.id }
         if (index >= 0) {
-            entries[index] = entry.copy(synced = false)
+            entries[index] = entry.copy(synced = false, notionSynced = false)
             entries.sortBy { it.start }
             persist()
         }
@@ -341,6 +346,20 @@ class ZasechkaStore(private val context: Context) {
         persist()
     }
 
+    /** Closed entries the Notion mirror has not seen yet, oldest first. */
+    suspend fun unsyncedNotion(): List<Entry> = mutex.withLock {
+        ensureLoaded()
+        entries.filter { !it.open && !it.notionSynced }
+    }
+
+    suspend fun markNotionSynced(ids: Collection<Long>): Unit = mutex.withLock {
+        ensureLoaded()
+        if (ids.isEmpty()) return@withLock
+        val idSet = ids.toSet()
+        entries = entries.map { if (it.id in idSet) it.copy(notionSynced = true) else it }.toMutableList()
+        persist()
+    }
+
     // ---- CSV export (same share pattern as the transcription metrics) ----
 
     suspend fun shareCsvIntent(): Intent {
@@ -388,11 +407,24 @@ class ZasechkaStore(private val context: Context) {
             categories = root?.optJSONArray("categories")?.toCategoryList()?.toMutableList()
                 ?: DEFAULT_CATEGORIES.toMutableList()
             catSeedVersion = root?.optInt("catSeed", 1) ?: CAT_SEED_VERSION
-            // Seed upgrade: the owner's real taxonomy replaced the v1 draft.
-            // Applies only to a list the owner never touched - hand edits win.
             if (root != null && catSeedVersion < CAT_SEED_VERSION) {
-                if (categories.map { it.name }.toSet() == SEED_V1_NAMES) {
+                // v1 -> v2: the owner's real taxonomy replaced the draft, but
+                // only if the list was never touched - hand edits win.
+                if (catSeedVersion < 2 && categories.map { it.name }.toSet() == SEED_V1_NAMES) {
                     categories = DEFAULT_CATEGORIES.toMutableList()
+                }
+                // v2 -> v3 is ADDITIVE (owner asked for new categories): the
+                // old "Секс" splits into the two new ones, everything else
+                // missing from the seed is appended; hand edits survive.
+                if (catSeedVersion < 3) {
+                    categories = categories
+                        .filter { !it.name.equals("Секс", ignoreCase = true) }
+                        .toMutableList()
+                    for (c in DEFAULT_CATEGORIES) {
+                        if (categories.none { it.name.equals(c.name, ignoreCase = true) }) {
+                            categories.add(c)
+                        }
+                    }
                 }
                 catSeedVersion = CAT_SEED_VERSION
                 persistQueued()
@@ -418,6 +450,7 @@ class ZasechkaStore(private val context: Context) {
                             synced = o.optBoolean("synced", false),
                             createdAt = o.optLong("createdAt", start),
                             pomodoros = o.optInt("pomodoros", 0),
+                            notionSynced = o.optBoolean("notionSynced", false),
                         )
                     )
                 }
@@ -488,6 +521,7 @@ class ZasechkaStore(private val context: Context) {
                             put("synced", e.synced)
                             put("createdAt", e.createdAt)
                             if (e.pomodoros > 0) put("pomodoros", e.pomodoros)
+                            put("notionSynced", e.notionSynced)
                         }
                     )
                 }

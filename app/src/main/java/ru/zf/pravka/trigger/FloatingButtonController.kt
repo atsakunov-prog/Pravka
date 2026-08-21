@@ -163,13 +163,27 @@ class FloatingButtonController(
         return if (step != 0) step else if (d > 0) 1 else -1
     }
 
-    /** No-op while hidden: an off-screen "П" must not chase the "З". */
+    /**
+     * Hidden "П" (no text field focused - most of the time) still keeps
+     * formation: it snaps to the target silently, so the next time it
+     * appears it is already docked where the "З" dropped it. Visible "П"
+     * chases on the rubber band.
+     */
     fun followTo(x: Int, y: Int, settle: Boolean) {
-        if (!visible) return
         val view = button ?: return
+        val p = params ?: return
         val (w, h) = screenSize()
         followTargetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
         followTargetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
+        if (!visible) {
+            following = false
+            view.removeCallbacks(followStep)
+            p.x = followTargetX
+            p.y = followTargetY
+            runCatching { windowManager.updateViewLayout(view, p) }
+            if (settle) savePosition(view, p)
+            return
+        }
         followSettle = settle
         if (!following) {
             following = true
