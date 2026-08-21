@@ -129,6 +129,25 @@ class ZasechkaButtonController(
         applyFaceAndLook()
     }
 
+    /**
+     * The hourly wink (owner's request): three soft dips of alpha, then back
+     * to the steady look - "я всё ещё считаю вот это". No-op while any louder
+     * state (busy/recording/gap-remind) owns the button.
+     */
+    fun blinkOnce() {
+        val b = button ?: return
+        if (busy || recording || reminding) return
+        pulse?.cancel()
+        pulse = ValueAnimator.ofFloat(1f, 0.35f).apply {
+            duration = 450
+            repeatCount = 5
+            repeatMode = ValueAnimator.REVERSE
+            addUpdateListener { b.alpha = it.animatedValue as Float }
+            start()
+        }
+        b.postDelayed({ applyFaceAndLook() }, 3_000)
+    }
+
     /** text = minutes left ("17"); null returns the "З" glyph. */
     fun setPomodoro(text: String?, color: Int?) {
         pomodoroText = text

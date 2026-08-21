@@ -53,6 +53,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         private const val KEY_Z_MORNING_DAY = "z_morning_day"
         private const val KEY_Z_EVENING_DAY = "z_evening_day"
         private const val KEY_Z_GAP_NOTIFIED = "z_gap_notified_end"
+        private const val KEY_Z_BEAT_AT = "z_beat_at"
 
         // Pomodoro survives a service restart: the deadline is on disk.
         private const val KEY_Z_POMO_ENDS = "z_pomo_ends"
@@ -1619,29 +1620,44 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     private fun showZasechkaMenu() {
-        val openTab = ZasechkaButtonController.MenuItem("Открыть Засечку") {
+        val goTab: () -> Unit = {
             startActivity(
                 android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
                     .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         }
-        val items = if (pomodoroEndsAt > 0) {
-            listOf(
-                ZasechkaButtonController.MenuItem(
-                    if (pomodoroIsBreak) "Стоп: перерыв" else "Стоп: помидор"
-                ) { stopPomodoro(byUser = true) },
-                openTab,
+        val openTab = ZasechkaButtonController.MenuItem("Открыть Засечку", goTab)
+        // The top pill answers "что сейчас считается?" without opening the
+        // app: current дело and since when (owner's request). Tap -> the tab.
+        scope.launch {
+            val now = System.currentTimeMillis()
+            val open = runCatching { app.zasechkaStore.openEntry() }.getOrNull()
+            val header = ZasechkaButtonController.MenuItem(
+                if (open != null) {
+                    "⏱ ${open.title.ifBlank { "без названия" }} — с ${zTime(open.start)}, ${zDur(now - open.start)}"
+                } else "— сейчас ничего не идёт",
+                goTab,
             )
-        } else {
-            listOf(
-                ZasechkaButtonController.MenuItem("🍅 25 минут") { startPomodoro(25, isBreak = false) },
-                ZasechkaButtonController.MenuItem("🍅 50 минут") { startPomodoro(50, isBreak = false) },
-                ZasechkaButtonController.MenuItem("Перерыв 5") { startPomodoro(5, isBreak = true) },
-                openTab,
-            )
+            val items = if (pomodoroEndsAt > 0) {
+                listOf(
+                    header,
+                    ZasechkaButtonController.MenuItem(
+                        if (pomodoroIsBreak) "Стоп: перерыв" else "Стоп: помидор"
+                    ) { stopPomodoro(byUser = true) },
+                    openTab,
+                )
+            } else {
+                listOf(
+                    header,
+                    ZasechkaButtonController.MenuItem("🍅 25 минут") { startPomodoro(25, isBreak = false) },
+                    ZasechkaButtonController.MenuItem("🍅 50 минут") { startPomodoro(50, isBreak = false) },
+                    ZasechkaButtonController.MenuItem("Перерыв 5") { startPomodoro(5, isBreak = true) },
+                    openTab,
+                )
+            }
+            zButton?.showMenu(items)
         }
-        zButton?.showMenu(items)
     }
 
     fun startPomodoro(minutes: Int, isBreak: Boolean) {
@@ -1855,6 +1871,21 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             if (open != null) {
                 zButton?.setRemind(false)
+                // Hourly heartbeat (owner's request): the button winks once an
+                // hour and says out loud what is being counted right now -
+                // trust in the robot comes from glanceability, not silence.
+                // A freshly started дело (<10 мин) doesn't need it: he just
+                // dictated it himself.
+                if (now - internal.getLong(KEY_Z_BEAT_AT, 0L) >= 60 * 60_000L) {
+                    internal.edit().putLong(KEY_Z_BEAT_AT, now).apply()
+                    if (now - open.start >= 10 * 60_000L) {
+                        zButton?.blinkOnce()
+                        Feedback.toast(
+                            this@PravkaAccessibilityService,
+                            "⏱ «${open.title.ifBlank { "без названия" }}» — идёт ${zDur(now - open.start)} (с ${zTime(open.start)})",
+                        )
+                    }
+                }
                 return@launch
             }
             val todays = app.zasechkaStore.forRange(ru.zf.pravka.data.dayStartMs(now), now)
