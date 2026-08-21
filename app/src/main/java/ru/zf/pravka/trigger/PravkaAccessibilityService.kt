@@ -58,6 +58,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         private const val KEY_Z_POMO_ENDS = "z_pomo_ends"
         private const val KEY_Z_POMO_BREAK = "z_pomo_break"
         private const val KEY_Z_POMO_DAY_PREFIX = "z_pomo_n_"
+
+        // Chrome flavors whose url bar the per-site watcher reads.
+        private val CHROME_PKGS = setOf("com.android.chrome", "com.chrome.beta", "com.chrome.dev")
         const val RULES_OPT_PERIOD_MS = 7L * 24 * 3600 * 1000
         const val RULES_OPT_MIN_COUNT = 6
     }
@@ -235,6 +238,8 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // ourselves, or our own UI appearing would count as an app
                 // switch and hide the button.
                 if (event.packageName == packageName) return
+                // Chrome came to the front: start counting per-site time.
+                event.packageName?.toString()?.let { if (it in CHROME_PKGS) startSitePolling() }
                 // While a take is live the button is pinned visible in every app
                 // and hide() early-returns anyway, so the tree walk below would
                 // be pure waste - and the owner is expected to switch apps
@@ -1433,6 +1438,95 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ---- Chrome per-site time: peek at the omnibox while Chrome is up ----
+    //
+    // UsageStats can only say "Chrome, 5 hours"; the owner wants to know
+    // WHICH sites eat those hours. The accessibility tree carries the url
+    // bar, so while Chrome is foregrounded a light poll (every 7s) reads the
+    // domain and slices time between domains. When the toolbar hides
+    // (scrolling, fullscreen) the last domain keeps accruing; when Chrome
+    // leaves the front the poller counts misses and stops itself.
+
+    private val siteBuckets = HashMap<String, Long>()  // domain -> ms, pending flush
+    private var siteCurrentDomain: String? = null
+    private var siteLastTick = 0L
+    private var sitePolling = false
+    private var siteMisses = 0
+    private val siteHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val sitePoll = object : Runnable {
+        override fun run() {
+            pollChromeSite()
+            if (sitePolling) siteHandler.postDelayed(this, 7_000)
+        }
+    }
+
+    private fun startSitePolling() {
+        if (sitePolling) return
+        sitePolling = true
+        siteMisses = 0
+        siteCurrentDomain = null
+        siteLastTick = System.currentTimeMillis()
+        siteHandler.removeCallbacks(sitePoll)
+        siteHandler.post(sitePoll)
+    }
+
+    private fun stopSitePolling() {
+        sitePolling = false
+        siteHandler.removeCallbacks(sitePoll)
+        flushSiteTime(System.currentTimeMillis(), null, force = true)
+    }
+
+    private fun pollChromeSite() {
+        val now = System.currentTimeMillis()
+        val root = runCatching { rootInActiveWindow }.getOrNull()
+        val pkg = root?.packageName?.toString()
+        if (root == null || pkg == null || pkg !in CHROME_PKGS) {
+            flushSiteTime(now, null, force = true)
+            siteMisses++
+            if (siteMisses >= 3) {
+                sitePolling = false
+                siteHandler.removeCallbacks(sitePoll)
+            }
+            return
+        }
+        siteMisses = 0
+        val domain = runCatching { readChromeDomain(root, pkg) }.getOrNull()
+        // Toolbar hidden mid-scroll/fullscreen: the last domain keeps counting.
+        flushSiteTime(now, domain ?: siteCurrentDomain, force = false)
+    }
+
+    private fun flushSiteTime(now: Long, newDomain: String?, force: Boolean) {
+        val prev = siteCurrentDomain
+        if (prev != null && siteLastTick in 1 until now) {
+            val delta = now - siteLastTick
+            // A poll gap far beyond the period means we were dead, not on site.
+            if (delta <= 120_000) siteBuckets[prev] = (siteBuckets[prev] ?: 0L) + delta
+        }
+        siteCurrentDomain = newDomain
+        siteLastTick = now
+        if (siteBuckets.isNotEmpty() && (force || siteBuckets.values.sum() >= 60_000)) {
+            val batch = HashMap(siteBuckets)
+            siteBuckets.clear()
+            scope.launch { runCatching { app.phoneStore.addSiteTime(batch) } }
+        }
+    }
+
+    private fun readChromeDomain(
+        root: android.view.accessibility.AccessibilityNodeInfo,
+        pkg: String,
+    ): String? {
+        val nodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/url_bar")
+        val text = nodes?.firstOrNull()?.text?.toString()?.trim().orEmpty()
+        if (text.isEmpty() || text.contains(' ')) return null  // NTP hint / search text
+        val host = text
+            .removePrefix("https://").removePrefix("http://")
+            .substringBefore('/')
+            .substringBefore(':')
+            .lowercase(java.util.Locale.US)
+            .removePrefix("www.")
+        return host.takeIf { it.contains('.') && it.length <= 80 }
+    }
+
     // ---- Помидоры: the "З" button doubles as a pomodoro timer ----
 
     private var pomodoroEndsAt = 0L
@@ -1536,24 +1630,44 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Missed deadline while the service was dead: credit it quietly. */
+    /**
+     * The deadline lives on disk, so a running pomodoro rides through app
+     * updates and service restarts: still ticking -> resume the countdown;
+     * finished while we were dead -> credit it (entry + day counter) and,
+     * if the finish was recent, still fire the "готов" notification - the
+     * owner should not lose a pomodoro to an APK install.
+     */
     private fun restorePomodoro() {
         val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
         val ends = internal.getLong(KEY_Z_POMO_ENDS, 0L)
         if (ends <= 0) return
         pomodoroIsBreak = internal.getBoolean(KEY_Z_POMO_BREAK, false)
-        if (ends > System.currentTimeMillis()) {
+        val now = System.currentTimeMillis()
+        if (ends > now) {
             pomodoroEndsAt = ends
             pomodoroHandler.removeCallbacks(pomodoroTicker)
             pomodoroTicker.run()
         } else {
             val wasBreak = pomodoroIsBreak
+            val endedAgo = now - ends
             clearPomodoro()
-            if (!wasBreak) {
+            if (wasBreak) {
+                if (endedAgo < 10 * 60_000L) zPomodoroNotify("Перерыв кончился", "Ещё помидор?")
+                return
+            }
+            scope.launch {
+                // The entry that was running when the bell should have rung.
+                if (endedAgo < 30 * 60_000L) {
+                    app.zasechkaStore.openEntry()?.let { app.zasechkaStore.incrementPomodoro(it.id) }
+                }
                 val dayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
                     .format(java.util.Date(ends))
                 val n = internal.getInt(KEY_Z_POMO_DAY_PREFIX + dayKey, 0) + 1
                 internal.edit().putInt(KEY_Z_POMO_DAY_PREFIX + dayKey, n).apply()
+                app.eventLog.add("помидор №$n дозасчитан после перезапуска")
+                if (endedAgo < 10 * 60_000L) {
+                    zPomodoroNotify("Помидор №$n готов 🍅", "Досчитал за время обновления. Перерыв?")
+                }
             }
         }
     }
@@ -1753,6 +1867,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         ripenessHandler.removeCallbacks(ripenessCheck)
         zReminderHandler.removeCallbacks(zReminderTick)
         pomodoroHandler.removeCallbacks(pomodoroTicker)
+        // Flush the pending per-site minutes before the scope dies with us.
+        runCatching { stopSitePolling() }
         googleSession?.stop()
         googleSession = null
         zSession?.stop()

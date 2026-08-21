@@ -44,6 +44,7 @@ class PhoneStore(private val context: Context) {
         val apps: Map<String, Long> = emptyMap(),        // pkg -> foreground ms
         val appSessions: Map<String, Int> = emptyMap(),  // pkg -> sessions >= 5s
         val glanceApps: Map<String, Int> = emptyMap(),   // pkg -> glances ended on it
+        val sites: Map<String, Long> = emptyMap(),       // Chrome: domain -> ms
     )
 
     /** Additive per-day delta produced by one sweep. */
@@ -104,6 +105,21 @@ class PhoneStore(private val context: Context) {
     }
 
     /**
+     * Per-site Chrome time from the accessibility watcher, flushed in small
+     * batches (domain -> ms). Attributed to the day of the flush - a batch is
+     * at most a couple of minutes, so midnight drift is noise.
+     */
+    suspend fun addSiteTime(sites: Map<String, Long>, at: Long = System.currentTimeMillis()): Unit =
+        mutex.withLock {
+            ensureLoaded()
+            if (sites.isEmpty()) return@withLock
+            val key = phoneDayKey(at)
+            val old = days[key] ?: Day()
+            days[key] = old.copy(sites = mergeLong(old.sites, sites))
+            persist()
+        }
+
+    /**
      * Merges one sweep's result: per-day additive deltas, fresh labels and
      * the carry state for the next sweep. One lock, one write.
      */
@@ -116,7 +132,7 @@ class PhoneStore(private val context: Context) {
         for ((key, d) in deltas) {
             if (d.isEmpty()) continue
             val old = days[key] ?: Day()
-            days[key] = Day(
+            days[key] = old.copy(
                 screenMs = old.screenMs + d.screenMs,
                 pickups = old.pickups + d.pickups,
                 glances = old.glances + d.glances,
@@ -166,6 +182,7 @@ class PhoneStore(private val context: Context) {
                         apps = o.optJSONObject("apps").toLongMap(),
                         appSessions = o.optJSONObject("appSessions").toIntMap(),
                         glanceApps = o.optJSONObject("glanceApps").toIntMap(),
+                        sites = o.optJSONObject("sites").toLongMap(),
                     )
                 }
             }
@@ -229,6 +246,7 @@ class PhoneStore(private val context: Context) {
                             put("apps", JSONObject(d.apps))
                             put("appSessions", JSONObject(d.appSessions))
                             put("glanceApps", JSONObject(d.glanceApps))
+                            put("sites", JSONObject(d.sites))
                         }
                     )
                 }

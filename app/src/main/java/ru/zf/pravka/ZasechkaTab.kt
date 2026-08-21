@@ -837,6 +837,7 @@ private fun aggregatePhoneDays(
     val apps = HashMap<String, Long>()
     val appSessions = HashMap<String, Int>()
     val glanceApps = HashMap<String, Int>()
+    val sites = HashMap<String, Long>()
     for (key in keys) {
         val d = days[key] ?: continue
         screenMs += d.screenMs
@@ -854,8 +855,9 @@ private fun aggregatePhoneDays(
             val p = PKG_ALIAS[raw] ?: raw
             glanceApps[p] = (glanceApps[p] ?: 0) + v
         }
+        for ((s, v) in d.sites) sites[s] = (sites[s] ?: 0L) + v
     }
-    return PhoneStore.Day(screenMs, pickups, glances, apps, appSessions, glanceApps)
+    return PhoneStore.Day(screenMs, pickups, glances, apps, appSessions, glanceApps, sites)
 }
 
 @Composable
@@ -978,6 +980,52 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+
+    // ---- Chrome by site: which pages actually eat the browser hours ----
+    val topSites = agg.sites.entries
+        .filter { it.value >= 60_000 }
+        .sortedByDescending { it.value }
+        .take(8)
+    if (topSites.isNotEmpty()) {
+        Text(
+            "Сайты в Chrome",
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        val maxSiteMs = topSites.first().value
+        for ((domain, ms) in topSites) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            ) {
+                Text(
+                    domain,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.width(130.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(10.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(5.dp)),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth((ms.toFloat() / maxSiteMs).coerceIn(0.02f, 1f))
+                            .height(10.dp)
+                            .background(Color(0xFF0E7490), RoundedCornerShape(5.dp)),
+                    )
+                }
+                Text(
+                    fmtDur(ms / 60_000),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(start = 8.dp).width(64.dp),
+                )
+            }
+        }
     }
 
     val topGlance = agg.glanceApps.entries
