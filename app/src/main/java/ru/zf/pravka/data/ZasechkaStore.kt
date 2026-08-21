@@ -180,17 +180,10 @@ class ZasechkaStore(private val context: Context) {
                 entries[i] = e.copy(end = start, synced = false, notionSynced = false)
             }
         }
-        val covered =
-            if (start < nowMs) {
-                entries
-                    .filter { it.source == "auto" && !it.open && it.start >= start && it.end <= nowMs }
-                    .sortedBy { it.start }
-            } else emptyList()
-
-        fun fragment(segStart: Long, segEnd: Long) = Entry(
+        val opened = Entry(
             id = nextId(),
-            start = segStart,
-            end = segEnd,
+            start = start,
+            end = 0L,
             raw = raw.trim(),
             title = title.trim(),
             category = category.trim(),
@@ -200,23 +193,77 @@ class ZasechkaStore(private val context: Context) {
             synced = false,
             createdAt = nowMs,
         )
-
-        var cursor = start
-        var firstSeg = true
-        for (a in covered) {
-            // The head fragment is created even at zero length: it anchors the
-            // chain at the declared start ("обед начался в 16:43").
-            if (a.start > cursor || firstSeg) {
-                entries.add(fragment(cursor, a.start.coerceAtLeast(cursor)))
-                firstSeg = false
-            }
-            cursor = kotlin.math.max(cursor, a.end)
-        }
-        val tail = fragment(cursor, 0L)
-        entries.add(tail)
+        entries.add(opened)
+        spliceOverlapsLocked()
         entries.sortBy { it.start }
         persist()
-        tail
+        // After the splice the running дело is the (only) open fragment.
+        entries.lastOrNull { it.open } ?: opened
+    }
+
+    /**
+     * The audit invariant: the ribbon never overlaps, the day sums to 24 h.
+     * Any manual entry that covers closed auto facts - however the overlap
+     * appeared (retroactive start, a time edit in the dialog or by voice,
+     * an old build's data) - is spliced into fragments AROUND them: the дело
+     * stays the main block (one chain, net time, interruptions as parallel
+     * rows), the robot's minutes stay the robot's. The head fragment keeps
+     * the id (its Sheets/Notion rows update in place) and is created even at
+     * zero length - it anchors the block at the declared start; later
+     * fragments get fresh ids, 🍅 stay on the tail.
+     */
+    private fun spliceOverlapsLocked(): Boolean {
+        val autosAsc = entries.filter { it.source == "auto" && !it.open }.sortedBy { it.start }
+        if (autosAsc.isEmpty()) return false
+        val rebuilt = ArrayList<Entry>(entries.size)
+        var changed = false
+        for (m in entries) {
+            if (m.source == "auto") {
+                rebuilt.add(m)
+                continue
+            }
+            val mEnd = if (m.open) Long.MAX_VALUE else m.end
+            val inside = autosAsc.filter { a ->
+                a.start >= m.start && a.end <= mEnd && a.start < mEnd && a.end > m.start
+            }
+            if (inside.isEmpty()) {
+                rebuilt.add(m)
+                continue
+            }
+            changed = true
+            var cursor = m.start
+            var firstSeg = true
+            for (a in inside) {
+                if (a.start > cursor || firstSeg) {
+                    rebuilt.add(
+                        m.copy(
+                            id = if (firstSeg) m.id else nextId(),
+                            start = cursor,
+                            end = a.start.coerceAtLeast(cursor),
+                            pomodoros = 0,
+                            synced = false,
+                            notionSynced = false,
+                        )
+                    )
+                    firstSeg = false
+                }
+                cursor = kotlin.math.max(cursor, a.end)
+            }
+            rebuilt.add(
+                m.copy(
+                    id = if (firstSeg) m.id else nextId(),
+                    start = cursor,
+                    end = if (m.open) 0L else kotlin.math.max(m.end, cursor),
+                    synced = false,
+                    notionSynced = false,
+                )
+            )
+        }
+        if (changed) {
+            entries = rebuilt
+            entries.sortBy { it.start }
+        }
+        return changed
     }
 
     /** Closes the running entry at [at]; null when nothing was open. */
@@ -319,12 +366,17 @@ class ZasechkaStore(private val context: Context) {
         entry
     }
 
-    /** Full replace by id. Any content change makes the row sync again. */
+    /**
+     * Full replace by id. Any content change makes the row sync again.
+     * A time edit that lands the entry OVER auto facts makes it the main
+     * дело: the splice runs right here, not only on load.
+     */
     suspend fun update(entry: Entry): Unit = mutex.withLock {
         ensureLoaded()
         val index = entries.indexOfFirst { it.id == entry.id }
         if (index >= 0) {
             entries[index] = entry.copy(synced = false, notionSynced = false)
+            spliceOverlapsLocked()
             entries.sortBy { it.start }
             persist()
         }
@@ -505,64 +557,8 @@ class ZasechkaStore(private val context: Context) {
                 persistQueued()
             }
             lastId = entries.maxOfOrNull { it.id } ?: 0L
-            // The ribbon must not overlap (the day sums to 24h - owner's audit
-            // rule). Data recorded while auto facts briefly lived "in parallel"
-            // is repaired the same way startEntry now splits: a manual entry
-            // is spliced around every closed auto fully inside its span; the
-            // head keeps the id (the Sheets row updates), tails get fresh ids,
-            // 🍅 stay on the last fragment.
-            val autosAsc = entries.filter { it.source == "auto" && !it.open }.sortedBy { it.start }
-            if (autosAsc.isNotEmpty()) {
-                val rebuilt = ArrayList<Entry>(entries.size)
-                var changed = false
-                for (m in entries) {
-                    if (m.source == "auto") {
-                        rebuilt.add(m)
-                        continue
-                    }
-                    val mEnd = if (m.open) Long.MAX_VALUE else m.end
-                    val inside = autosAsc.filter { a ->
-                        a.start >= m.start && a.end <= mEnd && a.start < mEnd && a.end > m.start
-                    }
-                    if (inside.isEmpty()) {
-                        rebuilt.add(m)
-                        continue
-                    }
-                    changed = true
-                    var cursor = m.start
-                    var firstSeg = true
-                    for (a in inside) {
-                        if (a.start > cursor || firstSeg) {
-                            rebuilt.add(
-                                m.copy(
-                                    id = if (firstSeg) m.id else nextId(),
-                                    start = cursor,
-                                    end = a.start.coerceAtLeast(cursor),
-                                    pomodoros = 0,
-                                    synced = false,
-                                    notionSynced = false,
-                                )
-                            )
-                            firstSeg = false
-                        }
-                        cursor = kotlin.math.max(cursor, a.end)
-                    }
-                    rebuilt.add(
-                        m.copy(
-                            id = if (firstSeg) m.id else nextId(),
-                            start = cursor,
-                            end = if (m.open) 0L else kotlin.math.max(m.end, cursor),
-                            synced = false,
-                            notionSynced = false,
-                        )
-                    )
-                }
-                if (changed) {
-                    entries = rebuilt
-                    entries.sortBy { it.start }
-                    persistQueued()
-                }
-            }
+            // Repair overlaps from older builds with the same shared splice.
+            if (spliceOverlapsLocked()) persistQueued()
             if (root == null) persistQueued()
         }
         loaded = true

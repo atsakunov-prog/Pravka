@@ -1,6 +1,7 @@
 package ru.zf.pravka.core
 
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
@@ -71,23 +72,52 @@ class ZasechkaEngine(
                 val target = today.getOrNull(p.entryIndex - 1)
                 when {
                     // Edit: touch only the fields the owner asked to change.
+                    // The numbered line may be one FRAGMENT of a sliced-up дело
+                    // - words apply to the whole chain, a new start moves the
+                    // first fragment, a new end moves (or closes) the last.
                     p.action == "edit" && target != null -> {
-                        val updated = target.copy(
-                            title = p.title.ifBlank { target.title },
-                            category = categoryNames
-                                .firstOrNull { it.equals(p.category, ignoreCase = true) }
-                                ?: p.category.ifBlank { target.category },
-                            client = p.client.ifBlank { target.client },
-                            useful = if (p.useful > 0) p.useful else target.useful,
+                        val chain = expandChain(target, today)
+                        val first = chain.first()
+                        val last = chain.last()
+                        // "еда была с 16:43 до 17:40" - clock times land on the
+                        // chain's own day; a named end also closes an open дело.
+                        val newStart = timeOnDay(first.start, p.startTime)
+                        val newEnd = timeOnDay(first.start, p.endTime)
+                        var shown = target
+                        for (f in chain) {
+                            var nf = f.copy(
+                                title = p.title.ifBlank { f.title },
+                                category = categoryNames
+                                    .firstOrNull { it.equals(p.category, ignoreCase = true) }
+                                    ?: p.category.ifBlank { f.category },
+                                client = p.client.ifBlank { f.client },
+                                useful = if (p.useful > 0) p.useful else f.useful,
+                            )
+                            if (newStart != null && f.id == first.id) {
+                                nf = nf.copy(
+                                    start = if (f.open) newStart else newStart.coerceAtMost(f.end),
+                                )
+                            }
+                            if (newEnd != null && f.id == last.id) {
+                                nf = nf.copy(end = newEnd.coerceAtLeast(nf.start))
+                            }
+                            store.update(nf)
+                            if (f.id == target.id) shown = nf
+                        }
+                        eventLog.add(
+                            "засечка-правка: «${target.title}» → «${shown.title}» [${shown.category}]" +
+                                (if (chain.size > 1) " (${chain.size} куска)" else "")
                         )
-                        store.update(updated)
-                        eventLog.add("засечка-правка: «${target.title}» → «${updated.title}» [${updated.category}]")
                         sync.kickSoon(scope)
-                        Outcome(updated, categorized = true, error = null, action = "edit", previousTitle = target.title)
+                        Outcome(shown, categorized = true, error = null, action = "edit", previousTitle = target.title)
                     }
                     p.action == "delete" && target != null -> {
-                        store.delete(target.id)
-                        eventLog.add("засечка-правка: удалена «${target.title}»")
+                        val chain = expandChain(target, today)
+                        chain.forEach { store.delete(it.id) }
+                        eventLog.add(
+                            "засечка-правка: удалена «${target.title}»" +
+                                (if (chain.size > 1) " (${chain.size} куска)" else "")
+                        )
                         sync.kickSoon(scope)
                         Outcome(target, categorized = true, error = null, action = "delete", previousTitle = target.title)
                     }
@@ -149,5 +179,69 @@ class ZasechkaEngine(
     private fun fallbackTitle(text: String): String {
         val cut = text.take(60)
         return if (cut.length < text.length) cut.trimEnd() + "…" else cut
+    }
+
+    private fun entrySigOf(e: ZasechkaStore.Entry): String =
+        "${e.title.trim().lowercase()}|${e.category.trim().lowercase()}|${e.client.trim().lowercase()}"
+
+    /**
+     * Grows the voice edit's target to the whole sliced-up дело: neighboring
+     * same-signature fragments whose gaps are fully covered (± 5 min) by
+     * closed auto interruptions between them - the same rule the ribbon uses
+     * to draw one block. A lone entry comes back as a list of one.
+     */
+    private fun expandChain(
+        target: ZasechkaStore.Entry,
+        todayAsc: List<ZasechkaStore.Entry>,
+    ): List<ZasechkaStore.Entry> {
+        val sig = entrySigOf(target)
+        val chain = ArrayList<ZasechkaStore.Entry>()
+        chain.add(target)
+        val idx = todayAsc.indexOfFirst { it.id == target.id }
+        if (idx < 0) return chain
+
+        fun covered(from: ZasechkaStore.Entry, to: ZasechkaStore.Entry, between: List<ZasechkaStore.Entry>): Boolean {
+            if (from.open || between.any { it.source != "auto" || it.open }) return false
+            val cov = between.sumOf {
+                (minOf(it.end, to.start) - maxOf(it.start, from.end)).coerceAtLeast(0L)
+            }
+            return to.start - from.end - cov <= 5 * 60_000L
+        }
+
+        var leftIdx = idx
+        while (true) {
+            val prevIdx = (leftIdx - 1 downTo 0)
+                .firstOrNull { entrySigOf(todayAsc[it]) == sig } ?: break
+            val between = todayAsc.subList(prevIdx + 1, leftIdx)
+            if (!covered(todayAsc[prevIdx], chain.first(), between)) break
+            chain.add(0, todayAsc[prevIdx])
+            leftIdx = prevIdx
+        }
+        var rightIdx = idx
+        while (true) {
+            val nextIdx = (rightIdx + 1 until todayAsc.size)
+                .firstOrNull { entrySigOf(todayAsc[it]) == sig } ?: break
+            val between = todayAsc.subList(rightIdx + 1, nextIdx)
+            if (!covered(chain.last(), todayAsc[nextIdx], between)) break
+            chain.add(todayAsc[nextIdx])
+            rightIdx = nextIdx
+        }
+        return chain
+    }
+
+    /** "16:43" -> epoch ms of that clock time on [anchor]'s day; null = keep. */
+    private fun timeOnDay(anchor: Long, hhmm: String): Long? {
+        if (hhmm.isBlank()) return null
+        val m = Regex("^(\\d{1,2}):(\\d{2})$").find(hhmm) ?: return null
+        val h = m.groupValues[1].toInt()
+        val min = m.groupValues[2].toInt()
+        if (h > 23 || min > 59) return null
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = anchor
+        cal.set(Calendar.HOUR_OF_DAY, h)
+        cal.set(Calendar.MINUTE, min)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
     }
 }

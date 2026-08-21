@@ -1719,7 +1719,10 @@ private fun EditEntryDialog(
                         start = newStart,
                         end = if (newEnd > 0) newEnd.coerceAtLeast(newStart) else newEnd,
                         useful = useful.coerceIn(0, 5),
-                        source = "edit",
+                        // An edited robot fact stays a robot fact: it keeps
+                        // living inside its block and keeps blocking its own
+                        // re-sweep duplicate.
+                        source = if (entry.source == "auto") "auto" else "edit",
                     )
                 )
             }) { Text("Сохранить") }

@@ -335,6 +335,8 @@ $listing
         val client: String,
         val useful: Int,           // 0 = not rated
         val startOffsetMin: Int,   // how far back the activity started
+        val startTime: String,     // edit: "HH:MM" new start, "" = keep
+        val endTime: String,       // edit: "HH:MM" new end, "" = keep
         val costUsd: Double,
         val tokensIn: Int,
         val tokensOut: Int,
@@ -396,7 +398,10 @@ $clientsBlock
   «это была не …, а …», «переименуй…», «запись с 16:00 — это на самом
   деле …». Укажи "entry" — номер записи из списка выше (по времени или
   названию, которое он назвал). В ответ включай ТОЛЬКО те поля, которые
-  он просит поменять; остальные — пустые ("" или 0).
+  он просит поменять; остальные — пустые ("" или 0). Если он называет
+  новое время записи («еда была с 16:43 до 17:40», «началось в 13:00»,
+  «закончилось в 15:20») — верни "start_time" и/или "end_time" в формате
+  "ЧЧ:ММ"; пустая строка = время не менять.
 - "delete" — просит удалить запись: «удали…», «убери запись…». Укажи "entry".
 - Если сомневаешься между new и edit — выбирай "new": данные важнее.
 
@@ -415,7 +420,7 @@ $clientsBlock
 
 Ответ — СТРОГО JSON без пояснений, по форме намерения:
 new:    {"action": "new", "title": "...", "category": "...", "client": "...", "useful": 0, "start_offset_min": 0}
-edit:   {"action": "edit", "entry": 7, "title": "...", "category": "...", "client": "...", "useful": 0}
+edit:   {"action": "edit", "entry": 7, "title": "...", "category": "...", "client": "...", "useful": 0, "start_time": "", "end_time": ""}
 delete: {"action": "delete", "entry": 7}
 
 Фраза владельца:
@@ -456,10 +461,18 @@ $raw
             // 12 hours is the sanity ceiling for "how far back" - anything
             // larger is a parse hallucination, not a real day.
             startOffsetMin = o.optInt("start_offset_min", 0).coerceIn(0, 12 * 60),
+            startTime = clockField(o, "start_time"),
+            endTime = clockField(o, "end_time"),
             costUsd = 0.0,
             tokensIn = 0,
             tokensOut = 0,
         )
+    }
+
+    /** "16:43" or "" - anything that is not a clock time is dropped. */
+    private fun clockField(o: JSONObject, key: String): String {
+        val v = o.optString(key).trim()
+        return if (Regex("^\\d{1,2}:\\d{2}$").matches(v)) v else ""
     }
 
     private fun parseLearn(raw: String): LearnProposals {
