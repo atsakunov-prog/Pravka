@@ -27,10 +27,12 @@ class AccessibilityTarget(
     private val pinnedNode: AccessibilityNodeInfo? = null,
 ) : TextTarget {
 
-    private var node: AccessibilityNodeInfo? = null
-    private var fullText: String = ""
-    private var selStart: Int = -1
-    private var selEnd: Int = -1
+    // read()/write() run on Main, preview() on a background dispatcher - the
+    // shared fields are volatile so the streaming thread sees read()'s state.
+    @Volatile private var node: AccessibilityNodeInfo? = null
+    @Volatile private var fullText: String = ""
+    @Volatile private var selStart: Int = -1
+    @Volatile private var selEnd: Int = -1
 
     // Field-level before/after of the last successful write - what undo
     // must restore even when only a fragment was fixed.
@@ -39,7 +41,7 @@ class AccessibilityTarget(
 
     // What the last live preview put into the field - the mid-flight guard
     // must not mistake our own streaming for the user typing.
-    private var previewedFull: String = ""
+    @Volatile private var previewedFull: String = ""
 
     private val hasFragmentSelection: Boolean
         get() = selStart in 0 until selEnd &&
@@ -76,8 +78,16 @@ class AccessibilityTarget(
      * plate. Best-effort: any failure (dead node, rejected SET_TEXT, the user
      * typing mid-stream) returns false and the caller falls back to the
      * ticker; the final [write] still decides the real outcome on its own.
+     *
+     * DELIBERATELY off the main thread: these are binder calls into the
+     * target window every ~150 ms for the whole generation, and node calls
+     * into a window that is dying mid-fold can block for seconds - exactly
+     * the fold black-screen disease (see the service's fold notes). On a
+     * locked screen (the owner folded/pocketed the phone mid-stream) the
+     * preview stops instantly and the ticker takes over.
      */
-    suspend fun preview(partial: String): Boolean = withContext(Dispatchers.Main) {
+    suspend fun preview(partial: String): Boolean = withContext(Dispatchers.Default) {
+        if (service.isLockedIdle()) return@withContext false
         runCatching { previewInner(partial) }
             .onFailure { service.logEvent("preview: threw ${it.javaClass.simpleName}") }
             .getOrDefault(false)

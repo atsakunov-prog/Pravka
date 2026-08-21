@@ -204,6 +204,28 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         zReminderHandler.postDelayed(zReminderTick, 60_000)
         restorePomodoro()
+        lagExpectedAt = 0L
+        lagHandler.removeCallbacks(lagTick)
+        lagHandler.postDelayed(lagTick, 2_000)
+    }
+
+    // Main-thread lag sentinel. The fold black-screen class of bug is "the
+    // service main thread was busy for seconds": each individual a11y event
+    // stays fast, so the per-event watchdog is silent while the QUEUE lags
+    // behind whatever hogged the thread. A timestamped no-op every 2s makes
+    // the hog visible: it runs late, and the lag lands in the log.
+    private val lagHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var lagExpectedAt = 0L
+    private val lagTick = object : Runnable {
+        override fun run() {
+            val now = SystemClock.uptimeMillis()
+            if (lagExpectedAt > 0) {
+                val lag = now - lagExpectedAt
+                if (lag > 700) app.eventLog.add("⚠️ главный поток службы вис ~$lag мс")
+            }
+            lagExpectedAt = now + 2_000
+            lagHandler.postDelayed(this, 2_000)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -318,10 +340,12 @@ class PravkaAccessibilityService : AccessibilityService() {
      * running keeps its button alive: locking the screen mid-dictation is
      * normal walking usage, and the stop-tap must still land.
      */
+    private val keyguardManager by lazy {
+        getSystemService(android.app.KeyguardManager::class.java)
+    }
+
     fun isLockedIdle(): Boolean {
-        val locked = runCatching {
-            getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
-        }.getOrDefault(false)
+        val locked = runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)
         if (!locked) return false
         return googleSession == null && zSession == null &&
             !zWhisperRecording && !DictationService.recording
@@ -2041,6 +2065,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         // The foldable changes configuration on fold/unfold - reposition.
         floatingButton?.onConfigurationChanged()
         zButton?.onConfigurationChanged()
+        // A focusable type-in box must not sit above the keyguard through a
+        // display switch - fold closes it (the draft is a sentence, not a loss).
+        zButton?.hideInput()
         // A fold means displays are switching - no site polling until Chrome
         // shows up again on the other screen.
         stopSitePolling()
@@ -2053,6 +2080,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         ripenessHandler.removeCallbacks(ripenessCheck)
         zReminderHandler.removeCallbacks(zReminderTick)
         pomodoroHandler.removeCallbacks(pomodoroTicker)
+        lagHandler.removeCallbacks(lagTick)
         // Flush the pending per-site minutes before the scope dies with us.
         runCatching { stopSitePolling() }
         runCatching { siteThread.quitSafely() }
