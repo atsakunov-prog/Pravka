@@ -44,13 +44,12 @@ class ZasechkaButtonController(
         private const val TICKER_W_MULT = 6
         private const val TICKER_LINES = 3
 
-        // Warm pair with the "П": red-orange pen there, amber marker here.
-        // Ink-dark glyph and text - amber is too light for paper-white.
-        private val AMBER = 0xFFF59E0B.toInt()
-        private val AMBER_DEEP = 0xFFD97706.toInt()   // remind pulse
+        // Warm pair with the "П": red-orange pen there, bright orange marker
+        // here - same paper-white glyph on both (owner's spec).
+        private val AMBER = 0xFFF97316.toInt()
+        private val AMBER_DEEP = 0xFFEA580C.toInt()   // remind pulse
         private val REC_RED = FloatingButtonController.REC_RED
         private val PAPER = 0xFFF7F3EA.toInt()
-        private val INK = 0xFF241F19.toInt()
 
         // Pomodoro faces: pine for focus, ink-soft for the break.
         val POMO_FOCUS = 0xFF2F6B5E.toInt()
@@ -327,7 +326,7 @@ class ZasechkaButtonController(
         for (item in items) {
             val pill = TextView(service).apply {
                 text = item.label
-                setTextColor(INK)
+                setTextColor(PAPER)
                 textSize = 15f
                 background = GradientDrawable().apply {
                     cornerRadius = dp(18).toFloat()
@@ -429,7 +428,7 @@ class ZasechkaButtonController(
 
         progress = ProgressBar(service).apply {
             visibility = View.GONE
-            indeterminateTintList = android.content.res.ColorStateList.valueOf(INK)
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(PAPER)
         }
         val progressSize = dp(28)
         container.addView(
@@ -496,7 +495,7 @@ class ZasechkaButtonController(
         }
         pill.elevation = dp(4).toFloat()
         val tv = TextView(service).apply {
-            setTextColor(INK)
+            setTextColor(PAPER)
             textSize = 17f
             maxLines = TICKER_LINES
             gravity = Gravity.BOTTOM or Gravity.START

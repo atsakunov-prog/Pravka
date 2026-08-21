@@ -215,8 +215,20 @@ class ZasechkaStore(private val context: Context) {
     ): Entry? = mutex.withLock {
         ensureLoaded()
         if (end <= start) return@withLock null
-        if (entries.any {
-                it.source == "auto" && it.title == title && kotlin.math.abs(it.start - start) < 60_000
+        // Iron dedup, two rules. Same-title near-same-start catches a re-scan
+        // of the same source row. The overlap rule catches messier realities
+        // (the call log can hold SEVERAL rows for one call - VoIP apps write
+        // their own copies): auto entries never legitimately overlap, the
+        // ribbon is continuous by construction, so a newcomer covering an
+        // existing auto entry by half its span is a duplicate, not a fact.
+        val cleanTitle = title.trim()
+        val newSpan = end - start
+        if (entries.any { e ->
+                e.source == "auto" && !e.open && (
+                    (e.title == cleanTitle && kotlin.math.abs(e.start - start) < 60_000) ||
+                        (kotlin.math.min(e.end, end) - kotlin.math.max(e.start, start))
+                            .coerceAtLeast(0L) * 2 >= newSpan
+                    )
             }
         ) return@withLock null
         var actualEnd = end
@@ -247,12 +259,14 @@ class ZasechkaStore(private val context: Context) {
         )
         entries.add(entry)
         resumeTemplate?.let { t ->
+            // The resume keeps the ORIGINAL source: it is the owner's own
+            // activity continuing, not a robot fact - so the dedup and
+            // coveredByOwner rules treat it like the human's claim it is.
             entries.add(
                 t.copy(
                     id = nextId(),
                     start = actualEnd,
                     end = 0L,
-                    source = "auto",
                     synced = false,
                     createdAt = System.currentTimeMillis(),
                 )
@@ -409,6 +423,17 @@ class ZasechkaStore(private val context: Context) {
                 }
             }
             entries.sortBy { it.start }
+            // One-time hygiene: collapse duplicate auto rows that piled up
+            // before the overlap guard existed (one call, many log rows).
+            val seenAuto = HashSet<String>()
+            val cleaned = entries.filter { e ->
+                e.source != "auto" || e.open ||
+                    seenAuto.add("${e.title}|${e.start / 60_000}|${e.end / 60_000}")
+            }
+            if (cleaned.size != entries.size) {
+                entries = cleaned.toMutableList()
+                persistQueued()
+            }
             lastId = entries.maxOfOrNull { it.id } ?: 0L
             if (root == null) persistQueued()
         }

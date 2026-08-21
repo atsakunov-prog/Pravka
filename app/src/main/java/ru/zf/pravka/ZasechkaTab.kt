@@ -51,8 +51,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
@@ -241,28 +244,12 @@ internal fun ZasechkaTab(app: PravkaApp) {
             }
         }
 
-        // ---- the day's history first (owner's layout), dense rows:
-        // time · category · task, then the classic ■ / ✎ / ✕ on the right ----
+        // ---- the day's history first (owner's layout), newest on top, one
+        // dense line per entry: category · task, the classic ■ / ✎ / ✕ right ----
         if (!weekMode) {
-            val dayList = rangeEntries
+            val dayList = rangeEntries.sortedByDescending { it.start }
             items(dayList, key = { it.id }) { entry ->
-                // A visible hole in the ribbon is the whole point of the app -
-                // show it between entries instead of papering over it.
                 val index = dayList.indexOf(entry)
-                if (index > 0) {
-                    val prev = dayList[index - 1]
-                    if (!prev.open) {
-                        val gapMin = (entry.start - prev.end) / 60_000L
-                        if (gapMin >= 5) {
-                            Text(
-                                "···  ${fmtDur(gapMin)} без записи",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(start = 56.dp, top = 1.dp, bottom = 1.dp),
-                            )
-                        }
-                    }
-                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -274,7 +261,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
                             ) else Modifier
                         )
                         .clickable { editing = entry }
-                        .padding(vertical = 3.dp),
+                        .padding(vertical = 2.dp),
                 ) {
                     Column(Modifier.width(46.dp)) {
                         Text(
@@ -291,33 +278,30 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     Box(
                         Modifier
                             .width(3.dp)
-                            .height(32.dp)
+                            .height(30.dp)
                             .background(categoryColor(entry.category), RoundedCornerShape(2.dp)),
                     )
-                    Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                        val meta = buildList {
-                            add(entry.category.ifBlank { "без категории" })
-                            add(fmtDur(entry.durationMin(now)))
-                            if (entry.client.isNotBlank()) add(entry.client)
-                        }.joinToString(" · ")
-                        Text(
-                            meta,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = categoryColor(entry.category),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        val suffix = buildString {
-                            if (entry.useful > 0) append("  ★${entry.useful}")
-                            if (entry.pomodoros > 0) append("  🍅×${entry.pomodoros}")
+                    val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    val line = buildAnnotatedString {
+                        withStyle(SpanStyle(color = categoryColor(entry.category))) {
+                            append(entry.category.ifBlank { "без категории" })
+                            if (entry.client.isNotBlank()) append(" · ${entry.client}")
                         }
-                        Text(
-                            entry.title.ifBlank { entry.raw.take(60) } + suffix,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        append("  ")
+                        append(entry.title.ifBlank { entry.raw.take(60) })
+                        if (entry.useful > 0) append(" ★${entry.useful}")
+                        if (entry.pomodoros > 0) append(" 🍅×${entry.pomodoros}")
+                        withStyle(SpanStyle(color = mutedColor)) {
+                            append("  ${fmtDur(entry.durationMin(now))}")
+                        }
                     }
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(start = 8.dp),
+                    )
                     if (entry.open) {
                         IconButton(
                             onClick = { app.appScope.launch { app.zasechkaEngine.closeOpen() } },
@@ -348,6 +332,22 @@ internal fun ZasechkaTab(app: PravkaApp) {
                             modifier = Modifier.size(15.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                }
+                // A visible hole in the ribbon is the whole point of the app -
+                // drawn between this entry and the chronologically older one.
+                if (index < dayList.size - 1) {
+                    val older = dayList[index + 1]
+                    if (!older.open) {
+                        val gapMin = (entry.start - older.end) / 60_000L
+                        if (gapMin >= 5) {
+                            Text(
+                                "···  ${fmtDur(gapMin)} без записи",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 56.dp, top = 1.dp, bottom = 1.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -817,15 +817,32 @@ private val PKG_ALIAS = mapOf(
     "com.google.android.webview" to "com.android.chrome",
     "com.android.webview" to "com.android.chrome",
 )
-private val FRIENDLY_LABELS = mapOf("com.android.chrome" to "Chrome")
+private val FRIENDLY_LABELS = mapOf(
+    "com.android.chrome" to "Chrome",
+    "us.zoom.videomeetings" to "Zoom",
+)
 
+// Some packages (work profile, hidden components) refuse a label - the last
+// TWO segments at least say whose package it is ("zoom.videomeetings").
 private fun appLabelOf(labels: Map<String, String>, pkg: String): String =
-    labels[pkg] ?: FRIENDLY_LABELS[pkg] ?: pkg.substringAfterLast('.')
+    labels[pkg] ?: FRIENDLY_LABELS[pkg] ?: pkg.split('.').takeLast(2).joinToString(".")
 
-// Launcher rows in "отвлекали" are furniture, not phone use (old stored data
-// may still carry them; fresh sweeps exclude at the source).
+// Furniture: never phone use - launchers, system UI, the docked-hub
+// screensaver, the dialer (call time is a ribbon entry). Old stored data may
+// still carry them; fresh sweeps exclude most at the source.
+private fun isFurniturePkg(pkg: String): Boolean =
+    pkg.contains("launcher", ignoreCase = true) ||
+        pkg.contains("systemui", ignoreCase = true) ||
+        pkg.contains("hubui", ignoreCase = true) ||
+        pkg.contains("dream", ignoreCase = true) ||
+        pkg.contains("dialer", ignoreCase = true) ||
+        pkg.contains("incallui", ignoreCase = true) ||
+        pkg.contains("telecom", ignoreCase = true)
+
+// Non-distractions in "отвлекали": furniture plus the music player (owner's
+// call: skipping a track is not a distraction) - but music stays in app time.
 private fun isNoisePkg(pkg: String): Boolean =
-    pkg.contains("launcher", ignoreCase = true) || pkg.contains("systemui")
+    isFurniturePkg(pkg) || pkg.contains("music", ignoreCase = true)
 
 private fun aggregatePhoneDays(
     days: Map<String, PhoneStore.Day>,
@@ -924,7 +941,10 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
-    val topApps = agg.apps.entries.sortedByDescending { it.value }.take(8)
+    val topApps = agg.apps.entries
+        .filter { !isFurniturePkg(it.key) }
+        .sortedByDescending { it.value }
+        .take(8)
     val maxMs = topApps.firstOrNull()?.value ?: 0L
     for ((pkg, ms) in topApps) {
         val label = appLabelOf(labels, pkg)

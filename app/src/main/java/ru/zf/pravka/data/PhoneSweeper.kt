@@ -391,9 +391,17 @@ class PhoneSweeper(
         return set
     }
 
-    // Any launcher is furniture, not phone use - whatever package it ships as.
+    // Furniture, not phone use: launchers, the docked-hub screensaver
+    // (Pixel's hubui sits "foregrounded" for hours on a stand), dreams and
+    // the in-call UI (call time is already a ribbon entry, not app time).
     private fun isExcluded(pkg: String, set: Set<String>): Boolean =
-        pkg in set || pkg.contains("launcher", ignoreCase = true)
+        pkg in set ||
+            pkg.contains("launcher", ignoreCase = true) ||
+            pkg.contains("hubui", ignoreCase = true) ||
+            pkg.contains("dream", ignoreCase = true) ||
+            pkg.contains("dialer", ignoreCase = true) ||
+            pkg.contains("incallui", ignoreCase = true) ||
+            pkg.contains("telecom", ignoreCase = true)
 
     private fun appLabel(pkg: String): String? = runCatching {
         val pm = context.packageManager
