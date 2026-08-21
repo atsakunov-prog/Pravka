@@ -108,13 +108,19 @@ private val CATEGORY_HUES = mapOf(
     "секс: соло" to 278f,
 )
 
+/** Position on the effectiveness rainbow, 0 (red) .. 280 (violet). */
+private fun categoryHue(name: String): Float {
+    val key = name.trim().lowercase()
+    return CATEGORY_HUES[key] ?: (abs(key.hashCode()) % 281).toFloat()
+}
+
 @Composable
 private fun categoryColor(name: String): Color {
     val dark = isSystemInDarkTheme()
     if (name.isBlank()) return if (dark) Color(0xFF9A9184) else Color(0xFF8A8172)
-    val key = name.trim().lowercase()
-    val hue = CATEGORY_HUES[key] ?: (abs(key.hashCode()) % 281).toFloat()
-    return if (dark) Color.hsv(hue, 0.70f, 1f) else Color.hsv(hue, 0.88f, 0.70f)
+    // Softened rainbow (owner: "чуть-чуть помягче") - same hues, less punch.
+    return if (dark) Color.hsv(categoryHue(name), 0.55f, 0.94f)
+    else Color.hsv(categoryHue(name), 0.68f, 0.64f)
 }
 
 private fun capFirst(s: String): String = s.replaceFirstChar { it.uppercase() }
@@ -410,13 +416,22 @@ internal fun ZasechkaTab(app: PravkaApp) {
             item { Spacer(Modifier.height(10.dp)) }
         }
 
-        // ---- totals by category ----
+        // ---- totals: EVERY category, laid out in rainbow order (red work at
+        // the top, violet leisure at the bottom) - the owner reads the shape
+        // of the day at a glance and aims for the inverted triangle: long red
+        // bars up top, short violet ones below. Zero rows stay visible but dim.
         item {
-            val byCategory = rangeEntries
-                .groupBy { it.category }
-                .mapValues { (_, list) -> list.sumOf { it.durationMin(now) } }
-                .entries.sortedByDescending { it.value }
-            val total = byCategory.sumOf { it.value }
+            val minutesByCat = HashMap<String, Long>()
+            for (e in rangeEntries) {
+                val k = e.category.trim().lowercase()
+                minutesByCat[k] = (minutesByCat[k] ?: 0L) + e.durationMin(now)
+            }
+            val names = (categoryNames + rangeEntries.map { it.category.trim() }.filter { it.isNotBlank() })
+                .distinctBy { it.lowercase() }
+                .sortedBy { categoryHue(it) }
+            val rows = names.map { it to (minutesByCat[it.lowercase()] ?: 0L) } +
+                listOfNotNull(minutesByCat[""]?.takeIf { it > 0 }?.let { "" to it })
+            val total = minutesByCat.values.sum()
             // Day pomodoro counters live in the service's internal prefs.
             val pomoCount = remember(now, dayStart, weekMode) {
                 val prefs = context.getSharedPreferences("pravka_internal", android.content.Context.MODE_PRIVATE)
@@ -431,8 +446,9 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(bottom = 6.dp),
             )
-            val max = byCategory.maxOfOrNull { it.value } ?: 0L
-            for ((category, minutes) in byCategory) {
+            val max = rows.maxOfOrNull { it.second } ?: 0L
+            for ((category, minutes) in rows) {
+                val rowAlpha = if (minutes > 0) 1f else 0.4f
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(vertical = 2.dp),
@@ -440,31 +456,40 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     Text(
                         category.ifBlank { "без категории" },
                         style = MaterialTheme.typography.bodySmall,
+                        color = categoryColor(category).copy(alpha = rowAlpha),
+                        fontWeight = if (minutes > 0) FontWeight.SemiBold else FontWeight.Normal,
                         modifier = Modifier.width(130.dp),
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Box(
                         Modifier
                             .weight(1f)
                             .height(10.dp)
-                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(5.dp)),
+                            .background(
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = rowAlpha * 0.9f),
+                                RoundedCornerShape(5.dp),
+                            ),
                     ) {
-                        val fraction = if (max > 0) minutes.toFloat() / max else 0f
-                        Box(
-                            Modifier
-                                .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
-                                .height(10.dp)
-                                .background(categoryColor(category), RoundedCornerShape(5.dp)),
-                        )
+                        if (minutes > 0 && max > 0) {
+                            val fraction = minutes.toFloat() / max
+                            Box(
+                                Modifier
+                                    .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
+                                    .height(10.dp)
+                                    .background(categoryColor(category), RoundedCornerShape(5.dp)),
+                            )
+                        }
                     }
                     Text(
-                        fmtDur(minutes),
+                        if (minutes > 0) fmtDur(minutes) else "—",
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = rowAlpha),
                         modifier = Modifier.padding(start = 8.dp).width(64.dp),
                     )
                 }
             }
-            if (byCategory.isEmpty()) {
+            if (rows.isEmpty()) {
                 Text(
                     "Пока пусто.",
                     style = MaterialTheme.typography.bodySmall,
