@@ -28,12 +28,17 @@
 
 ## Скрипт
 
+Если лист уже создан прежней версией скрипта, шапку он не переписывает:
+допиши три колонки — «Ценность», «Баллы», «Источник» — перед «Надиктовано»
+руками (или просто удали лист, следующая синхронизация создаст новый).
+
 ```javascript
 // Засечка -> Google Sheets. Принимает POST c JSON {entries:[...]} и
 // обновляет/добавляет строки по id на листе SHEET_NAME.
 const SHEET_NAME = 'Засечки';
 const HEADER = ['id', 'Дата', 'Начало', 'Конец', 'Минуты',
-                'Дело', 'Категория', 'Клиент', 'Полезность', 'Надиктовано'];
+                'Дело', 'Категория', 'Клиент', 'Полезность',
+                'Ценность', 'Баллы', 'Источник', 'Надиктовано'];
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
@@ -61,7 +66,10 @@ function doPost(e) {
     (body.entries || []).forEach(function (en) {
       const row = [String(en.id), en.date, en.start, en.end, en.minutes,
                    en.title, en.category, en.client,
-                   en.useful == null ? '' : en.useful, en.raw];
+                   en.useful == null ? '' : en.useful,
+                   en.value == null ? '' : en.value,
+                   en.points == null ? '' : en.points,
+                   en.source || '', en.raw];
       const at = index[String(en.id)];
       if (at) {
         sh.getRange(at, 1, 1, row.length).setValues([row]);

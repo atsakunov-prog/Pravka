@@ -91,6 +91,7 @@ class ZasechkaSync(
             runCatching {
                 val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
                 val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
+                val worth = store.categories().associate { it.name.trim().lowercase() to it.value }
                 val body = JSONObject().put(
                     "entries",
                     JSONArray().apply {
@@ -106,6 +107,19 @@ class ZasechkaSync(
                                     put("category", e.category)
                                     put("client", e.client)
                                     put("useful", if (e.useful > 0) e.useful else JSONObject.NULL)
+                                    // The worth of this row on the owner's
+                                    // scale, and what it did to the balance.
+                                    put("value", worth[e.category.trim().lowercase()] ?: 0)
+                                    put(
+                                        "points",
+                                        String.format(
+                                            Locale.US,
+                                            "%.1f",
+                                            (worth[e.category.trim().lowercase()] ?: 0) *
+                                                e.durationMs() / 3_600_000.0,
+                                        ).toDouble(),
+                                    )
+                                    put("source", e.source)
                                     put("raw", e.raw)
                                 }
                             )

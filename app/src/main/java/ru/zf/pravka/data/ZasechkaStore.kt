@@ -824,6 +824,9 @@ class ZasechkaStore(private val context: Context) {
 
     suspend fun shareCsvIntent(): Intent {
         val list = all()
+        // Worth per hour and typical length live on the category; carried into
+        // every row so a spreadsheet can add the day up on its own.
+        val cats = categories().associateBy { it.name.trim().lowercase() }
         val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
         val now = System.currentTimeMillis()
@@ -833,7 +836,10 @@ class ZasechkaStore(private val context: Context) {
             // "now" and flagged is_open), source tells a dictated row from one
             // the app filled in, and raw is printed once per act of speaking -
             // continuation fragments leave it empty instead of repeating it.
-            append("date,start,end,minutes,title,category,client,useful,source,is_open,raw\n")
+            append(
+                "date,start,end,minutes,title,category,client,useful,source,is_open," +
+                    "value,points,base_min,raw\n"
+            )
             for (e in list) {
                 val end = if (e.open) now else e.end
                 append(dateFormat.format(Date(e.start))).append(',')
@@ -846,6 +852,15 @@ class ZasechkaStore(private val context: Context) {
                 append(if (e.useful > 0) e.useful.toString() else "").append(',')
                 append(e.source).append(',')
                 append(if (e.open) "true" else "false").append(',')
+                // value = worth of an hour of this category (-10..+10),
+                // points = what this row did to the day's balance,
+                // base_min = the category's typical length (0 = no check-in).
+                val cat = cats[e.category.trim().lowercase()]
+                val worth = cat?.value ?: 0
+                val points = worth * e.durationMs(now) / 3_600_000.0
+                append(worth.toString()).append(',')
+                append(String.format(Locale.US, "%.1f", points)).append(',')
+                append((cat?.baseMin ?: 0).toString()).append(',')
                 val raw = if (e.raw.isNotBlank() && e.raw == previousRaw) "" else e.raw
                 if (e.raw.isNotBlank()) previousRaw = e.raw
                 append(csvEscape(raw)).append('\n')
