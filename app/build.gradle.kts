@@ -28,7 +28,7 @@ fun prop(key: String, default: String? = null): String? =
 // ---------------------------------------------------------------------------
 // Build counter: version.properties holds a single buildNumber that is
 // incremented on every assemble/install/deliver invocation.
-// versionCode = buildNumber, versionName = 1.0.<buildNumber>
+// versionCode = buildNumber, versionName = 2.0.<buildNumber>
 // ---------------------------------------------------------------------------
 // CI passes -PbuildNumber=<run number> instead of touching version.properties.
 val versionFile = rootProject.file("version.properties")
@@ -48,7 +48,7 @@ val buildNumber: Int = overrideBuildNumber ?: run {
     }
     n
 }
-val appVersionName = "1.0.$buildNumber"
+val appVersionName = "2.0.$buildNumber"
 val buildTimestamp: String = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(ZonedDateTime.now())
 
 android {

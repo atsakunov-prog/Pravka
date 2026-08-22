@@ -1918,7 +1918,6 @@ private fun EditEntryDialog(
     var client by remember { mutableStateOf(entry.client) }
     var startText by remember { mutableStateOf(fmtTime(entry.start)) }
     var endText by remember { mutableStateOf(if (entry.open) "" else fmtTime(entry.end)) }
-    var useful by remember { mutableStateOf(entry.useful) }
     var categoryMenu by remember { mutableStateOf(false) }
 
     val entryDayStart = remember(entry.id) {
@@ -1984,13 +1983,6 @@ private fun EditEntryDialog(
                     )
                 }
                 Spacer(Modifier.height(8.dp))
-                Text(if (useful > 0) "Полезность: $useful из 5" else "Полезность: не оценена")
-                Slider(
-                    value = useful.toFloat(),
-                    onValueChange = { useful = it.roundToInt() },
-                    valueRange = 0f..5f,
-                    steps = 4,
-                )
                 if (entry.raw.isNotBlank() && entry.raw != entry.title) {
                     Text(
                         "Надиктовано: «${entry.raw.take(200)}»",
@@ -2018,7 +2010,9 @@ private fun EditEntryDialog(
                         client = client.trim(),
                         start = newStart,
                         end = if (newEnd > 0) newEnd.coerceAtLeast(newStart) else newEnd,
-                        useful = useful.coerceIn(0, 5),
+                        // Полезность руками больше не ставится: её заменила
+                        // ценность часа - она понятна и считается сама.
+                        // У старых записей оценка остаётся как была.
                         // An edited robot fact stays a robot fact: it keeps
                         // living inside its block and keeps blocking its own
                         // re-sweep duplicate.
