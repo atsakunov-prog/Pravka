@@ -61,7 +61,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         private const val KEY_Z_POMO_DAY_PREFIX = "z_pomo_n_"
 
         // Chrome flavors whose url bar the per-site watcher reads.
-        private val CHROME_PKGS = setOf("com.android.chrome", "com.chrome.beta", "com.chrome.dev")
 
         // Windows that never host our text fields. Querying their node tree
         // is not just useless - during a fold/lock transition their process
@@ -286,8 +285,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // ourselves, or our own UI appearing would count as an app
                 // switch and hide the button.
                 if (pkg == packageName) return
-                // Chrome came to the front: start counting per-site time.
-                if (pkg != null && pkg in CHROME_PKGS) startSitePolling()
                 // Keyguard/SystemUI windows storm this event exactly while
                 // their process is busiest (fold, lock) - never query them.
                 if (pkg == null || pkg in SYSTEM_WINDOW_PKGS ||
@@ -1608,101 +1605,14 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    // ---- Chrome per-site time: peek at the omnibox while Chrome is up ----
+    // ---- Chrome per-site time: REMOVED (owner's call) ----
     //
-    // UsageStats can only say "Chrome, 5 hours"; the owner wants to know
-    // WHICH sites eat those hours. The accessibility tree carries the url
-    // bar, so while Chrome is foregrounded a light poll (every 7s) reads the
-    // domain and slices time between domains. When the toolbar hides
-    // (scrolling, fullscreen) the last domain keeps accruing; when Chrome
-    // leaves the front the poller counts misses and stops itself.
-
-    // The whole poller lives on its own thread: node queries are synchronous
-    // binder calls into Chrome's process and may block for seconds when that
-    // process is busy - the service MAIN thread must never wait on them (a
-    // stalled a11y main thread freezes system transitions; see the fold bug).
-    private val siteThread = android.os.HandlerThread("pravka-sites").apply { start() }
-    private val siteHandler by lazy { android.os.Handler(siteThread.looper) }
-    private val siteBuckets = HashMap<String, Long>()  // domain -> ms; site thread only
-    private var siteCurrentDomain: String? = null
-    private var siteLastTick = 0L
-    @Volatile private var sitePolling = false
-    private var siteMisses = 0
-    private val sitePoll = object : Runnable {
-        override fun run() {
-            pollChromeSite()
-            if (sitePolling) siteHandler.postDelayed(this, 7_000)
-        }
-    }
-
-    private fun startSitePolling() {
-        if (sitePolling) return
-        sitePolling = true
-        siteHandler.removeCallbacks(sitePoll)
-        siteHandler.post {
-            siteMisses = 0
-            siteCurrentDomain = null
-            siteLastTick = System.currentTimeMillis()
-        }
-        siteHandler.post(sitePoll)
-    }
-
-    private fun stopSitePolling() {
-        sitePolling = false
-        siteHandler.removeCallbacks(sitePoll)
-        siteHandler.post { flushSiteTime(System.currentTimeMillis(), null, force = true) }
-    }
-
-    private fun pollChromeSite() {
-        val now = System.currentTimeMillis()
-        val root = runCatching { rootInActiveWindow }.getOrNull()
-        val pkg = root?.packageName?.toString()
-        if (root == null || pkg == null || pkg !in CHROME_PKGS) {
-            flushSiteTime(now, null, force = true)
-            siteMisses++
-            if (siteMisses >= 3) {
-                sitePolling = false
-                siteHandler.removeCallbacks(sitePoll)
-            }
-            return
-        }
-        siteMisses = 0
-        val domain = runCatching { readChromeDomain(root, pkg) }.getOrNull()
-        // Toolbar hidden mid-scroll/fullscreen: the last domain keeps counting.
-        flushSiteTime(now, domain ?: siteCurrentDomain, force = false)
-    }
-
-    private fun flushSiteTime(now: Long, newDomain: String?, force: Boolean) {
-        val prev = siteCurrentDomain
-        if (prev != null && siteLastTick in 1 until now) {
-            val delta = now - siteLastTick
-            // A poll gap far beyond the period means we were dead, not on site.
-            if (delta <= 120_000) siteBuckets[prev] = (siteBuckets[prev] ?: 0L) + delta
-        }
-        siteCurrentDomain = newDomain
-        siteLastTick = now
-        if (siteBuckets.isNotEmpty() && (force || siteBuckets.values.sum() >= 60_000)) {
-            val batch = HashMap(siteBuckets)
-            siteBuckets.clear()
-            scope.launch { runCatching { app.phoneStore.addSiteTime(batch) } }
-        }
-    }
-
-    private fun readChromeDomain(
-        root: android.view.accessibility.AccessibilityNodeInfo,
-        pkg: String,
-    ): String? {
-        val nodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/url_bar")
-        val text = nodes?.firstOrNull()?.text?.toString()?.trim().orEmpty()
-        if (text.isEmpty() || text.contains(' ')) return null  // NTP hint / search text
-        val host = text
-            .removePrefix("https://").removePrefix("http://")
-            .substringBefore('/')
-            .substringBefore(':')
-            .lowercase(java.util.Locale.US)
-            .removePrefix("www.")
-        return host.takeIf { it.contains('.') && it.length <= 80 }
-    }
+    // The omnibox poller queried Chrome's a11y tree every 7s while Chrome was
+    // foregrounded. Even off the main thread, those are synchronous binder
+    // calls into another process - fold Chrome mid-transition and the query
+    // lands in a freezing app while the system's per-service interaction
+    // queue waits behind it. The owner's fold black-screens correlated with
+    // it, so the whole feature is out; per-app minutes from UsageStats stay.
 
     // ---- Помидоры: the "З" button doubles as a pomodoro timer ----
 
@@ -2072,9 +1982,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         // A focusable type-in box must not sit above the keyguard through a
         // display switch - fold closes it (the draft is a sentence, not a loss).
         zButton?.hideInput()
-        // A fold means displays are switching - no site polling until Chrome
-        // shows up again on the other screen.
-        stopSitePolling()
     }
 
     override fun onInterrupt() = Unit
@@ -2085,9 +1992,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         zReminderHandler.removeCallbacks(zReminderTick)
         pomodoroHandler.removeCallbacks(pomodoroTicker)
         lagHandler.removeCallbacks(lagTick)
-        // Flush the pending per-site minutes before the scope dies with us.
-        runCatching { stopSitePolling() }
-        runCatching { siteThread.quitSafely() }
         googleSession?.stop()
         googleSession = null
         zSession?.stop()

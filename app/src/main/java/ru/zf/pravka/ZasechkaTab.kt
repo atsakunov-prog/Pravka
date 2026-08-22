@@ -108,6 +108,8 @@ private val CATEGORY_HUES = mapOf(
     "секс: соло" to 278f,
     // Legacy v1/v2 name still alive on the device - keep it with "соло".
     "секс" to 278f,
+    // The very bottom of the spectrum: time spent on nothing at all.
+    "прокрастинация" to 292f,
 )
 
 /** Position on the effectiveness rainbow, 0 (red) .. 280 (violet). */
@@ -1441,51 +1443,9 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         )
     }
 
-    // ---- Chrome by site: which pages actually eat the browser hours ----
-    val topSites = agg.sites.entries
-        .filter { it.value >= 60_000 }
-        .sortedByDescending { it.value }
-        .take(8)
-    if (topSites.isNotEmpty()) {
-        Text(
-            "Сайты в Chrome",
-            style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.padding(top = 8.dp),
-        )
-        val maxSiteMs = topSites.first().value
-        for ((domain, ms) in topSites) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-            ) {
-                Text(
-                    domain,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.width(130.dp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .height(10.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(5.dp)),
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth((ms.toFloat() / maxSiteMs).coerceIn(0.02f, 1f))
-                            .height(10.dp)
-                            .background(Color(0xFF0E7490), RoundedCornerShape(5.dp)),
-                    )
-                }
-                Text(
-                    fmtDur(ms / 60_000),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(start = 8.dp).width(64.dp),
-                )
-            }
-        }
-    }
+    // Chrome per-site rows removed with the omnibox poller (owner's call:
+    // the fold black-screens correlated with it). Old site data stays in
+    // phone.json but is no longer shown or collected.
 
     val topGlance = agg.glanceApps.entries
         .filter { !isNoisePkg(it.key) }

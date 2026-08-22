@@ -35,7 +35,7 @@ class ZasechkaStore(private val context: Context) {
         // The owner's taxonomy, with hints the categorizer sees. A hint is
         // the difference between "поговорил с Марианой" landing in Семья and
         // landing in Социальное - names live here, not in code.
-        private const val CAT_SEED_VERSION = 3
+        private const val CAT_SEED_VERSION = 4
         val DEFAULT_CATEGORIES = listOf(
             Category("Сон", ""),
             Category("Спорт: силовая", "тренажёрка, железо, ОФП"),
@@ -57,7 +57,11 @@ class ZasechkaStore(private val context: Context) {
             Category("Чтение", "книги, статьи"),
             Category("Секс: с Марианной", "супружеский секс"),
             Category("Секс: соло", "мастурбация"),
-            Category("Отдых", "кино, сериалы, ютуб, игры, гуляние без цели"),
+            Category("Отдых", "осознанный отдых: кино, сериалы, игры, гуляние, полежать"),
+            Category(
+                "Прокрастинация",
+                "залипание вместо дела: бесцельный скроллинг, ютуб-туннель, туплю, откладываю",
+            ),
             Category("Звонки", "телефонный разговор, если непонятно с кем и о чём"),
         )
 
@@ -599,6 +603,11 @@ class ZasechkaStore(private val context: Context) {
                     categories = categories
                         .filter { !it.name.equals("Секс", ignoreCase = true) }
                         .toMutableList()
+                }
+                // v3 -> v4 adds «Прокрастинация» (owner: too much landed in
+                // Отдых). Same additive rule as v3: append whatever the seed
+                // has and the owner's list lacks; hand edits survive.
+                if (catSeedVersion < 4) {
                     for (c in DEFAULT_CATEGORIES) {
                         if (categories.none { it.name.equals(c.name, ignoreCase = true) }) {
                             categories.add(c)
