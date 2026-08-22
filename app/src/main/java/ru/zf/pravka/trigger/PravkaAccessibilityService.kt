@@ -2263,7 +2263,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     private fun openRaznoskaTypeIn(prefill: String) {
-        rButton?.showInput(prefill, "Дела текстом") { typed ->
+        rButton?.showInput(prefill = prefill, hint = "Дела текстом") { typed ->
             val text = typed.trim()
             if (text.isNotEmpty()) onRaznoskaText(text)
         }
@@ -2336,31 +2336,91 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Плашка: тап по ней — править в приложении, «ОК» — отправить как есть. */
+    /**
+     * Плашка разбора: у каждого дела своя галочка «одобрить» и «✎» на правку
+     * формулировки, тап по строке - дело целиком в «Делах», «ОК» - отправить
+     * всё оставшееся. Перерисовывается после каждого действия, поэтому на ней
+     * всегда живое состояние.
+     */
     private fun showRaznoskaPlate(draftId: Long) {
         val draft = app.raznoskaStore.byId(draftId) ?: return
-        val waiting = draft.live.filter { !it.sent }
-        if (waiting.isEmpty()) return
-        val rows = waiting.map { task ->
+        val tasks = draft.live
+        val waiting = tasks.count { !it.sent }
+        if (waiting == 0) return
+        val rows = tasks.map { task ->
             val meta = mutableListOf<String>()
             if (task.projectName.isNotBlank()) meta.add("#" + task.projectName)
             if (task.labels.isNotEmpty()) meta.add(task.labels.joinToString(" ") { "@" + it })
             if (task.repeat.isNotBlank()) meta.add(task.repeat)
             else if (task.due.isNotBlank()) meta.add(raznDate(task.due))
             if (task.priority != ru.zf.pravka.core.ParsedTask.P4) meta.add(task.priorityLabel)
+            if (task.projectName.isBlank()) meta.add("проект не выбран")
             RaznoskaButtonController.PlateRow(
+                id = task.id,
                 title = task.content,
                 meta = meta.joinToString(" · "),
                 warn = if (task.duplicateOf.isBlank()) "" else "⚠ похоже: " + task.duplicateOf,
+                sent = task.sent,
             )
         }
         rButton?.showTasks(
-            header = "РАЗНОСКА · " + raznCount(waiting.size),
+            header = "РАЗНОСКА · " + raznCount(waiting),
             rows = rows,
-            okLabel = "ОК",
-            onOk = { sendRaznoska(listOf(draftId)) },
+            okLabel = if (waiting == 1) "ОК" else "ОК · " + waiting,
+            onApprove = { id -> approveRaznoskaTask(draftId, id) },
+            onEdit = { id -> editRaznoskaTask(draftId, id) },
             onOpen = { openTodoistTab() },
+            onAll = { sendRaznoska(listOf(draftId)) },
         )
+    }
+
+    /** ✓ на плашке: одобрено одно дело - уезжает только оно. */
+    private fun approveRaznoskaTask(draftId: Long, taskId: Long) {
+        rButton?.setBusy(true)
+        scope.launch {
+            val outcome = runCatching { app.raznoskaEngine.sendOne(draftId, taskId) }
+                .getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    ru.zf.pravka.core.RaznoskaEngine.SendOutcome(0, 1, e.message ?: "не отправилось")
+                }
+            rButton?.setBusy(false)
+            if (outcome.created > 0) {
+                Haptics.success(this@PravkaAccessibilityService)
+            } else {
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(
+                    this@PravkaAccessibilityService,
+                    "Не отправилось: " + outcome.error,
+                    long = true,
+                )
+            }
+            val left = app.raznoskaStore.byId(draftId)?.pendingCount ?: 0
+            if (left == 0) {
+                rButton?.hidePlate()
+                if (outcome.created > 0) {
+                    Feedback.toast(this@PravkaAccessibilityService, "✓ всё в Todoist")
+                }
+            } else {
+                showRaznoskaPlate(draftId)
+            }
+        }
+    }
+
+    /** ✎ на плашке: правка формулировки на месте. Пусто = вычеркнуть дело. */
+    private fun editRaznoskaTask(draftId: Long, taskId: Long) {
+        val task = app.raznoskaStore.byId(draftId)?.tasks?.firstOrNull { it.id == taskId } ?: return
+        rButton?.hidePlate()
+        rButton?.showInput(
+            prefill = task.content,
+            hint = "Кто: что сделать",
+            // Отмена не должна съедать разбор - плашка возвращается как была.
+            onCancel = { showRaznoskaPlate(draftId) },
+        ) { typed ->
+            scope.launch {
+                app.raznoskaEngine.editText(draftId, taskId, typed)
+                showRaznoskaPlate(draftId)
+            }
+        }
     }
 
     /** «3 дела» / «1 дело» — плашка и тосты говорят по-русски. */

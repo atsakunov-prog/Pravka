@@ -50,9 +50,10 @@ class RaznoskaButtonController(
         val INK = 0xFF2A5D82.toInt()
         private val REC_RED = FloatingButtonController.REC_RED
         private val PAPER = 0xFFF7F3EA.toInt()
-        private val INK_TEXT = 0xFF241F19.toInt()
-        private val INK_SOFT = 0xFF6E6659.toInt()
-        private val WARN = 0xFFA8261B.toInt()
+        // Бумага в полсилы - под названием дела; песочный - предупреждение о
+        // дубле (красный на синем не читается).
+        private val PAPER_DIM = 0xB8F7F3EA.toInt()
+        private val SAND = 0xFFF6C177.toInt()
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -392,9 +393,16 @@ class RaznoskaButtonController(
         column.postDelayed(menuDismiss, 6000)
     }
 
-    // ---- Плашка дел: разобранный наговор, пока он ещё не в Todoist ----
+    // ---- Плашка дел: та же пилюля, что тикер Правки и Засечки ----
 
-    class PlateRow(val title: String, val meta: String, val warn: String)
+    /** Одна строка плашки. [id] возвращается в колбэки: кого правим/одобряем. */
+    class PlateRow(
+        val id: Long,
+        val title: String,
+        val meta: String,
+        val warn: String,
+        val sent: Boolean = false,
+    )
 
     private var plate: LinearLayout? = null
     private val plateDismiss = Runnable { hidePlate() }
@@ -409,18 +417,23 @@ class RaznoskaButtonController(
     fun plateVisible(): Boolean = plate != null
 
     /**
-     * Листок бумаги внизу экрана: сколько дел разобралось и какие. Тап по
-     * самой плашке — открыть «Дела» и править там; «ОК» — отправить как есть;
-     * «✕» — убрать с экрана (наговор остаётся в приложении, ничего не
-     * теряется). Плашка сама уходит через [holdMs], чтобы не жить на экране
-     * вечно.
+     * Разобранные дела рядом с кнопкой: синяя пилюля того же покроя, что
+     * тикер «П» и плашка «З» - тот же радиус, та же бумажная белизна, та же
+     * сторона экрана.
+     *
+     * У каждого дела свои две ручки: **✓** - одобрить и отправить именно его,
+     * **✎** - поправить формулировку тут же, не открывая приложение. Тап по
+     * строке целиком - открыть дело в «Делах» (проект, метки, срок,
+     * приоритет). Внизу «✕» убрать плашку и «ОК» отправить всё оставшееся.
      */
     fun showTasks(
         header: String,
         rows: List<PlateRow>,
         okLabel: String,
-        onOk: () -> Unit,
-        onOpen: () -> Unit,
+        onApprove: (Long) -> Unit,
+        onEdit: (Long) -> Unit,
+        onOpen: (Long) -> Unit,
+        onAll: () -> Unit,
         holdMs: Long = 45_000,
     ) {
         hidePlate()
@@ -428,21 +441,17 @@ class RaznoskaButtonController(
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(20).toFloat()
-                setColor(PAPER)
+                cornerRadius = buttonSize / 2f
+                setColor(INK)
             }
-            elevation = dp(6).toFloat()
-            setPadding(dp(16), dp(12), dp(16), dp(10))
-            // Тап по листку (не по кнопкам) — правка в приложении.
-            setOnClickListener {
-                hidePlate()
-                onOpen()
-            }
+            alpha = 0.96f
+            elevation = dp(4).toFloat()
+            setPadding(dp(16), dp(10), dp(12), dp(8))
         }
         sheet.addView(
             TextView(service).apply {
                 text = header
-                setTextColor(INK)
+                setTextColor(PAPER_DIM)
                 textSize = 12f
                 letterSpacing = 0.08f
                 typeface = android.graphics.Typeface.create(
@@ -452,21 +461,45 @@ class RaznoskaButtonController(
             }
         )
         for (row in rows.take(PLATE_ROWS)) {
-            sheet.addView(
+            val line = LinearLayout(service).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(6), 0, 0)
+            }
+            // Одобрить: галочка слева. Уже отправленное - просто отметка.
+            line.addView(
+                TextView(service).apply {
+                    text = if (row.sent) "✓" else "○"
+                    setTextColor(PAPER)
+                    textSize = 17f
+                    alpha = if (row.sent) 0.7f else 1f
+                    setPadding(0, dp(2), dp(10), dp(2))
+                    if (!row.sent) setOnClickListener { onApprove(row.id) }
+                }
+            )
+            val texts = LinearLayout(service).apply {
+                orientation = LinearLayout.VERTICAL
+                alpha = if (row.sent) 0.55f else 1f
+                // Тап по строке - дело целиком в приложении.
+                setOnClickListener {
+                    hidePlate()
+                    onOpen(row.id)
+                }
+            }
+            texts.addView(
                 TextView(service).apply {
                     text = row.title
-                    setTextColor(INK_TEXT)
+                    setTextColor(PAPER)
                     textSize = 15f
                     maxLines = 2
                     ellipsize = android.text.TextUtils.TruncateAt.END
-                    setPadding(0, dp(7), 0, 0)
                 }
             )
             if (row.meta.isNotBlank()) {
-                sheet.addView(
+                texts.addView(
                     TextView(service).apply {
                         text = row.meta
-                        setTextColor(INK_SOFT)
+                        setTextColor(PAPER_DIM)
                         textSize = 12f
                         maxLines = 1
                         ellipsize = android.text.TextUtils.TruncateAt.END
@@ -474,22 +507,44 @@ class RaznoskaButtonController(
                 )
             }
             if (row.warn.isNotBlank()) {
-                sheet.addView(
+                texts.addView(
                     TextView(service).apply {
                         text = row.warn
-                        setTextColor(WARN)
+                        setTextColor(SAND)
                         textSize = 12f
                         maxLines = 1
                         ellipsize = android.text.TextUtils.TruncateAt.END
                     }
                 )
             }
+            line.addView(
+                texts,
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            )
+            if (!row.sent) {
+                line.addView(
+                    TextView(service).apply {
+                        text = "✎"
+                        setTextColor(PAPER)
+                        textSize = 16f
+                        setPadding(dp(10), dp(2), dp(4), dp(2))
+                        setOnClickListener { onEdit(row.id) }
+                    }
+                )
+            }
+            sheet.addView(
+                line,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
         }
         if (rows.size > PLATE_ROWS) {
             sheet.addView(
                 TextView(service).apply {
-                    text = "…и ещё ${rows.size - PLATE_ROWS}"
-                    setTextColor(INK_SOFT)
+                    text = "…и ещё ${rows.size - PLATE_ROWS} — в «Делах»"
+                    setTextColor(PAPER_DIM)
                     textSize = 12f
                     setPadding(0, dp(6), 0, 0)
                 }
@@ -498,12 +553,13 @@ class RaznoskaButtonController(
         val buttons = LinearLayout(service).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            setPadding(0, dp(10), 0, 0)
+            setPadding(0, dp(8), 0, 0)
         }
         buttons.addView(
             TextView(service).apply {
                 text = "✕"
-                setTextColor(INK_SOFT)
+                setTextColor(PAPER)
+                alpha = 0.75f
                 textSize = 15f
                 setPadding(dp(14), dp(6), dp(14), dp(6))
                 setOnClickListener { hidePlate() }
@@ -512,7 +568,7 @@ class RaznoskaButtonController(
         buttons.addView(
             TextView(service).apply {
                 text = okLabel
-                setTextColor(PAPER)
+                setTextColor(INK)
                 textSize = 15f
                 typeface = android.graphics.Typeface.create(
                     android.graphics.Typeface.SANS_SERIF,
@@ -520,12 +576,12 @@ class RaznoskaButtonController(
                 )
                 background = GradientDrawable().apply {
                     cornerRadius = dp(16).toFloat()
-                    setColor(INK)
+                    setColor(PAPER)
                 }
-                setPadding(dp(22), dp(7), dp(22), dp(7))
+                setPadding(dp(20), dp(6), dp(20), dp(6))
                 setOnClickListener {
                     hidePlate()
-                    onOk()
+                    onAll()
                 }
             }
         )
@@ -536,29 +592,49 @@ class RaznoskaButtonController(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
-        val (w, _) = screenSize()
         val p = WindowManager.LayoutParams(
-            (w - dp(32)).coerceAtLeast(dp(240)),
+            tickerWidthPx(),
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            y = dp(56)
-        }
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+        // Высоту WRAP_CONTENT заранее не знает никто: оцениваем по строкам,
+        // чтобы плашка встала посередине кнопки и не свесилась за экран.
+        val shown = rows.take(PLATE_ROWS)
+        val estimate = dp(34 + 44) + shown.sumOf { dp(if (it.warn.isBlank()) 44 else 62) }
+        positionPlate(p, estimate)
         plate = sheet
         runCatching { windowManager.addView(sheet, p) }
         sheet.alpha = 0f
-        sheet.animate().alpha(1f).setDuration(180).start()
+        sheet.animate().alpha(0.96f).setDuration(180).start()
         sheet.postDelayed(plateDismiss, holdMs)
+    }
+
+    // Рядом с кнопкой, на той стороне, где есть место - то же правило, что у
+    // тикера; по вертикали прижимаем к экрану, список бывает высоким.
+    private fun positionPlate(p: WindowManager.LayoutParams, estimatedHeight: Int) {
+        val bp = params ?: return
+        val (w, h) = screenSize()
+        val plateW = tickerWidthPx()
+        val buttonCenterX = bp.x + buttonSize / 2
+        p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + dp(8) else bp.x - plateW - dp(8)
+        p.x = p.x.coerceIn(0, (w - plateW).coerceAtLeast(0))
+        // По вертикали - серединой на кнопку, как тикер.
+        p.y = (bp.y - (estimatedHeight - buttonSize) / 2)
+            .coerceIn(0, (h - estimatedHeight).coerceAtLeast(0))
     }
 
     // ---- Набрать текстом: тот же ввод, что у Засечки ----
 
     private var input: LinearLayout? = null
 
-    fun showInput(prefill: String, hint: String, onSubmit: (String) -> Unit) {
+    fun showInput(
+        prefill: String,
+        hint: String,
+        onCancel: (() -> Unit)? = null,
+        onSubmit: (String) -> Unit,
+    ) {
         hideInput()
         hideTicker()
         val row = LinearLayout(service).apply {
@@ -615,7 +691,10 @@ class RaznoskaButtonController(
                 setTextColor(PAPER)
                 alpha = 0.8f
                 setPadding(dp(6), dp(6), dp(10), dp(6))
-                setOnClickListener { hideInput() }
+                setOnClickListener {
+                    hideInput()
+                    onCancel?.invoke()
+                }
             }
         )
         val p = WindowManager.LayoutParams(

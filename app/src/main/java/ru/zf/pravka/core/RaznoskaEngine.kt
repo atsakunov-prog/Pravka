@@ -100,9 +100,14 @@ class RaznoskaEngine(
      * X-Request-Id у каждого дела свой и постоянный, поэтому повтор после
      * таймаута не создаёт дублей.
      */
-    suspend fun send(draftId: Long): SendOutcome {
+    suspend fun send(draftId: Long): SendOutcome = sendTasks(draftId, null)
+
+    /** Одобрено одно дело на плашке - уезжает только оно. */
+    suspend fun sendOne(draftId: Long, taskId: Long): SendOutcome = sendTasks(draftId, taskId)
+
+    private suspend fun sendTasks(draftId: Long, onlyTask: Long?): SendOutcome {
         val draft = store.byId(draftId) ?: return SendOutcome(0, 0, "Наговор не найден")
-        val queue = draft.live.filter { !it.sent }
+        val queue = draft.live.filter { !it.sent && (onlyTask == null || it.id == onlyTask) }
         if (queue.isEmpty()) return SendOutcome(0, 0, "")
         var created = 0
         var failed = 0
@@ -123,8 +128,30 @@ class RaznoskaEngine(
             // настоящими id - а не с нашими догадками.
             runCatching { todoistSync.refresh(force = true) }
         }
-        eventLog.add("разноска: отправлено $created, не вышло $failed${if (error.isBlank()) "" else " ($error)"}")
+        eventLog.add(
+            "разноска: отправлено $created, не вышло $failed" +
+                (if (error.isBlank()) "" else " ($error)")
+        )
         return SendOutcome(created, failed, error)
+    }
+
+    /**
+     * Правка формулировки прямо на плашке. Пустой текст = владелец вычеркнул
+     * дело: оно остаётся в записи, но в Todoist не поедет.
+     */
+    suspend fun editText(draftId: Long, taskId: Long, text: String) {
+        val draft = store.byId(draftId) ?: return
+        val trimmed = text.trim()
+        store.replaceTasks(
+            draftId,
+            draft.tasks.map { task ->
+                when {
+                    task.id != taskId -> task
+                    trimmed.isEmpty() -> task.copy(dropped = true)
+                    else -> task.copy(content = trimmed)
+                }
+            },
+        )
     }
 
     /** Пока владелец говорит, каталог проектов и меток успевает обновиться. */
