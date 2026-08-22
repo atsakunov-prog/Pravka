@@ -42,7 +42,7 @@ jobs:
           mkdir /tmp/apkpub
           cp "$APK" /tmp/apkpub/pravka-debug.apk
           {
-            echo "versionName=1.0.${{ github.run_number }}"
+            echo "versionName=2.0.${{ github.run_number }}"
             echo "versionCode=${{ github.run_number }}"
             echo "commit=${GITHUB_SHA}"
             echo "branch=${GITHUB_REF_NAME}"
