@@ -61,12 +61,10 @@ class PravkaApp : Application() {
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
 
-    // Засечка (timesheet): store, Sheets+Notion mirrors, phrase -> entry pipeline.
+    // Засечка (timesheet): store, the Sheets mirror, phrase -> entry pipeline.
     val zasechkaStore by lazy { ru.zf.pravka.data.ZasechkaStore(this) }
-    val notionSync by lazy { ru.zf.pravka.data.NotionSync(settings, zasechkaStore, httpClient, eventLog) }
     val zasechkaSync by lazy {
         ru.zf.pravka.data.ZasechkaSync(settings, zasechkaStore, httpClient, eventLog)
-            .also { it.notion = notionSync }
     }
     val zasechkaEngine by lazy {
         ru.zf.pravka.core.ZasechkaEngine(claudeProvider, zasechkaStore, stats, eventLog, zasechkaSync, appScope)

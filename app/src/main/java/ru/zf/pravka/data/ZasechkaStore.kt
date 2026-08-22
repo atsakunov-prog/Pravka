@@ -42,7 +42,7 @@ class ZasechkaStore(private val context: Context) {
         private const val GAP_FILL_MIN_MS = 5 * 60_000L
         // ...but only once the right edge has stood for a while: retro
         // dictation ("обедаю с 12:30") usually lands within the hour, and an
-        // eagerly created filler would already be mirrored to Sheets/Notion.
+        // eagerly created filler would already be mirrored to Sheets.
         private const val GAP_FILL_QUARANTINE_MS = 45 * 60_000L
         private const val GAP_SOURCE = "gap"
         private const val GAP_CATEGORY = "Потери"
@@ -606,19 +606,6 @@ class ZasechkaStore(private val context: Context) {
         persist()
     }
 
-    /** Closed entries the Notion mirror has not seen yet, oldest first. */
-    suspend fun unsyncedNotion(): List<Entry> = mutex.withLock {
-        ensureLoaded()
-        entries.filter { !it.open && !it.notionSynced }
-    }
-
-    suspend fun markNotionSynced(ids: Collection<Long>): Unit = mutex.withLock {
-        ensureLoaded()
-        if (ids.isEmpty()) return@withLock
-        val idSet = ids.toSet()
-        entries = entries.map { if (it.id in idSet) it.copy(notionSynced = true) else it }.toMutableList()
-        persist()
-    }
 
     // ---- CSV export (same share pattern as the transcription metrics) ----
 

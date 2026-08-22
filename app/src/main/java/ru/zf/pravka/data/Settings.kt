@@ -45,8 +45,6 @@ class Settings(private val context: Context) {
         private val KEY_Z_IMMERSIVE_MIN = intPreferencesKey("z_immersive_min")
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
-        private val KEY_NOTION_TOKEN = stringPreferencesKey("notion_token")
-        private val KEY_NOTION_DB = stringPreferencesKey("notion_database_id")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -166,19 +164,6 @@ class Settings(private val context: Context) {
     suspend fun icuKey(): String = icuKeyFlow.first()
     suspend fun setIcuKey(value: String) {
         context.dataStore.edit { it[KEY_ICU_KEY] = value.trim() }
-    }
-
-    // Notion mirror: an internal-integration token + the database to fill.
-    val notionTokenFlow = context.dataStore.data.map { it[KEY_NOTION_TOKEN] ?: "" }
-    suspend fun notionToken(): String = notionTokenFlow.first()
-    suspend fun setNotionToken(value: String) {
-        context.dataStore.edit { it[KEY_NOTION_TOKEN] = value.trim() }
-    }
-
-    val notionDbFlow = context.dataStore.data.map { it[KEY_NOTION_DB] ?: "" }
-    suspend fun notionDb(): String = notionDbFlow.first()
-    suspend fun setNotionDb(value: String) {
-        context.dataStore.edit { it[KEY_NOTION_DB] = value.trim() }
     }
 
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }
