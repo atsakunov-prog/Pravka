@@ -153,6 +153,15 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch {
             app.settings.learnPeriodHoursFlow.collect { cachedLearnPeriodH = it }
         }
+        // Auto-capture off (the owner's default now) means the service does not
+        // even SUBSCRIBE to text-change events: no event per keystroke in every
+        // app, no event.source binder round trip on this main thread.
+        scope.launch {
+            app.settings.learnAutoFlow.collect {
+                cachedLearnAuto = it
+                applyEventSubscription(it)
+            }
+        }
         refreshLearnBadge()
 
         // Засечка: the second button, visible everywhere while enabled.
@@ -254,6 +263,9 @@ class PravkaAccessibilityService : AccessibilityService() {
                 if (source.isEditable) cachedFocus = WeakReference(source)
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+                // Only the learning auto-capture needs these; without it the
+                // whole branch (and its binder call for event.source) is dead.
+                if (!cachedLearnAuto) return
                 val source = event.source ?: return
                 if (source.isEditable) {
                     cachedFocus = WeakReference(source)
@@ -478,6 +490,29 @@ class PravkaAccessibilityService : AccessibilityService() {
     private val convo = ArrayDeque<ConvoEntry>()
     @Volatile private var cachedConvoContext: Boolean = true
     @Volatile private var cachedLearnPeriodH: Int = 3
+    @Volatile private var cachedLearnAuto: Boolean = false
+
+    // The service's own event appetite, flipped with the auto-capture toggle:
+    // with capture off the system stops delivering text-change events at all.
+    private fun applyEventSubscription(autoCapture: Boolean) {
+        runCatching {
+            val info = serviceInfo ?: return
+            val wanted =
+                if (autoCapture) {
+                    AccessibilityEvent.TYPE_VIEW_FOCUSED or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+                } else {
+                    AccessibilityEvent.TYPE_VIEW_FOCUSED
+                }
+            if (info.eventTypes != wanted) {
+                info.eventTypes = wanted
+                serviceInfo = info
+                app.eventLog.add(
+                    if (autoCapture) "события: фокус + текст (авторазбор вкл)"
+                    else "события: только фокус (авторазбор выкл)"
+                )
+            }
+        }
+    }
 
     private fun convoRemember(pkg: String?, text: String) {
         if (pkg.isNullOrBlank() || text.isBlank()) return
@@ -1956,12 +1991,30 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        // The foldable changes configuration on fold/unfold - reposition.
-        floatingButton?.onConfigurationChanged()
-        zButton?.onConfigurationChanged()
         // A focusable type-in box must not sit above the keyguard through a
         // display switch - fold closes it (the draft is a sentence, not a loss).
+        // This one is immediate: removing a window helps the transition.
         zButton?.hideInput()
+        // Repositioning ADDS work to the transition the system is running right
+        // now: updateViewLayout on our overlays makes WindowManager wait for
+        // them to redraw mid-fold. Do it once the fold has settled instead -
+        // half a second of the buttons sitting at their old spot is invisible
+        // next to a 4-second black screen.
+        configHandler.removeCallbacks(configSettled)
+        configHandler.postDelayed(configSettled, 600)
+        // Census in the log: every overlay window we hold is a window the fold
+        // transition must relayout and WAIT for. If a freeze report ever comes
+        // back with a big number here, the leak is ours; a small one clears us.
+        runCatching {
+            val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0)
+            app.eventLog.add("смена конфигурации: наших окон $n")
+        }
+    }
+
+    private val configHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val configSettled = Runnable {
+        floatingButton?.onConfigurationChanged()
+        zButton?.onConfigurationChanged()
     }
 
     override fun onInterrupt() = Unit
@@ -1972,6 +2025,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         zReminderHandler.removeCallbacks(zReminderTick)
         pomodoroHandler.removeCallbacks(pomodoroTicker)
         lagHandler.removeCallbacks(lagTick)
+        configHandler.removeCallbacks(configSettled)
         googleSession?.stop()
         googleSession = null
         zSession?.stop()

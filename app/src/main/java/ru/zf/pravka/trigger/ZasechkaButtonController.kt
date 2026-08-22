@@ -320,7 +320,17 @@ class ZasechkaButtonController(
         if (!tickerVisible) return
         tickerVisible = false
         t.animate().alpha(0f).setDuration(220).withEndAction {
-            if (!tickerVisible) t.visibility = View.GONE
+            // Same rule as the "П" plate: a hidden overlay window still
+            // costs a relayout in every display transition, so it leaves
+            // WindowManager and is rebuilt on the next show.
+            if (!tickerVisible) {
+                ticker?.let { runCatching { windowManager.removeView(it) } }
+                ticker = null
+                tickerText = null
+                tickerParams = null
+                lastTickerText = ""
+                lastTickerAt = 0L
+            }
         }.start()
     }
 
@@ -385,6 +395,11 @@ class ZasechkaButtonController(
         // Not modal (the overlay can't see outside taps) - fades on its own.
         column.postDelayed(menuDismiss, 6000)
     }
+
+    /** How many overlay windows this controller currently holds. */
+    fun windowCount(): Int =
+        (if (button != null) 1 else 0) + (if (ticker != null) 1 else 0) +
+            (if (input != null) 1 else 0) + (if (menu != null) 1 else 0)
 
     fun destroy() {
         pulse?.cancel()

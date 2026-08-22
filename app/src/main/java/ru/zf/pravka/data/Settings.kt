@@ -33,6 +33,7 @@ class Settings(private val context: Context) {
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
+        private val KEY_LEARN_AUTO = booleanPreferencesKey("learn_auto_capture")
 
         // Засечка (timesheet).
         private val KEY_Z_ENABLED = booleanPreferencesKey("z_enabled")
@@ -88,6 +89,15 @@ class Settings(private val context: Context) {
     val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }
     suspend fun setRulesInProse(value: Boolean) {
         context.dataStore.edit { it[KEY_RULES_IN_PROSE] = value }
+    }
+
+    // Auto-capture of hand-edits. Default OFF (owner: the rule set is complete
+    // and nothing new is found) - and it is the ONLY reason the service needs
+    // typeViewTextChanged, i.e. an event from every keystroke in every app plus
+    // a binder round trip for event.source on the service main thread.
+    val learnAutoFlow = context.dataStore.data.map { it[KEY_LEARN_AUTO] ?: false }
+    suspend fun setLearnAuto(value: Boolean) {
+        context.dataStore.edit { it[KEY_LEARN_AUTO] = value }
     }
 
     // How often the auto-learning batch may run (hours). Owner-picked.

@@ -808,6 +808,28 @@ private fun LearningTab(app: PravkaApp) {
                 }) { Text("Обновить") }
             }
             Spacer(Modifier.height(10.dp))
+            val autoCapture by app.settings.learnAutoFlow.collectAsState(initial = false)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = autoCapture,
+                    onCheckedChange = { app.appScope.launch { app.settings.setLearnAuto(it) } },
+                )
+                Text(
+                    "Ловить правки автоматически",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+            HintText(
+                if (autoCapture)
+                    "Служба следит за текстовыми полями во всех приложениях, чтобы заметить " +
+                        "твои правки. Это события на каждое нажатие клавиши — держи выключенным, " +
+                        "если правила уже собраны."
+                else
+                    "Выключено: служба не смотрит за полями вообще (событий текста ей больше " +
+                        "не присылают). Кнопка «Обучить» в меню «П» и «Разобрать сейчас» работают."
+            )
+            Spacer(Modifier.height(10.dp))
             val period by app.settings.learnPeriodHoursFlow.collectAsState(initial = 3)
             HintText("Период авторазбора")
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {

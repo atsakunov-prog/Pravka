@@ -198,7 +198,7 @@ class FloatingButtonController(
         if (visible && !busy) {
             button?.visibility = View.GONE
             visible = false
-            learnBadge?.visibility = View.GONE
+            hideLearnBadge()
         }
     }
 
@@ -301,8 +301,22 @@ class FloatingButtonController(
             // hide -> immediate re-show (dictation ends, CLEAN streaming starts)
             // cancels this fade; the end action can still run and must not hide
             // the ticker that showTicker() just brought back.
-            if (!tickerVisible) t.visibility = View.GONE
+            if (!tickerVisible) dropTicker()
         }.start()
+    }
+
+    // An invisible overlay is NOT free: its window stays in WindowManager, and
+    // every display transition (fold!) relayouts it and waits for it to draw.
+    // A long-lived service held five windows, three of them invisible - the
+    // owner's "fresh install flies, after a day it black-screens for 4-5 s".
+    // So a hidden plate leaves the window manager and is rebuilt on next show.
+    private fun dropTicker() {
+        ticker?.let { runCatching { windowManager.removeView(it) } }
+        ticker = null
+        tickerText = null
+        tickerParams = null
+        lastTickerText = ""
+        lastTickerAt = 0L
     }
 
     // ---- Long-press menu: colored columns side by side ----
@@ -492,7 +506,9 @@ class FloatingButtonController(
 
     fun hideLearnBadge() {
         badgeWanted = false
-        learnBadge?.visibility = View.GONE
+        learnBadge?.let { runCatching { windowManager.removeView(it) } }
+        learnBadge = null
+        learnBadgeParams = null
     }
 
     /** Perches on the button's top-right corner, clamped on screen. */
@@ -545,6 +561,12 @@ class FloatingButtonController(
         cancelBubble?.let { runCatching { windowManager.removeView(it) } }
         cancelBubble = null
     }
+
+    /** How many overlay windows this controller currently holds. */
+    fun windowCount(): Int =
+        (if (button != null) 1 else 0) + (if (ticker != null) 1 else 0) +
+            (if (learnBadge != null) 1 else 0) + (if (cancelBubble != null) 1 else 0) +
+            (if (menu != null) 1 else 0)
 
     fun destroy() {
         learnBadge?.let { runCatching { windowManager.removeView(it) } }

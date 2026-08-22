@@ -46,6 +46,13 @@ class ZasechkaStore(private val context: Context) {
         private const val GAP_FILL_QUARANTINE_MS = 45 * 60_000L
         private const val GAP_SOURCE = "gap"
         private const val GAP_CATEGORY = "Потери"
+        // The normalize pass compares entries against each other (O(n^2) in the
+        // worst case) and re-serializes the file, and it runs every five minutes
+        // for the rest of the phone's life. History older than this is already
+        // normalized and immutable in practice, so the pass stops looking at it
+        // - otherwise the work grows with every logged day (and the owner's
+        // symptom was exactly "the longer it runs, the worse the fold").
+        private const val NORMALIZE_WINDOW_MS = 5 * 86_400_000L
         val DEFAULT_CATEGORIES = listOf(
             Category("Сон", ""),
             Category("Спорт: силовая", "тренажёрка, железо, ОФП"),
@@ -227,10 +234,15 @@ class ZasechkaStore(private val context: Context) {
      */
     private fun splitMidnightLocked(): Boolean {
         val nowMs = System.currentTimeMillis()
+        val cutoff = nowMs - NORMALIZE_WINDOW_MS
         var changed = false
         val out = ArrayList<Entry>(entries.size)
         for (e in entries) {
             val effEnd = if (e.open) nowMs else e.end
+            if (effEnd <= cutoff) {
+                out.add(e)
+                continue
+            }
             var dayEnd = nextMidnightMs(e.start)
             if (effEnd <= dayEnd) {
                 out.add(e)
@@ -302,11 +314,14 @@ class ZasechkaStore(private val context: Context) {
     private fun trimFillersLocked(): Boolean {
         if (entries.none { it.source == GAP_SOURCE }) return false
         val nowMs = System.currentTimeMillis()
-        val real = entries.filter { it.source != GAP_SOURCE }
+        val cutoff = nowMs - NORMALIZE_WINDOW_MS
+        val real = entries.filter {
+            it.source != GAP_SOURCE && (if (it.open) nowMs else it.end) > cutoff
+        }
         var changed = false
         val out = ArrayList<Entry>(entries.size)
         for (e in entries) {
-            if (e.source != GAP_SOURCE) {
+            if (e.source != GAP_SOURCE || (!e.open && e.end <= cutoff)) {
                 out.add(e)
                 continue
             }
@@ -391,11 +406,14 @@ class ZasechkaStore(private val context: Context) {
     private fun fillGapsLocked(): Boolean {
         val nowMs = System.currentTimeMillis()
         val cutoff = nowMs - GAP_FILL_QUARANTINE_MS
+        val windowStart = nowMs - NORMALIZE_WINDOW_MS
         var changed = false
         val asc = entries.sortedBy { it.start }
         var prevEnd = -1L
         for (e in asc) {
-            if (prevEnd > 0 && e.start - prevEnd >= GAP_FILL_MIN_MS && e.start <= cutoff) {
+            if (prevEnd > 0 && e.start - prevEnd >= GAP_FILL_MIN_MS &&
+                e.start <= cutoff && e.start > windowStart
+            ) {
                 entries.add(gapEntry(prevEnd, e.start, nowMs))
                 changed = true
             }
@@ -447,14 +465,21 @@ class ZasechkaStore(private val context: Context) {
      * fragments get fresh ids, 🍅 stay on the tail.
      */
     private fun spliceOverlapsLocked(): Boolean {
-        val autosAsc = entries.filter { it.source == "auto" && !it.open }.sortedBy { it.start }
+        val nowMs = System.currentTimeMillis()
+        val cutoff = nowMs - NORMALIZE_WINDOW_MS
+        val autosAsc = entries
+            .filter { it.source == "auto" && !it.open && it.end > cutoff }
+            .sortedBy { it.start }
         if (autosAsc.isEmpty()) return false
         val rebuilt = ArrayList<Entry>(entries.size)
         var changed = false
         for (m in entries) {
             // Auto facts are the things spliced AROUND; gap fillers are never
             // hosts either - they die to overlaps instead (clear-and-refill).
-            if (m.source == "auto" || m.source == GAP_SOURCE) {
+            // Settled history is skipped with them (see NORMALIZE_WINDOW_MS).
+            if (m.source == "auto" || m.source == GAP_SOURCE ||
+                (!m.open && m.end <= cutoff)
+            ) {
                 rebuilt.add(m)
                 continue
             }
