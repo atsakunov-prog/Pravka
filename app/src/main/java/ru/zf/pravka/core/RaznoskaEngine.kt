@@ -2,6 +2,7 @@ package ru.zf.pravka.core
 
 import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.EventLog
+import ru.zf.pravka.data.RaznoskaRoutes
 import ru.zf.pravka.data.RaznoskaStore
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.TodoistStore
@@ -21,15 +22,38 @@ class RaznoskaEngine(
     private val dictionary: DictionaryApplier,
     private val dictionaryStore: DictionaryStore,
     private val store: RaznoskaStore,
+    private val routes: RaznoskaRoutes,
     private val todoistStore: TodoistStore,
     private val todoistSync: TodoistSync,
     private val stats: Stats,
     private val eventLog: EventLog,
 ) {
 
+    companion object {
+        // Сколько времени «↩︎ отменить» ещё имеет смысл: дальше владелец,
+        // скорее всего, уже работал с задачей, и удалять её опасно.
+        private const val UNDO_WINDOW_MS = 10 * 60_000L
+    }
+
     data class SendOutcome(val created: Int, val failed: Int, val error: String) {
         val ok: Boolean get() = failed == 0 && created > 0
     }
+
+    data class UndoOutcome(val deleted: Int, val failed: Int, val draftId: Long)
+
+    // Последняя отправка - в памяти: если служба перезапустилась, отменять
+    // уже поздно, а отметки «создано» на диске остаются честными.
+    private class Batch(val draftId: Long, val taskIds: List<Long>, val at: Long)
+
+    @Volatile private var lastBatch: Batch? = null
+
+    private fun freshBatch(): Batch? =
+        lastBatch?.takeIf { System.currentTimeMillis() - it.at < UNDO_WINDOW_MS && it.taskIds.isNotEmpty() }
+
+    /** Есть ли что отменять прямо сейчас (для меню кнопки). */
+    fun undoAvailable(): Boolean = freshBatch() != null
+
+    fun undoCount(): Int = freshBatch()?.taskIds?.size ?: 0
 
     /**
      * Наговор → разобранный черновик на диске. Каталог проектов обновляется
@@ -42,13 +66,19 @@ class RaznoskaEngine(
         if (transcript.isBlank()) return Result.failure(IllegalArgumentException("Пустой наговор"))
         store.load()
         todoistStore.load()
+        routes.load()
         // Словарь чинит услышанные имена ДО модели (HARD) и подсказывает
         // остальное блоком {DICT} - те же правила, что у Правки.
         val prepared = dictionary.prepare(transcript)
         val result = claude.splitTasks(
             transcript = prepared.text,
             dictBlock = prepared.dictBlock,
-            catalogBlock = todoistStore.catalogPromptBlock(),
+            // Каталог и поправки владельца едут одним куском: так они
+            // попадают в промпт даже если он переписал шаблон и потерял
+            // отдельный плейсхолдер.
+            catalogBlock = listOf(todoistStore.catalogPromptBlock(), routes.promptBlock())
+                .filter { it.isNotBlank() }
+                .joinToString("\n\n"),
             knownLabels = todoistStore.labelsFlow.value,
             resolveProject = { named ->
                 todoistStore.resolveProject(named)?.let { p -> p.id to todoistStore.path(p) }
@@ -112,14 +142,26 @@ class RaznoskaEngine(
         var created = 0
         var failed = 0
         var error = ""
+        val done = mutableListOf<Long>()
         for (task in queue) {
             val outcome = todoistSync.createTask(task, "razn-${draft.id}-${task.id}")
             outcome.onSuccess { id ->
                 created++
+                done.add(task.id)
                 store.markSent(draft.id, task.id, id)
             }.onFailure { e ->
                 failed++
                 if (error.isBlank()) error = e.message ?: "не отправилось"
+            }
+        }
+        // Одна отправка - одна отмена. Дела, отправленные по одному, тоже
+        // копятся в один пакет, пока окно отмены не истекло.
+        if (done.isNotEmpty()) {
+            val previous = freshBatch()
+            lastBatch = if (previous != null && previous.draftId == draftId) {
+                Batch(draftId, previous.taskIds + done, System.currentTimeMillis())
+            } else {
+                Batch(draftId, done, System.currentTimeMillis())
             }
         }
         store.setError(draft.id, error)
@@ -152,6 +194,54 @@ class RaznoskaEngine(
                 }
             },
         )
+    }
+
+    /**
+     * «↩︎ Отменить отправку»: только что созданные дела удаляются из Todoist
+     * и снова ждут во вкладке. За окном отмены (10 минут) ничего не делаем -
+     * задачу могли уже начать.
+     */
+    suspend fun undoLast(): UndoOutcome {
+        val batch = freshBatch() ?: return UndoOutcome(0, 0, 0L)
+        val draft = store.byId(batch.draftId) ?: run {
+            lastBatch = null
+            return UndoOutcome(0, 0, 0L)
+        }
+        var deleted = 0
+        var failed = 0
+        for (taskId in batch.taskIds) {
+            val task = draft.tasks.firstOrNull { it.id == taskId } ?: continue
+            if (task.sentId.isBlank()) continue
+            if (todoistSync.deleteTask(task.sentId)) {
+                deleted++
+                store.clearSent(batch.draftId, taskId)
+            } else {
+                failed++
+            }
+        }
+        lastBatch = null
+        eventLog.add("разноска: отмена отправки — удалено $deleted, не вышло $failed")
+        return UndoOutcome(deleted, failed, batch.draftId)
+    }
+
+    /**
+     * Владелец переложил дело руками - запоминаем маршрут. Учимся только на
+     * раскладке (проект, метки, приоритет): именно в ней модель ошибается
+     * системно, а формулировку она берёт из его же слов.
+     */
+    suspend fun learnRoute(before: ParsedTask, after: ParsedTask) {
+        val moved = before.projectId != after.projectId ||
+            before.labels.toSet() != after.labels.toSet() ||
+            before.priority != after.priority
+        if (!moved) return
+        routes.load()
+        routes.remember(
+            text = after.content,
+            project = after.projectName,
+            labels = after.labels,
+            priority = after.priority,
+        )
+        eventLog.add("разноска: маршрут запомнен — «${after.content.take(60)}» → ${after.projectName}")
     }
 
     /** Пока владелец говорит, каталог проектов и меток успевает обновиться. */

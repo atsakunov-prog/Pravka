@@ -271,6 +271,34 @@ class TodoistSync(
             Result.failure(IllegalStateException(lastError))
         }
 
+    /**
+     * Отмена отправки: только что созданное дело удаляется из Todoist. 404
+     * считаем успехом - значит его там уже нет.
+     */
+    suspend fun deleteTask(taskId: String): Boolean = withContext(Dispatchers.IO) {
+        val token = settings.todoistToken().trim()
+        if (token.isBlank() || taskId.isBlank()) return@withContext false
+        for (host in listOfNotNull(base, V1, V2).distinct()) {
+            val request = Request.Builder()
+                .url("$host/tasks/$taskId")
+                .header("Authorization", "Bearer $token")
+                .delete()
+                .build()
+            val ok = runCatching {
+                client.newCall(request).execute().use { it.isSuccessful || it.code == 404 }
+            }.getOrDefault(false)
+            if (ok) {
+                base = host
+                // Из кэша вкладки тоже убираем сразу, не дожидаясь обновления.
+                runCatching { store.forget(taskId) }
+                eventLog.add("разноска: отменено дело $taskId")
+                return@withContext true
+            }
+        }
+        eventLog.add("разноска: не смог удалить дело $taskId")
+        false
+    }
+
     private fun humanError(code: Int, body: String?): String = when (code) {
         0 -> "нет сети"
         401, 403 -> "токен не принят ($code)"

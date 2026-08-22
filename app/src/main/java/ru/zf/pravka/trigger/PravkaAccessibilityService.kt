@@ -2475,10 +2475,11 @@ class PravkaAccessibilityService : AccessibilityService() {
             when {
                 failed == 0 && created > 0 -> {
                     Haptics.success(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "✓ ${raznCount(created)} в Todoist",
-                    )
+                    // Записка вместо тоста: у неё есть ручка отмены.
+                    rButton?.showNote(
+                        text = "✓ " + raznCount(created) + " в Todoist",
+                        actionLabel = "↩︎",
+                    ) { undoRaznoska() }
                 }
                 created > 0 -> {
                     Haptics.error(this@PravkaAccessibilityService)
@@ -2527,6 +2528,70 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Разноска чужого текста: дайджест из чата, расшифровка встречи, письмо.
+     * Тот же разбор, только наговор пришёл не голосом. Длинную стену режем -
+     * иначе один разбор стоил бы как день работы.
+     */
+    fun raznoskaFromText(raw: String) {
+        val limit = 60_000
+        val text = raw.trim().take(limit)
+        if (text.isBlank()) {
+            Haptics.error(this)
+            Feedback.toast(this, "Нечего разбирать — текста нет")
+            return
+        }
+        if (raw.trim().length > limit) {
+            Feedback.toast(this, "Текст длинный: взял первые ${limit / 1000} тыс. знаков")
+        }
+        onRaznoskaText(text)
+    }
+
+    /** «Разобрать текст» в меню «Р»: выделение → поле → буфер обмена. */
+    private fun raznoskaFromSelection() {
+        scope.launch {
+            val text = runCatching { assistContent() }.getOrDefault("")
+            raznoskaFromText(text)
+        }
+    }
+
+    /** «↩︎ Отменить отправку»: только что созданные дела уходят из Todoist. */
+    private fun undoRaznoska() {
+        rButton?.setBusy(true)
+        scope.launch {
+            val outcome = runCatching { app.raznoskaEngine.undoLast() }
+                .getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    ru.zf.pravka.core.RaznoskaEngine.UndoOutcome(0, 1, 0L)
+                }
+            rButton?.setBusy(false)
+            when {
+                outcome.deleted == 0 -> {
+                    Haptics.error(this@PravkaAccessibilityService)
+                    Feedback.toast(this@PravkaAccessibilityService, "Отменять нечего")
+                }
+                outcome.failed == 0 -> {
+                    Haptics.success(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "↩︎ " + raznCount(outcome.deleted) + " убрано из Todoist",
+                    )
+                    // Дела снова ждут - показываем разбор, чтобы поправить и
+                    // отправить заново.
+                    if (outcome.draftId != 0L) showRaznoskaPlate(outcome.draftId)
+                }
+                else -> {
+                    Haptics.error(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "Убрал ${outcome.deleted}, ${outcome.failed} не поддались — глянь в Todoist",
+                        long = true,
+                    )
+                }
+            }
+        }
+    }
+
     private fun showRaznoskaMenu() {
         scope.launch {
             runCatching { app.raznoskaStore.load() }
@@ -2551,6 +2616,16 @@ class PravkaAccessibilityService : AccessibilityService() {
                     }
                 )
             }
+            if (app.raznoskaEngine.undoAvailable()) {
+                items.add(
+                    RaznoskaButtonController.MenuItem(
+                        "↩︎ Отменить отправку (" + app.raznoskaEngine.undoCount() + ")"
+                    ) { undoRaznoska() }
+                )
+            }
+            items.add(
+                RaznoskaButtonController.MenuItem("Разобрать текст") { raznoskaFromSelection() }
+            )
             items.add(
                 RaznoskaButtonController.MenuItem("Набрать текстом") { openRaznoskaTypeIn("") }
             )

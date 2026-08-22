@@ -104,6 +104,17 @@ class RaznoskaStore(private val context: Context) {
         )
     }
 
+    /** Отмена отправки: дело снова ждёт. */
+    suspend fun clearSent(draftId: Long, taskId: Long) = mutex.withLock {
+        ensureLoaded()
+        write(
+            _draftsFlow.value.map { d ->
+                if (d.id != draftId) d
+                else d.copy(tasks = d.tasks.map { if (it.id == taskId) it.copy(sentId = "") else it })
+            }
+        )
+    }
+
     suspend fun delete(draftId: Long) = mutex.withLock {
         ensureLoaded()
         write(_draftsFlow.value.filterNot { it.id == draftId })

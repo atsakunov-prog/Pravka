@@ -217,6 +217,8 @@ internal fun RaznoskaSection(app: PravkaApp) {
             }
         }
 
+        RoutesBlock(app)
+
         if (pending.isNotEmpty() && done.isNotEmpty()) {
             Text(
                 "Отправлено: " + done.joinToString(" · ") { doneLine(it) },
@@ -244,6 +246,8 @@ internal fun RaznoskaSection(app: PravkaApp) {
                         edit.first,
                         draft.tasks.map { if (it.id == updated.id) updated else it },
                     )
+                    // Переложил дело руками - следующий разбор это учтёт.
+                    runCatching { app.raznoskaEngine.learnRoute(edit.second, updated) }
                 }
             },
             onDrop = {
@@ -260,6 +264,50 @@ internal fun RaznoskaSection(app: PravkaApp) {
             },
         )
     }
+}
+
+// Маршруты: чему Разноска научилась на его поправках. Свёрнуто, потому что
+// смотреть туда надо редко - только если она возит дело не туда.
+@Composable
+private fun RoutesBlock(app: PravkaApp) {
+    val routes by app.raznoskaRoutes.routesFlow.collectAsState()
+    var open by remember { mutableStateOf(false) }
+    val scope = app.appScope
+    LaunchedEffect(Unit) { app.raznoskaRoutes.load() }
+    if (routes.isEmpty()) return
+    TextButton(onClick = { open = !open }) {
+        Text((if (open) "▾ " else "▸ ") + "Маршруты (" + routes.size + ")")
+    }
+    if (!open) return
+    Text(
+        "Куда ты сам перекладывал дела. Эти примеры уезжают в следующий разбор — " +
+            "так Разноска перестаёт ошибаться дважды.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    for (route in routes) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "«" + route.text + "»",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "→ " + route.destination(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = RaznoskaBlue,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            TextButton(onClick = { scope.launch { app.raznoskaRoutes.forget(route.id) } }) {
+                Text("✕")
+            }
+        }
+    }
+    Spacer(Modifier.height(6.dp))
 }
 
 /** Одна строка дела в карточке: заголовок, под ним проект/метки/срок. */

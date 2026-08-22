@@ -109,6 +109,21 @@
             android:foregroundServiceType="microphone"
             android:exported="false" />
 
+        <!-- «Разноска» в меню выделения: выделенный текст разбирается на дела. -->
+        <activity
+            android:name=".trigger.ProcessTasksActivity"
+            android:label="@string/action_label_tasks"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".trigger.ProcessTextActivity"
             android:label="@string/action_label"

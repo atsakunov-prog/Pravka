@@ -91,12 +91,14 @@ class PravkaApp : Application() {
     // Разноска: наговор -> дела в Todoist. Разобранное лежит на диске до
     // того, как Todoist его примет (raznoska.json).
     val raznoskaStore by lazy { ru.zf.pravka.data.RaznoskaStore(this) }
+    val raznoskaRoutes by lazy { ru.zf.pravka.data.RaznoskaRoutes(this) }
     val raznoskaEngine by lazy {
         ru.zf.pravka.core.RaznoskaEngine(
             claude = claudeProvider,
             dictionary = DictionaryApplier(dictionaryStore),
             dictionaryStore = dictionaryStore,
             store = raznoskaStore,
+            routes = raznoskaRoutes,
             todoistStore = todoistStore,
             todoistSync = todoistSync,
             stats = stats,

@@ -625,6 +625,75 @@ class RaznoskaButtonController(
             .coerceIn(0, (h - estimatedHeight).coerceAtLeast(0))
     }
 
+    // ---- Записка: короткий итог с одной ручкой («↩︎ отменить») ----
+
+    /**
+     * Пилюля на пару строк рядом с кнопкой: что произошло и единственное
+     * действие поверх. Живёт [holdMs] и уходит сама - это не диалог, а
+     * реплика: «✓ 3 дела в Todoist · ↩︎».
+     */
+    fun showNote(text: String, actionLabel: String?, holdMs: Long = 12_000, onAction: (() -> Unit)?) {
+        hidePlate()
+        val row = LinearLayout(service).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = buttonSize / 2f
+                setColor(INK)
+            }
+            alpha = 0.96f
+            elevation = dp(4).toFloat()
+            setPadding(dp(16), dp(8), dp(10), dp(8))
+        }
+        row.addView(
+            TextView(service).apply {
+                this.text = text
+                setTextColor(PAPER)
+                textSize = 14f
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        if (actionLabel != null && onAction != null) {
+            row.addView(
+                TextView(service).apply {
+                    this.text = actionLabel
+                    setTextColor(INK)
+                    textSize = 14f
+                    typeface = android.graphics.Typeface.create(
+                        android.graphics.Typeface.SANS_SERIF,
+                        android.graphics.Typeface.BOLD,
+                    )
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(14).toFloat()
+                        setColor(PAPER)
+                    }
+                    setPadding(dp(14), dp(5), dp(14), dp(5))
+                    setOnClickListener {
+                        hidePlate()
+                        onAction()
+                    }
+                }
+            )
+        }
+        val p = WindowManager.LayoutParams(
+            tickerWidthPx(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+        positionPlate(p, dp(64))
+        // Записка живёт в том же окне, что плашка: их никогда не нужно два.
+        plate = row
+        runCatching { windowManager.addView(row, p) }
+        row.alpha = 0f
+        row.animate().alpha(0.96f).setDuration(160).start()
+        row.postDelayed(plateDismiss, holdMs)
+    }
+
     // ---- Набрать текстом: тот же ввод, что у Засечки ----
 
     private var input: LinearLayout? = null

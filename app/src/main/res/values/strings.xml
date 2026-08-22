@@ -176,6 +176,7 @@
     <string name="r_busy">Микрофон занят другой записью — сначала заверши её</string>
     <string name="r_busy_pravka">Идёт наговор Разноски — останови его кнопкой «Р»</string>
     <string name="r_split_failed">Не разобрал наговор — он сохранён, попробуй ещё раз</string>
+    <string name="action_label_tasks">Разноска</string>
     <string name="z_notify_morning_title">День начался?</string>
     <string name="z_notify_morning_text">Нажми «З» и скажи, с чего начал день.</string>
     <string name="z_notify_evening_title">Закрыть день?</string>
