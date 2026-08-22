@@ -360,6 +360,10 @@ $listing
         // Numbered lines of today's entries - the edit/delete intents point
         // at one of them by its number.
         todayEntries: List<String>,
+        // The owner's own wording from the previous few days: the same дело
+        // must come back under the same name and category, otherwise the week
+        // never adds up.
+        recentEntries: List<String> = emptyList(),
     ): Result<ZasechkaParse> = withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
@@ -375,6 +379,11 @@ $listing
             val todayBlock =
                 if (todayEntries.isEmpty()) "(записей сегодня ещё нет)"
                 else todayEntries.joinToString("\n")
+            val recentBlock =
+                if (recentEntries.isEmpty()) ""
+                else "\nКак владелец называл свои дела в предыдущие дни (его собственные\n" +
+                    "формулировки, часть он правил руками — держись их):\n" +
+                    recentEntries.joinToString("\n") + "\n"
             val prompt = """
 Ты — секретарь личного тайм-трекера. Владелец наговорил фразу. Обычно это
 «чем я сейчас занят», но иногда — просьба ИСПРАВИТЬ или УДАЛИТЬ уже
@@ -384,7 +393,7 @@ $listing
 $previousBlock
 Записи сегодня (№ · время · категория · название):
 $todayBlock
-
+$recentBlock
 Категории (после тире — пояснение, что сюда относится; выбери РОВНО одну
 и верни ТОЛЬКО её название — текст в «кавычках», без пояснения):
 $categoriesBlock
@@ -411,8 +420,9 @@ $clientsBlock
   «поехал на дачу» и не «едет с дачи»; «Приготовление еды», а не «готовлю
   еду»; «Обед», «Время с детьми», «Разбор почты». Одно и то же дело должно
   называться одинаково в разные дни — иначе неделя не сложится.
-  ВАЖНО: если такое же дело уже есть в сегодняшнем списке выше — назови его
-  ТОЧНО так же и той же категорией.
+  ВАЖНО: если такое же дело уже есть в списках выше — сегодняшнем или в
+  списке прошлых дней — назови его ТОЧНО так же (буква в букву) и положи в ту
+  же категорию. Списки прошлых дней и есть его словарь: он их правил руками.
 - "category": название категории из списка, БУКВА В БУКВУ (без «кавычек»
   и без пояснения). Если ничего не подходит — пустая строка.
 - "client": имя из списка клиентов, если дело явно про него. Если владелец

@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -139,11 +140,6 @@ private fun pointsOf(worth: Int, ms: Long): Int =
 /** «+12» / «−4» / «·» - what this row did to the day's score. */
 @Composable
 private fun PointsChip(points: Int, bold: Boolean = false) {
-    val color = when {
-        points > 0 -> Color(0xFFEA580C)
-        points < 0 -> Color(0xFF8B5CF6)
-        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-    }
     Text(
         when {
             points > 0 -> "+$points"
@@ -152,10 +148,28 @@ private fun PointsChip(points: Int, bold: Boolean = false) {
         },
         style = MaterialTheme.typography.bodySmall,
         fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
-        color = color,
+        color = if (points == 0) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        else scoreColor(points.toFloat(), ROW_SCORE_SPAN),
         maxLines = 1,
-        modifier = Modifier.width(34.dp).padding(start = 2.dp),
+        textAlign = TextAlign.Center,
+        modifier = Modifier.width(38.dp).padding(start = 2.dp),
     )
+}
+
+// Шкала балла - та же радуга, что у категорий и у полоски дня: ноль зелёный,
+// вниз через синий к фиолетовому, вверх через жёлтый к красному. Так строка
+// сразу говорит, тянет она день вверх или вниз (владелец: «−1 зелёный,
+// +20 очень красный»).
+private const val ROW_SCORE_SPAN = 20f
+
+private fun scoreColor(value: Float, span: Float): Color = when {
+    value >= span * 0.75f -> Color(0xFFEF4444)
+    value >= span * 0.45f -> Color(0xFFF97316)
+    value >= span * 0.15f -> Color(0xFFEAB308)
+    value > -span * 0.10f -> Color(0xFF22C55E)
+    value > -span * 0.30f -> Color(0xFF06B6D4)
+    value > -span * 0.55f -> Color(0xFF3B82F6)
+    else -> Color(0xFF8B5CF6)
 }
 
 private val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
@@ -700,25 +714,16 @@ private fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
         Color(0xFF22C55E), Color(0xFFEAB308), Color(0xFFF97316), Color(0xFFEF4444),
     )
     val label = if (balance >= 0) "+$balance" else "$balance"
-    val labelColor = when {
-        balance >= span * 0.66f -> Color(0xFFEF4444)
-        balance >= span * 0.33f -> Color(0xFFF97316)
-        balance >= span * 0.08f -> Color(0xFFEAB308)
-        balance > -span * 0.08f -> Color(0xFF22C55E)
-        balance > -span * 0.4f -> Color(0xFF3B82F6)
-        else -> Color(0xFF8B5CF6)
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            label,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = labelColor,
-            modifier = Modifier.width(56.dp),
-        )
-        val trackColor = MaterialTheme.colorScheme.surfaceVariant
-        val tickColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-        Canvas(Modifier.weight(1f).height(16.dp)) {
+    val labelColor = scoreColor(balance.toFloat(), span)
+    val trackColor = MaterialTheme.colorScheme.surfaceVariant
+    // Полоска во всю ширину и ровно под галками навигации: у IconButton глиф
+    // сидит в 12.dp от края, столько же отступа берёт себе дорожка - слева и
+    // справа одинаково.
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.fillMaxWidth().height(18.dp)) {
             val h = size.height
             val radius = androidx.compose.ui.geometry.CornerRadius(h / 2f)
             val middle = size.width / 2f
@@ -741,13 +746,30 @@ private fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
                     size = androidx.compose.ui.geometry.Size(width, h),
                     cornerRadius = radius,
                 )
+                // У нуля заливка ровная, скругление только на дальнем конце:
+                // ноль - это срез, от которого тянешься, а не отдельная капля.
+                val flat = kotlin.math.min(width, h / 2f)
+                drawRect(
+                    brush = brush,
+                    topLeft = androidx.compose.ui.geometry.Offset(
+                        if (balance >= 0) middle else middle - flat, 0f,
+                    ),
+                    size = androidx.compose.ui.geometry.Size(flat, h),
+                )
             }
-            drawRect(
-                color = tickColor,
-                topLeft = androidx.compose.ui.geometry.Offset(middle - 1f, 0f),
-                size = androidx.compose.ui.geometry.Size(2f, h),
-            )
         }
+        // Балл сидит кружком ровно в нуле - в точке отсчёта, своим цветом
+        // радуги: зелёный у ватерлинии, красный у сотни.
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF1B1B1B),
+            maxLines = 1,
+            modifier = Modifier
+                .background(labelColor, RoundedCornerShape(50))
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+        )
     }
 }
 
@@ -977,19 +999,22 @@ private fun ChainBlock(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .height(IntrinsicSize.Min)
                         .clickable { onEditInterruption(br) }
                         .padding(vertical = 1.dp),
                 ) {
                     // No time range here (owner: «уберём, с какого по какое») -
-                    // the row lines up with its parent instead: a slim stripe
-                    // right beside the block's tall one, then the same
-                    // category/duration/points/title columns. Times live one
-                    // tap away, in the entry editor.
+                    // the row lines up with its parent instead. Its stripe is
+                    // as wide as the block's own and stands OFF it (5.dp), so
+                    // the two lines read as parent and child, not as one
+                    // smudge; 5 + 3 + 96 = the parent's 104 category column,
+                    // and everything after it stays in the same columns.
+                    Spacer(Modifier.width(5.dp))
                     Box(
                         Modifier
-                            .width(2.dp)
-                            .height(13.dp)
-                            .background(categoryColor(br.category), RoundedCornerShape(1.dp)),
+                            .width(3.dp)
+                            .fillMaxHeight()
+                            .background(categoryColor(br.category), RoundedCornerShape(2.dp)),
                     )
                     Text(
                         br.category.ifBlank { "—" },
@@ -997,7 +1022,7 @@ private fun ChainBlock(
                         color = categoryColor(br.category),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.width(98.dp).padding(start = 4.dp),
+                        modifier = Modifier.width(96.dp).padding(start = 6.dp),
                     )
                     Text(
                         fmtDur(br.durationMin(now)),
@@ -1009,7 +1034,7 @@ private fun ChainBlock(
                     PointsChip(pointsOf(worthOf(br.category), br.durationMs(now)))
                     Text(
                         capFirst(br.title.ifBlank { br.raw.take(60) }),
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,

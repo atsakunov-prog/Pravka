@@ -28,6 +28,11 @@ class ZasechkaEngine(
     private val scope: CoroutineScope,
 ) {
 
+    companion object {
+        // Сколько прошлых дней показывать разборщику как «вот его словарь дел».
+        private const val RECENT_DAYS = 4L
+    }
+
     data class Outcome(
         val entry: ZasechkaStore.Entry,
         val categorized: Boolean,
@@ -57,6 +62,23 @@ class ZasechkaEngine(
                 "${e.category.ifBlank { "без категории" }} · ${e.title.ifBlank { "(без названия)" }}"
         }
 
+        // Прошлые дни для контекста: как владелец САМ называл свои дела и в
+        // какие категории их клал (в том числе после правок руками). Без этого
+        // одно и то же дело приезжает каждый день под новым именем, и неделя
+        // не складывается.
+        val dayStart = dayStartMs(now)
+        val recentLines = store.forRange(dayStart - RECENT_DAYS * 86_400_000L, dayStart)
+            .filter { it.source != "gap" && it.source != "auto" && it.title.isNotBlank() }
+            .groupBy { "${it.title.trim().lowercase()}|${it.category.trim().lowercase()}" }
+            .values
+            .mapNotNull { group -> group.maxByOrNull { it.start }?.let { it to group.size } }
+            .sortedByDescending { (last, _) -> last.start }
+            .take(30)
+            .map { (last, times) ->
+                "- «${last.title}» [${last.category.ifBlank { "без категории" }}]" +
+                    (if (times > 1) " ×$times" else "")
+            }
+
         val parsed = claude.zasechka(
             raw = text,
             categories = categories.map { it.name to it.hint },
@@ -64,6 +86,7 @@ class ZasechkaEngine(
             nowLocal = nowFormat.format(Date(now)),
             previousTitle = previousTitle,
             todayEntries = todayLines,
+            recentEntries = recentLines,
         )
 
         return parsed.fold(

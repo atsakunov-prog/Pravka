@@ -35,7 +35,7 @@ class ZasechkaStore(private val context: Context) {
         // The owner's taxonomy, with hints the categorizer sees. A hint is
         // the difference between "поговорил с Марианой" landing in Семья and
         // landing in Социальное - names live here, not in code.
-        private const val CAT_SEED_VERSION = 6
+        private const val CAT_SEED_VERSION = 7
 
         // The owner's rule: unrecorded time is not "unknown", it is «Потери».
         // Bounded holes at least this long become gap-filler entries...
@@ -76,20 +76,20 @@ class ZasechkaStore(private val context: Context) {
             Category("Передвижение: транспорт", "машина, такси, метро, поезд, самолёт", baseMin = 45, value = -1),
             Category("Еда", "завтрак, обед, ужин, перекус, готовка", baseMin = 30, value = 1),
             Category("Быт", "домашние дела, покупки, уборка, документы, врачи", baseMin = 45, value = 1),
-            Category("Систематизация", "наведение порядка в жизни и работе: сборка и настройка Правки и Засечки, процессы, автоматизация, разгребание", baseMin = 90, value = 7),
+            Category("Систематизация", "наведение порядка в жизни и работе: сборка и настройка Правки и Засечки, процессы, автоматизация, разгребание", baseMin = 90, value = 4),
             Category("Семья", "время и разговоры с Марианой, с Серёжей, с родными", baseMin = 90, value = 6),
             Category("Социальное: внешнее", "друзья, знакомые, встречи и переписка вне работы", baseMin = 90, value = 3),
             Category("Работа: привлечение", "маркетинг, контент, продажи, новые клиенты", baseMin = 90, value = 10),
-            Category("Работа: текущая", "работа по действующим клиентам и проектам", baseMin = 90, value = 8),
+            Category("Работа: текущая", "работа по действующим клиентам и проектам", baseMin = 90, value = 10),
             Category("Работа: планирование", "планирование, стратегия, разборы, финансы бизнеса", baseMin = 60, value = 9),
             Category("Работа: звонки", "рабочие созвоны и звонки по клиентам", baseMin = 45, value = 7),
             Category("Чтение", "книги, статьи", baseMin = 45, value = 6),
             Category("Секс: с Марианной", "супружеский секс", baseMin = 45, value = 6),
             Category("Секс: соло", "мастурбация", baseMin = 20, value = -4),
-            Category("Отдых", "осознанный отдых: кино, сериалы, игры, гуляние, полежать", baseMin = 60, value = 0),
+            Category("Отдых", "осознанный отдых: кино, сериалы, игры, гуляние, полежать", baseMin = 60, value = -2),
             Category(
                 "Потери",
-                "время, потраченное ни на что: залипание, бесцельный скроллинг, ютуб; дыры без записи падают сюда сами", baseMin = 30, value = -8),
+                "время, потраченное ни на что: залипание, бесцельный скроллинг, ютуб; дыры без записи падают сюда сами", baseMin = 30, value = -10),
             Category("Звонки", "телефонный разговор, если непонятно с кем и о чём", baseMin = 30, value = 2),
         )
 
@@ -1122,6 +1122,20 @@ class ZasechkaStore(private val context: Context) {
                             baseMin = if (c.baseMin == 0) seed.baseMin else c.baseMin,
                             value = if (c.value == 0) seed.value else c.value,
                         )
+                    }.toMutableList()
+                }
+                // v6 -> v7: владелец пересмотрел цену четырёх категорий -
+                // эти ставим принудительно, остальные не трогаем.
+                if (catSeedVersion < 7) {
+                    val reprice = mapOf(
+                        "работа: текущая" to 10,
+                        "систематизация" to 4,
+                        "отдых" to -2,
+                        "потери" to -10,
+                    )
+                    categories = categories.map { c ->
+                        val v = reprice[c.name.trim().lowercase()]
+                        if (v == null) c else c.copy(value = v)
                     }.toMutableList()
                 }
                 catSeedVersion = CAT_SEED_VERSION
