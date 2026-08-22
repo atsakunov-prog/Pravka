@@ -752,7 +752,9 @@ class RaznoskaButtonController(
             scope.launch {
                 settings.fabAlphaFlow.collect { alpha ->
                     idleAlpha = alpha
-                    if (!busy && !recording) button?.alpha = idleAlpha
+                    if (!busy && !recording) {
+                        button?.alpha = idleAlpha
+                    }
                 }
             }
         }
