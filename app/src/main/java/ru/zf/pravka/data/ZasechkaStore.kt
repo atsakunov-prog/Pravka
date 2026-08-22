@@ -35,7 +35,7 @@ class ZasechkaStore(private val context: Context) {
         // The owner's taxonomy, with hints the categorizer sees. A hint is
         // the difference between "поговорил с Марианой" landing in Семья and
         // landing in Социальное - names live here, not in code.
-        private const val CAT_SEED_VERSION = 7
+        private const val CAT_SEED_VERSION = 8
 
         // The owner's rule: unrecorded time is not "unknown", it is «Потери».
         // Bounded holes at least this long become gap-filler entries...
@@ -89,7 +89,7 @@ class ZasechkaStore(private val context: Context) {
             Category("Отдых", "осознанный отдых: кино, сериалы, игры, гуляние, полежать", baseMin = 60, value = -2),
             Category(
                 "Потери",
-                "время, потраченное ни на что: залипание, бесцельный скроллинг, ютуб; дыры без записи падают сюда сами", baseMin = 30, value = -10),
+                "время, потраченное ни на что: залипание, бесцельный скроллинг, ютуб; дыры без записи падают сюда сами", baseMin = 30, value = -5),
             Category("Звонки", "телефонный разговор, если непонятно с кем и о чём", baseMin = 30, value = 2),
         )
 
@@ -1136,6 +1136,14 @@ class ZasechkaStore(private val context: Context) {
                     categories = categories.map { c ->
                         val v = reprice[c.name.trim().lowercase()]
                         if (v == null) c else c.copy(value = v)
+                    }.toMutableList()
+                }
+                // v7 -> v8: −10 за час потерь стирал целый рабочий вечер за
+                // два часа утреннего залипания; владелец сбавил до −5.
+                if (catSeedVersion < 8) {
+                    categories = categories.map { c ->
+                        if (c.name.trim().equals(GAP_CATEGORY, ignoreCase = true)) c.copy(value = -5)
+                        else c
                     }.toMutableList()
                 }
                 catSeedVersion = CAT_SEED_VERSION
