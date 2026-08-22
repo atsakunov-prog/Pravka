@@ -1833,7 +1833,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             val cal = java.util.Calendar.getInstance()
             cal.timeInMillis = now
             val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-            val open = app.zasechkaStore.openEntry()
+            // Running LOSSES are not "busy": the amber pulse keeps nagging,
+            // the evening nudge and the hourly wink stay for real дела only.
+            val open = app.zasechkaStore.openEntry()?.takeIf { it.source != "gap" }
             val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
             val todayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
                 .format(java.util.Date(now))

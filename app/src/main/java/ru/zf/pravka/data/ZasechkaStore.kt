@@ -286,27 +286,107 @@ class ZasechkaStore(private val context: Context) {
 
     /**
      * The owner's rule: time without an entry is not "unknown", it is
-     * «Потери». (1) A filler overlapped by ANY real entry dies first - a
-     * retro claim or an auto fact always wins the span back (delete-and-
-     * refill keeps the remainder exact). (2) Any bounded hole >= 5 min whose
-     * right edge is at least 45 min old becomes a closed source="gap" entry.
+     * «Потери». Three moves, all in the normalize pass:
+     * (1) WRAP: a real entry landing inside a filler SUBTRACTS from it - the
+     * losses instantly hug the дело from both sides, no re-quarantine; pieces
+     * shorter than 5 min die as crumbs. A real claim over the RUNNING losses
+     * clips their start (or kills them while a real дело is open).
+     * (2) FILL: a bounded hole >= 5 min between entries becomes a closed
+     * filler once its right edge is 45 min old (the retro-dictation window).
+     * (3) LIVE: when nothing is open and the last entry ended >= 5 min ago,
+     * an OPEN filler starts at that end - "прямо сейчас идут потери" is
+     * visible in the ribbon and keeps counting until a real дело lands.
      * Deleting a filler by hand is futile by design - unrecorded time grows
      * back; the way out is to NAME the time (edit it into a real дело).
      */
-    private fun clearOverlappedFillersLocked(): Boolean {
+    private fun trimFillersLocked(): Boolean {
         if (entries.none { it.source == GAP_SOURCE }) return false
         val nowMs = System.currentTimeMillis()
         val real = entries.filter { it.source != GAP_SOURCE }
-        val kept = entries.filter { e ->
-            e.source != GAP_SOURCE || real.none { r ->
+        var changed = false
+        val out = ArrayList<Entry>(entries.size)
+        for (e in entries) {
+            if (e.source != GAP_SOURCE) {
+                out.add(e)
+                continue
+            }
+            if (e.open) {
+                // Running losses: a real open дело kills them; a real closed
+                // claim reaching past their start clips them to its end.
+                if (real.any { it.open }) {
+                    changed = true
+                    continue
+                }
+                val claimEnd = real
+                    .filter { r -> r.end > e.start && r.start < nowMs }
+                    .maxOfOrNull { it.end }
+                when {
+                    claimEnd == null || claimEnd <= e.start -> out.add(e)
+                    nowMs - claimEnd < GAP_FILL_MIN_MS -> changed = true  // crumb - drop
+                    else -> {
+                        out.add(e.copy(start = claimEnd, synced = false, notionSynced = false))
+                        changed = true
+                    }
+                }
+                continue
+            }
+            // Closed filler: subtract every real span; remainders >= 5 min
+            // stay as losses (the head keeps the id), crumbs disappear.
+            var pieces = mutableListOf(e.start to e.end)
+            for (r in real) {
                 val rEnd = if (r.open) nowMs else r.end
-                r.start < e.end && rEnd > e.start
+                if (r.start >= e.end || rEnd <= e.start) continue
+                val next = mutableListOf<Pair<Long, Long>>()
+                for ((s, en) in pieces) {
+                    if (r.start >= en || rEnd <= s) {
+                        next.add(s to en)
+                        continue
+                    }
+                    if (r.start > s) next.add(s to r.start)
+                    if (rEnd < en) next.add(rEnd to en)
+                }
+                pieces = next
+            }
+            val kept = pieces.filter { (s, en) -> en - s >= GAP_FILL_MIN_MS }
+            if (kept.size == 1 && kept[0].first == e.start && kept[0].second == e.end) {
+                out.add(e)
+                continue
+            }
+            changed = true
+            var first = true
+            for ((s, en) in kept) {
+                out.add(
+                    e.copy(
+                        id = if (first) e.id else nextId(),
+                        start = s,
+                        end = en,
+                        synced = false,
+                        notionSynced = false,
+                    )
+                )
+                first = false
             }
         }
-        if (kept.size == entries.size) return false
-        entries = kept.toMutableList()
-        return true
+        if (changed) {
+            entries = out
+            entries.sortBy { it.start }
+        }
+        return changed
     }
+
+    private fun gapEntry(start: Long, end: Long, nowMs: Long) = Entry(
+        id = nextId(),
+        start = start,
+        end = end,
+        raw = "",
+        title = "потери",
+        category = GAP_CATEGORY,
+        client = "",
+        useful = 0,
+        source = GAP_SOURCE,
+        synced = false,
+        createdAt = nowMs,
+    )
 
     private fun fillGapsLocked(): Boolean {
         val nowMs = System.currentTimeMillis()
@@ -316,25 +396,19 @@ class ZasechkaStore(private val context: Context) {
         var prevEnd = -1L
         for (e in asc) {
             if (prevEnd > 0 && e.start - prevEnd >= GAP_FILL_MIN_MS && e.start <= cutoff) {
-                entries.add(
-                    Entry(
-                        id = nextId(),
-                        start = prevEnd,
-                        end = e.start,
-                        raw = "",
-                        title = "потери",
-                        category = GAP_CATEGORY,
-                        client = "",
-                        useful = 0,
-                        source = GAP_SOURCE,
-                        synced = false,
-                        createdAt = nowMs,
-                    )
-                )
+                entries.add(gapEntry(prevEnd, e.start, nowMs))
                 changed = true
             }
             val eEnd = if (e.open) nowMs else e.end
             if (eEnd > prevEnd) prevEnd = eEnd
+        }
+        // The live tail: nothing is running and the ribbon has been silent
+        // for 5 minutes - losses start counting from the last entry's end,
+        // openly, right in the ribbon. A retro claim later takes the span
+        // back through closeOpenLocked + the trim above.
+        if (entries.none { it.open } && prevEnd > 0 && nowMs - prevEnd >= GAP_FILL_MIN_MS) {
+            entries.add(gapEntry(prevEnd, 0L, nowMs))
+            changed = true
         }
         if (changed) entries.sortBy { it.start }
         return changed
@@ -343,7 +417,7 @@ class ZasechkaStore(private val context: Context) {
     /** All ribbon invariants in one locked pass; true when anything changed. */
     private fun normalizeLocked(): Boolean {
         var changed = splitMidnightLocked()
-        if (clearOverlappedFillersLocked()) changed = true
+        if (trimFillersLocked()) changed = true
         if (spliceOverlapsLocked()) changed = true
         if (fillGapsLocked()) changed = true
         // Fillers created just now may cross midnight themselves.
