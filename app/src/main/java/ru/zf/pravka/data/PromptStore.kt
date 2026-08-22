@@ -24,7 +24,9 @@ class PromptStore(private val context: Context) {
         PROSE("prose"),
         // Meeting transcripts (Whisper on the owner's computer) - used only
         // by the "copy full prompt" button, never sent from the app itself.
-        MEETING("meeting");
+        MEETING("meeting"),
+        // Разноска: наговор -> дела в Todoist (Опус).
+        TASKS("tasks");
 
         companion object {
             fun of(mode: ProofreadMode): PromptId = when (mode) {
@@ -41,6 +43,7 @@ class PromptStore(private val context: Context) {
         PromptId.SOFTEN -> Prompts.SOFTEN
         PromptId.PROSE -> Prompts.PROSE
         PromptId.MEETING -> Prompts.MEETING
+        PromptId.TASKS -> Prompts.TASKS
     }
 
     fun overrideFlow(id: PromptId): Flow<String?> =

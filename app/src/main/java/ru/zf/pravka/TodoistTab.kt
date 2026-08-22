@@ -37,8 +37,8 @@ import ru.zf.pravka.data.TodoistStore
 import ru.zf.pravka.ui.Feedback
 
 // Вкладка «Дела»: список Todoist, тап по делу = оно становится текущим в
-// ленте. Ничего больше здесь пока нет по замыслу владельца - добавление дел
-// будет второй частью.
+// ленте. Сверху - Разноска: наговорённые дела, которые ещё не уехали в
+// Todoist, с правкой руками и кнопкой «Отправить» (см. RaznoskaSection).
 //
 // Группы: «Сегодня» (и всё просроченное - оно и есть сегодняшнее) раскрыта,
 // «Без даты и без проекта» (входящие) и проекты свёрнуты. Поиск - простой
@@ -105,7 +105,8 @@ fun TodoistTab(app: PravkaApp) {
             Text("Дела", style = MaterialTheme.typography.headlineSmall)
             Text(
                 "Тап по делу — оно становится текущим в ленте. Когда дело закончится, " +
-                    "в задачу Todoist уедет коммент со временем.",
+                    "в задачу Todoist уедет коммент со временем. Кнопка «Р» — наговорить " +
+                    "новые дела сюда.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
@@ -169,6 +170,10 @@ fun TodoistTab(app: PravkaApp) {
             }
             Spacer(Modifier.height(6.dp))
         }
+
+        // Разноска: разобранные наговоры, которые ещё не уехали в Todoist.
+        // Стоит выше списка - это то, что ждёт решения владельца.
+        item { RaznoskaSection(app) }
 
         val needle = query.trim().lowercase()
         if (needle.isNotEmpty()) {

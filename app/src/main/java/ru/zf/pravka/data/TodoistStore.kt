@@ -37,7 +37,14 @@ class TodoistStore(private val context: Context) {
         val url: String,
     )
 
-    data class Project(val id: String, val name: String, val inbox: Boolean)
+    data class Project(
+        val id: String,
+        val name: String,
+        val inbox: Boolean,
+        // Подпроекты - основа его структуры: «Стеллар Групп / buy-side M&A».
+        // Разноске нужен родитель, чтобы дело легло в точный подпроект.
+        val parentId: String = "",
+    )
 
     /** Запись ленты, выросшая из дела Todoist - ждёт коммента о времени. */
     data class Link(val entryId: Long, val taskId: String, val title: String, val startedAt: Long)
@@ -48,6 +55,7 @@ class TodoistStore(private val context: Context) {
 
     private var tasks = listOf<Task>()
     private var projects = listOf<Project>()
+    private var labels = listOf<String>()
     private var links = mutableListOf<Link>()
     private var syncedAt = 0L
 
@@ -55,6 +63,8 @@ class TodoistStore(private val context: Context) {
     val tasksFlow: StateFlow<List<Task>> = _tasksFlow
     private val _projectsFlow = MutableStateFlow<List<Project>>(emptyList())
     val projectsFlow: StateFlow<List<Project>> = _projectsFlow
+    private val _labelsFlow = MutableStateFlow<List<String>>(emptyList())
+    val labelsFlow: StateFlow<List<String>> = _labelsFlow
     private val _syncedAtFlow = MutableStateFlow(0L)
     val syncedAtFlow: StateFlow<Long> = _syncedAtFlow
     /** Что показывать под поиском: «обновлено 20:42» или текст ошибки. */
@@ -70,15 +80,22 @@ class TodoistStore(private val context: Context) {
 
     suspend fun projects(): List<Project> = mutex.withLock { ensureLoaded(); projects }
 
-    suspend fun replaceList(newTasks: List<Task>, newProjects: List<Project>, at: Long) =
-        mutex.withLock {
-            ensureLoaded()
-            tasks = newTasks
-            projects = newProjects
-            syncedAt = at
-            persist()
-            publish()
-        }
+    suspend fun replaceList(
+        newTasks: List<Task>,
+        newProjects: List<Project>,
+        newLabels: List<String>,
+        at: Long,
+    ) = mutex.withLock {
+        ensureLoaded()
+        tasks = newTasks
+        projects = newProjects
+        // Метки приезжают отдельным запросом: если он не удался, старый
+        // список лучше пустого - Разноска вешает метки только из него.
+        if (newLabels.isNotEmpty()) labels = newLabels
+        syncedAt = at
+        persist()
+        publish()
+    }
 
     /** Убирает дело из кэша сразу после закрытия, не дожидаясь обновления. */
     suspend fun forget(taskId: String) = mutex.withLock {
@@ -112,9 +129,66 @@ class TodoistStore(private val context: Context) {
         if (links.removeAll { it.entryId == entryId }) persist()
     }
 
+    // ---- Каталог для Разноски: проекты путями и список меток ----
+    //
+    // Читается из уже опубликованного кэша (без suspend): разборщик зовётся
+    // после load(), а плашке и редактору нужен мгновенный ответ.
+
+    /** «Стеллар Групп / банковский эдвайзори» - имя, каким его называет модель. */
+    fun path(project: Project, all: List<Project> = _projectsFlow.value): String {
+        if (project.parentId.isBlank()) return project.name
+        val parent = all.firstOrNull { it.id == project.parentId } ?: return project.name
+        return parent.name + " / " + project.name
+    }
+
+    fun paths(): List<Pair<String, Project>> {
+        val all = _projectsFlow.value
+        return all.map { path(it, all) to it }.sortedBy { it.first.lowercase() }
+    }
+
+    fun inbox(): Project? = _projectsFlow.value.firstOrNull { it.inbox }
+
+    /** Что бы модель ни написала в «project» - вернуть настоящий проект. */
+    fun resolveProject(named: String): Project? {
+        val wanted = named.trim().trim('#').lowercase()
+        if (wanted.isEmpty()) return null
+        val all = _projectsFlow.value
+        val byPath = all.map { path(it, all).lowercase() to it }
+        byPath.firstOrNull { it.first == wanted }?.let { return it.second }
+        all.firstOrNull { it.name.lowercase() == wanted }?.let { return it }
+        // Другой разделитель или лишние слова вокруг пути.
+        val squashed = wanted.replace(" / ", " ").replace("/", " ").replace("  ", " ")
+        byPath.firstOrNull { it.first.replace(" / ", " ") == squashed }?.let { return it.second }
+        // Последняя попытка: однозначный префикс по имени листа.
+        val prefix = all.filter { it.name.lowercase().startsWith(wanted) }
+        return if (prefix.size == 1) prefix.first() else null
+    }
+
+    /**
+     * Каталог, каким он уезжает в промпт Разноски: все пути проектов и все
+     * метки. Только имена - что они ЗНАЧАТ, написано в самом промпте, там
+     * владелец это и правит.
+     */
+    fun catalogPromptBlock(): String {
+        val list = paths()
+        if (list.isEmpty()) return ""
+        val sb = StringBuilder()
+        sb.append("ПРОЕКТЫ (выбери ровно одно имя из этого списка, ")
+        sb.append("подпроект — вместе с родителем через « / »):\n")
+        for ((p, _) in list) sb.append("— ").append(p).append('\n')
+        val labelList = _labelsFlow.value
+        if (labelList.isNotEmpty()) {
+            sb.append("\nМЕТКИ (только из этого списка, новых не выдумывать):\n")
+            sb.append(labelList.joinToString(", "))
+            sb.append('\n')
+        }
+        return sb.toString().trim()
+    }
+
     private fun publish() {
         _tasksFlow.value = tasks
         _projectsFlow.value = projects
+        _labelsFlow.value = labels
         _syncedAtFlow.value = syncedAt
     }
 
@@ -141,7 +215,17 @@ class TodoistStore(private val context: Context) {
                 (0 until array.length()).mapNotNull { i ->
                     val o = array.optJSONObject(i) ?: return@mapNotNull null
                     val id = o.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                    Project(id, o.optString("name"), o.optBoolean("inbox", false))
+                    Project(
+                        id = id,
+                        name = o.optString("name"),
+                        inbox = o.optBoolean("inbox", false),
+                        parentId = o.optString("parent"),
+                    )
+                }
+            } ?: emptyList()
+            labels = root?.optJSONArray("labels")?.let { array ->
+                (0 until array.length()).mapNotNull { i ->
+                    array.optString(i).takeIf { it.isNotBlank() }
                 }
             } ?: emptyList()
             links = (
@@ -192,10 +276,12 @@ class TodoistStore(private val context: Context) {
                             put("id", p.id)
                             put("name", p.name)
                             put("inbox", p.inbox)
+                            put("parent", p.parentId)
                         }
                     )
                 }
             )
+            put("labels", JSONArray().apply { for (l in labels) put(l) })
             put(
                 "links",
                 JSONArray().apply {

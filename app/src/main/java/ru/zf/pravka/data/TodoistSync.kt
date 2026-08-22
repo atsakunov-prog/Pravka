@@ -12,6 +12,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import ru.zf.pravka.core.ParsedTask
 
 // Прямой доступ к Todoist личным токеном: ни OAuth, ни посредников - один
 // заголовок Bearer, как у intervals.icu.
@@ -64,6 +65,9 @@ class TodoistSync(
     private suspend fun pull(token: String): Boolean {
         val projectRows = fetchAll(token, "projects") ?: return false
         val taskRows = fetchAll(token, "tasks") ?: return false
+        // Метки нужны только Разноске; если запрос не прошёл, старый список
+        // в кэше остаётся - пустой был бы хуже.
+        val labelRows = fetchAll(token, "labels") ?: emptyList()
         val projects = projectRows.mapNotNull { o ->
             val id = idOf(o) ?: return@mapNotNull null
             val name = o.optString("name")
@@ -74,7 +78,12 @@ class TodoistSync(
                     o.optBoolean("inbox_project", false) ||
                     name.equals("Inbox", ignoreCase = true) ||
                     name.equals("Входящие", ignoreCase = true),
+                parentId = o.opt("parent_id")?.toString()
+                    ?.takeIf { it.isNotBlank() && it != "null" }.orEmpty(),
             )
+        }
+        val labels = labelRows.mapNotNull { o ->
+            o.optString("name").trim().takeIf { it.isNotEmpty() }
         }
         val tasks = taskRows.mapNotNull { o ->
             val id = idOf(o) ?: return@mapNotNull null
@@ -97,7 +106,7 @@ class TodoistSync(
                 url = o.optString("url"),
             )
         }
-        store.replaceList(tasks, projects, System.currentTimeMillis())
+        store.replaceList(tasks, projects, labels, System.currentTimeMillis())
         store.setStatus(
             "обновлено " + SimpleDateFormat("HH:mm", Locale.US).format(Date()) +
                 " · дел ${tasks.size}"
@@ -205,6 +214,71 @@ class TodoistSync(
                 store.dropLink(link.entryId)
             }
         }
+    }
+
+    /**
+     * Разноска: дело из наговора уезжает в Todoist. [requestId] делает повтор
+     * безопасным - Todoist считает второй запрос с тем же X-Request-Id тем же
+     * самым, поэтому таймаут, который на самом деле дошёл, не создаст дубль.
+     *
+     * Повторяющееся дело едет словами (due_string, Todoist разбирает их сам),
+     * обычный срок - точной датой: так ничего не сползает.
+     */
+    suspend fun createTask(task: ParsedTask, requestId: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            val token = settings.todoistToken().trim()
+            if (token.isBlank()) {
+                return@withContext Result.failure(IllegalStateException("Нет токена Todoist"))
+            }
+            val payload = JSONObject().apply {
+                put("content", task.content.trim())
+                if (task.description.isNotBlank()) put("description", task.description.trim())
+                if (task.projectId.isNotBlank()) put("project_id", task.projectId)
+                if (task.labels.isNotEmpty()) {
+                    put("labels", JSONArray().apply { task.labels.forEach { put(it) } })
+                }
+                put("priority", task.priority.coerceIn(1, 4))
+                if (task.repeat.isNotBlank()) {
+                    put("due_string", task.repeat.trim())
+                    put("due_lang", "ru")
+                } else if (task.due.isNotBlank()) {
+                    put("due_date", task.due.trim())
+                }
+            }.toString()
+            var lastError = "Todoist не ответил"
+            for (host in listOfNotNull(base, V1, V2).distinct()) {
+                val request = Request.Builder()
+                    .url("$host/tasks")
+                    .header("Authorization", "Bearer $token")
+                    .header("X-Request-Id", requestId)
+                    .post(payload.toRequestBody(JSON))
+                    .build()
+                val res = runCatching {
+                    client.newCall(request).execute().use { r -> Res(r.code, r.body?.string()) }
+                }.getOrElse { Res(0, null) }
+                if (res.code in 200..299) {
+                    base = host
+                    val id = runCatching { JSONObject(res.body.orEmpty()).opt("id")?.toString() }
+                        .getOrNull()?.takeIf { it.isNotBlank() && it != "null" }
+                    eventLog.add("разноска: создано дело «${task.content.take(60)}»")
+                    return@withContext Result.success(id.orEmpty())
+                }
+                lastError = humanError(res.code, res.body)
+                // Токен и отвергнутое поле другой хост не исправит.
+                if (res.code == 401 || res.code == 403 || res.code == 400 || res.code == 422) break
+            }
+            eventLog.add("разноска: не отправилось — $lastError")
+            Result.failure(IllegalStateException(lastError))
+        }
+
+    private fun humanError(code: Int, body: String?): String = when (code) {
+        0 -> "нет сети"
+        401, 403 -> "токен не принят ($code)"
+        400, 422 -> "Todoist отказался: " + body.orEmpty().take(160)
+        404 -> "проект не найден — обнови список"
+        429 -> "Todoist просит подождать"
+        in 500..599 -> "Todoist приболел ($code)"
+        else -> "HTTP $code"
     }
 
     private fun comment(token: String, taskId: String, text: String): Boolean {

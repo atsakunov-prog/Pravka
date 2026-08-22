@@ -123,6 +123,7 @@
     <string name="prompt_title_soften">Мягче</string>
     <string name="prompt_title_prose">Художественная проза</string>
     <string name="prompt_title_meeting">Встреча (расшифровка)</string>
+    <string name="prompt_title_tasks">Разноска (дела)</string>
     <string name="tab_learning">Обучение</string>
     <string name="tab_logs">Логи</string>
     <string name="prompt_modified">изменён</string>
@@ -170,6 +171,11 @@
     <string name="z_busy_zasechka">Идёт диктовка Правки — сначала заверши её</string>
     <string name="z_saved_raw">Записал без категории (%1$s) — разбери во вкладке «Засечка»</string>
     <string name="z_record_failed">Не записалось — попробуй ещё раз</string>
+
+    <!-- Разноска: наговор -> дела в Todoist -->
+    <string name="r_busy">Микрофон занят другой записью — сначала заверши её</string>
+    <string name="r_busy_pravka">Идёт наговор Разноски — останови его кнопкой «Р»</string>
+    <string name="r_split_failed">Не разобрал наговор — он сохранён, попробуй ещё раз</string>
     <string name="z_notify_morning_title">День начался?</string>
     <string name="z_notify_morning_text">Нажми «З» и скажи, с чего начал день.</string>
     <string name="z_notify_evening_title">Закрыть день?</string>

@@ -45,6 +45,8 @@ class Settings(private val context: Context) {
         private val KEY_Z_CALL_CATEGORY = stringPreferencesKey("z_call_category")
         private val KEY_Z_IMMERSIVE_MIN = intPreferencesKey("z_immersive_min")
         private val KEY_Z_CHECKINS = booleanPreferencesKey("z_checkins")
+        // Разноска: третья кнопка «Р».
+        private val KEY_R_ENABLED = booleanPreferencesKey("r_enabled")
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
         private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
@@ -195,6 +197,13 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_TODOIST_TOKEN] = value.trim() }
     }
 
+    // Разноска: кнопка «Р» на экране. Включена по умолчанию - она и есть
+    // третий режим; выключается тем же тумблером, что и «З».
+    val rEnabledFlow = context.dataStore.data.map { it[KEY_R_ENABLED] ?: true }
+    suspend fun setREnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_R_ENABLED] = value }
+    }
+
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }
     val fabAlphaFlow = context.dataStore.data.map { it[KEY_FAB_ALPHA] ?: FAB_ALPHA_DEFAULT }
 
@@ -235,6 +244,21 @@ class Settings(private val context: Context) {
         context.dataStore.edit {
             it[floatPreferencesKey("zfab_x_$screenKey")] = xFraction
             it[floatPreferencesKey("zfab_y_$screenKey")] = yFraction
+        }
+    }
+
+    // Разноска стоит третьей в связке: по умолчанию под «З».
+    suspend fun rFabPosition(screenKey: String): Pair<Float, Float> {
+        val prefs = context.dataStore.data.first()
+        val x = prefs[floatPreferencesKey("rfab_x_$screenKey")] ?: 0.92f
+        val y = prefs[floatPreferencesKey("rfab_y_$screenKey")] ?: 0.75f
+        return x to y
+    }
+
+    suspend fun setRFabPosition(screenKey: String, xFraction: Float, yFraction: Float) {
+        context.dataStore.edit {
+            it[floatPreferencesKey("rfab_x_$screenKey")] = xFraction
+            it[floatPreferencesKey("rfab_y_$screenKey")] = yFraction
         }
     }
 }

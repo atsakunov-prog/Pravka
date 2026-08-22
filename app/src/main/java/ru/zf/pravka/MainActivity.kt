@@ -1586,6 +1586,7 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.SOFTEN to R.string.prompt_title_soften,
     PromptStore.PromptId.PROSE to R.string.prompt_title_prose,
     PromptStore.PromptId.MEETING to R.string.prompt_title_meeting,
+    PromptStore.PromptId.TASKS to R.string.prompt_title_tasks,
 )
 
 @Composable

@@ -88,6 +88,22 @@ class PravkaApp : Application() {
         ru.zf.pravka.data.TodoistSync(settings, todoistStore, zasechkaStore, httpClient, eventLog)
     }
 
+    // Разноска: наговор -> дела в Todoist. Разобранное лежит на диске до
+    // того, как Todoist его примет (raznoska.json).
+    val raznoskaStore by lazy { ru.zf.pravka.data.RaznoskaStore(this) }
+    val raznoskaEngine by lazy {
+        ru.zf.pravka.core.RaznoskaEngine(
+            claude = claudeProvider,
+            dictionary = DictionaryApplier(dictionaryStore),
+            dictionaryStore = dictionaryStore,
+            store = raznoskaStore,
+            todoistStore = todoistStore,
+            todoistSync = todoistSync,
+            stats = stats,
+            eventLog = eventLog,
+        )
+    }
+
     // The phone layer: app time, pickups, distractions; attention eaters and
     // calls cross into the ribbon via the sweeper.
     val phoneStore by lazy { ru.zf.pravka.data.PhoneStore(this) }

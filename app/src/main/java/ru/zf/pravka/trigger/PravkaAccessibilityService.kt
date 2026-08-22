@@ -101,6 +101,15 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile private var zCategoriesCached: List<String> = emptyList()
     @Volatile private var zClientsCached: List<String> = emptyList()
 
+    // Разноска: третья кнопка и свой захват. Наговор не касается ни поля, ни
+    // ленты - он уезжает Опусу на разбор и оттуда делами в Todoist.
+    private var rButton: RaznoskaButtonController? = null
+    private var rSession: GoogleSpeechSession? = null
+    @Volatile private var rWhisperRecording = false
+    @Volatile private var rTypeInstead = false
+    @Volatile private var cachedREnabled = true
+    private var micRequestForRaznoska = false
+
     // Weak cache of the last focused editable node and its text, updated on
     // TYPE_VIEW_FOCUSED / TYPE_VIEW_TEXT_CHANGED (spec 5.4: activities steal
     // focus, so triggers launched via Activity read from this cache).
@@ -176,16 +185,34 @@ class PravkaAccessibilityService : AccessibilityService() {
             onLongPress = ::showZasechkaMenu,
         )
         zButton?.onTickerTap = ::onZasechkaPlateTap
-        // The linked pair (owner's design): drag either bubble and the other
-        // trails behind on a rubber band; the "П" always docks above the "З".
+
+        // Разноска: третья кнопка того же семейства.
+        rButton = RaznoskaButtonController(
+            service = this,
+            scope = scope,
+            settings = app.settings,
+            onShortTap = ::onRaznoskaTap,
+            onLongPress = ::showRaznoskaMenu,
+        )
+        rButton?.onTickerTap = ::onRaznoskaTickerTap
+
+        // The linked chain (owner's design): drag any bubble and the others
+        // trail behind on a rubber band, in order "П" - "З" - "Р".
         val pairGap = (8 * resources.displayMetrics.density).toInt()
         floatingButton?.onDragged = { x, y, dropped ->
             val size = floatingButton?.buttonSizePx() ?: 0
             zButton?.followTo(x, y + size + pairGap, dropped)
+            rButton?.followTo(x, y + 2 * (size + pairGap), dropped)
         }
         zButton?.onDragged = { x, y, dropped ->
             val size = floatingButton?.buttonSizePx() ?: 0
             floatingButton?.followTo(x, y - size - pairGap, dropped)
+            rButton?.followTo(x, y + size + pairGap, dropped)
+        }
+        rButton?.onDragged = { x, y, dropped ->
+            val size = floatingButton?.buttonSizePx() ?: 0
+            zButton?.followTo(x, y - size - pairGap, dropped)
+            floatingButton?.followTo(x, y - 2 * (size + pairGap), dropped)
         }
         floatingButton?.pairAnchor = anchor@{
             if (!cachedZEnabled) return@anchor null
@@ -202,6 +229,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             app.settings.zEnabledFlow.collect {
                 cachedZEnabled = it
                 zButton?.setEnabled(it)
+            }
+        }
+        scope.launch {
+            app.settings.rEnabledFlow.collect {
+                cachedREnabled = it
+                rButton?.setEnabled(it)
             }
         }
         scope.launch { app.settings.zGapMinFlow.collect { cachedZGapMin = it } }
@@ -339,8 +372,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     fun isLockedIdle(): Boolean {
         val locked = runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)
         if (!locked) return false
-        return googleSession == null && zSession == null &&
-            !zWhisperRecording && !DictationService.recording
+        return googleSession == null && zSession == null && rSession == null &&
+            !zWhisperRecording && !rWhisperRecording && !DictationService.recording
     }
 
     /** Short tap: stop the active session if any, else start per the engine. */
@@ -351,6 +384,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (zSession != null || zWhisperRecording) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.z_busy_pravka))
+            return
+        }
+        if (rSession != null || rWhisperRecording) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.r_busy_pravka))
             return
         }
         if (googleSession != null) { stopLiveDictation(); return }
@@ -393,7 +431,10 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Called by MicPermissionActivity after the permission is granted. */
     fun onMicPermissionGranted() {
-        if (micRequestForZasechka) {
+        if (micRequestForRaznoska) {
+            micRequestForRaznoska = false
+            startRaznoskaCapture()
+        } else if (micRequestForZasechka) {
             micRequestForZasechka = false
             startZasechkaCapture()
         } else {
@@ -681,6 +722,44 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }.onFailure { e ->
                     zButton?.setBusy(false)
                     // Audio stays in Recordings, like a failed Правка take.
+                    Haptics.error(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        getString(R.string.dictation_saved_for_retry, e.message ?: ""),
+                    )
+                }
+            }
+            return
+        }
+        // Разноска на Whisper приходит тем же путём; свой флаг уводит её и от
+        // поля, и от ленты.
+        if (rWhisperRecording) {
+            rWhisperRecording = false
+            rButton?.setRecording(false)
+            if (rTypeInstead) {
+                rTypeInstead = false
+                file?.let { app.recordings.delete(it.name) }
+                rButton?.hideTicker()
+                rButton?.setBusy(false)
+                openRaznoskaTypeIn("")
+                return
+            }
+            rButton?.hideTicker()
+            if (file == null) {
+                rButton?.setBusy(false)
+                Haptics.error(this)
+                Feedback.toast(this, getString(R.string.dictation_empty))
+                return
+            }
+            rButton?.setBusy(true)
+            scope.launch {
+                val result = app.transcribeDictation(file)
+                result.onSuccess { text ->
+                    app.recordings.delete(file.name)
+                    onRaznoskaText(text)
+                }.onFailure { e ->
+                    rButton?.setBusy(false)
+                    // Аудио остаётся в «Записях», как у неудачной Правки.
                     Haptics.error(this@PravkaAccessibilityService)
                     Feedback.toast(
                         this@PravkaAccessibilityService,
@@ -1431,7 +1510,13 @@ class PravkaAccessibilityService : AccessibilityService() {
             stopDictation()  // -> onRecordingSaved, routed by the flag
             return
         }
-        // One microphone: while a Правка take runs, the "З" tap only nags.
+        // One microphone: while a Правка or Разноска take runs, the "З" tap
+        // only nags.
+        if (rSession != null || rWhisperRecording) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.r_busy_pravka))
+            return
+        }
         if (googleSession != null || DictationService.recording) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.z_busy_zasechka))
@@ -1535,7 +1620,11 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** The mic-hold notification's Stop: finalize whichever live take runs. */
     fun stopAnyLive() {
-        if (zSession != null) stopZasechkaLive() else stopLiveDictation()
+        when {
+            zSession != null -> stopZasechkaLive()
+            rSession != null -> stopRaznoskaLive()
+            else -> stopLiveDictation()
+        }
     }
 
     private fun onZasechkaLiveDone(text: String) {
@@ -2066,12 +2155,358 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ---- Разноска: тап -> наговор -> дела в Todoist (ни поля, ни ленты) ----
+
+    /** Кнопка «Р» (и вкладка «Дела»): старт наговора, второй тап — разбор. */
+    fun onRaznoskaTap() {
+        if (isLockedIdle()) return
+        if (rSession != null) { stopRaznoskaLive(); return }
+        if (rWhisperRecording && DictationService.recording) {
+            rButton?.setBusy(true)
+            stopDictation()  // -> onRecordingSaved, routed by the flag
+            return
+        }
+        // Один микрофон на все три кнопки: чужую запись эта не перехватывает.
+        if (googleSession != null || zSession != null || zWhisperRecording ||
+            DictationService.recording
+        ) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.r_busy))
+            return
+        }
+        if (!hasMicPermission()) {
+            micRequestForRaznoska = true
+            requestMicPermission()
+            return
+        }
+        startRaznoskaCapture()
+    }
+
+    private fun startRaznoskaCapture() {
+        rButton?.hideInput()
+        rButton?.hidePlate()
+        if (cachedEngine.startsWith("whisper")) {
+            rWhisperRecording = true
+            rButton?.setRecording(true)
+            // У Whisper живых слов нет, но плашка нужна: это ещё и цель тапа
+            // «набрать текстом».
+            rButton?.showTicker()
+            rButton?.updateTicker("🎙 наговори дела… (тап сюда — набрать текстом)")
+            Haptics.start(this)
+            startDictation()
+        } else {
+            startRaznoskaGoogle()
+        }
+        // Пока владелец говорит: греем сокет к API и подтягиваем каталог
+        // проектов, чтобы к моменту «стоп» всё было под рукой.
+        app.warmClaudeConnection()
+        scope.launch { runCatching { app.raznoskaEngine.warmCatalog() } }
+    }
+
+    // Имена проектов и меток Todoist: распознаватель должен слышать «Стеллар»
+    // и «Мармакс», а не «стеллаж» и «Марк Макс».
+    private fun raznBiasing(): List<String> = runCatching {
+        app.todoistStore.projectsFlow.value.map { it.name } + app.todoistStore.labelsFlow.value
+    }.getOrDefault(emptyList())
+
+    private fun startRaznoskaGoogle() {
+        if (rSession != null) return
+        if (!GoogleSpeechSession.isAvailable(this)) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.google_unavailable))
+            return
+        }
+        val session = GoogleSpeechSession(
+            this,
+            biasing = (cachedBiasing + zClientsCached + raznBiasing()).distinct(),
+            formatting = cachedFormatting,
+            segmentedSession = cachedSegmented,
+        )
+        rSession = session
+        session.start(
+            onReady = { Haptics.success(this) },
+            onPartial = { live -> rButton?.updateTicker(live) },
+            // Наговор длиннее засечки, но короче диктовки главы: черновик на
+            // диск не пишем, повторить его дешевле, чем чинить.
+            onCheckpoint = { },
+            onDone = { text -> onRaznoskaLiveDone(text) },
+            onError = { msg -> onRaznoskaLiveError(msg) },
+            onLog = { line -> app.eventLog.add("разноска: $line") },
+        )
+        rButton?.setRecording(true)
+        rButton?.showTicker()
+        rButton?.updateTicker("🎙 наговори дела… (тап сюда — набрать текстом)")
+        Haptics.start(this)
+        runCatching { startMicHold() }
+    }
+
+    private fun stopRaznoskaLive() {
+        val session = rSession ?: return
+        rButton?.setRecording(false)
+        rButton?.setBusy(true)
+        session.stop()  // -> onRaznoskaLiveDone
+    }
+
+    /** Тап по живой плашке: микрофон замолчал, дальше набираем текстом. */
+    private fun onRaznoskaTickerTap() {
+        when {
+            rSession != null -> {
+                rTypeInstead = true
+                stopRaznoskaLive()
+            }
+            rWhisperRecording && DictationService.recording -> {
+                rTypeInstead = true
+                rButton?.setBusy(true)
+                stopDictation()
+            }
+        }
+    }
+
+    private fun openRaznoskaTypeIn(prefill: String) {
+        rButton?.showInput(prefill, "Дела текстом") { typed ->
+            val text = typed.trim()
+            if (text.isNotEmpty()) onRaznoskaText(text)
+        }
+    }
+
+    private fun onRaznoskaLiveDone(text: String) {
+        rSession = null
+        runCatching { stopMicHold() }
+        runCatching { rButton?.hideTicker() }
+        rButton?.setRecording(false)
+        if (rTypeInstead) {
+            rTypeInstead = false
+            rButton?.setBusy(false)
+            openRaznoskaTypeIn(text.trim())
+            return
+        }
+        onRaznoskaText(text)
+    }
+
+    private fun onRaznoskaLiveError(msg: String) {
+        rSession = null
+        runCatching { stopMicHold() }
+        rButton?.hideTicker()
+        rButton?.setRecording(false)
+        rButton?.setBusy(false)
+        Haptics.error(this)
+        Feedback.toast(this, msg)
+    }
+
+    /** Текст наговора в руках: Опус разбирает, плашка показывает результат. */
+    private fun onRaznoskaText(raw: String) {
+        val text = raw.trim()
+        if (text.isBlank()) {
+            rButton?.setBusy(false)
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.dictation_empty))
+            return
+        }
+        if (!scope.isActive) return
+        rButton?.setBusy(true)
+        scope.launch {
+            val result = runCatching { app.raznoskaEngine.split(text) }
+                .getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    app.eventLog.add("разноска: split бросил ${e.javaClass.simpleName}: ${e.message}")
+                    Result.failure(e)
+                }
+            rButton?.setBusy(false)
+            val draft = result.getOrElse { e ->
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(
+                    this@PravkaAccessibilityService,
+                    e.message ?: getString(R.string.r_split_failed),
+                    long = true,
+                )
+                return@launch
+            }
+            Haptics.success(this@PravkaAccessibilityService)
+            if (draft.tasks.isEmpty()) {
+                // Дел не нашлось - наговор всё равно записан: заметки видно
+                // во вкладке «Дела», ничего не пропало.
+                Feedback.toast(
+                    this@PravkaAccessibilityService,
+                    if (draft.notes.isBlank()) "Дел в наговоре не нашлось"
+                    else "Дел нет — записал в заметки",
+                )
+                return@launch
+            }
+            showRaznoskaPlate(draft.id)
+        }
+    }
+
+    /** Плашка: тап по ней — править в приложении, «ОК» — отправить как есть. */
+    private fun showRaznoskaPlate(draftId: Long) {
+        val draft = app.raznoskaStore.byId(draftId) ?: return
+        val waiting = draft.live.filter { !it.sent }
+        if (waiting.isEmpty()) return
+        val rows = waiting.map { task ->
+            val meta = mutableListOf<String>()
+            if (task.projectName.isNotBlank()) meta.add("#" + task.projectName)
+            if (task.labels.isNotEmpty()) meta.add(task.labels.joinToString(" ") { "@" + it })
+            if (task.repeat.isNotBlank()) meta.add(task.repeat)
+            else if (task.due.isNotBlank()) meta.add(raznDate(task.due))
+            if (task.priority != ru.zf.pravka.core.ParsedTask.P4) meta.add(task.priorityLabel)
+            RaznoskaButtonController.PlateRow(
+                title = task.content,
+                meta = meta.joinToString(" · "),
+                warn = if (task.duplicateOf.isBlank()) "" else "⚠ похоже: " + task.duplicateOf,
+            )
+        }
+        rButton?.showTasks(
+            header = "РАЗНОСКА · " + raznCount(waiting.size),
+            rows = rows,
+            okLabel = "ОК",
+            onOk = { sendRaznoska(listOf(draftId)) },
+            onOpen = { openTodoistTab() },
+        )
+    }
+
+    /** «3 дела» / «1 дело» — плашка и тосты говорят по-русски. */
+    private fun raznCount(n: Int): String {
+        val word = when {
+            n % 10 == 1 && n % 100 != 11 -> "дело"
+            n % 10 in 2..4 && n % 100 !in 12..14 -> "дела"
+            else -> "дел"
+        }
+        return "$n $word"
+    }
+
+    /** «2026-08-25» → «25 авг». */
+    private fun raznDate(iso: String): String = runCatching {
+        val parsed = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).parse(iso)
+        if (parsed == null) iso
+        else java.text.SimpleDateFormat("d MMM", java.util.Locale("ru")).format(parsed)
+    }.getOrDefault(iso)
+
+    private fun openTodoistTab() {
+        startActivity(
+            android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_TODOIST)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+
+    /**
+     * Отправка в Todoist. Уже созданные дела пропускаются внутри движка, так
+     * что повторное «ОК» после потери сети ничего не удваивает.
+     */
+    private fun sendRaznoska(draftIds: List<Long>) {
+        if (draftIds.isEmpty()) return
+        rButton?.setBusy(true)
+        scope.launch {
+            var created = 0
+            var failed = 0
+            var error = ""
+            for (id in draftIds) {
+                val outcome = runCatching { app.raznoskaEngine.send(id) }
+                    .getOrElse { e ->
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        ru.zf.pravka.core.RaznoskaEngine.SendOutcome(
+                            0, 1, e.message ?: "не отправилось",
+                        )
+                    }
+                created += outcome.created
+                failed += outcome.failed
+                if (error.isBlank() && outcome.error.isNotBlank()) error = outcome.error
+            }
+            rButton?.setBusy(false)
+            when {
+                failed == 0 && created > 0 -> {
+                    Haptics.success(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "✓ ${raznCount(created)} в Todoist",
+                    )
+                }
+                created > 0 -> {
+                    Haptics.error(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "Отправлено $created, осталось $failed: $error",
+                        long = true,
+                    )
+                }
+                else -> {
+                    Haptics.error(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "Не отправилось ($error). Дела ждут во вкладке «Дела».",
+                        long = true,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun resplitRaznoska(draftId: Long) {
+        rButton?.setBusy(true)
+        scope.launch {
+            val result = runCatching { app.raznoskaEngine.resplit(draftId) }
+                .getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Result.failure(e)
+                }
+            rButton?.setBusy(false)
+            result.onSuccess { draft ->
+                Haptics.success(this@PravkaAccessibilityService)
+                if (draft.tasks.isEmpty()) {
+                    Feedback.toast(this@PravkaAccessibilityService, "Дел так и не нашлось")
+                } else {
+                    showRaznoskaPlate(draft.id)
+                }
+            }.onFailure { e ->
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(
+                    this@PravkaAccessibilityService,
+                    e.message ?: "Не вышло разобрать заново",
+                    long = true,
+                )
+            }
+        }
+    }
+
+    private fun showRaznoskaMenu() {
+        scope.launch {
+            runCatching { app.raznoskaStore.load() }
+            val pending = app.raznoskaStore.pending()
+            val waiting = pending.sumOf { it.pendingCount }
+            val items = mutableListOf<RaznoskaButtonController.MenuItem>()
+            if (waiting > 0) {
+                val newest = pending.first()
+                items.add(
+                    RaznoskaButtonController.MenuItem("✓ Отправить ${raznCount(waiting)}") {
+                        sendRaznoska(pending.map { it.id })
+                    }
+                )
+                items.add(
+                    RaznoskaButtonController.MenuItem("Показать разбор") {
+                        showRaznoskaPlate(newest.id)
+                    }
+                )
+                items.add(
+                    RaznoskaButtonController.MenuItem("Разобрать заново") {
+                        resplitRaznoska(newest.id)
+                    }
+                )
+            }
+            items.add(
+                RaznoskaButtonController.MenuItem("Набрать текстом") { openRaznoskaTypeIn("") }
+            )
+            items.add(RaznoskaButtonController.MenuItem("Открыть «Дела»") { openTodoistTab() })
+            rButton?.showMenu(items)
+        }
+    }
+
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         // A focusable type-in box must not sit above the keyguard through a
         // display switch - fold closes it (the draft is a sentence, not a loss).
         // This one is immediate: removing a window helps the transition.
         zButton?.hideInput()
+        rButton?.hideInput()
+        rButton?.hidePlate()
         // Repositioning ADDS work to the transition the system is running right
         // now: updateViewLayout on our overlays makes WindowManager wait for
         // them to redraw mid-fold. Do it once the fold has settled instead -
@@ -2083,7 +2518,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         // transition must relayout and WAIT for. If a freeze report ever comes
         // back with a big number here, the leak is ours; a small one clears us.
         runCatching {
-            val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0)
+            val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0) +
+                (rButton?.windowCount() ?: 0)
             app.eventLog.add("смена конфигурации: наших окон $n")
         }
     }
@@ -2092,6 +2528,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     private val configSettled = Runnable {
         floatingButton?.onConfigurationChanged()
         zButton?.onConfigurationChanged()
+        rButton?.onConfigurationChanged()
     }
 
     override fun onInterrupt() = Unit
@@ -2107,11 +2544,15 @@ class PravkaAccessibilityService : AccessibilityService() {
         googleSession = null
         zSession?.stop()
         zSession = null
+        rSession?.stop()
+        rSession = null
         runCatching { stopMicHold() }
         floatingButton?.destroy()
         floatingButton = null
         zButton?.destroy()
         zButton = null
+        rButton?.destroy()
+        rButton = null
         scope.cancel()
         super.onDestroy()
     }
