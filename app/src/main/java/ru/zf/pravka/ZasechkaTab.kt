@@ -3,6 +3,7 @@ package ru.zf.pravka
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -130,6 +131,32 @@ private fun categoryColor(name: String): Color {
 }
 
 private fun capFirst(s: String): String = s.replaceFirstChar { it.uppercase() }
+
+/** Points a span of [ms] in a category worth [worth] per hour contributes. */
+private fun pointsOf(worth: Int, ms: Long): Int =
+    kotlin.math.round(worth * ms.toDouble() / 3_600_000.0).toInt()
+
+/** «+12» / «−4» / «·» - what this row did to the day's score. */
+@Composable
+private fun PointsChip(points: Int, bold: Boolean = false) {
+    val color = when {
+        points > 0 -> Color(0xFFEA580C)
+        points < 0 -> Color(0xFF8B5CF6)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+    }
+    Text(
+        when {
+            points > 0 -> "+$points"
+            points < 0 -> "$points"
+            else -> "·"
+        },
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+        color = color,
+        maxLines = 1,
+        modifier = Modifier.width(34.dp).padding(start = 2.dp),
+    )
+}
 
 private val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
 private val dayLabelFormat = SimpleDateFormat("EEEE, d MMMM", Locale("ru"))
@@ -272,6 +299,13 @@ internal fun ZasechkaTab(app: PravkaApp) {
         entries.filter { it.start in rangeStart until dayEnd }
             .sortedWith(compareBy({ it.start }, { it.source == "auto" }))
     }
+    // Worth per hour by category, and the day's balance - hoisted out of the
+    // totals block so the bar can live right under the date (owner's layout)
+    // and every ribbon row can show what it earns.
+    val worthByCat = remember(categories) {
+        categories.associate { it.name.trim().lowercase() to it.value }
+    }
+    val worthOf: (String) -> Int = { worthByCat[it.trim().lowercase()] ?: 0 }
     // Day view groups the ribbon into units (chains + singles), newest first.
     val dayUnits = remember(rangeEntries, weekMode) {
         if (weekMode) emptyList() else buildDayUnits(rangeEntries).asReversed()
@@ -335,6 +369,13 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     Icon(Icons.Filled.KeyboardArrowRight, contentDescription = "позже")
                 }
             }
+            // The score of the day sits right under its name (owner's layout).
+            val rangeTo = minOf(now, dayEnd)
+            val balance = rangeEntries.sumOf { e ->
+                worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now).toDouble() / 3_600_000.0
+            }
+            RainbowScoreBar(kotlin.math.round(balance).toInt(), weekMode)
+            Spacer(Modifier.height(4.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -396,6 +437,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     ChainBlock(
                         unit = unit,
                         now = now,
+                        worthOf = worthOf,
                         onStop = if (unit.open) doStop else null,
                         onEdit = { editingChain = unit.fragments },
                         onDelete = {
@@ -407,6 +449,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     EntryRow(
                         entry = head,
                         now = now,
+                        worthOf = worthOf,
                         onStop = if (head.open) doStop else null,
                         onEdit = { editing = head },
                         onDelete = { app.appScope.launch { store.delete(head.id) } },
@@ -485,18 +528,6 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(bottom = 6.dp),
             )
-            // The waterline (owner's design): every category is worth so many
-            // points per hour - service around zero, work and sport lift the
-            // day, losses sink it. The balance is the integral: hours × worth.
-            val worthByCat = remember(categories) {
-                categories.associate { it.name.trim().lowercase() to it.value }
-            }
-            val balance = msByCat.entries.sumOf { (cat, ms) ->
-                (worthByCat[cat] ?: 0) * ms.toDouble() / 3_600_000.0
-            }
-            val balanceRounded = kotlin.math.round(balance).toInt()
-            WaterlineBar(balanceRounded, weekMode)
-            Spacer(Modifier.height(8.dp))
             val max = rows.maxOfOrNull { it.second } ?: 0L
             for ((category, minutes) in rows) {
                 val rowAlpha = if (minutes > 0) 1f else 0.4f
@@ -653,68 +684,88 @@ internal fun ZasechkaTab(app: PravkaApp) {
 }
 
 /**
- * The day (or week) floating above or below the waterline: a centre line with
- * the balance growing right for a day that paid off and left for one that did
- * not. The number is hours × the owner's per-category worth, so eight hours of
- * work at +8 reads +64 and two hours of losses at -8 take 16 back.
+ * The score of the day as a rainbow to climb (owner's design): the track runs
+ * from zero on the left to the day's target on the right, painted violet ->
+ * blue -> green -> yellow -> orange -> RED, and the bright fill shows how far
+ * he got. The colours are anchored to the TRACK, not to the fill, so red only
+ * shows up when the day actually reaches it - that is the whole point of the
+ * picture. A day in the red (negative) fills the short violet stub left of the
+ * zero tick instead.
  */
 @Composable
-private fun WaterlineBar(balance: Int, weekMode: Boolean) {
-    val scale = if (weekMode) 300f else 60f
-    val fraction = (kotlin.math.abs(balance) / scale).coerceIn(0f, 1f)
+private fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
+    // What "reaching the red" means: a strong day is around a hundred points
+    // (eight hours of work at +8 plus an hour of sport), a strong week five of
+    // those.
+    val target = if (weekMode) 500f else 100f
+    val negativeSpan = target / 4f
+    val rainbow = listOf(
+        Color(0xFF8B5CF6), Color(0xFF3B82F6), Color(0xFF06B6D4),
+        Color(0xFF22C55E), Color(0xFFEAB308), Color(0xFFF97316), Color(0xFFEF4444),
+    )
     val positive = balance >= 0
-    val tint = if (positive) Color(0xFFEA580C) else Color(0xFF8B5CF6)
+    val label = if (positive) "+$balance" else "$balance"
+    val labelColor = when {
+        balance >= target * 0.75f -> Color(0xFFEF4444)
+        balance >= target * 0.4f -> Color(0xFFF97316)
+        balance >= 0 -> Color(0xFF22C55E)
+        else -> Color(0xFF8B5CF6)
+    }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
-            (if (positive) "▲ +$balance" else "▼ $balance"),
-            style = MaterialTheme.typography.titleSmall,
+            label,
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
-            color = tint,
-            modifier = Modifier.width(78.dp),
+            color = labelColor,
+            modifier = Modifier.width(56.dp),
         )
-        Box(
-            Modifier
-                .weight(1f)
-                .height(14.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(7.dp)),
-        ) {
-            // Left half sinks, right half lifts; the centre tick is zero.
-            Row(Modifier.fillMaxWidth()) {
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                    if (!positive) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth(fraction)
-                                .height(14.dp)
-                                .background(tint, RoundedCornerShape(7.dp)),
-                        )
-                    }
+        val trackColor = MaterialTheme.colorScheme.surfaceVariant
+        val tickColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+        Canvas(Modifier.weight(1f).height(16.dp)) {
+            val h = size.height
+            val radius = androidx.compose.ui.geometry.CornerRadius(h / 2f)
+            // Zero sits a fifth in, leaving a short lane for a day that sank.
+            val zeroX = size.width * 0.18f
+            drawRoundRect(color = trackColor, size = size, cornerRadius = radius)
+            val brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                colors = rainbow,
+                startX = zeroX,
+                endX = size.width,
+            )
+            // The full climb, dimmed: the goal is visible before it is reached.
+            drawRoundRect(
+                brush = brush,
+                topLeft = androidx.compose.ui.geometry.Offset(zeroX, 0f),
+                size = androidx.compose.ui.geometry.Size(size.width - zeroX, h),
+                cornerRadius = radius,
+                alpha = 0.22f,
+            )
+            if (positive) {
+                val frac = (balance / target).coerceIn(0f, 1f)
+                if (frac > 0f) {
+                    drawRoundRect(
+                        brush = brush,
+                        topLeft = androidx.compose.ui.geometry.Offset(zeroX, 0f),
+                        size = androidx.compose.ui.geometry.Size((size.width - zeroX) * frac, h),
+                        cornerRadius = radius,
+                    )
                 }
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    if (positive) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth(fraction)
-                                .height(14.dp)
-                                .background(tint, RoundedCornerShape(7.dp)),
-                        )
-                    }
-                }
+            } else {
+                val frac = (-balance / negativeSpan).coerceIn(0f, 1f)
+                val w = zeroX * frac
+                drawRoundRect(
+                    color = Color(0xFF8B5CF6),
+                    topLeft = androidx.compose.ui.geometry.Offset(zeroX - w, 0f),
+                    size = androidx.compose.ui.geometry.Size(w, h),
+                    cornerRadius = radius,
+                )
             }
-            Box(
-                Modifier
-                    .fillMaxWidth(0.004f)
-                    .height(14.dp)
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f))
-                    .align(Alignment.Center),
+            drawRect(
+                color = tickColor,
+                topLeft = androidx.compose.ui.geometry.Offset(zeroX - 1f, 0f),
+                size = androidx.compose.ui.geometry.Size(2f, h),
             )
         }
-        Text(
-            "баланс",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 8.dp),
-        )
     }
 }
 
@@ -727,6 +778,7 @@ private fun WaterlineBar(balance: Int, weekMode: Boolean) {
 private fun EntryRow(
     entry: ZasechkaStore.Entry,
     now: Long,
+    worthOf: (String) -> Int,
     onStop: (() -> Unit)?,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -780,6 +832,7 @@ private fun EntryRow(
             maxLines = 1,
             modifier = Modifier.width(58.dp).padding(start = 4.dp),
         )
+        PointsChip(pointsOf(worthOf(entry.category), entry.durationMs(now)))
         val title = buildString {
             append(capFirst(entry.title.ifBlank { entry.raw.take(60) }))
             if (entry.client.isNotBlank()) append(" · ${entry.client}")
@@ -829,6 +882,7 @@ private fun EntryRow(
 private fun ChainBlock(
     unit: DayUnit,
     now: Long,
+    worthOf: (String) -> Int,
     onStop: (() -> Unit)?,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -889,6 +943,13 @@ private fun ChainBlock(
                     maxLines = 1,
                     modifier = Modifier.width(58.dp).padding(start = 4.dp),
                 )
+                PointsChip(
+                    pointsOf(
+                        worthOf(head.category),
+                        unit.fragments.sumOf { it.durationMs(now) },
+                    ),
+                    bold = true,
+                )
                 val pomos = unit.fragments.sumOf { it.pomodoros }
                 val title = buildString {
                     append(capFirst(head.title.ifBlank { head.raw.take(60) }))
@@ -937,17 +998,15 @@ private fun ChainBlock(
                         .clickable { onEditInterruption(br) }
                         .padding(vertical = 1.dp),
                 ) {
-                    Text(
-                        "${fmtTime(br.start)}–${fmtTime(br.end)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        modifier = Modifier.width(82.dp).padding(start = 6.dp),
-                    )
+                    // No time range here (owner: «уберём, с какого по какое») -
+                    // the row lines up with its parent instead: a slim stripe
+                    // right beside the block's tall one, then the same
+                    // category/duration/points/title columns. Times live one
+                    // tap away, in the entry editor.
                     Box(
                         Modifier
                             .width(2.dp)
-                            .height(14.dp)
+                            .height(13.dp)
                             .background(categoryColor(br.category), RoundedCornerShape(1.dp)),
                     )
                     Text(
@@ -956,15 +1015,16 @@ private fun ChainBlock(
                         color = categoryColor(br.category),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.width(90.dp).padding(start = 4.dp),
+                        modifier = Modifier.width(98.dp).padding(start = 4.dp),
                     )
                     Text(
                         fmtDur(br.durationMin(now)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
-                        modifier = Modifier.width(50.dp).padding(start = 4.dp),
+                        modifier = Modifier.width(58.dp).padding(start = 4.dp),
                     )
+                    PointsChip(pointsOf(worthOf(br.category), br.durationMs(now)))
                     Text(
                         capFirst(br.title.ifBlank { br.raw.take(60) }),
                         style = MaterialTheme.typography.bodySmall,
@@ -1189,7 +1249,8 @@ private fun CategoriesEditor(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    for (category in categories) {
+    // Same order as the day's progress bars: along the rainbow, red first.
+    for (category in categories.sortedBy { categoryHue(it.name) }) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
