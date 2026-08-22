@@ -67,7 +67,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         // is at its busiest, and a synchronous a11y query into it can hang
         // for the full accessibility timeout and freeze the transition (the
         // owner's 3-10s black screen on fold/unfold).
-        private val SYSTEM_WINDOW_PKGS = setOf("android", "com.android.systemui")
         const val RULES_OPT_PERIOD_MS = 7L * 24 * 3600 * 1000
         const val RULES_OPT_MIN_COUNT = 6
     }
@@ -182,6 +181,11 @@ class PravkaAccessibilityService : AccessibilityService() {
             val size = floatingButton?.buttonSizePx() ?: return@anchor null
             zx to (zy - size - pairGap)
         }
+        // The "П" lives on screen permanently (owner: "пусть будет всегда") -
+        // no field-following, no window watching. Without a focused field a
+        // take still works: CLEAN runs and the result lands in the clipboard
+        // plus a notification (the no-field path).
+        floatingButton?.show()
         scope.launch {
             app.settings.zEnabledFlow.collect {
                 cachedZEnabled = it
@@ -244,13 +248,10 @@ class PravkaAccessibilityService : AccessibilityService() {
     private fun handleAccessibilityEvent(event: AccessibilityEvent) {
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
+                // The button no longer follows fields (owner: "пусть будет
+                // всегда") - the focus event only feeds the insert-target cache.
                 val source = event.source ?: return
-                if (source.isEditable) {
-                    cachedFocus = WeakReference(source)
-                    floatingButton?.show()
-                } else {
-                    floatingButton?.hide()
-                }
+                if (source.isEditable) cachedFocus = WeakReference(source)
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
                 val source = event.source ?: return
@@ -279,58 +280,12 @@ class PravkaAccessibilityService : AccessibilityService() {
                     }
                 }
             }
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                val pkg = event.packageName?.toString()
-                // Toasts and our own overlays fire this event too - ignore
-                // ourselves, or our own UI appearing would count as an app
-                // switch and hide the button.
-                if (pkg == packageName) return
-                // Keyguard/SystemUI windows storm this event exactly while
-                // their process is busiest (fold, lock) - never query them.
-                if (pkg == null || pkg in SYSTEM_WINDOW_PKGS ||
-                    pkg.contains("keyguard", ignoreCase = true)
-                ) return
-                // While a take is live the button is pinned visible in every app
-                // and hide() early-returns anyway, so the tree walk below would
-                // be pure waste - and the owner is expected to switch apps
-                // mid-dictation, which is exactly when it would block the
-                // recognizer's callbacks.
-                if (googleSession != null || zSession != null || DictationService.recording) return
-                // Fold/unfold quiet period: for a few seconds after a
-                // configuration change every window is mid-transition - a tree
-                // query lands in an app busy redrawing (the launcher probe took
-                // ~300 ms in the owner's log) while the system's a11y dispatch
-                // waits behind us. Focus events restore the button afterwards.
-                if (SystemClock.uptimeMillis() - lastConfigChangedAt < 3_000) return
-                // On the keyguard there is no field to hover over.
-                if (runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)) return
-                // Window storms (fold, app launch animations) collapse to one
-                // probe per quarter second; the focus events keep the button
-                // honest in between.
-                val nowUp = SystemClock.uptimeMillis()
-                if (nowUp - lastWindowProbeAt < 250) return
-                lastWindowProbeAt = nowUp
-                // The LAST tree walk this service owned on its main thread is
-                // now off it: rootInActiveWindow + findFocus are binder round
-                // trips into the fronting app, and the fold bug taught us what
-                // that costs. The result hops back to main for the View work.
-                probeHandler.post {
-                    val editable =
-                        runCatching { liveFocusedEditableNode() != null }.getOrDefault(false)
-                    mainHandler.post {
-                        if (editable) floatingButton?.show() else floatingButton?.hide()
-                    }
-                }
-            }
+            // TYPE_WINDOW_STATE_CHANGED is no longer even subscribed to: the
+            // "П" lives on screen permanently (owner's call), so nothing needs
+            // to know which app is in front - and window storms during fold
+            // transitions no longer reach this service at all.
         }
     }
-
-    // Window-probe machinery: same isolation pattern as the removed Chrome
-    // poller - node queries never run on the service main thread.
-    private val probeThread = android.os.HandlerThread("pravka-probe").apply { start() }
-    private val probeHandler by lazy { android.os.Handler(probeThread.looper) }
-    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    @Volatile private var lastConfigChangedAt = 0L
 
     /** Focused editable node: live focus first, then the cache (spec 5.4). */
     fun focusedEditableNode(): AccessibilityNodeInfo? {
@@ -574,7 +529,6 @@ class PravkaAccessibilityService : AccessibilityService() {
     // wasteful, and irrelevant once no delivery is recent.
     @Volatile private var lastWatchProbeAt = 0L
     @Volatile private var lastDeliveryAt = 0L
-    @Volatile private var lastWindowProbeAt = 0L
 
     // The gray "отмена" bubble beside the ticker: throw the take away.
     @Volatile private var discardTake = false
@@ -2000,9 +1954,6 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        // Opens the window-probe quiet period: no tree queries while the
-        // displays are switching.
-        lastConfigChangedAt = SystemClock.uptimeMillis()
         // The foldable changes configuration on fold/unfold - reposition.
         floatingButton?.onConfigurationChanged()
         zButton?.onConfigurationChanged()
@@ -2019,7 +1970,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         zReminderHandler.removeCallbacks(zReminderTick)
         pomodoroHandler.removeCallbacks(pomodoroTicker)
         lagHandler.removeCallbacks(lagTick)
-        runCatching { probeThread.quitSafely() }
         googleSession?.stop()
         googleSession = null
         zSession?.stop()
