@@ -53,6 +53,18 @@ class ZasechkaStore(private val context: Context) {
         // - otherwise the work grows with every logged day (and the owner's
         // symptom was exactly "the longer it runs, the worse the fold").
         private const val NORMALIZE_WINDOW_MS = 5 * 86_400_000L
+        // Undo: a mutation snapshots the recent slice of the ribbon, so one
+        // press puts back exactly what was there - including entries a voice
+        // "удали обед" removed. Two days is far more than any single edit
+        // touches; five steps deep in memory, the top one survives a restart.
+        private const val UNDO_WINDOW_MS = 2 * 86_400_000L
+        private const val UNDO_DEPTH = 5
+        // Two mutations closer than this are one act (a chain edit updates
+        // every fragment in a tight loop) - keep the state before the burst.
+        private const val UNDO_BURST_MS = 1_500L
+        // Sub-half-minute closed leftovers are splice artifacts, not facts:
+        // they showed up in the owner's export as 0-minute rows.
+        private const val CRUMB_MS = 30_000L
         val DEFAULT_CATEGORIES = listOf(
             Category("Сон", ""),
             Category("Спорт: силовая", "тренажёрка, железо, ОФП"),
@@ -145,6 +157,51 @@ class ZasechkaStore(private val context: Context) {
     private val _clientsFlow = MutableStateFlow<List<String>>(emptyList())
     val clientsFlow: StateFlow<List<String>> = _clientsFlow
 
+    /** What one press of «Отменить» would take back; null = nothing to undo. */
+    private val _undoFlow = MutableStateFlow<String?>(null)
+    val undoFlow: StateFlow<String?> = _undoFlow
+
+    private class UndoStep(
+        val label: String,
+        val at: Long,
+        val from: Long,
+        val entries: List<Entry>,
+    )
+
+    private val undoSteps = ArrayDeque<UndoStep>()
+
+    /** Remembers the recent ribbon BEFORE a mutation. Call inside the lock. */
+    private fun snapshotLocked(label: String) {
+        val now = System.currentTimeMillis()
+        val last = undoSteps.lastOrNull()
+        if (last != null && now - last.at < UNDO_BURST_MS) return
+        val from = now - UNDO_WINDOW_MS
+        undoSteps.addLast(
+            UndoStep(
+                label = label,
+                at = now,
+                from = from,
+                entries = entries.filter { (if (it.open) Long.MAX_VALUE else it.end) > from },
+            )
+        )
+        while (undoSteps.size > UNDO_DEPTH) undoSteps.removeFirst()
+    }
+
+    /** Puts the last remembered state back. Returns its label, or null. */
+    suspend fun undoLast(): String? = mutex.withLock {
+        ensureLoaded()
+        val step = undoSteps.removeLastOrNull() ?: return@withLock null
+        val kept = entries.filter { (if (it.open) Long.MAX_VALUE else it.end) <= step.from }
+        // Restored rows go out to the mirrors again - the Sheets copy of a
+        // row that came back must stop showing the deleted state.
+        entries = (kept + step.entries.map { it.copy(synced = false, notionSynced = false) })
+            .toMutableList()
+        entries.sortBy { it.start }
+        normalizeLocked()
+        persist()
+        step.label
+    }
+
     private val file: File get() = File(context.filesDir, FILE_NAME)
 
     suspend fun all(): List<Entry> = mutex.withLock {
@@ -210,6 +267,7 @@ class ZasechkaStore(private val context: Context) {
         source: String,
     ): Entry = mutex.withLock {
         ensureLoaded()
+        snapshotLocked("запись «${title.trim().ifBlank { "без названия" }}»")
         closeOpenLocked(start)
         val nowMs = System.currentTimeMillis()
         for (i in entries.indices) {
@@ -449,9 +507,22 @@ class ZasechkaStore(private val context: Context) {
         return changed
     }
 
+    /**
+     * Splice leftovers shorter than half a minute are artifacts, not facts -
+     * they surfaced as 0-minute rows in the owner's export. The open entry and
+     * anything the owner could plausibly have meant (>= 30 s) stay.
+     */
+    private fun dropCrumbsLocked(): Boolean {
+        val kept = entries.filter { it.open || it.end - it.start >= CRUMB_MS }
+        if (kept.size == entries.size) return false
+        entries = kept.toMutableList()
+        return true
+    }
+
     /** All ribbon invariants in one locked pass; true when anything changed. */
     private fun normalizeLocked(): Boolean {
         var changed = splitMidnightLocked()
+        if (dropCrumbsLocked()) changed = true
         if (trimFillersLocked()) changed = true
         if (spliceOverlapsLocked()) changed = true
         if (fillGapsLocked()) changed = true
@@ -582,6 +653,7 @@ class ZasechkaStore(private val context: Context) {
         title: String,
         category: String,
         resumePrevious: Boolean,
+        client: String = "",
     ): Entry? = mutex.withLock {
         ensureLoaded()
         if (end <= start) return@withLock null
@@ -621,7 +693,7 @@ class ZasechkaStore(private val context: Context) {
             raw = "",
             title = title.trim(),
             category = category.trim(),
-            client = "",
+            client = client.trim(),
             useful = 0,
             source = "auto",
             synced = false,
@@ -632,9 +704,13 @@ class ZasechkaStore(private val context: Context) {
             // The resume keeps the ORIGINAL source: it is the owner's own
             // activity continuing, not a robot fact - so the dedup and
             // coveredByOwner rules treat it like the human's claim it is.
+            // But NOT the dictation text: raw belongs to one act of speaking.
+            // Copying it made rows whose raw described a past event - and if a
+            // later take named something else, the row would read as a lie.
             entries.add(
                 t.copy(
                     id = nextId(),
+                    raw = "",
                     start = actualEnd,
                     end = 0L,
                     synced = false,
@@ -660,6 +736,7 @@ class ZasechkaStore(private val context: Context) {
         ensureLoaded()
         val index = entries.indexOfFirst { it.id == entry.id }
         if (index >= 0) {
+            snapshotLocked("правку «${entries[index].title.ifBlank { "без названия" }}»")
             entries[index] = entry.copy(synced = false, notionSynced = false)
             normalizeLocked()
             entries.sortBy { it.start }
@@ -669,6 +746,8 @@ class ZasechkaStore(private val context: Context) {
 
     suspend fun delete(id: Long): Unit = mutex.withLock {
         ensureLoaded()
+        val doomed = entries.firstOrNull { it.id == id } ?: return@withLock
+        snapshotLocked("удаление «${doomed.title.ifBlank { "без названия" }}»")
         if (entries.removeAll { it.id == id }) persist()
     }
 
@@ -729,18 +808,29 @@ class ZasechkaStore(private val context: Context) {
         val list = all()
         val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
+        val now = System.currentTimeMillis()
+        var previousRaw = ""
         val csv = buildString {
-            append("date,start,end,minutes,title,category,client,useful,raw\n")
+            // end/minutes are never blank now (a running entry is closed at
+            // "now" and flagged is_open), source tells a dictated row from one
+            // the app filled in, and raw is printed once per act of speaking -
+            // continuation fragments leave it empty instead of repeating it.
+            append("date,start,end,minutes,title,category,client,useful,source,is_open,raw\n")
             for (e in list) {
+                val end = if (e.open) now else e.end
                 append(dateFormat.format(Date(e.start))).append(',')
                 append(timeFormat.format(Date(e.start))).append(',')
-                append(if (e.open) "" else timeFormat.format(Date(e.end))).append(',')
-                append(if (e.open) "" else e.durationMin().toString()).append(',')
+                append(timeFormat.format(Date(end))).append(',')
+                append(e.durationMin(now).toString()).append(',')
                 append(csvEscape(e.title)).append(',')
                 append(csvEscape(e.category)).append(',')
                 append(csvEscape(e.client)).append(',')
                 append(if (e.useful > 0) e.useful.toString() else "").append(',')
-                append(csvEscape(e.raw)).append('\n')
+                append(e.source).append(',')
+                append(if (e.open) "true" else "false").append(',')
+                val raw = if (e.raw.isNotBlank() && e.raw == previousRaw) "" else e.raw
+                if (e.raw.isNotBlank()) previousRaw = e.raw
+                append(csvEscape(raw)).append('\n')
             }
         }
         val out = File(context.cacheDir, "pravka-zasechka.csv")
@@ -855,6 +945,7 @@ class ZasechkaStore(private val context: Context) {
     }
 
     private fun publish() {
+        _undoFlow.value = undoSteps.lastOrNull()?.label
         _entriesFlow.value = entries.toList()
         _categoriesFlow.value = categories.toList()
         _clientsFlow.value = clients.toList()

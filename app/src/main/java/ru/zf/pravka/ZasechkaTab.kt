@@ -335,9 +335,24 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     Icon(Icons.Filled.KeyboardArrowRight, contentDescription = "позже")
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 FilterChip(selected = !weekMode, onClick = { weekMode = false }, label = { Text("День") })
                 FilterChip(selected = weekMode, onClick = { weekMode = true }, label = { Text("Неделя") })
+                // Undo: a voice "удали обед" or a mistyped time is one press
+                // away from coming back, with the act named on the button.
+                val undoLabel by store.undoFlow.collectAsState()
+                undoLabel?.let { label ->
+                    TextButton(onClick = {
+                        app.appScope.launch {
+                            val undone = store.undoLast()
+                            app.zasechkaSync.kickSoon(app.appScope)
+                            Feedback.toast(app, if (undone != null) "↩︎ Отменено: $undone" else "Отменять нечего")
+                        }
+                    }) { Text("↩︎ $label") }
+                }
             }
             Spacer(Modifier.height(12.dp))
         }

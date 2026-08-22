@@ -1659,17 +1659,32 @@ class PravkaAccessibilityService : AccessibilityService() {
                 } else "— сейчас ничего не идёт",
                 goTab,
             )
+            val undoLabel = app.zasechkaStore.undoFlow.value
+            val undoItem = undoLabel?.let { label ->
+                ZasechkaButtonController.MenuItem("↩︎ Отменить $label") {
+                    scope.launch {
+                        val undone = runCatching { app.zasechkaStore.undoLast() }.getOrNull()
+                        app.zasechkaSync.kickSoon(scope)
+                        Feedback.toast(
+                            this@PravkaAccessibilityService,
+                            if (undone != null) "↩︎ Отменено: $undone" else "Отменять нечего",
+                        )
+                    }
+                }
+            }
             val items = if (pomodoroEndsAt > 0) {
-                listOf(
+                listOfNotNull(
                     header,
+                    undoItem,
                     ZasechkaButtonController.MenuItem(
                         if (pomodoroIsBreak) "Стоп: перерыв" else "Стоп: помидор"
                     ) { stopPomodoro(byUser = true) },
                     openTab,
                 )
             } else {
-                listOf(
+                listOfNotNull(
                     header,
+                    undoItem,
                     ZasechkaButtonController.MenuItem("🍅 25 минут") { startPomodoro(25, isBreak = false) },
                     ZasechkaButtonController.MenuItem("🍅 50 минут") { startPomodoro(50, isBreak = false) },
                     ZasechkaButtonController.MenuItem("Перерыв 5") { startPomodoro(5, isBreak = true) },

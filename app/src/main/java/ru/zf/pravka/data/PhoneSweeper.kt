@@ -365,6 +365,9 @@ class PhoneSweeper(
                         // A call pauses the current activity; afterwards the
                         // same activity keeps running in the ribbon.
                         resumePrevious = true,
+                        // The recognized contact is the counterparty: with it in
+                        // its own column a call row is already a CRM log line.
+                        client = name?.takeIf { it.isNotBlank() }.orEmpty(),
                     )
                     if (entry != null) {
                         inserted = true
