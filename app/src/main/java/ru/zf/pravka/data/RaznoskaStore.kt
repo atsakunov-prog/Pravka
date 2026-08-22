@@ -39,7 +39,9 @@ class RaznoskaStore(private val context: Context) {
         val model: String = "",
     ) {
         val live: List<ParsedTask> get() = tasks.filter { !it.dropped }
-        val allSent: Boolean get() = live.isNotEmpty() && live.all { it.sent }
+        // Пустой набор — тоже «сделано»: наговор без дел (или тот, где все
+        // дела убрали руками) уходит в журнал, а не висит вечно ждущим.
+        val allSent: Boolean get() = live.all { it.sent }
         val anySent: Boolean get() = tasks.any { it.sent }
         val pending: Boolean get() = !allSent
         val pendingCount: Int get() = live.count { !it.sent }

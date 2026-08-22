@@ -71,6 +71,7 @@ class RaznoskaButtonController(
     private var busy = false
     private var recording = false
     private var enabled = false
+    private var collectorsStarted = false
 
     private var ticker: FrameLayout? = null
     private var tickerText: TextView? = null
@@ -733,19 +734,26 @@ class RaznoskaButtonController(
             applyPosition(p, xFraction, yFraction)
             runCatching { windowManager.updateViewLayout(container, p) }
         }
-        // Размер и прозрачность — общие ручки на все три кнопки.
-        scope.launch {
-            settings.fabSizeFlow.collect { sizeDp ->
-                buttonSize = dp(sizeDp)
-                p.width = buttonSize
-                p.height = buttonSize
-                runCatching { windowManager.updateViewLayout(container, p) }
+        // Размер и прозрачность — общие ручки на все три кнопки. Подписка
+        // ставится один раз за жизнь службы: тумблер «Р» убирает окно и может
+        // создать его заново, а второй сборщик писал бы в мёртвое окно.
+        if (!collectorsStarted) {
+            collectorsStarted = true
+            scope.launch {
+                settings.fabSizeFlow.collect { sizeDp ->
+                    buttonSize = dp(sizeDp)
+                    val lp = params ?: return@collect
+                    val view = button ?: return@collect
+                    lp.width = buttonSize
+                    lp.height = buttonSize
+                    runCatching { windowManager.updateViewLayout(view, lp) }
+                }
             }
-        }
-        scope.launch {
-            settings.fabAlphaFlow.collect { alpha ->
-                idleAlpha = alpha
-                if (!busy && !recording) container.alpha = idleAlpha
+            scope.launch {
+                settings.fabAlphaFlow.collect { alpha ->
+                    idleAlpha = alpha
+                    if (!busy && !recording) button?.alpha = idleAlpha
+                }
             }
         }
 
