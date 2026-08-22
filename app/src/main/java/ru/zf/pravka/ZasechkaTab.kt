@@ -136,6 +136,9 @@ private val dayLabelFormat = SimpleDateFormat("EEEE, d MMMM", Locale("ru"))
 
 private fun fmtTime(ms: Long): String = timeFormat.format(Date(ms))
 
+/** Milliseconds -> whole minutes, rounded to nearest (never truncated). */
+private fun msToMin(ms: Long): Long = (ms + 30_000L) / 60_000L
+
 private fun fmtDur(min: Long): String =
     if (min >= 60) "${min / 60} ч ${min % 60} м" else "$min м"
 
@@ -172,7 +175,7 @@ private data class DayUnit(
     val open: Boolean get() = fragments.last().open
     fun endMs(now: Long): Long = fragments.last().let { if (it.open) now else it.end }
     /** Minutes of the activity's own fragments - interruptions not counted. */
-    fun totalMin(now: Long): Long = fragments.sumOf { it.durationMin(now) }
+    fun totalMin(now: Long): Long = msToMin(fragments.sumOf { it.durationMs(now) })
 }
 
 private fun entrySig(e: ZasechkaStore.Entry): String =
@@ -431,17 +434,21 @@ internal fun ZasechkaTab(app: PravkaApp) {
         // of the day at a glance and aims for the inverted triangle: long red
         // bars up top, short violet ones below. Zero rows stay visible but dim.
         item {
-            val minutesByCat = HashMap<String, Long>()
+            // Summed in MILLISECONDS and rounded once: adding up per-entry
+            // whole minutes is how the day used to come out short of the clock.
+            val rangeTo = minOf(now, dayEnd)
+            val msByCat = HashMap<String, Long>()
             for (e in rangeEntries) {
                 val k = e.category.trim().lowercase()
-                minutesByCat[k] = (minutesByCat[k] ?: 0L) + e.durationMin(now)
+                msByCat[k] = (msByCat[k] ?: 0L) + e.durationMsIn(rangeStart, rangeTo, now)
             }
+            val minutesByCat = msByCat.mapValues { msToMin(it.value) }
             val names = (categoryNames + rangeEntries.map { it.category.trim() }.filter { it.isNotBlank() })
                 .distinctBy { it.lowercase() }
                 .sortedBy { categoryHue(it) }
             val rows = names.map { it to (minutesByCat[it.lowercase()] ?: 0L) } +
                 listOfNotNull(minutesByCat[""]?.takeIf { it > 0 }?.let { "" to it })
-            val total = minutesByCat.values.sum()
+            val total = msToMin(msByCat.values.sum())
             // Day pomodoro counters live in the service's internal prefs.
             val pomoCount = remember(now, dayStart, weekMode) {
                 val prefs = context.getSharedPreferences("pravka_internal", android.content.Context.MODE_PRIVATE)
@@ -450,9 +457,16 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     prefs.getInt("z_pomo_n_" + fmt.format(Date(dayStart - it * 86_400_000L)), 0)
                 }
             }
+            // The audit line: the ribbon must add up to the clock. Covered time
+            // vs the day's elapsed span - a visible remainder means a real hole
+            // (a fresh one, still inside the 45-minute «Потери» quarantine),
+            // not rounding, which is now exact to the minute.
+            val elapsedMs = (rangeTo - rangeStart).coerceAtLeast(0L)
+            val uncoveredMin = msToMin((elapsedMs - msByCat.values.sum()).coerceAtLeast(0L))
             Text(
                 (if (weekMode) "За неделю" else "За день") + ": ${fmtDur(total)} · записей: ${rangeEntries.size}" +
-                    (if (pomoCount > 0) " · 🍅 $pomoCount" else ""),
+                    (if (pomoCount > 0) " · 🍅 $pomoCount" else "") +
+                    (if (uncoveredMin >= 2) " · не покрыто ${fmtDur(uncoveredMin)}" else ""),
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(bottom = 6.dp),
             )
@@ -515,7 +529,9 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 val byClient = rangeEntries
                     .filter { it.client.isNotBlank() }
                     .groupBy { it.client }
-                    .mapValues { (_, list) -> list.sumOf { it.durationMin(now) } }
+                    .mapValues { (_, list) ->
+                        msToMin(list.sumOf { it.durationMsIn(rangeStart, minOf(now, dayEnd), now) })
+                    }
                     .entries.sortedByDescending { it.value }
                 if (byClient.isNotEmpty()) {
                     Text("По клиентам", style = MaterialTheme.typography.titleSmall)

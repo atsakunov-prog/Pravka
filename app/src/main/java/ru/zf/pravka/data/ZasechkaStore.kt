@@ -109,8 +109,25 @@ class ZasechkaStore(private val context: Context) {
         val notionSynced: Boolean = false,  // delivered to the Notion mirror
     ) {
         val open: Boolean get() = end == 0L
+        /** Exact span in ms - the only honest unit for adding a day up. */
+        fun durationMs(now: Long = System.currentTimeMillis()): Long =
+            ((if (open) now else end) - start).coerceAtLeast(0L)
+
+        // Rounded, NOT truncated: flooring every row separately dropped up to
+        // 59 seconds per entry, and an 18-entry day came out 7 minutes short of
+        // the wall clock (owner's audit). Totals are summed in ms and rounded
+        // once - see the tab.
         fun durationMin(now: Long = System.currentTimeMillis()): Long =
-            (((if (open) now else end) - start).coerceAtLeast(0L)) / 60_000L
+            (durationMs(now) + 30_000L) / 60_000L
+
+        /**
+         * The part of this entry that falls inside [from, to) - what a day or
+         * week total may legitimately count. Clipping instead of trusting the
+         * midnight split keeps a past day's total from swallowing an entry that
+         * is still running today.
+         */
+        fun durationMsIn(from: Long, to: Long, now: Long = System.currentTimeMillis()): Long =
+            (minOf(if (open) now else end, to) - maxOf(start, from)).coerceAtLeast(0L)
     }
 
     private val mutex = Mutex()
