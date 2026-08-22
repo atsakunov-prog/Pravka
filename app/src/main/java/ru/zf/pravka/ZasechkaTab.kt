@@ -109,6 +109,8 @@ private val CATEGORY_HUES = mapOf(
     // Legacy v1/v2 name still alive on the device - keep it with "соло".
     "секс" to 278f,
     // The very bottom of the spectrum: time spent on nothing at all.
+    // ("прокрастинация" lived for one build before the rename.)
+    "потери" to 292f,
     "прокрастинация" to 292f,
 )
 

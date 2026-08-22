@@ -32,8 +32,10 @@ class PhoneStore(private val context: Context) {
         val DAY_KEY_FORMAT = "yyyy-MM-dd"
 
         // First seed: the canonical attention eater. Everything else the
-        // owner adds by tapping an app row in the tab.
-        val DEFAULT_IMMERSIVE = mapOf("com.google.android.youtube" to "Отдых")
+        // owner adds by tapping an app row in the tab. YouTube counts as
+        // «Потери» (owner's call) - unnamed screen time is lost time.
+        val DEFAULT_IMMERSIVE = mapOf("com.google.android.youtube" to "Потери")
+        private const val IMMERSIVE_SEED_V = 2
     }
 
     /** One day of phone life, everything additive. */
@@ -190,6 +192,14 @@ class PhoneStore(private val context: Context) {
             root?.optJSONObject("immersive")?.let { m ->
                 for (key in m.keys()) m.optString(key).takeIf { it.isNotBlank() }?.let { immersive[key] = it }
             } ?: run { immersive.putAll(DEFAULT_IMMERSIVE) }
+            // Seed v2: YouTube moved Отдых -> Потери (owner's call). Flip only
+            // the untouched default; a hand-assigned category stays as set.
+            if (root != null && root.optInt("immersiveSeed", 1) < IMMERSIVE_SEED_V) {
+                if (immersive["com.google.android.youtube"] == "Отдых") {
+                    immersive["com.google.android.youtube"] = "Потери"
+                }
+                persistQueued()
+            }
             labels = HashMap()
             root?.optJSONObject("labels")?.let { m ->
                 for (key in m.keys()) m.optString(key).takeIf { it.isNotBlank() }?.let { labels[key] = it }
@@ -226,6 +236,7 @@ class PhoneStore(private val context: Context) {
     private fun toJson(): JSONObject = JSONObject().apply {
         put("format", FORMAT)
         put("version", 1)
+        put("immersiveSeed", IMMERSIVE_SEED_V)
         put("lastSweep", state.lastSweep)
         put("lastCallSweep", state.lastCallSweep)
         put("carryPkg", state.carryPkg)

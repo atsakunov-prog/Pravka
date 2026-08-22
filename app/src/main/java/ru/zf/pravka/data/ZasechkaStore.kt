@@ -35,7 +35,17 @@ class ZasechkaStore(private val context: Context) {
         // The owner's taxonomy, with hints the categorizer sees. A hint is
         // the difference between "поговорил с Марианой" landing in Семья and
         // landing in Социальное - names live here, not in code.
-        private const val CAT_SEED_VERSION = 4
+        private const val CAT_SEED_VERSION = 5
+
+        // The owner's rule: unrecorded time is not "unknown", it is «Потери».
+        // Bounded holes at least this long become gap-filler entries...
+        private const val GAP_FILL_MIN_MS = 5 * 60_000L
+        // ...but only once the right edge has stood for a while: retro
+        // dictation ("обедаю с 12:30") usually lands within the hour, and an
+        // eagerly created filler would already be mirrored to Sheets/Notion.
+        private const val GAP_FILL_QUARANTINE_MS = 45 * 60_000L
+        private const val GAP_SOURCE = "gap"
+        private const val GAP_CATEGORY = "Потери"
         val DEFAULT_CATEGORIES = listOf(
             Category("Сон", ""),
             Category("Спорт: силовая", "тренажёрка, железо, ОФП"),
@@ -59,8 +69,8 @@ class ZasechkaStore(private val context: Context) {
             Category("Секс: соло", "мастурбация"),
             Category("Отдых", "осознанный отдых: кино, сериалы, игры, гуляние, полежать"),
             Category(
-                "Прокрастинация",
-                "залипание вместо дела: бесцельный скроллинг, ютуб-туннель, туплю, откладываю",
+                "Потери",
+                "время, потраченное ни на что: залипание, бесцельный скроллинг, ютуб; дыры без записи падают сюда сами",
             ),
             Category("Звонки", "телефонный разговор, если непонятно с кем и о чём"),
         )
@@ -274,9 +284,72 @@ class ZasechkaStore(private val context: Context) {
         return cal.timeInMillis
     }
 
-    /** Both invariants in one locked pass; true when anything changed. */
-    private fun normalizeLocked(): Boolean =
-        splitMidnightLocked() or spliceOverlapsLocked()
+    /**
+     * The owner's rule: time without an entry is not "unknown", it is
+     * «Потери». (1) A filler overlapped by ANY real entry dies first - a
+     * retro claim or an auto fact always wins the span back (delete-and-
+     * refill keeps the remainder exact). (2) Any bounded hole >= 5 min whose
+     * right edge is at least 45 min old becomes a closed source="gap" entry.
+     * Deleting a filler by hand is futile by design - unrecorded time grows
+     * back; the way out is to NAME the time (edit it into a real дело).
+     */
+    private fun clearOverlappedFillersLocked(): Boolean {
+        if (entries.none { it.source == GAP_SOURCE }) return false
+        val nowMs = System.currentTimeMillis()
+        val real = entries.filter { it.source != GAP_SOURCE }
+        val kept = entries.filter { e ->
+            e.source != GAP_SOURCE || real.none { r ->
+                val rEnd = if (r.open) nowMs else r.end
+                r.start < e.end && rEnd > e.start
+            }
+        }
+        if (kept.size == entries.size) return false
+        entries = kept.toMutableList()
+        return true
+    }
+
+    private fun fillGapsLocked(): Boolean {
+        val nowMs = System.currentTimeMillis()
+        val cutoff = nowMs - GAP_FILL_QUARANTINE_MS
+        var changed = false
+        val asc = entries.sortedBy { it.start }
+        var prevEnd = -1L
+        for (e in asc) {
+            if (prevEnd > 0 && e.start - prevEnd >= GAP_FILL_MIN_MS && e.start <= cutoff) {
+                entries.add(
+                    Entry(
+                        id = nextId(),
+                        start = prevEnd,
+                        end = e.start,
+                        raw = "",
+                        title = "потери",
+                        category = GAP_CATEGORY,
+                        client = "",
+                        useful = 0,
+                        source = GAP_SOURCE,
+                        synced = false,
+                        createdAt = nowMs,
+                    )
+                )
+                changed = true
+            }
+            val eEnd = if (e.open) nowMs else e.end
+            if (eEnd > prevEnd) prevEnd = eEnd
+        }
+        if (changed) entries.sortBy { it.start }
+        return changed
+    }
+
+    /** All ribbon invariants in one locked pass; true when anything changed. */
+    private fun normalizeLocked(): Boolean {
+        var changed = splitMidnightLocked()
+        if (clearOverlappedFillersLocked()) changed = true
+        if (spliceOverlapsLocked()) changed = true
+        if (fillGapsLocked()) changed = true
+        // Fillers created just now may cross midnight themselves.
+        if (splitMidnightLocked()) changed = true
+        return changed
+    }
 
     /**
      * Periodic nudge (the service's 5-min tick): just past midnight the
@@ -305,7 +378,9 @@ class ZasechkaStore(private val context: Context) {
         val rebuilt = ArrayList<Entry>(entries.size)
         var changed = false
         for (m in entries) {
-            if (m.source == "auto") {
+            // Auto facts are the things spliced AROUND; gap fillers are never
+            // hosts either - they die to overlaps instead (clear-and-refill).
+            if (m.source == "auto" || m.source == GAP_SOURCE) {
                 rebuilt.add(m)
                 continue
             }
@@ -508,7 +583,9 @@ class ZasechkaStore(private val context: Context) {
     suspend fun coveredByOwner(from: Long, to: Long): Boolean {
         if (to <= from) return true
         val manualMs = forRange(from, to)
-            .filter { !it.open && it.source != "auto" }
+            // Gap fillers are NOT the owner's claim - a night filled with
+            // «Потери» must not block the сон insert that explains it.
+            .filter { !it.open && it.source != "auto" && it.source != GAP_SOURCE }
             .sumOf {
                 (kotlin.math.min(it.end, to) - kotlin.math.max(it.start, from)).coerceAtLeast(0L)
             }
@@ -604,10 +681,19 @@ class ZasechkaStore(private val context: Context) {
                         .filter { !it.name.equals("Секс", ignoreCase = true) }
                         .toMutableList()
                 }
-                // v3 -> v4 adds «Прокрастинация» (owner: too much landed in
-                // Отдых). Same additive rule as v3: append whatever the seed
-                // has and the owner's list lacks; hand edits survive.
-                if (catSeedVersion < 4) {
+                // v4 briefly added «Прокрастинация»; v5 renames it to «Потери»
+                // (owner's call: the automatic filler for unrecorded time) and
+                // appends whatever else the seed has and the list lacks.
+                if (catSeedVersion < 5) {
+                    val loss = DEFAULT_CATEGORIES.first { it.name == GAP_CATEGORY }
+                    val old = categories.indexOfFirst {
+                        it.name.equals("Прокрастинация", ignoreCase = true)
+                    }
+                    if (categories.none { it.name.equals(GAP_CATEGORY, ignoreCase = true) }) {
+                        if (old >= 0) categories[old] = loss
+                    } else if (old >= 0) {
+                        categories.removeAt(old)
+                    }
                     for (c in DEFAULT_CATEGORIES) {
                         if (categories.none { it.name.equals(c.name, ignoreCase = true) }) {
                             categories.add(c)

@@ -92,6 +92,9 @@ class ZasechkaEngine(
                                     ?: p.category.ifBlank { f.category },
                                 client = p.client.ifBlank { f.client },
                                 useful = if (p.useful > 0) p.useful else f.useful,
+                                // A gap filler the owner NAMED is his claim now,
+                                // not a filler - it must stop dying to overlaps.
+                                source = if (f.source == "gap") "edit" else f.source,
                             )
                             if (newStart != null && f.id == first.id) {
                                 nf = nf.copy(
