@@ -26,6 +26,14 @@ import ru.zf.pravka.target.ClipboardTarget
 // that a DI framework would be an unjustified dependency (spec section 14).
 class PravkaApp : Application() {
 
+    override fun onCreate() {
+        super.onCreate()
+        // Копии на диск: раз в час их снимает тик службы, но старт процесса -
+        // после обновления APK или перезагрузки телефона - тоже хороший момент
+        // (и единственный, если служба доступности почему-то выключена).
+        ru.zf.pravka.data.Backups.tick(this) { line -> eventLog.add(line) }
+    }
+
     val settings by lazy { Settings(this) }
     val promptStore by lazy { PromptStore(this) }
     val stats by lazy { Stats(this) }

@@ -879,6 +879,182 @@ class ZasechkaStore(private val context: Context) {
         return "\"" + s.replace("\"", "\"\"").replace('\r', ' ').replace('\n', ' ') + "\""
     }
 
+    // ---- CSV import: обратная дорога ----
+
+    /**
+     * Импорт из выгрузки Засечки. Владелец делится CSV наружу — значит, каждая
+     * такая выгрузка это полноценная резервная копия ленты, и обратный путь
+     * обязан существовать: даже если файл на диске обнулился, день возвращается
+     * из последнего экспорта.
+     *
+     * Импорт ДОПОЛНЯЕТ ленту, а не заменяет: строка, которая уже есть (та же
+     * минута начала и то же название), пропускается — один и тот же файл можно
+     * скормить дважды без последствий. Понимает обе версии заголовка (старую в
+     * девять колонок и нынешнюю), пустой «end» и «end <= start» как переход за
+     * полночь. Возвращает число вернувшихся строк, −1 — файл не прочитался.
+     */
+    suspend fun importCsv(uri: android.net.Uri): Int {
+        val text = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()
+        } ?: return -1
+        return importCsv(text)
+    }
+
+    suspend fun importCsv(text: String): Int = mutex.withLock {
+        ensureLoaded()
+        val rows = parseCsvRows(text)
+        if (rows.isEmpty()) return@withLock 0
+        val header = rows.first().map { it.trim().lowercase() }
+        val hasHeader = header.contains("date") && header.contains("start")
+        // Позиции старого формата: date,start,end,minutes,title,category,client,useful,raw.
+        val fallback = listOf(
+            "date", "start", "end", "minutes", "title", "category", "client", "useful", "raw"
+        )
+        fun columnOf(name: String): Int {
+            val named = if (hasHeader) header.indexOf(name) else -1
+            return if (named >= 0) named else fallback.indexOf(name)
+        }
+        val dateTime = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+        val nowMs = System.currentTimeMillis()
+        val fillerCutoff = nowMs - NORMALIZE_WINDOW_MS
+        val seen = HashSet<String>()
+        for (e in entries) seen.add("${e.start / 60_000}|${e.title.trim().lowercase()}")
+        val imported = ArrayList<Entry>()
+        for (row in rows.drop(if (hasHeader) 1 else 0)) {
+            fun cell(name: String): String {
+                val at = columnOf(name)
+                return if (at < 0) "" else row.getOrNull(at)?.trim().orEmpty()
+            }
+            val date = cell("date")
+            val startText = cell("start")
+            if (date.length < 8 || startText.length < 4) continue
+            val start = runCatching { dateTime.parse("$date $startText")?.time }.getOrNull() ?: continue
+            if (start <= 0) continue
+            val title = cell("title")
+            val key = "${start / 60_000}|${title.lowercase()}"
+            if (!seen.add(key)) continue
+            val endText = cell("end")
+            val minutes = cell("minutes").toLongOrNull() ?: 0L
+            val wasOpen = cell("is_open").equals("true", ignoreCase = true)
+            var end = 0L
+            if (!wasOpen && endText.length >= 4) {
+                end = runCatching { dateTime.parse("$date $endText")?.time }.getOrNull() ?: 0L
+                if (end in 1 until start) {
+                    // 10:41 → 00:00 в выгрузке значит «до полуночи следующего дня»
+                    // (end == start - нулевая строка, её потом съест крошкодав).
+                    val cal = Calendar.getInstance()
+                    cal.timeInMillis = end
+                    cal.add(Calendar.DAY_OF_MONTH, 1)
+                    end = cal.timeInMillis
+                }
+            }
+            if (!wasOpen && end == 0L && minutes > 0) end = start + minutes * 60_000L
+            val raw = cell("raw")
+            // Старый формат не знал колонки «source», а от неё зависит вся
+            // механика: заливка потерь живёт по source == "gap", авто-факты
+            // (звонки, YouTube) — то, вокруг чего режется ручная запись.
+            val source = cell("source").ifBlank {
+                when {
+                    title.equals(GAP_CATEGORY, ignoreCase = true) && raw.isBlank() -> GAP_SOURCE
+                    raw.isBlank() && (
+                        title.startsWith("звонок", ignoreCase = true) ||
+                            title.startsWith("youtube", ignoreCase = true)
+                        ) -> "auto"
+                    else -> "voice"
+                }
+            }
+            if (source == GAP_SOURCE) {
+                // Безымянные потери не импортируем: неучтённое время лента
+                // отращивает сама, и ровно там, где его нет - иначе привезённая
+                // заливка легла бы поверх той, что уже стоит в ленте (две
+                // заливки друг друга не вычитают, и сутки перестали бы
+                // сходиться). За окном нормализации отращивать уже некому -
+                // такие строки берём, но только если они никому не мешают.
+                if (start > fillerCutoff) continue
+                val span = if (end == 0L) start else end
+                if (entries.any { it.start < span && start < (if (it.open) nowMs else it.end) }) continue
+            }
+            imported.add(
+                Entry(
+                    id = nextId(),
+                    start = start,
+                    end = end,
+                    raw = raw,
+                    title = title,
+                    category = cell("category"),
+                    client = cell("client"),
+                    useful = cell("useful").toIntOrNull() ?: 0,
+                    source = source,
+                    // Строки уже уезжали в зеркало один раз — второй заход
+                    // насыпал бы в таблицу дубли всей истории.
+                    synced = true,
+                    createdAt = start,
+                )
+            )
+        }
+        if (imported.isEmpty()) return@withLock 0
+        snapshotLocked("импорт CSV (${imported.size})")
+        entries.addAll(imported)
+        entries.sortBy { it.start }
+        closeStaleOpenLocked()
+        lastId = entries.maxOfOrNull { it.id } ?: lastId
+        normalizeLocked()
+        persist()
+        logger?.invoke("лента: импорт CSV — вернулось ${imported.size} записей, всего ${entries.size}")
+        imported.size
+    }
+
+    /** Открытым может быть только последнее дело: остальные закрываем встык. */
+    private fun closeStaleOpenLocked() {
+        val open = entries.filter { it.open }
+        if (open.size <= 1) return
+        for (e in open) {
+            val next = entries.filter { it.start > e.start }.minByOrNull { it.start } ?: continue
+            val at = entries.indexOfFirst { it.id == e.id }
+            if (at >= 0) entries[at] = e.copy(end = next.start)
+        }
+    }
+
+    /** CSV по RFC4180 в облегчённом виде: кавычки, «""» внутри, CRLF или LF. */
+    private fun parseCsvRows(text: String): List<List<String>> {
+        val rows = ArrayList<List<String>>()
+        var row = ArrayList<String>()
+        val cell = StringBuilder()
+        var quoted = false
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            when {
+                quoted && c == '"' && i + 1 < text.length && text[i + 1] == '"' -> {
+                    cell.append('"')
+                    i++
+                }
+                c == '"' -> quoted = !quoted
+                !quoted && c == ',' -> {
+                    row.add(cell.toString())
+                    cell.setLength(0)
+                }
+                !quoted && (c == '\n' || c == '\r') -> {
+                    if (cell.isNotEmpty() || row.isNotEmpty()) {
+                        row.add(cell.toString())
+                        cell.setLength(0)
+                        rows.add(row)
+                        row = ArrayList()
+                    }
+                }
+                else -> cell.append(c)
+            }
+            i++
+        }
+        if (cell.isNotEmpty() || row.isNotEmpty()) {
+            row.add(cell.toString())
+            rows.add(row)
+        }
+        return rows
+    }
+
     // ---- persistence ----
 
     // Ids must stay unique across process restarts; wall-clock ms is unique
@@ -891,11 +1067,13 @@ class ZasechkaStore(private val context: Context) {
 
     private suspend fun ensureLoaded() {
         if (loaded) return
+        var seedMigrated = false
         withContext(Dispatchers.IO) {
             // A ribbon that fails to parse is quarantined by StoreFiles, and the
             // store would come up EMPTY - which is exactly how a day "vanishes".
             // So: quarantine first, then the newest backup, and say so loudly.
-            val root = StoreFiles.readOrQuarantine(file) { JSONObject(it) } ?: recoverRoot()
+            val root = StoreFiles.readOrQuarantine(file) { JSONObject(it) }
+                ?: recoverRoot("лента не читалась")
             categories = root?.optJSONArray("categories")?.toCategoryList()?.toMutableList()
                 ?: DEFAULT_CATEGORIES.toMutableList()
             catSeedVersion = root?.optInt("catSeed", 1) ?: CAT_SEED_VERSION
@@ -947,11 +1125,28 @@ class ZasechkaStore(private val context: Context) {
                     }.toMutableList()
                 }
                 catSeedVersion = CAT_SEED_VERSION
-                persistQueued()
+                // НЕ пишем здесь! entries ещё пустой список - persist в этом
+                // месте сериализовал ленту БЕЗ записей и затирал файл; ровно
+                // так владелец потерял день на первом запуске сборки, которая
+                // подняла CAT_SEED_VERSION. Пишем в самом конце загрузки.
+                seedMigrated = true
             }
             clients = root?.optJSONArray("clients")?.toStringList()?.toMutableList() ?: mutableListOf()
             entries = parseEntries(root).toMutableList()
+            // Файл может прочитаться прекрасно и быть ПУСТЫМ - именно это
+            // остаётся после карантина прошлой сборки, и именно так владелец
+            // потерял день. Пустая лента рядом с копией, в которой есть записи,
+            // не бывает правильной: поднимаем копию молча и громко пишем в лог.
+            var rescued = false
+            if (entries.isEmpty() && file.exists()) {
+                val rescue = parseEntries(recoverRoot("лента пришла пустой"))
+                if (rescue.isNotEmpty()) {
+                    entries = rescue.toMutableList()
+                    rescued = true
+                }
+            }
             entries.sortBy { it.start }
+            warnIfShorterThanCopies()
             lastPersistedCount = entries.size
             logger?.invoke(
                 "лента: загружено ${entries.size} записей" +
@@ -972,26 +1167,32 @@ class ZasechkaStore(private val context: Context) {
             // Repair old data with the same shared pass: midnight-crossing
             // entries split per day, overlaps splice around auto facts.
             if (normalizeLocked()) persistQueued()
-            if (root == null) persistQueued()
+            // Поднятое из копии надо тут же положить в файл - иначе следующая
+            // загрузка снова поднимала бы то же самое из копии.
+            if (root == null || rescued || seedMigrated) persistQueued()
         }
         loaded = true
         publish()
     }
 
-    /** The quarantined file, then daily backups - whatever still has rows. */
-    private fun recoverRoot(): JSONObject? {
+    /** Карантин, потом почасовые и дневные копии - что угодно с записями. */
+    private fun recoverRoot(why: String): JSONObject? {
         val candidates = listOfNotNull(
             File(file.parentFile, file.name + ".corrupt").takeIf { it.exists() },
-        ) + (backupDir.listFiles()?.sortedByDescending { it.lastModified() } ?: emptyList())
+        ) + hourlyCopies() +
+            (backupDir.listFiles()?.sortedByDescending { it.lastModified() } ?: emptyList())
         for (f in candidates) {
             val root = runCatching { JSONObject(f.readText()) }.getOrNull() ?: continue
             val n = root.optJSONArray("entries")?.length() ?: 0
             if (n <= 0) continue
-            logger?.invoke("⚠️ лента не читалась — поднял $n записей из ${f.name}")
+            logger?.invoke("⚠️ $why — поднял $n записей из ${f.name}")
             return root
         }
         return null
     }
+
+    /** Почасовые копии ленты, свежие сверху (см. Backups). */
+    private fun hourlyCopies(): List<File> = Backups.snapshotsOf(context, FILE_NAME)
 
     /** Entry rows out of a store JSON - shared by load and restore. */
     private fun parseEntries(root: JSONObject?): List<Entry> {
@@ -1042,12 +1243,26 @@ class ZasechkaStore(private val context: Context) {
         val json = toJson().toString()
         val count = entries.size
         val previous = lastPersistedCount
-        lastPersistedCount = count
         DiskWriter.post {
+            // Пустая лента поверх файла с записями - это всегда баг кода, а не
+            // решение владельца: стереть всё сразу лента не умеет. Такую запись
+            // не делаем вообще и говорим об этом громко.
+            if (count == 0 && fileEntryCount() > 0) {
+                logger?.invoke(
+                    "⚠️ не дал записать пустую ленту поверх файла с ${fileEntryCount()} записями"
+                )
+                return@post
+            }
+            lastPersistedCount = count
             runCatching { rotateBackups(previous, count) }
             StoreFiles.writeAtomic(file, json)
         }
     }
+
+    /** Сколько записей в файле прямо сейчас; 0 - файла нет или он пуст. */
+    private fun fileEntryCount(): Int = runCatching {
+        JSONObject(file.readText()).optJSONArray("entries")?.length() ?: 0
+    }.getOrDefault(0)
 
     /**
      * Runs on the writer thread, right BEFORE the ribbon file is overwritten.
@@ -1062,11 +1277,15 @@ class ZasechkaStore(private val context: Context) {
         val dayStamp = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val daily = File(backupDir, "lenta-$dayStamp.json")
         if (!daily.exists()) file.copyTo(daily, overwrite = true)
-        if (previousCount >= 10 && newCount * 2 < previousCount) {
+        // На первой записи после старта процесса в памяти счётчика ещё нет -
+        // спрашиваем сам файл, иначе самая опасная запись (сразу после
+        // загрузки) прошла бы без сигнализации. Именно так и прошла.
+        val previous = if (previousCount >= 0) previousCount else fileEntryCount()
+        if (previous >= 10 && newCount * 2 < previous) {
             val stamp = SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date())
             file.copyTo(File(backupDir, "lenta-обвал-$stamp.json"), overwrite = true)
             logger?.invoke(
-                "⚠️ лента резко уменьшилась: $previousCount → $newCount записей; " +
+                "⚠️ лента резко уменьшилась: $previous → $newCount записей; " +
                     "копия прежнего файла сохранена (Настройки → Резервные копии)"
             )
         }
@@ -1075,11 +1294,36 @@ class ZasechkaStore(private val context: Context) {
             ?.forEach { runCatching { it.delete() } }
     }
 
+    /**
+     * Загрузились, но записей подозрительно мало, а копия толще - молчать
+     * нельзя. Автоматически НЕ подменяем (владелец имеет право стереть
+     * что угодно), но и незаметно это пройти не должно.
+     */
+    private fun warnIfShorterThanCopies() {
+        if (entries.size >= 10) return
+        val best = (hourlyCopies() + (backupDir.listFiles()?.toList() ?: emptyList()))
+            .asSequence()
+            .mapNotNull { f ->
+                val n = runCatching {
+                    JSONObject(f.readText()).optJSONArray("entries")?.length() ?: 0
+                }.getOrDefault(0)
+                if (n > 0) f.name to n else null
+            }
+            .maxByOrNull { it.second } ?: return
+        if (best.second < 10 || best.second < entries.size * 3) return
+        logger?.invoke(
+            "⚠️ в ленте ${entries.size} записей, а в копии ${best.first} — ${best.second}. " +
+                "Настройки → Резервные копии → Восстановить"
+        )
+    }
+
     data class BackupInfo(val name: String, val at: Long, val entries: Int, val bytes: Long)
 
     /** Newest first: daily copies, forensic copies and the quarantined file. */
     suspend fun backups(): List<BackupInfo> = withContext(Dispatchers.IO) {
-        val files = (backupDir.listFiles()?.toList() ?: emptyList()) +
+        // Дневные копии показываем все, почасовых - дюжину свежих, иначе
+        // двое суток по часу вытеснят из списка прошлую неделю.
+        val files = (backupDir.listFiles()?.toList() ?: emptyList()) + hourlyCopies().take(12) +
             listOfNotNull(File(file.parentFile, file.name + ".corrupt").takeIf { it.exists() })
         files.sortedByDescending { it.lastModified() }.map { f ->
             BackupInfo(
@@ -1098,6 +1342,7 @@ class ZasechkaStore(private val context: Context) {
         ensureLoaded()
         val f = listOfNotNull(
             File(backupDir, name).takeIf { it.exists() },
+            File(Backups.dir(context), name).takeIf { it.exists() },
             File(file.parentFile, name).takeIf { it.exists() },
         ).firstOrNull() ?: return@withLock 0
         val root = runCatching { JSONObject(f.readText()) }.getOrNull() ?: return@withLock 0
@@ -1119,6 +1364,7 @@ class ZasechkaStore(private val context: Context) {
         val src = when {
             name == null -> file
             File(backupDir, name).exists() -> File(backupDir, name)
+            File(Backups.dir(context), name).exists() -> File(Backups.dir(context), name)
             else -> File(file.parentFile, name)
         }
         val out = File(context.cacheDir, if (name == null) "zasechka.json" else name)

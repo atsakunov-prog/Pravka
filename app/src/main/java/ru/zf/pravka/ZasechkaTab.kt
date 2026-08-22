@@ -1234,11 +1234,35 @@ private fun BackupsSection(app: PravkaApp) {
     LaunchedEffect(tick) {
         list = runCatching { app.zasechkaStore.backups() }.getOrDefault(emptyList())
     }
+    // Импорт возвращает ленту из любой выгрузки CSV - последняя линия обороны,
+    // если и файл, и копии на диске подвели (копии живут в приватной памяти
+    // приложения, а выгрузка уже уехала в мессенджер).
+    val importer = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            app.appScope.launch {
+                val n = runCatching { app.zasechkaStore.importCsv(uri) }.getOrDefault(0)
+                if (n > 0) app.zasechkaSync.kickSoon(app.appScope)
+                tick++
+                Feedback.toast(
+                    app,
+                    when {
+                        n > 0 -> "Вернулось записей: $n"
+                        n < 0 -> "Файл не прочитался"
+                        else -> "Новых записей в файле нет"
+                    },
+                )
+            }
+        }
+    }
     Text("Резервные копии", style = MaterialTheme.typography.titleSmall)
     Text(
-        "Копия ленты сохраняется раз в день и перед любым резким сокращением записей. " +
+        "Копия всего нажитого (лента, словарь, правила, телефон) снимается раз в час, " +
+            "плюс копия ленты на каждый день и перед любым резким сокращением записей. " +
             "«Восстановить» возвращает копию целиком (отменяется кнопкой ↩︎), " +
-            "«Файлом» отдаёт сырой JSON.",
+            "«Файлом» отдаёт сырой JSON. «Импорт CSV» поднимает ленту из любой выгрузки: " +
+            "строки, которые уже есть, не удваиваются.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -1249,10 +1273,13 @@ private fun BackupsSection(app: PravkaApp) {
                 runCatching { context.startActivity(app.zasechkaStore.shareStoreIntent()) }
             }
         }) { Text("Текущий файл") }
+        TextButton(onClick = {
+            runCatching { importer.launch(arrayOf("*/*")) }
+        }) { Text("Импорт CSV") }
     }
     if (list.isEmpty()) {
         Text(
-            "Копий пока нет — первая появится при следующей записи.",
+            "Копий пока нет — первая появится в течение часа.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1264,7 +1291,7 @@ private fun BackupsSection(app: PravkaApp) {
         ) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    b.name.removePrefix("lenta-").removeSuffix(".json"),
+                    b.name.removePrefix("lenta-").removePrefix("zasechka-").removeSuffix(".json"),
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

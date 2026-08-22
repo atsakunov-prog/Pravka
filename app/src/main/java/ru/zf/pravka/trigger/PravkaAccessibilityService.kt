@@ -1871,6 +1871,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             // otherwise nag about. Fire-and-forget - the check reads current data.
             scope.launch { app.phoneSweeper.sweep() }
             scope.launch { app.icuSweeper.sweep() }
+            // Копии на диск: сама проверка стоит один listFiles, копирование
+            // уходит на writer-поток и случается раз в час (имя файла = часовая
+            // засечка), так что тик может дёргать её сколько угодно.
+            ru.zf.pravka.data.Backups.tick(this@PravkaAccessibilityService) { line ->
+                app.eventLog.add(line)
+            }
             zasechkaReminderCheck()
             zReminderHandler.postDelayed(this, 5 * 60_000L)
         }
