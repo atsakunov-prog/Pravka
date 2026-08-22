@@ -35,7 +35,7 @@ class ZasechkaStore(private val context: Context) {
         // The owner's taxonomy, with hints the categorizer sees. A hint is
         // the difference between "поговорил с Марианой" landing in Семья and
         // landing in Социальное - names live here, not in code.
-        private const val CAT_SEED_VERSION = 5
+        private const val CAT_SEED_VERSION = 6
 
         // The owner's rule: unrecorded time is not "unknown", it is «Потери».
         // Bounded holes at least this long become gap-filler entries...
@@ -66,32 +66,31 @@ class ZasechkaStore(private val context: Context) {
         // they showed up in the owner's export as 0-minute rows.
         private const val CRUMB_MS = 30_000L
         val DEFAULT_CATEGORIES = listOf(
-            Category("Сон", ""),
-            Category("Спорт: силовая", "тренажёрка, железо, ОФП"),
-            Category("Спорт: бег", ""),
-            Category("Спорт: вело", "велотренировка"),
-            Category("Спорт: прочее", "плавание, лыжи, остальной спорт"),
-            Category("Передвижение: пешком", "ходьба, дойти куда-то"),
-            Category("Передвижение: вело", "велосипед как транспорт"),
-            Category("Передвижение: транспорт", "машина, такси, метро, поезд, самолёт"),
-            Category("Еда", "завтрак, обед, ужин, перекус, готовка"),
-            Category("Быт", "домашние дела, покупки, уборка, документы, врачи"),
-            Category("Систематизация", "наведение порядка в жизни и работе: сборка и настройка Правки и Засечки, процессы, автоматизация, разгребание"),
-            Category("Семья", "время и разговоры с Марианой, с Серёжей, с родными"),
-            Category("Социальное: внешнее", "друзья, знакомые, встречи и переписка вне работы"),
-            Category("Работа: привлечение", "маркетинг, контент, продажи, новые клиенты"),
-            Category("Работа: текущая", "работа по действующим клиентам и проектам"),
-            Category("Работа: планирование", "планирование, стратегия, разборы, финансы бизнеса"),
-            Category("Работа: звонки", "рабочие созвоны и звонки по клиентам"),
-            Category("Чтение", "книги, статьи"),
-            Category("Секс: с Марианной", "супружеский секс"),
-            Category("Секс: соло", "мастурбация"),
-            Category("Отдых", "осознанный отдых: кино, сериалы, игры, гуляние, полежать"),
+            Category("Сон", "", baseMin = 480, value = 0),
+            Category("Спорт: силовая", "тренажёрка, железо, ОФП", baseMin = 75, value = 9),
+            Category("Спорт: бег", "", baseMin = 60, value = 9),
+            Category("Спорт: вело", "велотренировка", baseMin = 90, value = 8),
+            Category("Спорт: прочее", "плавание, лыжи, остальной спорт", baseMin = 60, value = 8),
+            Category("Передвижение: пешком", "ходьба, дойти куда-то", baseMin = 30, value = 2),
+            Category("Передвижение: вело", "велосипед как транспорт", baseMin = 30, value = 3),
+            Category("Передвижение: транспорт", "машина, такси, метро, поезд, самолёт", baseMin = 45, value = -1),
+            Category("Еда", "завтрак, обед, ужин, перекус, готовка", baseMin = 30, value = 1),
+            Category("Быт", "домашние дела, покупки, уборка, документы, врачи", baseMin = 45, value = 1),
+            Category("Систематизация", "наведение порядка в жизни и работе: сборка и настройка Правки и Засечки, процессы, автоматизация, разгребание", baseMin = 90, value = 7),
+            Category("Семья", "время и разговоры с Марианой, с Серёжей, с родными", baseMin = 90, value = 6),
+            Category("Социальное: внешнее", "друзья, знакомые, встречи и переписка вне работы", baseMin = 90, value = 3),
+            Category("Работа: привлечение", "маркетинг, контент, продажи, новые клиенты", baseMin = 90, value = 10),
+            Category("Работа: текущая", "работа по действующим клиентам и проектам", baseMin = 90, value = 8),
+            Category("Работа: планирование", "планирование, стратегия, разборы, финансы бизнеса", baseMin = 60, value = 9),
+            Category("Работа: звонки", "рабочие созвоны и звонки по клиентам", baseMin = 45, value = 7),
+            Category("Чтение", "книги, статьи", baseMin = 45, value = 6),
+            Category("Секс: с Марианной", "супружеский секс", baseMin = 45, value = 6),
+            Category("Секс: соло", "мастурбация", baseMin = 20, value = -4),
+            Category("Отдых", "осознанный отдых: кино, сериалы, игры, гуляние, полежать", baseMin = 60, value = 0),
             Category(
                 "Потери",
-                "время, потраченное ни на что: залипание, бесцельный скроллинг, ютуб; дыры без записи падают сюда сами",
-            ),
-            Category("Звонки", "телефонный разговор, если непонятно с кем и о чём"),
+                "время, потраченное ни на что: залипание, бесцельный скроллинг, ютуб; дыры без записи падают сюда сами", baseMin = 30, value = -8),
+            Category("Звонки", "телефонный разговор, если непонятно с кем и о чём", baseMin = 30, value = 2),
         )
 
         // The v1 seed, kept only to recognize an UNTOUCHED list during the
@@ -103,7 +102,19 @@ class ZasechkaStore(private val context: Context) {
         )
     }
 
-    data class Category(val name: String, val hint: String)
+    /**
+     * [baseMin] - the owner's typical length for this kind of дело. When a
+     * running entry outlives it, the button winks and asks «всё ещё …?»
+     * (0 = never ask). [value] - what an hour of it is worth on his scale:
+     * service around zero, work and sport up to +10, rest and losses down to
+     * -10, so a day floats above or below the waterline.
+     */
+    data class Category(
+        val name: String,
+        val hint: String,
+        val baseMin: Int = 0,
+        val value: Int = 0,
+    )
 
     data class Entry(
         val id: Long,
@@ -222,7 +233,14 @@ class ZasechkaStore(private val context: Context) {
     suspend fun setCategories(value: List<Category>): Unit = mutex.withLock {
         ensureLoaded()
         categories = value
-            .map { Category(it.name.trim(), it.hint.trim()) }
+            .map {
+                Category(
+                    name = it.name.trim(),
+                    hint = it.hint.trim(),
+                    baseMin = it.baseMin.coerceIn(0, 24 * 60),
+                    value = it.value.coerceIn(-10, 10),
+                )
+            }
             .filter { it.name.isNotEmpty() }
             .distinctBy { it.name.lowercase() }
             .toMutableList()
@@ -893,6 +911,20 @@ class ZasechkaStore(private val context: Context) {
                         }
                     }
                 }
+                // v5 -> v6 fills the two new knobs (typical length, worth per
+                // hour) on categories the owner already has - only where he
+                // has not set them himself.
+                if (catSeedVersion < 6) {
+                    categories = categories.map { c ->
+                        val seed = DEFAULT_CATEGORIES.firstOrNull {
+                            it.name.equals(c.name, ignoreCase = true)
+                        }
+                        if (seed == null) c else c.copy(
+                            baseMin = if (c.baseMin == 0) seed.baseMin else c.baseMin,
+                            value = if (c.value == 0) seed.value else c.value,
+                        )
+                    }.toMutableList()
+                }
                 catSeedVersion = CAT_SEED_VERSION
                 persistQueued()
             }
@@ -969,7 +1001,14 @@ class ZasechkaStore(private val context: Context) {
             "categories",
             JSONArray().apply {
                 for (c in categories) {
-                    put(JSONObject().apply { put("name", c.name); put("hint", c.hint) })
+                    put(
+                        JSONObject().apply {
+                            put("name", c.name)
+                            put("hint", c.hint)
+                            put("baseMin", c.baseMin)
+                            put("value", c.value)
+                        }
+                    )
                 }
             }
         )
@@ -1009,7 +1048,14 @@ private fun JSONArray.toCategoryList(): List<ZasechkaStore.Category> =
     (0 until length()).mapNotNull { i ->
         optJSONObject(i)?.let { o ->
             o.optString("name").trim().takeIf { it.isNotEmpty() }
-                ?.let { ZasechkaStore.Category(it, o.optString("hint").trim()) }
+                ?.let {
+                    ZasechkaStore.Category(
+                        name = it,
+                        hint = o.optString("hint").trim(),
+                        baseMin = o.optInt("baseMin", 0),
+                        value = o.optInt("value", 0),
+                    )
+                }
         } ?: optString(i).trim().takeIf { it.isNotEmpty() }?.let { ZasechkaStore.Category(it, "") }
     }
 

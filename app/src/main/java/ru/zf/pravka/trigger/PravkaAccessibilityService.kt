@@ -54,6 +54,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         private const val KEY_Z_EVENING_DAY = "z_evening_day"
         private const val KEY_Z_GAP_NOTIFIED = "z_gap_notified_end"
         private const val KEY_Z_BEAT_AT = "z_beat_at"
+        private const val KEY_Z_ASK_AT = "z_ask_at"
+        private const val KEY_Z_ASK_ID = "z_ask_entry"
 
         // Pomodoro survives a service restart: the deadline is on disk.
         private const val KEY_Z_POMO_ENDS = "z_pomo_ends"
@@ -93,6 +95,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile private var zTypeInstead = false
     @Volatile private var cachedZEnabled = true
     @Volatile private var cachedZGapMin = 45
+    @Volatile private var cachedZCheckins = true
     @Volatile private var cachedZDayStart = 9
     @Volatile private var cachedZDayEnd = 23
     @Volatile private var zCategoriesCached: List<String> = emptyList()
@@ -202,6 +205,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch { app.settings.zGapMinFlow.collect { cachedZGapMin = it } }
+        scope.launch { app.settings.zCheckinsFlow.collect { cachedZCheckins = it } }
         scope.launch { app.settings.zDayStartFlow.collect { cachedZDayStart = it } }
         scope.launch { app.settings.zDayEndFlow.collect { cachedZDayEnd = it } }
         // Force-load the store once, then keep the recognizer bias lists warm.
@@ -1443,6 +1447,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     private fun startZasechkaCapture() {
         zButton?.hideInput()
+        zButton?.hideAsk()
         if (cachedEngine.startsWith("whisper")) {
             zWhisperRecording = true
             zButton?.setRecording(true)
@@ -1912,6 +1917,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             if (open != null) {
                 zButton?.setRemind(false)
+                checkInOnOpenEntry(open, now, internal)
                 // Hourly heartbeat (owner's request): the button winks once an
                 // hour and says out loud what is being counted right now -
                 // trust in the robot comes from glanceability, not silence.
@@ -1957,6 +1963,54 @@ class PravkaAccessibilityService : AccessibilityService() {
                 zButton?.setRemind(false)
             }
         }
+    }
+
+    /**
+     * «Всё ещё «Обед»?» - every category carries the owner's typical length
+     * for it; when the running дело outlives that, the button winks and asks.
+     * «Да» resets the clock (ask again after another base period), «Нет»
+     * starts a new take on the spot. Never on a locked screen (the bubble
+     * would sit unseen above the keyguard) and never for the auto-filled
+     * «Потери» - losses are not a дело to confirm.
+     */
+    private suspend fun checkInOnOpenEntry(
+        open: ru.zf.pravka.data.ZasechkaStore.Entry,
+        now: Long,
+        prefs: android.content.SharedPreferences,
+    ) {
+        if (!cachedZCheckins || open.source == "gap") return
+        if (googleSession != null || zSession != null || DictationService.recording) return
+        if (runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)) return
+        val baseMin = app.zasechkaStore.categories()
+            .firstOrNull { it.name.equals(open.category, ignoreCase = true) }
+            ?.baseMin ?: 0
+        if (baseMin <= 0) return
+        val baseMs = baseMin * 60_000L
+        // The clock runs from the last answer for THIS entry, or from its start.
+        val since = if (prefs.getLong(KEY_Z_ASK_ID, 0L) == open.id) {
+            prefs.getLong(KEY_Z_ASK_AT, open.start)
+        } else open.start
+        if (now - since < baseMs) return
+        prefs.edit()
+            .putLong(KEY_Z_ASK_ID, open.id)
+            .putLong(KEY_Z_ASK_AT, now)
+            .apply()
+        val name = open.title.ifBlank { open.category.ifBlank { "дело" } }
+        Haptics.start(this)
+        zButton?.showAsk(
+            question = "Всё ещё «$name»? Идёт ${zDur(now - open.start)}",
+            onYes = {
+                getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE).edit()
+                    .putLong(KEY_Z_ASK_ID, open.id)
+                    .putLong(KEY_Z_ASK_AT, System.currentTimeMillis())
+                    .apply()
+                Feedback.toast(this, "Ок, считаем дальше")
+            },
+            // Straight into a new take: the mic starts, and a tap on the live
+            // plate switches to typing if the answer is private.
+            onNo = { onZasechkaTap() },
+        )
+        app.eventLog.add("засечка: спросил «всё ещё $name?» (база $baseMin мин)")
     }
 
     private fun zNotify(title: String, text: String) {

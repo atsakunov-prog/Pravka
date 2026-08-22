@@ -44,6 +44,7 @@ class Settings(private val context: Context) {
         private val KEY_Z_CALLS = booleanPreferencesKey("z_calls_to_ribbon")
         private val KEY_Z_CALL_CATEGORY = stringPreferencesKey("z_call_category")
         private val KEY_Z_IMMERSIVE_MIN = intPreferencesKey("z_immersive_min")
+        private val KEY_Z_CHECKINS = booleanPreferencesKey("z_checkins")
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
 
@@ -137,6 +138,15 @@ class Settings(private val context: Context) {
     val zDayEndFlow = context.dataStore.data.map { it[KEY_Z_DAY_END] ?: 23 }
     suspend fun setZDayEnd(value: Int) {
         context.dataStore.edit { it[KEY_Z_DAY_END] = value.coerceIn(1, 24) }
+    }
+
+    /**
+     * «Всё ещё …?» - when a running дело outlives its category's typical
+     * length, the button winks and asks. One switch kills all of them.
+     */
+    val zCheckinsFlow = context.dataStore.data.map { it[KEY_Z_CHECKINS] ?: true }
+    suspend fun setZCheckins(value: Boolean) {
+        context.dataStore.edit { it[KEY_Z_CHECKINS] = value }
     }
 
     /** Apps Script web-app URL; blank = Sheets mirror off. */

@@ -396,12 +396,103 @@ class ZasechkaButtonController(
         column.postDelayed(menuDismiss, 6000)
     }
 
+    // ---- «Всё ещё …?»: the check-in bubble beside the button ----
+
+    private var ask: android.widget.LinearLayout? = null
+    private val askDismiss = Runnable { hideAsk() }
+
+    fun hideAsk() {
+        val a = ask ?: return
+        a.removeCallbacks(askDismiss)
+        runCatching { windowManager.removeView(a) }
+        ask = null
+    }
+
+    /**
+     * A dele has outlived its category's typical length: ask, in one line,
+     * whether it is still going. «Да» just resets the timer, «Нет» hands the
+     * owner straight to a new take. Fades on its own after half a minute -
+     * an unanswered question must not sit on the screen forever.
+     */
+    fun showAsk(question: String, onYes: () -> Unit, onNo: () -> Unit) {
+        hideAsk()
+        hideMenu()
+        val column = android.widget.LinearLayout(service).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(AMBER)
+            }
+            elevation = dp(4).toFloat()
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        column.addView(
+            TextView(service).apply {
+                text = question
+                setTextColor(PAPER)
+                textSize = 15f
+                maxLines = 2
+            }
+        )
+        val row = android.widget.LinearLayout(service).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+        }
+        fun pill(label: String, action: () -> Unit) = TextView(service).apply {
+            text = label
+            setTextColor(PAPER)
+            textSize = 15f
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(0x33000000)
+            }
+            setPadding(dp(16), dp(7), dp(16), dp(7))
+            setOnClickListener { hideAsk(); action() }
+        }
+        row.addView(pill("Да", onYes))
+        row.addView(
+            pill("Нет, другое", onNo),
+            android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { leftMargin = dp(8) },
+        )
+        column.addView(
+            row,
+            android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(8) },
+        )
+        val p = WindowManager.LayoutParams(
+            tickerWidthPx(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+        val bp = params
+        if (bp != null) {
+            val (w, h) = screenSize()
+            val plateW = tickerWidthPx()
+            val gap = dp(8)
+            val buttonCenterX = bp.x + buttonSize / 2
+            p.x = (if (buttonCenterX < w / 2) bp.x + buttonSize + gap else bp.x - plateW - gap)
+                .coerceIn(0, (w - plateW).coerceAtLeast(0))
+            p.y = bp.y.coerceIn(0, (h - dp(96)).coerceAtLeast(0))
+        }
+        ask = column
+        runCatching { windowManager.addView(column, p) }
+        column.postDelayed(askDismiss, 30_000)
+        blinkOnce()
+    }
+
     /** How many overlay windows this controller currently holds. */
     fun windowCount(): Int =
         (if (button != null) 1 else 0) + (if (ticker != null) 1 else 0) +
             (if (input != null) 1 else 0) + (if (menu != null) 1 else 0)
 
     fun destroy() {
+        hideAsk()
         pulse?.cancel()
         pulse = null
         hideMenu()

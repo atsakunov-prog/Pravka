@@ -485,6 +485,18 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(bottom = 6.dp),
             )
+            // The waterline (owner's design): every category is worth so many
+            // points per hour - service around zero, work and sport lift the
+            // day, losses sink it. The balance is the integral: hours × worth.
+            val worthByCat = remember(categories) {
+                categories.associate { it.name.trim().lowercase() to it.value }
+            }
+            val balance = msByCat.entries.sumOf { (cat, ms) ->
+                (worthByCat[cat] ?: 0) * ms.toDouble() / 3_600_000.0
+            }
+            val balanceRounded = kotlin.math.round(balance).toInt()
+            WaterlineBar(balanceRounded, weekMode)
+            Spacer(Modifier.height(8.dp))
             val max = rows.maxOfOrNull { it.second } ?: 0L
             for ((category, minutes) in rows) {
                 val rowAlpha = if (minutes > 0) 1f else 0.4f
@@ -636,6 +648,72 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 editingChain = null
                 app.appScope.launch { chain.forEach { store.delete(it.id) } }
             },
+        )
+    }
+}
+
+/**
+ * The day (or week) floating above or below the waterline: a centre line with
+ * the balance growing right for a day that paid off and left for one that did
+ * not. The number is hours × the owner's per-category worth, so eight hours of
+ * work at +8 reads +64 and two hours of losses at -8 take 16 back.
+ */
+@Composable
+private fun WaterlineBar(balance: Int, weekMode: Boolean) {
+    val scale = if (weekMode) 300f else 60f
+    val fraction = (kotlin.math.abs(balance) / scale).coerceIn(0f, 1f)
+    val positive = balance >= 0
+    val tint = if (positive) Color(0xFFEA580C) else Color(0xFF8B5CF6)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            (if (positive) "▲ +$balance" else "▼ $balance"),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = tint,
+            modifier = Modifier.width(78.dp),
+        )
+        Box(
+            Modifier
+                .weight(1f)
+                .height(14.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(7.dp)),
+        ) {
+            // Left half sinks, right half lifts; the centre tick is zero.
+            Row(Modifier.fillMaxWidth()) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    if (!positive) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(fraction)
+                                .height(14.dp)
+                                .background(tint, RoundedCornerShape(7.dp)),
+                        )
+                    }
+                }
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (positive) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(fraction)
+                                .height(14.dp)
+                                .background(tint, RoundedCornerShape(7.dp)),
+                        )
+                    }
+                }
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth(0.004f)
+                    .height(14.dp)
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f))
+                    .align(Alignment.Center),
+            )
+        }
+        Text(
+            "баланс",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 8.dp),
         )
     }
 }
@@ -977,6 +1055,26 @@ private fun ZasechkaConfig(
         )
 
         Spacer(Modifier.height(8.dp))
+        val checkins by app.settings.zCheckinsFlow.collectAsState(initial = true)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(
+                checked = checkins,
+                onCheckedChange = { app.appScope.launch { app.settings.setZCheckins(it) } },
+            )
+            Text(
+                "Спрашивать «всё ещё …?»",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+        Text(
+            "Когда дело идёт дольше базового времени своей категории, кнопка моргает и " +
+                "спрашивает. «Да» — считаем дальше, «Нет» — сразу новая запись.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(12.dp))
+
         CategoriesEditor(
             categories = categories,
             onChange = { app.appScope.launch { app.zasechkaStore.setCategories(it) } },
@@ -1085,7 +1183,9 @@ private fun CategoriesEditor(
     var editing by remember { mutableStateOf<ZasechkaStore.Category?>(null) }
     Text("Категории", style = MaterialTheme.typography.titleSmall)
     Text(
-        "Сонет выбирает строго из этого списка; пояснение — подсказка ему, что сюда относится. Тап — править.",
+        "Сонет выбирает строго из этого списка; пояснение — подсказка ему. Тап — править: " +
+            "там же базовое время («всё ещё …?» после него) и ценность часа от −10 до +10, " +
+            "из которой складывается баланс дня.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -1097,7 +1197,25 @@ private fun CategoriesEditor(
                 .clickable { editing = category },
         ) {
             Column(Modifier.weight(1f).padding(vertical = 3.dp)) {
-                Text(category.name, style = MaterialTheme.typography.bodyMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        category.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = categoryColor(category.name),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    // The two knobs at a glance: typical length and what an
+                    // hour of it is worth (+ lifts the day, - sinks it).
+                    Text(
+                        (if (category.baseMin > 0) "⏱ ${category.baseMin} м  " else "") +
+                            (if (category.value > 0) "+${category.value}" else "${category.value}"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
                 if (category.hint.isNotBlank()) {
                     Text(
                         category.hint,
@@ -1140,6 +1258,8 @@ private fun CategoriesEditor(
     editing?.let { original ->
         var name by remember(original) { mutableStateOf(original.name) }
         var hint by remember(original) { mutableStateOf(original.hint) }
+        var baseMin by remember(original) { mutableStateOf(original.baseMin.toString()) }
+        var worth by remember(original) { mutableStateOf(original.value) }
         AlertDialog(
             onDismissRequest = { editing = null },
             title = { Text("Категория") },
@@ -1159,6 +1279,32 @@ private fun CategoriesEditor(
                         label = { Text("Что сюда относится (подсказка Сонету)") },
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = baseMin,
+                        onValueChange = { baseMin = it.filter { c -> c.isDigit() }.take(4) },
+                        label = { Text("Базовое время, мин (0 — не спрашивать)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Ценность часа: " + (if (worth > 0) "+$worth" else "$worth") +
+                            when {
+                                worth >= 7 -> " — тянет день вверх"
+                                worth > 0 -> " — плюс"
+                                worth == 0 -> " — ватерлиния, сервисное время"
+                                worth > -7 -> " — минус"
+                                else -> " — тянет день вниз"
+                            },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Slider(
+                        value = worth.toFloat(),
+                        onValueChange = { worth = it.roundToInt() },
+                        valueRange = -10f..10f,
+                        steps = 19,
+                    )
                 }
             },
             confirmButton = {
@@ -1168,8 +1314,14 @@ private fun CategoriesEditor(
                     if (trimmed.isNotEmpty()) {
                         onChange(
                             categories.map {
-                                if (it.name == original.name) ZasechkaStore.Category(trimmed, hint.trim())
-                                else it
+                                if (it.name == original.name) {
+                                    ZasechkaStore.Category(
+                                        name = trimmed,
+                                        hint = hint.trim(),
+                                        baseMin = baseMin.toIntOrNull() ?: 0,
+                                        value = worth,
+                                    )
+                                } else it
                             }
                         )
                     }
