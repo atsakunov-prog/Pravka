@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
@@ -98,6 +99,7 @@ class MainActivity : ComponentActivity() {
         // on the timesheet tab.
         const val EXTRA_TAB = "tab"
         const val TAB_ZASECHKA = "zasechka"
+        const val TAB_TODOIST = "todoist"
         const val TAB_SETTINGS = "settings"
     }
 
@@ -109,6 +111,7 @@ class MainActivity : ComponentActivity() {
         val initialTab = when (intent?.getStringExtra(EXTRA_TAB)) {
             TAB_SETTINGS -> Tab.SETTINGS
             TAB_ZASECHKA -> Tab.ZASECHKA
+            TAB_TODOIST -> Tab.TODOIST
             // The timesheet is the screen the owner opens daily; everything
             // else is service tooling.
             else -> Tab.ZASECHKA
@@ -151,6 +154,7 @@ class MainActivity : ComponentActivity() {
 
 internal enum class Tab(val titleRes: Int) {
     ZASECHKA(R.string.tab_zasechka),
+    TODOIST(R.string.tab_todoist),
     SETTINGS(R.string.tab_settings),
     DICTIONARY(R.string.tab_dictionary),
     PROMPTS(R.string.tab_prompts),
@@ -191,6 +195,12 @@ private fun MainScreen(
                     onClick = { tab = Tab.ZASECHKA },
                     icon = { Icon(Icons.Filled.DateRange, contentDescription = null) },
                     label = { Text(stringResource(Tab.ZASECHKA.titleRes)) },
+                )
+                NavigationBarItem(
+                    selected = tab == Tab.TODOIST,
+                    onClick = { tab = Tab.TODOIST },
+                    icon = { Icon(Icons.Filled.CheckCircle, contentDescription = null) },
+                    label = { Text(stringResource(Tab.TODOIST.titleRes)) },
                 )
                 NavigationBarItem(
                     selected = tab == Tab.SETTINGS,
@@ -240,6 +250,7 @@ private fun MainScreen(
         Column(Modifier.padding(padding)) {
             when (tab) {
                 Tab.ZASECHKA -> ZasechkaTab(app)
+                Tab.TODOIST -> TodoistTab(app)
                 Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
                 Tab.PROMPTS -> PromptsTab(promptStore)

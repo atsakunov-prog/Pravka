@@ -192,6 +192,52 @@ class ZasechkaEngine(
         )
     }
 
+    /**
+     * Дело из Todoist становится текущей записью. Название берём ЕГО - буква
+     * в букву, как в Todoist: тогда лента, коммент в задаче и таблица говорят
+     * об одном и том же деле. Категорию ищем сначала в собственной истории
+     * (это же дело он уже трекал - и, возможно, правил категорию руками), и
+     * только если такого дела ещё не было, спрашиваем Сонета. Никакой правки
+     * и удаления здесь быть не может: тап по делу - всегда новая запись.
+     */
+    suspend fun startTask(title: String): ZasechkaStore.Entry {
+        val now = System.currentTimeMillis()
+        val clean = title.trim().take(120)
+        val known = store.all()
+            .lastOrNull { it.title.trim().equals(clean, ignoreCase = true) && it.category.isNotBlank() }
+        var category = known?.category.orEmpty()
+        var client = known?.client.orEmpty()
+        if (category.isBlank()) {
+            val categories = store.categories()
+            val parsed = claude.zasechka(
+                raw = clean,
+                categories = categories.map { it.name to it.hint },
+                clients = store.clients(),
+                nowLocal = nowFormat.format(Date(now)),
+                previousTitle = "",
+                todayEntries = emptyList(),
+                recentEntries = emptyList(),
+            ).getOrNull()
+            if (parsed != null) {
+                category = categories.map { it.name }
+                    .firstOrNull { it.equals(parsed.category, ignoreCase = true) } ?: parsed.category
+                client = parsed.client
+            }
+        }
+        val entry = store.startEntry(
+            start = now,
+            raw = clean,
+            title = clean,
+            category = category,
+            client = client,
+            useful = 0,
+            source = "todoist",
+        )
+        eventLog.add("засечка ← todoist: «${entry.title}» [${entry.category.ifBlank { "без категории" }}]")
+        sync.kickSoon(scope)
+        return entry
+    }
+
     /** Closes the running entry ("перерыв"/"конец дня"). Null if none was open. */
     suspend fun closeOpen(): ZasechkaStore.Entry? {
         val closed = store.closeOpen(System.currentTimeMillis())

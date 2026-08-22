@@ -1871,6 +1871,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             // otherwise nag about. Fire-and-forget - the check reads current data.
             scope.launch { app.phoneSweeper.sweep() }
             scope.launch { app.icuSweeper.sweep() }
+            // Закрылось дело, пришедшее из Todoist - в задачу уезжает время.
+            scope.launch { runCatching { app.todoistSync.flushLinks() } }
             // Копии на диск: сама проверка стоит один listFiles, копирование
             // уходит на writer-поток и случается раз в час (имя файла = часовая
             // засечка), так что тик может дёргать её сколько угодно.

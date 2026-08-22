@@ -163,6 +163,7 @@
 
     <!-- Засечка (таймшит) -->
     <string name="tab_zasechka">Засечка</string>
+    <string name="tab_todoist">Дела</string>
     <string name="z_channel">Засечка</string>
     <string name="z_record_action">Надиктовать</string>
     <string name="z_busy_pravka">Идёт запись Засечки — останови её кнопкой «З»</string>

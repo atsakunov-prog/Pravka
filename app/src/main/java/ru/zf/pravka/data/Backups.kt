@@ -34,6 +34,7 @@ internal object Backups {
         "pravka-learn-pending.json",
         "pravka-edit-watch.json",
         "phone.json",
+        "todoist.json",
     )
 
     private const val DIR = "backups"

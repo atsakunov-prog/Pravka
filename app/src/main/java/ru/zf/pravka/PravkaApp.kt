@@ -82,6 +82,12 @@ class PravkaApp : Application() {
         ru.zf.pravka.core.ZasechkaEngine(claudeProvider, zasechkaStore, stats, eventLog, zasechkaSync, appScope)
     }
 
+    // Todoist: список дел владельца и обратная запись времени в задачу.
+    val todoistStore by lazy { ru.zf.pravka.data.TodoistStore(this) }
+    val todoistSync by lazy {
+        ru.zf.pravka.data.TodoistSync(settings, todoistStore, zasechkaStore, httpClient, eventLog)
+    }
+
     // The phone layer: app time, pickups, distractions; attention eaters and
     // calls cross into the ribbon via the sweeper.
     val phoneStore by lazy { ru.zf.pravka.data.PhoneStore(this) }

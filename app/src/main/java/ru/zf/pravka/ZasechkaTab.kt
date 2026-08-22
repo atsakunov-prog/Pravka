@@ -758,8 +758,10 @@ private fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
                 )
             }
         }
-        // Балл сидит кружком ровно в нуле - в точке отсчёта, своим цветом
-        // радуги: зелёный у ватерлинии, красный у сотни.
+        // Балл едет кружком по дорожке и стоит в своей точке - там, докуда
+        // день дотянулся. Смещение задаётся тем же дробным сдвигом, что и
+        // заливка: 0 = ноль в середине, +1 = правый край, −1 = левый.
+        val bias = (balance / span).coerceIn(-1f, 1f)
         Text(
             label,
             style = MaterialTheme.typography.labelLarge,
@@ -767,6 +769,7 @@ private fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
             color = Color(0xFF1B1B1B),
             maxLines = 1,
             modifier = Modifier
+                .align(androidx.compose.ui.BiasAlignment(bias, 0f))
                 .background(labelColor, RoundedCornerShape(50))
                 .padding(horizontal = 8.dp, vertical = 2.dp),
         )

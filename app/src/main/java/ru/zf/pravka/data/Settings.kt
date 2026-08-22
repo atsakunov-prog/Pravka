@@ -47,6 +47,7 @@ class Settings(private val context: Context) {
         private val KEY_Z_CHECKINS = booleanPreferencesKey("z_checkins")
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
+        private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -184,6 +185,14 @@ class Settings(private val context: Context) {
     suspend fun icuKey(): String = icuKeyFlow.first()
     suspend fun setIcuKey(value: String) {
         context.dataStore.edit { it[KEY_ICU_KEY] = value.trim() }
+    }
+
+    // Todoist: личный API-токен (Todoist → Настройки → Интеграции →
+    // Разработчик). Прямой REST, без посредников - как и у intervals.icu.
+    val todoistTokenFlow = context.dataStore.data.map { it[KEY_TODOIST_TOKEN] ?: "" }
+    suspend fun todoistToken(): String = todoistTokenFlow.first()
+    suspend fun setTodoistToken(value: String) {
+        context.dataStore.edit { it[KEY_TODOIST_TOKEN] = value.trim() }
     }
 
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }
