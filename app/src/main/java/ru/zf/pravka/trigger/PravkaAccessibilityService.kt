@@ -296,17 +296,41 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // mid-dictation, which is exactly when it would block the
                 // recognizer's callbacks.
                 if (googleSession != null || zSession != null || DictationService.recording) return
+                // Fold/unfold quiet period: for a few seconds after a
+                // configuration change every window is mid-transition - a tree
+                // query lands in an app busy redrawing (the launcher probe took
+                // ~300 ms in the owner's log) while the system's a11y dispatch
+                // waits behind us. Focus events restore the button afterwards.
+                if (SystemClock.uptimeMillis() - lastConfigChangedAt < 3_000) return
+                // On the keyguard there is no field to hover over.
+                if (runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)) return
                 // Window storms (fold, app launch animations) collapse to one
                 // probe per quarter second; the focus events keep the button
                 // honest in between.
                 val nowUp = SystemClock.uptimeMillis()
                 if (nowUp - lastWindowProbeAt < 250) return
                 lastWindowProbeAt = nowUp
-                if (runCatching { liveFocusedEditableNode() }.getOrNull() != null) floatingButton?.show()
-                else floatingButton?.hide()
+                // The LAST tree walk this service owned on its main thread is
+                // now off it: rootInActiveWindow + findFocus are binder round
+                // trips into the fronting app, and the fold bug taught us what
+                // that costs. The result hops back to main for the View work.
+                probeHandler.post {
+                    val editable =
+                        runCatching { liveFocusedEditableNode() != null }.getOrDefault(false)
+                    mainHandler.post {
+                        if (editable) floatingButton?.show() else floatingButton?.hide()
+                    }
+                }
             }
         }
     }
+
+    // Window-probe machinery: same isolation pattern as the removed Chrome
+    // poller - node queries never run on the service main thread.
+    private val probeThread = android.os.HandlerThread("pravka-probe").apply { start() }
+    private val probeHandler by lazy { android.os.Handler(probeThread.looper) }
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    @Volatile private var lastConfigChangedAt = 0L
 
     /** Focused editable node: live focus first, then the cache (spec 5.4). */
     fun focusedEditableNode(): AccessibilityNodeInfo? {
@@ -1976,6 +2000,9 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        // Opens the window-probe quiet period: no tree queries while the
+        // displays are switching.
+        lastConfigChangedAt = SystemClock.uptimeMillis()
         // The foldable changes configuration on fold/unfold - reposition.
         floatingButton?.onConfigurationChanged()
         zButton?.onConfigurationChanged()
@@ -1992,6 +2019,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         zReminderHandler.removeCallbacks(zReminderTick)
         pomodoroHandler.removeCallbacks(pomodoroTicker)
         lagHandler.removeCallbacks(lagTick)
+        runCatching { probeThread.quitSafely() }
         googleSession?.stop()
         googleSession = null
         zSession?.stop()
