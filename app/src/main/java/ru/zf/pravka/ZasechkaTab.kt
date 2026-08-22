@@ -684,31 +684,28 @@ internal fun ZasechkaTab(app: PravkaApp) {
 }
 
 /**
- * The score of the day as a rainbow to climb (owner's design): the track runs
- * from zero on the left to the day's target on the right, painted violet ->
- * blue -> green -> yellow -> orange -> RED, and the bright fill shows how far
- * he got. The colours are anchored to the TRACK, not to the fill, so red only
- * shows up when the day actually reaches it - that is the whole point of the
- * picture. A day in the red (negative) fills the short violet stub left of the
- * zero tick instead.
+ * The score of the day on a full rainbow (owner's design): the whole track is
+ * the spectrum - violet on the far left, GREEN in the middle where zero sits,
+ * red on the far right. The bright fill grows from the centre: right for a day
+ * that paid off, left for one that sank. The colours belong to the TRACK, so
+ * red only lights up when the day actually reaches it.
  */
 @Composable
 private fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
-    // What "reaching the red" means: a strong day is around a hundred points
-    // (eight hours of work at +8 plus an hour of sport), a strong week five of
-    // those.
-    val target = if (weekMode) 500f else 100f
-    val negativeSpan = target / 4f
+    // Half the track is a strong day: eight hours of work at +8 plus an hour
+    // of sport lands near a hundred; a week of those near five hundred.
+    val span = if (weekMode) 500f else 100f
     val rainbow = listOf(
-        Color(0xFF8B5CF6), Color(0xFF3B82F6), Color(0xFF06B6D4),
+        Color(0xFF8B5CF6), Color(0xFF6366F1), Color(0xFF3B82F6), Color(0xFF06B6D4),
         Color(0xFF22C55E), Color(0xFFEAB308), Color(0xFFF97316), Color(0xFFEF4444),
     )
-    val positive = balance >= 0
-    val label = if (positive) "+$balance" else "$balance"
+    val label = if (balance >= 0) "+$balance" else "$balance"
     val labelColor = when {
-        balance >= target * 0.75f -> Color(0xFFEF4444)
-        balance >= target * 0.4f -> Color(0xFFF97316)
-        balance >= 0 -> Color(0xFF22C55E)
+        balance >= span * 0.66f -> Color(0xFFEF4444)
+        balance >= span * 0.33f -> Color(0xFFF97316)
+        balance >= span * 0.08f -> Color(0xFFEAB308)
+        balance > -span * 0.08f -> Color(0xFF22C55E)
+        balance > -span * 0.4f -> Color(0xFF3B82F6)
         else -> Color(0xFF8B5CF6)
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -720,49 +717,34 @@ private fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
             modifier = Modifier.width(56.dp),
         )
         val trackColor = MaterialTheme.colorScheme.surfaceVariant
-        val tickColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+        val tickColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
         Canvas(Modifier.weight(1f).height(16.dp)) {
             val h = size.height
             val radius = androidx.compose.ui.geometry.CornerRadius(h / 2f)
-            // Zero sits a fifth in, leaving a short lane for a day that sank.
-            val zeroX = size.width * 0.18f
-            drawRoundRect(color = trackColor, size = size, cornerRadius = radius)
+            val middle = size.width / 2f
             val brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
                 colors = rainbow,
-                startX = zeroX,
+                startX = 0f,
                 endX = size.width,
             )
-            // The full climb, dimmed: the goal is visible before it is reached.
-            drawRoundRect(
-                brush = brush,
-                topLeft = androidx.compose.ui.geometry.Offset(zeroX, 0f),
-                size = androidx.compose.ui.geometry.Size(size.width - zeroX, h),
-                cornerRadius = radius,
-                alpha = 0.22f,
-            )
-            if (positive) {
-                val frac = (balance / target).coerceIn(0f, 1f)
-                if (frac > 0f) {
-                    drawRoundRect(
-                        brush = brush,
-                        topLeft = androidx.compose.ui.geometry.Offset(zeroX, 0f),
-                        size = androidx.compose.ui.geometry.Size((size.width - zeroX) * frac, h),
-                        cornerRadius = radius,
-                    )
-                }
-            } else {
-                val frac = (-balance / negativeSpan).coerceIn(0f, 1f)
-                val w = zeroX * frac
+            drawRoundRect(color = trackColor, size = size, cornerRadius = radius)
+            // The whole spectrum, dimmed: both directions are visible as goals.
+            drawRoundRect(brush = brush, size = size, cornerRadius = radius, alpha = 0.22f)
+            val frac = (kotlin.math.abs(balance) / span).coerceIn(0f, 1f)
+            val width = middle * frac
+            if (width > 0f) {
                 drawRoundRect(
-                    color = Color(0xFF8B5CF6),
-                    topLeft = androidx.compose.ui.geometry.Offset(zeroX - w, 0f),
-                    size = androidx.compose.ui.geometry.Size(w, h),
+                    brush = brush,
+                    topLeft = androidx.compose.ui.geometry.Offset(
+                        if (balance >= 0) middle else middle - width, 0f,
+                    ),
+                    size = androidx.compose.ui.geometry.Size(width, h),
                     cornerRadius = radius,
                 )
             }
             drawRect(
                 color = tickColor,
-                topLeft = androidx.compose.ui.geometry.Offset(zeroX - 1f, 0f),
+                topLeft = androidx.compose.ui.geometry.Offset(middle - 1f, 0f),
                 size = androidx.compose.ui.geometry.Size(2f, h),
             )
         }
@@ -1227,11 +1209,92 @@ private fun ZasechkaConfig(
         // Notion mirror removed (owner's call): Sheets is the one mirror.
 
         Spacer(Modifier.height(12.dp))
+        BackupsSection(app)
+
+        Spacer(Modifier.height(12.dp))
         OutlinedButton(onClick = {
             app.appScope.launch {
                 context.startActivity(app.zasechkaStore.shareCsvIntent())
             }
         }) { Text("Выгрузить CSV") }
+    }
+}
+
+/**
+ * Backups, out in the open: a copy of the ribbon per day, the state before any
+ * sharp shrink, and the quarantined file if one ever appears. Restore puts a
+ * copy back (undoable like any other operation), «Файлом» hands the raw JSON
+ * out so nothing important is ever trapped in private storage.
+ */
+@Composable
+private fun BackupsSection(app: PravkaApp) {
+    val context = LocalContext.current
+    var tick by remember { mutableStateOf(0) }
+    var list by remember { mutableStateOf<List<ZasechkaStore.BackupInfo>>(emptyList()) }
+    LaunchedEffect(tick) {
+        list = runCatching { app.zasechkaStore.backups() }.getOrDefault(emptyList())
+    }
+    Text("Резервные копии", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "Копия ленты сохраняется раз в день и перед любым резким сокращением записей. " +
+            "«Восстановить» возвращает копию целиком (отменяется кнопкой ↩︎), " +
+            "«Файлом» отдаёт сырой JSON.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(onClick = { tick++ }) { Text("Обновить") }
+        TextButton(onClick = {
+            app.appScope.launch {
+                runCatching { context.startActivity(app.zasechkaStore.shareStoreIntent()) }
+            }
+        }) { Text("Текущий файл") }
+    }
+    if (list.isEmpty()) {
+        Text(
+            "Копий пока нет — первая появится при следующей записи.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    for (b in list) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    b.name.removePrefix("lenta-").removeSuffix(".json"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "${b.entries} записей · ${b.bytes / 1024} КБ · " +
+                        SimpleDateFormat("d MMM HH:mm", Locale("ru")).format(Date(b.at)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = {
+                app.appScope.launch {
+                    runCatching { context.startActivity(app.zasechkaStore.shareStoreIntent(b.name)) }
+                }
+            }) { Text("Файлом") }
+            TextButton(
+                onClick = {
+                    app.appScope.launch {
+                        val n = runCatching { app.zasechkaStore.restoreFrom(b.name) }.getOrDefault(0)
+                        app.zasechkaSync.kickSoon(app.appScope)
+                        Feedback.toast(
+                            app,
+                            if (n > 0) "Восстановлено записей: $n" else "В копии нечего восстанавливать",
+                        )
+                    }
+                },
+                enabled = b.entries > 0,
+            ) { Text("Восстановить") }
+        }
     }
 }
 

@@ -153,6 +153,9 @@ class ZasechkaStore(private val context: Context) {
             (minOf(if (open) now else end, to) - maxOf(start, from)).coerceAtLeast(0L)
     }
 
+    /** Wired by PravkaApp: incidents and recoveries land in the event log. */
+    var logger: ((String) -> Unit)? = null
+
     private val mutex = Mutex()
     private var loaded = false
     private var entries = mutableListOf<Entry>()
@@ -889,7 +892,10 @@ class ZasechkaStore(private val context: Context) {
     private suspend fun ensureLoaded() {
         if (loaded) return
         withContext(Dispatchers.IO) {
-            val root = StoreFiles.readOrQuarantine(file) { JSONObject(it) }
+            // A ribbon that fails to parse is quarantined by StoreFiles, and the
+            // store would come up EMPTY - which is exactly how a day "vanishes".
+            // So: quarantine first, then the newest backup, and say so loudly.
+            val root = StoreFiles.readOrQuarantine(file) { JSONObject(it) } ?: recoverRoot()
             categories = root?.optJSONArray("categories")?.toCategoryList()?.toMutableList()
                 ?: DEFAULT_CATEGORIES.toMutableList()
             catSeedVersion = root?.optInt("catSeed", 1) ?: CAT_SEED_VERSION
@@ -944,32 +950,13 @@ class ZasechkaStore(private val context: Context) {
                 persistQueued()
             }
             clients = root?.optJSONArray("clients")?.toStringList()?.toMutableList() ?: mutableListOf()
-            entries = mutableListOf()
-            root?.optJSONArray("entries")?.let { array ->
-                for (i in 0 until array.length()) {
-                    val o = array.optJSONObject(i) ?: continue
-                    val start = o.optLong("start", 0)
-                    if (start <= 0) continue
-                    entries.add(
-                        Entry(
-                            id = o.optLong("id", 0),
-                            start = start,
-                            end = o.optLong("end", 0),
-                            raw = o.optString("raw", ""),
-                            title = o.optString("title", ""),
-                            category = o.optString("category", ""),
-                            client = o.optString("client", ""),
-                            useful = o.optInt("useful", 0),
-                            source = o.optString("source", "voice"),
-                            synced = o.optBoolean("synced", false),
-                            createdAt = o.optLong("createdAt", start),
-                            pomodoros = o.optInt("pomodoros", 0),
-                            notionSynced = o.optBoolean("notionSynced", false),
-                        )
-                    )
-                }
-            }
+            entries = parseEntries(root).toMutableList()
             entries.sortBy { it.start }
+            lastPersistedCount = entries.size
+            logger?.invoke(
+                "лента: загружено ${entries.size} записей" +
+                    (if (file.exists()) ", файл ${file.length() / 1024} КБ" else ", файла нет")
+            )
             // One-time hygiene: collapse duplicate auto rows that piled up
             // before the overlap guard existed (one call, many log rows).
             val seenAuto = HashSet<String>()
@@ -991,6 +978,50 @@ class ZasechkaStore(private val context: Context) {
         publish()
     }
 
+    /** The quarantined file, then daily backups - whatever still has rows. */
+    private fun recoverRoot(): JSONObject? {
+        val candidates = listOfNotNull(
+            File(file.parentFile, file.name + ".corrupt").takeIf { it.exists() },
+        ) + (backupDir.listFiles()?.sortedByDescending { it.lastModified() } ?: emptyList())
+        for (f in candidates) {
+            val root = runCatching { JSONObject(f.readText()) }.getOrNull() ?: continue
+            val n = root.optJSONArray("entries")?.length() ?: 0
+            if (n <= 0) continue
+            logger?.invoke("⚠️ лента не читалась — поднял $n записей из ${f.name}")
+            return root
+        }
+        return null
+    }
+
+    /** Entry rows out of a store JSON - shared by load and restore. */
+    private fun parseEntries(root: JSONObject?): List<Entry> {
+        val array = root?.optJSONArray("entries") ?: return emptyList()
+        val out = ArrayList<Entry>(array.length())
+        for (i in 0 until array.length()) {
+            val o = array.optJSONObject(i) ?: continue
+            val start = o.optLong("start", 0)
+            if (start <= 0) continue
+            out.add(
+                Entry(
+                    id = o.optLong("id", 0),
+                    start = start,
+                    end = o.optLong("end", 0),
+                    raw = o.optString("raw", ""),
+                    title = o.optString("title", ""),
+                    category = o.optString("category", ""),
+                    client = o.optString("client", ""),
+                    useful = o.optInt("useful", 0),
+                    source = o.optString("source", "voice"),
+                    synced = o.optBoolean("synced", false),
+                    createdAt = o.optLong("createdAt", start),
+                    pomodoros = o.optInt("pomodoros", 0),
+                    notionSynced = o.optBoolean("notionSynced", false),
+                )
+            )
+        }
+        return out
+    }
+
     private fun publish() {
         _undoFlow.value = undoSteps.lastOrNull()?.label
         _entriesFlow.value = entries.toList()
@@ -1003,9 +1034,96 @@ class ZasechkaStore(private val context: Context) {
         publish()
     }
 
+    private val backupDir: File get() = File(context.filesDir, "zasechka-backups")
+
+    @Volatile private var lastPersistedCount = -1
+
     private fun persistQueued() {
         val json = toJson().toString()
-        DiskWriter.post { StoreFiles.writeAtomic(file, json) }
+        val count = entries.size
+        val previous = lastPersistedCount
+        lastPersistedCount = count
+        DiskWriter.post {
+            runCatching { rotateBackups(previous, count) }
+            StoreFiles.writeAtomic(file, json)
+        }
+    }
+
+    /**
+     * Runs on the writer thread, right BEFORE the ribbon file is overwritten.
+     * One copy per day is kept no matter what; and if this write would shrink
+     * the ribbon by more than half, the state about to be replaced is saved
+     * under its own name and the loss is shouted into the log. A timesheet
+     * built by hand over months must never depend on a single file.
+     */
+    private fun rotateBackups(previousCount: Int, newCount: Int) {
+        if (!file.exists()) return
+        backupDir.mkdirs()
+        val dayStamp = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val daily = File(backupDir, "lenta-$dayStamp.json")
+        if (!daily.exists()) file.copyTo(daily, overwrite = true)
+        if (previousCount >= 10 && newCount * 2 < previousCount) {
+            val stamp = SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date())
+            file.copyTo(File(backupDir, "lenta-обвал-$stamp.json"), overwrite = true)
+            logger?.invoke(
+                "⚠️ лента резко уменьшилась: $previousCount → $newCount записей; " +
+                    "копия прежнего файла сохранена (Настройки → Резервные копии)"
+            )
+        }
+        // Keep a dozen newest copies - months of daily snapshots is overkill.
+        backupDir.listFiles()?.sortedByDescending { it.lastModified() }?.drop(12)
+            ?.forEach { runCatching { it.delete() } }
+    }
+
+    data class BackupInfo(val name: String, val at: Long, val entries: Int, val bytes: Long)
+
+    /** Newest first: daily copies, forensic copies and the quarantined file. */
+    suspend fun backups(): List<BackupInfo> = withContext(Dispatchers.IO) {
+        val files = (backupDir.listFiles()?.toList() ?: emptyList()) +
+            listOfNotNull(File(file.parentFile, file.name + ".corrupt").takeIf { it.exists() })
+        files.sortedByDescending { it.lastModified() }.map { f ->
+            BackupInfo(
+                name = f.name,
+                at = f.lastModified(),
+                entries = runCatching {
+                    JSONObject(f.readText()).optJSONArray("entries")?.length() ?: 0
+                }.getOrDefault(0),
+                bytes = f.length(),
+            )
+        }
+    }
+
+    /** Puts a backup's entries back. Returns how many rows came home. */
+    suspend fun restoreFrom(name: String): Int = mutex.withLock {
+        ensureLoaded()
+        val f = listOfNotNull(
+            File(backupDir, name).takeIf { it.exists() },
+            File(file.parentFile, name).takeIf { it.exists() },
+        ).firstOrNull() ?: return@withLock 0
+        val root = runCatching { JSONObject(f.readText()) }.getOrNull() ?: return@withLock 0
+        val restored = parseEntries(root)
+        if (restored.isEmpty()) return@withLock 0
+        snapshotLocked("восстановление из $name")
+        // Everything goes out to the mirrors again after a restore.
+        entries = restored.map { it.copy(synced = false, notionSynced = false) }.toMutableList()
+        entries.sortBy { it.start }
+        lastId = entries.maxOfOrNull { it.id } ?: lastId
+        normalizeLocked()
+        persist()
+        logger?.invoke("лента: восстановлено ${entries.size} записей из $name")
+        entries.size
+    }
+
+    /** Shares the raw ribbon file (or a backup) - the last-resort escape hatch. */
+    suspend fun shareStoreIntent(name: String? = null): Intent = withContext(Dispatchers.IO) {
+        val src = when {
+            name == null -> file
+            File(backupDir, name).exists() -> File(backupDir, name)
+            else -> File(file.parentFile, name)
+        }
+        val out = File(context.cacheDir, if (name == null) "zasechka.json" else name)
+        runCatching { src.copyTo(out, overwrite = true) }
+        shareFileIntent(context, out, "application/json")
     }
 
     private fun toJson(): JSONObject = JSONObject().apply {

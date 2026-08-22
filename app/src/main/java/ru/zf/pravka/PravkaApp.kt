@@ -62,7 +62,11 @@ class PravkaApp : Application() {
     val recordings by lazy { Recordings(this) }
 
     // Засечка (timesheet): store, the Sheets mirror, phrase -> entry pipeline.
-    val zasechkaStore by lazy { ru.zf.pravka.data.ZasechkaStore(this) }
+    val zasechkaStore by lazy {
+        ru.zf.pravka.data.ZasechkaStore(this).also { store ->
+            store.logger = { line -> eventLog.add(line) }
+        }
+    }
     val zasechkaSync by lazy {
         ru.zf.pravka.data.ZasechkaSync(settings, zasechkaStore, httpClient, eventLog)
     }
