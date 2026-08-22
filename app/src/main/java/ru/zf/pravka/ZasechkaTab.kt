@@ -540,6 +540,22 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     (if (pomoCount > 0) " · 🍅 $pomoCount" else "") +
                     (if (uncoveredMin >= 2) " · не покрыто ${fmtDur(uncoveredMin)}" else ""),
                 style = MaterialTheme.typography.titleSmall,
+            )
+            // Из чего сложился балл: плюс и минус по отдельности. Ноль на
+            // полоске - это чаще всего не «не посчиталось», а честная ничья:
+            // час потерь по −10 съедает час работы по +10, и это видно.
+            var plus = 0.0
+            var minus = 0.0
+            for (e in rangeEntries) {
+                val v = worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now) / 3_600_000.0
+                if (v >= 0) plus += v else minus += v
+            }
+            val net = kotlin.math.round(plus + minus).toInt()
+            Text(
+                "Баланс ${if (net >= 0) "+$net" else "$net"} = " +
+                    "+${kotlin.math.round(plus).toInt()} и ${kotlin.math.round(minus).toInt()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 6.dp),
             )
             val max = rows.maxOfOrNull { it.second } ?: 0L
@@ -582,6 +598,12 @@ internal fun ZasechkaTab(app: PravkaApp) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = rowAlpha),
                         modifier = Modifier.padding(start = 8.dp).width(64.dp),
+                    )
+                    // Сколько эта категория дала дню - тут и видно, кто съел
+                    // балл: строка «Потери −19» объясняет ноль на полоске.
+                    PointsChip(
+                        pointsOf(worthOf(category), msByCat[category.trim().lowercase()] ?: 0L),
+                        bold = true,
                     )
                 }
             }
