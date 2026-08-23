@@ -438,11 +438,14 @@ class StrengthEngine(
             }
         }
         // Зарядка — той же очередью: день с отметками уезжает строкой в
-        // комментарий wellness. Активности у зарядки обычно нет, а календарный
-        // день в intervals есть всегда.
+        // комментарий wellness (календарный день в intervals есть всегда).
+        // А если владелец записал зарядку и часами — она приезжает тем же
+        // типом WeightTraining, что силовая, только короткая: в неё итог
+        // вклеивается тоже.
         for (day in store.gtgNeedingSync().take(5)) {
             val outcome = icu.spliceWellnessComment(day.date, day.line())
             outcome.onSuccess {
+                runCatching { spliceGtgIntoActivity(day) }
                 store.markGtgSynced(day.date)
                 sent++
             }.onFailure { e ->
@@ -457,6 +460,29 @@ class StrengthEngine(
             )
         }
         return SyncOutcome(sent, waiting, failed, error)
+    }
+
+    /**
+     * Итог зарядки — в её же активность с часов, если она есть. Зарядка и
+     * силовая приезжают одним типом, поэтому берём КОРОТКУЮ (до получаса) и
+     * никогда не ту, куда лёг журнал подходов. Двусмысленно — не пишем:
+     * комментарий wellness уже уехал, а «вклеили не туда» хуже, чем «только
+     * в день».
+     */
+    private suspend fun spliceGtgIntoActivity(day: StrengthStore.GtgDay) {
+        val acts = icu.findActivities(day.date, ICU_STRENGTH_TYPE)
+        if (acts.isEmpty()) return
+        val sessionActivity = store.sessionsOn(day.date)
+            .firstOrNull { it.icuActivityId.isNotBlank() }?.icuActivityId
+        val candidates = acts.filter {
+            it.seconds in 1 until 30 * 60L && it.id != sessionActivity
+        }
+        // Кандидат должен быть один: две короткие — уже не «очевидно зарядка».
+        val target = candidates.singleOrNull() ?: return
+        // Одна-единственная активность дня при непустой сессии — это силовая,
+        // даже короткая: журнал приедет в неё, зарядке остаётся wellness.
+        if (acts.size == 1 && store.sessionsOn(day.date).any { !it.empty }) return
+        icu.writeSetLog(target.id, day.line(), 0, 0)
     }
 
     /**

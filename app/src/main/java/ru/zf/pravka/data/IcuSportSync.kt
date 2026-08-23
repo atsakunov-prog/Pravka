@@ -470,23 +470,42 @@ class IcuSportSync(
 
     // ---- Обратная дорога: журнал подходов в активность Garmin ----
 
-    /** Активность нужного типа за этот день, если часы её уже прислали. */
-    suspend fun findActivity(date: String, type: String): String? = withContext(Dispatchers.IO) {
-        val athlete = settings.icuAthlete().trim()
-        val key = settings.icuKey().trim()
-        if (athlete.isBlank() || key.isBlank()) return@withContext null
-        val auth = Credentials.basic("API_KEY", key)
-        val body = get("$BASE/$athlete/activities?oldest=$date&newest=$date", auth)
-            ?: return@withContext null
-        val array = runCatching { JSONArray(body) }.getOrNull() ?: return@withContext null
-        for (i in 0 until array.length()) {
-            val a = array.optJSONObject(i) ?: continue
-            if (!a.optString("type").equals(type, ignoreCase = true)) continue
-            val id = a.optString("id")
-            if (id.isNotBlank()) return@withContext id
+    /** Активность дня: id и длительность в секундах. */
+    data class DayActivity(val id: String, val seconds: Long)
+
+    /**
+     * ВСЕ активности нужного типа за день, длинные первыми. Их бывает две, и
+     * это не экзотика: утренняя зарядка по пульсу и вечерняя силовая приезжают
+     * ОДНИМ типом WeightTraining — различает их только длительность. Журнал
+     * подходов должен лечь в длинную, итог зарядки — в короткую, и «первая
+     * попавшаяся» тут гарантированно кладёт что-то не туда.
+     */
+    suspend fun findActivities(date: String, type: String): List<DayActivity> =
+        withContext(Dispatchers.IO) {
+            val athlete = settings.icuAthlete().trim()
+            val key = settings.icuKey().trim()
+            if (athlete.isBlank() || key.isBlank()) return@withContext emptyList()
+            val auth = Credentials.basic("API_KEY", key)
+            val body = get("$BASE/$athlete/activities?oldest=$date&newest=$date", auth)
+                ?: return@withContext emptyList()
+            val array = runCatching { JSONArray(body) }.getOrNull()
+                ?: return@withContext emptyList()
+            val out = mutableListOf<DayActivity>()
+            for (i in 0 until array.length()) {
+                val a = array.optJSONObject(i) ?: continue
+                if (!a.optString("type").equals(type, ignoreCase = true)) continue
+                val id = a.optString("id")
+                if (id.isBlank()) continue
+                val seconds = a.optLong("elapsed_time", 0).takeIf { it > 0 }
+                    ?: a.optLong("moving_time", 0)
+                out.add(DayActivity(id, seconds))
+            }
+            out.sortedByDescending { it.seconds }
         }
-        null
-    }
+
+    /** Активность нужного типа за этот день — самая ДЛИННАЯ, см. [findActivities]. */
+    suspend fun findActivity(date: String, type: String): String? =
+        findActivities(date, type).firstOrNull()?.id
 
     /**
      * Текущее описание активности — чтобы заменить в нём наш блок, а не чужой
