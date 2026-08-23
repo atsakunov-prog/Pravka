@@ -21,6 +21,21 @@ class RationBook(private val context: Context) {
 
     companion object {
         private const val ASSET = "ration.json"
+
+        /** Приёмы в порядке дня — так они и подписаны в Notion. */
+        val MEALS = listOf("1 Завтрак", "2 Обед", "3 Ужин", "Слот · опция")
+
+        /** «1 Завтрак» → «Завтрак»: цифра нужна Notion для сортировки, не глазу. */
+        fun mealTitle(meal: String): String =
+            meal.trimStart { it.isDigit() || it == ' ' }.ifBlank { meal }
+
+        /** Приём → вид записи в дневнике. */
+        fun mealKind(meal: String): String = when {
+            meal.contains("Завтрак") -> "завтрак"
+            meal.contains("Обед") -> "обед"
+            meal.contains("Ужин") -> "ужин"
+            else -> "перекус"
+        }
     }
 
     /** Продукт рациона. Все числа — на 100 г. */
@@ -119,24 +134,57 @@ class RationBook(private val context: Context) {
         return if (bestScore >= 0.5) best else null
     }
 
+    /** Позиции приёма как они лежат в Notion, включая переключатели на нуле. */
+    fun ofMeal(meal: String): List<Product> = items.filter { it.meal == meal }
+
+    /** Приёмы с их позициями, в порядке дня. Пустые приёмы не показываем. */
+    fun byMeal(): List<Pair<String, List<Product>>> =
+        MEALS.map { it to ofMeal(it) }.filter { it.second.isNotEmpty() }
+
     /**
-     * Блок промпта: штатный рацион с точными цифрами. Уезжает в разбор еды —
-     * дешевле пары сотен токенов, а «творог» перестаёт быть средним по стране.
+     * ШТАТНЫЙ набор приёма — то, что владелец правда ест, а не весь список.
+     *
+     * В Notion граммы работают переключателем: у выбранного варианта порция
+     * стоит, у альтернативы ноль («Переключатель с бедром: у одного граммы, у
+     * другого 0» — его же пометка). Поэтому набор это позиции с граммами, иначе
+     * «весь обед» посчитал бы и грудку, и бедро.
+     */
+    fun mealSet(meal: String): List<Product> = ofMeal(meal).filter { it.defaultGrams > 0 }
+
+    /**
+     * Блок промпта: штатный рацион с точными цифрами, разложенный по приёмам.
+     * Уезжает в разбор еды — дешевле пары сотен токенов, а «творог» перестаёт
+     * быть средним по стране.
+     *
+     * Приёмы здесь не украшение: владелец говорит блюдами — «каша моя», «обед
+     * как обычно», — и без разбивки модель на такой фразе сдаётся, потому что
+     * «каши» в списке продуктов нет. С разбивкой она разворачивает фразу в
+     * набор позиций сама.
      */
     fun promptBlock(): String {
         if (items.isEmpty()) return ""
         return buildString {
             append("Штатный рацион владельца — КБЖУ на 100 г с настоящих этикеток.\n")
-            append("Если сказанное похоже на позицию отсюда, считай ПО ЭТИМ цифрам:\n")
-            for (p in items) {
-                append("- ").append(p.shortName)
-                append(": ").append(fmt(p.kcal100)).append(" ккал")
-                append(", Б").append(fmt(p.protein100))
-                append(" Ж").append(fmt(p.fat100))
-                append(" У").append(fmt(p.carbs100))
-                append(" на 100 г")
-                if (p.defaultGrams > 0) append("; обычная порция ").append(p.defaultGrams).append(" г")
-                append('\n')
+            append("Если сказанное похоже на позицию отсюда, считай ПО ЭТИМ цифрам.\n")
+            append("Порции сгруппированы по приёмам: «мой завтрак», «каша моя», ")
+            append("«обед как обычно» — это ВЕСЬ набор приёма с этими порциями.\n")
+            for ((meal, list) in byMeal()) {
+                append('\n').append(mealTitle(meal)).append(":\n")
+                for (p in list) {
+                    append("- ").append(p.shortName)
+                    append(": ").append(fmt(p.kcal100)).append(" ккал")
+                    append(", Б").append(fmt(p.protein100))
+                    append(" Ж").append(fmt(p.fat100))
+                    append(" У").append(fmt(p.carbs100))
+                    append(" на 100 г")
+                    if (p.defaultGrams > 0) {
+                        append("; обычная порция ").append(p.defaultGrams).append(" г")
+                    } else {
+                        append("; сейчас не в наборе (вариант на замену)")
+                    }
+                    if (p.note.isNotBlank()) append(" — ").append(p.note.take(90))
+                    append('\n')
+                }
             }
         }
     }

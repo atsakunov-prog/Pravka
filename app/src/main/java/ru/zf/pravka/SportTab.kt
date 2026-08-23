@@ -32,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -357,16 +358,41 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             }
         }
 
+        // ---- Силовая сегодня: что записано и куда уехало ----
+        if (todaySession != null && (!todaySession.empty || todaySession.done)) {
+            item { StrengthTodayCard(app, todaySession, onFeel = { feelDialog = todaySession.id }) }
+        }
+
         // ---- Зарядка и GTG ----
         item {
             PaperCard(
                 label = "зарядка · путь к первому подтягиванию",
-                trailing = {
-                    IconButton(onClick = { gtgDialog = true }) {
-                        Icon(Icons.Filled.Add, contentDescription = "Записать")
-                    }
-                },
             ) {
+                // Отметка зарядки — ГЛАВНАЯ кнопка во всю ширину, и она одна.
+                // Раньше она была мелкой справа от стрика, а «+» в углу открывал
+                // диалог с висами, который зарядку не отмечал вовсе — и было
+                // непонятно, чем одно отличается от другого. Теперь порядок
+                // такой: сверху «сделал», ниже мелким — числа турника.
+                val charged = gtgToday?.charged == true
+                if (charged) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "✓ Зарядка сделана",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = toneColor(1),
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = {
+                            app.appScope.launch { app.bodyEngine.unchargeToday(today) }
+                        }) { Text("Отменить") }
+                    }
+                } else {
+                    Button(
+                        onClick = { app.appScope.launch { app.bodyEngine.chargedToday() } },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Зарядка сделана") }
+                }
+                Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "$streak",
@@ -380,19 +406,16 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         PaperHint(
-                            if (gtgToday?.charged == true) "сегодня отмечено"
-                            else "сегодня ещё нет — утро не кончилось"
+                            if (charged) "сегодня отмечено"
+                            else "сегодня ещё нет — цепочка не рвётся до полуночи"
                         )
-                    }
-                    if (gtgToday?.charged != true) {
-                        Button(onClick = {
-                            app.appScope.launch { app.bodyEngine.chargedToday() }
-                        }) { Text("Сделал") }
                     }
                 }
                 Spacer(Modifier.height(10.dp))
                 GtgStrip(app.strengthStore.recentGtg(14))
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(12.dp))
+                PaperHint("Турник — отдельные числа, зарядку они не отмечают:")
+                Spacer(Modifier.height(4.dp))
                 val best = app.strengthStore.bestHang()
                 Row(
                     Modifier.fillMaxWidth(),
@@ -410,6 +433,11 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                         CTL_COLOR,
                     )
                 }
+                Spacer(Modifier.height(6.dp))
+                OutlinedButton(
+                    onClick = { gtgDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Записать вис, негативы, колено") }
                 if (gtgToday?.knee?.isNotBlank() == true) {
                     Spacer(Modifier.height(8.dp))
                     PaperHint("Колено сегодня: ${gtgToday.knee}")
@@ -714,6 +742,142 @@ private fun PlannedExerciseCard(
     }
 }
 
+
+/**
+ * Силовая за сегодня: подходы, как они записаны, и — главное — КУДА они уехали.
+ *
+ * Про дорогу наружу владелец спросил прямо: «непонятно, как силовые делать, она
+ * же будет отмечена ещё и на гармине, надо это совмещать». Совмещение работает
+ * так: часы отдают силовую в intervals активностью WeightTraining, и журнал
+ * подходов дописывается в ОПИСАНИЕ этой активности — одна запись за день, а не
+ * телефонная рядом с часовой. Пока часы молчат, сессия ждёт; через полтора
+ * суток журнал уходит отдельной заметкой, чтобы не пропасть.
+ *
+ * Всё это было и раньше, но молча, и молчание читалось как «ничего не
+ * записалось». Поэтому карточка называет состояние словами и даёт две кнопки:
+ * подтолкнуть поиск активности и не ждать вовсе.
+ */
+@Composable
+private fun StrengthTodayCard(
+    app: PravkaApp,
+    session: StrengthStore.Session,
+    onFeel: () -> Unit,
+) {
+    val route = remember(session) { app.strengthEngine.routeOf(session) }
+    var busy by remember { mutableStateOf(false) }
+
+    PaperCard(
+        label = "силовая сегодня",
+        trailing = {
+            if (session.setCount > 0) {
+                PaperHint("подходов ${session.setCount}")
+            }
+        },
+    ) {
+        if (session.title.isNotBlank()) {
+            Text(session.title, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+        }
+        for (log in session.exercises) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    log.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(log.compact(), style = MaterialTheme.typography.bodyMedium)
+            }
+            if (log.note.isNotBlank()) PaperHint(log.note)
+        }
+        if (session.volume > 0) {
+            Spacer(Modifier.height(4.dp))
+            PaperHint("объём ${fmt0(session.volume)} кг")
+        }
+        if (session.feel in 1..5) {
+            Spacer(Modifier.height(4.dp))
+            PaperHint("самочувствие ${session.feel}/5" +
+                (if (session.rpe > 0) " · RPE ${session.rpe}" else ""))
+        } else {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onFeel) { Text("Самочувствие") }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            (if (route.tone == 1) "✓ " else if (route.tone < 0) "⚠ " else "⏳ ") + route.headline,
+            style = MaterialTheme.typography.bodyMedium,
+            color = toneColor(route.tone),
+        )
+        if (route.hint.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            PaperHint(route.hint)
+        }
+        if (route.canRetry || route.canNote) {
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (route.canRetry) {
+                    OutlinedButton(
+                        onClick = {
+                            if (!busy) {
+                                busy = true
+                                app.appScope.launch {
+                                    val outcome = app.strengthEngine.syncPending(force = true)
+                                    busy = false
+                                    Feedback.toast(
+                                        app,
+                                        when {
+                                            outcome.sent > 0 -> "Уехало"
+                                            outcome.failed > 0 -> outcome.error.ifBlank { "Не вышло" }
+                                            else -> "Активности с часов ещё нет"
+                                        },
+                                        long = true,
+                                    )
+                                }
+                            }
+                        },
+                        enabled = !busy,
+                    ) { Text(if (busy) "Ищу…" else "Найти активность") }
+                }
+                if (route.canNote) {
+                    OutlinedButton(
+                        onClick = {
+                            if (!busy) {
+                                busy = true
+                                app.appScope.launch {
+                                    val outcome = app.strengthEngine.pushAsNote(session.id)
+                                    busy = false
+                                    Feedback.toast(
+                                        app,
+                                        outcome.fold(
+                                            { "Записал заметкой в календарь" },
+                                            { e -> e.message ?: "Не вышло" },
+                                        ),
+                                        long = true,
+                                    )
+                                }
+                            }
+                        },
+                        enabled = !busy,
+                    ) { Text("Без часов") }
+                }
+            }
+            if (route.canNote) {
+                Spacer(Modifier.height(4.dp))
+                PaperHint(
+                    "«Без часов» — когда силовая прошла без них вовсе: журнал ляжет " +
+                        "заметкой сразу, не дожидаясь полутора суток."
+                )
+            }
+        }
+    }
+}
+
 /** Полоска последних двух недель зарядки: цепочка, которую видно глазом. */
 @Composable
 private fun GtgStrip(days: List<StrengthStore.GtgDay>) {
@@ -754,11 +918,21 @@ private fun GtgDialog(app: PravkaApp, date: String, onClose: () -> Unit) {
     var negatives by remember { mutableStateOf("") }
     var scapular by remember { mutableStateOf("") }
     var knee by remember { mutableStateOf("") }
+    // Записал числа турника — значит зарядка была. Раньше диалог их не связывал,
+    // и «вис 40 секунд» оставлял день неотмеченным: владелец видел цифры и
+    // пустой стрик и не понимал, чего ещё от него хотят.
+    var charged by remember { mutableStateOf(true) }
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Зарядка и турник") },
         text = {
             Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = charged, onCheckedChange = { charged = it })
+                    Spacer(Modifier.width(8.dp))
+                    Text("Отметить зарядку сделанной", style = MaterialTheme.typography.bodyMedium)
+                }
+                Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedTextField(
                         value = hang,
@@ -808,6 +982,7 @@ private fun GtgDialog(app: PravkaApp, date: String, onClose: () -> Unit) {
                 app.appScope.launch {
                     app.bodyEngine.putGtgNumbers(
                         date = date,
+                        charged = if (charged) true else null,
                         hangSec = hang.toIntOrNull(),
                         negatives = negatives.toIntOrNull(),
                         scapular = scapular.toIntOrNull(),

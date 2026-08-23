@@ -201,8 +201,15 @@ class BodyEngine(
         return strengthStore.putGtg(date = date, charged = true)
     }
 
+    /** Промахнулся кнопкой — снять отметку. Числа турника при этом остаются. */
+    suspend fun unchargeToday(date: String = dayKey(System.currentTimeMillis())): StrengthStore.GtgDay {
+        strengthStore.load()
+        return strengthStore.putGtg(date = date, charged = false)
+    }
+
     suspend fun putGtgNumbers(
         date: String = dayKey(System.currentTimeMillis()),
+        charged: Boolean? = null,
         hangSec: Int? = null,
         negatives: Int? = null,
         scapular: Int? = null,
@@ -211,6 +218,7 @@ class BodyEngine(
         strengthStore.load()
         return strengthStore.putGtg(
             date = date,
+            charged = charged,
             hangSec = hangSec,
             negatives = negatives,
             scapular = scapular,

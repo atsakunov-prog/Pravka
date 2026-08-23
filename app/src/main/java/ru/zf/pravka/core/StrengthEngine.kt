@@ -280,6 +280,88 @@ class StrengthEngine(
      * не портим. Не появилась за полтора суток — кладём журнал заметкой в
      * календарь на ту же дату: пусть лежит рядом с планом, чем нигде.
      */
+    /**
+     * Куда уехал журнал этой сессии — словами, для карточки.
+     *
+     * Механика тут неочевидная, и без объяснения она читается как «ничего не
+     * произошло»: силовую владелец пишет часами, часы отдают её в intervals как
+     * активность WeightTraining, и журнал подходов должен лечь в ОПИСАНИЕ этой
+     * активности, а не рядом с ней. Значит между «сказал в телефон» и «уехало»
+     * есть ожидание — обычно минуты, на даче сутки. Карточка обязана говорить,
+     * чего именно ждёт, иначе владелец решит, что запись потерялась, и
+     * продиктует всё второй раз.
+     */
+    data class Route(
+        val headline: String,
+        val hint: String,
+        /** −1 не вышло · 0 ждём · 1 уехало. */
+        val tone: Int,
+        val canRetry: Boolean,
+        val canNote: Boolean,
+    )
+
+    fun routeOf(session: StrengthStore.Session): Route = when {
+        session.icuSynced && session.icuActivityId.isNotBlank() -> Route(
+            headline = "Дописано в тренировку с часов",
+            hint = "Журнал лежит в описании активности Garmin за этот день — " +
+                "одной записью, а не двумя. Повторная надиктовка перепишет тот же " +
+                "блок, дубля не будет.",
+            tone = 1,
+            canRetry = false,
+            canNote = false,
+        )
+        session.icuSynced && session.icuNoteId.isNotBlank() -> Route(
+            headline = "Записано заметкой в календарь",
+            hint = "Активности с часов за этот день не нашлось, поэтому журнал " +
+                "лёг отдельной заметкой. Если часы её потом пришлют, записи " +
+                "останутся двумя: слить их можно только руками в intervals.",
+            tone = 1,
+            canRetry = false,
+            canNote = false,
+        )
+        session.icuSynced -> Route("Уехало", "", 1, false, false)
+        session.lastError.isNotBlank() -> Route(
+            headline = "Не уехало: ${session.lastError}",
+            hint = "Попыток ${session.attempts}. Подходы на телефоне целы — " +
+                "отправка повторится сама, и её можно подтолкнуть.",
+            tone = -1,
+            canRetry = true,
+            canNote = true,
+        )
+        else -> Route(
+            headline = "Ждём тренировку с часов",
+            hint = "Часы отдадут силовую в intervals как WeightTraining, и журнал " +
+                "допишется в её описание. Не придёт за полтора суток — ляжет " +
+                "отдельной заметкой в календарь сама. Подходы на телефоне уже " +
+                "записаны, потерять их нельзя.",
+            tone = 0,
+            canRetry = true,
+            canNote = true,
+        )
+    }
+
+    /**
+     * Не ждать часов и положить журнал заметкой прямо сейчас. Нужно, когда
+     * силовая прошла без часов вообще: ждать сутки с половиной ради заметки,
+     * которая всё равно будет заметкой, незачем.
+     */
+    suspend fun pushAsNote(sessionId: Long): Result<String> {
+        store.load()
+        val session = store.sessionsFlow.value.firstOrNull { it.id == sessionId }
+            ?: return Result.failure(IllegalStateException("Сессия не найдена"))
+        val outcome = icu.writeNote(
+            date = session.date,
+            name = session.title.ifBlank { "Силовая (из Правки)" },
+            body = setLogText(session),
+            existingId = session.icuNoteId,
+        )
+        outcome.onSuccess { id ->
+            store.markSynced(session.id, "", id)
+            eventLog.add("силовые → intervals: заметка за ${session.date} по кнопке")
+        }.onFailure { e -> store.markAttempt(session.id, e.message.orEmpty()) }
+        return outcome
+    }
+
     suspend fun syncPending(force: Boolean = false): SyncOutcome {
         val now = System.currentTimeMillis()
         if (!force && now - lastSync < SYNC_PERIOD_MS) return SyncOutcome(0, 0, 0, "")

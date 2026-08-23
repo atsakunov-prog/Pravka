@@ -61,6 +61,7 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.MealItem
 import ru.zf.pravka.data.FoodStore
+import ru.zf.pravka.data.RationBook
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.GoalBar
 import ru.zf.pravka.ui.GoalRow
@@ -306,6 +307,9 @@ internal fun FoodTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                 )
             }
         }
+
+        // ---- Мой рацион: то, что повторяется каждый день ----
+        item { RationSection(app, dayStart) }
 
         // ---- Разобранное, но не записанное ----
         if (pending.isNotEmpty()) {
@@ -881,4 +885,220 @@ private fun copyToCache(context: android.content.Context, uri: Uri): File {
         out.outputStream().use { input.copyTo(it) }
     } ?: throw java.io.IOException("Снимок не открылся")
     return out
+}
+
+
+/**
+ * «Мой рацион» — сворачиваемый список штатной еды, где порция записывается
+ * тапом.
+ *
+ * Зачем он, если есть микрофон. Половина еды владельца повторяется каждый день
+ * и уже посчитана с настоящих этикеток в базе Notion «Рацион». Говорить про неё
+ * — это платить модели за то, что и так известно точно, и получать «примерно»
+ * там, где есть «точно». Хуже того, владелец говорит блюдами: на «каша моя»
+ * модель отвечала «сказано только каша без подробностей» и не записывала
+ * ничего.
+ *
+ * Промпт теперь такие фразы разворачивает сам (рацион уезжает в него по
+ * приёмам), но тап надёжнее любого промпта: он бесплатный, мгновенный и
+ * работает на даче без интернета.
+ *
+ * Приёмы взяты из Notion как есть. Граммы там работают переключателем: у
+ * выбранного варианта порция стоит, у альтернативы ноль — поэтому «весь обед»
+ * берёт грудку ИЛИ бедро, а не обе, а вариант на замену показан бледным и
+ * записывается только по отдельному тапу.
+ */
+@Composable
+private fun RationSection(app: PravkaApp, dayStart: Long) {
+    var open by remember { mutableStateOf(false) }
+    var loaded by remember { mutableStateOf(app.rationBook.loaded) }
+    var asking by remember { mutableStateOf<RationBook.Product?>(null) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(open) {
+        if (open && !loaded) {
+            app.rationBook.load()
+            loaded = app.rationBook.loaded
+        }
+    }
+
+    /** Записать порции сразу подтверждённым приёмом: цифры с этикеток, спорить не о чем. */
+    val put: (String, List<Pair<RationBook.Product, Int>>) -> Unit = { meal, chosen ->
+        if (chosen.isNotEmpty()) {
+            app.appScope.launch {
+                val parsed = app.foodEngine.record(
+                    items = chosen.map { (p, g) -> p.item(g) },
+                    kind = RationBook.mealKind(meal),
+                    timeOfDay = "",
+                    raw = "рацион: " + chosen.joinToString(", ") {
+                        it.first.shortName + " " + it.second + " г"
+                    },
+                    note = "",
+                    source = "ration",
+                    // Листаешь дневник назад — запись ложится в тот день, а не в
+                    // сегодняшний.
+                    at = mealStampFor(dayStart),
+                )
+                val outcome = app.foodEngine.confirm(parsed.meal.id)
+                Feedback.toast(
+                    app,
+                    "Записал: ${parsed.meal.kcal} ккал · Б${parsed.meal.protein} " +
+                        "Ж${parsed.meal.fat} У${parsed.meal.carbs}" +
+                        (if (outcome.icuError.isNotBlank()) " (в intervals не уехало)" else ""),
+                )
+            }
+        }
+    }
+
+    PaperCard(
+        label = "мой рацион",
+        trailing = {
+            TextButton(onClick = { open = !open }) {
+                Text(if (open) "скрыть" else "показать")
+            }
+        },
+    ) {
+        if (!open) {
+            PaperHint(
+                "Штатная еда с настоящих этикеток: завтрак, обед, ужин и восемь " +
+                    "вариантов углеводного слота. Тап вместо диктовки — бесплатно, " +
+                    "точно и без интернета."
+            )
+            return@PaperCard
+        }
+        if (!loaded) {
+            PaperHint("Читаю справочник…")
+            return@PaperCard
+        }
+        PaperHint("Тап по строке — записать порцию. Тап по граммам — сменить вес.")
+        for ((meal, list) in app.rationBook.byMeal()) {
+            val set = list.filter { it.defaultGrams > 0 }
+            val kcal = set.sumOf { Math.round(it.kcal100 * it.defaultGrams / 100.0).toInt() }
+            Spacer(Modifier.height(14.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        RationBook.mealTitle(meal),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    PaperHint("${set.size} поз. · $kcal ккал")
+                }
+                // «Слот · опция» — это варианты на замену пюре, а не приём:
+                // целиком их не едят, и кнопки «весь слот» быть не должно.
+                if (set.size > 1 && !meal.contains("Слот")) {
+                    OutlinedButton(onClick = {
+                        put(meal, set.map { it to it.defaultGrams })
+                    }) { Text("Весь " + RationBook.mealTitle(meal).lowercase()) }
+                }
+            }
+            for (p in list) {
+                RationRow(
+                    product = p,
+                    onPut = { put(meal, listOf(p to p.defaultGrams)) },
+                    onGrams = { asking = p },
+                )
+            }
+        }
+    }
+
+    val ask = asking
+    if (ask != null) {
+        GramsDialog(
+            product = ask,
+            onClose = { asking = null },
+            onPut = { grams ->
+                asking = null
+                put(ask.meal, listOf(ask to grams))
+            },
+        )
+    }
+}
+
+@Composable
+private fun RationRow(
+    product: RationBook.Product,
+    onPut: () -> Unit,
+    onGrams: () -> Unit,
+) {
+    val switchable = product.defaultGrams <= 0
+    val grams = if (switchable) 100 else product.defaultGrams
+    val kcal = Math.round(product.kcal100 * grams / 100.0).toInt()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onPut)
+            .padding(vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                product.shortName,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (switchable) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.onSurface,
+            )
+            PaperHint(
+                if (switchable) "вариант на замену · $kcal ккал за 100 г"
+                else "$kcal ккал · Б${r(product.protein100, grams)} " +
+                    "Ж${r(product.fat100, grams)} У${r(product.carbs100, grams)}"
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        // Граммы — своя кнопка: порция меняется чаще, чем состав.
+        TextButton(onClick = onGrams) { Text("$grams г") }
+    }
+}
+
+@Composable
+private fun GramsDialog(
+    product: RationBook.Product,
+    onClose: () -> Unit,
+    onPut: (Int) -> Unit,
+) {
+    var text by remember {
+        mutableStateOf(product.defaultGrams.takeIf { it > 0 }?.toString() ?: "100")
+    }
+    val grams = text.toIntOrNull() ?: 0
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(product.shortName) },
+        text = {
+            Column {
+                NumberField("Граммы", text, Modifier.fillMaxWidth()) { text = it }
+                Spacer(Modifier.height(8.dp))
+                if (grams > 0) {
+                    val i = product.item(grams)
+                    Text(
+                        "${i.kcal} ккал · Б${i.protein} Ж${i.fat} У${i.carbs}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                if (product.note.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    PaperHint(product.note)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { if (grams > 0) onPut(grams) }, enabled = grams > 0) {
+                Text("Записать")
+            }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
+    )
+}
+
+private fun r(per100: Double, grams: Int): Int = Math.round(per100 * grams / 100.0).toInt()
+
+/**
+ * Метка времени для записи на показанный день: сегодня — сейчас, прошлый день —
+ * его полдень. Полдень, а не начало суток: приём попадает внутрь дня при любом
+ * часовом поясе и не съезжает на сутки назад в выгрузке.
+ */
+private fun mealStampFor(dayStart: Long): Long {
+    val now = System.currentTimeMillis()
+    return if (now - dayStart in 0 until 86_400_000L) now else dayStart + 12 * 3_600_000L
 }

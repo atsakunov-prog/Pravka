@@ -139,10 +139,12 @@ class FoodEngine(
         photo: String = "",
         costUsd: Double = 0.0,
         model: String = "",
+        /** Готовая метка времени, если она уже известна (лист дневника назад). */
+        at: Long = 0L,
     ): Parsed {
         store.load()
         val meal = store.add(
-            ts = mealTimeOf(timeOfDay),
+            ts = if (at > 0) at else mealTimeOf(timeOfDay),
             kind = kind.ifBlank { MealItem.kindByHour(hourNow()) },
             raw = raw,
             items = items,

@@ -3288,22 +3288,39 @@ class PravkaAccessibilityService : AccessibilityService() {
                 )
             }
 
-            // Зарядка одной кнопкой, без модели и без токенов. Цепочка рядом:
-            // она и есть то, что не должно рваться.
+            // Зарядка одной кнопкой, без модели и без токенов. Подпись говорит
+            // ровно одно: отметить или уже отмечено. Цепочка рядом — она и есть
+            // то, что не должно рваться. Висы и негативы отсюда не пишутся: их
+            // числа наговариваются или ставятся во вкладке, и мешать их с
+            // отметкой «делал» было ровно той путаницей, из которой всё
+            // непонимание и росло.
             val gtg = app.strengthStore.gtgOn(today)
             val streak = app.strengthStore.streak(today)
-            items.add(
-                BodyButtonController.MenuItem(
-                    (if (gtg?.charged == true) "✓ " else "") + "Зарядка · цепочка $streak дн."
-                ) { markCharged() }
-            )
+            if (gtg?.charged == true) {
+                items.add(
+                    BodyButtonController.MenuItem("✓ Зарядка сделана · цепочка $streak дн.") {
+                        openSportTab()
+                    }
+                )
+            } else {
+                items.add(
+                    BodyButtonController.MenuItem(
+                        "Зарядка сделана" +
+                            (if (streak > 0) " · цепочка $streak дн." else " · цепочка начнётся")
+                    ) { markCharged() }
+                )
+            }
 
             val session = app.strengthStore.sessionsOn(today).firstOrNull { !it.empty }
             if (session != null) {
+                // Куда уехал журнал — прямо в подписи: «ждём часы» это ответ на
+                // вопрос «а записалось ли», а пустая строка — нет.
+                val route = app.strengthEngine.routeOf(session)
                 items.add(
-                    BodyButtonController.MenuItem("Подходы сегодня (${session.setCount})") {
-                        showStrengthPlate(session.id, null)
-                    }
+                    BodyButtonController.MenuItem(
+                        "Подходы сегодня (${session.setCount}) · " +
+                            (if (route.tone == 1) "уехало" else route.headline.lowercase())
+                    ) { showStrengthPlate(session.id, null) }
                 )
             }
 
@@ -3337,7 +3354,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             val day = app.bodyEngine.chargedToday()
             val streak = app.strengthStore.streak(day.date)
             Haptics.success(this@PravkaAccessibilityService)
-            eButton?.showNote("✓ Зарядка · цепочка $streak дн.", null, onAction = null)
+            eButton?.showNote("✓ Зарядка сделана · цепочка $streak дн.", null, onAction = null)
         }
     }
 
