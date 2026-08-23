@@ -3206,11 +3206,22 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             Haptics.success(this@PravkaAccessibilityService)
             val day = app.foodStore.dayTotal(ru.zf.pravka.data.dayKey(meal.ts))
-            val target = runCatching { app.settings.foodTargets().kcal }.getOrDefault(0)
-            val tail = when {
-                target > 0 && day.kcal <= target -> "за день ${day.kcal} из $target ккал"
-                target > 0 -> "за день ${day.kcal} ккал, цель $target"
-                else -> "за день ${day.kcal} ккал"
+            val targets = runCatching { app.settings.foodTargets() }.getOrNull()
+            val target = targets?.kcal ?: 0
+            val tail = buildString {
+                append(
+                    when {
+                        target > 0 && day.kcal <= target -> "за день ${day.kcal} из $target ккал"
+                        target > 0 -> "за день ${day.kcal} ккал, цель $target"
+                        else -> "за день ${day.kcal} ккал"
+                    }
+                )
+                // Белок — его настоящий рычаг («накачаться впервые в жизни»),
+                // и добирают его сознательно: остаток полезнее суммы.
+                val proteinTarget = targets?.protein ?: 0
+                if (proteinTarget > 0 && day.protein < proteinTarget) {
+                    append(" · Б ещё ").append(proteinTarget - day.protein)
+                }
             }
             eButton?.showNote(
                 "✓ ${meal.kcal} ккал · $tail",

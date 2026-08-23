@@ -660,6 +660,8 @@ private fun MealEditDialog(app: PravkaApp, meal: FoodStore.Meal, onClose: () -> 
 @Composable
 internal fun BodyFoodSettings(app: PravkaApp) {
     val context = LocalContext.current
+    // Настройки открываются и без захода в «Еду» — дневник мог быть не прочитан.
+    LaunchedEffect(Unit) { runCatching { app.foodStore.load() } }
     val kcal by app.settings.foodKcalFlow.collectAsState(initial = 0)
     val protein by app.settings.foodProteinFlow.collectAsState(initial = 0)
     val fat by app.settings.foodFatFlow.collectAsState(initial = 0)

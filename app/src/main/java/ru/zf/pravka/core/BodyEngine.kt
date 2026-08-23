@@ -168,8 +168,11 @@ class BodyEngine(
             }
             if (f.feel > 0) {
                 // Самочувствие цепляем к сегодняшней тренировке, если она есть:
-                // оттуда оно уедет в intervals вместе с журналом.
+                // оттуда оно уедет в intervals вместе с журналом. Сессия без
+                // упражнений («сделано» кнопкой) — тоже тренировка: feel после
+                // неё терять нельзя.
                 val session = strengthStore.sessionsOn(date).firstOrNull { !it.empty }
+                    ?: strengthStore.sessionsOn(date).firstOrNull()
                 if (session != null) strengthStore.setFeel(session.id, f.feel, 0, f.note)
             }
             outcome = outcome.copy(feel = f.feel, knee = f.knee)
@@ -223,6 +226,10 @@ class BodyEngine(
             negatives = negatives,
             scapular = scapular,
             knee = knee,
+            // Руками — значит заменить: только так чинится ослышка «вис 400
+            // секунд», иначе она травила бы лучший вис вечно. Голосовая дорога
+            // (hear → putGtg) остаётся на максимуме дня.
+            replace = true,
         )
     }
 

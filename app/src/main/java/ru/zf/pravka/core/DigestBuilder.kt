@@ -208,6 +208,31 @@ class DigestBuilder(
             }
             if (s.note.isNotBlank()) append("  ").append(s.note).append('\n')
         }
+        // «Каждую неделю чуть больше прошлой» — его принцип №2, и он про
+        // ОБЪЁМ, а не про ощущения. Считаем неделю против предыдущей, когда
+        // сводка недельная: за день такое сравнение бессмысленно.
+        if (dates.size >= 7) {
+            val weekVolume = sessions.sumOf { it.volume }
+            val prevDates = mutableListOf<String>()
+            var cursor = dayBefore(dates.last())
+            repeat(7) {
+                prevDates.add(cursor)
+                cursor = dayBefore(cursor)
+            }
+            val prevVolume = strength.sessionsFlow.value
+                .filter { it.date in prevDates && !it.empty }
+                .sumOf { it.volume }
+            if (weekVolume > 0 || prevVolume > 0) {
+                append("Объём недели: ").append(Math.round(weekVolume))
+                append(" кг против ").append(Math.round(prevVolume))
+                append(" на прошлой")
+                if (prevVolume > 0) {
+                    val pct = Math.round((weekVolume - prevVolume) / prevVolume * 100)
+                    append(" (").append(if (pct >= 0) "+" else "").append(pct).append("%)")
+                }
+                append('\n')
+            }
+        }
         append('\n')
     }
 

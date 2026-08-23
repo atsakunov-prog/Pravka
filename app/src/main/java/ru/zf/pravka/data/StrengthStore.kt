@@ -201,8 +201,13 @@ class StrengthStore(private val context: Context) {
 
     fun rawById(id: Long): RawTake? = _rawFlow.value.firstOrNull { it.id == id }
 
-    /** Надиктовки, которые ничем не стали: их можно переиграть. */
-    fun rawUnparsed(): List<RawTake> = _rawFlow.value.filter { it.consumedBy == 0L }
+    /**
+     * Надиктовки, которые ничем не стали: их можно переиграть. Именно по kind,
+     * а не по consumedBy: у зарядки, самочувствия и вопроса consumedBy пустой,
+     * но они разобраны.
+     */
+    fun rawUnparsed(): List<RawTake> =
+        _rawFlow.value.filter { it.kind.isBlank() || it.kind == "unknown" }
 
     // ---- Тренировки ----
 
@@ -210,12 +215,40 @@ class StrengthStore(private val context: Context) {
      * Тренировка дня, одна на дату и блок. Идемпотентность живёт здесь: второй
      * наговор в тот же день дописывает УПРАЖНЕНИЯ в ту же тренировку, а не
      * заводит вторую.
+     *
+     * Пустой блок — это «блок ещё неизвестен», а не другой ключ. Утром на даче
+     * плана в кэше может не быть (блок пустой), к обеду календарь приехал (блок
+     * «C · полевой») — и без этого правила день раскалывался бы на ДВЕ
+     * тренировки, которые потом обе писали бы себя в одну активность Garmin,
+     * затирая друг друга: маркеры-то одни. Поэтому: нашёлся день с пустым
+     * блоком — дописываем его и заодно доучиваем блоку; просят пустой блок, а
+     * день уже есть с настоящим — отдаём настоящий.
      */
     suspend fun sessionFor(date: String, block: String, title: String): Session =
         mutex.withLock {
             ensureLoaded()
-            val existing = _sessionsFlow.value.firstOrNull { it.date == date && it.block == block }
-            if (existing != null) return@withLock existing
+            val sameDay = _sessionsFlow.value.filter { it.date == date }
+            val existing = sameDay.firstOrNull { it.block == block }
+                ?: sameDay.firstOrNull { it.block.isBlank() }
+                ?: sameDay.firstOrNull { block.isBlank() }
+            if (existing != null) {
+                // День был записан до того, как приехал план: доучиваем блок и
+                // название, чтобы карточка и intervals звали его по-настоящему.
+                if (existing.block.isBlank() && block.isNotBlank()) {
+                    var upgraded: Session = existing
+                    write(
+                        _sessionsFlow.value.map { s ->
+                            if (s.id != existing.id) s
+                            else s.copy(
+                                block = block,
+                                title = s.title.ifBlank { title },
+                            ).also { upgraded = it }
+                        }
+                    )
+                    return@withLock upgraded
+                }
+                return@withLock existing
+            }
             val now = System.currentTimeMillis()
             val session = Session(
                 id = now,
@@ -415,17 +448,24 @@ class StrengthStore(private val context: Context) {
         scapular: Int? = null,
         knee: String? = null,
         note: String? = null,
+        /**
+         * true — числа ЗАМЕНЯЮТ записанные (ручная правка в диалоге: только так
+         * чинится ослышка «вис 400 секунд», иначе она травила бы лучший вис
+         * вечно). false — берём максимум: голосовая вечерняя попытка на 20 сек
+         * не должна портить утреннюю на 45.
+         */
+        replace: Boolean = false,
     ): GtgDay = mutex.withLock {
         ensureLoaded()
         val old = _gtgFlow.value.firstOrNull { it.date == date }
+        fun best(fresh: Int?, was: Int): Int =
+            if (replace && fresh != null) fresh else maxOf(fresh ?: 0, was)
         val fresh = GtgDay(
             date = date,
             charged = charged ?: old?.charged ?: false,
-            // Лучший результат дня, а не последний: вис на 45 секунд не должен
-            // «испортиться» вечерней попыткой на 20.
-            hangSec = maxOf(hangSec ?: 0, old?.hangSec ?: 0),
-            negatives = maxOf(negatives ?: 0, old?.negatives ?: 0),
-            scapular = maxOf(scapular ?: 0, old?.scapular ?: 0),
+            hangSec = best(hangSec, old?.hangSec ?: 0),
+            negatives = best(negatives, old?.negatives ?: 0),
+            scapular = best(scapular, old?.scapular ?: 0),
             // Колено — наоборот, ПОСЛЕДНЕЕ сказанное: «к вечеру отпустило»
             // должно перебивать утреннее «ноет», а не проигрывать максимуму.
             knee = knee?.trim()?.ifBlank { old?.knee.orEmpty() } ?: old?.knee.orEmpty(),

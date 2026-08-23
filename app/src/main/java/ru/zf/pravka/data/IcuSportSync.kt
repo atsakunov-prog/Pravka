@@ -101,7 +101,7 @@ class IcuSportSync(
         val athlete = settings.icuAthlete().trim()
         val key = settings.icuKey().trim()
         if (athlete.isBlank() || key.isBlank()) {
-            lastError = "Не заданы athlete id и ключ intervals.icu — Настройки Засечки"
+            lastError = "Не заданы athlete id и ключ intervals.icu — «Настройки» → «Засечка»"
             return false
         }
         val auth = Credentials.basic("API_KEY", key)
@@ -182,6 +182,9 @@ class IcuSportSync(
                     // не занимался арифметикой на каждой перерисовке.
                     paceSecPerKm = paceOf(a.optDouble("average_speed", 0.0)),
                     gapSecPerKm = paceOf(a.optDouble("gap", 0.0)),
+                    // Каденс бега intervals отдаёт «на одну ногу» — удваиваем до
+                    // привычных шагов в минуту, которыми написано правило «168+».
+                    cadence = a.optInt("average_cadence", 0).let { if (it in 1..130) it * 2 else it },
                     calories = a.optInt("calories", 0),
                     feel = a.optInt("feel", 0),
                     rpe = a.optInt("icu_rpe", 0),
@@ -428,10 +431,15 @@ class IcuSportSync(
         null
     }
 
-    /** Текущее описание активности — чтобы заменить в нём наш блок, а не чужой текст. */
-    private fun activityDescription(activityId: String, auth: String): String {
-        val body = get("$ACTIVITY/$activityId", auth) ?: return ""
-        val o = runCatching { JSONObject(body) }.getOrNull() ?: return ""
+    /**
+     * Текущее описание активности — чтобы заменить в нём наш блок, а не чужой
+     * текст. null значит «прочитать не вышло», и это ОТМЕНЯЕТ запись: PUT с
+     * пустым existing затёр бы то, что владелец написал в описании руками.
+     * Не дописать сейчас — можно, досыл повторит; затереть чужое — нельзя.
+     */
+    private fun activityDescription(activityId: String, auth: String): String? {
+        val body = get("$ACTIVITY/$activityId", auth) ?: return null
+        val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
         return o.optString("description")
     }
 
@@ -454,6 +462,9 @@ class IcuSportSync(
             if (key.isBlank()) throw IllegalStateException("Нет ключа intervals.icu")
             val auth = Credentials.basic("API_KEY", key)
             val existing = activityDescription(activityId, auth)
+                ?: throw IllegalStateException(
+                    "не прочиталось описание активности — запись отложена, чтобы не затереть чужой текст"
+                )
             val payload = JSONObject().apply {
                 put("description", spliceOwnBlock(existing, body))
                 if (feel in 1..5) put("feel", feel)

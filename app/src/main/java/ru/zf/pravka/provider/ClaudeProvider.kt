@@ -810,12 +810,20 @@ $raw
             // Стабильная часть — до маркера {VARS}: инструкция и оба
             // справочника. Она и уходит под точку кэша.
             val split = template.indexOf(Prompts.PLACEHOLDER_VARS)
+            // Словарь варьируется от фразы к фразе, поэтому в заводском шаблоне
+            // он стоит НИЖЕ {VARS}. Точка кэша сидит на конце head, и любой
+            // изменившийся байт до неё стоил бы полной перезаписи кэша — один
+            // сработавший hint делал бы дороже все наговоры дня. В head словарь
+            // подменяем прочерком на случай, если владелец в правленом шаблоне
+            // оставил {DICT} над {VARS}: пусть кэш живёт, а словарь ему уедет
+            // в хвосте.
             val head = (if (split >= 0) template.substring(0, split) else template)
                 .replace("{EXERCISES}", exerciseBook.ifBlank { "Справочник упражнений не загружен." })
                 .replace("{RATION}", rationBook.ifBlank { "Справочник рациона не загружен." })
-                .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
+                .replace(Prompts.PLACEHOLDER_DICT, "—")
             var tail = if (split >= 0) template.substring(split + Prompts.PLACEHOLDER_VARS.length) else ""
             tail = tail
+                .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
                 .replace("{NOW}", nowContext())
                 .replace("{PLAN}", planBlock)
                 .replace("{LAST}", lastTimeBlock)
@@ -824,10 +832,6 @@ $raw
             } else {
                 tail.trimEnd() + "\n\nСказано:\n" + text
             }
-            // Словарь варьируется от фразы к фразе, поэтому он в head, а head
-            // тогда не полностью стабилен. Кэш живёт на общем начале строки,
-            // и инструкция со справочниками — это первые тысячи токенов; блок
-            // словаря стоит в конце head и портит лишь свой хвост.
             val parts = Prompts.PromptParts(stablePrefix = head, dictPart = tail, afterInput = "")
             val started = System.currentTimeMillis()
             val reply = requestWithOneRetry(apiKey, Settings.MODEL_SONNET, parts, "", null)

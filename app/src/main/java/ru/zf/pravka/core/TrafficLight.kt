@@ -48,6 +48,10 @@ class TrafficLight(
 
     fun today(date: String = dayKey(System.currentTimeMillis())): Verdict {
         val health = sport.healthFlow.value.firstOrNull()
+        // Свежесть — часть вердикта. На даче выгрузка молчит сутками, и
+        // светофор, который светит позавчерашним HRV как сегодняшним, врёт
+        // уверенно — хуже, чем молчал бы.
+        val stale = health != null && health.date < date
         val rules = plan.rulesFlow.value
         val planned = plan.dayOf(date)
         val main = plan.mainOf(date)
@@ -154,7 +158,10 @@ class TrafficLight(
             }
         }
 
-        val warnings = ruleWarnings(date, rules, planned, tsb)
+        val warnings = buildList {
+            if (stale) add("Часы молчат: данные за ${health!!.date}, не за сегодня")
+            addAll(ruleWarnings(date, rules, planned, tsb))
+        }
         val knee = strength.gtgOn(date)?.knee.orEmpty()
 
         // Колено — отдельный светофор, и он старше общего: красный отменяет
@@ -176,7 +183,7 @@ class TrafficLight(
             return Verdict(
                 headline = "Данных нет",
                 because = "Часы ещё не прислали ни сна, ни HRV. Проверь athlete id и ключ " +
-                    "intervals.icu в настройках Засечки.",
+                    "intervals.icu — «Настройки» → «Засечка».",
                 tone = 0,
                 numbers = numbers,
                 warnings = warnings,

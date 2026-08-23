@@ -53,6 +53,7 @@ class SportStore(private val context: Context) {
         val normWatts: Int,
         val paceSecPerKm: Int,      // 0 = не бег/ходьба
         val gapSecPerKm: Int,       // с поправкой на рельеф
+        val cadence: Int = 0,       // шагов/мин у бега (уже удвоенный), rpm у вело
         val calories: Int,
         val feel: Int,              // 1..5, как владелец себя ощущал
         val rpe: Int,               // 1..10
@@ -308,6 +309,7 @@ class SportStore(private val context: Context) {
         put("np", w.normWatts)
         put("pace", w.paceSecPerKm)
         put("gap", w.gapSecPerKm)
+        put("cadence", w.cadence)
         put("kcal", w.calories)
         put("feel", w.feel)
         put("rpe", w.rpe)
@@ -386,6 +388,7 @@ class SportStore(private val context: Context) {
                         normWatts = w.optInt("np"),
                         paceSecPerKm = w.optInt("pace"),
                         gapSecPerKm = w.optInt("gap"),
+                        cadence = w.optInt("cadence"),
                         calories = w.optInt("kcal"),
                         feel = w.optInt("feel"),
                         rpe = w.optInt("rpe"),

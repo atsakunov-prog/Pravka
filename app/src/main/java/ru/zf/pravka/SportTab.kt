@@ -106,6 +106,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     val rules by app.planStore.rulesFlow.collectAsState()
     val sessions by app.strengthStore.sessionsFlow.collectAsState()
     val gtgDays by app.strengthStore.gtgFlow.collectAsState()
+    val rawTakes by app.strengthStore.rawFlow.collectAsState()
     val restSec by app.settings.restSecFlow.collectAsState(initial = 90)
 
     var syncing by remember { mutableStateOf(false) }
@@ -476,6 +477,14 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             }
         }
 
+        // ---- КПД: его же месячная контрольная, посчитанная сама ----
+        // Правило владельца из Notion: «раз в месяц — темп бега на пульсе 150
+        // и мощность на пульсе ~145. Первый вниз, вторая вверх». Это и есть
+        // efficiency factor, который intervals считает каждой тренировке:
+        // темп (или ватты) на удар пульса. Держать для этого отдельный ритуал
+        // не нужно — данные уже в кэше, рисуем тренд и говорим словами.
+        item { EfficiencyCard(workouts) }
+
         // ---- Вес и VO2max, если часы их знают ----
         if (weights.size >= 3) {
             item {
@@ -533,7 +542,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                         Spacer(Modifier.height(6.dp))
                         PaperHint(
                             "Тренировки приезжают из intervals.icu. Проверь athlete id " +
-                                "и ключ в настройках Засечки, потом нажми «Обновить»."
+                                "и ключ («Настройки» → «Засечка»), потом нажми «Обновить»."
                         )
                     }
                 }
@@ -561,6 +570,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                         expanded = openWorkout == w.id,
                         onToggle = { openWorkout = if (openWorkout == w.id) null else w.id },
                         maxHr = profile.runMaxHr,
+                        rules = rules,
                     )
                 }
             }
@@ -605,6 +615,50 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     talk = talk,
                     onDelete = { scope.launch { store.deleteTalk(talk.id) } },
                 )
+            }
+        }
+
+        // ---- Неразобранное: сказанное, что не стало ничем ----
+        // Сырая надиктовка не удаляется никогда — но до сих пор её никто и не
+        // ПОКАЗЫВАЛ: фраза, на которой модель споткнулась, лежала на диске
+        // невидимой, а «можно переиграть» было обещанием без кнопки. Вот кнопка.
+        run {
+            val unparsed = rawTakes.filter { it.kind.isBlank() || it.kind == "unknown" }.take(5)
+            if (unparsed.isNotEmpty()) {
+                item { PaperLabel("неразобранное · ${unparsed.size}") }
+                items(unparsed.size, key = { i -> "raw" + unparsed[i].id }) { i ->
+                    val take = unparsed[i]
+                    var busy by remember(take.id) { mutableStateOf(false) }
+                    PaperCard {
+                        Text("«${take.text}»", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(4.dp))
+                        PaperHint(
+                            rawDayFormat.format(Date(take.ts)) +
+                                (if (take.error.isBlank()) "" else " · ${take.error.take(120)}")
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                if (!busy) {
+                                    busy = true
+                                    app.appScope.launch {
+                                        val result = app.bodyEngine.rehear(take.id)
+                                        busy = false
+                                        Feedback.toast(
+                                            app,
+                                            result.fold(
+                                                { "✓ " + it.headline() },
+                                                { e -> e.message ?: "Опять не вышло" },
+                                            ),
+                                            long = true,
+                                        )
+                                    }
+                                }
+                            },
+                            enabled = !busy,
+                        ) { Text(if (busy) "Разбираю…" else "Разобрать заново") }
+                    }
+                }
             }
         }
 
@@ -1067,14 +1121,112 @@ private fun LegendValue(label: String, value: String, color: Color) {
     }
 }
 
+private val rawDayFormat = SimpleDateFormat("d MMMM, HH:mm", Locale("ru"))
+
 private val CTL_COLOR = Color(0xFF0E7490)
 private val ATL_COLOR = Color(0xFFEA580C)
+private val RUN_COLOR = Color(0xFF16A34A)
+private val RIDE_COLOR = Color(0xFF2563EB)
 
 /**
  * Тренированность и усталость одной картинкой. Рисуем руками по Canvas, а не
  * библиотекой: две ломаные - это двадцать строк, а любая графическая
  * библиотека это ещё одна зависимость в приложении, где их пять.
  */
+/**
+ * Тренд КПД по бегу и вело за 90 дней: EF = темп (ватты) на удар пульса,
+ * intervals отдаёт его готовым. Рост EF — база строится; сравниваем среднее
+ * последних четырёх недель с четырьмя до них, а не два одиночных замера:
+ * одиночные шумят погодой, сном и рельефом.
+ */
+@Composable
+private fun EfficiencyCard(workouts: List<SportStore.Workout>) {
+    val from = remember { System.currentTimeMillis() - 90L * 86_400_000L }
+    val runs = remember(workouts) {
+        workouts.filter {
+            it.type.equals("Run", ignoreCase = true) && it.efficiency > 0 && it.start >= from
+        }.sortedBy { it.start }
+    }
+    val rides = remember(workouts) {
+        workouts.filter {
+            (it.type.equals("Ride", ignoreCase = true) ||
+                it.type.equals("VirtualRide", ignoreCase = true)) &&
+                it.efficiency > 0 && it.start >= from
+        }.sortedBy { it.start }
+    }
+    if (runs.size < 3 && rides.size < 3) return
+    PaperCard(label = "кпд · темп и ватты на удар пульса") {
+        var shown = false
+        if (runs.size >= 3) {
+            EfficiencyRow("Бег", runs, RUN_COLOR)
+            shown = true
+        }
+        if (rides.size >= 3) {
+            if (shown) Spacer(Modifier.height(12.dp))
+            EfficiencyRow("Вело", rides, RIDE_COLOR)
+        }
+        Spacer(Modifier.height(8.dp))
+        PaperHint(
+            "Это твоя месячная контрольная, посчитанная сама: рост — база " +
+                "строится, темп на том же пульсе ускоряется. Сравниваются " +
+                "средние по четырём неделям, одиночные точки шумят."
+        )
+    }
+}
+
+@Composable
+private fun EfficiencyRow(label: String, ascending: List<SportStore.Workout>, color: Color) {
+    val now = System.currentTimeMillis()
+    val recent = ascending.filter { it.start >= now - 28L * 86_400_000L }.map { it.efficiency }
+    val before = ascending.filter { it.start < now - 28L * 86_400_000L }.map { it.efficiency }
+    val trend: Pair<String, Int>? = if (recent.isNotEmpty() && before.isNotEmpty()) {
+        val a = before.average()
+        val b = recent.average()
+        val pct = ((b - a) / a * 100).let { Math.round(it).toInt() }
+        when {
+            pct >= 2 -> "+$pct% за месяц" to 1
+            pct <= -2 -> "$pct% за месяц" to -1
+            else -> "ровно" to 0
+        }
+    } else null
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        if (trend != null) {
+            Text(
+                trend.first,
+                style = MaterialTheme.typography.bodyMedium,
+                color = toneColor(trend.second),
+            )
+        } else {
+            PaperHint("${ascending.size} трен. — мало для сравнения месяцев")
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+    val values = ascending.map { it.efficiency }
+    val low = values.min()
+    val high = values.max()
+    val span = (high - low).coerceAtLeast(0.01)
+    val line = MaterialTheme.colorScheme.outlineVariant
+    Canvas(Modifier.fillMaxWidth().height(46.dp)) {
+        val w = size.width
+        val h = size.height
+        drawLine(line, Offset(0f, h), Offset(w, h), strokeWidth = 1f)
+        var previous: Offset? = null
+        values.forEachIndexed { i, v ->
+            val x = if (values.size == 1) 0f else w * i / (values.size - 1).toFloat()
+            val y = h - ((v - low) / span * h * 0.9).toFloat() - h * 0.05f
+            val current = Offset(x, y)
+            previous?.let { drawLine(color, it, current, strokeWidth = 3f) }
+            drawCircle(color, radius = 3f, center = current)
+            previous = current
+        }
+    }
+}
+
 @Composable
 private fun FitnessChart(ascending: List<SportStore.Health>) {
     val points = ascending.filter { it.ctl > 0 || it.atl > 0 }
@@ -1135,8 +1287,12 @@ private fun WorkoutRow(
     expanded: Boolean,
     onToggle: () -> Unit,
     maxHr: Int,
+    rules: PlanStore.Rules = PlanStore.Rules(),
 ) {
     val accent = sportColor(workout.type)
+    // Пробежка против ЕГО правил, сразу в строке: «под потолком» или «серая
+    // зона» видно без тапа. Правил в тексте нет — молчим, порог не выдумываем.
+    val verdictRun = runRuleVerdict(workout, rules)
     PaperCard {
         Row(
             Modifier.fillMaxWidth().clickable { onToggle() },
@@ -1163,6 +1319,13 @@ private fun WorkoutRow(
                     workoutDayFormat.format(Date(workout.start)) + ", " +
                         workoutTimeFormat.format(Date(workout.start))
                 )
+                if (verdictRun != null) {
+                    Text(
+                        verdictRun.first,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = toneColor(verdictRun.second),
+                    )
+                }
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
@@ -1200,6 +1363,15 @@ private fun WorkoutRow(
                         (if (workout.normWatts > 0) " (нормированная ${workout.normWatts})" else "")
                 )
             }
+            if (workout.cadence > 0 && workout.type.equals("Run", ignoreCase = true)) {
+                add(
+                    "Каденс" to "${workout.cadence}" +
+                        (if (rules.cadenceMin > 0) {
+                            if (workout.cadence >= rules.cadenceMin) " (цель ${rules.cadenceMin}+ ✓)"
+                            else " (цель ${rules.cadenceMin}+)"
+                        } else "")
+                )
+            }
             if (workout.elevationM >= 10) add("Набор высоты" to "${workout.elevationM.toInt()} м")
             if (workout.intensity > 0) add("Интенсивность" to "${workout.intensity}% от порога")
             if (workout.decoupling != 0.0) {
@@ -1229,6 +1401,27 @@ private fun WorkoutRow(
         if (facts.isEmpty() && zones.none { it > 0 }) {
             PaperHint("Кроме времени и расстояния, часы ничего не записали.")
         }
+    }
+}
+
+/**
+ * Пробежка против правил блока: пара «текст · тон» или null, если сказать
+ * нечего. Выше серой зоны не ругаем: интервалы и тесты там и живут — про них
+ * решает план, а не пост-фактум значок.
+ */
+private fun runRuleVerdict(
+    workout: SportStore.Workout,
+    rules: PlanStore.Rules,
+): Pair<String, Int>? {
+    if (!workout.type.equals("Run", ignoreCase = true)) return null
+    if (workout.avgHr <= 0 || rules.runHrCeiling <= 0) return null
+    val hr = workout.avgHr
+    return when {
+        hr <= rules.runHrCeiling -> "под потолком ${rules.runHrCeiling} ✓" to 1
+        rules.greyZoneLow > 0 && rules.greyZoneHigh > 0 && hr in rules.greyZoneLow..rules.greyZoneHigh ->
+            "серая зона ${rules.greyZoneLow}–${rules.greyZoneHigh} — пульс $hr" to -2
+        rules.greyZoneHigh in 1 until hr -> "жёсткая: пульс $hr — если не по плану, это перебор" to -1
+        else -> "выше потолка ${rules.runHrCeiling}: пульс $hr" to -1
     }
 }
 
@@ -1411,6 +1604,14 @@ private fun DigestSection(app: PravkaApp) {
 
 @Composable
 internal fun BodySportSettings(app: PravkaApp) {
+    // Группа «Тело» открывается и без захода во вкладку «Спорт» — сторы могли
+    // быть не прочитаны, и счётчик «ждут отправки» показал бы ноль неправдой.
+    LaunchedEffect(Unit) {
+        runCatching { app.sportStore.load() }
+        runCatching { app.strengthStore.load() }
+        runCatching { app.planStore.load() }
+        runCatching { app.exerciseBook.load() }
+    }
     val store = app.sportStore
     val profile by store.profileFlow.collectAsState()
     val days by app.settings.sportDaysFlow.collectAsState(initial = 120)
@@ -1662,7 +1863,7 @@ internal fun BodySportSettings(app: PravkaApp) {
         } else {
             PaperHint(
                 "Пороги ещё не приехали. Они тянутся при глубокой выгрузке — " +
-                    "нажми «Обновить» наверху."
+                    "нажми «Обновить» на вкладке «Спорт»."
             )
         }
         Spacer(Modifier.height(12.dp))

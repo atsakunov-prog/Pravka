@@ -336,7 +336,9 @@ class NotionPlanSync(
     }
 
     private fun appendBlocks(blockId: String, token: String, out: StringBuilder, depth: Int) {
-        if (depth > 2 || requests >= MAX_REQUESTS) return
+        // Три уровня: страница → тоггл → список → подпункты. Глубже правил не
+        // прячут, а от циклов synced-блоков бережёт лимит запросов.
+        if (depth > 3 || requests >= MAX_REQUESTS) return
         var cursor: String? = null
         do {
             val url = buildString {
@@ -354,17 +356,35 @@ class NotionPlanSync(
                     "heading_1", "heading_2", "heading_3" ->
                         if (text.isNotBlank()) out.append("\n## ").append(text).append('\n')
                     "paragraph" -> if (text.isNotBlank()) out.append(text).append('\n')
-                    "bulleted_list_item", "numbered_list_item" ->
+                    "bulleted_list_item", "numbered_list_item" -> {
                         if (text.isNotBlank()) out.append("- ").append(text).append('\n')
+                        // Вложенные пункты: «потолок 150» бывает подпунктом.
+                        if (b.optBoolean("has_children")) {
+                            appendBlocks(b.optString("id"), token, out, depth + 1)
+                        }
+                    }
                     "to_do" -> if (text.isNotBlank()) out.append("- [ ] ").append(text).append('\n')
-                    "quote", "callout" ->
+                    "quote", "callout" -> {
                         if (text.isNotBlank()) out.append("> ").append(text).append('\n')
+                        if (b.optBoolean("has_children")) {
+                            appendBlocks(b.optString("id"), token, out, depth + 1)
+                        }
+                    }
                     "table" -> {
                         // Штатная неделя и светофор колена живут таблицами — без
                         // них правил считай что нет, поэтому за ними идём внутрь.
                         appendBlocks(b.optString("id"), token, out, depth + 1)
                         out.append('\n')
                     }
+                    // Тогглы и колонки — контейнеры: их текст это заголовок, а
+                    // содержимое живёт в детях. Правила, спрятанные в тоггл,
+                    // раньше терялись молча.
+                    "toggle" -> {
+                        if (text.isNotBlank()) out.append("\n## ").append(text).append('\n')
+                        appendBlocks(b.optString("id"), token, out, depth + 1)
+                    }
+                    "column_list", "column", "synced_block" ->
+                        appendBlocks(b.optString("id"), token, out, depth + 1)
                     "table_row" -> {
                         val cells = b.optJSONObject("table_row")?.optJSONArray("cells")
                         if (cells != null) {

@@ -1080,6 +1080,11 @@ private fun ChainBlock(
 @Composable
 internal fun ZasechkaSettings(app: PravkaApp) {
     val context = LocalContext.current
+    // Настройки открываются и БЕЗ захода в Засечку — стор мог быть не прочитан,
+    // и редактор категорий показал бы пустоту. Отредактировать пустоту и
+    // сохранить — значит затереть настоящие категории; загрузка обязана
+    // случиться раньше.
+    LaunchedEffect(Unit) { app.zasechkaStore.all() }
     val categories by app.zasechkaStore.categoriesFlow.collectAsState()
     val clients by app.zasechkaStore.clientsFlow.collectAsState()
     val syncStatus by app.zasechkaSync.statusFlow.collectAsState()
