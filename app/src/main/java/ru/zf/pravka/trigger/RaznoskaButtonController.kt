@@ -19,7 +19,8 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.data.Settings
 
-// Разноска: третья кнопка, «Р». Тот же TYPE_ACCESSIBILITY_OVERLAY, что у «П» и
+// Разноска: третья кнопка, «Д» — она про ДЕЛА. Тот же
+// TYPE_ACCESSIBILITY_OVERLAY, что у «П» и
 // «З», та же плашка-тикер, те же жесты:
 //   тап        -> наговор (говори, тап ещё раз — разбор)
 //   долгое     -> меню: открыть «Дела», набрать текстом, разобрать заново
@@ -914,7 +915,7 @@ class RaznoskaButtonController(
             runCatching { windowManager.updateViewLayout(container, p) }
         }
         // Размер и прозрачность — общие ручки на все три кнопки. Подписка
-        // ставится один раз за жизнь службы: тумблер «Р» убирает окно и может
+        // ставится один раз за жизнь службы: тумблер «Д» убирает окно и может
         // создать его заново, а второй сборщик писал бы в мёртвое окно.
         if (!collectorsStarted) {
             collectorsStarted = true

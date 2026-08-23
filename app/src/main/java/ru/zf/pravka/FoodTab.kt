@@ -726,7 +726,7 @@ private fun FoodSettings(app: PravkaApp) {
         Spacer(Modifier.height(14.dp))
         SwitchRow(
             "Кнопка «Т» на экране",
-            "Четвёртая в связке под «Р». Одна на всё тело: подходы, еда, " +
+            "Четвёртая в связке под «Д». Одна на всё тело: подходы, еда, " +
                 "зарядка, вопрос — намерение определяет модель.",
             tEnabled,
         ) { v -> app.appScope.launch { app.settings.setTEnabled(v) } }

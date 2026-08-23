@@ -222,7 +222,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         eButton?.onTickerTap = ::onFoodTickerTap
 
         // The linked chain (owner's design): drag any bubble and the others
-        // trail behind on a rubber band, in order "П" - "З" - "Р" - "Е".
+        // trail behind on a rubber band, in order "П" - "З" - "Д" - "Т".
         val pairGap = (8 * resources.displayMetrics.density).toInt()
         floatingButton?.onDragged = { x, y, dropped ->
             val size = floatingButton?.buttonSizePx() ?: 0
@@ -2265,7 +2265,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // ---- Разноска: тап -> наговор -> дела в Todoist (ни поля, ни ленты) ----
 
-    /** Кнопка «Р» (и вкладка «Дела»): старт наговора, второй тап — разбор. */
+    /** Кнопка «Д» (и вкладка «Дела»): старт наговора, второй тап — разбор. */
     fun onRaznoskaTap() {
         if (isLockedIdle()) return
         if (rSession != null) { stopRaznoskaLive(); return }
@@ -2645,7 +2645,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         onRaznoskaText(text)
     }
 
-    /** «Разобрать текст» в меню «Р»: выделение → поле → буфер обмена. */
+    /** «Разобрать текст» в меню «Д»: выделение → поле → буфер обмена. */
     private fun raznoskaFromSelection() {
         scope.launch {
             val text = runCatching { assistContent() }.getOrDefault("")

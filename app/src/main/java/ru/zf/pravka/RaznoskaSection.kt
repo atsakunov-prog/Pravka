@@ -74,7 +74,7 @@ internal fun RaznoskaSection(app: PravkaApp) {
             modifier = Modifier.padding(top = 4.dp),
         )
         Text(
-            "Кнопка «Р» — наговори дела, Опус разберёт их на задачи. " +
+            "Кнопка «Д» — наговори дела, Опус разберёт их на задачи. " +
                 "Плашка появится сразу; правь здесь, потом «Отправить».",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -101,7 +101,7 @@ internal fun RaznoskaSection(app: PravkaApp) {
                 onCheckedChange = { on -> scope.launch { app.settings.setREnabled(on) } },
             )
             Text(
-                "Кнопка «Р» на экране",
+                "Кнопка «Д» на экране",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(start = 8.dp),
             )

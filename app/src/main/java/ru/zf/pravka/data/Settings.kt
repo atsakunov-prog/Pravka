@@ -45,7 +45,7 @@ class Settings(private val context: Context) {
         private val KEY_Z_CALL_CATEGORY = stringPreferencesKey("z_call_category")
         private val KEY_Z_IMMERSIVE_MIN = intPreferencesKey("z_immersive_min")
         private val KEY_Z_CHECKINS = booleanPreferencesKey("z_checkins")
-        // Разноска: третья кнопка «Р».
+        // Разноска: третья кнопка «Д» (она про дела).
         private val KEY_R_ENABLED = booleanPreferencesKey("r_enabled")
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
@@ -232,7 +232,7 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_TODOIST_TOKEN] = value.trim() }
     }
 
-    // Разноска: кнопка «Р» на экране. Включена по умолчанию - она и есть
+    // Разноска: кнопка «Д» на экране. Включена по умолчанию - она и есть
     // третий режим; выключается тем же тумблером, что и «З».
     val rEnabledFlow = context.dataStore.data.map { it[KEY_R_ENABLED] ?: true }
     suspend fun setREnabled(value: Boolean) {
@@ -389,7 +389,7 @@ class Settings(private val context: Context) {
         }
     }
 
-    // Еда стоит четвёртой в связке: по умолчанию под «Р».
+    // Тело стоит четвёртым в связке: по умолчанию под «Д».
     suspend fun eFabPosition(screenKey: String): Pair<Float, Float> {
         val prefs = context.dataStore.data.first()
         val x = prefs[floatPreferencesKey("efab_x_$screenKey")] ?: 0.92f

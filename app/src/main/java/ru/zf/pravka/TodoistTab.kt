@@ -105,7 +105,7 @@ fun TodoistTab(app: PravkaApp) {
             Text("Дела", style = MaterialTheme.typography.headlineSmall)
             Text(
                 "Тап по делу — оно становится текущим в ленте. Когда дело закончится, " +
-                    "в задачу Todoist уедет коммент со временем. Кнопка «Р» — наговорить " +
+                    "в задачу Todoist уедет коммент со временем. Кнопка «Д» — наговорить " +
                     "новые дела сюда.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

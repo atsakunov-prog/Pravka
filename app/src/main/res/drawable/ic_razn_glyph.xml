@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Разноска's mark: the same slab language as «П» and «З» - a left spine,
-     a top bar and a shorter bar closing the bowl. Same paper white, same bar
-     thickness (10), same rhythm of gaps as the «З». -->
+<!-- Разноски's mark: «Д» — она про ДЕЛА, и буква должна об этом говорить.
+     Тот же слэб-язык, что у «П», «З» и «Т»: та же бумажная белизна, та же
+     толщина планки 10, та же высота 22..78. Левая нога скошена, правая
+     вертикальная, база шире корпуса и стоит на двух лапках — иначе «Д» не
+     читается и путается с «П». -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="48dp"
     android:height="48dp"
@@ -9,5 +11,5 @@
     android:viewportHeight="100">
     <path
         android:fillColor="#F7F3EA"
-        android:pathData="M24,22 h10 v56 h-10 z M24,22 h52 v10 h-52 z M66,22 h10 v33 h-10 z M24,45 h52 v10 h-52 z" />
+        android:pathData="M34,22 h32 v10 h-32 z M34,22 h10 l-6,40 h-10 z M56,22 h10 v40 h-10 z M22,62 h56 v10 h-56 z M28,72 h10 v6 h-10 z M62,72 h10 v6 h-10 z" />
 </vector>
