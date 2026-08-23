@@ -132,12 +132,13 @@ class RaznoskaEngine(
      */
     suspend fun send(draftId: Long): SendOutcome = sendTasks(draftId, null)
 
-    /** Одобрено одно дело на плашке - уезжает только оно. */
-    suspend fun sendOne(draftId: Long, taskId: Long): SendOutcome = sendTasks(draftId, taskId)
+    /** «ОК» на плашке: уезжают только отмеченные дела. */
+    suspend fun sendOnly(draftId: Long, taskIds: Collection<Long>): SendOutcome =
+        if (taskIds.isEmpty()) SendOutcome(0, 0, "") else sendTasks(draftId, taskIds.toSet())
 
-    private suspend fun sendTasks(draftId: Long, onlyTask: Long?): SendOutcome {
+    private suspend fun sendTasks(draftId: Long, only: Set<Long>?): SendOutcome {
         val draft = store.byId(draftId) ?: return SendOutcome(0, 0, "Наговор не найден")
-        val queue = draft.live.filter { !it.sent && (onlyTask == null || it.id == onlyTask) }
+        val queue = draft.live.filter { !it.sent && (only == null || it.id in only) }
         if (queue.isEmpty()) return SendOutcome(0, 0, "")
         var created = 0
         var failed = 0

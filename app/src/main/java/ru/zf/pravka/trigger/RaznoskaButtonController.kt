@@ -421,22 +421,24 @@ class RaznoskaButtonController(
      * тикер «П» и плашка «З» - тот же радиус, та же бумажная белизна, та же
      * сторона экрана.
      *
-     * У каждого дела свои две ручки: **✓** - одобрить и отправить именно его,
-     * **✎** - поправить формулировку тут же, не открывая приложение. Тап по
-     * строке целиком - открыть дело в «Делах» (проект, метки, срок,
-     * приоритет). Внизу «✕» убрать плашку и «ОК» отправить всё оставшееся.
+     * Кружок слева - это ОТМЕТКА, а не отправка: все дела отмечены сразу,
+     * тапом снимаешь лишние, и одно «ОК» в конце добавляет отмеченные. Так
+     * решение принимается глазами по всему списку, а не по одному делу с
+     * кручением после каждого. «✎» правит формулировку на месте, тап по
+     * строке открывает дело целиком в «Делах».
      */
     fun showTasks(
         header: String,
         rows: List<PlateRow>,
-        okLabel: String,
-        onApprove: (Long) -> Unit,
         onEdit: (Long) -> Unit,
         onOpen: (Long) -> Unit,
-        onAll: () -> Unit,
+        onSend: (List<Long>) -> Unit,
         holdMs: Long = 45_000,
     ) {
         hidePlate()
+        val shown = rows.take(PLATE_ROWS)
+        // По умолчанию отмечено всё, что ещё не уехало: обычно нужны все.
+        val chosen = shown.filter { !it.sent }.map { it.id }.toMutableSet()
         val sheet = LinearLayout(service).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
@@ -446,7 +448,7 @@ class RaznoskaButtonController(
             }
             alpha = 0.96f
             elevation = dp(4).toFloat()
-            setPadding(dp(16), dp(10), dp(12), dp(8))
+            setPadding(dp(14), dp(10), dp(12), dp(8))
         }
         sheet.addView(
             TextView(service).apply {
@@ -460,22 +462,57 @@ class RaznoskaButtonController(
                 )
             }
         )
-        for (row in rows.take(PLATE_ROWS)) {
+        // Кнопка «ОК» создаётся заранее: отметки меняют её счёт.
+        val okButton = TextView(service).apply {
+            setTextColor(INK)
+            textSize = 15f
+            typeface = android.graphics.Typeface.create(
+                android.graphics.Typeface.SANS_SERIF,
+                android.graphics.Typeface.BOLD,
+            )
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(PAPER)
+            }
+            setPadding(dp(22), dp(7), dp(22), dp(7))
+        }
+        fun refreshOk() {
+            okButton.text = if (chosen.size > 1) "ОК · " + chosen.size else "ОК"
+            okButton.alpha = if (chosen.isEmpty()) 0.45f else 1f
+        }
+        refreshOk()
+        okButton.setOnClickListener {
+            val ids = chosen.toList()
+            hidePlate()
+            if (ids.isNotEmpty()) onSend(ids)
+        }
+
+        for (row in shown) {
             val line = LinearLayout(service).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, dp(6), 0, 0)
             }
-            // Одобрить: галочка слева. Уже отправленное - просто отметка.
-            line.addView(
-                TextView(service).apply {
-                    text = if (row.sent) "✓" else "○"
-                    setTextColor(PAPER)
-                    textSize = 17f
-                    alpha = if (row.sent) 0.7f else 1f
-                    setPadding(0, dp(2), dp(10), dp(2))
-                    if (!row.sent) setOnClickListener { onApprove(row.id) }
+            // Крупный кружок-отметка: по нему бьют пальцем на ходу.
+            val mark = TextView(service).apply {
+                text = "✓"
+                textSize = 16f
+                gravity = Gravity.CENTER
+            }
+            paintCheck(mark, row.sent || row.id in chosen)
+            if (row.sent) {
+                mark.alpha = 0.6f
+            } else {
+                mark.setOnClickListener {
+                    if (row.id in chosen) chosen.remove(row.id) else chosen.add(row.id)
+                    paintCheck(mark, row.id in chosen)
+                    refreshOk()
                 }
+            }
+            val markSize = dp(32)
+            line.addView(
+                mark,
+                LinearLayout.LayoutParams(markSize, markSize).apply { marginEnd = dp(10) },
             )
             val texts = LinearLayout(service).apply {
                 orientation = LinearLayout.VERTICAL
@@ -526,8 +563,8 @@ class RaznoskaButtonController(
                     TextView(service).apply {
                         text = "✎"
                         setTextColor(PAPER)
-                        textSize = 16f
-                        setPadding(dp(10), dp(2), dp(4), dp(2))
+                        textSize = 17f
+                        setPadding(dp(12), dp(6), dp(6), dp(6))
                         setOnClickListener { onEdit(row.id) }
                     }
                 )
@@ -565,26 +602,7 @@ class RaznoskaButtonController(
                 setOnClickListener { hidePlate() }
             }
         )
-        buttons.addView(
-            TextView(service).apply {
-                text = okLabel
-                setTextColor(INK)
-                textSize = 15f
-                typeface = android.graphics.Typeface.create(
-                    android.graphics.Typeface.SANS_SERIF,
-                    android.graphics.Typeface.BOLD,
-                )
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(16).toFloat()
-                    setColor(PAPER)
-                }
-                setPadding(dp(20), dp(6), dp(20), dp(6))
-                setOnClickListener {
-                    hidePlate()
-                    onAll()
-                }
-            }
-        )
+        buttons.addView(okButton)
         sheet.addView(
             buttons,
             LinearLayout.LayoutParams(
@@ -601,14 +619,27 @@ class RaznoskaButtonController(
         ).apply { gravity = Gravity.TOP or Gravity.START }
         // Высоту WRAP_CONTENT заранее не знает никто: оцениваем по строкам,
         // чтобы плашка встала посередине кнопки и не свесилась за экран.
-        val shown = rows.take(PLATE_ROWS)
-        val estimate = dp(34 + 44) + shown.sumOf { dp(if (it.warn.isBlank()) 44 else 62) }
+        val estimate = dp(34 + 44) + shown.sumOf { dp(if (it.warn.isBlank()) 46 else 64) }
         positionPlate(p, estimate)
         plate = sheet
         runCatching { windowManager.addView(sheet, p) }
         sheet.alpha = 0f
         sheet.animate().alpha(0.96f).setDuration(180).start()
         sheet.postDelayed(plateDismiss, holdMs)
+    }
+
+    /** Отмеченный кружок - залитый бумагой, снятый - только обводка. */
+    private fun paintCheck(view: TextView, on: Boolean) {
+        view.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            if (on) {
+                setColor(PAPER)
+            } else {
+                setColor(0x00FFFFFF)
+                setStroke(dp(2), PAPER_DIM)
+            }
+        }
+        view.setTextColor(if (on) INK else 0x00FFFFFF)
     }
 
     // Рядом с кнопкой, на той стороне, где есть место - то же правило, что у

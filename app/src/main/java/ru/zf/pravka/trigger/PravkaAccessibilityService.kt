@@ -2337,10 +2337,9 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Плашка разбора: у каждого дела своя галочка «одобрить» и «✎» на правку
-     * формулировки, тап по строке - дело целиком в «Делах», «ОК» - отправить
-     * всё оставшееся. Перерисовывается после каждого действия, поэтому на ней
-     * всегда живое состояние.
+     * Плашка разбора: кружок у дела - отметка (по умолчанию отмечено всё),
+     * «✎» - правка формулировки на месте, тап по строке - дело целиком в
+     * «Делах», «ОК» - добавить отмеченные. Ничего не уезжает до «ОК».
      */
     private fun showRaznoskaPlate(draftId: Long) {
         val draft = app.raznoskaStore.byId(draftId) ?: return
@@ -2366,43 +2365,26 @@ class PravkaAccessibilityService : AccessibilityService() {
         rButton?.showTasks(
             header = "РАЗНОСКА · " + raznCount(waiting),
             rows = rows,
-            okLabel = if (waiting == 1) "ОК" else "ОК · " + waiting,
-            onApprove = { id -> approveRaznoskaTask(draftId, id) },
             onEdit = { id -> editRaznoskaTask(draftId, id) },
             onOpen = { openTodoistTab() },
-            onAll = { sendRaznoska(listOf(draftId)) },
+            onSend = { ids -> sendRaznoskaTasks(draftId, ids) },
         )
     }
 
-    /** ✓ на плашке: одобрено одно дело - уезжает только оно. */
-    private fun approveRaznoskaTask(draftId: Long, taskId: Long) {
+    /** «ОК» на плашке: одной отправкой уезжают все отмеченные дела. */
+    private fun sendRaznoskaTasks(draftId: Long, taskIds: List<Long>) {
+        if (taskIds.isEmpty()) return
         rButton?.setBusy(true)
         scope.launch {
-            val outcome = runCatching { app.raznoskaEngine.sendOne(draftId, taskId) }
+            val outcome = runCatching { app.raznoskaEngine.sendOnly(draftId, taskIds) }
                 .getOrElse { e ->
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    ru.zf.pravka.core.RaznoskaEngine.SendOutcome(0, 1, e.message ?: "не отправилось")
+                    ru.zf.pravka.core.RaznoskaEngine.SendOutcome(
+                        0, taskIds.size, e.message ?: "не отправилось",
+                    )
                 }
             rButton?.setBusy(false)
-            if (outcome.created > 0) {
-                Haptics.success(this@PravkaAccessibilityService)
-            } else {
-                Haptics.error(this@PravkaAccessibilityService)
-                Feedback.toast(
-                    this@PravkaAccessibilityService,
-                    "Не отправилось: " + outcome.error,
-                    long = true,
-                )
-            }
-            val left = app.raznoskaStore.byId(draftId)?.pendingCount ?: 0
-            if (left == 0) {
-                rButton?.hidePlate()
-                if (outcome.created > 0) {
-                    Feedback.toast(this@PravkaAccessibilityService, "✓ всё в Todoist")
-                }
-            } else {
-                showRaznoskaPlate(draftId)
-            }
+            reportRaznoskaSend(outcome.created, outcome.failed, outcome.error)
         }
     }
 
@@ -2472,31 +2454,39 @@ class PravkaAccessibilityService : AccessibilityService() {
                 if (error.isBlank() && outcome.error.isNotBlank()) error = outcome.error
             }
             rButton?.setBusy(false)
-            when {
-                failed == 0 && created > 0 -> {
-                    Haptics.success(this@PravkaAccessibilityService)
-                    // Записка вместо тоста: у неё есть ручка отмены.
-                    rButton?.showNote(
-                        text = "✓ " + raznCount(created) + " в Todoist",
-                        actionLabel = "↩︎",
-                    ) { undoRaznoska() }
-                }
-                created > 0 -> {
-                    Haptics.error(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "Отправлено $created, осталось $failed: $error",
-                        long = true,
-                    )
-                }
-                else -> {
-                    Haptics.error(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "Не отправилось ($error). Дела ждут во вкладке «Дела».",
-                        long = true,
-                    )
-                }
+            reportRaznoskaSend(created, failed, error)
+        }
+    }
+
+    /**
+     * Итог отправки одним местом: успех - записка с ручкой отмены, частичный
+     * успех и провал - тост, из которого понятно, где остались дела.
+     */
+    private fun reportRaznoskaSend(created: Int, failed: Int, error: String) {
+        when {
+            failed == 0 && created > 0 -> {
+                Haptics.success(this)
+                // Записка вместо тоста: у неё есть ручка отмены.
+                rButton?.showNote(
+                    text = "✓ " + raznCount(created) + " в Todoist",
+                    actionLabel = "↩︎",
+                ) { undoRaznoska() }
+            }
+            created > 0 -> {
+                Haptics.error(this)
+                Feedback.toast(
+                    this,
+                    "Отправлено $created, осталось $failed: $error",
+                    long = true,
+                )
+            }
+            else -> {
+                Haptics.error(this)
+                Feedback.toast(
+                    this,
+                    "Не отправилось ($error). Дела ждут во вкладке «Дела».",
+                    long = true,
+                )
             }
         }
     }
