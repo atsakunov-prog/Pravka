@@ -31,6 +31,8 @@ class PromptStore(private val context: Context) {
         FOOD("food"),
         // Спорт: вопрос по своим тренировкам (Опус).
         COACH("coach"),
+        // Тренер-консультант: короткий вопрос про упражнение (Сонет).
+        TRAINER("trainer"),
         // Тело: один микрофон на подходы, еду, зарядку и вопросы (Сонет).
         BODY("body"),
         // Правила блока: проза Notion -> числа (Сонет).
@@ -54,6 +56,7 @@ class PromptStore(private val context: Context) {
         PromptId.TASKS -> Prompts.TASKS
         PromptId.FOOD -> Prompts.FOOD
         PromptId.COACH -> Prompts.COACH
+        PromptId.TRAINER -> Prompts.TRAINER
         PromptId.BODY -> Prompts.BODY
         PromptId.RULES -> Prompts.RULES
     }

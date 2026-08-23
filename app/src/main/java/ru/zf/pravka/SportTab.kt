@@ -122,8 +122,10 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     var openWorkout by remember { mutableStateOf<String?>(null) }
     var commenting by remember { mutableStateOf<SportStore.Workout?>(null) }
     // Вопрос тренеру про конкретное упражнение: заголовок задачи и карточка
-    // справочника уезжают фокусом, ответ стримится в диалоге.
-    var coachTopic by remember { mutableStateOf<Pair<String, ExerciseBook.Exercise?>?>(null) }
+    // справочника уезжают фокусом, ответ стримится в диалоге. Третий элемент —
+    // «спросить сразу»: кнопка «Как делать?» шлёт фиксированный вопрос без
+    // редактирования.
+    var coachTopic by remember { mutableStateOf<Triple<String, ExerciseBook.Exercise?, Boolean>?>(null) }
     var days by remember { mutableStateOf(14) }
 
     var gtgDialog by remember { mutableStateOf(false) }
@@ -371,7 +373,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     doneToday = doneToday,
                     history = task.history,
                     restSec = restSec,
-                    onAskCoach = { coachTopic = task.title to task.exercise },
+                    onAskCoach = { auto -> coachTopic = Triple(task.title, task.exercise, auto) },
                     checked = todaySession?.isChecked(task.id) == true,
                     onCheck = {
                         app.appScope.launch {
@@ -806,8 +808,8 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     commenting?.let { workout ->
         WorkoutCommentDialog(app, workout, onClose = { commenting = null })
     }
-    coachTopic?.let { (title, exercise) ->
-        CoachDialog(app, title, exercise, onClose = { coachTopic = null })
+    coachTopic?.let { (title, exercise, auto) ->
+        CoachDialog(app, title, exercise, autoAsk = auto, onClose = { coachTopic = null })
     }
 }
 
@@ -821,12 +823,40 @@ private fun CoachDialog(
     app: PravkaApp,
     taskTitle: String,
     exercise: ExerciseBook.Exercise?,
+    autoAsk: Boolean = false,
     onClose: () -> Unit,
 ) {
     val shortName = exercise?.name ?: taskTitle.take(40)
-    var question by remember { mutableStateOf("Как правильно делать: $shortName?") }
+    var question by remember {
+        mutableStateOf(if (autoAsk) "Как правильно делать: $shortName?" else "")
+    }
     var streaming by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    val send: () -> Unit = {
+        if (!busy && question.isNotBlank()) {
+            busy = true
+            streaming = ""
+            app.appScope.launch {
+                val answer = runCatching {
+                    app.sportCoach.askTrainer(
+                        question = question,
+                        focus = SportCoach.exerciseFocus(exercise, taskTitle),
+                    ) { delta -> streaming += delta }
+                }.getOrElse { e ->
+                    SportCoach.Answer("", 0.0, e.message ?: "не вышло")
+                }
+                busy = false
+                if (answer.error.isNotBlank()) {
+                    streaming = answer.error
+                } else if (answer.text.isNotBlank()) {
+                    streaming = answer.text
+                }
+            }
+        }
+    }
+    // «Как делать?» не заставляет редактировать вопрос: диалог открылся —
+    // ответ уже пошёл.
+    LaunchedEffect(Unit) { if (autoAsk) send() }
     AlertDialog(
         onDismissRequest = { if (!busy) onClose() },
         title = { Text(shortName, maxLines = 2, overflow = TextOverflow.Ellipsis) },
@@ -840,7 +870,7 @@ private fun CoachDialog(
                 OutlinedTextField(
                     value = question,
                     onValueChange = { question = it },
-                    label = { Text("Вопрос тренеру") },
+                    label = { Text(if (autoAsk) "Вопрос тренеру" else "Спроси про это упражнение…") },
                     minLines = 1,
                     maxLines = 3,
                     enabled = !busy,
@@ -848,8 +878,8 @@ private fun CoachDialog(
                 )
                 Spacer(Modifier.height(6.dp))
                 PaperHint(
-                    "Опус видит карточку движения из твоего справочника, план дня, " +
-                        "правила недели и твои данные."
+                    "Тренер-консультант видит карточку движения из твоего " +
+                        "справочника, план дня и правила недели."
                 )
                 if (streaming.isNotBlank()) {
                     Spacer(Modifier.height(10.dp))
@@ -859,28 +889,7 @@ private fun CoachDialog(
         },
         confirmButton = {
             Button(
-                onClick = {
-                    if (!busy && question.isNotBlank()) {
-                        busy = true
-                        streaming = ""
-                        app.appScope.launch {
-                            val answer = runCatching {
-                                app.sportCoach.ask(
-                                    question = question,
-                                    focus = SportCoach.exerciseFocus(exercise, taskTitle),
-                                ) { delta -> streaming += delta }
-                            }.getOrElse { e ->
-                                SportCoach.Answer("", 0.0, e.message ?: "не вышло")
-                            }
-                            busy = false
-                            if (answer.error.isNotBlank()) {
-                                streaming = answer.error
-                            } else if (answer.text.isNotBlank()) {
-                                streaming = answer.text
-                            }
-                        }
-                    }
-                },
+                onClick = send,
                 enabled = !busy && question.isNotBlank(),
             ) { Text(if (busy) "Думает…" else "Спросить") }
         },
@@ -966,7 +975,7 @@ private fun PlannedExerciseCard(
     restSec: Int,
     checked: Boolean = false,
     onCheck: (() -> Unit)? = null,
-    onAskCoach: (() -> Unit)? = null,
+    onAskCoach: ((Boolean) -> Unit)? = null,
     onRest: (Int) -> Unit,
 ) {
     var open by remember(title) { mutableStateOf(false) }
@@ -1076,7 +1085,10 @@ private fun PlannedExerciseCard(
                 OutlinedButton(onClick = { onRest(seconds) }) { Text("⏱ $seconds") }
             }
             if (onAskCoach != null) {
-                OutlinedButton(onClick = onAskCoach) { Text("Тренеру?") }
+                // «Как делать?» — один тап, фиксированный вопрос; «Спросить» —
+                // своё, с пустым полем. Обе — лёгкий тренер-консультант.
+                OutlinedButton(onClick = { onAskCoach(true) }) { Text("Как делать?") }
+                OutlinedButton(onClick = { onAskCoach(false) }) { Text("Спросить") }
             }
         }
         if (exercise != null && exercise.videoQuery.isNotBlank()) {
@@ -1515,7 +1527,7 @@ private fun ZaryadkaChecklist(
     val doneIds = gtgToday?.doneIds ?: emptyList()
     val charged = gtgToday?.charged == true
     var openId by remember { mutableStateOf<String?>(null) }
-    var asking by remember { mutableStateOf<ExerciseBook.Exercise?>(null) }
+    var asking by remember { mutableStateOf<Pair<ExerciseBook.Exercise, Boolean>?>(null) }
 
     PaperCard(
         label = "зарядка сегодня",
@@ -1573,7 +1585,14 @@ private fun ZaryadkaChecklist(
                             )
                         }
                         Spacer(Modifier.height(6.dp))
-                        OutlinedButton(onClick = { asking = exercise }) { Text("Тренеру?") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { asking = exercise to true }) {
+                                Text("Как делать?")
+                            }
+                            OutlinedButton(onClick = { asking = exercise to false }) {
+                                Text("Спросить")
+                            }
+                        }
                     }
                 }
             }
@@ -1593,8 +1612,8 @@ private fun ZaryadkaChecklist(
             whereSaid = "в карточке зарядки",
         )
     }
-    asking?.let { exercise ->
-        CoachDialog(app, exercise.name, exercise, onClose = { asking = null })
+    asking?.let { (exercise, auto) ->
+        CoachDialog(app, exercise.name, exercise, autoAsk = auto, onClose = { asking = null })
     }
 }
 

@@ -332,6 +332,52 @@ class SportCoach(
      * человеческом виде, а не JSON-ом: так дешевле по токенам и модель реже
      * путает поля.
      */
+    /**
+     * Лёгкий вопрос тренеру-консультанту: без телеметрии, только карточка
+     * движения и правила недели. Ответ тоже ложится в «прошлые разборы».
+     */
+    suspend fun askTrainer(
+        question: String,
+        focus: String,
+        onDelta: ((String) -> Unit)? = null,
+    ): Answer {
+        runCatching { planStore.load() }
+        val result = claude.trainer(question, focus, weekRulesSnippet(), onDelta)
+        val answer = result.getOrElse { e ->
+            eventLog.add("тренер: вопрос не вышел — ${e.message}")
+            return Answer("", 0.0, e.message ?: "Не получилось спросить")
+        }
+        runCatching { stats.recordAux(answer.costUsd, answer.tokensIn, answer.tokensOut) }
+        runCatching { store.addTalk("[тренер] " + question, answer.text, answer.costUsd) }
+        eventLog.add(
+            "тренер: «${question.take(50)}» — ${answer.text.length} зн., " +
+                String.format(Locale.US, "%.3f", answer.costUsd) + " USD"
+        )
+        return Answer(answer.text, answer.costUsd, "")
+    }
+
+    /**
+     * Срез правил для лёгкого тренера: раздел текущей недели из Notion
+     * (спина-протокол с запретами и заменами), а если его нет — ключевые числа
+     * одной строкой. Полная телеметрия сюда нарочно не едет.
+     */
+    private fun weekRulesSnippet(): String {
+        val rules = planStore.rulesFlow.value
+        val source = rules.sourceText
+        val marker = "# Текущая неделя"
+        val week = if (source.contains(marker)) {
+            source.substring(source.indexOf(marker)).take(3500)
+        } else ""
+        if (week.isNotBlank()) return "Его правила недели:\n" + week
+        if (!rules.known) return ""
+        return buildString {
+            append("Его правила: ")
+            if (rules.runHrCeiling > 0) append("бег до ${rules.runHrCeiling}; ")
+            if (rules.cadenceMin > 0) append("каденс ${rules.cadenceMin}+; ")
+            if (rules.cancelOrder.isNotBlank()) append(rules.cancelOrder)
+        }
+    }
+
     fun buildContext(targets: Settings.Targets? = null): String = buildString {
         val profile = store.profileFlow.value
         if (profile.known) {

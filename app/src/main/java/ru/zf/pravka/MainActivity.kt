@@ -1515,6 +1515,7 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.TASKS to R.string.prompt_title_tasks,
     PromptStore.PromptId.FOOD to R.string.prompt_title_food,
     PromptStore.PromptId.COACH to R.string.prompt_title_coach,
+    PromptStore.PromptId.TRAINER to R.string.prompt_title_trainer,
     PromptStore.PromptId.BODY to R.string.prompt_title_body,
     PromptStore.PromptId.RULES to R.string.prompt_title_rules,
 )

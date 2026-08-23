@@ -1093,6 +1093,46 @@ $raw
         }
     }
 
+    /**
+     * Тренер-консультант: короткий вопрос про упражнение. Сонет, а не Опус:
+     * техника отвечается карточкой движения и правилами недели, полная
+     * телеметрия тут лишняя — и по деньгам, и по скорости между подходами.
+     */
+    suspend fun trainer(
+        question: String,
+        focusBlock: String,
+        weekBlock: String,
+        onDelta: ((String) -> Unit)? = null,
+    ): Result<CoachAnswer> = withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) {
+                throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+            }
+            val template = promptStore.effective(PromptStore.PromptId.TRAINER)
+            var prompt = template
+                .replace("{FOCUS}", focusBlock.ifBlank { "Упражнение не из справочника." })
+                .replace("{WEEK}", weekBlock.ifBlank { "Правил недели в кэше нет." })
+            val asked = question.trim().ifBlank { "Как правильно делать это упражнение?" }
+            prompt = if (prompt.contains(Prompts.PLACEHOLDER_INPUT)) {
+                prompt.replace(Prompts.PLACEHOLDER_INPUT, asked)
+            } else {
+                prompt.trimEnd() + "\n\nВопрос:\n" + asked
+            }
+            val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+            val started = System.currentTimeMillis()
+            val reply = requestWithOneRetry(apiKey, Settings.MODEL_SONNET, parts, "", onDelta)
+            CoachAnswer(
+                text = reply.text.trim(),
+                costUsd = costUsd(Settings.MODEL_SONNET, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+                model = Settings.MODEL_SONNET,
+                latencyMs = System.currentTimeMillis() - started,
+            )
+        }
+    }
+
     /** «воскресенье, 23 августа 2026, 14:05» — еде нужен ещё и час. */
     private fun nowContext(): String {
         val now = java.util.Date()

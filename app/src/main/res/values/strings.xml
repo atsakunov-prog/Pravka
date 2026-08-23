@@ -126,6 +126,7 @@
     <string name="prompt_title_tasks">Разноска (дела)</string>
     <string name="prompt_title_food">Еда (КБЖУ)</string>
     <string name="prompt_title_coach">Спорт (разбор тренировок)</string>
+    <string name="prompt_title_trainer">Тренер (вопрос про упражнение)</string>
     <string name="prompt_title_body">Тело (подходы, еда, зарядка)</string>
     <string name="prompt_title_rules">Правила блока из Notion</string>
     <string name="tab_learning">Обучение</string>
