@@ -90,7 +90,7 @@ private val FAT_COLOR = Color(0xFFCA8A04)
 private val CARBS_COLOR = Color(0xFF16A34A)
 
 @Composable
-internal fun FoodTab(app: PravkaApp) {
+internal fun FoodTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val store = app.foodStore
     val meals by store.mealsFlow.collectAsState()
@@ -103,7 +103,6 @@ internal fun FoodTab(app: PravkaApp) {
     var draft by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Long?>(null) }
-    var showSettings by remember { mutableStateOf(false) }
     // Куда камера положит кадр: файл нужен ДО съёмки, чтобы отдать в интент URI.
     var pendingPhoto by remember { mutableStateOf<File?>(null) }
     val scope = rememberCoroutineScope()
@@ -423,14 +422,7 @@ internal fun FoodTab(app: PravkaApp) {
         }
 
         // ---- Настройки ----
-        item {
-            TextButton(onClick = { showSettings = !showSettings }) {
-                Text(if (showSettings) "Скрыть настройки" else "Настройки еды")
-            }
-        }
-        if (showSettings) {
-            item { FoodSettings(app) }
-        }
+        item { SettingsLink("Настройки еды: цели и куда уезжает", onOpenSettings) }
     }
 
     val editMeal = editing?.let { id -> meals.firstOrNull { it.id == id } }
@@ -662,7 +654,7 @@ private fun MealEditDialog(app: PravkaApp, meal: FoodStore.Meal, onClose: () -> 
 }
 
 @Composable
-private fun FoodSettings(app: PravkaApp) {
+internal fun BodyFoodSettings(app: PravkaApp) {
     val context = LocalContext.current
     val kcal by app.settings.foodKcalFlow.collectAsState(initial = 0)
     val protein by app.settings.foodProteinFlow.collectAsState(initial = 0)

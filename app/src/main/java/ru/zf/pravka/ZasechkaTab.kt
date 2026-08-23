@@ -276,7 +276,7 @@ private fun buildDayUnits(asc: List<ZasechkaStore.Entry>): List<DayUnit> {
 }
 
 @Composable
-internal fun ZasechkaTab(app: PravkaApp) {
+internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     val context = LocalContext.current
     val store = app.zasechkaStore
     val entries by store.entriesFlow.collectAsState()
@@ -647,10 +647,11 @@ internal fun ZasechkaTab(app: PravkaApp) {
             Spacer(Modifier.height(12.dp))
         }
 
-        // ---- settings for the whole Засечка mode ----
+        // Настройки режима живут в одной вкладке со всеми остальными -
+        // здесь только дорога туда, одним тапом вместо трёх.
         item {
             Spacer(Modifier.height(16.dp))
-            ZasechkaConfig(app, categories, clients, syncStatus, entries)
+            SettingsLink("Настройки Засечки", onOpenSettings)
         }
     }
 
@@ -1077,20 +1078,12 @@ private fun ChainBlock(
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun ZasechkaConfig(
-    app: PravkaApp,
-    categories: List<ZasechkaStore.Category>,
-    clients: List<String>,
-    syncStatus: String,
-    entries: List<ZasechkaStore.Entry>,
-) {
+internal fun ZasechkaSettings(app: PravkaApp) {
     val context = LocalContext.current
-    var expanded by remember { mutableStateOf(false) }
-
-    TextButton(onClick = { expanded = !expanded }) {
-        Text(if (expanded) "▾ Настройки Засечки" else "▸ Настройки Засечки")
-    }
-    if (!expanded) return
+    val categories by app.zasechkaStore.categoriesFlow.collectAsState()
+    val clients by app.zasechkaStore.clientsFlow.collectAsState()
+    val syncStatus by app.zasechkaSync.statusFlow.collectAsState()
+    val entries by app.zasechkaStore.entriesFlow.collectAsState()
 
     val zEnabled by app.settings.zEnabledFlow.collectAsState(initial = true)
     val gapMin by app.settings.zGapMinFlow.collectAsState(initial = 45)

@@ -95,7 +95,7 @@ private fun toneColor(tone: Int): Color = when (tone) {
 }
 
 @Composable
-internal fun SportTab(app: PravkaApp) {
+internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     val store = app.sportStore
     val workouts by store.workoutsFlow.collectAsState()
     val health by store.healthFlow.collectAsState()
@@ -113,7 +113,6 @@ internal fun SportTab(app: PravkaApp) {
     // Живой ответ: слова приезжают потоком и растут прямо на экране.
     var streaming by remember { mutableStateOf("") }
     var openWorkout by remember { mutableStateOf<String?>(null) }
-    var showSettings by remember { mutableStateOf(false) }
     var days by remember { mutableStateOf(14) }
 
     var gtgDialog by remember { mutableStateOf(false) }
@@ -584,14 +583,8 @@ internal fun SportTab(app: PravkaApp) {
         // ---- Настройки ----
         item { DigestSection(app) }
 
-        item {
-            TextButton(onClick = { showSettings = !showSettings }) {
-                Text(if (showSettings) "Скрыть настройки" else "Настройки спорта и правил")
-            }
-        }
-        if (showSettings) {
-            item { SportSettings(app) }
-        }
+        // Настройки — в одной вкладке со всеми остальными, группой «Тело».
+        item { SettingsLink("Настройки тела: правила, Notion, цели", onOpenSettings) }
     }
 
     if (gtgDialog) {
@@ -1242,7 +1235,7 @@ private fun DigestSection(app: PravkaApp) {
 }
 
 @Composable
-private fun SportSettings(app: PravkaApp) {
+internal fun BodySportSettings(app: PravkaApp) {
     val store = app.sportStore
     val profile by store.profileFlow.collectAsState()
     val days by app.settings.sportDaysFlow.collectAsState(initial = 120)
@@ -1253,8 +1246,17 @@ private fun SportSettings(app: PravkaApp) {
     val sessions by app.strengthStore.sessionsFlow.collectAsState()
     var sliderDays by remember(days) { mutableStateOf(days.toFloat()) }
     var sliderRest by remember(restSec) { mutableStateOf(restSec.toFloat()) }
+    val notionHub by app.settings.notionHubFlow.collectAsState(
+        initial = ru.zf.pravka.data.Settings.NOTION_HUB_DEFAULT
+    )
     var tokenDraft by remember(notionToken) { mutableStateOf(notionToken) }
+    var hubDraft by remember(notionHub) { mutableStateOf(notionHub) }
     var syncingPlan by remember { mutableStateOf(false) }
+    var checking by remember { mutableStateOf(false) }
+    var report by remember { mutableStateOf("") }
+    // Ошибка Notion живёт не во Flow, а полем в синхронизаторе: перечитываем её
+    // после каждой попытки, иначе на экране останется прошлая.
+    var notionError by remember { mutableStateOf(app.notionPlanSync.lastError()) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     PaperCard(label = "правила блока из notion") {
@@ -1295,10 +1297,11 @@ private fun SportSettings(app: PravkaApp) {
             PaperHint("Правится в Notion — здесь только видно. Читается раз в сутки.")
         } else {
             PaperHint(
-                "Правила блока ещё не приезжали. Нужен внутренний токен интеграции " +
-                    "Notion (только чтение) и доступ этой интеграции к странице " +
-                    "«Тело: велоформа и сила» — приложение само найдёт под ней " +
-                    "свежую страницу «Блок …»."
+                "Правила ещё не приезжали. Нужны две вещи: внутренний токен " +
+                    "интеграции Notion (только чтение) и доступ этой интеграции " +
+                    "к странице «Тело: велоформа и сила» — страница → «…» в правом " +
+                    "верхнем углу → Connections → выбрать интеграцию. Доступ " +
+                    "наследуется вниз: страницу блока отдельно открывать не надо."
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -1309,11 +1312,28 @@ private fun SportSettings(app: PravkaApp) {
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+        Spacer(Modifier.height(6.dp))
+        OutlinedTextField(
+            value = hubDraft,
+            onValueChange = { hubDraft = it },
+            label = { Text("Страница-хаб: ссылка или id") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        PaperHint(
+            "Можно вставить прямо ссылку из «Copy link» — id из неё вынется сам. " +
+                "Хаб читается и сам: светофор колена, правило отмены и потолок бега " +
+                "лежат на нём, а не на странице блока."
+        )
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
-                app.appScope.launch { app.settings.setNotionToken(tokenDraft.trim()) }
-            }) { Text("Сохранить токен") }
+                app.appScope.launch {
+                    app.settings.setNotionToken(tokenDraft.trim())
+                    app.settings.setNotionHub(hubDraft.trim())
+                    Feedback.toast(app, "Сохранено")
+                }
+            }) { Text("Сохранить") }
             OutlinedButton(
                 onClick = {
                     if (!syncingPlan) {
@@ -1321,6 +1341,7 @@ private fun SportSettings(app: PravkaApp) {
                         app.appScope.launch {
                             val outcome = app.planSync.refresh(force = true)
                             syncingPlan = false
+                            notionError = app.notionPlanSync.lastError()
                             Feedback.toast(
                                 app,
                                 when {
@@ -1338,7 +1359,35 @@ private fun SportSettings(app: PravkaApp) {
                 enabled = !syncingPlan,
             ) { Text(if (syncingPlan) "Читаю…" else "Прочитать план") }
         }
-        val notionError = app.notionPlanSync.lastError()
+        Spacer(Modifier.height(6.dp))
+        // «Проверить доступ» — не про удобство, а про то, чтобы ошибка была
+        // читаемой. «Не нашлось страниц» ничего не говорит о том, что чинить;
+        // построчный отчёт («токен принят, хаб отдал 404») указывает пальцем.
+        OutlinedButton(
+            onClick = {
+                if (!checking) {
+                    checking = true
+                    app.appScope.launch {
+                        // Токен и хаб из полей — иначе проверяется прошлое,
+                        // а владелец смотрит на новое.
+                        app.settings.setNotionToken(tokenDraft.trim())
+                        app.settings.setNotionHub(hubDraft.trim())
+                        report = runCatching { app.notionPlanSync.diagnose() }
+                            .getOrElse { e -> "Сорвалось: ${e.message ?: e.javaClass.simpleName}" }
+                        checking = false
+                    }
+                }
+            },
+            enabled = !checking,
+        ) { Text(if (checking) "Проверяю…" else "Проверить доступ") }
+        if (report.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                report,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            )
+        }
         if (notionError.isNotBlank()) {
             Spacer(Modifier.height(6.dp))
             Text(
@@ -1346,6 +1395,10 @@ private fun SportSettings(app: PravkaApp) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
+        }
+        if (rules.sourceText.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            PaperHint("Прочитано и лежит на телефоне: ${rules.sourceText.length} зн.")
         }
     }
 

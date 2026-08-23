@@ -53,7 +53,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -73,8 +72,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
@@ -360,12 +357,14 @@ private fun MainScreen(
                         onBack = { moreTab = null },
                     )
                 }
+                // Из любой вкладки — в её группу настроек одним тапом.
+                val openSettings = { tab = Tab.MORE; moreTab = Tab.SETTINGS }
                 when (shown) {
-                    Tab.ZASECHKA -> ZasechkaTab(app)
-                    Tab.TODOIST -> TodoistTab(app)
-                    Tab.SPORT -> SportTab(app)
-                    Tab.FOOD -> FoodTab(app)
-                    Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
+                    Tab.ZASECHKA -> ZasechkaTab(app, openSettings)
+                    Tab.TODOIST -> TodoistTab(app, openSettings)
+                    Tab.SPORT -> SportTab(app, openSettings)
+                    Tab.FOOD -> FoodTab(app, openSettings)
+                    Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings)
                     Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
                     Tab.PROMPTS -> PromptsTab(promptStore)
                     Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
@@ -386,7 +385,7 @@ private fun MainScreen(
 
 /** The wide "П" mark - same as the launcher icon and the floating button. */
 @Composable
-private fun BrandMark(size: androidx.compose.ui.unit.Dp, textSize: androidx.compose.ui.unit.TextUnit) {
+internal fun BrandMark(size: androidx.compose.ui.unit.Dp, textSize: androidx.compose.ui.unit.TextUnit) {
     Box(
         modifier = Modifier
             .size(size)
@@ -404,13 +403,13 @@ private fun BrandMark(size: androidx.compose.ui.unit.Dp, textSize: androidx.comp
 }
 
 @Composable
-private fun ScreenTitle(text: String) {
+internal fun ScreenTitle(text: String) {
     Text(text, style = MaterialTheme.typography.headlineSmall)
 }
 
 /** Small uppercase label in the accent color above a card. */
 @Composable
-private fun SectionLabel(text: String) {
+internal fun SectionLabel(text: String) {
     Text(
         text.uppercase(Locale.forLanguageTag("ru")),
         style = MaterialTheme.typography.labelMedium,
@@ -420,7 +419,7 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun SectionCard(
+internal fun SectionCard(
     label: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -438,7 +437,7 @@ private fun SectionCard(
 }
 
 @Composable
-private fun HintText(text: String) {
+internal fun HintText(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.bodySmall,
@@ -446,198 +445,8 @@ private fun HintText(text: String) {
     )
 }
 
-// ---------------------------------------------------------------------------
-// Settings
-// ---------------------------------------------------------------------------
-
 @Composable
-private fun SettingsTab(
-    settings: Settings,
-    whisperProvider: ru.zf.pravka.provider.WhisperProvider,
-    recordings: ru.zf.pravka.data.Recordings,
-    serviceEnabled: Boolean,
-    onOpenAccessibilitySettings: () -> Unit,
-) {
-    // App-lifetime scope for persistence: rememberCoroutineScope dies with
-    // the composition and cancels DataStore/file writes mid-flight when the
-    // owner switches tabs (the "принял четыре правила, записалось одно" bug
-    // class - fixed in Learning, but these older tabs kept the old scope).
-    val scope = (LocalContext.current.applicationContext as PravkaApp).appScope
-    var apiKey by remember { mutableStateOf("") }
-    var keyVisible by remember { mutableStateOf(false) }
-    var savedMark by remember { mutableStateOf(false) }
-    var loaded by remember { mutableStateOf(false) }
-
-    val fabSize by settings.fabSizeFlow.collectAsState(initial = Settings.FAB_SIZE_DEFAULT)
-    val fabAlpha by settings.fabAlphaFlow.collectAsState(initial = Settings.FAB_ALPHA_DEFAULT)
-    var sizeSlider by remember(fabSize) { mutableStateOf(fabSize.toFloat()) }
-    var alphaSlider by remember(fabAlpha) { mutableStateOf(fabAlpha) }
-
-    LaunchedEffect(Unit) {
-        apiKey = settings.apiKey()
-        loaded = true
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-    ) {
-        // Brand header
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            BrandMark(size = 48.dp, textSize = 26.sp)
-            Spacer(Modifier.width(14.dp))
-            Column {
-                Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    stringResource(R.string.build_info, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, BuildConfig.BUILD_TIME),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        // Accessibility service status
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = if (serviceEnabled) {
-                    MaterialTheme.colorScheme.secondaryContainer
-                } else {
-                    MaterialTheme.colorScheme.errorContainer
-                },
-            ),
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    stringResource(if (serviceEnabled) R.string.service_status_on else R.string.service_status_off),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (serviceEnabled) {
-                        MaterialTheme.colorScheme.onSecondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onErrorContainer
-                    },
-                )
-                if (!serviceEnabled) {
-                    Button(onClick = onOpenAccessibilitySettings) {
-                        Text(stringResource(R.string.service_enable))
-                    }
-                    Text(
-                        stringResource(R.string.service_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                    )
-                }
-            }
-        }
-
-        SectionCard(label = stringResource(R.string.settings_api_key_title)) {
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = { apiKey = it; savedMark = false },
-                enabled = loaded,
-                singleLine = true,
-                visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                label = { Text(stringResource(R.string.settings_api_key_label)) },
-                trailingIcon = {
-                    TextButton(onClick = { keyVisible = !keyVisible }) {
-                        Text(stringResource(if (keyVisible) R.string.settings_hide else R.string.settings_show))
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(6.dp))
-            HintText(stringResource(R.string.settings_api_key_hint))
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = {
-                    scope.launch {
-                        settings.setApiKey(apiKey)
-                        savedMark = true
-                    }
-                },
-                enabled = loaded,
-            ) {
-                Text(stringResource(if (savedMark) R.string.settings_saved else R.string.settings_save))
-            }
-        }
-
-        SectionCard(label = stringResource(R.string.settings_fab_title)) {
-            Text(stringResource(R.string.settings_fab_size, sizeSlider.toInt()), style = MaterialTheme.typography.bodyMedium)
-            Slider(
-                value = sizeSlider,
-                onValueChange = { sizeSlider = it },
-                onValueChangeFinished = { scope.launch { settings.setFabSize(sizeSlider.toInt()) } },
-                valueRange = 36f..72f,
-            )
-            Text(
-                stringResource(R.string.settings_fab_alpha, (alphaSlider * 100).toInt()),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Slider(
-                value = alphaSlider,
-                onValueChange = { alphaSlider = it },
-                onValueChangeFinished = { scope.launch { settings.setFabAlpha(alphaSlider) } },
-                valueRange = 0.15f..1f,
-            )
-        }
-
-        SpeechSection(settings, whisperProvider)
-
-        SectionCard(label = "Правка текста") {
-            val prose by settings.proseModeFlow.collectAsState(initial = false)
-            val convo by settings.convoContextFlow.collectAsState(initial = true)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = prose,
-                    onCheckedChange = { on -> scope.launch { settings.setProseMode(on) } },
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Художественная проза", style = MaterialTheme.typography.bodyMedium)
-            }
-            HintText(
-                "Чистка бережёт авторский стиль: ритм, инверсии, повторы. " +
-                    "Только ошибки распознавания, орфография и пунктуация. " +
-                    "Промпт режима редактируется во вкладке «Промпты»."
-            )
-            if (prose) {
-                val rulesInProse by settings.rulesInProseFlow.collectAsState(initial = false)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(
-                        checked = rulesInProse,
-                        onCheckedChange = { on -> scope.launch { settings.setRulesInProse(on) } },
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("Правила обучения в прозе", style = MaterialTheme.typography.bodyMedium)
-                }
-                HintText("Выключено: правила оформления (списки и т.п.) не применяются к художественному тексту.")
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = convo,
-                    onCheckedChange = { on -> scope.launch { settings.setConvoContext(on) } },
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Контекст разговора", style = MaterialTheme.typography.bodyMedium)
-            }
-            HintText(
-                "Твои недавние сообщения в том же приложении (пауза до 10 минут) " +
-                    "уходят с новой диктовкой как контекст — ответы держат нить разговора."
-            )
-        }
-
-
-        RecordingsSection(recordings, serviceEnabled)
-
-        HintText(stringResource(R.string.settings_usage_hint))
-    }
-}
-
-@Composable
-private fun SpeechSection(
+internal fun SpeechSection(
     settings: Settings,
     whisperProvider: ru.zf.pravka.provider.WhisperProvider,
 ) {
@@ -759,7 +568,7 @@ private fun SpeechSection(
 }
 
 @Composable
-private fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceEnabled: Boolean) {
+internal fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceEnabled: Boolean) {
     val context = LocalContext.current
     // listFiles() plus a length() stat per file - off the composition pass.
     var items by remember { mutableStateOf<List<ru.zf.pravka.data.Recordings.Item>>(emptyList()) }

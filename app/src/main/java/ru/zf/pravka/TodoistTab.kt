@@ -44,7 +44,7 @@ import ru.zf.pravka.ui.Feedback
 // «Без даты и без проекта» (входящие) и проекты свёрнуты. Поиск - простой
 // фильтр по вхождению слова, он показывает плоский список поверх групп.
 @Composable
-fun TodoistTab(app: PravkaApp) {
+fun TodoistTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     val store = app.todoistStore
     val tasks by store.tasksFlow.collectAsState()
     val projects by store.projectsFlow.collectAsState()
@@ -54,7 +54,6 @@ fun TodoistTab(app: PravkaApp) {
 
     var query by remember { mutableStateOf("") }
     var expanded by remember { mutableStateOf(setOf("today")) }
-    var showSetup by remember { mutableStateOf(false) }
     var starting by remember { mutableStateOf("") }
 
     LaunchedEffect(token) {
@@ -134,7 +133,7 @@ fun TodoistTab(app: PravkaApp) {
                 TextButton(onClick = {
                     app.appScope.launch { app.todoistSync.refresh(force = true) }
                 }) { Text("Обновить") }
-                TextButton(onClick = { showSetup = !showSetup }) { Text("Токен") }
+                TextButton(onClick = onOpenSettings) { Text("Настройки") }
                 Text(
                     status,
                     style = MaterialTheme.typography.bodySmall,
@@ -144,29 +143,15 @@ fun TodoistTab(app: PravkaApp) {
                     modifier = Modifier.padding(start = 4.dp),
                 )
             }
-            if (showSetup || token.isBlank()) {
-                var draft by remember(token) { mutableStateOf(token) }
+            // Токен живёт в «Настройках → Дела» вместе с остальными ключами.
+            // Здесь про него только напоминание, и то лишь пока его нет.
+            if (token.isBlank()) {
                 Text(
-                    "Todoist → Настройки → Интеграции → Разработчик → API-токен. " +
-                        "Ключ живёт только на телефоне.",
+                    "Токена Todoist нет — дела приехать не могут. Он вставляется " +
+                        "в «Настройках», группа «Дела».",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.error,
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Токен Todoist") },
-                        singleLine = true,
-                    )
-                    TextButton(onClick = {
-                        app.appScope.launch {
-                            app.settings.setTodoistToken(draft)
-                            app.todoistSync.refresh(force = true)
-                        }
-                    }) { Text("Сохранить") }
-                }
             }
             Spacer(Modifier.height(6.dp))
         }
@@ -321,5 +306,47 @@ private fun TaskRow(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.primary,
         )
+    }
+}
+
+/**
+ * Настройки «Дел»: один токен. Живёт здесь, рядом с режимом, а показывается в
+ * общей вкладке настроек — как и настройки остальных режимов.
+ */
+@Composable
+internal fun TodoistSettings(app: PravkaApp) {
+    val token by app.settings.todoistTokenFlow.collectAsState(initial = "")
+    val status by app.todoistStore.statusFlow.collectAsState()
+    var draft by remember(token) { mutableStateOf(token) }
+    Column {
+        Text(
+            "Todoist → Настройки → Интеграции → Разработчик → API-токен. " +
+                "Ключ живёт только на телефоне.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Токен Todoist") },
+            singleLine = true,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = {
+                app.appScope.launch {
+                    app.settings.setTodoistToken(draft.trim())
+                    app.todoistSync.refresh(force = true)
+                }
+            }) { Text("Сохранить и проверить") }
+            Text(
+                status,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
