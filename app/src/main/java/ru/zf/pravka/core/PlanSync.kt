@@ -48,6 +48,21 @@ class PlanSync(
     data class Outcome(val events: Boolean, val rules: Boolean, val error: String)
 
     /**
+     * Только календарь, и только если он несвежий. Дорога «поменял план в чате
+     * с Клодом → открыл Тело» должна занимать секунды, а не час: чат пушит в
+     * intervals, и десять минут давности — предел, дальше идём за свежим.
+     * Правила Notion не трогаем: их чтение стоит вызова Сонета.
+     */
+    suspend fun refreshEventsIfStale(maxAgeMs: Long = 10 * 60_000L): Boolean {
+        store.load()
+        val age = System.currentTimeMillis() - store.eventsFetchedAt()
+        if (age < maxAgeMs) return false
+        val ok = runCatching { icu.refreshPlan(store) }.getOrDefault(false)
+        if (ok) lastEvents = System.currentTimeMillis()
+        return ok
+    }
+
+    /**
      * Обновить план. [force] — владелец сам потянул экран: идём в оба источника,
      * не глядя на таймеры.
      */

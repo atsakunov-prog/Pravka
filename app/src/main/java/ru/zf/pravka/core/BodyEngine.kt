@@ -204,6 +204,26 @@ class BodyEngine(
         return strengthStore.putGtg(date = date, charged = true)
     }
 
+    /**
+     * Галочка одного упражнения зарядки в чек-листе дня. Когда отмечены ВСЕ
+     * упражнения блока «Зарядка» — день закрывается сам: charged встаёт без
+     * отдельной кнопки, цепочка растёт. Снял галочку — charged НЕ снимаем:
+     * может, он отметил зарядку голосом, а галочки тыкал потом.
+     */
+    suspend fun toggleZaryadka(
+        exerciseId: String,
+        date: String = dayKey(System.currentTimeMillis()),
+    ): StrengthStore.GtgDay {
+        strengthStore.load()
+        book.load()
+        val day = strengthStore.toggleGtgItem(date, exerciseId)
+        val all = book.ofBlock("Зарядка").map { it.id }
+        if (!day.charged && all.isNotEmpty() && all.all { it in day.doneIds }) {
+            return strengthStore.putGtg(date = date, charged = true)
+        }
+        return day
+    }
+
     /** Промахнулся кнопкой — снять отметку. Числа турника при этом остаются. */
     suspend fun unchargeToday(date: String = dayKey(System.currentTimeMillis())): StrengthStore.GtgDay {
         strengthStore.load()

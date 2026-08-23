@@ -233,6 +233,33 @@ class StrengthEngine(
     suspend fun setFeel(sessionId: Long, feel: Int, rpe: Int, note: String) =
         store.setFeel(sessionId, feel, rpe, note)
 
+    /**
+     * Галочка упражнения силовой в чек-листе дня — «сделал по схеме», без
+     * чисел. Сессии ещё нет — заводится, как при наговоре. Отмечены все
+     * упражнения блока — сессия закрывается сама (done), останется спросить
+     * самочувствие.
+     */
+    suspend fun toggleChecked(
+        exerciseId: String,
+        date: String = dayKey(System.currentTimeMillis()),
+    ): StrengthStore.Session? {
+        store.load()
+        planStore.load()
+        book.load()
+        val planned = planStore.mainOf(date)
+        val block = planned?.block.orEmpty()
+        val session = store.sessionsOn(date).firstOrNull()
+            ?: store.sessionFor(date, block, planned?.name.orEmpty())
+        val updated = store.toggleChecked(session.id, exerciseId) ?: return null
+        if (!updated.done && block.isNotBlank()) {
+            val all = book.ofBlock(block).map { it.id }
+            if (all.isNotEmpty() && all.all { updated.isChecked(it) }) {
+                return store.setDone(updated.id, done = true, minutes = planned?.minutes ?: 0)
+            }
+        }
+        return updated
+    }
+
     suspend fun markDone(date: String, minutes: Int = 0): StrengthStore.Session {
         store.load()
         planStore.load()

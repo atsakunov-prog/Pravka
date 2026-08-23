@@ -2,6 +2,8 @@ package ru.zf.pravka
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -128,6 +130,9 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         // Первое открытие после установки: кэш пуст, и молчать об этом нельзя.
         runCatching { app.icuSportSync.refresh(force = store.workoutsFlow.value.isEmpty()) }
         runCatching { app.planSync.refresh(force = planDays.isEmpty()) }
+        // План правится в чате с Клодом и пушится в intervals — открытая
+        // вкладка должна видеть его свежим, а не часовой давности.
+        runCatching { app.planSync.refreshEventsIfStale() }
     }
 
     val today = remember(planDays, sessions) { dayKey(System.currentTimeMillis()) }
@@ -256,6 +261,28 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                             Text("· " + line, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
+                    // Кардио закрывают часы: активность нужного типа приехала —
+                    // задача дня выполнена фактом, никакую кнопку жать не надо.
+                    val arrivedToday = if (!mainPlan.strength) {
+                        workouts.firstOrNull {
+                            dayKey(it.start) == today &&
+                                (it.type.equals(mainPlan.type, true) ||
+                                    (mainPlan.type.equals("Ride", true) &&
+                                        it.type.equals("VirtualRide", true)))
+                        }
+                    } else null
+                    if (arrivedToday != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "✓ Приехала с часов: " + buildList {
+                                if (arrivedToday.km >= 0.1) add(fmt1(arrivedToday.km) + " км")
+                                add("${arrivedToday.minutes} мин")
+                                if (arrivedToday.avgHr > 0) add("пульс ${arrivedToday.avgHr}")
+                            }.joinToString(", "),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = toneColor(1),
+                        )
+                    }
                     Spacer(Modifier.height(10.dp))
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -287,9 +314,17 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             }
         }
 
+        // ---- Зарядка: чек-лист на утро ----
+        item { ZaryadkaChecklist(app, gtgToday) }
+
         // ---- Упражнения дня с прошлым разом ----
         if (plannedExercises.isNotEmpty()) {
-            item { PaperLabel("упражнения · прошлый раз") }
+            item {
+                val checkedCount = plannedExercises.count { (exercise, _) ->
+                    todaySession?.isChecked(exercise.id) == true
+                }
+                PaperLabel("упражнения · $checkedCount из ${plannedExercises.size}")
+            }
             items(plannedExercises.size, key = { i -> "px" + plannedExercises[i].first.id }) { i ->
                 val (exercise, last) = plannedExercises[i]
                 val doneToday = todaySession?.exercises?.firstOrNull { it.exerciseId == exercise.id }
@@ -299,6 +334,18 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     doneToday = doneToday,
                     history = plannedHistory[exercise.id].orEmpty(),
                     restSec = restSec,
+                    checked = todaySession?.isChecked(exercise.id) == true,
+                    onCheck = {
+                        app.appScope.launch {
+                            val before = app.strengthStore.sessionsOn(today).firstOrNull()?.done == true
+                            val updated = app.strengthEngine.toggleChecked(exercise.id, today)
+                            // Отметил последнее — сессия закрылась сама:
+                            // осталось спросить самочувствие, как у «Сделано».
+                            if (updated != null && updated.done && !before) {
+                                feelDialog = updated.id
+                            }
+                        }
+                    },
                     onRest = { seconds ->
                         Feedback.toast(app, "Отдых $seconds сек — кнопка «Т» считает")
                         ru.zf.pravka.trigger.PravkaAccessibilityService.instance
@@ -701,20 +748,29 @@ private fun PlannedExerciseCard(
     doneToday: StrengthStore.ExerciseLog?,
     history: List<Pair<String, StrengthStore.ExerciseLog>> = emptyList(),
     restSec: Int,
+    checked: Boolean = false,
+    onCheck: (() -> Unit)? = null,
     onRest: (Int) -> Unit,
 ) {
     var open by remember(exercise.id) { mutableStateOf(false) }
+    val ticked = checked || doneToday != null
     PaperCard {
         Row(
             Modifier.fillMaxWidth().clickable { open = !open },
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (onCheck != null) {
+                // «Ок» на задачу: галочка — «сделал по схеме», числа поверх
+                // неё наговариваются как обычно и весят больше галочки.
+                CheckDot(ticked, onCheck)
+                Spacer(Modifier.width(10.dp))
+            }
             Box(
                 Modifier
                     .width(4.dp)
                     .height(38.dp)
                     .background(
-                        if (doneToday != null) toneColor(1) else MaterialTheme.colorScheme.outlineVariant,
+                        if (ticked) toneColor(1) else MaterialTheme.colorScheme.outlineVariant,
                         MaterialTheme.shapes.extraSmall,
                     )
             )
@@ -1152,6 +1208,110 @@ private val RIDE_COLOR = Color(0xFF2563EB)
  * библиотекой: две ломаные - это двадцать строк, а любая графическая
  * библиотека это ещё одна зависимость в приложении, где их пять.
  */
+/** Круглая галочка чек-листа: пустой круг → зелёная точка с ✓. */
+@Composable
+private fun CheckDot(ticked: Boolean, onCheck: () -> Unit) {
+    Box(
+        Modifier
+            .size(30.dp)
+            .background(
+                if (ticked) toneColor(1) else MaterialTheme.colorScheme.surface,
+                CircleShape,
+            )
+            .border(
+                width = 2.dp,
+                color = if (ticked) toneColor(1) else MaterialTheme.colorScheme.outlineVariant,
+                shape = CircleShape,
+            )
+            .clickable(onClick = onCheck),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (ticked) {
+            Text("✓", color = MaterialTheme.colorScheme.surface, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/**
+ * Чек-лист зарядки: что именно делать сегодня утром, по упражнению на строку,
+ * с «ок» на каждом. Список — блок «Зарядка» справочника (правится в Notion,
+ * пересобирается скриптом). Отметил все — день закрывается сам: charged
+ * встаёт, цепочка растёт, отдельную кнопку жать не надо.
+ *
+ * Это ответ на «у меня должна быть задача на день, и мне надо понимать, что
+ * именно делать в зарядке»: схема — в строке, техника — по тапу.
+ */
+@Composable
+private fun ZaryadkaChecklist(app: PravkaApp, gtgToday: StrengthStore.GtgDay?) {
+    var loaded by remember { mutableStateOf(app.exerciseBook.loaded) }
+    LaunchedEffect(Unit) {
+        if (!loaded) {
+            app.exerciseBook.load()
+            loaded = true
+        }
+    }
+    val items = if (loaded) app.exerciseBook.ofBlock("Зарядка") else emptyList()
+    if (items.isEmpty()) return
+    val doneIds = gtgToday?.doneIds ?: emptyList()
+    val charged = gtgToday?.charged == true
+    var openId by remember { mutableStateOf<String?>(null) }
+
+    PaperCard(
+        label = "зарядка сегодня",
+        trailing = {
+            PaperHint(
+                if (charged) "✓ сделана"
+                else "${items.count { it.id in doneIds }} из ${items.size}"
+            )
+        },
+    ) {
+        for (exercise in items) {
+            val ticked = exercise.id in doneIds || charged
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CheckDot(ticked) {
+                    app.appScope.launch { app.bodyEngine.toggleZaryadka(exercise.id) }
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .clickable { openId = if (openId == exercise.id) null else exercise.id }
+                ) {
+                    Text(
+                        exercise.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (ticked) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (exercise.scheme.isNotBlank()) PaperHint(exercise.scheme)
+                    if (openId == exercise.id && exercise.how.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(exercise.how, style = MaterialTheme.typography.bodySmall)
+                        if (exercise.mistakes.isNotBlank()) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                exercise.mistakes,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        PaperHint(
+            if (charged) "Числа виса и негативов — в карточке зарядки ниже."
+            else "Тап по названию — техника. Отметишь всё — зарядка закроется сама."
+        )
+    }
+}
+
 /** Столбики объёма упражнения по сессиям, старые слева. */
 @Composable
 private fun ProgressBars(history: List<Pair<String, StrengthStore.ExerciseLog>>) {

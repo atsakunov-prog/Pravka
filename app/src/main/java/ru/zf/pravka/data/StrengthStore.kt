@@ -125,7 +125,17 @@ class StrengthStore(private val context: Context) {
         val lastError: String = "",
         val rawIds: List<Long> = emptyList(),
         val done: Boolean = false,       // владелец нажал «сделано»
+        /**
+         * Галочки чек-листа: упражнения, отмеченные «ок» БЕЗ надиктовки чисел.
+         * Журнал (rows) — отдельно: галочка значит «сделал по схеме», числа
+         * значат «сделал вот так». Журнальное упражнение считается отмеченным
+         * само собой.
+         */
+        val checkedIds: List<String> = emptyList(),
     ) {
+        fun isChecked(exerciseId: String): Boolean =
+            exerciseId in checkedIds || exercises.any { it.exerciseId == exerciseId && it.rows.isNotEmpty() }
+
         val setCount: Int get() = exercises.sumOf { it.sets }
         val volume: Double get() = exercises.sumOf { it.volume }
         val empty: Boolean get() = exercises.isEmpty()
@@ -152,6 +162,8 @@ class StrengthStore(private val context: Context) {
         val knee: String = "",
         val note: String = "",
         val ts: Long = 0L,
+        /** Галочки чек-листа зарядки: id упражнений блока «Зарядка», отмеченных сегодня. */
+        val doneIds: List<String> = emptyList(),
     ) {
         val any: Boolean
             get() = charged || hangSec > 0 || negatives > 0 || scapular > 0 || knee.isNotBlank()
@@ -471,6 +483,7 @@ class StrengthStore(private val context: Context) {
             knee = knee?.trim()?.ifBlank { old?.knee.orEmpty() } ?: old?.knee.orEmpty(),
             note = note?.ifBlank { old?.note.orEmpty() } ?: old?.note.orEmpty(),
             ts = System.currentTimeMillis(),
+            doneIds = old?.doneIds ?: emptyList(),
         )
         _gtgFlow.value = (_gtgFlow.value.filterNot { it.date == date } + fresh)
             .sortedByDescending { it.date }
@@ -479,6 +492,35 @@ class StrengthStore(private val context: Context) {
     }
 
     fun gtgOn(date: String): GtgDay? = _gtgFlow.value.firstOrNull { it.date == date }
+
+    /** Галочка одного упражнения зарядки: тап ставит, повторный тап снимает. */
+    suspend fun toggleGtgItem(date: String, exerciseId: String): GtgDay = mutex.withLock {
+        ensureLoaded()
+        val old = _gtgFlow.value.firstOrNull { it.date == date } ?: GtgDay(date = date)
+        val ids = if (exerciseId in old.doneIds) old.doneIds - exerciseId
+        else old.doneIds + exerciseId
+        val fresh = old.copy(doneIds = ids, ts = System.currentTimeMillis())
+        _gtgFlow.value = (_gtgFlow.value.filterNot { it.date == date } + fresh)
+            .sortedByDescending { it.date }
+        persist()
+        fresh
+    }
+
+    /** Галочка упражнения силовой без чисел: «сделал по схеме». */
+    suspend fun toggleChecked(sessionId: Long, exerciseId: String): Session? = mutex.withLock {
+        ensureLoaded()
+        var result: Session? = null
+        write(
+            _sessionsFlow.value.map { s ->
+                if (s.id != sessionId) s
+                else s.copy(
+                    checkedIds = if (exerciseId in s.checkedIds) s.checkedIds - exerciseId
+                    else s.checkedIds + exerciseId,
+                ).also { result = it }
+            }
+        )
+        result
+    }
 
     /**
      * Длина непрерывной цепочки зарядки, считая назад от [today]. Сегодняшний
@@ -567,6 +609,7 @@ class StrengthStore(private val context: Context) {
         put("error", s.lastError)
         put("done", s.done)
         put("rawIds", JSONArray().apply { s.rawIds.forEach { put(it) } })
+        put("checked", JSONArray().apply { s.checkedIds.forEach { put(it) } })
         put(
             "exercises",
             JSONArray().apply {
@@ -613,6 +656,7 @@ class StrengthStore(private val context: Context) {
         put("knee", g.knee)
         put("note", g.note)
         put("ts", g.ts)
+        put("doneIds", JSONArray().apply { g.doneIds.forEach { put(it) } })
     }
 
     private fun parse(o: JSONObject): Snapshot {
@@ -652,6 +696,12 @@ class StrengthStore(private val context: Context) {
                 s.optJSONArray("rawIds")?.let { ra ->
                     for (k in 0 until ra.length()) rawIds.add(ra.optLong(k))
                 }
+                val checked = mutableListOf<String>()
+                s.optJSONArray("checked")?.let { ca ->
+                    for (k in 0 until ca.length()) {
+                        ca.optString(k).takeIf { it.isNotBlank() }?.let { checked.add(it) }
+                    }
+                }
                 sessions.add(
                     Session(
                         id = s.optLong("id"),
@@ -670,6 +720,7 @@ class StrengthStore(private val context: Context) {
                         lastError = s.optString("error"),
                         rawIds = rawIds,
                         done = s.optBoolean("done", false),
+                        checkedIds = checked,
                     )
                 )
             }
@@ -695,6 +746,12 @@ class StrengthStore(private val context: Context) {
         o.optJSONArray("gtg")?.let { a ->
             for (i in 0 until a.length()) {
                 val g = a.optJSONObject(i) ?: continue
+                val doneIds = mutableListOf<String>()
+                g.optJSONArray("doneIds")?.let { da ->
+                    for (k in 0 until da.length()) {
+                        da.optString(k).takeIf { it.isNotBlank() }?.let { doneIds.add(it) }
+                    }
+                }
                 gtg.add(
                     GtgDay(
                         date = g.optString("date"),
@@ -705,6 +762,7 @@ class StrengthStore(private val context: Context) {
                         knee = g.optString("knee"),
                         note = g.optString("note"),
                         ts = g.optLong("ts"),
+                        doneIds = doneIds,
                     )
                 )
             }
