@@ -2983,12 +2983,21 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** «↩︎» на записке: приём уходит из дневника, сумма дня пересчитывается. */
+    /**
+     * «↩︎» на записке: приём выходит из дня, а разбор остаётся ждать - плашка
+     * возвращается, чтобы поправить и записать заново. Совсем убрать приём
+     * можно во вкладке «Еда».
+     */
     private fun undoFood(mealId: Long) {
         scope.launch {
-            app.foodEngine.delete(mealId)
+            val meal = app.foodEngine.unconfirm(mealId)
             Haptics.success(this@PravkaAccessibilityService)
-            Feedback.toast(this@PravkaAccessibilityService, "↩︎ Приём убран из дневника")
+            if (meal == null) {
+                Feedback.toast(this@PravkaAccessibilityService, "Приём не нашёлся")
+                return@launch
+            }
+            Feedback.toast(this@PravkaAccessibilityService, "↩︎ Из дня убран, разбор ждёт")
+            showFoodPlate(mealId)
         }
     }
 

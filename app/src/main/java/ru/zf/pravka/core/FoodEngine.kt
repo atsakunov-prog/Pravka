@@ -201,6 +201,38 @@ class FoodEngine(
     }
 
     /**
+     * «↩︎» на записке: приём выходит из дня, но разбор остаётся ждать на
+     * плашке — удалять его вместе с решением «пока не считать» было бы
+     * расточительно, модель за него платила.
+     *
+     * Приписка в ленте снимается тоже: строка про КБЖУ относилась к приёму,
+     * которого в дне больше нет. Убираем РОВНО свою строку, всё остальное в
+     * `raw` — сказанное владельцем, и оно остаётся.
+     */
+    suspend fun unconfirm(mealId: Long): FoodStore.Meal? {
+        val before = store.byId(mealId) ?: return null
+        val line = ribbonLine(before)
+        val meal = store.unconfirm(mealId) ?: return null
+        runCatching { stripRibbonLine(before, line) }
+        // Сумма дня стала меньше — доносим её, иначе в intervals.icu останется
+        // прежняя (пуш перетирающий, а не складывающий).
+        runCatching { syncDay(dayKey(meal.ts)) }
+        eventLog.add("еда: «${meal.shortList.take(60)}» убран из дня, разбор ждёт")
+        return meal
+    }
+
+    private suspend fun stripRibbonLine(meal: FoodStore.Meal, line: String) {
+        if (!meal.ribbonSynced || line.isBlank()) return
+        val from = meal.ts - RIBBON_WINDOW_MS
+        val to = meal.ts + RIBBON_WINDOW_MS
+        val target = zasechkaStore.forRange(from, to)
+            .filter { it.raw.contains(line) }
+            .minByOrNull { kotlin.math.abs(it.start - meal.ts) } ?: return
+        val kept = target.raw.lines().filterNot { it.trim() == line }.joinToString("\n").trim()
+        zasechkaStore.annotate(target.id, kept)
+    }
+
+    /**
      * Итог дня уезжает в wellness. Именно ИТОГ: каждый пуш перетирает
      * предыдущий, поэтому суммируем все подтверждённые приёмы дня заново.
      * Пустая строка в ответе = всё хорошо (или отправлять было нечего).

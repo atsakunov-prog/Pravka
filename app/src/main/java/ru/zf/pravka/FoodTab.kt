@@ -370,6 +370,7 @@ internal fun FoodTab(app: PravkaApp) {
                     onConfirm = {},
                     onDelete = { scope.launch { app.foodEngine.delete(meal.id) } },
                     onReparse = null,
+                    onUnconfirm = { scope.launch { app.foodEngine.unconfirm(meal.id) } },
                 )
             }
         }
@@ -452,6 +453,7 @@ private fun MealCard(
     onConfirm: () -> Unit,
     onDelete: () -> Unit,
     onReparse: (() -> Unit)?,
+    onUnconfirm: (() -> Unit)? = null,
 ) {
     var open by remember(meal.id) { mutableStateOf(pendingState) }
     val accent = kindColor(meal.kind)
@@ -540,6 +542,11 @@ private fun MealCard(
             OutlinedButton(onClick = onEdit) { Text("Поправить") }
             if (onReparse != null) {
                 TextButton(onClick = onReparse) { Text("Заново") }
+            }
+            // Убрать из дня — не то же, что удалить: разбор остаётся ждать, и
+            // приём можно записать заново, поправив.
+            if (onUnconfirm != null) {
+                TextButton(onClick = onUnconfirm) { Text("Из дня") }
             }
             Spacer(Modifier.weight(1f))
             IconButton(onClick = onDelete) {

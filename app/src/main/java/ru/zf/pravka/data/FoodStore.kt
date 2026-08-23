@@ -138,6 +138,21 @@ class FoodStore(private val context: Context) {
         updated.firstOrNull { it.id == id }
     }
 
+    /**
+     * «↩︎» сразу после «ОК»: приём выходит из дня, но НЕ пропадает. Разбор
+     * стоил модели денег и остаётся ждать на плашке — как неотправленное дело
+     * у Разноски. Отметки «уехало» снимаются: сумма дня изменилась.
+     */
+    suspend fun unconfirm(id: Long): Meal? = mutex.withLock {
+        ensureLoaded()
+        val updated = _mealsFlow.value.map {
+            if (it.id == id) it.copy(confirmed = false, icuSynced = false, ribbonSynced = false)
+            else it
+        }
+        write(updated)
+        updated.firstOrNull { it.id == id }
+    }
+
     suspend fun replaceItems(id: Long, items: List<MealItem>) = mutex.withLock {
         ensureLoaded()
         write(
