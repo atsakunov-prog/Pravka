@@ -91,6 +91,7 @@ class PlanStore(private val context: Context) {
         val runsPerWeekMax: Int = 0,
         val hoursBetweenRuns: Int = 0,
         val rampNeedsPositiveTsb: Boolean = false,
+        val testPrep: String = "",          // что сделать перед тестом, его словами
         val cancelOrder: String = "",       // что выпадает первым, когда день ломается
         val kneeGreen: String = "",
         val kneeYellow: String = "",
@@ -222,6 +223,7 @@ class PlanStore(private val context: Context) {
                 put("runsMax", r.runsPerWeekMax)
                 put("hoursBetween", r.hoursBetweenRuns)
                 put("rampTsb", r.rampNeedsPositiveTsb)
+                put("testPrep", r.testPrep)
                 put("cancel", r.cancelOrder)
                 put("kneeGreen", r.kneeGreen)
                 put("kneeYellow", r.kneeYellow)
@@ -285,6 +287,7 @@ class PlanStore(private val context: Context) {
             runsPerWeekMax = r.optInt("runsMax"),
             hoursBetweenRuns = r.optInt("hoursBetween"),
             rampNeedsPositiveTsb = r.optBoolean("rampTsb", false),
+            testPrep = r.optString("testPrep"),
             cancelOrder = r.optString("cancel"),
             kneeGreen = r.optString("kneeGreen"),
             kneeYellow = r.optString("kneeYellow"),

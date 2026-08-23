@@ -1616,11 +1616,14 @@ private fun runRuleVerdict(
     if (!workout.type.equals("Run", ignoreCase = true)) return null
     if (workout.avgHr <= 0 || rules.runHrCeiling <= 0) return null
     val hr = workout.avgHr
+    // Быстрая пробежка НЕ криминал: по его 80/20 одна качественная в неделю
+    // запланирована. Криминал — серая зона (ни легко, ни быстро) и «лёгкая»,
+    // уползшая выше потолка. Выше серой зоны — нейтрально: судит план.
     return when {
         hr <= rules.runHrCeiling -> "под потолком ${rules.runHrCeiling} ✓" to 1
         rules.greyZoneLow > 0 && rules.greyZoneHigh > 0 && hr in rules.greyZoneLow..rules.greyZoneHigh ->
             "серая зона ${rules.greyZoneLow}–${rules.greyZoneHigh} — пульс $hr" to -2
-        rules.greyZoneHigh in 1 until hr -> "жёсткая: пульс $hr — если не по плану, это перебор" to -1
+        rules.greyZoneHigh in 1 until hr -> "быстрая: пульс $hr — ок, если это плановая качественная" to 0
         else -> "выше потолка ${rules.runHrCeiling}: пульс $hr" to -1
     }
 }
@@ -1848,6 +1851,7 @@ internal fun BodySportSettings(app: PravkaApp) {
                 if (rules.runsPerWeekMax > 0) add("Пробежек в неделю" to "не больше ${rules.runsPerWeekMax}")
                 if (rules.hoursBetweenRuns > 0) add("Между пробежками" to "${rules.hoursBetweenRuns} ч")
                 if (rules.rampNeedsPositiveTsb) add("Тест" to "только на плюсовом TSB")
+                if (rules.testPrep.isNotBlank()) add("Перед тестом" to rules.testPrep.take(60))
             }
             for ((label, value) in lines) {
                 Row(

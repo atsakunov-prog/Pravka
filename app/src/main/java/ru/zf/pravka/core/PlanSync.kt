@@ -111,6 +111,7 @@ class PlanSync(
                 runsPerWeekMax = parsed.runsMax,
                 hoursBetweenRuns = parsed.hoursBetween,
                 rampNeedsPositiveTsb = parsed.rampNeedsPositiveTsb,
+                testPrep = parsed.testPrep,
                 cancelOrder = parsed.cancel,
                 kneeGreen = parsed.kneeGreen,
                 kneeYellow = parsed.kneeYellow,

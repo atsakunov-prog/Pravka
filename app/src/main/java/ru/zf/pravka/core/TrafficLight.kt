@@ -253,10 +253,11 @@ class TrafficLight(
     ): List<String> {
         val out = mutableListOf<String>()
         val runPlanned = planned.any { it.type.equals("Run", ignoreCase = true) }
-        val rampPlanned = planned.any {
-            val n = it.name.lowercase()
-            n.contains("рамп") || n.contains("ramp") || n.contains("тест")
+        fun isTest(day: PlanStore.PlanDay): Boolean {
+            val n = day.name.lowercase()
+            return n.contains("рамп") || n.contains("ramp") || n.contains("тест")
         }
+        val rampPlanned = planned.any(::isTest)
 
         // Рамп-тест только свежим — его правило, и оно дословно про TSB.
         if (rampPlanned && rules.rampNeedsPositiveTsb && tsb < 0) {
@@ -264,6 +265,19 @@ class TrafficLight(
                 "Тест по плану, а форма ${signed(Math.round(tsb).toInt())}: " +
                     "по твоему правилу тест только на плюсовом TSB"
             )
+        }
+        // Сегодняшний тест: подготовка его же словами из блока
+        // («свежим, углеводный слот обязателен»).
+        if (rampPlanned && rules.testPrep.isNotBlank()) {
+            out.add("Сегодня тест. Твоя же подготовка: ${rules.testPrep}")
+        }
+        // Тест ЗАВТРА: готовиться надо сегодня — углеводный слот вечером,
+        // а не утром перед стартом.
+        if (!rampPlanned && rules.testPrep.isNotBlank()) {
+            val tomorrow = plan.dayOf(dayAfter(date))
+            if (tomorrow.any(::isTest)) {
+                out.add("Завтра тест — готовься сегодня: ${rules.testPrep}")
+            }
         }
 
         if (runPlanned) {
@@ -336,6 +350,18 @@ class TrafficLight(
             }
         }
         return if (bits.isEmpty()) main.name else main.name + " · " + bits.joinToString(" · ")
+    }
+
+    /** «2026-08-30» → «2026-08-31» — календарём, как dayBefore. */
+    private fun dayAfter(date: String): String {
+        val parsed = runCatching {
+            java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(date)
+        }.getOrNull() ?: return date
+        val cal = java.util.Calendar.getInstance().apply {
+            time = parsed
+            add(java.util.Calendar.DAY_OF_YEAR, 1)
+        }
+        return java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
     }
 
     private fun fmt0(v: Double) = String.format(Locale.US, "%.0f", v)

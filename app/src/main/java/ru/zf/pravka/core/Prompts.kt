@@ -697,6 +697,9 @@ feel 1–5 по той же шкале. knee — «зелёный», «жёлт�
 — hoursBetween: сколько часов между пробежками минимум;
 — rampNeedsPositiveTsb: true, если рамп-тест или другой тест разрешён
   только на свежести/плюсовом TSB;
+— testPrep: что владелец велел себе сделать ПЕРЕД тестом, его словами
+  одной строкой («свежим, углеводный слот обязателен, не удивляться
+  200–220 Вт»); нет такого — пустая строка;
 — cancel: правило отмены — что выпадает первым, когда день ломается,
   одной строкой его словами;
 — kneeGreen, kneeYellow, kneeRed: что делать по светофору колена,
@@ -707,7 +710,7 @@ feel 1–5 по той же шкале. knee — «зелёный», «жёлт�
 
 Ответ — СТРОГО JSON, без пояснений:
 {"hrCeiling": 0, "greyLow": 0, "greyHigh": 0, "cadence": 0, "runsMax": 0,
- "hoursBetween": 0, "rampNeedsPositiveTsb": false, "cancel": "",
+ "hoursBetween": 0, "rampNeedsPositiveTsb": false, "testPrep": "", "cancel": "",
  "kneeGreen": "", "kneeYellow": "", "kneeRed": "",
  "week": [{"day": "Пн", "session": ""}], "extra": [""]}
 
