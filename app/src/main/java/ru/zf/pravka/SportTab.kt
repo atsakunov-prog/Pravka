@@ -146,14 +146,36 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     val todaySession = remember(sessions, today) {
         app.strengthStore.sessionsOn(today).firstOrNull()
     }
-    val plannedExercises = remember(planDays, sessions, today) {
-        val block = mainPlan?.block.orEmpty()
-        if (block.isBlank()) emptyList() else app.strengthEngine.lastTimeFor(block, today)
-    }
-    // История по каждому упражнению дня — для графика прогрессии по тапу.
-    val plannedHistory = remember(sessions, plannedExercises) {
-        plannedExercises.associate { (exercise, _) ->
-            exercise.id to app.strengthStore.history(exercise.id, 10)
+    // Задачи дня. ПЕРВОИСТОЧНИК — нумерованный список события в календаре:
+    // владелец пушит его из чата, и в нём живут замены недели («мосты вместо
+    // RDL» на спина-протоколе). Статический блок справочника — только запасной
+    // вариант, когда события без списка: показать по блоку RDL, который на
+    // этой неделе запрещён, значило бы спорить с его же планом.
+    val dayTasks = remember(planDays, sessions, today) {
+        val lines = mainPlan?.plannedLines().orEmpty()
+        if (lines.isNotEmpty()) {
+            lines.mapIndexed { i, line ->
+                val exercise = app.exerciseBook.match(line)
+                DayTask(
+                    id = exercise?.id ?: taskId(i, line),
+                    title = line,
+                    exercise = exercise,
+                    lastTime = exercise?.let { app.strengthStore.lastTime(it.id, today)?.second },
+                    history = exercise?.let { app.strengthStore.history(it.id, 10) }.orEmpty(),
+                )
+            }
+        } else {
+            val block = mainPlan?.block.orEmpty()
+            if (block.isBlank()) emptyList()
+            else app.strengthEngine.lastTimeFor(block, today).map { (exercise, last) ->
+                DayTask(
+                    id = exercise.id,
+                    title = exercise.name + (if (exercise.scheme.isBlank()) "" else " — ${exercise.scheme}"),
+                    exercise = exercise,
+                    lastTime = last,
+                    history = app.strengthStore.history(exercise.id, 10),
+                )
+            }
         }
     }
     val streak = remember(gtgDays) { app.strengthStore.streak(today) }
@@ -255,12 +277,18 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
-                    val planned = mainPlan.plannedLines()
-                    if (planned.isNotEmpty() && plannedExercises.isEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        for (line in planned) {
-                            Text("· " + line, style = MaterialTheme.typography.bodyMedium)
-                        }
+                    // Список упражнений здесь не дублируем: он живёт ниже
+                    // отдельными карточками-задачами с галочками.
+                    // Второстепенное дня — одной строкой: прокрутка, заметка.
+                    val extras = app.planStore.dayOf(today)
+                        .filterNot { it.eventId == mainPlan.eventId || it.charger }
+                    if (extras.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        PaperHint(
+                            "Ещё сегодня: " + extras.joinToString("; ") { e ->
+                                e.name + (if (e.minutes > 0) " · ${e.minutes} мин" else "")
+                            }
+                        )
                     }
                     // Кардио закрывают часы: активность нужного типа приехала —
                     // задача дня выполнена фактом, никакую кнопку жать не надо.
@@ -316,30 +344,34 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         }
 
         // ---- Зарядка: чек-лист на утро ----
-        item { ZaryadkaChecklist(app, gtgToday) }
+        item {
+            val chargerPlan = remember(planDays, today) { app.planStore.chargerOf(today) }
+            ZaryadkaChecklist(app, gtgToday, chargerPlan)
+        }
 
         // ---- Упражнения дня с прошлым разом ----
-        if (plannedExercises.isNotEmpty()) {
+        if (dayTasks.isNotEmpty()) {
             item {
-                val checkedCount = plannedExercises.count { (exercise, _) ->
-                    todaySession?.isChecked(exercise.id) == true
-                }
-                PaperLabel("упражнения · $checkedCount из ${plannedExercises.size}")
+                val checkedCount = dayTasks.count { todaySession?.isChecked(it.id) == true }
+                PaperLabel("упражнения · $checkedCount из ${dayTasks.size}")
             }
-            items(plannedExercises.size, key = { i -> "px" + plannedExercises[i].first.id }) { i ->
-                val (exercise, last) = plannedExercises[i]
-                val doneToday = todaySession?.exercises?.firstOrNull { it.exerciseId == exercise.id }
+            items(dayTasks.size, key = { i -> "px" + dayTasks[i].id }) { i ->
+                val task = dayTasks[i]
+                val doneToday = todaySession?.exercises?.firstOrNull { it.exerciseId == task.id }
                 PlannedExerciseCard(
-                    exercise = exercise,
-                    lastTime = last,
+                    title = task.title,
+                    exercise = task.exercise,
+                    lastTime = task.lastTime,
                     doneToday = doneToday,
-                    history = plannedHistory[exercise.id].orEmpty(),
+                    history = task.history,
                     restSec = restSec,
-                    checked = todaySession?.isChecked(exercise.id) == true,
+                    checked = todaySession?.isChecked(task.id) == true,
                     onCheck = {
                         app.appScope.launch {
                             val before = app.strengthStore.sessionsOn(today).firstOrNull()?.done == true
-                            val updated = app.strengthEngine.toggleChecked(exercise.id, today)
+                            val updated = app.strengthEngine.toggleChecked(
+                                task.id, today, allIds = dayTasks.map { it.id },
+                            )
                             // Отметил последнее — сессия закрылась сама:
                             // осталось спросить самочувствие, как у «Сделано».
                             if (updated != null && updated.done && !before) {
@@ -417,7 +449,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         // Итог силовой словами — рядом с её упражнениями, а не в другой
         // вкладке: «гоблет четыре по десять шестнадцать, последний тяжело,
         // очень доволен» — числа в журнал, комментарий в заметку сессии.
-        if (plannedExercises.isNotEmpty()) {
+        if (dayTasks.isNotEmpty()) {
             item {
                 PaperCard {
                     BodyTalkBox(
@@ -565,6 +597,9 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         // темп (или ватты) на удар пульса. Держать для этого отдельный ритуал
         // не нужно — данные уже в кэше, рисуем тренд и говорим словами.
         item { EfficiencyCard(workouts) }
+
+        // ---- План недели: что впереди, с его же комментариями ----
+        item { WeekPlanCard(app, planDays) }
 
         // ---- Цели октября ----
         item { GoalsCard(app, health, gtgDays, rules) }
@@ -836,7 +871,8 @@ private fun fmtDay(ts: Long): String = workoutDayFormat.format(Date(ts))
  */
 @Composable
 private fun PlannedExerciseCard(
-    exercise: ExerciseBook.Exercise,
+    title: String,
+    exercise: ExerciseBook.Exercise?,
     lastTime: StrengthStore.ExerciseLog?,
     doneToday: StrengthStore.ExerciseLog?,
     history: List<Pair<String, StrengthStore.ExerciseLog>> = emptyList(),
@@ -845,7 +881,7 @@ private fun PlannedExerciseCard(
     onCheck: (() -> Unit)? = null,
     onRest: (Int) -> Unit,
 ) {
-    var open by remember(exercise.id) { mutableStateOf(false) }
+    var open by remember(title) { mutableStateOf(false) }
     val ticked = checked || doneToday != null
     PaperCard {
         Row(
@@ -870,17 +906,20 @@ private fun PlannedExerciseCard(
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    exercise.name,
+                    title,
                     style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 2,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
-                PaperHint(
-                    listOfNotNull(
-                        exercise.scheme.takeIf { it.isNotBlank() },
-                        exercise.gear.firstOrNull(),
-                    ).joinToString(" · ")
-                )
+                // Что подсказать мелким: узнанное упражнение — если строка плана
+                // зовёт его иначе; неузнанное — честное «техники в справочнике нет».
+                val hint = when {
+                    exercise == null -> "свободная строка плана"
+                    !title.contains(exercise.name.substringBefore(" (").take(8), ignoreCase = true) ->
+                        exercise.name
+                    else -> exercise.gear.firstOrNull().orEmpty()
+                }
+                if (hint.isNotBlank()) PaperHint(hint)
             }
             Column(horizontalAlignment = Alignment.End) {
                 if (doneToday != null) {
@@ -902,6 +941,13 @@ private fun PlannedExerciseCard(
         }
         if (!open) return@PaperCard
         Spacer(Modifier.height(10.dp))
+        if (exercise == null) {
+            PaperHint(
+                "В справочнике такого движения нет — техника в описании плана. " +
+                    "Отметить можно, наговорить числа — тоже."
+            )
+            Spacer(Modifier.height(8.dp))
+        }
         if (doneToday != null && lastTime != null) {
             Text(
                 "Прошлый раз: " + lastTime.compact(),
@@ -918,12 +964,12 @@ private fun PlannedExerciseCard(
             ProgressBars(history)
             Spacer(Modifier.height(8.dp))
         }
-        if (exercise.how.isNotBlank()) {
+        if (exercise != null && exercise.how.isNotBlank()) {
             Text("Как делать", style = MaterialTheme.typography.labelMedium)
             Text(exercise.how, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
         }
-        if (exercise.mistakes.isNotBlank()) {
+        if (exercise != null && exercise.mistakes.isNotBlank()) {
             Text("Главные ошибки", style = MaterialTheme.typography.labelMedium)
             Text(
                 exercise.mistakes,
@@ -932,7 +978,7 @@ private fun PlannedExerciseCard(
             )
             Spacer(Modifier.height(8.dp))
         }
-        if (exercise.progression.isNotBlank() && exercise.progression != "—") {
+        if (exercise != null && exercise.progression.isNotBlank() && exercise.progression != "—") {
             Text("Прогрессия", style = MaterialTheme.typography.labelMedium)
             Text(exercise.progression, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
@@ -942,7 +988,7 @@ private fun PlannedExerciseCard(
                 OutlinedButton(onClick = { onRest(seconds) }) { Text("⏱ $seconds") }
             }
         }
-        if (exercise.videoQuery.isNotBlank()) {
+        if (exercise != null && exercise.videoQuery.isNotBlank()) {
             Spacer(Modifier.height(6.dp))
             val context = androidx.compose.ui.platform.LocalContext.current
             TextButton(onClick = {
@@ -1304,6 +1350,19 @@ private fun LegendValue(label: String, value: String, color: Color) {
 
 private val rawDayFormat = SimpleDateFormat("d MMMM, HH:mm", Locale("ru"))
 
+/** Одна задача дня: строка плана + узнанное по ней упражнение справочника. */
+private data class DayTask(
+    val id: String,
+    val title: String,
+    val exercise: ExerciseBook.Exercise?,
+    val lastTime: StrengthStore.ExerciseLog?,
+    val history: List<Pair<String, StrengthStore.ExerciseLog>>,
+)
+
+/** Устойчивый id свободной строки плана: позиция + начало текста. */
+private fun taskId(index: Int, line: String): String =
+    "task-$index-" + ExerciseBook.normalize(line).replace(' ', '-').take(30)
+
 private val CTL_COLOR = Color(0xFF0E7490)
 private val ATL_COLOR = Color(0xFFEA580C)
 private val RUN_COLOR = Color(0xFF16A34A)
@@ -1348,7 +1407,11 @@ private fun CheckDot(ticked: Boolean, onCheck: () -> Unit) {
  * именно делать в зарядке»: схема — в строке, техника — по тапу.
  */
 @Composable
-private fun ZaryadkaChecklist(app: PravkaApp, gtgToday: StrengthStore.GtgDay?) {
+private fun ZaryadkaChecklist(
+    app: PravkaApp,
+    gtgToday: StrengthStore.GtgDay?,
+    chargerPlan: PlanStore.PlanDay? = null,
+) {
     var loaded by remember { mutableStateOf(app.exerciseBook.loaded) }
     LaunchedEffect(Unit) {
         if (!loaded) {
@@ -1371,6 +1434,15 @@ private fun ZaryadkaChecklist(app: PravkaApp, gtgToday: StrengthStore.GtgDay?) {
             )
         },
     ) {
+        // Заметка дня из календаря: «сокращённая версия», «дачная — турник
+        // заменяется резинкой», «добавка недели — bird dog». Владелец пушит
+        // её из чата вместе с планом, и меняется она чаще справочника.
+        val dayNote = chargerPlan?.description.orEmpty()
+            .substringBefore("Warmup").trim()
+        if (dayNote.isNotBlank()) {
+            Text(dayNote.take(400), style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(10.dp))
+        }
         for (exercise in items) {
             val ticked = exercise.id in doneIds || charged
             Row(
@@ -1398,7 +1470,7 @@ private fun ZaryadkaChecklist(app: PravkaApp, gtgToday: StrengthStore.GtgDay?) {
                     if (openId == exercise.id && exercise.how.isNotBlank()) {
                         Spacer(Modifier.height(4.dp))
                         Text(exercise.how, style = MaterialTheme.typography.bodySmall)
-                        if (exercise.mistakes.isNotBlank()) {
+                        if (exercise != null && exercise.mistakes.isNotBlank()) {
                             Spacer(Modifier.height(2.dp))
                             Text(
                                 exercise.mistakes,
@@ -1510,6 +1582,85 @@ private fun ProgressBars(history: List<Pair<String, StrengthStore.ExerciseLog>>)
 
 private fun shortDate(date: String): String =
     date.split('-').let { if (it.size == 3) "${it[2]}.${it[1]}" else date }
+
+/**
+ * Неделя вперёд, как её запушил владелец: день → сессии → его же комментарии
+ * из описаний событий. Свёрнута в строки; тап по дню раскрывает тексты. Всё
+ * из кэша плана — офлайн, без сети и токенов.
+ */
+@Composable
+private fun WeekPlanCard(app: PravkaApp, planDays: List<PlanStore.PlanDay>) {
+    val today = remember { dayKey(System.currentTimeMillis()) }
+    val upcoming = remember(planDays, today) {
+        app.planStore.upcoming(7).groupBy { it.date }.toList().sortedBy { it.first }
+    }
+    if (upcoming.isEmpty()) return
+    var openDate by remember { mutableStateOf<String?>(null) }
+    PaperCard(label = "план недели") {
+        for ((date, events) in upcoming) {
+            val main = events.filterNot { it.charger }
+            val charger = events.firstOrNull { it.charger }
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { openDate = if (openDate == date) null else date }
+                    .padding(vertical = 6.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        weekDayTitle(date),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (date == today) FontWeight.Bold else FontWeight.SemiBold,
+                        modifier = Modifier.width(74.dp),
+                    )
+                    Text(
+                        main.joinToString("; ") { e ->
+                            e.name + (if (e.minutes > 0) " · ${e.minutes}м" else "")
+                        }.ifBlank { charger?.name ?: "—" },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = if (openDate == date) 4 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (charger != null && main.isNotEmpty()) {
+                        Spacer(Modifier.width(6.dp))
+                        PaperHint("+зарядка")
+                    }
+                }
+                if (openDate == date) {
+                    for (e in main) {
+                        // Его комментарий — первый абзац описания, до
+                        // нумерованного списка и структурных Warmup-строк.
+                        val comment = e.description
+                            .substringBefore("Warmup").trim()
+                            .lines()
+                            .takeWhile { !Regex("^\\d+[.)]\\s+\\S").containsMatchIn(it.trim()) }
+                            .joinToString("\n").trim()
+                        if (comment.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                e.name,
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                            Text(
+                                comment.take(600),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        PaperHint("Тап по дню — его комментарии из календаря. Правится в чате с Клодом.")
+    }
+}
+
+private val weekDayTitleFormat = SimpleDateFormat("EE d.MM", Locale("ru"))
+private fun weekDayTitle(date: String): String = runCatching {
+    weekDayTitleFormat.format(SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(date)!!)
+}.getOrDefault(date)
 
 /**
  * Дорога к его трём целям октября — из дорожной карты в Notion: вес к 80,

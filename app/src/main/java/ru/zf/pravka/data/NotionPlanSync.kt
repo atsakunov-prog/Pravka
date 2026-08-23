@@ -117,8 +117,13 @@ class NotionPlanSync(
                 val hubText = pageText(hub, token)
                 val block = findBlockPage(hub, token)
                 val blockText = block?.let { pageText(it.first, token) }.orEmpty()
+                // Страница недели — самая оперативная: «Неделя 24–30.08 —
+                // спина-протокол» с запретами, заменами и условиями тестов.
+                // Владелец пишет новую каждую неделю — берём последнюю.
+                val week = newestChild(hub, token) { isWeekTitle(it) }
+                val weekText = week?.let { pageText(it.first, token) }.orEmpty()
 
-                if (hubText.isBlank() && blockText.isBlank()) {
+                if (hubText.isBlank() && blockText.isBlank() && weekText.isBlank()) {
                     lastError = httpError.ifBlank {
                         "Notion ответил, но обе страницы прочитались пустыми. " +
                             "Проверь, что интеграции открыт доступ: страница → " +
@@ -134,7 +139,13 @@ class NotionPlanSync(
                     }
                     if (blockText.isNotBlank()) {
                         append("# Текущий блок: ").append(block!!.second).append('\n')
-                        append(blockText)
+                        append(blockText).append("\n\n")
+                    }
+                    if (weekText.isNotBlank()) {
+                        // Неделя — ПОСЛЕДНЕЙ: она самая свежая, и при споре с
+                        // блоком побеждать должна она.
+                        append("# Текущая неделя: ").append(week!!.second).append('\n')
+                        append(weekText)
                     }
                 }.trim()
 
@@ -142,7 +153,7 @@ class NotionPlanSync(
                 // Блока нет, но хаб прочитался — это рабочее состояние, а не
                 // ошибка. Говорим об этом отдельной строкой, не красной.
                 lastError = if (block == null && httpError.isNotBlank()) httpError else ""
-                val title = block?.second ?: "Тело: велоформа и сила"
+                val title = week?.second ?: block?.second ?: "Тело: велоформа и сила"
                 eventLog.add(
                     "план: правила из Notion — «$title», ${text.length} зн." +
                         if (block == null) " (страницы блока не нашлось)" else ""
@@ -215,6 +226,10 @@ class NotionPlanSync(
             out.append("Поиск «Блок»: ")
                 .append(found?.second ?: httpError.ifBlank { "ничего не нашлось" })
                 .append('\n')
+            val week = newestChild(hub, token) { isWeekTitle(it) }
+            out.append("Страница недели: ")
+                .append(week?.second ?: "не нашлось")
+                .append('\n')
 
             // 4. Что в итоге прочиталось.
             httpError = ""
@@ -247,9 +262,19 @@ class NotionPlanSync(
         newestBlockChild(hubId, token) ?: searchBlockPage(token)
 
     /** Самая свежая дочерняя страница хаба, чей заголовок начинается на «Блок». */
-    private fun newestBlockChild(hubId: String, token: String): Pair<String, String>? {
-        // Notion отдаёт детей в порядке страницы, а не по свежести. Владелец
-        // дописывает новый блок в конец — берём ПОСЛЕДНИЙ подходящий.
+    private fun newestBlockChild(hubId: String, token: String): Pair<String, String>? =
+        newestChild(hubId, token) { isBlockTitle(it) }
+
+    /**
+     * Последняя дочерняя страница хаба с подходящим заголовком. Notion отдаёт
+     * детей в порядке страницы, а не по свежести; владелец дописывает новое в
+     * конец — берём ПОСЛЕДНЕЕ подходящее.
+     */
+    private fun newestChild(
+        hubId: String,
+        token: String,
+        matches: (String) -> Boolean,
+    ): Pair<String, String>? {
         var found: Pair<String, String>? = null
         var cursor: String? = null
         do {
@@ -264,7 +289,7 @@ class NotionPlanSync(
                 val b = results.optJSONObject(i) ?: continue
                 if (b.optString("type") != "child_page") continue
                 val title = b.optJSONObject("child_page")?.optString("title").orEmpty()
-                if (!isBlockTitle(title)) continue
+                if (!matches(title)) continue
                 found = pageId(b.optString("id")) to title
             }
             cursor = json.optString("next_cursor").takeIf {
@@ -326,6 +351,13 @@ class NotionPlanSync(
         val cleaned = title.dropWhile { !it.isLetter() }
         return cleaned.startsWith("Блок", ignoreCase = true) ||
             cleaned.startsWith("Block", ignoreCase = true)
+    }
+
+    /** «Неделя 24–30.08 — спина-протокол» и любые будущие недельные страницы. */
+    private fun isWeekTitle(title: String): Boolean {
+        val cleaned = title.dropWhile { !it.isLetter() }
+        return cleaned.startsWith("Недел", ignoreCase = true) ||
+            cleaned.startsWith("Week", ignoreCase = true)
     }
 
     /** Блоки страницы в плоский текст: заголовки, абзацы, списки и таблицы. */

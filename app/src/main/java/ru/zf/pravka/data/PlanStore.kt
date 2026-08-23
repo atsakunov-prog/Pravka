@@ -48,6 +48,17 @@ class PlanStore(private val context: Context) {
         val strength: Boolean get() = type.equals("WeightTraining", ignoreCase = true)
 
         /**
+         * Зарядка, стоящая в календаре своим событием. Она тоже WeightTraining
+         * (так владелец её пушит), но главной сессией дня быть не может: днём
+         * правят Zwift, бег и силовые, а зарядка — ежедневный фон со своей
+         * карточкой.
+         */
+        val charger: Boolean
+            get() = strength && name.lowercase().let {
+                it.contains("зарядка") || it.contains("турник")
+            }
+
+        /**
          * Блок силовой по названию сессии: «Силовая A — ноги…» → «A · дом».
          * Полевая C — дачная, поэтому у неё свой блок в справочнике.
          */
@@ -152,13 +163,23 @@ class PlanStore(private val context: Context) {
 
     fun dayOf(date: String): List<PlanDay> = _daysFlow.value.filter { it.date == date }
 
-    /** Главная сессия дня: силовая важнее прокрутки — она «не двигается никогда». */
+    /**
+     * Главная сессия дня: силовая важнее прокрутки — она «не двигается
+     * никогда». Зарядка-события в главные не идут: с тех пор как владелец
+     * ставит их в календарь каждый день, «первая WeightTraining дня» — это
+     * почти всегда зарядка, и без этого фильтра карточка дня показывала бы её
+     * вместо Zwift, а журнал силовой писался бы в блок «Зарядка».
+     */
     fun mainOf(date: String): PlanDay? {
-        val list = dayOf(date)
-        return list.firstOrNull { it.strength }
+        val list = dayOf(date).filterNot { it.charger }
+        return list.filter { it.strength }.maxByOrNull { it.minutes }
             ?: list.maxByOrNull { it.load }
             ?: list.firstOrNull()
+            ?: dayOf(date).firstOrNull()
     }
+
+    /** Зарядка-событие дня, если владелец поставил его в календарь. */
+    fun chargerOf(date: String): PlanDay? = dayOf(date).firstOrNull { it.charger }
 
     fun upcoming(days: Int): List<PlanDay> {
         val today = dayKey(System.currentTimeMillis())

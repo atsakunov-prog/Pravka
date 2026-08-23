@@ -242,6 +242,13 @@ class StrengthEngine(
     suspend fun toggleChecked(
         exerciseId: String,
         date: String = dayKey(System.currentTimeMillis()),
+        /**
+         * Полный список задач ДНЯ — тот, что видит владелец. Именно он решает
+         * «всё сделано», а не блок справочника: на неделе спина-протокола план
+         * дня отличается от блока заменами, и считать «сделано» по блоку
+         * значило бы требовать запрещённые упражнения.
+         */
+        allIds: List<String> = emptyList(),
     ): StrengthStore.Session? {
         store.load()
         planStore.load()
@@ -251,11 +258,9 @@ class StrengthEngine(
         val session = store.sessionsOn(date).firstOrNull()
             ?: store.sessionFor(date, block, planned?.name.orEmpty())
         val updated = store.toggleChecked(session.id, exerciseId) ?: return null
-        if (!updated.done && block.isNotBlank()) {
-            val all = book.ofBlock(block).map { it.id }
-            if (all.isNotEmpty() && all.all { updated.isChecked(it) }) {
-                return store.setDone(updated.id, done = true, minutes = planned?.minutes ?: 0)
-            }
+        val all = allIds.ifEmpty { book.ofBlock(block).map { it.id } }
+        if (!updated.done && all.isNotEmpty() && all.all { updated.isChecked(it) }) {
+            return store.setDone(updated.id, done = true, minutes = planned?.minutes ?: 0)
         }
         return updated
     }

@@ -48,7 +48,7 @@ class SportCoach(
         // Правила прозой: восемь тысяч знаков это две страницы Notion целиком.
         // Дороже пары центов на вопрос, и это ровно тот контекст, без которого
         // совет расходится с его собственными записанными правилами.
-        private const val CONTEXT_RULES_CHARS = 8000
+        private const val CONTEXT_RULES_CHARS = 14_000
         private const val CONTEXT_FOOD_DAYS = 7
 
         /** Как виды спорта из intervals.icu называются по-русски. */
