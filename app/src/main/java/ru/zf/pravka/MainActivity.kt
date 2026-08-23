@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,11 +20,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -34,7 +33,9 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingCart
@@ -165,6 +166,7 @@ internal enum class Tab(val titleRes: Int) {
     TODOIST(R.string.tab_todoist),
     SPORT(R.string.tab_sport),
     FOOD(R.string.tab_food),
+    MORE(R.string.tab_more),
     SETTINGS(R.string.tab_settings),
     DICTIONARY(R.string.tab_dictionary),
     PROMPTS(R.string.tab_prompts),
@@ -172,6 +174,103 @@ internal enum class Tab(val titleRes: Int) {
     LEARNING(R.string.tab_learning),
     LOGS(R.string.tab_logs),
     STATS(R.string.tab_stats),
+}
+
+/**
+ * Что живёт под «Ещё»: всё, что обслуживает Правку, а не день. Порядок — по
+ * тому, как часто туда правда заходят.
+ *
+ * Список стоит рядом с enum нарочно: добавил вкладку — сразу видно, идёт она
+ * вниз или сюда. Внизу места ровно на пять кнопок.
+ */
+private val SERVICE_TABS = listOf(
+    Tab.SETTINGS,
+    Tab.DICTIONARY,
+    Tab.STATS,
+    Tab.TRANSCRIPTS,
+    Tab.PROMPTS,
+    Tab.LEARNING,
+    Tab.LOGS,
+)
+
+/** Одна строка про то, зачем эта вкладка — чтобы не открывать её наугад. */
+private fun serviceHint(tab: Tab): String = when (tab) {
+    Tab.SETTINGS -> "Ключ Anthropic, распознавание, служба, сохранённые записи"
+    Tab.DICTIONARY -> "Как писать имена и термины: заменять, подсказывать, не трогать"
+    Tab.STATS -> "Токены и деньги по дням"
+    Tab.TRANSCRIPTS -> "Журнал распознаваний с метриками: движок, время, символы"
+    Tab.PROMPTS -> "Тексты запросов ко всем режимам — правятся и возвращаются к заводским"
+    Tab.LEARNING -> "Правила, выученные на твоих правках, и находки для словаря"
+    Tab.LOGS -> "Что делала служба: кнопки, свипы, выгрузки, ошибки"
+    else -> ""
+}
+
+@Composable
+private fun MoreList(onOpen: (Tab) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        ScreenTitle(stringResource(R.string.tab_more))
+        HintText(
+            "Всё, что обслуживает Правку, а не день. Внизу остались только " +
+                "ежедневные: Засечка, Дела, Спорт, Еда."
+        )
+        Spacer(Modifier.height(4.dp))
+        for (item in SERVICE_TABS) {
+            Card(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpen(item) }
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            stringResource(item.titleRes),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        HintText(serviceHint(item))
+                    }
+                    Icon(
+                        Icons.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Шапка служебной вкладки: «‹ Ещё» и её название. */
+@Composable
+private fun MoreHeader(title: String, onBack: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { onBack() }
+            .padding(start = 12.dp, end = 20.dp, top = 12.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "‹",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.weight(1f))
+        HintText(stringResource(R.string.tab_more))
+    }
 }
 
 @Composable
@@ -194,109 +293,88 @@ private fun MainScreen(
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
 ) {
-    var tab by remember { mutableStateOf(initialTab) }
+    // Служебные вкладки живут под «Ещё». Ссылка снаружи (уведомление, меню
+    // кнопки) может показывать прямо на служебную — тогда открываем «Ещё» и
+    // сразу её.
+    val service = remember { SERVICE_TABS }
+    var tab by remember {
+        mutableStateOf(if (initialTab in service) Tab.MORE else initialTab)
+    }
+    var moreTab by remember {
+        mutableStateOf(if (initialTab in service) initialTab else null)
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            // Одиннадцать вкладок в одну полосу больше не влезают: она ездит
-            // пальцем влево-вправо. Ежедневные (Засечка, Дела, Спорт, Еда)
-            // стоят первыми, служебные - за ними, поэтому в обычный день
-            // прокручивать не приходится вообще.
-            NavigationBar(Modifier.horizontalScroll(rememberScrollState())) {
+            // Пять кнопок — столько NavigationBar раздаёт по весам без
+            // сплющивания подписей. Одиннадцать не влезали никак: полоса,
+            // которую я сперва сделал прокручиваемой, ломалась именно поэтому —
+            // внутри horizontalScroll ширина не ограничена, и веса теряют
+            // смысл. Ежедневное осталось внизу, служебное ушло под «Ещё».
+            NavigationBar {
                 NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.ZASECHKA,
                     onClick = { tab = Tab.ZASECHKA },
                     icon = { Icon(Icons.Filled.DateRange, contentDescription = null) },
                     label = { Text(stringResource(Tab.ZASECHKA.titleRes)) },
                 )
                 NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.TODOIST,
                     onClick = { tab = Tab.TODOIST },
                     icon = { Icon(Icons.Filled.CheckCircle, contentDescription = null) },
                     label = { Text(stringResource(Tab.TODOIST.titleRes)) },
                 )
                 NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.SPORT,
                     onClick = { tab = Tab.SPORT },
                     icon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
                     label = { Text(stringResource(Tab.SPORT.titleRes)) },
                 )
                 NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.FOOD,
                     onClick = { tab = Tab.FOOD },
                     icon = { Icon(Icons.Filled.ShoppingCart, contentDescription = null) },
                     label = { Text(stringResource(Tab.FOOD.titleRes)) },
                 )
                 NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
-                    selected = tab == Tab.SETTINGS,
-                    onClick = { tab = Tab.SETTINGS },
-                    icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
-                    label = { Text(stringResource(Tab.SETTINGS.titleRes)) },
-                )
-                NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
-                    selected = tab == Tab.DICTIONARY,
-                    onClick = { tab = Tab.DICTIONARY },
-                    icon = { Icon(Icons.Filled.List, contentDescription = null) },
-                    label = { Text(stringResource(Tab.DICTIONARY.titleRes)) },
-                )
-                NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
-                    selected = tab == Tab.PROMPTS,
-                    onClick = { tab = Tab.PROMPTS },
-                    icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
-                    label = { Text(stringResource(Tab.PROMPTS.titleRes)) },
-                )
-                NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
-                    selected = tab == Tab.TRANSCRIPTS,
-                    onClick = { tab = Tab.TRANSCRIPTS },
-                    icon = { Icon(painterResource(R.drawable.ic_transcripts), contentDescription = null) },
-                    label = { Text(stringResource(Tab.TRANSCRIPTS.titleRes)) },
-                )
-                NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
-                    selected = tab == Tab.LEARNING,
-                    onClick = { tab = Tab.LEARNING },
-                    icon = { Icon(Icons.Filled.Star, contentDescription = null) },
-                    label = { Text(stringResource(Tab.LEARNING.titleRes)) },
-                )
-                NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
-                    selected = tab == Tab.LOGS,
-                    onClick = { tab = Tab.LOGS },
-                    icon = { Icon(Icons.Filled.Build, contentDescription = null) },
-                    label = { Text(stringResource(Tab.LOGS.titleRes)) },
-                )
-                NavigationBarItem(
-                    modifier = Modifier.widthIn(min = 84.dp),
-                    selected = tab == Tab.STATS,
-                    onClick = { tab = Tab.STATS },
-                    icon = { Icon(Icons.Filled.Info, contentDescription = null) },
-                    label = { Text(stringResource(Tab.STATS.titleRes)) },
+                    selected = tab == Tab.MORE,
+                    // Повторный тап по «Ещё» возвращает список: иначе из
+                    // Логов обратно к списку пришлось бы жать «назад».
+                    onClick = { tab = Tab.MORE; moreTab = null },
+                    icon = { Icon(Icons.Filled.MoreVert, contentDescription = null) },
+                    label = { Text(stringResource(Tab.MORE.titleRes)) },
                 )
             }
         },
     ) { padding ->
         Column(Modifier.padding(padding)) {
-            when (tab) {
-                Tab.ZASECHKA -> ZasechkaTab(app)
-                Tab.TODOIST -> TodoistTab(app)
-                Tab.SPORT -> SportTab(app)
-                Tab.FOOD -> FoodTab(app)
-                Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
-                Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
-                Tab.PROMPTS -> PromptsTab(promptStore)
-                Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
-                Tab.LEARNING -> LearningTab(app)
-                Tab.LOGS -> LogsTab(app)
-                Tab.STATS -> StatsTab(stats, historyLog)
+            val open = moreTab
+            if (tab == Tab.MORE && open == null) {
+                MoreList(onOpen = { moreTab = it })
+            } else {
+                val shown = if (tab == Tab.MORE) open!! else tab
+                if (tab == Tab.MORE) {
+                    MoreHeader(
+                        title = stringResource(shown.titleRes),
+                        onBack = { moreTab = null },
+                    )
+                }
+                when (shown) {
+                    Tab.ZASECHKA -> ZasechkaTab(app)
+                    Tab.TODOIST -> TodoistTab(app)
+                    Tab.SPORT -> SportTab(app)
+                    Tab.FOOD -> FoodTab(app)
+                    Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
+                    Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
+                    Tab.PROMPTS -> PromptsTab(promptStore)
+                    Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
+                    Tab.LEARNING -> LearningTab(app)
+                    Tab.LOGS -> LogsTab(app)
+                    Tab.STATS -> StatsTab(stats, historyLog)
+                    // «Ещё» без выбранной вкладки уже обработано выше.
+                    Tab.MORE -> Unit
+                }
             }
         }
     }

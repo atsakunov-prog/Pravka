@@ -182,6 +182,7 @@
     <string name="r_split_failed">Не разобрал наговор — он сохранён, попробуй ещё раз</string>
 
     <!-- Спорт и еда -->
+    <string name="tab_more">Ещё</string>
     <string name="tab_sport">Спорт</string>
     <string name="tab_food">Еда</string>
     <string name="e_busy">Микрофон занят другой записью — сначала заверши её</string>
