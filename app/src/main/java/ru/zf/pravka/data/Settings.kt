@@ -69,6 +69,9 @@ class Settings(private val context: Context) {
         // Тело: кнопка «Т» и таймер отдыха между подходами.
         private val KEY_T_ENABLED = booleanPreferencesKey("t_enabled")
         private val KEY_REST_SEC = intPreferencesKey("rest_timer_sec")
+        private val KEY_GOAL_WEIGHT = intPreferencesKey("body_goal_weight")
+        private val KEY_SPORT_NOTIFY = booleanPreferencesKey("sport_notify_arrived")
+        private val KEY_NOTION_DIARY = booleanPreferencesKey("notion_diary_push")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -83,6 +86,8 @@ class Settings(private val context: Context) {
         const val FOOD_CARBS_DEFAULT = 280
         const val SPORT_DAYS_DEFAULT = 120
         const val REST_SEC_DEFAULT = 90
+        // Цель веса из его же дорожной карты: «было 93, цель 80».
+        const val GOAL_WEIGHT_DEFAULT = 80
 
         // Страница-хаб «Тело: велоформа и сила» в Notion. Приложение само
         // находит под ней самую свежую страницу «Блок …» — так новый блок
@@ -271,6 +276,26 @@ class Settings(private val context: Context) {
     val restSecFlow = context.dataStore.data.map { it[KEY_REST_SEC] ?: REST_SEC_DEFAULT }
     suspend fun setRestSec(value: Int) {
         context.dataStore.edit { it[KEY_REST_SEC] = value.coerceIn(30, 300) }
+    }
+
+    /** Цель веса, кг — карточка «цели» меряет дорогу к ней. */
+    val goalWeightFlow = context.dataStore.data.map { it[KEY_GOAL_WEIGHT] ?: GOAL_WEIGHT_DEFAULT }
+    suspend fun setGoalWeight(value: Int) {
+        context.dataStore.edit { it[KEY_GOAL_WEIGHT] = value.coerceIn(40, 200) }
+    }
+
+    /** Уведомление, когда часы прислали тренировку: вердикт по правилам + feel. */
+    val sportNotifyFlow = context.dataStore.data.map { it[KEY_SPORT_NOTIFY] ?: true }
+    suspend fun sportNotify(): Boolean = sportNotifyFlow.first()
+    suspend fun setSportNotify(value: Boolean) {
+        context.dataStore.edit { it[KEY_SPORT_NOTIFY] = value }
+    }
+
+    /** Автогалочки в базу «Дневник» Notion: зарядка, сделано, feel, колено, вес. */
+    val notionDiaryFlow = context.dataStore.data.map { it[KEY_NOTION_DIARY] ?: true }
+    suspend fun notionDiary(): Boolean = notionDiaryFlow.first()
+    suspend fun setNotionDiary(value: Boolean) {
+        context.dataStore.edit { it[KEY_NOTION_DIARY] = value }
     }
 
     // ---- Спорт (вкладка на кэше intervals.icu) ----

@@ -1993,6 +1993,92 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * «Пробежка приехала: 5,2 км, пульс 152 против потолка 150» — как только
+     * выгрузка увидела новую тренировку с часов. Кнопки 2/3/4 пишут feel прямо
+     * в активность intervals; крайние 1 и 5 редки, за ними — во вкладку.
+     */
+    private suspend fun notifyArrivedWorkouts() {
+        val arrived = app.icuSportSync.takeArrived()
+        if (arrived.isEmpty()) return
+        if (!runCatching { app.settings.sportNotify() }.getOrDefault(true)) return
+        val rules = app.planStore.rulesFlow.value
+        for (w in arrived.take(2)) {
+            val name = ru.zf.pravka.core.SportCoach.sportName(w.type)
+            val bits = mutableListOf<String>()
+            if (w.km >= 0.1) bits.add(String.format(java.util.Locale.US, "%.1f км", w.km))
+            if (w.minutes > 0) bits.add("${w.minutes} мин")
+            if (w.avgHr > 0) bits.add("пульс ${w.avgHr}")
+            val verdict = when {
+                !w.type.equals("Run", true) || w.avgHr <= 0 || rules.runHrCeiling <= 0 -> ""
+                w.avgHr <= rules.runHrCeiling -> "Под потолком ${rules.runHrCeiling} ✓."
+                rules.greyZoneLow in 1..w.avgHr && w.avgHr <= rules.greyZoneHigh ->
+                    "Серая зона ${rules.greyZoneLow}–${rules.greyZoneHigh} — твоё же правило."
+                else -> "Выше потолка ${rules.runHrCeiling}."
+            }
+            sportNotify(
+                workoutId = w.id,
+                title = "$name приехал${if (name.endsWith("а")) "а" else ""}: " + bits.joinToString(", "),
+                text = (verdict + " Как самочувствие? 1 отлично … 5 развалина").trim(),
+            )
+        }
+    }
+
+    private fun sportNotify(workoutId: String, title: String, text: String) {
+        runCatching {
+            val nm = getSystemService(android.app.NotificationManager::class.java)
+            val channelId = "pravka-sport"
+            if (nm.getNotificationChannel(channelId) == null) {
+                nm.createNotificationChannel(
+                    android.app.NotificationChannel(
+                        channelId, "Спорт: тренировка приехала",
+                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                    )
+                )
+            }
+            fun feelAction(feel: Int): android.app.Notification.Action {
+                val intent = android.content.Intent(this, SportQuickActivity::class.java)
+                    .putExtra(SportQuickActivity.EXTRA_ACTIVITY_ID, workoutId)
+                    .putExtra(SportQuickActivity.EXTRA_FEEL, feel)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                val pending = android.app.PendingIntent.getActivity(
+                    this, 60 + feel + workoutId.hashCode() % 1000,
+                    intent,
+                    android.app.PendingIntent.FLAG_IMMUTABLE or
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+                )
+                val label = when (feel) {
+                    2 -> "2 · хорошо"
+                    3 -> "3 · норм"
+                    else -> "4 · тяжело"
+                }
+                return android.app.Notification.Action.Builder(
+                    null as android.graphics.drawable.Icon?, label, pending,
+                ).build()
+            }
+            val open = android.app.PendingIntent.getActivity(
+                this, 59,
+                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                    .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_SPORT)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                android.app.PendingIntent.FLAG_IMMUTABLE or
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val notif = android.app.Notification.Builder(this, channelId)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setSmallIcon(R.drawable.ic_tile)
+                .setContentIntent(open)
+                .addAction(feelAction(2))
+                .addAction(feelAction(3))
+                .addAction(feelAction(4))
+                .setAutoCancel(true)
+                .build()
+            // Id от тренировки: две приехавшие не съедают друг друга.
+            nm.notify(4600 + kotlin.math.abs(workoutId.hashCode() % 100), notif)
+        }
+    }
+
     private fun zPomodoroNotify(title: String, text: String) {
         runCatching {
             val nm = getSystemService(android.app.NotificationManager::class.java)
@@ -2060,8 +2146,17 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Спорт и еда: свой кэш и своя недоставленная почта. Оба звонка
             // сами себя дросселируют (30 минут у выгрузки, «уже уехало» у
             // еды), так что пятиминутный тик может дёргать их сколько хочет.
-            scope.launch { runCatching { app.icuSportSync.refresh() } }
+            scope.launch {
+                runCatching { app.icuSportSync.refresh() }
+                // Приехало новое с часов — уведомление с вердиктом по его
+                // правилам и кнопками самочувствия. Замыкает петлю feel,
+                // которую иначе надо помнить самому.
+                runCatching { notifyArrivedWorkouts() }
+            }
             scope.launch { runCatching { app.foodEngine.syncPending() } }
+            // Дневник в Notion: галочки, feel, колено и вес уезжают сами.
+            // Свой дроссель на полчаса и свой «ничего не изменилось» внутри.
+            scope.launch { runCatching { app.notionDiarySync.sync() } }
             // План: календарь раз в час, правила блока раз в сутки — оба
             // звонка дросселируются сами.
             scope.launch { runCatching { app.planSync.refresh() } }

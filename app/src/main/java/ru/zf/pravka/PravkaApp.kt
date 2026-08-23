@@ -169,6 +169,20 @@ class PravkaApp : Application() {
     val notionPlanSync by lazy {
         ru.zf.pravka.data.NotionPlanSync(settings, planStore, httpClient, eventLog)
     }
+    // Единственное место, где приложение ПИШЕТ в Notion: автогалочки в его
+    // базу «Дневник» — зарядка, сделано, feel, колено, вес. Он забросил её
+    // тикать руками ровно тогда, когда всё это стал наговаривать сюда.
+    val notionDiarySync by lazy {
+        ru.zf.pravka.data.NotionDiarySync(
+            settings = settings,
+            strengthStore = strengthStore,
+            planStore = planStore,
+            foodStore = foodStore,
+            sportStore = sportStore,
+            client = httpClient,
+            eventLog = eventLog,
+        )
+    }
     val planSync by lazy {
         ru.zf.pravka.core.PlanSync(
             icu = icuSportSync,

@@ -67,6 +67,18 @@ class IcuSportSync(
     @Volatile private var lastRun = 0L
     @Volatile private var lastDeep = 0L
     @Volatile private var lastError = ""
+    @Volatile private var arrived: List<SportStore.Workout> = emptyList()
+
+    /**
+     * Тренировки, приехавшие ПОСЛЕДНЕЙ выгрузкой и которых кэш раньше не
+     * видел. Забираются один раз — служба показывает по ним уведомление
+     * («пробежка приехала: пульс 152 против потолка 150») и просит feel.
+     */
+    fun takeArrived(): List<SportStore.Workout> {
+        val list = arrived
+        arrived = emptyList()
+        return list
+    }
 
     /** Что показать во вкладке, если выгрузка не удалась. */
     fun lastError(): String = lastError
@@ -122,6 +134,14 @@ class IcuSportSync(
         val profile = if (deep) fetchProfile(athlete, auth) else null
 
         if (workouts == null && health == null && profile == null) return false
+        // Что нового: сравниваем с кэшем ДО слияния. Пустой кэш — не «всё
+        // новое», а первая выгрузка: заваливать уведомлениями сто двадцать
+        // дней истории нельзя.
+        val known = store.workoutsFlow.value.map { it.id }.toSet()
+        if (known.isNotEmpty() && workouts != null) {
+            val freshCut = now - 48 * 3_600_000L
+            arrived = workouts.filter { it.id !in known && it.start >= freshCut }
+        }
         store.merge(workouts, health, profile, keepDays)
         if (deep) lastDeep = now
         lastError = ""
@@ -484,6 +504,31 @@ class IcuSportSync(
             eventLog.add("силовые → активность $activityId: ${body.length} зн.")
         }
     }
+
+    /**
+     * Самочувствие в активность — из уведомления «тренировка приехала».
+     * Только feel, описание не трогаем вовсе.
+     */
+    suspend fun pushFeel(activityId: String, feel: Int): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val key = settings.icuKey().trim()
+                if (key.isBlank()) throw IllegalStateException("Нет ключа intervals.icu")
+                require(feel in 1..5) { "feel вне шкалы" }
+                val payload = JSONObject().put("feel", feel)
+                val request = Request.Builder()
+                    .url("$ACTIVITY/$activityId")
+                    .header("Authorization", Credentials.basic("API_KEY", key))
+                    .put(payload.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        throw IllegalStateException("intervals.icu: HTTP ${response.code}")
+                    }
+                }
+                eventLog.add("спорт: feel $feel → активность $activityId")
+            }
+        }
 
     /**
      * Запасная дорога: активности от часов так и не появилось, и оставлять

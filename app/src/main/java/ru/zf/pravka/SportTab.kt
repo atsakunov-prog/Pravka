@@ -144,6 +144,12 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         val block = mainPlan?.block.orEmpty()
         if (block.isBlank()) emptyList() else app.strengthEngine.lastTimeFor(block, today)
     }
+    // История по каждому упражнению дня — для графика прогрессии по тапу.
+    val plannedHistory = remember(sessions, plannedExercises) {
+        plannedExercises.associate { (exercise, _) ->
+            exercise.id to app.strengthStore.history(exercise.id, 10)
+        }
+    }
     val streak = remember(gtgDays) { app.strengthStore.streak(today) }
     val gtgToday = remember(gtgDays, today) { app.strengthStore.gtgOn(today) }
     val shownWorkouts = remember(workouts, days) {
@@ -291,6 +297,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     exercise = exercise,
                     lastTime = last,
                     doneToday = doneToday,
+                    history = plannedHistory[exercise.id].orEmpty(),
                     restSec = restSec,
                     onRest = { seconds ->
                         Feedback.toast(app, "Отдых $seconds сек — кнопка «Т» считает")
@@ -484,6 +491,9 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         // темп (или ватты) на удар пульса. Держать для этого отдельный ритуал
         // не нужно — данные уже в кэше, рисуем тренд и говорим словами.
         item { EfficiencyCard(workouts) }
+
+        // ---- Цели октября ----
+        item { GoalsCard(app, health, gtgDays, rules) }
 
         // ---- Вес и VO2max, если часы их знают ----
         if (weights.size >= 3) {
@@ -689,6 +699,7 @@ private fun PlannedExerciseCard(
     exercise: ExerciseBook.Exercise,
     lastTime: StrengthStore.ExerciseLog?,
     doneToday: StrengthStore.ExerciseLog?,
+    history: List<Pair<String, StrengthStore.ExerciseLog>> = emptyList(),
     restSec: Int,
     onRest: (Int) -> Unit,
 ) {
@@ -748,6 +759,14 @@ private fun PlannedExerciseCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.height(8.dp))
+        }
+        if (history.size >= 2) {
+            // Прогрессия — столбики объёма по сессиям. «Мышцы растут от
+            // прогрессии, не от усталости» — его принцип №2, вот она глазом.
+            Text("Прогрессия · объём по сессиям", style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(4.dp))
+            ProgressBars(history)
             Spacer(Modifier.height(8.dp))
         }
         if (exercise.how.isNotBlank()) {
@@ -1133,6 +1152,187 @@ private val RIDE_COLOR = Color(0xFF2563EB)
  * библиотекой: две ломаные - это двадцать строк, а любая графическая
  * библиотека это ещё одна зависимость в приложении, где их пять.
  */
+/** Столбики объёма упражнения по сессиям, старые слева. */
+@Composable
+private fun ProgressBars(history: List<Pair<String, StrengthStore.ExerciseLog>>) {
+    val ascending = history.reversed()
+    val values = ascending.map { it.second.volume }
+    val peak = values.maxOrNull()?.coerceAtLeast(1.0) ?: return
+    Row(
+        Modifier.fillMaxWidth().height(44.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        for ((i, v) in values.withIndex()) {
+            val grew = i > 0 && v > values[i - 1] + 0.01
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(((v / peak) * 44).dp.coerceAtLeast(3.dp))
+                    .background(
+                        if (grew) toneColor(1) else CTL_COLOR,
+                        MaterialTheme.shapes.extraSmall,
+                    )
+            )
+        }
+    }
+    Spacer(Modifier.height(2.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        PaperHint(shortDate(ascending.first().first))
+        val first = values.first()
+        val last = values.last()
+        if (first > 0) {
+            val pct = Math.round((last - first) / first * 100)
+            PaperHint((if (pct >= 0) "+" else "") + "$pct% за ${values.size} сессий")
+        }
+        PaperHint(shortDate(ascending.last().first))
+    }
+}
+
+private fun shortDate(date: String): String =
+    date.split('-').let { if (it.size == 3) "${it[2]}.${it[1]}" else date }
+
+/**
+ * Дорога к его трём целям октября — из дорожной карты в Notion: вес к 80,
+ * первое подтягивание (вис и негативы), честный рамп-тест. Всё считается на
+ * телефоне из уже имеющихся данных; чего нет — про то молчим.
+ */
+@Composable
+private fun GoalsCard(
+    app: PravkaApp,
+    health: List<SportStore.Health>,
+    gtgDays: List<StrengthStore.GtgDay>,
+    rules: PlanStore.Rules,
+) {
+    val goalWeight by app.settings.goalWeightFlow.collectAsState(
+        initial = ru.zf.pravka.data.Settings.GOAL_WEIGHT_DEFAULT
+    )
+    val now = remember { System.currentTimeMillis() }
+
+    // Вес: скорость за последний месяц и честный прогноз по ней.
+    val weights = remember(health) { health.filter { it.weightKg > 0 } }
+    val current = weights.firstOrNull()?.weightKg ?: 0.0
+    val monthAgoKey = remember(now) { dayKey(now - 28L * 86_400_000L) }
+    val past = remember(weights, monthAgoKey) {
+        weights.firstOrNull { it.date <= monthAgoKey } ?: weights.lastOrNull()
+    }
+    // Вис и негативы: последние две недели против двух до них.
+    val fortnight = remember(now) { dayKey(now - 14L * 86_400_000L) }
+    val monthKey = remember(now) { dayKey(now - 28L * 86_400_000L) }
+    val hangNow = gtgDays.filter { it.date >= fortnight }.maxOfOrNull { it.hangSec } ?: 0
+    val hangPrev = gtgDays.filter { it.date in monthKey..fortnight }.maxOfOrNull { it.hangSec } ?: 0
+    val negBest = gtgDays.maxOfOrNull { it.negatives } ?: 0
+    val bestHang = remember(gtgDays) { app.strengthStore.bestHang() }
+    val tsb = health.firstOrNull()?.tsb ?: 0.0
+
+    val deadline = "2026-10-31"
+    val today = dayKey(now)
+    val weeksLeft = remember(today) {
+        val days = runCatching {
+            val f = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            ((f.parse(deadline)!!.time - f.parse(today)!!.time) / 86_400_000L).toInt()
+        }.getOrDefault(-1)
+        if (days >= 0) (days + 6) / 7 else -1
+    }
+
+    if (current <= 0 && bestHang == 0 && negBest == 0) return
+
+    PaperCard(
+        label = "цели октября",
+        trailing = { if (weeksLeft >= 0) PaperHint("осталось $weeksLeft нед.") },
+    ) {
+        // №1-бис: вес к 80 — половина пути уже пройдена (было 93).
+        if (current > 0) {
+            val rate: Double? = past?.takeIf { it.date < today }?.let { p ->
+                val days = runCatching {
+                    val f = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+                    ((f.parse(today)!!.time - f.parse(p.date)!!.time) / 86_400_000L).toInt()
+                }.getOrDefault(0)
+                if (days >= 7) (current - p.weightKg) / (days / 7.0) else null
+            }
+            GoalRowLine(
+                title = "Вес → $goalWeight кг",
+                value = fmt1(current),
+                tone = if (current <= goalWeight) 1 else 0,
+            )
+            when {
+                current <= goalWeight -> PaperHint("Дошёл. Дальше — удержать.")
+                rate == null -> PaperHint("Скорость станет видна, когда наберётся месяц замеров.")
+                rate < -0.05 -> {
+                    val weeks = Math.round((current - goalWeight) / -rate).toInt()
+                    PaperHint(
+                        fmt1(-rate) + " кг/нед — так к цели через $weeks нед." +
+                            (if (weeksLeft in 0 until weeks) " (позже октября)" else "")
+                    )
+                    if (rate < -0.8) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Быстрее 0,8 кг/нед — твоё же правило: добавь углеводный слот.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = toneColor(-1),
+                        )
+                    }
+                }
+                else -> PaperHint("За месяц вес стоит — дефицита нет.")
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
+        // №2: первое подтягивание — вис и негативы.
+        if (bestHang > 0 || negBest > 0) {
+            GoalRowLine(
+                title = "Путь к подтягиванию",
+                value = if (bestHang > 0) "вис $bestHang сек" else "негативы $negBest",
+                tone = if (hangNow > hangPrev && hangPrev > 0) 1 else 0,
+            )
+            PaperHint(
+                buildString {
+                    if (hangNow > 0) {
+                        append("Вис за две недели: $hangNow сек")
+                        if (hangPrev > 0) {
+                            val d = hangNow - hangPrev
+                            append(" (")
+                            append(if (d >= 0) "+" else "")
+                            append("$d к прошлым двум")
+                            append(")")
+                        }
+                    } else {
+                        append("Виса за две недели не записано")
+                    }
+                    if (negBest > 0) append(" · негативы лучшее $negBest")
+                }
+            )
+            Spacer(Modifier.height(10.dp))
+        }
+
+        // №1: честный FTP — тест только на плюсовом TSB (его правило).
+        if (rules.rampNeedsPositiveTsb && health.isNotEmpty()) {
+            GoalRowLine(
+                title = "Рамп-тест",
+                value = "TSB " + signed(Math.round(tsb).toInt()),
+                tone = if (tsb >= 0) 1 else -1,
+            )
+            PaperHint(
+                if (tsb >= 0) "Форма в плюсе — тест можно планировать."
+                else "Твоё правило: тест только на плюсовом TSB. Пока рано."
+            )
+        }
+    }
+}
+
+@Composable
+private fun GoalRowLine(title: String, value: String, tone: Int) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        Text(value, style = MaterialTheme.typography.bodyMedium, color = toneColor(tone))
+    }
+    Spacer(Modifier.height(2.dp))
+}
+
 /**
  * Тренд КПД по бегу и вело за 90 дней: EF = темп (ватты) на удар пульса,
  * intervals отдаёт его готовым. Рост EF — база строится; сравниваем среднее
@@ -1776,6 +1976,51 @@ internal fun BodySportSettings(app: PravkaApp) {
             Spacer(Modifier.height(6.dp))
             PaperHint("Прочитано и лежит на телефоне: ${rules.sourceText.length} зн.")
         }
+
+        Spacer(Modifier.height(14.dp))
+        val diary by app.settings.notionDiaryFlow.collectAsState(initial = true)
+        var pushingDiary by remember { mutableStateOf(false) }
+        var diaryStatus by remember { mutableStateOf("") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Автогалочки в «Дневник»", style = MaterialTheme.typography.bodyMedium)
+                PaperHint(
+                    "Зарядка, «сделано», feel, колено, вес и еда сами уезжают в " +
+                        "твою базу Notion. Галочки только ставятся, тексты пишутся " +
+                        "лишь в пустые ячейки — твоё руками написанное не трогается. " +
+                        "Интеграции нужны права на запись."
+                )
+            }
+            Switch(checked = diary, onCheckedChange = { v ->
+                app.appScope.launch { app.settings.setNotionDiary(v) }
+            })
+        }
+        if (diary) {
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = {
+                    if (!pushingDiary) {
+                        pushingDiary = true
+                        app.appScope.launch {
+                            val done = runCatching { app.notionDiarySync.sync(force = true) }
+                                .getOrDefault(false)
+                            pushingDiary = false
+                            diaryStatus = when {
+                                app.notionDiarySync.lastError().isNotBlank() ->
+                                    app.notionDiarySync.lastError()
+                                done -> "Уехало: ${app.notionDiarySync.lastPushed()}"
+                                else -> "Нечего отправлять или уже уехало"
+                            }
+                        }
+                    }
+                },
+                enabled = !pushingDiary,
+            ) { Text(if (pushingDiary) "Отправляю…" else "Отправить в Дневник сейчас") }
+            if (diaryStatus.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                PaperHint(diaryStatus)
+            }
+        }
     }
 
     Spacer(Modifier.height(14.dp))
@@ -1805,6 +2050,35 @@ internal fun BodySportSettings(app: PravkaApp) {
             "Столько дней тренировок и здоровья держим на телефоне. " +
                 "Глубже — дольше первая выгрузка, но длиннее графики."
         )
+        Spacer(Modifier.height(12.dp))
+        val goalWeight by app.settings.goalWeightFlow.collectAsState(
+            initial = ru.zf.pravka.data.Settings.GOAL_WEIGHT_DEFAULT
+        )
+        var goalSlider by remember(goalWeight) { mutableStateOf(goalWeight.toFloat()) }
+        Text("Цель веса: ${goalSlider.toInt()} кг", style = MaterialTheme.typography.bodyMedium)
+        Slider(
+            value = goalSlider,
+            onValueChange = { goalSlider = it },
+            onValueChangeFinished = {
+                app.appScope.launch { app.settings.setGoalWeight(goalSlider.toInt()) }
+            },
+            valueRange = 65f..95f,
+        )
+        PaperHint("К ней меряет дорогу карточка «Цели октября».")
+        Spacer(Modifier.height(12.dp))
+        val notify by app.settings.sportNotifyFlow.collectAsState(initial = true)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Тренировка приехала — уведомление", style = MaterialTheme.typography.bodyMedium)
+                PaperHint(
+                    "Как только часы отдали тренировку: вердикт по твоим правилам " +
+                        "и кнопки самочувствия 2/3/4 прямо в шторке."
+                )
+            }
+            Switch(checked = notify, onCheckedChange = { v ->
+                app.appScope.launch { app.settings.setSportNotify(v) }
+            })
+        }
         Spacer(Modifier.height(12.dp))
         val pending = sessions.count { it.pendingSync }
         Row(
