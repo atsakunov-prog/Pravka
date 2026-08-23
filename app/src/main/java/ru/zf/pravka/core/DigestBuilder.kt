@@ -328,6 +328,110 @@ class DigestBuilder(
 
     // ---- Наружу ----
 
+    /**
+     * CSV всей жизни: таймшит, еда, тренировки, силовые, зарядка и
+     * комментарии — одним файлом, строка на событие, хронологически.
+     * Владелец так и сказал: «фактически вся моя жизнь, всеобъемлющий файл».
+     *
+     * Колонки нарочно одни на все домены: date,time,domain,name,detail,note.
+     * Числа живут внутри detail строкой — файл кормят Клоду и открывают
+     * глазами, а не сводят в Excel формулами; для формул есть выгрузки
+     * Засечки и Еды по отдельности.
+     */
+    suspend fun lifeCsvIntent(): android.content.Intent = withContext(Dispatchers.IO) {
+        loadAll()
+        val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
+        fun cell(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
+        data class Row(val ts: Long, val domain: String, val name: String, val detail: String, val note: String)
+        val rows = mutableListOf<Row>()
+
+        for (e in zasechka.entriesFlow.value.filterNot { it.open }) {
+            rows.add(
+                Row(
+                    ts = e.start,
+                    domain = "таймшит",
+                    name = e.title.ifBlank { e.category.ifBlank { "без названия" } },
+                    detail = listOfNotNull(
+                        e.category.takeIf { it.isNotBlank() },
+                        "${e.durationMin()} мин",
+                        e.client.takeIf { it.isNotBlank() },
+                    ).joinToString(" · "),
+                    note = e.raw,
+                )
+            )
+        }
+        for (m in food.mealsFlow.value.filter { it.confirmed }) {
+            rows.add(
+                Row(
+                    ts = m.ts,
+                    domain = "еда",
+                    name = m.kind.ifBlank { "приём" },
+                    detail = m.shortList + " · ${m.kcal} ккал · Б${m.protein} Ж${m.fat} У${m.carbs}",
+                    note = m.raw,
+                )
+            )
+        }
+        for (w in sport.workoutsFlow.value) {
+            rows.add(
+                Row(
+                    ts = w.start,
+                    domain = "тренировка",
+                    name = SportCoach.sportName(w.type) +
+                        (if (w.name.isNotBlank() && !w.name.equals(w.type, true)) " · ${w.name}" else ""),
+                    detail = listOfNotNull(
+                        "${w.minutes} мин",
+                        if (w.km >= 0.1) String.format(Locale.US, "%.1f км", w.km) else null,
+                        if (w.avgHr > 0) "пульс ${w.avgHr}" else null,
+                        if (w.avgWatts > 0) "${w.avgWatts} Вт" else null,
+                        if (w.load > 0) "load ${w.load}" else null,
+                        if (w.feel > 0) "самочувствие ${w.feel}/5" else null,
+                    ).joinToString(" · "),
+                    note = "",
+                )
+            )
+        }
+        for (s in strength.sessionsFlow.value.filter { !it.empty || it.done }) {
+            rows.add(
+                Row(
+                    ts = dayStart(s.date) + 12 * 3_600_000L,
+                    domain = "силовая",
+                    name = s.title.ifBlank { s.block.ifBlank { "силовая" } },
+                    detail = s.exercises.joinToString("; ") { "${it.name} ${it.compact()}" } +
+                        (if (s.feel in 1..5) " · самочувствие ${s.feel}/5" else "") +
+                        (if (s.minutes > 0) " · ${s.minutes} мин" else ""),
+                    note = s.note,
+                )
+            )
+        }
+        for (g in strength.gtgFlow.value.filter { it.any }) {
+            rows.add(
+                Row(
+                    ts = dayStart(g.date) + 8 * 3_600_000L,
+                    domain = "зарядка",
+                    name = if (g.charged) "сделана" else "частично",
+                    detail = g.line().removePrefix("Зарядка: "),
+                    note = g.note,
+                )
+            )
+        }
+        for (r in strength.rawFlow.value.filter { it.kind == "comment" }) {
+            rows.add(Row(r.ts, "комментарий", "к тренировке", r.text, ""))
+        }
+
+        val sb = StringBuilder("date,time,domain,name,detail,note\n")
+        for (r in rows.sortedBy { it.ts }) {
+            sb.append(dayKey(r.ts)).append(',')
+                .append(timeFormat.format(Date(r.ts))).append(',')
+                .append(cell(r.domain)).append(',')
+                .append(cell(r.name)).append(',')
+                .append(cell(r.detail)).append(',')
+                .append(cell(r.note)).append('\n')
+        }
+        val out = java.io.File(context.cacheDir, "pravka-zhizn.csv")
+        out.writeText(sb.toString())
+        shareFileIntent(context, out, "text/csv")
+    }
+
     /** Сводка файлом — тем же путём, что CSV Засечки и дневника еды. */
     suspend fun shareIntent(text: String, name: String): android.content.Intent =
         withContext(Dispatchers.IO) {

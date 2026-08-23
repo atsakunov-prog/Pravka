@@ -167,13 +167,13 @@ class NotionDiarySync(
             session?.let { s ->
                 append(s.exercises.joinToString("; ") { "${it.name} ${it.compact()}" })
             }
-            if (gtg != null && (gtg.hangSec > 0 || gtg.negatives > 0)) {
+            if (gtg != null && (gtg.hangSec > 0 || gtg.negatives > 0 || gtg.pullups > 0)) {
                 if (isNotEmpty()) append(" · ")
-                if (gtg.hangSec > 0) append("вис ${gtg.hangSec} сек")
-                if (gtg.negatives > 0) {
-                    if (gtg.hangSec > 0) append(", ")
-                    append("негативы ${gtg.negatives}")
-                }
+                val bits = mutableListOf<String>()
+                if (gtg.pullups > 0) bits.add("подтягивания ${gtg.pullups}")
+                if (gtg.hangSec > 0) bits.add("вис ${gtg.hangSec} сек")
+                if (gtg.negatives > 0) bits.add("негативы ${gtg.negatives}")
+                append(bits.joinToString(", "))
             }
         }.trim()
 

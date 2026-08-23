@@ -156,6 +156,9 @@ class StrengthStore(private val context: Context) {
         val hangSec: Int = 0,
         val negatives: Int = 0,
         val scapular: Int = 0,
+        // Подтягивания. Ради этого числа затевался весь GTG: первый раз, когда
+        // оно станет больше нуля, — и есть цель №2.
+        val pullups: Int = 0,
         // Светофор колена на этот день: «зелёный» | «жёлтый» | «красный».
         // Живёт рядом с зарядкой, потому что это тоже ежедневная отметка — и
         // потому что именно она решает, режем ли бег (он младший).
@@ -164,9 +167,24 @@ class StrengthStore(private val context: Context) {
         val ts: Long = 0L,
         /** Галочки чек-листа зарядки: id упражнений блока «Зарядка», отмеченных сегодня. */
         val doneIds: List<String> = emptyList(),
+        /** День уехал в комментарий wellness intervals; любая правка снимает. */
+        val icuSynced: Boolean = false,
     ) {
         val any: Boolean
-            get() = charged || hangSec > 0 || negatives > 0 || scapular > 0 || knee.isNotBlank()
+            get() = charged || hangSec > 0 || negatives > 0 || scapular > 0 ||
+                pullups > 0 || knee.isNotBlank()
+
+        /** День одной строкой — для комментария wellness, сводки и CSV. */
+        fun line(): String = buildString {
+            append("Зарядка: ")
+            append(if (charged) "сделана" else "не отмечена")
+            if (pullups > 0) append(" · подтягивания $pullups")
+            if (hangSec > 0) append(" · вис $hangSec сек")
+            if (negatives > 0) append(" · негативы $negatives")
+            if (scapular > 0) append(" · лопаточные $scapular")
+            if (knee.isNotBlank()) append(" · колено $knee")
+            if (note.isNotBlank()) append(" — ").append(note)
+        }
     }
 
     private val mutex = Mutex()
@@ -458,6 +476,7 @@ class StrengthStore(private val context: Context) {
         hangSec: Int? = null,
         negatives: Int? = null,
         scapular: Int? = null,
+        pullups: Int? = null,
         knee: String? = null,
         note: String? = null,
         /**
@@ -478,12 +497,15 @@ class StrengthStore(private val context: Context) {
             hangSec = best(hangSec, old?.hangSec ?: 0),
             negatives = best(negatives, old?.negatives ?: 0),
             scapular = best(scapular, old?.scapular ?: 0),
+            pullups = best(pullups, old?.pullups ?: 0),
             // Колено — наоборот, ПОСЛЕДНЕЕ сказанное: «к вечеру отпустило»
             // должно перебивать утреннее «ноет», а не проигрывать максимуму.
             knee = knee?.trim()?.ifBlank { old?.knee.orEmpty() } ?: old?.knee.orEmpty(),
             note = note?.ifBlank { old?.note.orEmpty() } ?: old?.note.orEmpty(),
             ts = System.currentTimeMillis(),
             doneIds = old?.doneIds ?: emptyList(),
+            // День изменился — довезти его в intervals заново.
+            icuSynced = false,
         )
         _gtgFlow.value = (_gtgFlow.value.filterNot { it.date == date } + fresh)
             .sortedByDescending { it.date }
@@ -499,7 +521,7 @@ class StrengthStore(private val context: Context) {
         val old = _gtgFlow.value.firstOrNull { it.date == date } ?: GtgDay(date = date)
         val ids = if (exerciseId in old.doneIds) old.doneIds - exerciseId
         else old.doneIds + exerciseId
-        val fresh = old.copy(doneIds = ids, ts = System.currentTimeMillis())
+        val fresh = old.copy(doneIds = ids, ts = System.currentTimeMillis(), icuSynced = false)
         _gtgFlow.value = (_gtgFlow.value.filterNot { it.date == date } + fresh)
             .sortedByDescending { it.date }
         persist()
@@ -540,6 +562,21 @@ class StrengthStore(private val context: Context) {
 
     /** Лучший вис за всё время — метрика пути к первому подтягиванию. */
     fun bestHang(): Int = _gtgFlow.value.maxOfOrNull { it.hangSec } ?: 0
+
+    /** Лучшие подтягивания за всё время. Больше нуля = цель №2 взята. */
+    fun bestPullups(): Int = _gtgFlow.value.maxOfOrNull { it.pullups } ?: 0
+
+    /** Дни зарядки, не доехавшие в intervals, свежие первыми. */
+    fun gtgNeedingSync(): List<GtgDay> =
+        _gtgFlow.value.filter { it.any && !it.icuSynced }.sortedByDescending { it.date }
+
+    suspend fun markGtgSynced(date: String) = mutex.withLock {
+        ensureLoaded()
+        _gtgFlow.value = _gtgFlow.value.map {
+            if (it.date == date) it.copy(icuSynced = true) else it
+        }
+        persist()
+    }
 
     fun recentGtg(days: Int): List<GtgDay> {
         val from = dayKey(System.currentTimeMillis() - days * 86_400_000L)
@@ -653,10 +690,12 @@ class StrengthStore(private val context: Context) {
         put("hang", g.hangSec)
         put("neg", g.negatives)
         put("scap", g.scapular)
+        put("pullups", g.pullups)
         put("knee", g.knee)
         put("note", g.note)
         put("ts", g.ts)
         put("doneIds", JSONArray().apply { g.doneIds.forEach { put(it) } })
+        put("icu", g.icuSynced)
     }
 
     private fun parse(o: JSONObject): Snapshot {
@@ -759,10 +798,12 @@ class StrengthStore(private val context: Context) {
                         hangSec = g.optInt("hang"),
                         negatives = g.optInt("neg"),
                         scapular = g.optInt("scap"),
+                        pullups = g.optInt("pullups"),
                         knee = g.optString("knee"),
                         note = g.optString("note"),
                         ts = g.optLong("ts"),
                         doneIds = doneIds,
+                        icuSynced = g.optBoolean("icu", false),
                     )
                 )
             }

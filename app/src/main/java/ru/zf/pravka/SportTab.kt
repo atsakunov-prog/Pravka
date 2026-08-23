@@ -117,6 +117,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     // Живой ответ: слова приезжают потоком и растут прямо на экране.
     var streaming by remember { mutableStateOf("") }
     var openWorkout by remember { mutableStateOf<String?>(null) }
+    var commenting by remember { mutableStateOf<SportStore.Workout?>(null) }
     var days by remember { mutableStateOf(14) }
 
     var gtgDialog by remember { mutableStateOf(false) }
@@ -130,8 +131,8 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         // Первое открытие после установки: кэш пуст, и молчать об этом нельзя.
         runCatching { app.icuSportSync.refresh(force = store.workoutsFlow.value.isEmpty()) }
         runCatching { app.planSync.refresh(force = planDays.isEmpty()) }
-        // План правится в чате с Клодом и пушится в intervals — открытая
-        // вкладка должна видеть его свежим, а не часовой давности.
+        // Календарь старше суток — подтянуть; свежее не трогаем: «поменял
+        // план в чате — сам и обновлю» (кнопка «Обновить» идёт в сеть сразу).
         runCatching { app.planSync.refreshEventsIfStale() }
     }
 
@@ -413,6 +414,21 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             }
         }
 
+        // Итог силовой словами — рядом с её упражнениями, а не в другой
+        // вкладке: «гоблет четыре по десять шестнадцать, последний тяжело,
+        // очень доволен» — числа в журнал, комментарий в заметку сессии.
+        if (plannedExercises.isNotEmpty()) {
+            item {
+                PaperCard {
+                    BodyTalkBox(
+                        app = app,
+                        hint = "Подходы и как прошло — словами…",
+                        whereSaid = "в карточке силовой",
+                    )
+                }
+            }
+        }
+
         // ---- Силовая сегодня: что записано и куда уехало ----
         if (todaySession != null && (!todaySession.empty || todaySession.done)) {
             item { StrengthTodayCard(app, todaySession, onFeel = { feelDialog = todaySession.id }) }
@@ -472,6 +488,16 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                 PaperHint("Турник — отдельные числа, зарядку они не отмечают:")
                 Spacer(Modifier.height(4.dp))
                 val best = app.strengthStore.bestHang()
+                val bestPull = app.strengthStore.bestPullups()
+                if ((gtgToday?.pullups ?: 0) > 0) {
+                    Text(
+                        "Подтягивания сегодня: ${gtgToday?.pullups}" +
+                            (if (bestPull == gtgToday?.pullups) " — рекорд" else ""),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = toneColor(1),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -483,8 +509,9 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     )
                     LegendValue("Лучший вис", if (best > 0) "$best сек" else "—", ATL_COLOR)
                     LegendValue(
-                        "Негативы",
-                        if ((gtgToday?.negatives ?: 0) > 0) "${gtgToday?.negatives}" else "—",
+                        if (bestPull > 0) "Подтягивания" else "Негативы",
+                        if (bestPull > 0) "$bestPull"
+                        else if ((gtgToday?.negatives ?: 0) > 0) "${gtgToday?.negatives}" else "—",
                         CTL_COLOR,
                     )
                 }
@@ -628,6 +655,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                         onToggle = { openWorkout = if (openWorkout == w.id) null else w.id },
                         maxHr = profile.runMaxHr,
                         rules = rules,
+                        onComment = { commenting = w },
                     )
                 }
             }
@@ -733,7 +761,72 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     if (feelSession != null) {
         FeelDialog(app = app, sessionId = feelSession, onClose = { feelDialog = null })
     }
+    commenting?.let { workout ->
+        WorkoutCommentDialog(app, workout, onClose = { commenting = null })
+    }
 }
+
+/**
+ * Комментарий к тренировке с часов: сказанное вклеивается своим блоком в
+ * описание этой активности в intervals и остаётся сырой записью на телефоне —
+ * попадёт и в сводку, и в CSV всей жизни.
+ */
+@Composable
+private fun WorkoutCommentDialog(
+    app: PravkaApp,
+    workout: SportStore.Workout,
+    onClose: () -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(SportCoach.sportName(workout.type) + " · " + fmtDay(workout.start)) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("Как прошло — своими словами") },
+                    minLines = 2,
+                    maxLines = 5,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                PaperHint(
+                    "Уедет в описание этой активности в intervals (свой блок, " +
+                        "твоё там не трогается) и останется на телефоне."
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (!busy && text.isNotBlank()) {
+                        busy = true
+                        app.appScope.launch {
+                            val outcome = app.strengthEngine.commentWorkout(workout.id, text)
+                            busy = false
+                            Feedback.toast(
+                                app,
+                                outcome.fold(
+                                    { "✓ Уехало в intervals" },
+                                    { e -> (e.message ?: "Не уехало") + " — текст сохранён" },
+                                ),
+                                long = true,
+                            )
+                            onClose()
+                        }
+                    }
+                },
+                enabled = !busy && text.isNotBlank(),
+            ) { Text(if (busy) "Отправляю…" else "Отправить") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
+    )
+}
+
+private fun fmtDay(ts: Long): String = workoutDayFormat.format(Date(ts))
 
 /**
  * Упражнение дня: схема из справочника, прошлый раз, что уже сделано сегодня —
@@ -1046,6 +1139,7 @@ private fun GtgDialog(app: PravkaApp, date: String, onClose: () -> Unit) {
     var hang by remember { mutableStateOf("") }
     var negatives by remember { mutableStateOf("") }
     var scapular by remember { mutableStateOf("") }
+    var pullups by remember { mutableStateOf("") }
     var knee by remember { mutableStateOf("") }
     // Записал числа турника — значит зарядка была. Раньше диалог их не связывал,
     // и «вис 40 секунд» оставлял день неотмеченным: владелец видел цифры и
@@ -1081,13 +1175,24 @@ private fun GtgDialog(app: PravkaApp, date: String, onClose: () -> Unit) {
                     )
                 }
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = scapular,
-                    onValueChange = { scapular = it.filter { c -> c.isDigit() }.take(3) },
-                    label = { Text("Лопаточные") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(
+                        value = scapular,
+                        onValueChange = { scapular = it.filter { c -> c.isDigit() }.take(3) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Лопаточные") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    OutlinedTextField(
+                        value = pullups,
+                        onValueChange = { pullups = it.filter { c -> c.isDigit() }.take(3) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Подтягивания") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                }
                 Spacer(Modifier.height(10.dp))
                 PaperHint("Колено сегодня")
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1115,6 +1220,7 @@ private fun GtgDialog(app: PravkaApp, date: String, onClose: () -> Unit) {
                         hangSec = hang.toIntOrNull(),
                         negatives = negatives.toIntOrNull(),
                         scapular = scapular.toIntOrNull(),
+                        pullups = pullups.toIntOrNull(),
                         knee = knee.ifBlank { null },
                     )
                     onClose()
@@ -1309,6 +1415,59 @@ private fun ZaryadkaChecklist(app: PravkaApp, gtgToday: StrengthStore.GtgDay?) {
             if (charged) "Числа виса и негативов — в карточке зарядки ниже."
             else "Тап по названию — техника. Отметишь всё — зарядка закроется сама."
         )
+        Spacer(Modifier.height(10.dp))
+        // Итог словами вместо тапов: «всё сделал, чувствовал себя хорошо,
+        // подтягивания два». Разбирает тот же роутер, что у кнопки «Т»:
+        // charged, числа, заметка — и всё это уедет в intervals и в Дневник.
+        BodyTalkBox(
+            app = app,
+            hint = "Итог: всё сделал, вис 40, подтягивания 2…",
+            whereSaid = "в карточке зарядки",
+        )
+    }
+}
+
+/**
+ * Поле «скажи итог словами» — одно на зарядку и силовую. Текст идёт через тот
+ * же роутер, что кнопка «Т»: сырая запись на диск навсегда, разбор в числа,
+ * дороги в intervals и Дневник — все прежние. Поле просто ближе, чем кнопка.
+ */
+@Composable
+private fun BodyTalkBox(app: PravkaApp, hint: String, whereSaid: String) {
+    var draft by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.weight(1f),
+            label = { Text(hint) },
+            minLines = 1,
+            maxLines = 3,
+            enabled = !busy,
+        )
+        IconButton(
+            onClick = {
+                val text = draft.trim()
+                if (text.isNotBlank() && !busy) {
+                    busy = true
+                    draft = ""
+                    app.appScope.launch {
+                        val result = app.bodyEngine.hear(text, source = "text", whereSaid = whereSaid)
+                        busy = false
+                        Feedback.toast(
+                            app,
+                            result.fold({ "✓ " + it.headline() }, { e -> e.message ?: "Не разобрал" }),
+                            long = true,
+                        )
+                    }
+                }
+            },
+            enabled = !busy,
+        ) {
+            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            else Icon(Icons.Filled.Send, contentDescription = "Записать")
+        }
     }
 }
 
@@ -1438,8 +1597,17 @@ private fun GoalsCard(
             Spacer(Modifier.height(10.dp))
         }
 
-        // №2: первое подтягивание — вис и негативы.
-        if (bestHang > 0 || negBest > 0) {
+        // №2: первое подтягивание — вис и негативы, а когда случилось — салют.
+        val bestPull = remember(gtgDays) { app.strengthStore.bestPullups() }
+        if (bestPull > 0) {
+            GoalRowLine(
+                title = "Первое подтягивание",
+                value = "есть ✓ · лучшее $bestPull",
+                tone = 1,
+            )
+            PaperHint("Цель №2 взята. Дальше — «отжимания 20+, гиря легка, разница в зеркале».")
+            Spacer(Modifier.height(10.dp))
+        } else if (bestHang > 0 || negBest > 0) {
             GoalRowLine(
                 title = "Путь к подтягиванию",
                 value = if (bestHang > 0) "вис $bestHang сек" else "негативы $negBest",
@@ -1648,6 +1816,7 @@ private fun WorkoutRow(
     onToggle: () -> Unit,
     maxHr: Int,
     rules: PlanStore.Rules = PlanStore.Rules(),
+    onComment: (() -> Unit)? = null,
 ) {
     val accent = sportColor(workout.type)
     // Пробежка против ЕГО правил, сразу в строке: «под потолком» или «серая
@@ -1760,6 +1929,10 @@ private fun WorkoutRow(
         }
         if (facts.isEmpty() && zones.none { it > 0 }) {
             PaperHint("Кроме времени и расстояния, часы ничего не записали.")
+        }
+        if (onComment != null) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onComment) { Text("Комментарий в intervals") }
         }
     }
 }
@@ -1931,6 +2104,24 @@ private fun DigestSection(app: PravkaApp) {
             Button(onClick = { build(true) }, enabled = !busy) { Text("За неделю") }
             if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
         }
+        Spacer(Modifier.height(8.dp))
+        // «Фактически вся моя жизнь, всеобъемлющий файл» — его словами.
+        // Таймшит, еда, тренировки, силовые, зарядка и комментарии, строка на
+        // событие, хронологически, за всю глубину хранения.
+        OutlinedButton(onClick = {
+            app.appScope.launch {
+                val intent = runCatching { app.digestBuilder.lifeCsvIntent() }.getOrNull()
+                if (intent == null) {
+                    Feedback.toast(app, "Не собрался — посмотри Логи")
+                } else {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent.createChooser(intent, "CSV всей жизни")
+                        )
+                    }
+                }
+            }
+        }) { Text("CSV всей жизни") }
         if (preview.isNotBlank()) {
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

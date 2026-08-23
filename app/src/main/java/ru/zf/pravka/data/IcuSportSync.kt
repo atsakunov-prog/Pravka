@@ -384,6 +384,43 @@ class IcuSportSync(
         }
     }
 
+    /**
+     * Вклеить свой блок в комментарий wellness-дня. Комментарий — его поле:
+     * читаем, что там есть, и заменяем ровно свой кусок между маркерами, как в
+     * описаниях активностей. Не прочиталось — не пишем: затереть его слова
+     * из-за одного неудачного GET нельзя.
+     */
+    suspend fun spliceWellnessComment(date: String, body: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val athlete = settings.icuAthlete().trim()
+                val key = settings.icuKey().trim()
+                if (athlete.isBlank() || key.isBlank()) {
+                    throw IllegalStateException("Нет athlete id или ключа intervals.icu")
+                }
+                val auth = Credentials.basic("API_KEY", key)
+                val existingBody = get("$BASE/$athlete/wellness/$date", auth)
+                    ?: throw IllegalStateException("wellness-день не прочитался — запись отложена")
+                val existing = runCatching { JSONObject(existingBody).optString("comments") }
+                    .getOrDefault("")
+                val payload = JSONObject().apply {
+                    put("id", date)
+                    put("comments", spliceOwnBlock(existing, body))
+                }
+                val request = Request.Builder()
+                    .url("$BASE/$athlete/wellness/$date")
+                    .header("Authorization", auth)
+                    .put(payload.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        throw IllegalStateException("intervals.icu: HTTP ${response.code}")
+                    }
+                }
+                eventLog.add("зарядка → wellness $date: ${body.length} зн.")
+            }
+        }
+
     // ---- План: календарь intervals ----
 
     /**

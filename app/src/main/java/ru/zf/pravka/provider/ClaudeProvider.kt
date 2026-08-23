@@ -778,6 +778,7 @@ $raw
         val hangSec: Int,
         val negatives: Int,
         val scapular: Int,
+        val pullups: Int,
     )
 
     data class FeelParse(val feel: Int, val knee: String, val note: String)
@@ -799,6 +800,8 @@ $raw
         rationBook: String,
         planBlock: String,
         lastTimeBlock: String,
+        /** Где сказано: «в карточке зарядки», «в карточке силовой» — смещает роутер. */
+        whereSaid: String = "",
     ): Result<BodyParse> = withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
@@ -825,6 +828,11 @@ $raw
             tail = tail
                 .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
                 .replace("{NOW}", nowContext())
+                .replace(
+                    "{WHERE}",
+                    if (whereSaid.isBlank()) ""
+                    else "Владелец написал это $whereSaid — скорее всего, речь про неё.",
+                )
                 .replace("{PLAN}", planBlock)
                 .replace("{LAST}", lastTimeBlock)
             tail = if (tail.contains(Prompts.PLACEHOLDER_INPUT)) {
@@ -891,6 +899,7 @@ $raw
                 hangSec = g.optInt("hang", 0).coerceIn(0, 1200),
                 negatives = g.optInt("negatives", 0).coerceIn(0, 100),
                 scapular = g.optInt("scapular", 0).coerceIn(0, 100),
+                pullups = g.optInt("pullups", 0).coerceIn(0, 100),
             )
         }
 

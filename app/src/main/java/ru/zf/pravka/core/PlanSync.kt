@@ -32,9 +32,9 @@ class PlanSync(
 ) {
 
     companion object {
-        // Календарь — раз в час: владелец пушит блок раз в неделю, но правки
-        // отдельных дней случаются, и час это дешёвый компромисс.
-        private const val EVENTS_PERIOD_MS = 60 * 60_000L
+        // Календарь — раз в сутки, по слову владельца: «правлю план в чате —
+        // сам и обновлю». Кнопка «Обновить» идёт в сеть сразу, фон не суетится.
+        private const val EVENTS_PERIOD_MS = 24 * 3_600_000L
         // Правила — раз в сутки. Страница блока меняется раз в месяц.
         private const val RULES_PERIOD_MS = 24 * 3_600_000L
     }
@@ -48,12 +48,12 @@ class PlanSync(
     data class Outcome(val events: Boolean, val rules: Boolean, val error: String)
 
     /**
-     * Только календарь, и только если он несвежий. Дорога «поменял план в чате
-     * с Клодом → открыл Тело» должна занимать секунды, а не час: чат пушит в
-     * intervals, и десять минут давности — предел, дальше идём за свежим.
-     * Правила Notion не трогаем: их чтение стоит вызова Сонета.
+     * Только календарь, и только если он старше суток. Владелец сказал прямо:
+     * «поменял план в чате — сам и обновлю» (кнопкой), а фоновая суета при
+     * каждом открытии вкладки ему не нужна. Правила Notion не трогаем: их
+     * чтение стоит вызова Сонета.
      */
-    suspend fun refreshEventsIfStale(maxAgeMs: Long = 10 * 60_000L): Boolean {
+    suspend fun refreshEventsIfStale(maxAgeMs: Long = 24 * 3_600_000L): Boolean {
         store.load()
         val age = System.currentTimeMillis() - store.eventsFetchedAt()
         if (age < maxAgeMs) return false

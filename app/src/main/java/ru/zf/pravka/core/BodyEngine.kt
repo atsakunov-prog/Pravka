@@ -63,6 +63,7 @@ class BodyEngine(
             meal != null -> "Еда: ${meal.kcal} ккал · Б${meal.protein} Ж${meal.fat} У${meal.carbs}"
             gtg != null -> buildString {
                 append("Зарядка")
+                if (gtg.pullups > 0) append(" · ПОДТЯГИВАНИЯ ${gtg.pullups}!")
                 if (gtg.hangSec > 0) append(" · вис ${gtg.hangSec} сек")
                 if (gtg.negatives > 0) append(" · негативы ${gtg.negatives}")
                 if (gtg.scapular > 0) append(" · лопаточные ${gtg.scapular}")
@@ -90,6 +91,8 @@ class BodyEngine(
         rawText: String,
         source: String = "voice",
         date: String = dayKey(System.currentTimeMillis()),
+        /** Откуда фраза: «в карточке зарядки» и т.п. — смещает роутер модели. */
+        whereSaid: String = "",
     ): Result<Outcome> {
         val text = rawText.trim()
         if (text.isBlank()) return Result.failure(IllegalArgumentException("Пустая фраза"))
@@ -116,6 +119,7 @@ class BodyEngine(
             rationBook = ration.promptBlock(),
             planBlock = planBlock(date),
             lastTimeBlock = strengthEngine.lastTimeBlock(block, date),
+            whereSaid = whereSaid,
         )
         val parse = result.getOrElse { e ->
             strengthStore.markRaw(raw.id, "unknown", 0L, e.message.orEmpty())
@@ -137,7 +141,14 @@ class BodyEngine(
         // другое, и терять половину нельзя.
         parse.strength?.let { strength ->
             val logged = strengthEngine.record(strength, raw.id, date)
-            if (logged != null) outcome = outcome.copy(strength = logged)
+            if (logged != null) {
+                // Общий комментарий фразы — в заметку сессии: он уедет в
+                // intervals вместе с журналом («очень рад» тоже данные).
+                if (parse.note.isNotBlank()) {
+                    strengthStore.setFeel(logged.session.id, 0, 0, parse.note)
+                }
+                outcome = outcome.copy(strength = logged)
+            }
         }
         parse.food?.let { food ->
             val meal = foodEngine.record(
@@ -159,6 +170,8 @@ class BodyEngine(
                 hangSec = gtg.hangSec.takeIf { it > 0 },
                 negatives = gtg.negatives.takeIf { it > 0 },
                 scapular = gtg.scapular.takeIf { it > 0 },
+                pullups = gtg.pullups.takeIf { it > 0 },
+                note = parse.note.ifBlank { null },
             )
             outcome = outcome.copy(gtg = day)
         }
@@ -236,6 +249,7 @@ class BodyEngine(
         hangSec: Int? = null,
         negatives: Int? = null,
         scapular: Int? = null,
+        pullups: Int? = null,
         knee: String? = null,
     ): StrengthStore.GtgDay {
         strengthStore.load()
@@ -245,6 +259,7 @@ class BodyEngine(
             hangSec = hangSec,
             negatives = negatives,
             scapular = scapular,
+            pullups = pullups,
             knee = knee,
             // Руками — значит заменить: только так чинится ослышка «вис 400
             // секунд», иначе она травила бы лучший вис вечно. Голосовая дорога

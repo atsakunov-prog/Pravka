@@ -437,6 +437,19 @@ class StrengthEngine(
                 store.markAttempt(session.id, e.message.orEmpty())
             }
         }
+        // Зарядка — той же очередью: день с отметками уезжает строкой в
+        // комментарий wellness. Активности у зарядки обычно нет, а календарный
+        // день в intervals есть всегда.
+        for (day in store.gtgNeedingSync().take(5)) {
+            val outcome = icu.spliceWellnessComment(day.date, day.line())
+            outcome.onSuccess {
+                store.markGtgSynced(day.date)
+                sent++
+            }.onFailure { e ->
+                failed++
+                if (error.isBlank()) error = e.message ?: "не вышло"
+            }
+        }
         if (sent > 0 || failed > 0) {
             eventLog.add(
                 "силовые → intervals: отправлено $sent, ждут $waiting, не вышло $failed" +
@@ -444,6 +457,25 @@ class StrengthEngine(
             )
         }
         return SyncOutcome(sent, waiting, failed, error)
+    }
+
+    /**
+     * Комментарий к тренировке с часов (бег, вело): сказанное сохраняется
+     * сырой надиктовкой навсегда и вклеивается своим блоком в описание этой
+     * активности в intervals. Модель не зовём: комментарий — это слова, а не
+     * числа, чистить в них нечего.
+     */
+    suspend fun commentWorkout(activityId: String, text: String): Result<Unit> {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return Result.failure(IllegalArgumentException("Пусто"))
+        store.load()
+        val raw = store.addRaw(trimmed, "comment")
+        store.markRaw(raw.id, "comment", 0L)
+        val outcome = icu.writeSetLog(activityId, trimmed, 0, 0)
+        outcome.onSuccess {
+            eventLog.add("комментарий → активность $activityId: ${trimmed.length} зн.")
+        }
+        return outcome
     }
 
     // ---- Мелочи ----
