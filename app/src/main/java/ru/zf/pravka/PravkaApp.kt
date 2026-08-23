@@ -141,6 +141,7 @@ class PravkaApp : Application() {
             claude = claudeProvider,
             store = sportStore,
             foodStore = foodStore,
+            planStore = planStore,
             zasechkaStore = zasechkaStore,
             settings = settings,
             stats = stats,

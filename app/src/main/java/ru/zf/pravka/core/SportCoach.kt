@@ -5,6 +5,7 @@ import java.util.Date
 import java.util.Locale
 import ru.zf.pravka.data.EventLog
 import ru.zf.pravka.data.FoodStore
+import ru.zf.pravka.data.PlanStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.SportStore
 import ru.zf.pravka.data.Stats
@@ -28,6 +29,7 @@ class SportCoach(
     private val claude: ClaudeProvider,
     private val store: SportStore,
     private val foodStore: FoodStore,
+    private val planStore: PlanStore,
     private val zasechkaStore: ZasechkaStore,
     private val settings: Settings,
     private val stats: Stats,
@@ -43,6 +45,10 @@ class SportCoach(
         // видно и последнюю неделю, и с чем её сравнивать.
         private const val CONTEXT_WORKOUT_DAYS = 21
         private const val CONTEXT_HEALTH_DAYS = 14
+        // Правила прозой: восемь тысяч знаков это две страницы Notion целиком.
+        // Дороже пары центов на вопрос, и это ровно тот контекст, без которого
+        // совет расходится с его собственными записанными правилами.
+        private const val CONTEXT_RULES_CHARS = 8000
         private const val CONTEXT_FOOD_DAYS = 7
 
         /** Как виды спорта из intervals.icu называются по-русски. */
@@ -253,6 +259,9 @@ class SportCoach(
     suspend fun ask(question: String, onDelta: ((String) -> Unit)? = null): Answer {
         store.load()
         runCatching { foodStore.load() }
+        // План и правила могут быть ещё не прочитаны с диска: вопрос задаётся и
+        // с плашки кнопки «Т», где вкладка «Спорт» ни разу не открывалась.
+        runCatching { planStore.load() }
         val targets = runCatching { settings.foodTargets() }.getOrNull()
         val context = runCatching { buildContext(targets) }
             .getOrElse { "Контекст собрать не удалось." }
@@ -362,6 +371,59 @@ class SportCoach(
 
         appendFood(targets)
         appendDays()
+        appendRules()
+    }
+
+    /**
+     * План на неделю вперёд и ЕГО СОБСТВЕННЫЕ ПРАВИЛА из Notion.
+     *
+     * Без этого блока совет получался общемедицинским: «стоит ли сегодня
+     * бежать» — вопрос не про физиологию вообще, а про то, что у него потолок
+     * лёгкого бега 150, серая зона 160–165, три пробежки в неделю максимум и
+     * «первым выпадает бег, силовые не двигаются никогда». Правила он написал
+     * сам и правит руками; модель, которая их не видит, будет спорить с
+     * владельцем его же словами.
+     *
+     * Текст страницы уезжает прозой и с обрезкой: числа из него уже вынуты в
+     * поля, но проза объясняет ПОЧЕМУ, а это ровно то, за чем идут к Опусу.
+     */
+    private fun StringBuilder.appendRules() {
+        val upcoming = runCatching { planStore.upcoming(7) }.getOrNull().orEmpty()
+        if (upcoming.isNotEmpty()) {
+            append("ПЛАН НА НЕДЕЛЮ (из календаря intervals)\n")
+            for (d in upcoming) {
+                append(d.date).append(" · ").append(d.name)
+                if (d.minutes > 0) append(" · ${d.minutes} мин")
+                if (d.load > 0) append(" · load ${d.load}")
+                append('\n')
+            }
+            append('\n')
+        }
+        val rules = runCatching { planStore.rulesFlow.value }.getOrNull() ?: return
+        if (!rules.known && rules.sourceText.isBlank()) return
+        append("ЕГО ПРАВИЛА (страница блока в Notion, правит руками)\n")
+        if (rules.blockTitle.isNotBlank()) append("Блок: ${rules.blockTitle}\n")
+        if (rules.runHrCeiling > 0) append("Потолок лёгкого бега ${rules.runHrCeiling}. ")
+        if (rules.greyZoneLow > 0 && rules.greyZoneHigh > 0) {
+            append("Серая зона ${rules.greyZoneLow}–${rules.greyZoneHigh} — в ней не работать. ")
+        }
+        if (rules.cadenceMin > 0) append("Каденс ${rules.cadenceMin}+. ")
+        if (rules.runsPerWeekMax > 0) append("Пробежек в неделю не больше ${rules.runsPerWeekMax}. ")
+        if (rules.hoursBetweenRuns > 0) append("Между пробежками ${rules.hoursBetweenRuns} ч. ")
+        if (rules.rampNeedsPositiveTsb) append("Рамп-тест только на плюсовом TSB. ")
+        if (rules.cancelOrder.isNotBlank()) append("Отмена: ${rules.cancelOrder}. ")
+        append('\n')
+        if (rules.kneeGreen.isNotBlank() || rules.kneeYellow.isNotBlank() || rules.kneeRed.isNotBlank()) {
+            append("Светофор колена — зелёный: ${rules.kneeGreen}; ")
+            append("жёлтый: ${rules.kneeYellow}; красный: ${rules.kneeRed}\n")
+        }
+        if (rules.sourceText.isNotBlank()) {
+            append("\nСтраница целиком (проза, тут объяснено почему):\n")
+            append(rules.sourceText.take(CONTEXT_RULES_CHARS))
+            if (rules.sourceText.length > CONTEXT_RULES_CHARS) append("\n…")
+            append('\n')
+        }
+        append('\n')
     }
 
     /** Еда: сумма дня против цели — тут и видно, чем оплачена усталость. */
