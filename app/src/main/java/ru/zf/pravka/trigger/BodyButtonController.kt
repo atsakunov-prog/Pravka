@@ -19,23 +19,26 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.data.Settings
 
-// Еда: четвёртая кнопка, «Е». Тот же TYPE_ACCESSIBILITY_OVERLAY, что у «П»,
+// Тело: четвёртая кнопка, «Т». Тот же TYPE_ACCESSIBILITY_OVERLAY, что у «П»,
 // «З» и «Р», та же плашка-тикер, те же жесты:
-//   тап        -> говоришь, что съел (тап ещё раз — разбор по КБЖУ)
-//   долгое     -> меню: открыть «Еду», набрать текстом, разобрать заново
-//   перетаскивание -> четвёрка ездит связкой (П сверху, З, Р, Е снизу)
+//   тап        -> говоришь что угодно про тело (тап ещё раз — разбор)
+//   долгое     -> меню: сегодня, зарядка сделана, «Спорт», «Еда», текстом
+//   перетаскивание -> четвёрка ездит связкой (П сверху, З, Р, Т снизу)
 // Цвет — зелёные чернила рядом с оранжевым «П», янтарной «З» и синей «Р»:
 // четыре кнопки различаются глазом на ощупь, а не только буквой.
 //
-// Плашка здесь показывает не список дел, а разобранную тарелку: позиции с
-// граммами и КБЖУ, снизу итог, и одно «ОК» пишет приём в дневник. Кружков-
-// отметок нет — приём пищи один, отмечать в нём нечего; вместо них «✎» у
-// каждой позиции, чтобы поправить вес на месте.
+// ОДНА кнопка на подходы, еду, зарядку и вопросы — намерение определяет
+// модель. Это не экономия кнопок, а убранное трение: между подходами, с
+// телефоном в потной руке, выбирать «куда нажать» невозможно и не нужно.
+//
+// Плашка показывает разобранное: подходы с дельтой к прошлому разу, тарелку с
+// КБЖУ или ответ на вопрос. «✎» правит строку на месте, чипы 60/90/120
+// запускают отдых — и кнопка сама становится счётчиком секунд.
 //
 // Собственное окно у кнопки только одно. Тикер, меню и плашка УХОДЯТ из
 // WindowManager, когда не нужны: скрытое оверлейное окно всё равно стоит
 // пересчёта при каждом складывании Fold (см. README, «больная тема»).
-class FoodButtonController(
+class BodyButtonController(
     private val service: PravkaAccessibilityService,
     private val scope: CoroutineScope,
     private val settings: Settings,
@@ -55,6 +58,9 @@ class FoodButtonController(
         // синей «Р». Тёмный, «бутылочный» — на бумажном фоне он читается как
         // чернила, а не как светофор.
         val INK = 0xFF2F6B4F.toInt()
+        // Отдых идёт — кнопка становится счётчиком, и цвет у неё свой: видно
+        // с расстояния вытянутой руки, лежит телефон на полу или нет.
+        private val REST_INK = 0xFF1F5138.toInt()
         private val REC_RED = FloatingButtonController.REC_RED
         private val PAPER = 0xFFF7F3EA.toInt()
         // Бумага в полсилы - под названием позиции; песочный - замечание
@@ -74,6 +80,7 @@ class FoodButtonController(
     private var background: GradientDrawable? = null
     private var glyph: ImageView? = null
     private var recDot: View? = null
+    private var countdown: TextView? = null
     private var progress: ProgressBar? = null
     private var params: WindowManager.LayoutParams? = null
     private var busy = false
@@ -129,11 +136,43 @@ class FoodButtonController(
         applyFace()
     }
 
+    // ---- Таймер отдыха: кнопка сама становится счётчиком ----
+
+    @Volatile private var restSecondsLeft = 0
+
+    /**
+     * Секунды до конца отдыха на лице кнопки. Ноль — вернуть обычный вид.
+     *
+     * Мелочь, но именно её владелец сейчас считает по часам между подходами, а
+     * телефон в это время всё равно в руке.
+     */
+    fun setRest(seconds: Int) {
+        restSecondsLeft = seconds.coerceAtLeast(0)
+        val view = countdown ?: return
+        if (restSecondsLeft <= 0) {
+            view.visibility = View.GONE
+        } else {
+            view.visibility = View.VISIBLE
+            view.text = if (restSecondsLeft >= 60) {
+                "" + (restSecondsLeft / 60) + ":" + String.format(
+                    java.util.Locale.US, "%02d", restSecondsLeft % 60
+                )
+            } else {
+                restSecondsLeft.toString()
+            }
+        }
+        applyFace()
+    }
+
+    fun restRunning(): Boolean = restSecondsLeft > 0
+
     // Одно место решает лицо кнопки, чтобы состояния можно было переключать
     // в любом порядке и не поймать устаревший вид.
     private fun applyFace() {
         val b = button ?: return
-        glyph?.visibility = if (!busy && !recording) View.VISIBLE else View.GONE
+        val resting = restSecondsLeft > 0
+        glyph?.visibility = if (!busy && !recording && !resting) View.VISIBLE else View.GONE
+        countdown?.visibility = if (resting && !busy && !recording) View.VISIBLE else View.GONE
         when {
             recording -> {
                 background?.setColor(REC_RED)
@@ -141,6 +180,10 @@ class FoodButtonController(
             }
             busy -> {
                 background?.setColor(INK)
+                b.alpha = 1f
+            }
+            resting -> {
+                background?.setColor(REST_INK)
                 b.alpha = 1f
             }
             else -> {
@@ -400,14 +443,27 @@ class FoodButtonController(
         column.postDelayed(menuDismiss, 6000)
     }
 
-    // ---- Плашка тарелки: та же пилюля, что тикер Правки и Засечки ----
+    // ---- Плашка тела: та же пилюля, что тикер Правки и Засечки ----
 
-    /** Одна позиция тарелки. [index] возвращается в «✎»: чей вес правим. */
+    /**
+     * Одна строка плашки — упражнение или позиция еды. [index] возвращается в
+     * «✎»: чей вес правим.
+     *
+     * [delta] — дельта к прошлому разу («+1 подход, +16 повторов»), самое
+     * ценное, что здесь может быть написано: прогрессивная перегрузка это и
+     * есть «сегодня чуть больше, чем прошлый раз».
+     */
     class PlateRow(
         val index: Int,
         val title: String,
         val meta: String,
+        val delta: String = "",
+        /** true — рост, false — просадка, null — не с чем сравнить. */
+        val deltaUp: Boolean? = null,
     )
+
+    /** Чип под плашкой: «⏱ 90» и прочие короткие действия одним тапом. */
+    class Chip(val label: String, val onClick: () -> Unit)
 
     private var plate: LinearLayout? = null
     private val plateDismiss = Runnable { hidePlate() }
@@ -422,18 +478,21 @@ class FoodButtonController(
     fun plateVisible(): Boolean = plate != null
 
     /**
-     * Разобранная тарелка рядом с кнопкой: зелёная пилюля того же покроя, что
-     * тикер «П» и плашки «З» и «Р».
+     * Разобранное рядом с кнопкой: зелёная пилюля того же покроя, что тикер
+     * «П» и плашки «З» и «Р».
      *
-     * Каждая строка - позиция с граммами и калориями, «✎» правит её вес на
-     * месте (КБЖУ пересчитывается пропорционально), «✕» у строки убирает
-     * позицию. Внизу итог приёма и «ОК», который и пишет его в дневник: до
-     * «ОК» приём в сумму дня не идёт и наружу не уезжает.
+     * Одна плашка на все виды сказанного, потому что кнопка одна. У подходов
+     * строка это упражнение с дельтой к прошлому разу, у еды — позиция с
+     * граммами и калориями. «✎» правит строку на месте, «✕» её убирает.
      *
-     * [footer] - итог: «620 ккал · Б42 Ж28 У45 · обед». [note] - замечание
-     * модели, если она чего-то не поняла (сладкий кофе или нет).
+     * [onConfirm] = null — подтверждать нечего: подходы записаны в тот же
+     * миг, как разобрались (терять их нельзя), и плашка просто показывает,
+     * что легло. У еды наоборот: до «ОК» приём в сумму дня не идёт.
+     *
+     * [footer] — итог строкой. [note] — замечание модели. [chips] — короткие
+     * действия одним тапом, обычно отдых 60/90/120.
      */
-    fun showMeal(
+    fun showBody(
         header: String,
         rows: List<PlateRow>,
         footer: String,
@@ -441,7 +500,9 @@ class FoodButtonController(
         onEditItem: (Int) -> Unit,
         onDropItem: (Int) -> Unit,
         onOpen: () -> Unit,
-        onConfirm: () -> Unit,
+        onConfirm: (() -> Unit)?,
+        confirmLabel: String = "ОК",
+        chips: List<Chip> = emptyList(),
         holdMs: Long = 45_000,
     ) {
         hidePlate()
@@ -503,6 +564,20 @@ class FoodButtonController(
                     }
                 )
             }
+            if (row.delta.isNotBlank()) {
+                texts.addView(
+                    TextView(service).apply {
+                        text = (if (row.deltaUp == true) "▲ " else if (row.deltaUp == false) "▼ " else "")
+                            .plus(row.delta)
+                        // Рост — бумажной белизной, просадка — песочным: на
+                        // зелёном красный не читается, а тревожить и не надо.
+                        setTextColor(if (row.deltaUp == false) SAND else PAPER)
+                        textSize = 12f
+                        maxLines = 2
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }
+                )
+            }
             line.addView(
                 texts,
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
@@ -556,6 +631,43 @@ class FoodButtonController(
                 }
             )
         }
+        if (chips.isNotEmpty()) {
+            val chipRow = LinearLayout(service).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(8), 0, 0)
+            }
+            for (chip in chips) {
+                chipRow.addView(
+                    TextView(service).apply {
+                        text = chip.label
+                        setTextColor(PAPER)
+                        textSize = 13f
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(14).toFloat()
+                            setColor(0x00FFFFFF)
+                            setStroke(dp(1), PAPER_DIM)
+                        }
+                        setPadding(dp(12), dp(5), dp(12), dp(5))
+                        setOnClickListener {
+                            hidePlate()
+                            chip.onClick()
+                        }
+                    },
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { marginEnd = dp(6) },
+                )
+            }
+            sheet.addView(
+                chipRow,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
         val buttons = LinearLayout(service).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -584,26 +696,28 @@ class FoodButtonController(
                 setOnClickListener { hidePlate() }
             }
         )
-        buttons.addView(
-            TextView(service).apply {
-                text = "ОК"
-                setTextColor(INK)
-                textSize = 15f
-                typeface = android.graphics.Typeface.create(
-                    android.graphics.Typeface.SANS_SERIF,
-                    android.graphics.Typeface.BOLD,
-                )
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(16).toFloat()
-                    setColor(PAPER)
+        if (onConfirm != null) {
+            buttons.addView(
+                TextView(service).apply {
+                    text = confirmLabel
+                    setTextColor(INK)
+                    textSize = 15f
+                    typeface = android.graphics.Typeface.create(
+                        android.graphics.Typeface.SANS_SERIF,
+                        android.graphics.Typeface.BOLD,
+                    )
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(16).toFloat()
+                        setColor(PAPER)
+                    }
+                    setPadding(dp(22), dp(7), dp(22), dp(7))
+                    setOnClickListener {
+                        hidePlate()
+                        onConfirm()
+                    }
                 }
-                setPadding(dp(22), dp(7), dp(22), dp(7))
-                setOnClickListener {
-                    hidePlate()
-                    onConfirm()
-                }
-            }
-        )
+            )
+        }
         sheet.addView(
             buttons,
             LinearLayout.LayoutParams(
@@ -620,8 +734,10 @@ class FoodButtonController(
         ).apply { gravity = Gravity.TOP or Gravity.START }
         // Высоту WRAP_CONTENT заранее не знает никто: оцениваем по строкам,
         // чтобы плашка встала посередине кнопки и не свесилась за экран.
-        val estimate = dp(34 + 44) + shown.sumOf { dp(if (it.meta.isBlank()) 46 else 62) } +
-            (if (note.isBlank()) 0 else dp(24))
+        val estimate = dp(34 + 44) +
+            shown.sumOf { dp(46 + (if (it.meta.isBlank()) 0 else 16) + (if (it.delta.isBlank()) 0 else 16)) } +
+            (if (note.isBlank()) 0 else dp(24)) +
+            (if (chips.isEmpty()) 0 else dp(36))
         positionPlate(p, estimate)
         plate = sheet
         runCatching { windowManager.addView(sheet, p) }
@@ -830,6 +946,7 @@ class FoodButtonController(
             (if (input != null) 1 else 0)
 
     fun destroy() {
+        restSecondsLeft = 0
         hideMenu()
         hidePlate()
         hideInput()
@@ -851,7 +968,7 @@ class FoodButtonController(
         container.elevation = dp(4).toFloat()
         container.alpha = idleAlpha
 
-        glyph = ImageView(service).apply { setImageResource(R.drawable.ic_food_glyph) }
+        glyph = ImageView(service).apply { setImageResource(R.drawable.ic_body_glyph) }
         container.addView(
             glyph,
             FrameLayout.LayoutParams(
@@ -868,6 +985,24 @@ class FoodButtonController(
         }
         val dotSize = dp(16)
         container.addView(recDot, FrameLayout.LayoutParams(dotSize, dotSize, Gravity.CENTER))
+
+        countdown = TextView(service).apply {
+            visibility = View.GONE
+            setTextColor(PAPER)
+            textSize = 15f
+            gravity = Gravity.CENTER
+            typeface = android.graphics.Typeface.create(
+                android.graphics.Typeface.SANS_SERIF,
+                android.graphics.Typeface.BOLD,
+            )
+        }
+        container.addView(
+            countdown,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
 
         progress = ProgressBar(service).apply {
             visibility = View.GONE

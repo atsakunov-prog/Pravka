@@ -110,15 +110,20 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile private var cachedREnabled = true
     private var micRequestForRaznoska = false
 
-    // Еда: четвёртая кнопка и свой захват. Сказанное «омлет из трёх яиц»
-    // уезжает Сонету на КБЖУ и ложится в дневник еды - ни поля, ни ленты этот
-    // путь не касается (в ленту еда только ПРИПИСЫВАЕТСЯ, и то из движка).
-    private var eButton: FoodButtonController? = null
+    // Тело: четвёртая кнопка и свой захват. Одна на подходы, еду, зарядку и
+    // вопросы - намерение определяет модель тем же вызовом, что и разбор. Ни
+    // поля, ни ленты этот путь не касается (в ленту еда только ПРИПИСЫВАЕТСЯ,
+    // и то из движка).
+    private var eButton: BodyButtonController? = null
     private var eSession: GoogleSpeechSession? = null
     @Volatile private var eWhisperRecording = false
     @Volatile private var eTypeInstead = false
     @Volatile private var cachedEEnabled = true
     private var micRequestForFood = false
+    // Отдых между подходами: дедлайн на диске не нужен - это минуты, а не
+    // помидор, и переживать перезапуск службы ему незачем.
+    @Volatile private var restUntil = 0L
+    @Volatile private var cachedRestSec = 90
 
     // Weak cache of the last focused editable node and its text, updated on
     // TYPE_VIEW_FOCUSED / TYPE_VIEW_TEXT_CHANGED (spec 5.4: activities steal
@@ -207,7 +212,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         rButton?.onTickerTap = ::onRaznoskaTickerTap
 
         // Еда: четвёртая кнопка того же семейства.
-        eButton = FoodButtonController(
+        eButton = BodyButtonController(
             service = this,
             scope = scope,
             settings = app.settings,
@@ -267,11 +272,18 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch {
-            app.settings.eEnabledFlow.collect {
+            app.settings.tEnabledFlow.collect {
                 cachedEEnabled = it
                 eButton?.setEnabled(it)
             }
         }
+        scope.launch { app.settings.restSecFlow.collect { cachedRestSec = it } }
+        // Справочники в память заранее: разбор подходов не должен ждать чтения
+        // с диска, а список движений — это пятьдесят килобайт один раз.
+        scope.launch { runCatching { app.exerciseBook.load() } }
+        scope.launch { runCatching { app.rationBook.load() } }
+        scope.launch { runCatching { app.strengthStore.load() } }
+        scope.launch { runCatching { app.planStore.load() } }
         scope.launch { app.settings.zGapMinFlow.collect { cachedZGapMin = it } }
         scope.launch { app.settings.zCheckinsFlow.collect { cachedZCheckins = it } }
         scope.launch { app.settings.zDayStartFlow.collect { cachedZDayStart = it } }
@@ -2050,6 +2062,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             // еды), так что пятиминутный тик может дёргать их сколько хочет.
             scope.launch { runCatching { app.icuSportSync.refresh() } }
             scope.launch { runCatching { app.foodEngine.syncPending() } }
+            // План: календарь раз в час, правила блока раз в сутки — оба
+            // звонка дросселируются сами.
+            scope.launch { runCatching { app.planSync.refresh() } }
+            // Подходы: ждут активность от часов и уезжают, как только она
+            // появится. Свой дроссель на десять минут внутри.
+            scope.launch { runCatching { app.strengthEngine.syncPending() } }
             // Закрылось дело, пришедшее из Todoist - в задачу уезжает время.
             scope.launch { runCatching { app.todoistSync.flushLinks() } }
             // Копии на диск: сама проверка стоит один listFiles, копирование
@@ -2748,17 +2766,20 @@ class PravkaAccessibilityService : AccessibilityService() {
             eWhisperRecording = true
             eButton?.setRecording(true)
             eButton?.showTicker()
-            eButton?.updateTicker("🍽 что съел… (тап сюда — набрать текстом)")
+            eButton?.updateTicker("🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)")
             Haptics.start(this)
             startDictation()
         } else {
             startFoodGoogle()
         }
-        // Пока владелец говорит: греем сокет к API и подтягиваем свой же вес и
-        // недельную нагрузку — они уезжают в промпт вместе с едой.
+        // Пока владелец говорит: греем сокет к API и подтягиваем всё, что
+        // уезжает в промпт — справочники, план на сегодня, прошлый раз.
         app.warmClaudeConnection()
         scope.launch { runCatching { app.sportStore.load() } }
         scope.launch { runCatching { app.foodStore.load() } }
+        scope.launch { runCatching { app.strengthStore.load() } }
+        scope.launch { runCatching { app.planStore.load() } }
+        scope.launch { runCatching { app.exerciseBook.load() } }
     }
 
     private fun startFoodGoogle() {
@@ -2770,7 +2791,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         val session = GoogleSpeechSession(
             this,
-            biasing = cachedBiasing,
+            // Гоблет, сплит, РДЛ, свинги, паллоф, лопаточные, творог, кускус —
+            // распознаватель должен слышать ИХ, а не «гоблин» и «кус-кус».
+            biasing = (cachedBiasing + bodyBiasing()).distinct(),
             formatting = cachedFormatting,
             segmentedSession = cachedSegmented,
         )
@@ -2787,7 +2810,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
         eButton?.setRecording(true)
         eButton?.showTicker()
-        eButton?.updateTicker("🍽 что съел… (тап сюда — набрать текстом)")
+        eButton?.updateTicker("🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)")
         Haptics.start(this)
         runCatching { startMicHold() }
     }
@@ -2815,7 +2838,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     private fun openFoodTypeIn(prefill: String) {
-        eButton?.showInput(prefill = prefill, hint = "Что съел") { typed ->
+        eButton?.showInput(prefill = prefill, hint = "Подходы, еда, зарядка") { typed ->
             val text = typed.trim()
             if (text.isNotEmpty()) onFoodText(text)
         }
@@ -2845,7 +2868,14 @@ class PravkaAccessibilityService : AccessibilityService() {
         Feedback.toast(this, msg)
     }
 
-    /** Сказанное в руках: Сонет считает КБЖУ, плашка показывает тарелку. */
+    /**
+     * Сказанное в руках. Роутер и разбор — один вызов: модель сама решает,
+     * подходы это, еда, зарядка, самочувствие или вопрос.
+     *
+     * Сказанное ложится на диск ДО модели (это делает движок), поэтому неудача
+     * разбора не стоит владельцу его слов: фраза останется во вкладке
+     * неразобранной, и её можно переиграть.
+     */
     private fun onFoodText(raw: String) {
         val text = raw.trim()
         if (text.isBlank()) {
@@ -2857,37 +2887,246 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (!scope.isActive) return
         eButton?.setBusy(true)
         scope.launch {
-            val result = runCatching { app.foodEngine.parse(text, source = "voice") }
+            val result = runCatching { app.bodyEngine.hear(text, "voice") }
                 .getOrElse { e ->
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    app.eventLog.add("еда: parse бросил ${e.javaClass.simpleName}: ${e.message}")
+                    app.eventLog.add("тело: hear бросил ${e.javaClass.simpleName}: ${e.message}")
                     Result.failure(e)
                 }
             eButton?.setBusy(false)
-            val parsed = result.getOrElse { e ->
+            val outcome = result.getOrElse { e ->
                 Haptics.error(this@PravkaAccessibilityService)
                 Feedback.toast(
                     this@PravkaAccessibilityService,
-                    e.message ?: getString(R.string.e_parse_failed),
+                    (e.message ?: getString(R.string.e_parse_failed)) +
+                        " Сказанное сохранено — можно разобрать заново.",
                     long = true,
                 )
                 return@launch
             }
             Haptics.success(this@PravkaAccessibilityService)
-            showFoodPlate(parsed.meal.id)
+            showBodyPlate(outcome)
+        }
+    }
+
+    /** Плашка по разобранному: у каждого вида свой вид, кнопка одна. */
+    private fun showBodyPlate(outcome: ru.zf.pravka.core.BodyEngine.Outcome) {
+        when {
+            outcome.strength != null -> showStrengthPlate(outcome.strength.session.id, outcome.strength)
+            outcome.meal != null -> showFoodPlate(outcome.meal.id)
+            outcome.gtg != null -> {
+                val streak = app.strengthStore.streak(
+                    ru.zf.pravka.data.dayKey(System.currentTimeMillis())
+                )
+                eButton?.showNote(
+                    "✓ " + outcome.headline() + " · цепочка " + streak + " дн.",
+                    "Спорт",
+                    onAction = { openSportTab() },
+                )
+            }
+            outcome.feel > 0 || outcome.knee.isNotBlank() ->
+                eButton?.showNote("✓ " + outcome.headline(), null, onAction = null)
+            outcome.question.isNotBlank() -> askCoach(outcome.question)
+            else -> {
+                Feedback.toast(
+                    this,
+                    (outcome.note.ifBlank { "Не понял, что это" }) +
+                        " — сказанное сохранено, посмотри во «Спорте»",
+                    long = true,
+                )
+            }
         }
     }
 
     /**
-     * Плашка тарелки: позиции с граммами и КБЖУ, «✎» правит вес на месте,
-     * «✕» убирает позицию, «ОК» пишет приём в дневник. До «ОК» приём в сумму
-     * дня не идёт и наружу не уезжает.
+     * Подходы на плашке: у каждого упражнения дельта к прошлому разу — это и
+     * есть весь смысл журнала. Подтверждать нечего: записано уже, «ОК» тут был
+     * бы шансом потерять данные. Вместо него чипы отдыха.
+     */
+    private fun showStrengthPlate(
+        sessionId: Long,
+        logged: ru.zf.pravka.core.StrengthEngine.Logged?,
+    ) {
+        val session = app.strengthStore.sessionById(sessionId) ?: return
+        if (session.exercises.isEmpty()) return
+        val deltas = logged?.deltas?.associateBy { it.name }.orEmpty()
+        val rows = session.exercises.mapIndexed { index, e ->
+            val delta = deltas[e.name]
+            BodyButtonController.PlateRow(
+                index = index,
+                title = e.name,
+                meta = e.compact() + (if (e.note.isBlank()) "" else " · " + e.note),
+                delta = delta?.let {
+                    if (it.previous.isBlank()) "первый раз"
+                    else it.text + " (было " + it.previous + ")"
+                }.orEmpty(),
+                deltaUp = delta?.up,
+            )
+        }
+        val rest = cachedRestSec
+        eButton?.showBody(
+            header = session.title.uppercase(java.util.Locale("ru")),
+            rows = rows,
+            footer = "подходов ${session.setCount}",
+            note = logged?.unknown?.takeIf { it.isNotEmpty() }
+                ?.let { "не узнал: " + it.joinToString(", ") }.orEmpty(),
+            onEditItem = { index -> editStrengthRow(sessionId, index) },
+            onDropItem = { index -> dropStrengthRow(sessionId, index) },
+            onOpen = { openSportTab() },
+            onConfirm = null,
+            chips = listOf(60, rest, 120).distinct().map { seconds ->
+                BodyButtonController.Chip("⏱ $seconds") { startRest(seconds) }
+            },
+        )
+    }
+
+    /** «✎» у упражнения: поправить вес — КБЖУ подходов от него не зависит. */
+    private fun editStrengthRow(sessionId: Long, index: Int) {
+        val session = app.strengthStore.sessionById(sessionId) ?: return
+        val exercise = session.exercises.getOrNull(index) ?: return
+        eButton?.showInput(
+            prefill = exercise.compact(),
+            hint = exercise.name + " — подходы",
+            onCancel = { showStrengthPlate(sessionId, null) },
+        ) { typed ->
+            scope.launch {
+                val rows = parseSetsByHand(typed, exercise)
+                if (rows == null) {
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "Не понял. Пиши как «4x10 16» или «10, 9, 8 @16»",
+                        long = true,
+                    )
+                } else {
+                    app.strengthEngine.editRows(sessionId, exercise.exerciseId, rows)
+                }
+                showStrengthPlate(sessionId, null)
+            }
+        }
+    }
+
+    /**
+     * Руками подходы пишутся коротко: «4x10 16», «10, 9, 8 @16», «40».
+     * Разбирается на телефоне — за правку веса платить моделью незачем.
+     */
+    private fun parseSetsByHand(
+        typed: String,
+        exercise: ru.zf.pravka.data.StrengthStore.ExerciseLog,
+    ): List<ru.zf.pravka.data.StrengthStore.SetRow>? {
+        val text = typed.trim().lowercase().replace(',', ' ')
+        if (text.isBlank()) return emptyList()   // пусто = убрать упражнение
+        // Вес — то, что после «@» или последнее число, если есть «х»/«x».
+        val weight = Regex("@\\s*(\\d+(?:[.,]\\d+)?)").find(text)
+            ?.groupValues?.get(1)?.replace(',', '.')?.toDoubleOrNull() ?: 0.0
+        val body = text.substringBefore('@').trim()
+        val cross = Regex("^(\\d+)\\s*[xх*]\\s*(\\d+)(?:\\s+(\\d+(?:[.,]\\d+)?))?$").find(body)
+        if (cross != null) {
+            val sets = cross.groupValues[1].toIntOrNull() ?: return null
+            val amount = cross.groupValues[2].toIntOrNull() ?: return null
+            val inline = cross.groupValues[3].replace(',', '.').toDoubleOrNull() ?: 0.0
+            val kg = if (weight > 0) weight else inline
+            if (sets !in 1..30 || amount !in 1..3000) return null
+            return List(sets) {
+                ru.zf.pravka.data.StrengthStore.SetRow(amount, kg, "")
+            }
+        }
+        val numbers = Regex("\\d+").findAll(body).mapNotNull { it.value.toIntOrNull() }.toList()
+        if (numbers.isEmpty()) return null
+        return numbers.filter { it in 1..3000 }.map {
+            ru.zf.pravka.data.StrengthStore.SetRow(it, weight, "")
+        }.ifEmpty { null }
+    }
+
+    private fun dropStrengthRow(sessionId: Long, index: Int) {
+        val session = app.strengthStore.sessionById(sessionId) ?: return
+        val exercise = session.exercises.getOrNull(index) ?: return
+        scope.launch {
+            app.strengthStore.dropExercise(sessionId, exercise.exerciseId)
+            val left = app.strengthStore.sessionById(sessionId)
+            if (left == null || left.exercises.isEmpty()) {
+                eButton?.hidePlate()
+                Feedback.toast(this@PravkaAccessibilityService, "Упражнений не осталось")
+            } else {
+                showStrengthPlate(sessionId, null)
+            }
+        }
+    }
+
+    // ---- Отдых между подходами ----
+
+    private val restHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val restTick = object : Runnable {
+        override fun run() {
+            val left = ((restUntil - System.currentTimeMillis()) / 1000L).toInt()
+            if (left <= 0) {
+                restUntil = 0L
+                eButton?.setRest(0)
+                Haptics.success(this@PravkaAccessibilityService)
+                eButton?.showNote("Отдых кончился — следующий подход", null, holdMs = 8_000, onAction = null)
+                return
+            }
+            eButton?.setRest(left)
+            restHandler.postDelayed(this, 1000)
+        }
+    }
+
+    /** Отдых из карточки дня во вкладке: считает всё равно кнопка. */
+    fun startRestFromTab(seconds: Int) = startRest(seconds)
+
+    private fun startRest(seconds: Int) {
+        restHandler.removeCallbacks(restTick)
+        restUntil = System.currentTimeMillis() + seconds * 1000L
+        Haptics.start(this)
+        restHandler.post(restTick)
+    }
+
+    private fun stopRest() {
+        restHandler.removeCallbacks(restTick)
+        restUntil = 0L
+        eButton?.setRest(0)
+    }
+
+    /** Вопрос голосом: Опус отвечает, ответ ложится запиской у кнопки. */
+    private fun askCoach(question: String) {
+        eButton?.setBusy(true)
+        scope.launch {
+            val answer = runCatching { app.sportCoach.ask(question) }
+                .getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    ru.zf.pravka.core.SportCoach.Answer("", 0.0, e.message ?: "не вышло")
+                }
+            eButton?.setBusy(false)
+            if (answer.error.isNotBlank()) {
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(this@PravkaAccessibilityService, answer.error, long = true)
+                return@launch
+            }
+            // Ответ бывает в несколько абзацев — на плашке он не поместится, и
+            // растягивать её на пол-экрана незачем: первые строки здесь,
+            // целиком во вкладке «Спорт».
+            eButton?.showNote(
+                answer.text.replace('\n', ' ').take(180),
+                "Целиком",
+                holdMs = 30_000,
+                onAction = { openSportTab() },
+            )
+        }
+    }
+
+    /** Голосовые имена упражнений и продуктов для смещения распознавателя. */
+    private fun bodyBiasing(): List<String> =
+        runCatching { app.bodyEngine.biasing() }.getOrDefault(emptyList())
+
+    /**
+     * Тарелка на плашке: позиции с граммами и КБЖУ, «✎» правит вес на месте,
+     * «✕» убирает позицию, «✓ В дневник» записывает приём. До подтверждения
+     * приём в сумму дня не идёт и наружу не уезжает — но на диске он уже есть.
      */
     private fun showFoodPlate(mealId: Long) {
         val meal = app.foodStore.byId(mealId) ?: return
         if (meal.items.isEmpty()) return
         val rows = meal.items.mapIndexed { index, item ->
-            FoodButtonController.PlateRow(
+            BodyButtonController.PlateRow(
                 index = index,
                 title = item.name,
                 meta = listOfNotNull(
@@ -2898,7 +3137,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 ).joinToString(" · "),
             )
         }
-        eButton?.showMeal(
+        eButton?.showBody(
             header = meal.kind.uppercase(java.util.Locale("ru")) +
                 (if (meal.source == "barcode") " · ШТРИХКОД" else ""),
             rows = rows,
@@ -2908,6 +3147,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             onDropItem = { index -> dropFoodItem(mealId, index) },
             onOpen = { openFoodTab() },
             onConfirm = { confirmFood(mealId) },
+            confirmLabel = "✓ В дневник",
         )
     }
 
@@ -2948,7 +3188,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** «ОК»: приём в дневник, а оттуда в ленту и в intervals.icu. */
+    /** «✓ В дневник»: приём в день, а оттуда в ленту и в intervals.icu. */
     private fun confirmFood(mealId: Long) {
         eButton?.setBusy(true)
         scope.launch {
@@ -2984,7 +3224,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * «↩︎» на записке: приём выходит из дня, а разбор остаётся ждать - плашка
+     * «↩︎» на записке: приём выходит из дня, а разбор остаётся ждать — плашка
      * возвращается, чтобы поправить и записать заново. Совсем убрать приём
      * можно во вкладке «Еда».
      */
@@ -3020,36 +3260,84 @@ class PravkaAccessibilityService : AccessibilityService() {
     private fun showFoodMenu() {
         scope.launch {
             runCatching { app.foodStore.load() }
-            val pending = app.foodStore.pending()
-            val today = app.foodStore.dayTotal(
-                ru.zf.pravka.data.dayKey(System.currentTimeMillis())
-            )
-            val target = runCatching { app.settings.foodTargets().kcal }.getOrDefault(0)
-            val items = mutableListOf<FoodButtonController.MenuItem>()
-            // Первой строкой — сколько уже съедено сегодня: чаще всего кнопку
-            // держат именно за этим.
+            runCatching { app.strengthStore.load() }
+            runCatching { app.planStore.load() }
+            val today = ru.zf.pravka.data.dayKey(System.currentTimeMillis())
+            val items = mutableListOf<BodyButtonController.MenuItem>()
+
+            // Первой строкой — что сегодня по плану. Чаще всего кнопку держат
+            // именно за этим: «а что у меня сегодня».
+            val planned = app.planStore.mainOf(today)
             items.add(
-                FoodButtonController.MenuItem(
-                    if (today.empty) "Сегодня ещё ничего не записано"
-                    else "Сегодня ${today.kcal}" + (if (target > 0) " из $target" else "") +
-                        " ккал · Б${today.protein} Ж${today.fat} У${today.carbs}"
-                ) { openFoodTab() }
+                BodyButtonController.MenuItem(
+                    planned?.let { p ->
+                        "▶ " + p.name + (if (p.minutes > 0) " · ${p.minutes} мин" else "")
+                    } ?: "План на сегодня не найден"
+                ) { openSportTab() }
             )
-            if (pending.isNotEmpty()) {
-                val newest = pending.first()
+
+            // Отдых: идёт — оборвать, не идёт — запустить.
+            if (restUntil > System.currentTimeMillis()) {
+                val left = ((restUntil - System.currentTimeMillis()) / 1000L).toInt()
+                items.add(BodyButtonController.MenuItem("⏱ Отдых $left сек — стоп") { stopRest() })
+            } else {
                 items.add(
-                    FoodButtonController.MenuItem("Показать разбор (${pending.size})") {
-                        showFoodPlate(newest.id)
+                    BodyButtonController.MenuItem("⏱ Отдых $cachedRestSec сек") {
+                        startRest(cachedRestSec)
                     }
                 )
+            }
+
+            // Зарядка одной кнопкой, без модели и без токенов. Цепочка рядом:
+            // она и есть то, что не должно рваться.
+            val gtg = app.strengthStore.gtgOn(today)
+            val streak = app.strengthStore.streak(today)
+            items.add(
+                BodyButtonController.MenuItem(
+                    (if (gtg?.charged == true) "✓ " else "") + "Зарядка · цепочка $streak дн."
+                ) { markCharged() }
+            )
+
+            val session = app.strengthStore.sessionsOn(today).firstOrNull { !it.empty }
+            if (session != null) {
                 items.add(
-                    FoodButtonController.MenuItem("Разобрать заново") { reparseFood(newest.id) }
+                    BodyButtonController.MenuItem("Подходы сегодня (${session.setCount})") {
+                        showStrengthPlate(session.id, null)
+                    }
                 )
             }
-            items.add(FoodButtonController.MenuItem("Набрать текстом") { openFoodTypeIn("") })
-            items.add(FoodButtonController.MenuItem("Открыть «Еду»") { openFoodTab() })
-            items.add(FoodButtonController.MenuItem("Открыть «Спорт»") { openSportTab() })
+
+            val food = app.foodStore.dayTotal(today)
+            val target = runCatching { app.settings.foodTargets().kcal }.getOrDefault(0)
+            items.add(
+                BodyButtonController.MenuItem(
+                    if (food.empty) "Еды сегодня не записано"
+                    else "Еда: ${food.kcal}" + (if (target > 0) " из $target" else "") + " ккал"
+                ) { openFoodTab() }
+            )
+
+            val pending = app.foodStore.pending()
+            if (pending.isNotEmpty()) {
+                items.add(
+                    BodyButtonController.MenuItem("Показать разбор еды (${pending.size})") {
+                        showFoodPlate(pending.first().id)
+                    }
+                )
+            }
+            items.add(BodyButtonController.MenuItem("Набрать текстом") { openFoodTypeIn("") })
+            items.add(BodyButtonController.MenuItem("Открыть «Спорт»") { openSportTab() })
+            items.add(BodyButtonController.MenuItem("Открыть «Еду»") { openFoodTab() })
             eButton?.showMenu(items)
+        }
+    }
+
+    /** «Зарядка сделана»: одна отметка, ноль токенов, цепочка не рвётся. */
+    private fun markCharged() {
+        scope.launch {
+            val day = app.bodyEngine.chargedToday()
+            val streak = app.strengthStore.streak(day.date)
+            Haptics.success(this@PravkaAccessibilityService)
+            eButton?.showNote("✓ Зарядка · цепочка $streak дн.", null, onAction = null)
         }
     }
 
@@ -3135,6 +3423,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         zButton = null
         rButton?.destroy()
         rButton = null
+        restHandler.removeCallbacks(restTick)
         eButton?.destroy()
         eButton = null
         scope.cancel()

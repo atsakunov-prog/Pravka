@@ -2,6 +2,7 @@ package ru.zf.pravka
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -17,9 +18,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -42,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.text.SimpleDateFormat
@@ -49,21 +54,32 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.SportCoach
+import ru.zf.pravka.core.TrafficLight
+import ru.zf.pravka.data.ExerciseBook
+import ru.zf.pravka.data.PlanStore
 import ru.zf.pravka.data.SportStore
+import ru.zf.pravka.data.StrengthStore
+import ru.zf.pravka.data.dayKey
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.PaperLabel
 
-// Вкладка «Спорт»: тренировки, здоровье, тренированность и разбор.
+// Вкладка «Спорт»: сегодня, светофор, подходы, форма, разбор.
 //
-// Порядок сверху вниз - это порядок вопросов, которые владелец задаёт себе
-// утром: «как я сегодня?» (готовность), «куда я вообще иду?» (форма графиком),
-// «что я делал?» (тренировки), «а вот объясни» (вопрос Опусу).
+// Порядок сверху вниз — порядок вопросов утром, и он важнее красоты:
 //
-// Всё, кроме вопроса, рисуется из кэша на диске и считается на телефоне -
-// вкладка открывается мгновенно и работает в самолёте. Токены здесь тратит
-// только вопрос, и только когда его задали.
+//   1. ЧТО Я ДЕЛАЮ СЕГОДНЯ. Сессия из плана с ключевыми параметрами и списком
+//      упражнений, у каждого — прошлый раз. Это карточка дня, а не лента
+//      вчерашнего: ретроспективу и в intervals видно.
+//   2. СВЕТОФОР — одно решение вместо трёх графиков, плюс три числа мелким
+//      шрифтом и нарушения его собственных правил.
+//   3. ЗАРЯДКА — цепочка, которая не должна рваться, и вис в секундах.
+//   4. Форма, тренировки, вопрос — то, что смотрят раз в неделю, а не каждый день.
+//
+// Всё, кроме вопроса, рисуется из кэша на диске и считается на телефоне —
+// вкладка открывается мгновенно и работает в самолёте, а он тренируется на
+// даче каждое воскресенье.
 
 private val talkTimeFormat = SimpleDateFormat("d MMM, HH:mm", Locale("ru"))
 private val workoutDayFormat = SimpleDateFormat("EEEE, d MMMM", Locale("ru"))
@@ -85,6 +101,11 @@ internal fun SportTab(app: PravkaApp) {
     val health by store.healthFlow.collectAsState()
     val profile by store.profileFlow.collectAsState()
     val talks by store.talksFlow.collectAsState()
+    val planDays by app.planStore.daysFlow.collectAsState()
+    val rules by app.planStore.rulesFlow.collectAsState()
+    val sessions by app.strengthStore.sessionsFlow.collectAsState()
+    val gtgDays by app.strengthStore.gtgFlow.collectAsState()
+    val restSec by app.settings.restSecFlow.collectAsState(initial = 90)
 
     var syncing by remember { mutableStateOf(false) }
     var asking by remember { mutableStateOf(false) }
@@ -95,15 +116,35 @@ internal fun SportTab(app: PravkaApp) {
     var showSettings by remember { mutableStateOf(false) }
     var days by remember { mutableStateOf(14) }
 
+    var gtgDialog by remember { mutableStateOf(false) }
+    var feelDialog by remember { mutableStateOf<Long?>(null) }
+
     LaunchedEffect(Unit) {
         store.load()
+        app.strengthStore.load()
+        app.planStore.load()
+        app.exerciseBook.load()
         // Первое открытие после установки: кэш пуст, и молчать об этом нельзя.
         runCatching { app.icuSportSync.refresh(force = store.workoutsFlow.value.isEmpty()) }
+        runCatching { app.planSync.refresh(force = planDays.isEmpty()) }
     }
 
-    // Готовность считается на телефоне: перерисовывается сама, когда приехали
-    // свежие дни здоровья.
-    val readiness = remember(health, workouts) { app.sportCoach.readiness() }
+    val today = remember(planDays, sessions) { dayKey(System.currentTimeMillis()) }
+    // Светофор и карточка дня считаются на телефоне: перерисовываются сами,
+    // когда приехали свежие дни здоровья или новый план.
+    val verdict = remember(health, workouts, planDays, rules, gtgDays) {
+        app.trafficLight.today(today)
+    }
+    val mainPlan = remember(planDays, today) { app.planStore.mainOf(today) }
+    val todaySession = remember(sessions, today) {
+        app.strengthStore.sessionsOn(today).firstOrNull()
+    }
+    val plannedExercises = remember(planDays, sessions, today) {
+        val block = mainPlan?.block.orEmpty()
+        if (block.isBlank()) emptyList() else app.strengthEngine.lastTimeFor(block, today)
+    }
+    val streak = remember(gtgDays) { app.strengthStore.streak(today) }
+    val gtgToday = remember(gtgDays, today) { app.strengthStore.gtgOn(today) }
     val shownWorkouts = remember(workouts, days) {
         val from = System.currentTimeMillis() - days * 86_400_000L
         workouts.filter { it.start >= from }
@@ -119,6 +160,8 @@ internal fun SportTab(app: PravkaApp) {
             syncing = true
             app.appScope.launch {
                 val ok = runCatching { app.icuSportSync.refresh(force = true) }.getOrDefault(false)
+                runCatching { app.planSync.refresh(force = true) }
+                runCatching { app.strengthEngine.syncPending(force = true) }
                 syncing = false
                 if (!ok) {
                     val why = app.icuSportSync.lastError()
@@ -155,11 +198,10 @@ internal fun SportTab(app: PravkaApp) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // ---- Готовность ----
+        // ---- Что я делаю сегодня ----
         item {
             PaperCard(
-                label = "как я сегодня",
-                labelColor = toneColor(readiness.tone),
+                label = "сегодня",
                 trailing = {
                     if (syncing) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -170,43 +212,208 @@ internal fun SportTab(app: PravkaApp) {
                     }
                 },
             ) {
-                Text(
-                    readiness.verdict,
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = toneColor(readiness.tone),
-                )
-                Spacer(Modifier.height(4.dp))
-                PaperHint(readiness.detail)
-                if (readiness.signals.isNotEmpty()) Spacer(Modifier.height(10.dp))
-                for (signal in readiness.signals) {
+                if (mainPlan == null) {
+                    Text(
+                        "В календаре intervals на сегодня ничего нет.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    PaperHint(
+                        "План приезжает из календаря intervals — ты его туда пушишь, " +
+                            "когда собираешь блок. Правила блока читаются из Notion."
+                    )
+                } else {
+                    Text(mainPlan.name, style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.height(4.dp))
+                    // planLine — «название · параметры»; название уже выше,
+                    // поэтому в подсказку идёт только хвост с параметрами.
+                    PaperHint(verdict.planLine.substringAfter(mainPlan.name).trim(' ', '·'))
+                    // Комментарий владельца к сессии — первый абзац описания
+                    // до нумерованного списка. Он там про смысл дня, и это
+                    // ровно то, что стоит прочитать перед началом.
+                    val comment = mainPlan.description.lines()
+                        .takeWhile { !Regex("^\\d+[.)]\\s+\\S").containsMatchIn(it.trim()) }
+                        .joinToString(" ")
+                        .trim()
+                    if (comment.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            comment.take(400),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    val planned = mainPlan.plannedLines()
+                    if (planned.isNotEmpty() && plannedExercises.isEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        for (line in planned) {
+                            Text("· " + line, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
                     Row(
-                        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(signal.label, style = MaterialTheme.typography.bodyMedium)
-                            PaperHint(signal.hint)
+                        if (todaySession?.done == true) {
+                            Text(
+                                "✓ Сделано",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = toneColor(1),
+                            )
+                        } else {
+                            Button(onClick = {
+                                app.appScope.launch {
+                                    val session = app.strengthEngine.markDone(today, mainPlan.minutes)
+                                    feelDialog = session.id
+                                }
+                            }) { Text("Сделано") }
                         }
+                        if (todaySession != null && todaySession.feel in 1..5) {
+                            PaperHint("самочувствие ${todaySession.feel}/5")
+                        } else if (todaySession != null) {
+                            OutlinedButton(onClick = { feelDialog = todaySession.id }) {
+                                Text("Самочувствие")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Упражнения дня с прошлым разом ----
+        if (plannedExercises.isNotEmpty()) {
+            item { PaperLabel("упражнения · прошлый раз") }
+            items(plannedExercises.size, key = { i -> "px" + plannedExercises[i].first.id }) { i ->
+                val (exercise, last) = plannedExercises[i]
+                val doneToday = todaySession?.exercises?.firstOrNull { it.exerciseId == exercise.id }
+                PlannedExerciseCard(
+                    exercise = exercise,
+                    lastTime = last,
+                    doneToday = doneToday,
+                    restSec = restSec,
+                    onRest = { seconds ->
+                        Feedback.toast(app, "Отдых $seconds сек — кнопка «Т» считает")
+                        ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                            ?.startRestFromTab(seconds)
+                    },
+                )
+            }
+        }
+
+        // ---- Светофор ----
+        item {
+            PaperCard(label = "светофор", labelColor = toneColor(verdict.tone)) {
+                Text(
+                    verdict.headline,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = toneColor(verdict.tone),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(verdict.because, style = MaterialTheme.typography.bodyMedium)
+                if (verdict.warnings.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    for (w in verdict.warnings) {
                         Text(
-                            signal.value,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = toneColor(signal.tone),
+                            "⚠ " + w,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
                         )
                     }
                 }
-                val syncedAt = store.lastSyncAt()
-                if (syncedAt > 0) {
-                    Spacer(Modifier.height(8.dp))
-                    PaperHint("Выгружено " + talkTimeFormat.format(Date(syncedAt)))
+                if (verdict.numbers.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    // Три числа мелким шрифтом — чтобы можно было проверить, а
+                    // не чтобы читать вместо вердикта. Больше трёх — дашборд.
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        for (n in verdict.numbers) {
+                            Column {
+                                Text(
+                                    n.label + " " + n.value,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = toneColor(n.tone),
+                                )
+                                if (n.hint.isNotBlank()) {
+                                    Text(
+                                        n.hint,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
                 val error = app.icuSportSync.lastError()
                 if (error.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(8.dp))
                     Text(
                         error,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
+                }
+            }
+        }
+
+        // ---- Зарядка и GTG ----
+        item {
+            PaperCard(
+                label = "зарядка · путь к первому подтягиванию",
+                trailing = {
+                    IconButton(onClick = { gtgDialog = true }) {
+                        Icon(Icons.Filled.Add, contentDescription = "Записать")
+                    }
+                },
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "$streak",
+                        style = MaterialTheme.typography.displaySmall,
+                        color = if (streak > 0) toneColor(1) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (streak == 1) "день подряд" else "дней подряд",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        PaperHint(
+                            if (gtgToday?.charged == true) "сегодня отмечено"
+                            else "сегодня ещё нет — утро не кончилось"
+                        )
+                    }
+                    if (gtgToday?.charged != true) {
+                        Button(onClick = {
+                            app.appScope.launch { app.bodyEngine.chargedToday() }
+                        }) { Text("Сделал") }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                GtgStrip(app.strengthStore.recentGtg(14))
+                Spacer(Modifier.height(10.dp))
+                val best = app.strengthStore.bestHang()
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    LegendValue(
+                        "Вис сегодня",
+                        if ((gtgToday?.hangSec ?: 0) > 0) "${gtgToday?.hangSec} сек" else "—",
+                        CTL_COLOR,
+                    )
+                    LegendValue("Лучший вис", if (best > 0) "$best сек" else "—", ATL_COLOR)
+                    LegendValue(
+                        "Негативы",
+                        if ((gtgToday?.negatives ?: 0) > 0) "${gtgToday?.negatives}" else "—",
+                        CTL_COLOR,
+                    )
+                }
+                if (gtgToday?.knee?.isNotBlank() == true) {
+                    Spacer(Modifier.height(8.dp))
+                    PaperHint("Колено сегодня: ${gtgToday.knee}")
                 }
             }
         }
@@ -375,15 +582,309 @@ internal fun SportTab(app: PravkaApp) {
         }
 
         // ---- Настройки ----
+        item { DigestSection(app) }
+
         item {
             TextButton(onClick = { showSettings = !showSettings }) {
-                Text(if (showSettings) "Скрыть настройки" else "Настройки спорта")
+                Text(if (showSettings) "Скрыть настройки" else "Настройки спорта и правил")
             }
         }
         if (showSettings) {
             item { SportSettings(app) }
         }
     }
+
+    if (gtgDialog) {
+        GtgDialog(app = app, date = today, onClose = { gtgDialog = false })
+    }
+    val feelSession = feelDialog
+    if (feelSession != null) {
+        FeelDialog(app = app, sessionId = feelSession, onClose = { feelDialog = null })
+    }
+}
+
+/**
+ * Упражнение дня: схема из справочника, прошлый раз, что уже сделано сегодня —
+ * и техника с ошибками по тапу. Прошлый раз здесь главное: прогрессивная
+ * перегрузка это «сегодня чуть больше», и «чуть больше чего» надо видеть В
+ * МОМЕНТ подхода, а не вспоминать.
+ */
+@Composable
+private fun PlannedExerciseCard(
+    exercise: ExerciseBook.Exercise,
+    lastTime: StrengthStore.ExerciseLog?,
+    doneToday: StrengthStore.ExerciseLog?,
+    restSec: Int,
+    onRest: (Int) -> Unit,
+) {
+    var open by remember(exercise.id) { mutableStateOf(false) }
+    PaperCard {
+        Row(
+            Modifier.fillMaxWidth().clickable { open = !open },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .width(4.dp)
+                    .height(38.dp)
+                    .background(
+                        if (doneToday != null) toneColor(1) else MaterialTheme.colorScheme.outlineVariant,
+                        MaterialTheme.shapes.extraSmall,
+                    )
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    exercise.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                PaperHint(
+                    listOfNotNull(
+                        exercise.scheme.takeIf { it.isNotBlank() },
+                        exercise.gear.firstOrNull(),
+                    ).joinToString(" · ")
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                if (doneToday != null) {
+                    Text(
+                        doneToday.compact(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = toneColor(1),
+                    )
+                } else {
+                    Text(
+                        lastTime?.compact() ?: "—",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                PaperHint(if (doneToday != null) "сегодня" else "прошлый раз")
+            }
+        }
+        if (!open) return@PaperCard
+        Spacer(Modifier.height(10.dp))
+        if (doneToday != null && lastTime != null) {
+            Text(
+                "Прошлый раз: " + lastTime.compact(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        if (exercise.how.isNotBlank()) {
+            Text("Как делать", style = MaterialTheme.typography.labelMedium)
+            Text(exercise.how, style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(8.dp))
+        }
+        if (exercise.mistakes.isNotBlank()) {
+            Text("Главные ошибки", style = MaterialTheme.typography.labelMedium)
+            Text(
+                exercise.mistakes,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        if (exercise.progression.isNotBlank() && exercise.progression != "—") {
+            Text("Прогрессия", style = MaterialTheme.typography.labelMedium)
+            Text(exercise.progression, style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(8.dp))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (seconds in listOf(60, restSec, 120).distinct()) {
+                OutlinedButton(onClick = { onRest(seconds) }) { Text("⏱ $seconds") }
+            }
+        }
+        if (exercise.videoQuery.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            val context = androidx.compose.ui.platform.LocalContext.current
+            TextButton(onClick = {
+                // Не встроенный плеер, а поиск в ютубе: держать у себя ссылки
+                // на чужие видео значит починять их каждый год.
+                runCatching {
+                    context.startActivity(
+                        android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse(
+                                "https://www.youtube.com/results?search_query=" +
+                                    android.net.Uri.encode(exercise.videoQuery)
+                            ),
+                        )
+                    )
+                }
+            }) { Text("▶ Видео: " + exercise.videoQuery.take(40)) }
+        }
+    }
+}
+
+/** Полоска последних двух недель зарядки: цепочка, которую видно глазом. */
+@Composable
+private fun GtgStrip(days: List<StrengthStore.GtgDay>) {
+    val done = days.filter { it.charged }.map { it.date }.toSet()
+    val today = dayKey(System.currentTimeMillis())
+    val dates = remember(today) {
+        var cursor = today
+        val out = mutableListOf<String>()
+        repeat(14) {
+            out.add(cursor)
+            cursor = ru.zf.pravka.data.dayBefore(cursor)
+        }
+        out.reversed()
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        for (date in dates) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(18.dp)
+                    .background(
+                        if (date in done) toneColor(1)
+                        else MaterialTheme.colorScheme.surfaceVariant,
+                        MaterialTheme.shapes.extraSmall,
+                    )
+            )
+        }
+    }
+}
+
+/** Вис, негативы, лопаточные и колено — руками, когда голосом неудобно. */
+@Composable
+private fun GtgDialog(app: PravkaApp, date: String, onClose: () -> Unit) {
+    var hang by remember { mutableStateOf("") }
+    var negatives by remember { mutableStateOf("") }
+    var scapular by remember { mutableStateOf("") }
+    var knee by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Зарядка и турник") },
+        text = {
+            Column {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(
+                        value = hang,
+                        onValueChange = { hang = it.filter { c -> c.isDigit() }.take(4) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Вис, сек") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    OutlinedTextField(
+                        value = negatives,
+                        onValueChange = { negatives = it.filter { c -> c.isDigit() }.take(3) },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Негативы") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = scapular,
+                    onValueChange = { scapular = it.filter { c -> c.isDigit() }.take(3) },
+                    label = { Text("Лопаточные") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                Spacer(Modifier.height(10.dp))
+                PaperHint("Колено сегодня")
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (option in listOf("зелёный", "жёлтый", "красный")) {
+                        FilterChip(
+                            selected = knee == option,
+                            onClick = { knee = if (knee == option) "" else option },
+                            label = { Text(option) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                PaperHint(
+                    "Записывается лучший результат дня: вечерняя попытка не портит " +
+                        "утреннюю. Колено — наоборот, последнее сказанное."
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                app.appScope.launch {
+                    app.bodyEngine.putGtgNumbers(
+                        date = date,
+                        hangSec = hang.toIntOrNull(),
+                        negatives = negatives.toIntOrNull(),
+                        scapular = scapular.toIntOrNull(),
+                        knee = knee.ifBlank { null },
+                    )
+                    onClose()
+                }
+            }) { Text("Записать") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
+    )
+}
+
+/**
+ * Самочувствие после тренировки. Шкала перевёрнутая — 1 отлично, 5 развалина, —
+ * потому что такая она в intervals.icu, и переворачивать её здесь значило бы
+ * врать при записи назад.
+ */
+@Composable
+private fun FeelDialog(app: PravkaApp, sessionId: Long, onClose: () -> Unit) {
+    var feel by remember { mutableStateOf(0) }
+    var rpe by remember { mutableStateOf(0) }
+    var note by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Как прошло") },
+        text = {
+            Column {
+                PaperHint("Самочувствие: 1 отлично — 5 развалина (шкала intervals)")
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (v in 1..5) {
+                        FilterChip(
+                            selected = feel == v,
+                            onClick = { feel = if (feel == v) 0 else v },
+                            label = { Text("$v") },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                PaperHint("Как тяжело далось, RPE 1–10")
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (v in listOf(3, 5, 7, 8, 9, 10)) {
+                        FilterChip(
+                            selected = rpe == v,
+                            onClick = { rpe = if (rpe == v) 0 else v },
+                            label = { Text("$v") },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Заметка (уедет в intervals)") },
+                    minLines = 1,
+                    maxLines = 3,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                app.appScope.launch {
+                    app.strengthEngine.setFeel(sessionId, feel, rpe, note.trim())
+                    app.strengthEngine.syncPending(force = true)
+                    onClose()
+                }
+            }) { Text("Записать") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
+    )
 }
 
 @Composable
@@ -671,16 +1172,197 @@ private fun TalkCard(talk: SportStore.Talk, onDelete: () -> Unit) {
     }
 }
 
+/**
+ * Сводка для чата: день или неделя одним текстом. Собирается на телефоне из
+ * уже имеющихся сторов — ни запроса в сеть, ни токена. Дорого стоит совет, а
+ * не его исходные данные.
+ */
+@Composable
+private fun DigestSection(app: PravkaApp) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var busy by remember { mutableStateOf(false) }
+    var preview by remember { mutableStateOf("") }
+
+    val build: (Boolean) -> Unit = { weekly ->
+        if (!busy) {
+            busy = true
+            app.appScope.launch {
+                val text = runCatching {
+                    if (weekly) app.digestBuilder.week() else app.digestBuilder.day()
+                }.getOrElse { e -> "Сводка не собралась: ${e.message}" }
+                busy = false
+                preview = text
+            }
+        }
+    }
+
+    PaperCard(label = "сводка для чата") {
+        PaperHint(
+            "Таймшит, тренировки, подходы с прошлым разом, здоровье, зарядка и " +
+                "еда — одним текстом. Отправляешь Клоду в чат, он советует."
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { build(false) }, enabled = !busy) { Text("За день") }
+            Button(onClick = { build(true) }, enabled = !busy) { Text("За неделю") }
+            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+        }
+        if (preview.isNotBlank()) {
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(
+                        android.content.ClipData.newPlainText("Сводка", preview)
+                    )
+                    Feedback.toast(app, "Сводка в буфере — вставляй в чат")
+                }) { Text("В буфер") }
+                OutlinedButton(onClick = {
+                    app.appScope.launch {
+                        val intent = app.digestBuilder.shareIntent(preview, "pravka-svodka.txt")
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent.createChooser(intent, "Сводка")
+                            )
+                        }
+                    }
+                }) { Text("Файлом") }
+                OutlinedButton(onClick = { preview = "" }) { Text("Скрыть") }
+            }
+            Spacer(Modifier.height(10.dp))
+            PaperHint("${preview.length} знаков")
+            Spacer(Modifier.height(6.dp))
+            Text(
+                preview,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            )
+        }
+    }
+}
+
 @Composable
 private fun SportSettings(app: PravkaApp) {
     val store = app.sportStore
     val profile by store.profileFlow.collectAsState()
     val days by app.settings.sportDaysFlow.collectAsState(initial = 120)
+    val restSec by app.settings.restSecFlow.collectAsState(initial = 90)
     val talks by store.talksFlow.collectAsState()
+    val rules by app.planStore.rulesFlow.collectAsState()
+    val notionToken by app.settings.notionTokenFlow.collectAsState(initial = "")
+    val sessions by app.strengthStore.sessionsFlow.collectAsState()
     var sliderDays by remember(days) { mutableStateOf(days.toFloat()) }
+    var sliderRest by remember(restSec) { mutableStateOf(restSec.toFloat()) }
+    var tokenDraft by remember(notionToken) { mutableStateOf(notionToken) }
+    var syncingPlan by remember { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
+    PaperCard(label = "правила блока из notion") {
+        if (rules.known) {
+            Text(rules.blockTitle.ifBlank { "Блок" }, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            val lines = buildList {
+                if (rules.runHrCeiling > 0) add("Потолок лёгкого бега" to "${rules.runHrCeiling}")
+                if (rules.greyZoneLow > 0 && rules.greyZoneHigh > 0) {
+                    add("Серая зона" to "${rules.greyZoneLow}–${rules.greyZoneHigh}")
+                }
+                if (rules.cadenceMin > 0) add("Каденс" to "${rules.cadenceMin}+")
+                if (rules.runsPerWeekMax > 0) add("Пробежек в неделю" to "не больше ${rules.runsPerWeekMax}")
+                if (rules.hoursBetweenRuns > 0) add("Между пробежками" to "${rules.hoursBetweenRuns} ч")
+                if (rules.rampNeedsPositiveTsb) add("Тест" to "только на плюсовом TSB")
+            }
+            for ((label, value) in lines) {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    PaperHint(label)
+                    Text(value, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            if (rules.cancelOrder.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                PaperHint("Отмена: ${rules.cancelOrder}")
+            }
+            if (rules.weekPlan.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Text("Штатная неделя", style = MaterialTheme.typography.labelMedium)
+                for ((day, session) in rules.weekPlan) {
+                    Text("$day — $session", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            PaperHint("Правится в Notion — здесь только видно. Читается раз в сутки.")
+        } else {
+            PaperHint(
+                "Правила блока ещё не приезжали. Нужен внутренний токен интеграции " +
+                    "Notion (только чтение) и доступ этой интеграции к странице " +
+                    "«Тело: велоформа и сила» — приложение само найдёт под ней " +
+                    "свежую страницу «Блок …»."
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = tokenDraft,
+            onValueChange = { tokenDraft = it },
+            label = { Text("Токен Notion (ntn_…)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                app.appScope.launch { app.settings.setNotionToken(tokenDraft.trim()) }
+            }) { Text("Сохранить токен") }
+            OutlinedButton(
+                onClick = {
+                    if (!syncingPlan) {
+                        syncingPlan = true
+                        app.appScope.launch {
+                            val outcome = app.planSync.refresh(force = true)
+                            syncingPlan = false
+                            Feedback.toast(
+                                app,
+                                when {
+                                    outcome.error.isNotBlank() -> outcome.error
+                                    outcome.events && outcome.rules -> "План и правила обновлены"
+                                    outcome.events -> "Календарь обновлён, правила — нет"
+                                    outcome.rules -> "Правила обновлены, календарь — нет"
+                                    else -> "Ничего не обновилось"
+                                },
+                                long = true,
+                            )
+                        }
+                    }
+                },
+                enabled = !syncingPlan,
+            ) { Text(if (syncingPlan) "Читаю…" else "Прочитать план") }
+        }
+        val notionError = app.notionPlanSync.lastError()
+        if (notionError.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                notionError,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+
+    Spacer(Modifier.height(14.dp))
+
     PaperCard(label = "настройки спорта") {
+        Text("Отдых между подходами: ${sliderRest.toInt()} сек", style = MaterialTheme.typography.bodyMedium)
+        Slider(
+            value = sliderRest,
+            onValueChange = { sliderRest = it },
+            onValueChangeFinished = {
+                app.appScope.launch { app.settings.setRestSec(sliderRest.toInt()) }
+            },
+            valueRange = 30f..240f,
+        )
+        PaperHint("Чип «⏱» в карточке и на плашке запускает именно этот отдых.")
+        Spacer(Modifier.height(12.dp))
         Text("Глубина выгрузки: ${sliderDays.toInt()} дн.", style = MaterialTheme.typography.bodyMedium)
         Slider(
             value = sliderDays,
@@ -694,6 +1376,32 @@ private fun SportSettings(app: PravkaApp) {
             "Столько дней тренировок и здоровья держим на телефоне. " +
                 "Глубже — дольше первая выгрузка, но длиннее графики."
         )
+        Spacer(Modifier.height(12.dp))
+        val pending = sessions.count { it.pendingSync }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Подходы в intervals", style = MaterialTheme.typography.bodyMedium)
+                PaperHint(
+                    if (pending == 0) "всё уехало"
+                    else "$pending ждут активность от часов"
+                )
+            }
+            OutlinedButton(onClick = {
+                app.appScope.launch {
+                    val outcome = app.strengthEngine.syncPending(force = true)
+                    Feedback.toast(
+                        app,
+                        "Отправлено ${outcome.sent}, ждут ${outcome.waiting}" +
+                            (if (outcome.failed > 0) ", не вышло ${outcome.failed}" else ""),
+                        long = true,
+                    )
+                }
+            }) { Text("Донести") }
+        }
         Spacer(Modifier.height(12.dp))
         if (profile.known) {
             Text("Пороги из intervals.icu", style = MaterialTheme.typography.titleMedium)
@@ -729,6 +1437,12 @@ private fun SportSettings(app: PravkaApp) {
                     "нажми «Обновить» наверху."
             )
         }
+        Spacer(Modifier.height(12.dp))
+        PaperHint(
+            "Справочник: ${app.exerciseBook.all.size} упражнений, снимок " +
+                app.exerciseBook.snapshotDate() + ". Лежит файлом в приложении — " +
+                "работает без интернета. Правится в Notion, пересобирается скриптом."
+        )
         if (talks.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
             OutlinedButton(onClick = { scope.launch { store.clearTalks() } }) {

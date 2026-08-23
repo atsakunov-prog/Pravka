@@ -185,8 +185,8 @@
     <string name="tab_sport">Спорт</string>
     <string name="tab_food">Еда</string>
     <string name="e_busy">Микрофон занят другой записью — сначала заверши её</string>
-    <string name="e_busy_pravka">Идёт запись Еды — останови её кнопкой «Е»</string>
-    <string name="e_parse_failed">Не разобрал по КБЖУ — скажи ещё раз или набери текстом</string>
+    <string name="e_busy_pravka">Идёт запись Тела — останови её кнопкой «Т»</string>
+    <string name="e_parse_failed">Не разобрал — скажи ещё раз или набери текстом</string>
     <string name="action_label_tasks">Разноска</string>
     <string name="z_notify_morning_title">День начался?</string>
     <string name="z_notify_morning_text">Нажми «З» и скажи, с чего начал день.</string>

@@ -71,7 +71,7 @@ import ru.zf.pravka.ui.PaperLabel
 // Вкладка «Еда»: дневник приёмов с КБЖУ.
 //
 // Ввод четырьмя дорогами, и у каждой своя правда:
-//   голос      - кнопка «Е», на ходу, самая частая (движок Правки);
+//   голос      - кнопка «Т», на ходу, самая частая (движок Правки);
 //   текст      - поле здесь же, когда говорить неудобно;
 //   снимок     - тарелку и этикетку модель читает точнее, чем описание;
 //   штрихкод   - на упаковке КБЖУ НАПИСАН, и база его знает точно.
@@ -301,7 +301,7 @@ internal fun FoodTab(app: PravkaApp) {
                 }
                 Spacer(Modifier.height(6.dp))
                 PaperHint(
-                    "Голосом — кнопка «Е» на экране. Снимок читается вместе с " +
+                    "Голосом — кнопка «Т» на экране. Снимок читается вместе с " +
                         "подписью из поля выше: там уточняют невидимое (масло в " +
                         "салате, сахар в кофе)."
                 )
@@ -356,7 +356,7 @@ internal fun FoodTab(app: PravkaApp) {
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Spacer(Modifier.height(6.dp))
-                    PaperHint("Скажи кнопкой «Е», набери выше или сними тарелку.")
+                    PaperHint("Скажи кнопкой «Т», набери выше или сними тарелку.")
                 }
             }
         } else {
@@ -670,7 +670,7 @@ private fun FoodSettings(app: PravkaApp) {
     val carbs by app.settings.foodCarbsFlow.collectAsState(initial = 0)
     val toIcu by app.settings.foodToIcuFlow.collectAsState(initial = true)
     val toRibbon by app.settings.foodToRibbonFlow.collectAsState(initial = true)
-    val eEnabled by app.settings.eEnabledFlow.collectAsState(initial = true)
+    val tEnabled by app.settings.tEnabledFlow.collectAsState(initial = true)
     val meals by app.foodStore.mealsFlow.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -725,10 +725,11 @@ private fun FoodSettings(app: PravkaApp) {
         }
         Spacer(Modifier.height(14.dp))
         SwitchRow(
-            "Кнопка «Е» на экране",
-            "Четвёртая в связке под «Р»: тап — сказал, что съел.",
-            eEnabled,
-        ) { v -> app.appScope.launch { app.settings.setEEnabled(v) } }
+            "Кнопка «Т» на экране",
+            "Четвёртая в связке под «Р». Одна на всё тело: подходы, еда, " +
+                "зарядка, вопрос — намерение определяет модель.",
+            tEnabled,
+        ) { v -> app.appScope.launch { app.settings.setTEnabled(v) } }
         SwitchRow(
             "Приписывать к ленте",
             "КБЖУ дописывается к записи «Еда» в Засечке, если она в это время " +
