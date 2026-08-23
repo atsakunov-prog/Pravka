@@ -40,6 +40,13 @@
         android:theme="@style/Theme.Pravka"
         android:allowBackup="true">
 
+        <!-- Штрихкод еды: просим Play Services подтянуть модуль сканера при
+             установке, а не при первом сканировании. Иначе первый скан в
+             магазине упирается в загрузку по мобильной сети. -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

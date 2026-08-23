@@ -110,6 +110,16 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile private var cachedREnabled = true
     private var micRequestForRaznoska = false
 
+    // Еда: четвёртая кнопка и свой захват. Сказанное «омлет из трёх яиц»
+    // уезжает Сонету на КБЖУ и ложится в дневник еды - ни поля, ни ленты этот
+    // путь не касается (в ленту еда только ПРИПИСЫВАЕТСЯ, и то из движка).
+    private var eButton: FoodButtonController? = null
+    private var eSession: GoogleSpeechSession? = null
+    @Volatile private var eWhisperRecording = false
+    @Volatile private var eTypeInstead = false
+    @Volatile private var cachedEEnabled = true
+    private var micRequestForFood = false
+
     // Weak cache of the last focused editable node and its text, updated on
     // TYPE_VIEW_FOCUSED / TYPE_VIEW_TEXT_CHANGED (spec 5.4: activities steal
     // focus, so triggers launched via Activity read from this cache).
@@ -196,23 +206,42 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
         rButton?.onTickerTap = ::onRaznoskaTickerTap
 
+        // Еда: четвёртая кнопка того же семейства.
+        eButton = FoodButtonController(
+            service = this,
+            scope = scope,
+            settings = app.settings,
+            onShortTap = ::onFoodTap,
+            onLongPress = ::showFoodMenu,
+        )
+        eButton?.onTickerTap = ::onFoodTickerTap
+
         // The linked chain (owner's design): drag any bubble and the others
-        // trail behind on a rubber band, in order "П" - "З" - "Р".
+        // trail behind on a rubber band, in order "П" - "З" - "Р" - "Е".
         val pairGap = (8 * resources.displayMetrics.density).toInt()
         floatingButton?.onDragged = { x, y, dropped ->
             val size = floatingButton?.buttonSizePx() ?: 0
             zButton?.followTo(x, y + size + pairGap, dropped)
             rButton?.followTo(x, y + 2 * (size + pairGap), dropped)
+            eButton?.followTo(x, y + 3 * (size + pairGap), dropped)
         }
         zButton?.onDragged = { x, y, dropped ->
             val size = floatingButton?.buttonSizePx() ?: 0
             floatingButton?.followTo(x, y - size - pairGap, dropped)
             rButton?.followTo(x, y + size + pairGap, dropped)
+            eButton?.followTo(x, y + 2 * (size + pairGap), dropped)
         }
         rButton?.onDragged = { x, y, dropped ->
             val size = floatingButton?.buttonSizePx() ?: 0
             zButton?.followTo(x, y - size - pairGap, dropped)
             floatingButton?.followTo(x, y - 2 * (size + pairGap), dropped)
+            eButton?.followTo(x, y + size + pairGap, dropped)
+        }
+        eButton?.onDragged = { x, y, dropped ->
+            val size = floatingButton?.buttonSizePx() ?: 0
+            rButton?.followTo(x, y - size - pairGap, dropped)
+            zButton?.followTo(x, y - 2 * (size + pairGap), dropped)
+            floatingButton?.followTo(x, y - 3 * (size + pairGap), dropped)
         }
         floatingButton?.pairAnchor = anchor@{
             if (!cachedZEnabled) return@anchor null
@@ -235,6 +264,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             app.settings.rEnabledFlow.collect {
                 cachedREnabled = it
                 rButton?.setEnabled(it)
+            }
+        }
+        scope.launch {
+            app.settings.eEnabledFlow.collect {
+                cachedEEnabled = it
+                eButton?.setEnabled(it)
             }
         }
         scope.launch { app.settings.zGapMinFlow.collect { cachedZGapMin = it } }
@@ -373,7 +408,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         val locked = runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)
         if (!locked) return false
         return googleSession == null && zSession == null && rSession == null &&
-            !zWhisperRecording && !rWhisperRecording && !DictationService.recording
+            eSession == null && !zWhisperRecording && !rWhisperRecording &&
+            !eWhisperRecording && !DictationService.recording
     }
 
     /** Short tap: stop the active session if any, else start per the engine. */
@@ -389,6 +425,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (rSession != null || rWhisperRecording) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.r_busy_pravka))
+            return
+        }
+        if (eSession != null || eWhisperRecording) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.e_busy_pravka))
             return
         }
         if (googleSession != null) { stopLiveDictation(); return }
@@ -431,7 +472,10 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Called by MicPermissionActivity after the permission is granted. */
     fun onMicPermissionGranted() {
-        if (micRequestForRaznoska) {
+        if (micRequestForFood) {
+            micRequestForFood = false
+            startFoodCapture()
+        } else if (micRequestForRaznoska) {
             micRequestForRaznoska = false
             startRaznoskaCapture()
         } else if (micRequestForZasechka) {
@@ -760,6 +804,42 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }.onFailure { e ->
                     rButton?.setBusy(false)
                     // Аудио остаётся в «Записях», как у неудачной Правки.
+                    Haptics.error(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        getString(R.string.dictation_saved_for_retry, e.message ?: ""),
+                    )
+                }
+            }
+            return
+        }
+        // Еда на Whisper — тем же путём, со своим флагом.
+        if (eWhisperRecording) {
+            eWhisperRecording = false
+            eButton?.setRecording(false)
+            if (eTypeInstead) {
+                eTypeInstead = false
+                file?.let { app.recordings.delete(it.name) }
+                eButton?.hideTicker()
+                eButton?.setBusy(false)
+                openFoodTypeIn("")
+                return
+            }
+            eButton?.hideTicker()
+            if (file == null) {
+                eButton?.setBusy(false)
+                Haptics.error(this)
+                Feedback.toast(this, getString(R.string.dictation_empty))
+                return
+            }
+            eButton?.setBusy(true)
+            scope.launch {
+                val result = app.transcribeDictation(file)
+                result.onSuccess { text ->
+                    app.recordings.delete(file.name)
+                    onFoodText(text)
+                }.onFailure { e ->
+                    eButton?.setBusy(false)
                     Haptics.error(this@PravkaAccessibilityService)
                     Feedback.toast(
                         this@PravkaAccessibilityService,
@@ -1510,11 +1590,16 @@ class PravkaAccessibilityService : AccessibilityService() {
             stopDictation()  // -> onRecordingSaved, routed by the flag
             return
         }
-        // One microphone: while a Правка or Разноска take runs, the "З" tap
-        // only nags.
+        // One microphone: while a Правка, Разноска or Еда take runs, the "З"
+        // tap only nags.
         if (rSession != null || rWhisperRecording) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.r_busy_pravka))
+            return
+        }
+        if (eSession != null || eWhisperRecording) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.e_busy_pravka))
             return
         }
         if (googleSession != null || DictationService.recording) {
@@ -1960,6 +2045,11 @@ class PravkaAccessibilityService : AccessibilityService() {
             // otherwise nag about. Fire-and-forget - the check reads current data.
             scope.launch { app.phoneSweeper.sweep() }
             scope.launch { app.icuSweeper.sweep() }
+            // Спорт и еда: свой кэш и своя недоставленная почта. Оба звонка
+            // сами себя дросселируют (30 минут у выгрузки, «уже уехало» у
+            // еды), так что пятиминутный тик может дёргать их сколько хочет.
+            scope.launch { runCatching { app.icuSportSync.refresh() } }
+            scope.launch { runCatching { app.foodEngine.syncPending() } }
             // Закрылось дело, пришедшее из Todoist - в задачу уезжает время.
             scope.launch { runCatching { app.todoistSync.flushLinks() } }
             // Копии на диск: сама проверка стоит один listFiles, копирование
@@ -2168,7 +2258,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         // Один микрофон на все три кнопки: чужую запись эта не перехватывает.
         if (googleSession != null || zSession != null || zWhisperRecording ||
-            DictationService.recording
+            eSession != null || eWhisperRecording || DictationService.recording
         ) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.r_busy))
@@ -2624,6 +2714,359 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ---- Еда: тап -> сказал, что съел -> КБЖУ -> дневник ----
+
+    /** Кнопка «Е»: старт наговора, второй тап — разбор по КБЖУ. */
+    fun onFoodTap() {
+        if (isLockedIdle()) return
+        if (eSession != null) { stopFoodLive(); return }
+        if (eWhisperRecording && DictationService.recording) {
+            eButton?.setBusy(true)
+            stopDictation()  // -> onRecordingSaved, routed by the flag
+            return
+        }
+        // Один микрофон на все четыре кнопки: чужую запись эта не перехватывает.
+        if (googleSession != null || zSession != null || zWhisperRecording ||
+            rSession != null || rWhisperRecording || DictationService.recording
+        ) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.e_busy))
+            return
+        }
+        if (!hasMicPermission()) {
+            micRequestForFood = true
+            requestMicPermission()
+            return
+        }
+        startFoodCapture()
+    }
+
+    private fun startFoodCapture() {
+        eButton?.hideInput()
+        eButton?.hidePlate()
+        if (cachedEngine.startsWith("whisper")) {
+            eWhisperRecording = true
+            eButton?.setRecording(true)
+            eButton?.showTicker()
+            eButton?.updateTicker("🍽 что съел… (тап сюда — набрать текстом)")
+            Haptics.start(this)
+            startDictation()
+        } else {
+            startFoodGoogle()
+        }
+        // Пока владелец говорит: греем сокет к API и подтягиваем свой же вес и
+        // недельную нагрузку — они уезжают в промпт вместе с едой.
+        app.warmClaudeConnection()
+        scope.launch { runCatching { app.sportStore.load() } }
+        scope.launch { runCatching { app.foodStore.load() } }
+    }
+
+    private fun startFoodGoogle() {
+        if (eSession != null) return
+        if (!GoogleSpeechSession.isAvailable(this)) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.google_unavailable))
+            return
+        }
+        val session = GoogleSpeechSession(
+            this,
+            biasing = cachedBiasing,
+            formatting = cachedFormatting,
+            segmentedSession = cachedSegmented,
+        )
+        eSession = session
+        session.start(
+            onReady = { Haptics.success(this) },
+            onPartial = { live -> eButton?.updateTicker(live) },
+            // Приём пищи — две фразы: черновик на диск не пишем, повторить
+            // дешевле, чем чинить (то же решение, что у Разноски).
+            onCheckpoint = { },
+            onDone = { text -> onFoodLiveDone(text) },
+            onError = { msg -> onFoodLiveError(msg) },
+            onLog = { line -> app.eventLog.add("еда: $line") },
+        )
+        eButton?.setRecording(true)
+        eButton?.showTicker()
+        eButton?.updateTicker("🍽 что съел… (тап сюда — набрать текстом)")
+        Haptics.start(this)
+        runCatching { startMicHold() }
+    }
+
+    private fun stopFoodLive() {
+        val session = eSession ?: return
+        eButton?.setRecording(false)
+        eButton?.setBusy(true)
+        session.stop()  // -> onFoodLiveDone
+    }
+
+    /** Тап по живой плашке: микрофон замолчал, дальше набираем текстом. */
+    private fun onFoodTickerTap() {
+        when {
+            eSession != null -> {
+                eTypeInstead = true
+                stopFoodLive()
+            }
+            eWhisperRecording && DictationService.recording -> {
+                eTypeInstead = true
+                eButton?.setBusy(true)
+                stopDictation()
+            }
+        }
+    }
+
+    private fun openFoodTypeIn(prefill: String) {
+        eButton?.showInput(prefill = prefill, hint = "Что съел") { typed ->
+            val text = typed.trim()
+            if (text.isNotEmpty()) onFoodText(text)
+        }
+    }
+
+    private fun onFoodLiveDone(text: String) {
+        eSession = null
+        runCatching { stopMicHold() }
+        runCatching { eButton?.hideTicker() }
+        eButton?.setRecording(false)
+        if (eTypeInstead) {
+            eTypeInstead = false
+            eButton?.setBusy(false)
+            openFoodTypeIn(text.trim())
+            return
+        }
+        onFoodText(text)
+    }
+
+    private fun onFoodLiveError(msg: String) {
+        eSession = null
+        runCatching { stopMicHold() }
+        eButton?.hideTicker()
+        eButton?.setRecording(false)
+        eButton?.setBusy(false)
+        Haptics.error(this)
+        Feedback.toast(this, msg)
+    }
+
+    /** Сказанное в руках: Сонет считает КБЖУ, плашка показывает тарелку. */
+    private fun onFoodText(raw: String) {
+        val text = raw.trim()
+        if (text.isBlank()) {
+            eButton?.setBusy(false)
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.dictation_empty))
+            return
+        }
+        if (!scope.isActive) return
+        eButton?.setBusy(true)
+        scope.launch {
+            val result = runCatching { app.foodEngine.parse(text, source = "voice") }
+                .getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    app.eventLog.add("еда: parse бросил ${e.javaClass.simpleName}: ${e.message}")
+                    Result.failure(e)
+                }
+            eButton?.setBusy(false)
+            val parsed = result.getOrElse { e ->
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(
+                    this@PravkaAccessibilityService,
+                    e.message ?: getString(R.string.e_parse_failed),
+                    long = true,
+                )
+                return@launch
+            }
+            Haptics.success(this@PravkaAccessibilityService)
+            showFoodPlate(parsed.meal.id)
+        }
+    }
+
+    /**
+     * Плашка тарелки: позиции с граммами и КБЖУ, «✎» правит вес на месте,
+     * «✕» убирает позицию, «ОК» пишет приём в дневник. До «ОК» приём в сумму
+     * дня не идёт и наружу не уезжает.
+     */
+    private fun showFoodPlate(mealId: Long) {
+        val meal = app.foodStore.byId(mealId) ?: return
+        if (meal.items.isEmpty()) return
+        val rows = meal.items.mapIndexed { index, item ->
+            FoodButtonController.PlateRow(
+                index = index,
+                title = item.name,
+                meta = listOfNotNull(
+                    if (item.grams > 0) "${item.grams} г" else null,
+                    "${item.kcal} ккал",
+                    "Б${item.protein} Ж${item.fat} У${item.carbs}",
+                    item.sureness.takeIf { it.isNotBlank() && it != "точно" },
+                ).joinToString(" · "),
+            )
+        }
+        eButton?.showMeal(
+            header = meal.kind.uppercase(java.util.Locale("ru")) +
+                (if (meal.source == "barcode") " · ШТРИХКОД" else ""),
+            rows = rows,
+            footer = "${meal.kcal} ккал · Б${meal.protein} Ж${meal.fat} У${meal.carbs}",
+            note = meal.note,
+            onEditItem = { index -> editFoodItem(mealId, index) },
+            onDropItem = { index -> dropFoodItem(mealId, index) },
+            onOpen = { openFoodTab() },
+            onConfirm = { confirmFood(mealId) },
+        )
+    }
+
+    /** «✎» у позиции: правим вес, КБЖУ пересчитывается пропорционально. */
+    private fun editFoodItem(mealId: Long, index: Int) {
+        val meal = app.foodStore.byId(mealId) ?: return
+        val item = meal.items.getOrNull(index) ?: return
+        eButton?.showInput(
+            prefill = if (item.grams > 0) item.grams.toString() else "",
+            hint = "${item.name} — сколько граммов",
+            onCancel = { showFoodPlate(mealId) },
+        ) { typed ->
+            val grams = typed.filter { it.isDigit() }.toIntOrNull()
+            scope.launch {
+                if (grams != null && grams > 0) {
+                    app.foodEngine.rescaleItem(mealId, index, grams)
+                } else {
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "Не понял вес — оставил как было",
+                    )
+                }
+                showFoodPlate(mealId)
+            }
+        }
+    }
+
+    private fun dropFoodItem(mealId: Long, index: Int) {
+        scope.launch {
+            app.foodEngine.dropItem(mealId, index)
+            if (app.foodStore.byId(mealId) == null) {
+                Haptics.success(this@PravkaAccessibilityService)
+                Feedback.toast(this@PravkaAccessibilityService, "Приём убран целиком")
+                eButton?.hidePlate()
+            } else {
+                showFoodPlate(mealId)
+            }
+        }
+    }
+
+    /** «ОК»: приём в дневник, а оттуда в ленту и в intervals.icu. */
+    private fun confirmFood(mealId: Long) {
+        eButton?.setBusy(true)
+        scope.launch {
+            val outcome = runCatching { app.foodEngine.confirm(mealId) }
+                .getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    ru.zf.pravka.core.FoodEngine.ConfirmOutcome(null, "", e.message ?: "не вышло")
+                }
+            eButton?.setBusy(false)
+            val meal = outcome.meal
+            if (meal == null) {
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(this@PravkaAccessibilityService, "Приём не нашёлся")
+                return@launch
+            }
+            Haptics.success(this@PravkaAccessibilityService)
+            val day = app.foodStore.dayTotal(ru.zf.pravka.data.dayKey(meal.ts))
+            val target = runCatching { app.settings.foodTargets().kcal }.getOrDefault(0)
+            val tail = when {
+                target > 0 && day.kcal <= target -> "за день ${day.kcal} из $target ккал"
+                target > 0 -> "за день ${day.kcal} ккал, цель $target"
+                else -> "за день ${day.kcal} ккал"
+            }
+            eButton?.showNote(
+                "✓ ${meal.kcal} ккал · $tail",
+                "↩︎",
+                onAction = { undoFood(mealId) },
+            )
+            if (outcome.icuError.isNotBlank()) {
+                app.eventLog.add("еда: в intervals.icu не уехало — ${outcome.icuError}")
+            }
+        }
+    }
+
+    /** «↩︎» на записке: приём уходит из дневника, сумма дня пересчитывается. */
+    private fun undoFood(mealId: Long) {
+        scope.launch {
+            app.foodEngine.delete(mealId)
+            Haptics.success(this@PravkaAccessibilityService)
+            Feedback.toast(this@PravkaAccessibilityService, "↩︎ Приём убран из дневника")
+        }
+    }
+
+    private fun openFoodTab() {
+        startActivity(
+            android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_FOOD)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+
+    private fun openSportTab() {
+        startActivity(
+            android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_SPORT)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+
+    private fun showFoodMenu() {
+        scope.launch {
+            runCatching { app.foodStore.load() }
+            val pending = app.foodStore.pending()
+            val today = app.foodStore.dayTotal(
+                ru.zf.pravka.data.dayKey(System.currentTimeMillis())
+            )
+            val target = runCatching { app.settings.foodTargets().kcal }.getOrDefault(0)
+            val items = mutableListOf<FoodButtonController.MenuItem>()
+            // Первой строкой — сколько уже съедено сегодня: чаще всего кнопку
+            // держат именно за этим.
+            items.add(
+                FoodButtonController.MenuItem(
+                    if (today.empty) "Сегодня ещё ничего не записано"
+                    else "Сегодня ${today.kcal}" + (if (target > 0) " из $target" else "") +
+                        " ккал · Б${today.protein} Ж${today.fat} У${today.carbs}"
+                ) { openFoodTab() }
+            )
+            if (pending.isNotEmpty()) {
+                val newest = pending.first()
+                items.add(
+                    FoodButtonController.MenuItem("Показать разбор (${pending.size})") {
+                        showFoodPlate(newest.id)
+                    }
+                )
+                items.add(
+                    FoodButtonController.MenuItem("Разобрать заново") { reparseFood(newest.id) }
+                )
+            }
+            items.add(FoodButtonController.MenuItem("Набрать текстом") { openFoodTypeIn("") })
+            items.add(FoodButtonController.MenuItem("Открыть «Еду»") { openFoodTab() })
+            items.add(FoodButtonController.MenuItem("Открыть «Спорт»") { openSportTab() })
+            eButton?.showMenu(items)
+        }
+    }
+
+    private fun reparseFood(mealId: Long) {
+        eButton?.setBusy(true)
+        scope.launch {
+            val result = runCatching { app.foodEngine.reparse(mealId) }
+                .getOrElse { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Result.failure(e)
+                }
+            eButton?.setBusy(false)
+            result.onSuccess { parsed ->
+                Haptics.success(this@PravkaAccessibilityService)
+                showFoodPlate(parsed.meal.id)
+            }.onFailure { e ->
+                Haptics.error(this@PravkaAccessibilityService)
+                Feedback.toast(
+                    this@PravkaAccessibilityService,
+                    e.message ?: "Разобрать заново не вышло",
+                    long = true,
+                )
+            }
+        }
+    }
+
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         // A focusable type-in box must not sit above the keyguard through a
@@ -2632,6 +3075,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         zButton?.hideInput()
         rButton?.hideInput()
         rButton?.hidePlate()
+        eButton?.hideInput()
+        eButton?.hidePlate()
         // Repositioning ADDS work to the transition the system is running right
         // now: updateViewLayout on our overlays makes WindowManager wait for
         // them to redraw mid-fold. Do it once the fold has settled instead -
@@ -2644,7 +3089,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // back with a big number here, the leak is ours; a small one clears us.
         runCatching {
             val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0) +
-                (rButton?.windowCount() ?: 0)
+                (rButton?.windowCount() ?: 0) + (eButton?.windowCount() ?: 0)
             app.eventLog.add("смена конфигурации: наших окон $n")
         }
     }
@@ -2654,6 +3099,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         floatingButton?.onConfigurationChanged()
         zButton?.onConfigurationChanged()
         rButton?.onConfigurationChanged()
+        eButton?.onConfigurationChanged()
     }
 
     override fun onInterrupt() = Unit
@@ -2671,6 +3117,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         zSession = null
         rSession?.stop()
         rSession = null
+        eSession?.stop()
+        eSession = null
         runCatching { stopMicHold() }
         floatingButton?.destroy()
         floatingButton = null
@@ -2678,6 +3126,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         zButton = null
         rButton?.destroy()
         rButton = null
+        eButton?.destroy()
+        eButton = null
         scope.cancel()
         super.onDestroy()
     }

@@ -106,6 +106,48 @@ class PravkaApp : Application() {
         )
     }
 
+    // Спорт: кэш тренировочной жизни из intervals.icu и разбор своих
+    // тренировок. Сама выгрузка - вторая дорога к тому же API, отдельная от
+    // IcuSweeper: тот пишет в ленту, а этот в кэш, который можно потерять.
+    val sportStore by lazy { ru.zf.pravka.data.SportStore(this) }
+    val icuSportSync by lazy {
+        ru.zf.pravka.data.IcuSportSync(settings, sportStore, httpClient, eventLog)
+    }
+
+    // Еда: дневник приёмов с КБЖУ. Незаменимые данные - как лента.
+    val foodStore by lazy {
+        ru.zf.pravka.data.FoodStore(this).also { store ->
+            store.logger = { line -> eventLog.add(line) }
+        }
+    }
+    val openFoodFacts by lazy { ru.zf.pravka.data.OpenFoodFacts(httpClient) }
+    val foodEngine by lazy {
+        ru.zf.pravka.core.FoodEngine(
+            claude = claudeProvider,
+            dictionary = DictionaryApplier(dictionaryStore),
+            dictionaryStore = dictionaryStore,
+            store = foodStore,
+            sportStore = sportStore,
+            icu = icuSportSync,
+            zasechkaStore = zasechkaStore,
+            offf = openFoodFacts,
+            settings = settings,
+            stats = stats,
+            eventLog = eventLog,
+        )
+    }
+    val sportCoach by lazy {
+        ru.zf.pravka.core.SportCoach(
+            claude = claudeProvider,
+            store = sportStore,
+            foodStore = foodStore,
+            zasechkaStore = zasechkaStore,
+            settings = settings,
+            stats = stats,
+            eventLog = eventLog,
+        )
+    }
+
     // The phone layer: app time, pickups, distractions; attention eaters and
     // calls cross into the ribbon via the sweeper.
     val phoneStore by lazy { ru.zf.pravka.data.PhoneStore(this) }

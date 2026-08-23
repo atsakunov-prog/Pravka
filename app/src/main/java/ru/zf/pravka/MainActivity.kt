@@ -19,9 +19,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -33,7 +35,9 @@ import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -100,6 +104,8 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_TAB = "tab"
         const val TAB_ZASECHKA = "zasechka"
         const val TAB_TODOIST = "todoist"
+        const val TAB_SPORT = "sport"
+        const val TAB_FOOD = "food"
         const val TAB_SETTINGS = "settings"
     }
 
@@ -112,6 +118,8 @@ class MainActivity : ComponentActivity() {
             TAB_SETTINGS -> Tab.SETTINGS
             TAB_ZASECHKA -> Tab.ZASECHKA
             TAB_TODOIST -> Tab.TODOIST
+            TAB_SPORT -> Tab.SPORT
+            TAB_FOOD -> Tab.FOOD
             // The timesheet is the screen the owner opens daily; everything
             // else is service tooling.
             else -> Tab.ZASECHKA
@@ -155,6 +163,8 @@ class MainActivity : ComponentActivity() {
 internal enum class Tab(val titleRes: Int) {
     ZASECHKA(R.string.tab_zasechka),
     TODOIST(R.string.tab_todoist),
+    SPORT(R.string.tab_sport),
+    FOOD(R.string.tab_food),
     SETTINGS(R.string.tab_settings),
     DICTIONARY(R.string.tab_dictionary),
     PROMPTS(R.string.tab_prompts),
@@ -189,56 +199,83 @@ private fun MainScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            NavigationBar {
+            // Одиннадцать вкладок в одну полосу больше не влезают: она ездит
+            // пальцем влево-вправо. Ежедневные (Засечка, Дела, Спорт, Еда)
+            // стоят первыми, служебные - за ними, поэтому в обычный день
+            // прокручивать не приходится вообще.
+            NavigationBar(Modifier.horizontalScroll(rememberScrollState())) {
                 NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.ZASECHKA,
                     onClick = { tab = Tab.ZASECHKA },
                     icon = { Icon(Icons.Filled.DateRange, contentDescription = null) },
                     label = { Text(stringResource(Tab.ZASECHKA.titleRes)) },
                 )
                 NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.TODOIST,
                     onClick = { tab = Tab.TODOIST },
                     icon = { Icon(Icons.Filled.CheckCircle, contentDescription = null) },
                     label = { Text(stringResource(Tab.TODOIST.titleRes)) },
                 )
                 NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
+                    selected = tab == Tab.SPORT,
+                    onClick = { tab = Tab.SPORT },
+                    icon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    label = { Text(stringResource(Tab.SPORT.titleRes)) },
+                )
+                NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
+                    selected = tab == Tab.FOOD,
+                    onClick = { tab = Tab.FOOD },
+                    icon = { Icon(Icons.Filled.ShoppingCart, contentDescription = null) },
+                    label = { Text(stringResource(Tab.FOOD.titleRes)) },
+                )
+                NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.SETTINGS,
                     onClick = { tab = Tab.SETTINGS },
                     icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                     label = { Text(stringResource(Tab.SETTINGS.titleRes)) },
                 )
                 NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.DICTIONARY,
                     onClick = { tab = Tab.DICTIONARY },
                     icon = { Icon(Icons.Filled.List, contentDescription = null) },
                     label = { Text(stringResource(Tab.DICTIONARY.titleRes)) },
                 )
                 NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.PROMPTS,
                     onClick = { tab = Tab.PROMPTS },
                     icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                     label = { Text(stringResource(Tab.PROMPTS.titleRes)) },
                 )
                 NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.TRANSCRIPTS,
                     onClick = { tab = Tab.TRANSCRIPTS },
                     icon = { Icon(painterResource(R.drawable.ic_transcripts), contentDescription = null) },
                     label = { Text(stringResource(Tab.TRANSCRIPTS.titleRes)) },
                 )
                 NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.LEARNING,
                     onClick = { tab = Tab.LEARNING },
                     icon = { Icon(Icons.Filled.Star, contentDescription = null) },
                     label = { Text(stringResource(Tab.LEARNING.titleRes)) },
                 )
                 NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.LOGS,
                     onClick = { tab = Tab.LOGS },
                     icon = { Icon(Icons.Filled.Build, contentDescription = null) },
                     label = { Text(stringResource(Tab.LOGS.titleRes)) },
                 )
                 NavigationBarItem(
+                    modifier = Modifier.widthIn(min = 84.dp),
                     selected = tab == Tab.STATS,
                     onClick = { tab = Tab.STATS },
                     icon = { Icon(Icons.Filled.Info, contentDescription = null) },
@@ -251,6 +288,8 @@ private fun MainScreen(
             when (tab) {
                 Tab.ZASECHKA -> ZasechkaTab(app)
                 Tab.TODOIST -> TodoistTab(app)
+                Tab.SPORT -> SportTab(app)
+                Tab.FOOD -> FoodTab(app)
                 Tab.SETTINGS -> SettingsTab(settings, whisperProvider, recordings, serviceEnabled, onOpenAccessibilitySettings)
                 Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
                 Tab.PROMPTS -> PromptsTab(promptStore)
@@ -1587,6 +1626,8 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.PROSE to R.string.prompt_title_prose,
     PromptStore.PromptId.MEETING to R.string.prompt_title_meeting,
     PromptStore.PromptId.TASKS to R.string.prompt_title_tasks,
+    PromptStore.PromptId.FOOD to R.string.prompt_title_food,
+    PromptStore.PromptId.COACH to R.string.prompt_title_coach,
 )
 
 @Composable

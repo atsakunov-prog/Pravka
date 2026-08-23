@@ -772,6 +772,27 @@ class ZasechkaStore(private val context: Context) {
         if (entries.removeAll { it.id == id }) persist()
     }
 
+    /**
+     * Дописать примечание к записи, не двигая её во времени.
+     *
+     * Отдельно от [update] нарочно, и по двум причинам. Во-первых, `raw` не
+     * участвует в инвариантах ленты: изменить текст нельзя так, чтобы записи
+     * наложились, - значит и пересчёт ленты здесь не нужен. Во-вторых, шаг
+     * отмены: еда приписывается к «Еде» три-пять раз в день, и если каждая
+     * приписка встаёт в стопку отмены (там пять шагов), то настоящую свою
+     * операцию владелец через день откатить уже не сможет.
+     *
+     * Возвращает false, если записи с таким id нет: звать это можно смело.
+     */
+    suspend fun annotate(id: Long, raw: String): Boolean = mutex.withLock {
+        ensureLoaded()
+        val index = entries.indexOfFirst { it.id == id }
+        if (index < 0) return@withLock false
+        entries[index] = entries[index].copy(raw = raw, synced = false, notionSynced = false)
+        persist()
+        true
+    }
+
     /** A completed 🍅 is credited to the entry that was running. */
     suspend fun incrementPomodoro(id: Long): Unit = mutex.withLock {
         ensureLoaded()

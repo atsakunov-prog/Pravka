@@ -24,7 +24,8 @@ import java.util.Locale
 internal object Backups {
 
     // Незаменимое: лента с категориями, словарь Правки, выученные правила,
-    // ждущие подтверждения находки, следилки за правками, телефонный слой.
+    // ждущие подтверждения находки, следилки за правками, телефонный слой,
+    // дневник еды.
     // Логи (history.jsonl, transcriptions.jsonl) сюда НЕ идут: они большие и
     // сами держат прошлую копию рядом.
     private val STORES = listOf(
@@ -35,6 +36,10 @@ internal object Backups {
         "pravka-edit-watch.json",
         "phone.json",
         "todoist.json",
+        // Дневник еды: сказанное «омлет из трёх яиц» неоткуда добыть заново,
+        // как и ленту. Кэш спорта (sport.json) сюда НЕ идёт - он отрастает из
+        // intervals.icu сам.
+        "food.json",
     )
 
     private const val DIR = "backups"

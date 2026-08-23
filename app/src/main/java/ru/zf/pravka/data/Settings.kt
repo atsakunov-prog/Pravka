@@ -51,8 +51,29 @@ class Settings(private val context: Context) {
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
         private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
 
+        // Спорт: вкладка живёт кэшем intervals.icu, глубина - в днях.
+        private val KEY_SPORT_DAYS = intPreferencesKey("sport_days")
+        // Еда: кнопка «Е», цели КБЖУ и две дороги наружу.
+        private val KEY_E_ENABLED = booleanPreferencesKey("e_enabled")
+        private val KEY_FOOD_KCAL = intPreferencesKey("food_target_kcal")
+        private val KEY_FOOD_PROTEIN = intPreferencesKey("food_target_protein")
+        private val KEY_FOOD_FAT = intPreferencesKey("food_target_fat")
+        private val KEY_FOOD_CARBS = intPreferencesKey("food_target_carbs")
+        private val KEY_FOOD_TO_ICU = booleanPreferencesKey("food_to_icu")
+        private val KEY_FOOD_TO_RIBBON = booleanPreferencesKey("food_to_ribbon")
+
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
+
+        // Заводские цели КБЖУ: посчитаны по Миффлину-Сан-Жеору для владельца
+        // (86 кг, 180 см, 1982) при умеренной активности, белок 1,8 г/кг.
+        // Тренировки в этот расчёт НЕ входят: их видно отдельно, а еда под
+        // тренировку добирается сознательно.
+        const val FOOD_KCAL_DEFAULT = 2500
+        const val FOOD_PROTEIN_DEFAULT = 160
+        const val FOOD_FAT_DEFAULT = 80
+        const val FOOD_CARBS_DEFAULT = 280
+        const val SPORT_DAYS_DEFAULT = 120
     }
 
     val apiKeyFlow = context.dataStore.data.map { it[KEY_API_KEY] ?: "" }
@@ -204,6 +225,64 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_R_ENABLED] = value }
     }
 
+    // ---- Спорт (вкладка на кэше intervals.icu) ----
+
+    /** Сколько дней тренировок и здоровья держим в кэше вкладки «Спорт». */
+    val sportDaysFlow = context.dataStore.data.map { it[KEY_SPORT_DAYS] ?: SPORT_DAYS_DEFAULT }
+    suspend fun sportDays(): Int = sportDaysFlow.first()
+    suspend fun setSportDays(value: Int) {
+        context.dataStore.edit { it[KEY_SPORT_DAYS] = value.coerceIn(14, 400) }
+    }
+
+    // ---- Еда ----
+
+    /** Кнопка «Е» на экране: сказал, что съел — получил КБЖУ. */
+    val eEnabledFlow = context.dataStore.data.map { it[KEY_E_ENABLED] ?: true }
+    suspend fun setEEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_E_ENABLED] = value }
+    }
+
+    val foodKcalFlow = context.dataStore.data.map { it[KEY_FOOD_KCAL] ?: FOOD_KCAL_DEFAULT }
+    val foodProteinFlow = context.dataStore.data.map { it[KEY_FOOD_PROTEIN] ?: FOOD_PROTEIN_DEFAULT }
+    val foodFatFlow = context.dataStore.data.map { it[KEY_FOOD_FAT] ?: FOOD_FAT_DEFAULT }
+    val foodCarbsFlow = context.dataStore.data.map { it[KEY_FOOD_CARBS] ?: FOOD_CARBS_DEFAULT }
+
+    suspend fun foodTargets(): Targets = Targets(
+        kcal = foodKcalFlow.first(),
+        protein = foodProteinFlow.first(),
+        fat = foodFatFlow.first(),
+        carbs = foodCarbsFlow.first(),
+    )
+
+    data class Targets(val kcal: Int, val protein: Int, val fat: Int, val carbs: Int)
+
+    suspend fun setFoodTargets(kcal: Int, protein: Int, fat: Int, carbs: Int) {
+        context.dataStore.edit {
+            it[KEY_FOOD_KCAL] = kcal.coerceIn(800, 6000)
+            it[KEY_FOOD_PROTEIN] = protein.coerceIn(0, 400)
+            it[KEY_FOOD_FAT] = fat.coerceIn(0, 300)
+            it[KEY_FOOD_CARBS] = carbs.coerceIn(0, 800)
+        }
+    }
+
+    /** КБЖУ дня уезжает в wellness intervals.icu (там эти поля пустуют). */
+    val foodToIcuFlow = context.dataStore.data.map { it[KEY_FOOD_TO_ICU] ?: true }
+    suspend fun foodToIcu(): Boolean = foodToIcuFlow.first()
+    suspend fun setFoodToIcu(value: Boolean) {
+        context.dataStore.edit { it[KEY_FOOD_TO_ICU] = value }
+    }
+
+    /**
+     * Съеденное приписывается к записи «Еда» в ленте Засечки. Приписывается -
+     * и только: сама лента новых записей от еды не отращивает, её инварианты
+     * трогать нельзя (см. README).
+     */
+    val foodToRibbonFlow = context.dataStore.data.map { it[KEY_FOOD_TO_RIBBON] ?: true }
+    suspend fun foodToRibbon(): Boolean = foodToRibbonFlow.first()
+    suspend fun setFoodToRibbon(value: Boolean) {
+        context.dataStore.edit { it[KEY_FOOD_TO_RIBBON] = value }
+    }
+
     val fabSizeFlow = context.dataStore.data.map { it[KEY_FAB_SIZE] ?: FAB_SIZE_DEFAULT }
     val fabAlphaFlow = context.dataStore.data.map { it[KEY_FAB_ALPHA] ?: FAB_ALPHA_DEFAULT }
 
@@ -259,6 +338,21 @@ class Settings(private val context: Context) {
         context.dataStore.edit {
             it[floatPreferencesKey("rfab_x_$screenKey")] = xFraction
             it[floatPreferencesKey("rfab_y_$screenKey")] = yFraction
+        }
+    }
+
+    // Еда стоит четвёртой в связке: по умолчанию под «Р».
+    suspend fun eFabPosition(screenKey: String): Pair<Float, Float> {
+        val prefs = context.dataStore.data.first()
+        val x = prefs[floatPreferencesKey("efab_x_$screenKey")] ?: 0.92f
+        val y = prefs[floatPreferencesKey("efab_y_$screenKey")] ?: 0.88f
+        return x to y
+    }
+
+    suspend fun setEFabPosition(screenKey: String, xFraction: Float, yFraction: Float) {
+        context.dataStore.edit {
+            it[floatPreferencesKey("efab_x_$screenKey")] = xFraction
+            it[floatPreferencesKey("efab_y_$screenKey")] = yFraction
         }
     }
 }

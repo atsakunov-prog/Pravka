@@ -632,6 +632,187 @@ $raw
         return out to o.optString("notes").trim()
     }
 
+    // ---- Еда: сказанное (и снятое) -> КБЖУ (Сонет) ----
+
+    data class FoodParse(
+        val kind: String,
+        val timeOfDay: String,   // «ЧЧ:ММ» со слов владельца, иначе пусто
+        val items: List<ru.zf.pravka.core.MealItem>,
+        val note: String,
+        val costUsd: Double,
+        val tokensIn: Int,
+        val tokensOut: Int,
+        val model: String,
+        val latencyMs: Long,
+    )
+
+    /**
+     * Разбирает один приём пищи. Сонета здесь достаточно: трудное - узнать
+     * блюдо и прикинуть порцию, а не рассудить; таблицы КБЖУ модель знает.
+     *
+     * [image] - снимок тарелки: тогда к промпту добавляется указание мерить
+     * порции по посуде в кадре и читать этикетку, если она попала в кадр.
+     * Текст при этом может быть пустым - фото само себе описание.
+     */
+    suspend fun parseFood(
+        text: String,
+        dictBlock: String,
+        profileLine: String,
+        image: ImagePart? = null,
+    ): Result<FoodParse> = withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) {
+                throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+            }
+            require(text.isNotBlank() || image != null) { "Нечего разбирать: ни слов, ни снимка." }
+            val template = promptStore.effective(PromptStore.PromptId.FOOD)
+            var prompt = template
+                .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
+                .replace("{NOW}", nowContext())
+                .replace("{PROFILE}", profileLine.ifBlank { "вес и пороги неизвестны" })
+            if (image != null) prompt = prompt.trimEnd() + "\n\n" + Prompts.FOOD_PHOTO_HINT
+            val said = text.ifBlank { "(без слов — только снимок)" }
+            prompt = if (prompt.contains(Prompts.PLACEHOLDER_INPUT)) {
+                prompt.replace(Prompts.PLACEHOLDER_INPUT, said)
+            } else {
+                prompt.trimEnd() + "\n\nСъедено:\n" + said
+            }
+            val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+            val started = System.currentTimeMillis()
+            val reply = requestWithOneRetry(
+                apiKey, Settings.MODEL_SONNET, parts, "", null,
+                images = listOfNotNull(image),
+            )
+            val parsed = parseFoodReply(reply.text)
+            FoodParse(
+                kind = parsed.kind,
+                timeOfDay = parsed.timeOfDay,
+                items = parsed.items,
+                note = parsed.note,
+                costUsd = costUsd(Settings.MODEL_SONNET, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+                model = Settings.MODEL_SONNET,
+                latencyMs = System.currentTimeMillis() - started,
+            )
+        }
+    }
+
+    private class FoodReply(
+        val kind: String,
+        val timeOfDay: String,
+        val items: List<ru.zf.pravka.core.MealItem>,
+        val note: String,
+    )
+
+    private val clockOnly = Regex("^([01]?\\d|2[0-3]):[0-5]\\d$")
+
+    private fun parseFoodReply(raw: String): FoodReply {
+        val o = jsonObjectOf(raw, "Модель ответила не JSON. Скажи ещё раз или поправь руками.")
+        val out = mutableListOf<ru.zf.pravka.core.MealItem>()
+        val array = o.optJSONArray("items") ?: JSONArray()
+        for (i in 0 until array.length()) {
+            val t = array.optJSONObject(i) ?: continue
+            val name = t.optString("name").trim()
+            if (name.isEmpty()) continue
+            val item = ru.zf.pravka.core.MealItem(
+                name = name.take(120),
+                grams = t.optInt("grams", 0).coerceIn(0, 5000),
+                kcal = t.optInt("kcal", 0).coerceIn(0, 10_000),
+                protein = t.optInt("protein", 0).coerceIn(0, 500),
+                fat = t.optInt("fat", 0).coerceIn(0, 500),
+                carbs = t.optInt("carbs", 0).coerceIn(0, 1000),
+                fiber = t.optInt("fiber", 0).coerceIn(0, 200),
+                sureness = t.optString("sure").trim().take(12),
+            )
+            // Калорий модель не дала, а макросы дала - считаем сами, чтобы
+            // позиция не пришла в дневник нулевой.
+            out.add(if (item.kcal == 0) item.copy(kcal = item.kcalFromMacros()) else item)
+        }
+        val time = o.optString("time").trim()
+        return FoodReply(
+            kind = o.optString("kind").trim().lowercase().take(20),
+            timeOfDay = if (clockOnly.matches(time)) time else "",
+            items = out,
+            note = o.optString("note").trim(),
+        )
+    }
+
+    // ---- Спорт: вопрос по своим тренировкам (Опус) ----
+
+    data class CoachAnswer(
+        val text: String,
+        val costUsd: Double,
+        val tokensIn: Int,
+        val tokensOut: Int,
+        val model: String,
+        val latencyMs: Long,
+    )
+
+    /**
+     * Отвечает на вопрос о тренировках. Опус: считать тут нечего - все цифры
+     * уже в [contextBlock], - а вот сказать «сегодня не грузись, и вот почему»
+     * это суждение, и оно стоит своих денег.
+     *
+     * Ответ стримится в [onDelta], чтобы первые слова появлялись на экране
+     * сразу, как в Правке.
+     */
+    suspend fun coach(
+        question: String,
+        contextBlock: String,
+        onDelta: ((String) -> Unit)? = null,
+    ): Result<CoachAnswer> = withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) {
+                throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+            }
+            val template = promptStore.effective(PromptStore.PromptId.COACH)
+            var prompt = template
+                .replace("{CONTEXT}", contextBlock.ifBlank { "Данных нет — выгрузка не удалась." })
+                .replace("{TODAY}", todayContext())
+            val asked = question.trim().ifBlank { "Как у меня дела?" }
+            prompt = if (prompt.contains(Prompts.PLACEHOLDER_INPUT)) {
+                prompt.replace(Prompts.PLACEHOLDER_INPUT, asked)
+            } else {
+                prompt.trimEnd() + "\n\nВопрос:\n" + asked
+            }
+            val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+            val started = System.currentTimeMillis()
+            val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", onDelta)
+            CoachAnswer(
+                text = reply.text.trim(),
+                costUsd = costUsd(Settings.MODEL_OPUS, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+                model = Settings.MODEL_OPUS,
+                latencyMs = System.currentTimeMillis() - started,
+            )
+        }
+    }
+
+    /** «воскресенье, 23 августа 2026, 14:05» — еде нужен ещё и час. */
+    private fun nowContext(): String {
+        val now = java.util.Date()
+        val human = java.text.SimpleDateFormat("EEEE, d MMMM yyyy, HH:mm", java.util.Locale("ru"))
+            .format(now)
+        return human
+    }
+
+    /** Достаёт JSON-объект из ответа, снимая markdown-обёртку, если она есть. */
+    private fun jsonObjectOf(raw: String, complaint: String): JSONObject {
+        var text = raw.trim()
+        if (text.startsWith("```")) {
+            text = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        }
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start < 0 || end <= start) throw ApiException(complaint)
+        return runCatching { JSONObject(text.substring(start, end + 1)) }
+            .getOrElse { throw ApiException(complaint) }
+    }
+
     private fun parseLearn(raw: String): LearnProposals {
         var text = raw.trim()
         if (text.startsWith("```")) {
@@ -677,12 +858,20 @@ $raw
         cacheReadTokens = reply.cacheReadTokens,
     )
 
+    /**
+     * Снимок для мультимодального запроса: base64 и его тип. Картинка едет
+     * ПЕРЕД текстом - так рекомендует Anthropic, и так модель точно видит её
+     * до инструкции, что с ней делать.
+     */
+    data class ImagePart(val mediaType: String, val base64: String)
+
     private fun requestWithOneRetry(
         apiKey: String,
         model: String,
         parts: Prompts.PromptParts,
         input: String,
         onDelta: ((String) -> Unit)?,
+        images: List<ImagePart> = emptyList(),
     ): ApiReply {
         // Spec 6.1: one retry on network error or timeout; none on client 4xx.
         // Transient server blips (429/500/529 "overloaded") last seconds - one
@@ -690,14 +879,14 @@ $raw
         // nothing. A short pause before the network retry too: an instant
         // re-POST into the same dead socket just fails the same way.
         return try {
-            request(apiKey, model, parts, input, onDelta)
+            request(apiKey, model, parts, input, onDelta, images)
         } catch (e: IOException) {
             Thread.sleep(1000)
-            request(apiKey, model, parts, input, onDelta)
+            request(apiKey, model, parts, input, onDelta, images)
         } catch (e: ApiException) {
             if (!e.retryable) throw e
             Thread.sleep(e.retryDelayMs)
-            request(apiKey, model, parts, input, onDelta)
+            request(apiKey, model, parts, input, onDelta, images)
         }
     }
 
@@ -707,12 +896,17 @@ $raw
         parts: Prompts.PromptParts,
         input: String,
         onDelta: ((String) -> Unit)?,
+        images: List<ImagePart> = emptyList(),
     ): ApiReply {
         // Rough token estimate for Russian text (~2.5 chars/token) + 30% headroom.
         // Counts BOTH slots: assist/learn tasks carry all their content in
         // dictPart with input="" - estimating from input alone collapsed their
         // budget to the 1024 floor, deterministically truncating long texts.
-        val estimatedInputTokens = (parts.dictPart.length + input.length) / 2 + 1
+        // Снимок тарелки - это ещё ~1600 токенов на картинку (1568x1568 max):
+        // без этой прибавки бюджет ответа сжимается до пола и разбор еды по
+        // фото обрывается на середине JSON.
+        val estimatedInputTokens =
+            (parts.dictPart.length + input.length) / 2 + 1 + images.size * 1600
         // Opus (redo chips) thinks adaptively by default, and thinking tokens
         // count toward max_tokens: without headroom a 350-char redo burned the
         // whole budget on thinking and died with stop_reason=max_tokens before
@@ -743,6 +937,21 @@ $raw
                         put(
                             "content",
                             JSONArray().apply {
+                                // Картинки первыми: так у модели сначала кадр,
+                                // потом инструкция, что с ним делать.
+                                for (img in images) put(
+                                    JSONObject().apply {
+                                        put("type", "image")
+                                        put(
+                                            "source",
+                                            JSONObject().apply {
+                                                put("type", "base64")
+                                                put("media_type", img.mediaType)
+                                                put("data", img.base64)
+                                            }
+                                        )
+                                    }
+                                )
                                 // Cache breakpoint sits on the stable template prefix
                                 // ONLY - the dict block varies per request and would
                                 // invalidate the cache on every dictation. 1h TTL:

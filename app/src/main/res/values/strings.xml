@@ -124,6 +124,8 @@
     <string name="prompt_title_prose">Художественная проза</string>
     <string name="prompt_title_meeting">Встреча (расшифровка)</string>
     <string name="prompt_title_tasks">Разноска (дела)</string>
+    <string name="prompt_title_food">Еда (КБЖУ)</string>
+    <string name="prompt_title_coach">Спорт (разбор тренировок)</string>
     <string name="tab_learning">Обучение</string>
     <string name="tab_logs">Логи</string>
     <string name="prompt_modified">изменён</string>
@@ -176,6 +178,13 @@
     <string name="r_busy">Микрофон занят другой записью — сначала заверши её</string>
     <string name="r_busy_pravka">Идёт наговор Разноски — останови его кнопкой «Р»</string>
     <string name="r_split_failed">Не разобрал наговор — он сохранён, попробуй ещё раз</string>
+
+    <!-- Спорт и еда -->
+    <string name="tab_sport">Спорт</string>
+    <string name="tab_food">Еда</string>
+    <string name="e_busy">Микрофон занят другой записью — сначала заверши её</string>
+    <string name="e_busy_pravka">Идёт запись Еды — останови её кнопкой «Е»</string>
+    <string name="e_parse_failed">Не разобрал по КБЖУ — скажи ещё раз или набери текстом</string>
     <string name="action_label_tasks">Разноска</string>
     <string name="z_notify_morning_title">День начался?</string>
     <string name="z_notify_morning_text">Нажми «З» и скажи, с чего начал день.</string>
