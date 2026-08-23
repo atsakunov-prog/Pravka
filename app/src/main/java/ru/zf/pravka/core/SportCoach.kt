@@ -73,6 +73,41 @@ class SportCoach(
             "" -> "Тренировка"
             else -> type
         }
+
+        /**
+         * Фокус-блок для вопроса «как делать X»: полная карточка движения из
+         * справочника плюс сегодняшняя строка плана. Правила недели тренер и
+         * так увидит ниже — они уезжают в контекст целиком.
+         */
+        fun exerciseFocus(
+            exercise: ru.zf.pravka.data.ExerciseBook.Exercise?,
+            planLine: String,
+        ): String {
+            if (exercise == null && planLine.isBlank()) return ""
+            return buildString {
+                append("ВОПРОС ПРО КОНКРЕТНОЕ УПРАЖНЕНИЕ\n")
+                if (planLine.isNotBlank()) append("Сегодня в плане: ").append(planLine).append('\n')
+                if (exercise != null) {
+                    append("Карточка из его справочника (собран из его Notion):\n")
+                    append("Название: ").append(exercise.name).append('\n')
+                    if (exercise.scheme.isNotBlank()) append("Схема: ").append(exercise.scheme).append('\n')
+                    if (exercise.gear.isNotEmpty()) {
+                        append("Снаряд: ").append(exercise.gear.joinToString(", ")).append('\n')
+                    }
+                    if (exercise.how.isNotBlank()) append("Как делать: ").append(exercise.how).append('\n')
+                    if (exercise.mistakes.isNotBlank()) {
+                        append("Главные ошибки: ").append(exercise.mistakes).append('\n')
+                    }
+                    if (exercise.progression.isNotBlank()) {
+                        append("Прогрессия: ").append(exercise.progression).append('\n')
+                    }
+                }
+                append(
+                    "Отвечай про технику: по шагам, что чувствовать, чего не делать, " +
+                        "как понять, что получается — его правилами недели (они ниже в данных)."
+                )
+            }
+        }
     }
 
     // ---- Готовность: считается на телефоне, без токенов ----
@@ -256,15 +291,26 @@ class SportCoach(
      *
      * Ответ стримится в [onDelta]: первые слова появляются на экране сразу.
      */
-    suspend fun ask(question: String, onDelta: ((String) -> Unit)? = null): Answer {
+    suspend fun ask(
+        question: String,
+        /**
+         * Про что именно спрашивают — карточка упражнения кладёт сюда свой
+         * справочник (техника, ошибки, прогрессия) и строку плана дня. Стоит
+         * ПЕРВЫМ в контексте: «как правильно вис» должен отвечаться его же
+         * техникой и его спина-протоколом, а не общими словами из интернета.
+         */
+        focus: String = "",
+        onDelta: ((String) -> Unit)? = null,
+    ): Answer {
         store.load()
         runCatching { foodStore.load() }
         // План и правила могут быть ещё не прочитаны с диска: вопрос задаётся и
         // с плашки кнопки «Т», где вкладка «Спорт» ни разу не открывалась.
         runCatching { planStore.load() }
         val targets = runCatching { settings.foodTargets() }.getOrNull()
-        val context = runCatching { buildContext(targets) }
-            .getOrElse { "Контекст собрать не удалось." }
+        val context = (if (focus.isBlank()) "" else focus.trim() + "\n\n") +
+            runCatching { buildContext(targets) }
+                .getOrElse { "Контекст собрать не удалось." }
         val result = claude.coach(question, context, onDelta)
         val answer = result.getOrElse { e ->
             eventLog.add("спорт: вопрос не вышел — ${e.message}")

@@ -15,10 +15,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
@@ -118,6 +121,9 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     var streaming by remember { mutableStateOf("") }
     var openWorkout by remember { mutableStateOf<String?>(null) }
     var commenting by remember { mutableStateOf<SportStore.Workout?>(null) }
+    // Вопрос тренеру про конкретное упражнение: заголовок задачи и карточка
+    // справочника уезжают фокусом, ответ стримится в диалоге.
+    var coachTopic by remember { mutableStateOf<Pair<String, ExerciseBook.Exercise?>?>(null) }
     var days by remember { mutableStateOf(14) }
 
     var gtgDialog by remember { mutableStateOf(false) }
@@ -365,6 +371,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     doneToday = doneToday,
                     history = task.history,
                     restSec = restSec,
+                    onAskCoach = { coachTopic = task.title to task.exercise },
                     checked = todaySession?.isChecked(task.id) == true,
                     onCheck = {
                         app.appScope.launch {
@@ -799,6 +806,86 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     commenting?.let { workout ->
         WorkoutCommentDialog(app, workout, onClose = { commenting = null })
     }
+    coachTopic?.let { (title, exercise) ->
+        CoachDialog(app, title, exercise, onClose = { coachTopic = null })
+    }
+}
+
+/**
+ * Тренер в кармане упражнения: «как правильно вис?» — и Опус отвечает, видя
+ * ЕГО справочник этого движения, строку плана дня, спина-протокол недели и все
+ * данные. Ответ стримится сюда же и остаётся в «прошлых разборах».
+ */
+@Composable
+private fun CoachDialog(
+    app: PravkaApp,
+    taskTitle: String,
+    exercise: ExerciseBook.Exercise?,
+    onClose: () -> Unit,
+) {
+    val shortName = exercise?.name ?: taskTitle.take(40)
+    var question by remember { mutableStateOf("Как правильно делать: $shortName?") }
+    var streaming by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onClose() },
+        title = { Text(shortName, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                OutlinedTextField(
+                    value = question,
+                    onValueChange = { question = it },
+                    label = { Text("Вопрос тренеру") },
+                    minLines = 1,
+                    maxLines = 3,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                PaperHint(
+                    "Опус видит карточку движения из твоего справочника, план дня, " +
+                        "правила недели и твои данные."
+                )
+                if (streaming.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(streaming, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (!busy && question.isNotBlank()) {
+                        busy = true
+                        streaming = ""
+                        app.appScope.launch {
+                            val answer = runCatching {
+                                app.sportCoach.ask(
+                                    question = question,
+                                    focus = SportCoach.exerciseFocus(exercise, taskTitle),
+                                ) { delta -> streaming += delta }
+                            }.getOrElse { e ->
+                                SportCoach.Answer("", 0.0, e.message ?: "не вышло")
+                            }
+                            busy = false
+                            if (answer.error.isNotBlank()) {
+                                streaming = answer.error
+                            } else if (answer.text.isNotBlank()) {
+                                streaming = answer.text
+                            }
+                        }
+                    }
+                },
+                enabled = !busy && question.isNotBlank(),
+            ) { Text(if (busy) "Думает…" else "Спросить") }
+        },
+        dismissButton = { TextButton(onClick = onClose, enabled = !busy) { Text("Закрыть") } },
+    )
 }
 
 /**
@@ -879,6 +966,7 @@ private fun PlannedExerciseCard(
     restSec: Int,
     checked: Boolean = false,
     onCheck: (() -> Unit)? = null,
+    onAskCoach: (() -> Unit)? = null,
     onRest: (Int) -> Unit,
 ) {
     var open by remember(title) { mutableStateOf(false) }
@@ -986,6 +1074,9 @@ private fun PlannedExerciseCard(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (seconds in listOf(60, restSec, 120).distinct()) {
                 OutlinedButton(onClick = { onRest(seconds) }) { Text("⏱ $seconds") }
+            }
+            if (onAskCoach != null) {
+                OutlinedButton(onClick = onAskCoach) { Text("Тренеру?") }
             }
         }
         if (exercise != null && exercise.videoQuery.isNotBlank()) {
@@ -1424,6 +1515,7 @@ private fun ZaryadkaChecklist(
     val doneIds = gtgToday?.doneIds ?: emptyList()
     val charged = gtgToday?.charged == true
     var openId by remember { mutableStateOf<String?>(null) }
+    var asking by remember { mutableStateOf<ExerciseBook.Exercise?>(null) }
 
     PaperCard(
         label = "зарядка сегодня",
@@ -1467,10 +1559,12 @@ private fun ZaryadkaChecklist(
                         else MaterialTheme.colorScheme.onSurface,
                     )
                     if (exercise.scheme.isNotBlank()) PaperHint(exercise.scheme)
-                    if (openId == exercise.id && exercise.how.isNotBlank()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(exercise.how, style = MaterialTheme.typography.bodySmall)
-                        if (exercise != null && exercise.mistakes.isNotBlank()) {
+                    if (openId == exercise.id) {
+                        if (exercise.how.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(exercise.how, style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (exercise.mistakes.isNotBlank()) {
                             Spacer(Modifier.height(2.dp))
                             Text(
                                 exercise.mistakes,
@@ -1478,6 +1572,8 @@ private fun ZaryadkaChecklist(
                                 color = MaterialTheme.colorScheme.error,
                             )
                         }
+                        Spacer(Modifier.height(6.dp))
+                        OutlinedButton(onClick = { asking = exercise }) { Text("Тренеру?") }
                     }
                 }
             }
@@ -1496,6 +1592,9 @@ private fun ZaryadkaChecklist(
             hint = "Итог: всё сделал, вис 40, подтягивания 2…",
             whereSaid = "в карточке зарядки",
         )
+    }
+    asking?.let { exercise ->
+        CoachDialog(app, exercise.name, exercise, onClose = { asking = null })
     }
 }
 
