@@ -739,6 +739,292 @@ $raw
         )
     }
 
+    // ---- Тело: один вызов на роутер и разбор (Сонет) ----
+
+    /** Что владелец сказал: вид намерения и разобранная начинка. */
+    data class BodyParse(
+        val kind: String,                     // strength | gtg | food | feel | question | unknown
+        val strength: StrengthParse?,
+        val gtg: GtgParse?,
+        val food: FoodParse?,
+        val feel: FeelParse?,
+        val question: String,
+        val note: String,
+        val costUsd: Double,
+        val tokensIn: Int,
+        val tokensOut: Int,
+        val model: String,
+        val latencyMs: Long,
+    )
+
+    data class SetParse(val amount: Int, val weightKg: Double, val note: String)
+
+    data class ExerciseParse(
+        val name: String,
+        val sets: List<SetParse>,
+        val note: String,
+    )
+
+    data class StrengthParse(
+        val mode: String,                     // replace | add
+        val exercises: List<ExerciseParse>,
+        val feel: Int,
+        val rpe: Int,
+        val minutes: Int,
+    )
+
+    data class GtgParse(
+        val charged: Boolean,
+        val hangSec: Int,
+        val negatives: Int,
+        val scapular: Int,
+    )
+
+    data class FeelParse(val feel: Int, val knee: String, val note: String)
+
+    /**
+     * Разбирает одну фразу про тело: подходы, зарядку, еду, самочувствие или
+     * вопрос. Роутер и разбор в ОДНОМ вызове — два подряд стоили бы вдвое и
+     * тормозили вдвое, а классификация без разбора всё равно бесполезна.
+     *
+     * Справочники упражнений и рациона едут в КЭШИРУЕМОЙ части промпта: они
+     * байт в байт одинаковы между запросами, поэтому платятся раз в час, а не
+     * на каждую фразу. Именно из-за них распознавание становится выбором из
+     * списка вместо угадывания.
+     */
+    suspend fun parseBody(
+        text: String,
+        dictBlock: String,
+        exerciseBook: String,
+        rationBook: String,
+        planBlock: String,
+        lastTimeBlock: String,
+    ): Result<BodyParse> = withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) {
+                throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+            }
+            require(text.isNotBlank()) { "Пустая фраза — разбирать нечего." }
+            val template = promptStore.effective(PromptStore.PromptId.BODY)
+            // Стабильная часть — до маркера {VARS}: инструкция и оба
+            // справочника. Она и уходит под точку кэша.
+            val split = template.indexOf(Prompts.PLACEHOLDER_VARS)
+            val head = (if (split >= 0) template.substring(0, split) else template)
+                .replace("{EXERCISES}", exerciseBook.ifBlank { "Справочник упражнений не загружен." })
+                .replace("{RATION}", rationBook.ifBlank { "Справочник рациона не загружен." })
+                .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
+            var tail = if (split >= 0) template.substring(split + Prompts.PLACEHOLDER_VARS.length) else ""
+            tail = tail
+                .replace("{NOW}", nowContext())
+                .replace("{PLAN}", planBlock)
+                .replace("{LAST}", lastTimeBlock)
+            tail = if (tail.contains(Prompts.PLACEHOLDER_INPUT)) {
+                tail.replace(Prompts.PLACEHOLDER_INPUT, text)
+            } else {
+                tail.trimEnd() + "\n\nСказано:\n" + text
+            }
+            // Словарь варьируется от фразы к фразе, поэтому он в head, а head
+            // тогда не полностью стабилен. Кэш живёт на общем начале строки,
+            // и инструкция со справочниками — это первые тысячи токенов; блок
+            // словаря стоит в конце head и портит лишь свой хвост.
+            val parts = Prompts.PromptParts(stablePrefix = head, dictPart = tail, afterInput = "")
+            val started = System.currentTimeMillis()
+            val reply = requestWithOneRetry(apiKey, Settings.MODEL_SONNET, parts, "", null)
+            parseBodyReply(reply).copy(latencyMs = System.currentTimeMillis() - started)
+        }
+    }
+
+    private fun parseBodyReply(reply: ApiReply): BodyParse {
+        val o = jsonObjectOf(
+            reply.text,
+            "Модель ответила не JSON. Сказанное сохранено — можно разобрать заново.",
+        )
+        val kind = o.optString("kind").trim().lowercase().ifBlank { "unknown" }
+
+        val strength = o.optJSONObject("strength")?.let { s ->
+            val exercises = mutableListOf<ExerciseParse>()
+            val array = s.optJSONArray("exercises") ?: JSONArray()
+            for (i in 0 until array.length()) {
+                val e = array.optJSONObject(i) ?: continue
+                val name = e.optString("name").trim()
+                if (name.isEmpty()) continue
+                val rows = mutableListOf<SetParse>()
+                val sets = e.optJSONArray("sets") ?: JSONArray()
+                for (j in 0 until sets.length()) {
+                    val r = sets.optJSONObject(j) ?: continue
+                    val amount = r.optInt("amount", 0)
+                    if (amount <= 0) continue
+                    rows.add(
+                        SetParse(
+                            amount = amount.coerceAtMost(3000),
+                            weightKg = r.optDouble("weight", 0.0).coerceIn(0.0, 300.0),
+                            note = r.optString("note").trim().take(120),
+                        )
+                    )
+                }
+                if (rows.isEmpty()) continue
+                exercises.add(
+                    ExerciseParse(
+                        name = name.take(120),
+                        sets = rows,
+                        note = e.optString("note").trim().take(200),
+                    )
+                )
+            }
+            StrengthParse(
+                mode = if (s.optString("mode").trim().lowercase() == "add") "add" else "replace",
+                exercises = exercises,
+                feel = s.optInt("feel", 0).coerceIn(0, 5),
+                rpe = s.optInt("rpe", 0).coerceIn(0, 10),
+                minutes = s.optInt("minutes", 0).coerceIn(0, 600),
+            )
+        }
+
+        val gtg = o.optJSONObject("gtg")?.let { g ->
+            GtgParse(
+                charged = g.optBoolean("charged", false),
+                hangSec = g.optInt("hang", 0).coerceIn(0, 1200),
+                negatives = g.optInt("negatives", 0).coerceIn(0, 100),
+                scapular = g.optInt("scapular", 0).coerceIn(0, 100),
+            )
+        }
+
+        val food = o.optJSONObject("food")?.let { f ->
+            val items = mutableListOf<ru.zf.pravka.core.MealItem>()
+            val array = f.optJSONArray("items") ?: JSONArray()
+            for (i in 0 until array.length()) {
+                val t = array.optJSONObject(i) ?: continue
+                val name = t.optString("name").trim()
+                if (name.isEmpty()) continue
+                val item = ru.zf.pravka.core.MealItem(
+                    name = name.take(120),
+                    grams = t.optInt("grams", 0).coerceIn(0, 5000),
+                    kcal = t.optInt("kcal", 0).coerceIn(0, 10_000),
+                    protein = t.optInt("protein", 0).coerceIn(0, 500),
+                    fat = t.optInt("fat", 0).coerceIn(0, 500),
+                    carbs = t.optInt("carbs", 0).coerceIn(0, 1000),
+                    fiber = t.optInt("fiber", 0).coerceIn(0, 200),
+                    sureness = t.optString("sure").trim().take(12),
+                )
+                items.add(if (item.kcal == 0) item.copy(kcal = item.kcalFromMacros()) else item)
+            }
+            val clock = f.optString("time").trim()
+            FoodParse(
+                kind = f.optString("kind").trim().lowercase().take(20),
+                timeOfDay = if (clockOnly.matches(clock)) clock else "",
+                items = items,
+                note = f.optString("note").trim(),
+                costUsd = 0.0,
+                tokensIn = 0,
+                tokensOut = 0,
+                model = Settings.MODEL_SONNET,
+                latencyMs = 0L,
+            )
+        }
+
+        val feel = o.optJSONObject("feel")?.let { f ->
+            FeelParse(
+                feel = f.optInt("feel", 0).coerceIn(0, 5),
+                knee = f.optString("knee").trim().lowercase().take(16),
+                note = f.optString("note").trim().take(300),
+            )
+        }
+
+        return BodyParse(
+            kind = kind,
+            strength = strength?.takeIf { it.exercises.isNotEmpty() || it.feel > 0 || it.rpe > 0 },
+            gtg = gtg?.takeIf { it.charged || it.hangSec > 0 || it.negatives > 0 || it.scapular > 0 },
+            food = food?.takeIf { it.items.isNotEmpty() },
+            feel = feel?.takeIf { it.feel > 0 || it.knee.isNotBlank() },
+            question = o.optString("question").trim(),
+            note = o.optString("note").trim(),
+            costUsd = costUsd(Settings.MODEL_SONNET, reply),
+            tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+            tokensOut = reply.outputTokens,
+            model = Settings.MODEL_SONNET,
+            latencyMs = 0L,
+        )
+    }
+
+    // ---- Правила блока: проза Notion -> числа (Сонет, раз в сутки) ----
+
+    data class RulesParse(
+        val hrCeiling: Int,
+        val greyLow: Int,
+        val greyHigh: Int,
+        val cadence: Int,
+        val runsMax: Int,
+        val hoursBetween: Int,
+        val rampNeedsPositiveTsb: Boolean,
+        val cancel: String,
+        val kneeGreen: String,
+        val kneeYellow: String,
+        val kneeRed: String,
+        val week: List<Pair<String, String>>,
+        val extra: List<String>,
+        val costUsd: Double,
+        val tokensIn: Int,
+        val tokensOut: Int,
+    )
+
+    /**
+     * Вынимает числа из страницы блока в Notion: потолок пульса, каденс, серую
+     * зону, лимит пробежек. Раз в сутки — страница меняется раз в месяц.
+     */
+    suspend fun extractRules(pageText: String): Result<RulesParse> = withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+            require(pageText.isNotBlank()) { "Страница блока пуста." }
+            val template = promptStore.effective(PromptStore.PromptId.RULES)
+            // Стена текста режется: страница блока это две-три тысячи знаков, а
+            // не роман, и платить за случайно вставленный роман незачем.
+            val body = pageText.take(20_000)
+            val prompt = if (template.contains(Prompts.PLACEHOLDER_INPUT)) {
+                template.replace(Prompts.PLACEHOLDER_INPUT, body)
+            } else {
+                template.trimEnd() + "\n\nСтраница блока:\n" + body
+            }
+            val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+            val reply = requestWithOneRetry(apiKey, Settings.MODEL_SONNET, parts, "", null)
+            val o = jsonObjectOf(reply.text, "Правила блока не разобрались — модель ответила не JSON.")
+            val week = mutableListOf<Pair<String, String>>()
+            o.optJSONArray("week")?.let { a ->
+                for (i in 0 until a.length()) {
+                    val w = a.optJSONObject(i) ?: continue
+                    val day = w.optString("day").trim()
+                    val session = w.optString("session").trim()
+                    if (day.isNotBlank() && session.isNotBlank()) week.add(day to session)
+                }
+            }
+            val extra = mutableListOf<String>()
+            o.optJSONArray("extra")?.let { a ->
+                for (i in 0 until a.length()) {
+                    a.optString(i).trim().takeIf { it.isNotBlank() }?.let { extra.add(it.take(200)) }
+                }
+            }
+            RulesParse(
+                hrCeiling = o.optInt("hrCeiling", 0).coerceIn(0, 220),
+                greyLow = o.optInt("greyLow", 0).coerceIn(0, 220),
+                greyHigh = o.optInt("greyHigh", 0).coerceIn(0, 220),
+                cadence = o.optInt("cadence", 0).coerceIn(0, 240),
+                runsMax = o.optInt("runsMax", 0).coerceIn(0, 14),
+                hoursBetween = o.optInt("hoursBetween", 0).coerceIn(0, 168),
+                rampNeedsPositiveTsb = o.optBoolean("rampNeedsPositiveTsb", false),
+                cancel = o.optString("cancel").trim().take(300),
+                kneeGreen = o.optString("kneeGreen").trim().take(300),
+                kneeYellow = o.optString("kneeYellow").trim().take(300),
+                kneeRed = o.optString("kneeRed").trim().take(300),
+                week = week,
+                extra = extra.take(8),
+                costUsd = costUsd(Settings.MODEL_SONNET, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+            )
+        }
+    }
+
     // ---- Спорт: вопрос по своим тренировкам (Опус) ----
 
     data class CoachAnswer(

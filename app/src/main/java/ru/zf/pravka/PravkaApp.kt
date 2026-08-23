@@ -148,6 +148,81 @@ class PravkaApp : Application() {
         )
     }
 
+    // Тело: справочники статическим файлом, журнал силовых, план на день.
+    //
+    // Справочники в assets намеренно: карточка тренировки открывается каждый
+    // день, в том числе в подвале на даче, а список движений меняется раз в
+    // месяц. Собираются из Notion скриптом tools/gen_reference.py.
+    val exerciseBook by lazy { ru.zf.pravka.data.ExerciseBook(this) }
+    val rationBook by lazy { ru.zf.pravka.data.RationBook(this) }
+
+    // Журнал силовых — самое незаменимое здесь: подходов нет больше НИГДЕ.
+    val strengthStore by lazy {
+        ru.zf.pravka.data.StrengthStore(this).also { store ->
+            store.logger = { line -> eventLog.add(line) }
+        }
+    }
+
+    // План: скелет дня из календаря intervals, правила блока из Notion.
+    val planStore by lazy { ru.zf.pravka.data.PlanStore(this) }
+    val notionPlanSync by lazy {
+        ru.zf.pravka.data.NotionPlanSync(settings, planStore, httpClient, eventLog)
+    }
+    val planSync by lazy {
+        ru.zf.pravka.core.PlanSync(
+            icu = icuSportSync,
+            notion = notionPlanSync,
+            claude = claudeProvider,
+            store = planStore,
+            stats = stats,
+            eventLog = eventLog,
+        )
+    }
+    val strengthEngine by lazy {
+        ru.zf.pravka.core.StrengthEngine(
+            store = strengthStore,
+            book = exerciseBook,
+            planStore = planStore,
+            icu = icuSportSync,
+            eventLog = eventLog,
+        )
+    }
+    val trafficLight by lazy {
+        ru.zf.pravka.core.TrafficLight(sportStore, planStore, strengthStore)
+    }
+
+    // Один микрофон на подходы, еду, зарядку и вопросы: намерение решает
+    // модель тем же вызовом, что и разбор.
+    val bodyEngine by lazy {
+        ru.zf.pravka.core.BodyEngine(
+            claude = claudeProvider,
+            dictionary = DictionaryApplier(dictionaryStore),
+            dictionaryStore = dictionaryStore,
+            strengthStore = strengthStore,
+            strengthEngine = strengthEngine,
+            foodEngine = foodEngine,
+            book = exerciseBook,
+            ration = rationBook,
+            planStore = planStore,
+            stats = stats,
+            eventLog = eventLog,
+        )
+    }
+
+    // Сводка дня и недели для чата: таймшит, подходы, здоровье, еда — одним
+    // текстом, без единого запроса в сеть.
+    val digestBuilder by lazy {
+        ru.zf.pravka.core.DigestBuilder(
+            context = this,
+            zasechka = zasechkaStore,
+            sport = sportStore,
+            strength = strengthStore,
+            food = foodStore,
+            plan = planStore,
+            settings = settings,
+        )
+    }
+
     // The phone layer: app time, pickups, distractions; attention eaters and
     // calls cross into the ribbon via the sweeper.
     val phoneStore by lazy { ru.zf.pravka.data.PhoneStore(this) }

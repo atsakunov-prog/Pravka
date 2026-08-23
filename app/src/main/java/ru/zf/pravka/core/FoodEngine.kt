@@ -108,22 +108,55 @@ class FoodEngine(
         // Снимок кладём рядом с дневником ТОЛЬКО когда разбор удался: иначе в
         // filesDir копились бы кадры от неудачных попыток.
         val photoName = photo?.let { savePhoto(it) }.orEmpty()
+        return Result.success(
+            record(
+                items = parse.items,
+                kind = parse.kind,
+                timeOfDay = parse.timeOfDay,
+                raw = text,
+                note = parse.note,
+                source = source,
+                photo = photoName,
+                costUsd = parse.costUsd,
+                model = parse.model,
+            )
+        )
+    }
+
+    /**
+     * Положить УЖЕ разобранные позиции в дневник. Отдельно от [parse], потому
+     * что тем же путём приезжает разбор из общего роутера кнопки «Т»: там еда
+     * и подходы разбираются одним вызовом модели, и звать её второй раз ради
+     * той же тарелки было бы расточительно.
+     */
+    suspend fun record(
+        items: List<MealItem>,
+        kind: String,
+        timeOfDay: String,
+        raw: String,
+        note: String,
+        source: String,
+        photo: String = "",
+        costUsd: Double = 0.0,
+        model: String = "",
+    ): Parsed {
+        store.load()
         val meal = store.add(
-            ts = mealTimeOf(parse.timeOfDay),
-            kind = parse.kind.ifBlank { MealItem.kindByHour(hourNow()) },
-            raw = text,
-            items = parse.items,
-            note = parse.note,
+            ts = mealTimeOf(timeOfDay),
+            kind = kind.ifBlank { MealItem.kindByHour(hourNow()) },
+            raw = raw,
+            items = items,
+            note = note,
             source = source,
-            photo = photoName,
-            costUsd = parse.costUsd,
-            model = parse.model,
+            photo = photo,
+            costUsd = costUsd,
+            model = model,
         )
         eventLog.add(
-            "еда: «${text.take(60)}» → позиций ${meal.items.size}, ${meal.kcal} ккал, " +
-                String.format(java.util.Locale.US, "%.3f", parse.costUsd) + " USD"
+            "еда: «${raw.take(60)}» → позиций ${meal.items.size}, ${meal.kcal} ккал, " +
+                String.format(java.util.Locale.US, "%.3f", costUsd) + " USD"
         )
-        return Result.success(Parsed(meal, parse.note))
+        return Parsed(meal, note)
     }
 
     /**

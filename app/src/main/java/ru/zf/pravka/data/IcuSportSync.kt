@@ -36,6 +36,31 @@ class IcuSportSync(
         private const val DEEP_PERIOD_MS = 24 * 3_600_000L
         private const val SHALLOW_DAYS = 10
         private const val BASE = "https://intervals.icu/api/v1/athlete"
+        private const val ACTIVITY = "https://intervals.icu/api/v1/activity"
+
+        // Наш блок в описании активности. Границы нужны для идемпотентности:
+        // повторная отправка ЗАМЕНЯЕТ то, что между ними, а не дописывает
+        // второй раз. Без этого одна потерянная сеть удваивала бы журнал в
+        // чужой системе, где чинить его руками неудобно.
+        const val MARK_OPEN = "[Правка]"
+        const val MARK_CLOSE = "[/Правка]"
+
+        /**
+         * Вставить [body] в описание активности вместо прошлого нашего блока.
+         * Всё, что владелец написал в описании сам, остаётся как было.
+         */
+        fun spliceOwnBlock(existing: String, body: String): String {
+            val block = MARK_OPEN + "\n" + body.trim() + "\n" + MARK_CLOSE
+            val start = existing.indexOf(MARK_OPEN)
+            val end = existing.indexOf(MARK_CLOSE)
+            if (start >= 0 && end > start) {
+                val before = existing.substring(0, start).trimEnd()
+                val after = existing.substring(end + MARK_CLOSE.length).trimStart()
+                return listOf(before, block, after).filter { it.isNotBlank() }.joinToString("\n\n")
+            }
+            val kept = existing.trim()
+            return if (kept.isEmpty()) block else kept + "\n\n" + block
+        }
     }
 
     private val running = AtomicBoolean(false)
@@ -333,6 +358,164 @@ class IcuSportSync(
                 }
             }
             eventLog.add("еда → intervals.icu: $date — $kcal ккал, Б$protein Ж$fat У$carbs")
+        }
+    }
+
+    // ---- План: календарь intervals ----
+
+    /**
+     * Календарь на окно вокруг сегодня → кэш плана. Скелет дня приезжает
+     * отсюда: название сессии, тип, длительность, нагрузка и нумерованный
+     * список упражнений прямо в описании — владелец пушит их сам, когда
+     * собирает блок.
+     */
+    suspend fun refreshPlan(store: PlanStore, back: Int = 21, ahead: Int = 21): Boolean =
+        withContext(Dispatchers.IO) {
+            val athlete = settings.icuAthlete().trim()
+            val key = settings.icuKey().trim()
+            if (athlete.isBlank() || key.isBlank()) return@withContext false
+            val auth = Credentials.basic("API_KEY", key)
+            val now = System.currentTimeMillis()
+            val oldest = dayString(now - back * 86_400_000L)
+            val newest = dayString(now + ahead * 86_400_000L)
+            val body = get("$BASE/$athlete/events?oldest=$oldest&newest=$newest", auth)
+                ?: return@withContext false
+            val array = runCatching { JSONArray(body) }.getOrNull() ?: return@withContext false
+            val out = mutableListOf<PlanStore.PlanDay>()
+            for (i in 0 until array.length()) {
+                val e = array.optJSONObject(i) ?: continue
+                val local = e.optString("start_date_local")
+                val date = local.substringBefore('T').ifBlank { continue }
+                val seconds = e.optLong("moving_time", 0).takeIf { it > 0 }
+                    ?: e.optLong("duration", 0)
+                out.add(
+                    PlanStore.PlanDay(
+                        eventId = e.optString("id"),
+                        date = date,
+                        name = e.optString("name"),
+                        type = e.optString("type"),
+                        minutes = ((seconds + 30) / 60).toInt(),
+                        load = e.optInt("icu_training_load", 0).takeIf { it > 0 }
+                            ?: e.optInt("load_target", 0),
+                        description = e.optString("description"),
+                        carbsPerHour = e.optInt("carbs_per_hour", 0),
+                    )
+                )
+            }
+            if (out.isEmpty()) return@withContext false
+            store.mergeDays(out)
+            eventLog.add("план: календарь intervals — событий ${out.size} за $back+$ahead дн.")
+            true
+        }
+
+    // ---- Обратная дорога: журнал подходов в активность Garmin ----
+
+    /** Активность нужного типа за этот день, если часы её уже прислали. */
+    suspend fun findActivity(date: String, type: String): String? = withContext(Dispatchers.IO) {
+        val athlete = settings.icuAthlete().trim()
+        val key = settings.icuKey().trim()
+        if (athlete.isBlank() || key.isBlank()) return@withContext null
+        val auth = Credentials.basic("API_KEY", key)
+        val body = get("$BASE/$athlete/activities?oldest=$date&newest=$date", auth)
+            ?: return@withContext null
+        val array = runCatching { JSONArray(body) }.getOrNull() ?: return@withContext null
+        for (i in 0 until array.length()) {
+            val a = array.optJSONObject(i) ?: continue
+            if (!a.optString("type").equals(type, ignoreCase = true)) continue
+            val id = a.optString("id")
+            if (id.isNotBlank()) return@withContext id
+        }
+        null
+    }
+
+    /** Текущее описание активности — чтобы заменить в нём наш блок, а не чужой текст. */
+    private fun activityDescription(activityId: String, auth: String): String {
+        val body = get("$ACTIVITY/$activityId", auth) ?: return ""
+        val o = runCatching { JSONObject(body) }.getOrNull() ?: return ""
+        return o.optString("description")
+    }
+
+    /**
+     * Дописать журнал подходов к активности. Поля на запись у завершённой
+     * активности небогатые: описание — единственный свободный текст, плюс
+     * `feel` (1 отлично … 5 развалина, шкала перевёрнутая) и `icu_rpe` 1–10.
+     *
+     * Идемпотентно: наш блок в описании заменяется целиком, поэтому повторная
+     * отправка после потерянной сети ничего не удваивает.
+     */
+    suspend fun writeSetLog(
+        activityId: String,
+        body: String,
+        feel: Int = 0,
+        rpe: Int = 0,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val key = settings.icuKey().trim()
+            if (key.isBlank()) throw IllegalStateException("Нет ключа intervals.icu")
+            val auth = Credentials.basic("API_KEY", key)
+            val existing = activityDescription(activityId, auth)
+            val payload = JSONObject().apply {
+                put("description", spliceOwnBlock(existing, body))
+                if (feel in 1..5) put("feel", feel)
+                if (rpe in 1..10) put("icu_rpe", rpe)
+            }
+            val request = Request.Builder()
+                .url("$ACTIVITY/$activityId")
+                .header("Authorization", auth)
+                .put(payload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val text = response.body?.string()?.take(200).orEmpty()
+                    throw IllegalStateException("intervals.icu: HTTP ${response.code} $text")
+                }
+            }
+            eventLog.add("силовые → активность $activityId: ${body.length} зн.")
+        }
+    }
+
+    /**
+     * Запасная дорога: активности от часов так и не появилось, и оставлять
+     * журнал только на телефоне нельзя. Тогда подходы ложатся NOTE-событием на
+     * ту же дату — рядом с запланированной сессией, так что «план против
+     * факта» всё равно видно в одном месте.
+     *
+     * [existingId] непустой — правим прежнюю заметку, а не плодим вторую.
+     */
+    suspend fun writeNote(
+        date: String,
+        name: String,
+        body: String,
+        existingId: String = "",
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val athlete = settings.icuAthlete().trim()
+            val key = settings.icuKey().trim()
+            if (athlete.isBlank() || key.isBlank()) {
+                throw IllegalStateException("Нет athlete id или ключа intervals.icu")
+            }
+            val auth = Credentials.basic("API_KEY", key)
+            val payload = JSONObject().apply {
+                put("start_date_local", date + "T00:00:00")
+                put("category", "NOTE")
+                put("name", name)
+                put("description", body)
+            }
+            val url = if (existingId.isBlank()) "$BASE/$athlete/events"
+            else "$BASE/$athlete/events/$existingId"
+            val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
+            val builder = Request.Builder().url(url).header("Authorization", auth)
+            val request = (if (existingId.isBlank()) builder.post(requestBody)
+            else builder.put(requestBody)).build()
+            val id = client.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    throw IllegalStateException("intervals.icu: HTTP ${response.code} ${text.take(200)}")
+                }
+                runCatching { JSONObject(text).optString("id") }.getOrNull().orEmpty()
+            }
+            eventLog.add("силовые → заметка календаря $date (${id.ifBlank { "без id" }})")
+            id.ifBlank { existingId }
         }
     }
 

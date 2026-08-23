@@ -30,7 +30,11 @@ class PromptStore(private val context: Context) {
         // Еда: сказанное -> КБЖУ (Сонет).
         FOOD("food"),
         // Спорт: вопрос по своим тренировкам (Опус).
-        COACH("coach");
+        COACH("coach"),
+        // Тело: один микрофон на подходы, еду, зарядку и вопросы (Сонет).
+        BODY("body"),
+        // Правила блока: проза Notion -> числа (Сонет).
+        RULES("rules");
 
         companion object {
             fun of(mode: ProofreadMode): PromptId = when (mode) {
@@ -50,6 +54,8 @@ class PromptStore(private val context: Context) {
         PromptId.TASKS -> Prompts.TASKS
         PromptId.FOOD -> Prompts.FOOD
         PromptId.COACH -> Prompts.COACH
+        PromptId.BODY -> Prompts.BODY
+        PromptId.RULES -> Prompts.RULES
     }
 
     fun overrideFlow(id: PromptId): Flow<String?> =

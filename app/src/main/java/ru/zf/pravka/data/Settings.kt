@@ -62,6 +62,14 @@ class Settings(private val context: Context) {
         private val KEY_FOOD_TO_ICU = booleanPreferencesKey("food_to_icu")
         private val KEY_FOOD_TO_RIBBON = booleanPreferencesKey("food_to_ribbon")
 
+        // Notion: правила блока читаются оттуда — владелец их там правит.
+        // Справочник упражнений НЕ отсюда: он статическим файлом в assets.
+        private val KEY_NOTION_TOKEN = stringPreferencesKey("notion_token")
+        private val KEY_NOTION_HUB = stringPreferencesKey("notion_hub_page")
+        // Тело: кнопка «Т» и таймер отдыха между подходами.
+        private val KEY_T_ENABLED = booleanPreferencesKey("t_enabled")
+        private val KEY_REST_SEC = intPreferencesKey("rest_timer_sec")
+
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
 
@@ -74,6 +82,12 @@ class Settings(private val context: Context) {
         const val FOOD_FAT_DEFAULT = 80
         const val FOOD_CARBS_DEFAULT = 280
         const val SPORT_DAYS_DEFAULT = 120
+        const val REST_SEC_DEFAULT = 90
+
+        // Страница-хаб «Тело: велоформа и сила» в Notion. Приложение само
+        // находит под ней самую свежую страницу «Блок …» — так новый блок
+        // подхватывается без правки настроек.
+        const val NOTION_HUB_DEFAULT = "3a8c4ffca2d58181a09be74696775c3e"
     }
 
     val apiKeyFlow = context.dataStore.data.map { it[KEY_API_KEY] ?: "" }
@@ -223,6 +237,40 @@ class Settings(private val context: Context) {
     val rEnabledFlow = context.dataStore.data.map { it[KEY_R_ENABLED] ?: true }
     suspend fun setREnabled(value: Boolean) {
         context.dataStore.edit { it[KEY_R_ENABLED] = value }
+    }
+
+    // ---- Notion: правила блока ----
+
+    /**
+     * Внутренний токен интеграции Notion (ntn_…). Только чтение: приложение
+     * берёт оттуда правила блока и ничего туда не пишет.
+     */
+    val notionTokenFlow = context.dataStore.data.map { it[KEY_NOTION_TOKEN] ?: "" }
+    suspend fun notionToken(): String = notionTokenFlow.first()
+    suspend fun setNotionToken(value: String) {
+        context.dataStore.edit { it[KEY_NOTION_TOKEN] = value.trim() }
+    }
+
+    val notionHubFlow = context.dataStore.data.map { it[KEY_NOTION_HUB] ?: NOTION_HUB_DEFAULT }
+    suspend fun notionHub(): String = notionHubFlow.first()
+    suspend fun setNotionHub(value: String) {
+        context.dataStore.edit {
+            it[KEY_NOTION_HUB] = value.trim().ifEmpty { NOTION_HUB_DEFAULT }
+        }
+    }
+
+    // ---- Тело: силовые, зарядка, GTG ----
+
+    /** Кнопка «Т»: одна на подходы, еду и зарядку — намерение решает модель. */
+    val tEnabledFlow = context.dataStore.data.map { it[KEY_T_ENABLED] ?: true }
+    suspend fun setTEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_T_ENABLED] = value }
+    }
+
+    /** Отдых между подходами по умолчанию, секунды. */
+    val restSecFlow = context.dataStore.data.map { it[KEY_REST_SEC] ?: REST_SEC_DEFAULT }
+    suspend fun setRestSec(value: Int) {
+        context.dataStore.edit { it[KEY_REST_SEC] = value.coerceIn(30, 300) }
     }
 
     // ---- Спорт (вкладка на кэше intervals.icu) ----
