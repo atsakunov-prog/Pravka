@@ -35,7 +35,7 @@ class ZasechkaStore(private val context: Context) {
         // The owner's taxonomy, with hints the categorizer sees. A hint is
         // the difference between "поговорил с Марианой" landing in Семья and
         // landing in Социальное - names live here, not in code.
-        private const val CAT_SEED_VERSION = 8
+        private const val CAT_SEED_VERSION = 9
 
         // The owner's rule: unrecorded time is not "unknown", it is «Потери».
         // Bounded holes at least this long become gap-filler entries...
@@ -45,7 +45,10 @@ class ZasechkaStore(private val context: Context) {
         // eagerly created filler would already be mirrored to Sheets.
         private const val GAP_FILL_QUARANTINE_MS = 45 * 60_000L
         private const val GAP_SOURCE = "gap"
-        private const val GAP_CATEGORY = "Потери"
+        // Авто-заполнитель дыр пишет в СВОЮ категорию: «Потери» — только
+        // осознанные (залипание, ютуб, «просто сижу»), неучтённое время — не
+        // потери, а неизвестность. Его чат считает по этим категориям тренды.
+        private const val GAP_CATEGORY = "Не размечено"
         // The normalize pass compares entries against each other (O(n^2) in the
         // worst case) and re-serializes the file, and it runs every five minutes
         // for the rest of the phone's life. History older than this is already
@@ -89,7 +92,10 @@ class ZasechkaStore(private val context: Context) {
             Category("Отдых", "осознанный отдых: кино, сериалы, игры, гуляние, полежать", baseMin = 60, value = -2),
             Category(
                 "Потери",
-                "время, потраченное ни на что: залипание, бесцельный скроллинг, ютуб; дыры без записи падают сюда сами", baseMin = 30, value = -5),
+                "время, потраченное ни на что ОСОЗНАННО: залипание, бесцельный скроллинг, ютуб, «просто сижу»", baseMin = 30, value = -5),
+            Category(
+                "Не размечено",
+                "техническая: дыры без записи, их заводит авто-заполнитель ленты", baseMin = 30, value = -5),
             Category("Звонки", "телефонный разговор, если непонятно с кем и о чём", baseMin = 30, value = 2),
         )
 
@@ -353,6 +359,9 @@ class ZasechkaStore(private val context: Context) {
                         id = if (first) e.id else nextId(),
                         start = segStart,
                         end = dayEnd,
+                        // Надиктовка принадлежит одному отрезку: копия на
+                        // каждом куске размазывала заметку по выгрузкам.
+                        raw = if (first) e.raw else "",
                         pomodoros = if (first) e.pomodoros else 0,
                         synced = false,
                         notionSynced = false,
@@ -367,6 +376,7 @@ class ZasechkaStore(private val context: Context) {
                     id = nextId(),
                     start = segStart,
                     end = if (e.open) 0L else e.end,
+                    raw = "",
                     pomodoros = 0,
                     synced = false,
                     notionSynced = false,
@@ -490,7 +500,7 @@ class ZasechkaStore(private val context: Context) {
         start = start,
         end = end,
         raw = "",
-        title = "потери",
+        title = "не размечено",
         category = GAP_CATEGORY,
         client = "",
         useful = 0,
@@ -610,6 +620,9 @@ class ZasechkaStore(private val context: Context) {
                             id = if (firstSeg) m.id else nextId(),
                             start = cursor,
                             end = a.start.coerceAtLeast(cursor),
+                            // Надиктовка принадлежит одному фрагменту — тому,
+                            // что держит id; копии размазывали заметку.
+                            raw = if (firstSeg) m.raw else "",
                             pomodoros = 0,
                             synced = false,
                             notionSynced = false,
@@ -624,6 +637,7 @@ class ZasechkaStore(private val context: Context) {
                     id = if (firstSeg) m.id else nextId(),
                     start = cursor,
                     end = if (m.open) 0L else kotlin.math.max(m.end, cursor),
+                    raw = if (firstSeg) m.raw else "",
                     synced = false,
                     notionSynced = false,
                 )
@@ -978,7 +992,10 @@ class ZasechkaStore(private val context: Context) {
             // (звонки, YouTube) — то, вокруг чего режется ручная запись.
             val source = cell("source").ifBlank {
                 when {
-                    title.equals(GAP_CATEGORY, ignoreCase = true) && raw.isBlank() -> GAP_SOURCE
+                    raw.isBlank() && (
+                        title.equals("потери", ignoreCase = true) ||
+                            title.equals(GAP_CATEGORY, ignoreCase = true)
+                        ) -> GAP_SOURCE
                     raw.isBlank() && (
                         title.startsWith("звонок", ignoreCase = true) ||
                             title.startsWith("youtube", ignoreCase = true)
@@ -1116,11 +1133,11 @@ class ZasechkaStore(private val context: Context) {
                 // (owner's call: the automatic filler for unrecorded time) and
                 // appends whatever else the seed has and the list lacks.
                 if (catSeedVersion < 5) {
-                    val loss = DEFAULT_CATEGORIES.first { it.name == GAP_CATEGORY }
+                    val loss = DEFAULT_CATEGORIES.first { it.name == "Потери" }
                     val old = categories.indexOfFirst {
                         it.name.equals("Прокрастинация", ignoreCase = true)
                     }
-                    if (categories.none { it.name.equals(GAP_CATEGORY, ignoreCase = true) }) {
+                    if (categories.none { it.name.equals("Потери", ignoreCase = true) }) {
                         if (old >= 0) categories[old] = loss
                     } else if (old >= 0) {
                         categories.removeAt(old)
@@ -1163,8 +1180,21 @@ class ZasechkaStore(private val context: Context) {
                 // два часа утреннего залипания; владелец сбавил до −5.
                 if (catSeedVersion < 8) {
                     categories = categories.map { c ->
-                        if (c.name.trim().equals(GAP_CATEGORY, ignoreCase = true)) c.copy(value = -5)
+                        if (c.name.trim().equals("Потери", ignoreCase = true)) c.copy(value = -5)
                         else c
+                    }.toMutableList()
+                }
+                // v8 -> v9: авто-дыры отделены от осознанных «Потерь» — у ленты
+                // появляется техническая «Не размечено», а пояснение «Потерь»
+                // больше не зовёт в них дыры без записи.
+                if (catSeedVersion < 9) {
+                    if (categories.none { it.name.equals(GAP_CATEGORY, ignoreCase = true) }) {
+                        categories.add(DEFAULT_CATEGORIES.first { it.name == GAP_CATEGORY })
+                    }
+                    categories = categories.map { c ->
+                        if (c.name.trim().equals("Потери", ignoreCase = true)) {
+                            c.copy(hint = "время, потраченное ни на что ОСОЗНАННО: залипание, бесцельный скроллинг, ютуб, «просто сижу»")
+                        } else c
                     }.toMutableList()
                 }
                 catSeedVersion = CAT_SEED_VERSION
@@ -1189,6 +1219,24 @@ class ZasechkaStore(private val context: Context) {
                 }
             }
             entries.sortBy { it.start }
+            // Старые авто-дыры назывались «потери» и делили категорию с
+            // осознанными потерями — переводим их под «Не размечено».
+            // Свежая неделя пересинкается в зеркала, осевшая история в
+            // зеркалах остаётся как была (данные до правки всё равно
+            // помечены владельцем как тестовый прогон).
+            var fillersMigrated = false
+            val weekAgo = System.currentTimeMillis() - 7 * 86_400_000L
+            entries = entries.map { e ->
+                if (e.source == GAP_SOURCE && !e.title.equals("не размечено", ignoreCase = true)) {
+                    fillersMigrated = true
+                    e.copy(
+                        title = "не размечено",
+                        category = GAP_CATEGORY,
+                        synced = if (e.open || e.end > weekAgo) false else e.synced,
+                        notionSynced = if (e.open || e.end > weekAgo) false else e.notionSynced,
+                    )
+                } else e
+            }.toMutableList()
             warnIfShorterThanCopies()
             lastPersistedCount = entries.size
             logger?.invoke(
@@ -1212,7 +1260,7 @@ class ZasechkaStore(private val context: Context) {
             if (normalizeLocked()) persistQueued()
             // Поднятое из копии надо тут же положить в файл - иначе следующая
             // загрузка снова поднимала бы то же самое из копии.
-            if (root == null || rescued || seedMigrated) persistQueued()
+            if (root == null || rescued || seedMigrated || fillersMigrated) persistQueued()
         }
         loaded = true
         publish()

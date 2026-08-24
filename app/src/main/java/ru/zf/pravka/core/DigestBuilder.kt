@@ -357,7 +357,9 @@ class DigestBuilder(
                         "${e.durationMin()} мин",
                         e.client.takeIf { it.isNotBlank() },
                     ).joinToString(" · "),
-                    note = e.raw,
+                    // КБЖУ-хвост, дописанный едой к записи ленты, в CSV не
+                    // нужен: те же приёмы лежат рядом строками домена «еда».
+                    note = e.raw.substringBefore("\nКБЖУ:").trim(),
                 )
             )
         }
@@ -409,8 +411,9 @@ class DigestBuilder(
                 Row(
                     ts = dayStart(g.date) + 8 * 3_600_000L,
                     domain = "зарядка",
-                    name = if (g.charged) "сделана" else "частично",
-                    detail = g.line().removePrefix("Зарядка: "),
+                    name = g.status(),
+                    // Проза дня — только в note; detail держит структуру.
+                    detail = g.line(withNote = false).removePrefix("Зарядка: "),
                     note = g.note,
                 )
             )

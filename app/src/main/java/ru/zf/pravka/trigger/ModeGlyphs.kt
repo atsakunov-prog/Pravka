@@ -9,10 +9,12 @@ import ru.zf.pravka.R
 object ModeGlyphs {
     @Volatile var icons = false
 
-    fun pravka() = if (icons) R.drawable.ic_mode_pravka else R.drawable.ic_fab_glyph
-    fun zasechka() = if (icons) R.drawable.ic_mode_zasechka else R.drawable.ic_zfab_glyph
-    fun raznoska() = if (icons) R.drawable.ic_mode_delo else R.drawable.ic_razn_glyph
+    // На кнопках — уменьшенные (_btn, 52%) версии: во всю ширину кружка
+    // пиктограммы выглядели ужасно, буквы-глифы держат такой же отступ.
+    fun pravka() = if (icons) R.drawable.ic_mode_pravka_btn else R.drawable.ic_fab_glyph
+    fun zasechka() = if (icons) R.drawable.ic_mode_zasechka_btn else R.drawable.ic_zfab_glyph
+    fun raznoska() = if (icons) R.drawable.ic_mode_delo_btn else R.drawable.ic_razn_glyph
 
     // «Т» — одна кнопка на весь домен Тела: гантеля, спорт в нём главный.
-    fun body() = if (icons) R.drawable.ic_mode_sport else R.drawable.ic_body_glyph
+    fun body() = if (icons) R.drawable.ic_mode_sport_btn else R.drawable.ic_body_glyph
 }

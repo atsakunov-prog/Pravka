@@ -113,6 +113,7 @@ private val CATEGORY_HUES = mapOf(
     // The very bottom of the spectrum: time spent on nothing at all.
     // ("прокрастинация" lived for one build before the rename.)
     "потери" to 292f,
+    "не размечено" to 292f,
     "прокрастинация" to 292f,
 )
 

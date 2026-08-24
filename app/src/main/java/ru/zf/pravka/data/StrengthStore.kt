@@ -260,8 +260,12 @@ class StrengthStore(private val context: Context) {
             else -> "skip"
         }
 
-        /** День одной строкой — для CSV, дайджеста и контекста коуча. */
-        fun line(): String = buildString {
+        /**
+         * День одной строкой — для CSV, дайджеста и контекста коуча.
+         * [withNote] false — без заметки дня: CSV кладёт её в свою колонку
+         * note, и дублировать её в detail — читать одно дважды.
+         */
+        fun line(withNote: Boolean = true): String = buildString {
             append("Зарядка: ")
             append(status())
             if (pullups > 0) append(" · подтягивания $pullups")
@@ -274,7 +278,7 @@ class StrengthStore(private val context: Context) {
                 if (i.status == "ok" && i.note.isBlank()) continue
                 append(" · ").append(i.brief())
             }
-            if (note.isNotBlank()) append(" — ").append(note)
+            if (withNote && note.isNotBlank()) append(" — ").append(note)
         }
 
         /**
