@@ -180,7 +180,10 @@ class ExerciseBook(private val context: Context) {
         var best: Exercise? = null
         var bestLen = 0
         for ((alias, exercise) in byAlias) {
-            if (alias.length < 4) continue
+            // Пять символов, не четыре: «тяга» внутри «тяга под столом»
+            // перехватывала строку в «тягу гири в наклоне» — на неделе
+            // спина-протокола это ровно запрещённое движение.
+            if (alias.length < 5) continue
             if (key.contains(alias) && alias.length > bestLen) {
                 best = exercise
                 bestLen = alias.length
@@ -196,6 +199,9 @@ class ExerciseBook(private val context: Context) {
             for (candidate in exercise.aliases + exercise.name) {
                 val theirs = stemmed(candidate).toSet()
                 if (theirs.isEmpty()) continue
+                // Однословный псевдоним против многословной фразы — не улика:
+                // счёт 1/1 у «тяги» съедал любую «тягу чего угодно».
+                if (theirs.size == 1 && said.size > 1) continue
                 val shared = theirs.count { it in said }
                 if (shared == 0) continue
                 val score = shared.toDouble() / theirs.size
