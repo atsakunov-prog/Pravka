@@ -116,6 +116,11 @@ class FloatingButtonController(
         }
     }
 
+    /** Перечитать глиф после переключения «иконки вместо букв». */
+    fun refreshGlyph() {
+        label?.setImageResource(ModeGlyphs.pravka())
+    }
+
     // ---- Elastic pair: trail the "З" button on a rubber band ----
 
     /** Fired while the owner drags THIS button (and once more on drop). */
@@ -592,7 +597,7 @@ class FloatingButtonController(
         container.alpha = idleAlpha
 
         label = ImageView(service).apply {
-            setImageResource(R.drawable.ic_fab_glyph)
+            setImageResource(ModeGlyphs.pravka())
         }
         container.addView(
             label,

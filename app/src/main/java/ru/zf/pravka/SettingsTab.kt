@@ -325,6 +325,21 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
         valueRange = 0.15f..1f,
     )
 
+    Spacer(Modifier.height(10.dp))
+    val modeIcons by settings.modeIconsFlow.collectAsState(initial = false)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = modeIcons,
+            onCheckedChange = { on -> scope.launch { settings.setModeIcons(on) } },
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("Иконки вместо букв на кнопках", style = MaterialTheme.typography.bodyMedium)
+    }
+    HintText(
+        "«П/З/Д/Т» станут пиктограммами, как в нижней ленте: перо, часы, " +
+            "галочка, гантеля. Применяется сразу."
+    )
+
     Spacer(Modifier.height(18.dp))
     RecordingsSection(app.recordings, serviceEnabled)
 }

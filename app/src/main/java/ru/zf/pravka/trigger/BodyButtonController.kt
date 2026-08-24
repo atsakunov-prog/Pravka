@@ -386,6 +386,11 @@ class BodyButtonController(
 
     // ---- Меню долгого нажатия: столбик синих пилюль ----
 
+    /** Перечитать глиф после переключения «иконки вместо букв». */
+    fun refreshGlyph() {
+        glyph?.setImageResource(ModeGlyphs.body())
+    }
+
     class MenuItem(val label: String, val onClick: () -> Unit)
 
     private var menu: LinearLayout? = null
@@ -968,7 +973,7 @@ class BodyButtonController(
         container.elevation = dp(4).toFloat()
         container.alpha = idleAlpha
 
-        glyph = ImageView(service).apply { setImageResource(R.drawable.ic_body_glyph) }
+        glyph = ImageView(service).apply { setImageResource(ModeGlyphs.body()) }
         container.addView(
             glyph,
             FrameLayout.LayoutParams(

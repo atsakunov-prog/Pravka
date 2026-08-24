@@ -71,6 +71,7 @@ class Settings(private val context: Context) {
         private val KEY_REST_SEC = intPreferencesKey("rest_timer_sec")
         private val KEY_GOAL_WEIGHT = intPreferencesKey("body_goal_weight")
         private val KEY_SPORT_NOTIFY = booleanPreferencesKey("sport_notify_arrived")
+        private val KEY_MODE_ICONS = booleanPreferencesKey("mode_icons_on_buttons")
         private val KEY_NOTION_DIARY = booleanPreferencesKey("notion_diary_push")
 
         const val FAB_SIZE_DEFAULT = 48
@@ -285,6 +286,12 @@ class Settings(private val context: Context) {
     }
 
     /** Уведомление, когда часы прислали тренировку: вердикт по правилам + feel. */
+    /** Иконки вместо букв «П/З/Д/Т» на плавающих кнопках — как в нижней ленте. */
+    val modeIconsFlow = context.dataStore.data.map { it[KEY_MODE_ICONS] ?: false }
+    suspend fun setModeIcons(value: Boolean) {
+        context.dataStore.edit { it[KEY_MODE_ICONS] = value }
+    }
+
     val sportNotifyFlow = context.dataStore.data.map { it[KEY_SPORT_NOTIFY] ?: true }
     suspend fun sportNotify(): Boolean = sportNotifyFlow.first()
     suspend fun setSportNotify(value: Boolean) {

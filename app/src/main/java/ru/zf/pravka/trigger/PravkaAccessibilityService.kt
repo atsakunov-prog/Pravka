@@ -278,6 +278,15 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch { app.settings.restSecFlow.collect { cachedRestSec = it } }
+        scope.launch {
+            app.settings.modeIconsFlow.collect {
+                ModeGlyphs.icons = it
+                floatingButton?.refreshGlyph()
+                zButton?.refreshGlyph()
+                rButton?.refreshGlyph()
+                eButton?.refreshGlyph()
+            }
+        }
         // Справочники в память заранее: разбор подходов не должен ждать чтения
         // с диска, а список движений — это пятьдесят килобайт один раз.
         scope.launch { runCatching { app.exerciseBook.load() } }

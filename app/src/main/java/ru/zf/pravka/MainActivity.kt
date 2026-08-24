@@ -100,6 +100,7 @@ class MainActivity : ComponentActivity() {
         // The Засечка button's long press and its notifications land straight
         // on the timesheet tab.
         const val EXTRA_TAB = "tab"
+        const val TAB_PRAVKA = "pravka"
         const val TAB_ZASECHKA = "zasechka"
         const val TAB_TODOIST = "todoist"
         const val TAB_SPORT = "sport"
@@ -114,6 +115,7 @@ class MainActivity : ComponentActivity() {
         val app = application as PravkaApp
         val initialTab = when (intent?.getStringExtra(EXTRA_TAB)) {
             TAB_SETTINGS -> Tab.SETTINGS
+            TAB_PRAVKA -> Tab.PRAVKA
             TAB_ZASECHKA -> Tab.ZASECHKA
             TAB_TODOIST -> Tab.TODOIST
             TAB_SPORT -> Tab.SPORT
@@ -159,11 +161,13 @@ class MainActivity : ComponentActivity() {
 }
 
 internal enum class Tab(val titleRes: Int) {
+    PRAVKA(R.string.tab_pravka),
     ZASECHKA(R.string.tab_zasechka),
     TODOIST(R.string.tab_todoist),
     SPORT(R.string.tab_sport),
     FOOD(R.string.tab_food),
     MORE(R.string.tab_more),
+    EXPORT(R.string.tab_export),
     SETTINGS(R.string.tab_settings),
     DICTIONARY(R.string.tab_dictionary),
     PROMPTS(R.string.tab_prompts),
@@ -181,10 +185,10 @@ internal enum class Tab(val titleRes: Int) {
  * вниз или сюда. Внизу места ровно на пять кнопок.
  */
 private val SERVICE_TABS = listOf(
+    Tab.EXPORT,
     Tab.SETTINGS,
     Tab.DICTIONARY,
     Tab.STATS,
-    Tab.TRANSCRIPTS,
     Tab.PROMPTS,
     Tab.LEARNING,
     Tab.LOGS,
@@ -192,6 +196,7 @@ private val SERVICE_TABS = listOf(
 
 /** Одна строка про то, зачем эта вкладка — чтобы не открывать её наугад. */
 private fun serviceHint(tab: Tab): String = when (tab) {
+    Tab.EXPORT -> "Вся жизнь одним CSV: таймшит, еда, спорт — файл для разбора в чате"
     Tab.SETTINGS -> "Ключ Anthropic, распознавание, служба, сохранённые записи"
     Tab.DICTIONARY -> "Как писать имена и термины: заменять, подсказывать, не трогать"
     Tab.STATS -> "Токены и деньги по дням"
@@ -213,8 +218,8 @@ private fun MoreList(onOpen: (Tab) -> Unit) {
     ) {
         ScreenTitle(stringResource(R.string.tab_more))
         HintText(
-            "Всё, что обслуживает Правку, а не день. Внизу остались только " +
-                "ежедневные: Засечка, Дела, Спорт, Еда."
+            "Служебное и выгрузки. Внизу — ежедневные режимы: Правка, " +
+                "Засечка, Дело, Тело (спорт и еда)."
         )
         Spacer(Modifier.height(4.dp))
         for (item in SERVICE_TABS) {
@@ -245,6 +250,58 @@ private fun MoreList(onOpen: (Tab) -> Unit) {
                 }
             }
         }
+    }
+}
+
+/**
+ * Выгрузка всего одним файлом — владелец: «файл, где было бы и таймшит, и
+ * тело еда и тело спорт, чтобы разбирать». Сам файл собирает DigestBuilder,
+ * тот же, что кнопка в «Сводке для чата»; здесь просто короткая дорога.
+ */
+@Composable
+private fun ExportTab(app: PravkaApp) {
+    val context = LocalContext.current
+    var busy by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+    ) {
+        ScreenTitle(stringResource(R.string.tab_export))
+        HintText(
+            "«Вся жизнь» — один CSV на все домены: таймшит Засечки, еда, " +
+                "тренировки, силовые с подходами, зарядка с заметками и " +
+                "комментарии. Строка на событие, хронологически, за всю " +
+                "глубину хранения. Колонки одни на всё: date, time, domain, " +
+                "name, detail, note — файл кормят Клоду в чат."
+        )
+        Spacer(Modifier.height(14.dp))
+        Button(
+            onClick = {
+                busy = true
+                app.appScope.launch {
+                    val intent = runCatching { app.digestBuilder.lifeCsvIntent() }.getOrNull()
+                    busy = false
+                    if (intent == null) {
+                        Feedback.toast(app, "Не собрался — посмотри Логи")
+                    } else {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent.createChooser(intent, "CSV всей жизни")
+                            )
+                        }
+                    }
+                }
+            },
+            enabled = !busy,
+        ) { Text(if (busy) "Собираю…" else "CSV всей жизни") }
+        Spacer(Modifier.height(10.dp))
+        HintText(
+            "Сводки текстом за день и неделю — во вкладке Тело (С), карточка " +
+                "«Сводка для чата». Выгрузки одной Засечки и одной Еды — в их " +
+                "вкладках."
+        )
     }
 }
 
@@ -304,34 +361,49 @@ private fun MainScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            // Пять кнопок — столько NavigationBar раздаёт по весам без
-            // сплющивания подписей. Одиннадцать не влезали никак: полоса,
-            // которую я сперва сделал прокручиваемой, ломалась именно поэтому —
-            // внутри horizontalScroll ширина не ограничена, и веса теряют
-            // смысл. Ежедневное осталось внизу, служебное ушло под «Ещё».
+            // Шесть кнопок — порядок и подписи владельца: Правка, Засечка,
+            // Дело, Тело (С), Тело (Е), Ещё. Пиктограммы те же, что могут
+            // встать на плавающие кнопки: перо, часы, галочка, гантеля,
+            // тарелка — один язык на всё приложение.
             NavigationBar {
+                NavigationBarItem(
+                    selected = tab == Tab.PRAVKA,
+                    onClick = { tab = Tab.PRAVKA },
+                    icon = {
+                        Icon(painterResource(R.drawable.ic_mode_pravka), contentDescription = null)
+                    },
+                    label = { Text(stringResource(Tab.PRAVKA.titleRes)) },
+                )
                 NavigationBarItem(
                     selected = tab == Tab.ZASECHKA,
                     onClick = { tab = Tab.ZASECHKA },
-                    icon = { Icon(Icons.Filled.DateRange, contentDescription = null) },
+                    icon = {
+                        Icon(painterResource(R.drawable.ic_mode_zasechka), contentDescription = null)
+                    },
                     label = { Text(stringResource(Tab.ZASECHKA.titleRes)) },
                 )
                 NavigationBarItem(
                     selected = tab == Tab.TODOIST,
                     onClick = { tab = Tab.TODOIST },
-                    icon = { Icon(Icons.Filled.CheckCircle, contentDescription = null) },
+                    icon = {
+                        Icon(painterResource(R.drawable.ic_mode_delo), contentDescription = null)
+                    },
                     label = { Text(stringResource(Tab.TODOIST.titleRes)) },
                 )
                 NavigationBarItem(
                     selected = tab == Tab.SPORT,
                     onClick = { tab = Tab.SPORT },
-                    icon = { Icon(Icons.Filled.Favorite, contentDescription = null) },
+                    icon = {
+                        Icon(painterResource(R.drawable.ic_mode_sport), contentDescription = null)
+                    },
                     label = { Text(stringResource(Tab.SPORT.titleRes)) },
                 )
                 NavigationBarItem(
                     selected = tab == Tab.FOOD,
                     onClick = { tab = Tab.FOOD },
-                    icon = { Icon(Icons.Filled.ShoppingCart, contentDescription = null) },
+                    icon = {
+                        Icon(painterResource(R.drawable.ic_mode_food), contentDescription = null)
+                    },
                     label = { Text(stringResource(Tab.FOOD.titleRes)) },
                 )
                 NavigationBarItem(
@@ -360,10 +432,12 @@ private fun MainScreen(
                 // Из любой вкладки — в её группу настроек одним тапом.
                 val openSettings = { tab = Tab.MORE; moreTab = Tab.SETTINGS }
                 when (shown) {
+                    Tab.PRAVKA -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
                     Tab.ZASECHKA -> ZasechkaTab(app, openSettings)
                     Tab.TODOIST -> TodoistTab(app, openSettings)
                     Tab.SPORT -> SportTab(app, openSettings)
                     Tab.FOOD -> FoodTab(app, openSettings)
+                    Tab.EXPORT -> ExportTab(app)
                     Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings)
                     Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
                     Tab.PROMPTS -> PromptsTab(promptStore)

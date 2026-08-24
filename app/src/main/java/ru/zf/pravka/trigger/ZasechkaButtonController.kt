@@ -148,6 +148,11 @@ class ZasechkaButtonController(
         b.postDelayed({ applyFaceAndLook() }, 3_000)
     }
 
+    /** Перечитать глиф после переключения «иконки вместо букв». */
+    fun refreshGlyph() {
+        glyph?.setImageResource(ModeGlyphs.zasechka())
+    }
+
     /** text = minutes left ("17"); null returns the "З" glyph. */
     fun setPomodoro(text: String?, color: Int?) {
         pomodoroText = text
@@ -517,7 +522,7 @@ class ZasechkaButtonController(
 
         // The slab "З" - П's own geometry turned on its side (see the vector).
         glyph = ImageView(service).apply {
-            setImageResource(R.drawable.ic_zfab_glyph)
+            setImageResource(ModeGlyphs.zasechka())
         }
         container.addView(
             glyph,

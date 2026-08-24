@@ -337,6 +337,11 @@ class RaznoskaButtonController(
 
     // ---- Меню долгого нажатия: столбик синих пилюль ----
 
+    /** Перечитать глиф после переключения «иконки вместо букв». */
+    fun refreshGlyph() {
+        glyph?.setImageResource(ModeGlyphs.raznoska())
+    }
+
     class MenuItem(val label: String, val onClick: () -> Unit)
 
     private var menu: LinearLayout? = null
@@ -864,7 +869,7 @@ class RaznoskaButtonController(
         container.elevation = dp(4).toFloat()
         container.alpha = idleAlpha
 
-        glyph = ImageView(service).apply { setImageResource(R.drawable.ic_razn_glyph) }
+        glyph = ImageView(service).apply { setImageResource(ModeGlyphs.raznoska()) }
         container.addView(
             glyph,
             FrameLayout.LayoutParams(

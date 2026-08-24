@@ -168,8 +168,9 @@
     <string name="settings_usage_hint">Как пользоваться: надиктуй текст в любое поле и нажми плавающую кнопку «П». Текст заменится исправленным, а на несколько секунд появится кнопка «Откатить». Запасной путь — выделить текст и выбрать «Правка» в меню выделения, где оно есть.</string>
 
     <!-- Засечка (таймшит) -->
+    <string name="tab_pravka">Правка</string>
     <string name="tab_zasechka">Засечка</string>
-    <string name="tab_todoist">Дела</string>
+    <string name="tab_todoist">Дело</string>
     <string name="z_channel">Засечка</string>
     <string name="z_record_action">Надиктовать</string>
     <string name="z_busy_pravka">Идёт запись Засечки — останови её кнопкой «З»</string>
@@ -184,8 +185,9 @@
 
     <!-- Спорт и еда -->
     <string name="tab_more">Ещё</string>
-    <string name="tab_sport">Спорт</string>
-    <string name="tab_food">Еда</string>
+    <string name="tab_sport">Тело (С)</string>
+    <string name="tab_food">Тело (Е)</string>
+    <string name="tab_export">Выгрузки</string>
     <string name="e_busy">Микрофон занят другой записью — сначала заверши её</string>
     <string name="e_busy_pravka">Идёт запись Тела — останови её кнопкой «Т»</string>
     <string name="e_parse_failed">Не разобрал — скажи ещё раз или набери текстом</string>
