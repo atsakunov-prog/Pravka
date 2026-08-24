@@ -449,10 +449,18 @@ class StrengthEngine(
         // А если владелец записал зарядку и часами — она приезжает тем же
         // типом WeightTraining, что силовая, только короткая: в неё итог
         // вклеивается тоже.
-        for (day in store.gtgNeedingSync().take(5)) {
-            val outcome = icu.spliceWellnessComment(day.date, day.block())
+        val gtgPending = store.gtgNeedingSync().take(5)
+        if (gtgPending.isNotEmpty()) {
+            // Блок показывает ВСЕ упражнения дня — для этого нужны план и
+            // справочник, даже если вкладка «Спорт» ни разу не открывалась.
+            runCatching { planStore.load() }
+            runCatching { book.load() }
+        }
+        for (day in gtgPending) {
+            val rows = zaryadkaPlanRows(day.date)
+            val outcome = icu.spliceWellnessComment(day.date, day.block(rows))
             outcome.onSuccess {
-                runCatching { spliceGtgIntoActivity(day) }
+                runCatching { spliceGtgIntoActivity(day, rows) }
                 store.markGtgSynced(day.date)
                 sent++
             }.onFailure { e ->
@@ -476,7 +484,10 @@ class StrengthEngine(
      * комментарий wellness уже уехал, а «вклеили не туда» хуже, чем «только
      * в день».
      */
-    private suspend fun spliceGtgIntoActivity(day: StrengthStore.GtgDay) {
+    private suspend fun spliceGtgIntoActivity(
+        day: StrengthStore.GtgDay,
+        rows: List<StrengthStore.PlanRow>,
+    ) {
         val acts = icu.findActivities(day.date, ICU_STRENGTH_TYPE)
         if (acts.isEmpty()) return
         val sessionActivity = store.sessionsOn(day.date)
@@ -491,7 +502,24 @@ class StrengthEngine(
         if (acts.size == 1 && store.sessionsOn(day.date).any { !it.empty }) return
         // Самочувствие — в нативное поле feel той же записью: intervals сам
         // рисует по нему график, извлекать усталость из слова «ужас» не надо.
-        icu.writeSetLog(target.id, day.block(), day.feel, 0)
+        icu.writeSetLog(target.id, day.block(rows), day.feel, 0)
+    }
+
+    /**
+     * Строки плана зарядки этого дня — с ТЕМИ ЖЕ id, что чек-лист во вкладке
+     * (совпадение по справочнику, иначе позиция+нормализованный текст+«-z»):
+     * галочки из doneIds должны находить свои строки и в комментарии.
+     */
+    private fun zaryadkaPlanRows(date: String): List<StrengthStore.PlanRow> {
+        val charger = runCatching { planStore.chargerOf(date) }.getOrNull() ?: return emptyList()
+        return charger.plannedLines().mapIndexed { i, line ->
+            val parts = line.split(" — ")
+            val name = parts.firstOrNull().orEmpty().trim().ifBlank { line.trim() }
+            val dose = if (parts.size >= 2) parts[1].trim() else ""
+            val id = book.match(name)?.id
+                ?: ("task-$i-" + ExerciseBook.normalize(line).replace(' ', '-').take(30) + "-z")
+            StrengthStore.PlanRow(id = id, name = name, dose = dose)
+        }
     }
 
     /**

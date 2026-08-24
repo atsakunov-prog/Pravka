@@ -144,6 +144,9 @@ class StrengthStore(private val context: Context) {
         val pendingSync: Boolean get() = !icuSynced && (!empty || feel > 0 || done)
     }
 
+    /** Строка плана зарядки на день: id как в чек-листе вкладки, имя, доза. */
+    data class PlanRow(val id: String, val name: String, val dose: String)
+
     /**
      * Отчёт по одному пункту зарядки — строка «таблицы выполнения». План
      * хранится снимком на этот день: дозы владелец правит неделя к неделе,
@@ -272,29 +275,49 @@ class StrengthStore(private val context: Context) {
 
         /**
          * День развёрнутым блоком — для комментариев intervals (wellness и
-         * короткая активность зарядки). Протокол согласован с его чатом:
-         * шапка со статусом, строки «факт/план» по пунктам с отклонениями,
-         * живая заметка — и машинная строка #data, по которой графики
-         * строятся без разбора прозы. Ключи #data не менять: их читает чат
-         * по ту сторону intervals.
+         * короткая активность зарядки). Формат владельца: ВСЕ упражнения дня
+         * по строке, «сделал / должен» через дробь, комментарий в конце.
+         * Сводить сделанное в «без пометок: N» он запретил — список должен
+         * читаться целиком. Плюс машинная строка #data для графиков без
+         * разбора прозы; её ключи не менять — их читает чат по ту сторону
+         * intervals.
          */
-        fun block(): String = buildString {
+        fun block(plan: List<PlanRow> = emptyList()): String = buildString {
             append("ЗАРЯДКА ").append(date).append(" · ").append(status()).append('\n')
-            val flagged = items.filter {
-                it.status != "ok" || it.fact.isNotBlank() || it.note.isNotBlank()
+            val used = mutableSetOf<GtgItem>()
+            for ((idx, row) in plan.withIndex()) {
+                val item = items.firstOrNull { it.id == row.id }
+                    ?: items.firstOrNull { it.name.equals(row.name, ignoreCase = true) }
+                if (item != null) used.add(item)
+                val cell = factCell(item, row.name, ticked = charged || row.id in doneIds)
+                append(idx + 1).append(". ").append(row.name).append(": ").append(cell)
+                if (row.dose.isNotBlank()) append(" / ").append(row.dose)
+                if (item != null) {
+                    if (item.status != "ok" && !cell.startsWith("✗") && !cell.startsWith("◐")) {
+                        append(" — ").append(item.statusWord())
+                    }
+                    if (item.note.isNotBlank()) append(" — ").append(item.note)
+                }
+                append('\n')
             }
-            for (i in flagged) append(i.itemLine(this@GtgDay)).append('\n')
-            // Числа, наговоренные без ✎-отчёта, — своей строкой, один раз.
-            fun covered(word: String) = flagged.any { it.name.lowercase().contains(word) }
+            // Отчёты, не совпавшие со строками плана (план правился днём), —
+            // и, когда плана в кэше нет вовсе, просто все отчёты по одному.
+            for (i in items) {
+                if (i in used) continue
+                append(i.itemLine(this@GtgDay)).append('\n')
+            }
+            // Числа, наговоренные голосом мимо списка, — своей строкой, один раз.
+            fun covered(word: String) =
+                plan.any { it.name.lowercase().contains(word) } ||
+                    items.any { it.name.lowercase().contains(word) }
             if (hangSec > 0 && !covered("вис")) append("Вис: $hangSec сек\n")
             if (negatives > 0 && !covered("негатив")) append("Негативы: $negatives\n")
             if (scapular > 0 && !covered("лопаточ")) append("Лопаточные: $scapular\n")
             if (pullups > 0 && !covered("подтяг")) append("Подтягивания: $pullups\n")
-            val plainTicks = doneIds.count { id -> items.none { it.id == id } }
-            val quiet = items.count {
-                it.status == "ok" && it.fact.isBlank() && it.note.isBlank()
-            } + plainTicks
-            if (quiet > 0) append("По плану, без пометок: $quiet\n")
+            if (plan.isEmpty()) {
+                val plainTicks = doneIds.count { id -> items.none { it.id == id } }
+                if (plainTicks > 0) append("Отмечено галочками ещё: $plainTicks\n")
+            }
             if (knee.isNotBlank()) append("Колено: ").append(knee).append('\n')
             if (note.isNotBlank()) append("Заметка: ").append(note).append('\n')
             append("#data status=").append(statusKey())
@@ -303,6 +326,28 @@ class StrengthStore(private val context: Context) {
             append(" neg=").append(negatives)
             append(" pull=").append(pullups)
             if (feel > 0) append(" feel=").append(feel)
+        }
+
+        /** Левая половина дроби: число, если оно есть; иначе значок отметки. */
+        private fun factCell(item: GtgItem?, name: String, ticked: Boolean): String {
+            val lower = name.lowercase()
+            val num = when {
+                lower.contains("вис") -> hangSec
+                lower.contains("негатив") -> negatives
+                lower.contains("лопаточ") -> scapular
+                lower.contains("подтяг") -> pullups
+                else -> -1
+            }
+            val fact = item?.fact.orEmpty().ifBlank {
+                if (num > 0 || (num == 0 && item?.status == "no")) "$num" else ""
+            }
+            if (fact.isNotBlank()) return fact
+            return when {
+                item?.status == "no" -> "✗ не смог"
+                item?.status == "part" -> "◐ частично"
+                item != null || ticked -> "✓"
+                else -> "—"
+            }
         }
     }
 
