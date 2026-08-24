@@ -1586,8 +1586,12 @@ private fun ZaryadkaChecklist(
         if (!loaded) emptyList()
         else if (planLines.isNotEmpty()) {
             planLines.mapIndexed { i, line ->
-                val (name, dose, note) = planLineParts(line)
-                val exercise = app.exerciseBook.match(name)
+                val (raw, dose, note) = planLineParts(line)
+                val exercise = app.exerciseBook.match(raw)
+                // Имя — каноническое из справочника (как в Notion): так же
+                // подпишется строка в комментарии intervals, глазам и чату
+                // не приходится сводить два названия одного движения.
+                val name = exercise?.name ?: raw
                 DayTask(
                     id = exercise?.id ?: taskId(i, line) + "-z",
                     title = if (dose.isBlank()) name else "$name — $dose",

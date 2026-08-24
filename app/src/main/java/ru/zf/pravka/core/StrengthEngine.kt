@@ -514,11 +514,15 @@ class StrengthEngine(
         val charger = runCatching { planStore.chargerOf(date) }.getOrNull() ?: return emptyList()
         return charger.plannedLines().mapIndexed { i, line ->
             val parts = line.split(" — ")
-            val name = parts.firstOrNull().orEmpty().trim().ifBlank { line.trim() }
+            val raw = parts.firstOrNull().orEmpty().trim().ifBlank { line.trim() }
             val dose = if (parts.size >= 2) parts[1].trim() else ""
-            val id = book.match(name)?.id
+            val exercise = book.match(raw)
+            val id = exercise?.id
                 ?: ("task-$i-" + ExerciseBook.normalize(line).replace(' ', '-').take(30) + "-z")
-            StrengthStore.PlanRow(id = id, name = name, dose = dose)
+            // Имя — каноническое из справочника (он собран из Notion), а не
+            // сокращение из строки события: владелец просил имена «как в
+            // ноушене». Не узнали движение — остаётся его же текст.
+            StrengthStore.PlanRow(id = id, name = exercise?.name ?: raw, dose = dose)
         }
     }
 

@@ -37,6 +37,10 @@ class StrengthStore(private val context: Context) {
         // Сырые надиктовки: держим год. Это единственное, что нельзя добыть
         // заново, но и бесконечно их копить незачем — разбор давно на месте.
         private const val KEEP_RAW_DAYS = 400
+
+        /** Количество из дозы: «20–30 сек» → «20–30», «2×30 сек» → «2×30», «10 циклов» → «10». */
+        fun doseQuantity(dose: String): String =
+            Regex("""^\d+(?:[×x]\d+)?(?:[–—-]\d+)?""").find(dose.trim())?.value.orEmpty()
     }
 
     /**
@@ -289,13 +293,11 @@ class StrengthStore(private val context: Context) {
                 val item = items.firstOrNull { it.id == row.id }
                     ?: items.firstOrNull { it.name.equals(row.name, ignoreCase = true) }
                 if (item != null) used.add(item)
-                val cell = factCell(item, row.name, ticked = charged || row.id in doneIds)
+                val cell = factCell(item, row.name, row.dose, ticked = charged || row.id in doneIds)
                 append(idx + 1).append(". ").append(row.name).append(": ").append(cell)
                 if (row.dose.isNotBlank()) append(" / ").append(row.dose)
                 if (item != null) {
-                    if (item.status != "ok" && !cell.startsWith("✗") && !cell.startsWith("◐")) {
-                        append(" — ").append(item.statusWord())
-                    }
+                    if (item.status != "ok") append(" — ").append(item.statusWord())
                     if (item.note.isNotBlank()) append(" — ").append(item.note)
                 }
                 append('\n')
@@ -328,8 +330,13 @@ class StrengthStore(private val context: Context) {
             if (feel > 0) append(" feel=").append(feel)
         }
 
-        /** Левая половина дроби: число, если оно есть; иначе значок отметки. */
-        private fun factCell(item: GtgItem?, name: String, ticked: Boolean): String {
+        /**
+         * Левая половина дроби — ВСЕГДА число, владелец просил «математически
+         * правильно, без галочек»: своё число (из ✎-отчёта или наговоренное),
+         * иначе сделал по плану = плановая доза, не смог и не отмечено = 0.
+         * «?» — только у «частично» без числа: выдумывать половину нельзя.
+         */
+        private fun factCell(item: GtgItem?, name: String, dose: String, ticked: Boolean): String {
             val lower = name.lowercase()
             val num = when {
                 lower.contains("вис") -> hangSec
@@ -342,11 +349,13 @@ class StrengthStore(private val context: Context) {
                 if (num > 0 || (num == 0 && item?.status == "no")) "$num" else ""
             }
             if (fact.isNotBlank()) return fact
+            val quota = doseQuantity(dose)
             return when {
-                item?.status == "no" -> "✗ не смог"
-                item?.status == "part" -> "◐ частично"
-                item != null || ticked -> "✓"
-                else -> "—"
+                item?.status == "no" -> "0"
+                item?.status == "part" -> "?"
+                (item != null || ticked) && quota.isNotBlank() -> quota
+                item != null || ticked -> "сделано"
+                else -> "0"
             }
         }
     }
