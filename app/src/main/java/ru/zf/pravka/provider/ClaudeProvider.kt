@@ -507,7 +507,7 @@ $raw
             )
             val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
             parseZasechka(reply.text).copy(
-                costUsd = costUsd(Settings.MODEL_SONNET, reply),
+                costUsd = costUsd(Settings.MODEL_OPUS, reply),
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
             )
@@ -733,10 +733,25 @@ $raw
             } else {
                 prompt.trimEnd() + "\n\nСъедено:\n" + said
             }
-            val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+            // Правила еды стабильны — под кэш; словарь, время и вход в хвосте.
+            // Сплит по маркеру словаря: правил его шаблон может и не иметь
+            // (правится в «Промптах») — тогда весь текст уезжает хвостом.
+            // Со снимком кэш не включаем: блок изображения стоит ПЕРЕД
+            // текстом и ломает префикс — платили бы за запись впустую.
+            val cut = prompt.indexOf("Словарь владельца")
+            val parts = if (cut > 0) {
+                Prompts.PromptParts(
+                    stablePrefix = prompt.substring(0, cut),
+                    dictPart = prompt.substring(cut),
+                    afterInput = "",
+                    cacheStableAlways = image == null,
+                )
+            } else {
+                Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+            }
             val started = System.currentTimeMillis()
             val reply = requestWithOneRetry(
-                apiKey, Settings.MODEL_SONNET, parts, "", null,
+                apiKey, Settings.MODEL_OPUS, parts, "", null,
                 images = listOfNotNull(image),
             )
             val parsed = parseFoodReply(reply.text)
@@ -745,10 +760,10 @@ $raw
                 timeOfDay = parsed.timeOfDay,
                 items = parsed.items,
                 note = parsed.note,
-                costUsd = costUsd(Settings.MODEL_SONNET, reply),
+                costUsd = costUsd(Settings.MODEL_OPUS, reply),
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
-                model = Settings.MODEL_SONNET,
+                model = Settings.MODEL_OPUS,
                 latencyMs = System.currentTimeMillis() - started,
             )
         }
@@ -895,9 +910,16 @@ $raw
             } else {
                 tail.trimEnd() + "\n\nСказано:\n" + text
             }
-            val parts = Prompts.PromptParts(stablePrefix = head, dictPart = tail, afterInput = "")
+            val parts = Prompts.PromptParts(
+                stablePrefix = head,
+                dictPart = tail,
+                afterInput = "",
+                // Роутер «Т» ходит много раз в день с одними справочниками —
+                // кэш окупается и на Опусе.
+                cacheStableAlways = true,
+            )
             val started = System.currentTimeMillis()
-            val reply = requestWithOneRetry(apiKey, Settings.MODEL_SONNET, parts, "", null)
+            val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
             parseBodyReply(reply).copy(latencyMs = System.currentTimeMillis() - started)
         }
     }
@@ -986,7 +1008,7 @@ $raw
                 costUsd = 0.0,
                 tokensIn = 0,
                 tokensOut = 0,
-                model = Settings.MODEL_SONNET,
+                model = Settings.MODEL_OPUS,
                 latencyMs = 0L,
             )
         }
@@ -1007,10 +1029,10 @@ $raw
             feel = feel?.takeIf { it.feel > 0 || it.knee.isNotBlank() },
             question = o.optString("question").trim(),
             note = o.optString("note").trim(),
-            costUsd = costUsd(Settings.MODEL_SONNET, reply),
+            costUsd = costUsd(Settings.MODEL_OPUS, reply),
             tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
             tokensOut = reply.outputTokens,
-            model = Settings.MODEL_SONNET,
+            model = Settings.MODEL_OPUS,
             latencyMs = 0L,
         )
     }
