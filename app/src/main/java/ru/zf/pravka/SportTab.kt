@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
@@ -230,7 +231,9 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         // не должно стоить ответа.
         app.appScope.launch {
             val answer = runCatching {
-                app.sportCoach.ask(text) { delta -> streaming += delta }
+                // onDelta приносит НАКОПЛЕННЫЙ текст (см. executeStreaming), не
+                // приращение: += склеивал повторы в кашу.
+                app.sportCoach.ask(text) { grown -> streaming = grown }
             }.getOrElse { e ->
                 SportCoach.Answer("", 0.0, e.message ?: "не вышло")
             }
@@ -870,7 +873,8 @@ private fun CoachDialog(
                     app.sportCoach.askTrainer(
                         question = question,
                         focus = SportCoach.exerciseFocus(exercise, taskTitle),
-                    ) { delta -> streaming += delta }
+                        // Накопленный текст, не приращение — иначе каша с повторами.
+                    ) { grown -> streaming = grown }
                 }.getOrElse { e ->
                     SportCoach.Answer("", 0.0, e.message ?: "не вышло")
                 }
@@ -887,7 +891,9 @@ private fun CoachDialog(
     // ответ уже пошёл.
     LaunchedEffect(Unit) { if (autoAsk) send() }
     AlertDialog(
-        onDismissRequest = { if (!busy) onClose() },
+        // Закрывается ВСЕГДА: запрос доживёт в app-scope и ляжет в «прошлые
+        // разборы», а запертый диалог — это владелец без телефона.
+        onDismissRequest = onClose,
         title = { Text(shortName, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(
@@ -922,7 +928,7 @@ private fun CoachDialog(
                 enabled = !busy && question.isNotBlank(),
             ) { Text(if (busy) "Думает…" else "Спросить") }
         },
-        dismissButton = { TextButton(onClick = onClose, enabled = !busy) { Text("Закрыть") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
     )
 }
 
@@ -1609,6 +1615,7 @@ private fun ZaryadkaChecklist(
     val charged = gtgToday?.charged == true
     var openId by remember { mutableStateOf<String?>(null) }
     var asking by remember { mutableStateOf<Triple<String, ExerciseBook.Exercise?, Boolean>?>(null) }
+    var noting by remember { mutableStateOf<DayTask?>(null) }
 
     PaperCard(
         label = "зарядка сегодня",
@@ -1691,13 +1698,50 @@ private fun ZaryadkaChecklist(
                         }
                     }
                 }
+                // «Планка — 40 сек»: секунды засечь нечем — intervals не
+                // передаёт Garmin шаги силовых, часы на зарядке пишут только
+                // пульс. Таймер поэтому здесь, в одном тапе от строки.
+                val holdSec = HOLD_SEC.find(task.title)?.groupValues?.get(1)?.toIntOrNull()
+                if (holdSec != null && !ticked) {
+                    Text(
+                        "⏱$holdSec",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable {
+                                Feedback.toast(app, "$holdSec сек пошли — считает кнопка «Т»")
+                                ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                                    ?.startRestFromTab(holdSec)
+                            }
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                    )
+                }
+                IconButton(onClick = { noting = task }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Filled.Edit,
+                        contentDescription = "Комментарий к упражнению",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         Spacer(Modifier.height(4.dp))
         PaperHint(
             if (charged) "Числа виса и негативов — в карточке зарядки ниже."
-            else "Тап по названию — техника. Отметишь всё — зарядка закроется сама."
+            else "Тап по названию — техника, ✎ — как пошло. Отметишь всё — зарядка закроется сама."
         )
+        // Накопленные за день пометки — здесь же, чтобы было видно, что уедет
+        // в intervals вместе с итогом.
+        val accumNote = gtgToday?.note.orEmpty()
+        if (accumNote.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Заметки дня: $accumNote",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Spacer(Modifier.height(10.dp))
         // Итог словами вместо тапов: «всё сделал, чувствовал себя хорошо,
         // подтягивания два». Разбирает тот же роутер, что у кнопки «Т»:
@@ -1711,6 +1755,57 @@ private fun ZaryadkaChecklist(
     asking?.let { (title, exercise, auto) ->
         CoachDialog(app, title, exercise, autoAsk = auto, onClose = { asking = null })
     }
+    noting?.let { task ->
+        ZaryadkaNoteDialog(
+            app = app,
+            exerciseName = task.title.substringBefore(" — "),
+            onClose = { noting = null },
+        )
+    }
+}
+
+/** «2×30 сек», «40 сек каждая нога» — число прямо перед «сек». */
+private val HOLD_SEC = Regex("""(\d+)\s*сек""")
+
+/**
+ * Короткий комментарий к одному упражнению зарядки: «спина хрустит», «легко,
+ * можно дольше». Ложится в заметку дня с именем упражнения, оттуда — в
+ * wellness-комментарий intervals и в контекст тренера: ровно то, по чему
+ * правится план следующих дней.
+ */
+@Composable
+private fun ZaryadkaNoteDialog(app: PravkaApp, exerciseName: String, onClose: () -> Unit) {
+    var draft by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(exerciseName, style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    label = { Text("Как пошло? «спина хрустит», «легко»…") },
+                    minLines = 2,
+                    maxLines = 4,
+                )
+                Spacer(Modifier.height(6.dp))
+                PaperHint("Уедет с итогом дня в intervals — по этим заметкам правятся следующие дни.")
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val text = draft.trim()
+                if (text.isNotBlank()) {
+                    app.appScope.launch {
+                        app.bodyEngine.noteZaryadka("$exerciseName: $text")
+                        Feedback.toast(app, "✓ В заметке дня — уедет в intervals")
+                    }
+                }
+                onClose()
+            }) { Text("Записать") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
+    )
 }
 
 /**

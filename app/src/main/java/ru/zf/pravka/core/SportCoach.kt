@@ -8,6 +8,7 @@ import ru.zf.pravka.data.FoodStore
 import ru.zf.pravka.data.PlanStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.SportStore
+import ru.zf.pravka.data.StrengthStore
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.data.dayKey
@@ -30,6 +31,7 @@ class SportCoach(
     private val store: SportStore,
     private val foodStore: FoodStore,
     private val planStore: PlanStore,
+    private val strengthStore: StrengthStore,
     private val zasechkaStore: ZasechkaStore,
     private val settings: Settings,
     private val stats: Stats,
@@ -50,6 +52,7 @@ class SportCoach(
         // совет расходится с его собственными записанными правилами.
         private const val CONTEXT_RULES_CHARS = 14_000
         private const val CONTEXT_FOOD_DAYS = 7
+        private const val CONTEXT_GTG_DAYS = 7
 
         /** Как виды спорта из intervals.icu называются по-русски. */
         fun sportName(type: String): String = when (type) {
@@ -304,6 +307,7 @@ class SportCoach(
     ): Answer {
         store.load()
         runCatching { foodStore.load() }
+        runCatching { strengthStore.load() }
         // План и правила могут быть ещё не прочитаны с диска: вопрос задаётся и
         // с плашки кнопки «Т», где вкладка «Спорт» ни разу не открывалась.
         runCatching { planStore.load() }
@@ -462,6 +466,7 @@ class SportCoach(
         }
 
         appendFood(targets)
+        appendGtg()
         appendDays()
         appendRules()
     }
@@ -538,6 +543,27 @@ class SportCoach(
             append("Б${targets.protein} Ж${targets.fat} У${targets.carbs} г.")
         }
         append("\n\n")
+    }
+
+    /**
+     * Зарядка и турник по дням — вместе с ЕГО ЗАМЕТКАМИ («вис тяжело»,
+     * «кошка-корова: спина хрустит»). Заметки тут главное: числа модель видит
+     * и в плане, а вот как оно шло по ощущениям — только здесь, и именно по
+     * этим строкам корректируются следующие дни.
+     */
+    private fun StringBuilder.appendGtg() {
+        val days = runCatching { strengthStore.gtgFlow.value }.getOrNull().orEmpty()
+            .filter { it.any || it.note.isNotBlank() || it.doneIds.isNotEmpty() }
+            .sortedByDescending { it.date }
+            .take(CONTEXT_GTG_DAYS)
+        if (days.isEmpty()) return
+        append("ЗАРЯДКА И ТУРНИК по дням (его отметки и заметки, свежий день первым)\n")
+        for (d in days) {
+            append(d.date).append(" · ").append(d.line())
+            if (!d.charged && d.doneIds.isNotEmpty()) append(" · отмечено ${d.doneIds.size} упр.")
+            append('\n')
+        }
+        append('\n')
     }
 
     /**

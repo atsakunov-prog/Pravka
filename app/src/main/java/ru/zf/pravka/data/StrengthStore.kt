@@ -501,7 +501,9 @@ class StrengthStore(private val context: Context) {
             // Колено — наоборот, ПОСЛЕДНЕЕ сказанное: «к вечеру отпустило»
             // должно перебивать утреннее «ноет», а не проигрывать максимуму.
             knee = knee?.trim()?.ifBlank { old?.knee.orEmpty() } ?: old?.knee.orEmpty(),
-            note = note?.ifBlank { old?.note.orEmpty() } ?: old?.note.orEmpty(),
+            // Заметки дня КОПЯТСЯ, а не затираются: «вис тяжело» утром и
+            // «негативы легче» вечером — обе нужны тому, кто правит план.
+            note = appendNote(old?.note.orEmpty(), note),
             ts = System.currentTimeMillis(),
             doneIds = old?.doneIds ?: emptyList(),
             // День изменился — довезти его в intervals заново.
@@ -514,6 +516,17 @@ class StrengthStore(private val context: Context) {
     }
 
     fun gtgOn(date: String): GtgDay? = _gtgFlow.value.firstOrNull { it.date == date }
+
+    /** Дописать заметку к уже записанным; дубль и пустота не дописываются. */
+    private fun appendNote(old: String, fresh: String?): String {
+        val add = fresh?.trim().orEmpty()
+        return when {
+            add.isBlank() -> old
+            old.isBlank() -> add
+            old.contains(add) -> old
+            else -> "$old; $add"
+        }
+    }
 
     /** Галочка одного упражнения зарядки: тап ставит, повторный тап снимает. */
     suspend fun toggleGtgItem(date: String, exerciseId: String): GtgDay = mutex.withLock {

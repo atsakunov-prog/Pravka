@@ -244,6 +244,20 @@ class BodyEngine(
         return day
     }
 
+    /**
+     * Короткий комментарий к одному упражнению зарядки: «кошка-корова: спина
+     * хрустит». Копится в заметку дня (appendNote склеивает через «; ») и
+     * уезжает в intervals тем же wellness-комментарием, что и итог зарядки, —
+     * дальше по этим строкам правится план следующих дней.
+     */
+    suspend fun noteZaryadka(
+        text: String,
+        date: String = dayKey(System.currentTimeMillis()),
+    ): StrengthStore.GtgDay {
+        strengthStore.load()
+        return strengthStore.putGtg(date = date, note = text)
+    }
+
     /** Промахнулся кнопкой — снять отметку. Числа турника при этом остаются. */
     suspend fun unchargeToday(date: String = dayKey(System.currentTimeMillis())): StrengthStore.GtgDay {
         strengthStore.load()

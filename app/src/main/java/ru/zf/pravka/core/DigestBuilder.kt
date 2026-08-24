@@ -246,6 +246,7 @@ class DigestBuilder(
                 append(g.date).append(": ")
                 val bits = mutableListOf<String>()
                 if (g.charged) bits.add("зарядка сделана")
+                if (g.pullups > 0) bits.add("подтягивания ${g.pullups}")
                 if (g.hangSec > 0) bits.add("вис ${g.hangSec} сек")
                 if (g.negatives > 0) bits.add("негативы ${g.negatives}")
                 if (g.scapular > 0) bits.add("лопаточные ${g.scapular}")
