@@ -16,7 +16,7 @@ class Settings(private val context: Context) {
 
     companion object {
         const val MODEL_SONNET = "claude-sonnet-5"
-        const val MODEL_OPUS = "claude-opus-5"   // redo chips only
+        const val MODEL_OPUS = "claude-opus-5"   // redo chips + разбор Засечки
 
         // Dictation engines.
         const val SPEECH_GOOGLE = "google"          // live streaming, Gboard's engine

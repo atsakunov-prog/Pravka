@@ -1784,6 +1784,28 @@ class PravkaAccessibilityService : AccessibilityService() {
             zButton?.setRemind(false)
             val entry = outcome.entry
             when {
+                outcome.action == "none" -> {
+                    Haptics.success(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "🤷 Не записал: ${outcome.say.ifBlank { "это не про ленту" }}",
+                    )
+                }
+                outcome.action == "stop" -> {
+                    Haptics.success(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "⏹ «${entry.title}» закрыто, ${entry.durationMin()} мин",
+                    )
+                }
+                outcome.action == "insert" && outcome.error == null -> {
+                    Haptics.success(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        "⤵ Вставлено: «${entry.title}» ${zTime(entry.start)}–${zTime(entry.end)}" +
+                            " — обрамляющее дело продолжено",
+                    )
+                }
                 outcome.action == "edit" -> {
                     Haptics.success(this@PravkaAccessibilityService)
                     Feedback.toast(

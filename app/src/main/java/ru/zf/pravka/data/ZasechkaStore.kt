@@ -672,6 +672,99 @@ class ZasechkaStore(private val context: Context) {
     }
 
     /**
+     * Вставка ЗАВЕРШЁННОГО куска задним числом голосом: «с 18:30 до 18:50
+     * ходил в туалет» посреди быта. Владелец просил ровно это: вставить и
+     * «грубо обрамить тем делом, которым занимался» — накрывающее РУЧНОЕ
+     * дело разрезается вокруг вставки и ПРОДОЛЖАЕТСЯ после неё (открытое —
+     * открытым хвостом), частично пересекающиеся обрезаются по краю.
+     * Надиктовка остаётся на головном фрагменте, продолжение — свежий id и
+     * пустой raw. Авто-факты не трогаем: normalize сам обрамит вставку
+     * вокруг них; заполнители пересчитаются там же. Ручная запись ЦЕЛИКОМ
+     * внутри вставки — конфликт владельца с самим собой: вставка
+     * обрезается до её края, а при полном накрытии не пишется вовсе
+     * (затирать сказанное раньше нельзя).
+     */
+    suspend fun insertClosed(
+        start: Long,
+        end: Long,
+        raw: String,
+        title: String,
+        category: String,
+        client: String,
+        useful: Int,
+    ): Entry? = mutex.withLock {
+        ensureLoaded()
+        var s0 = start
+        var e0 = end
+        if (e0 <= s0) return@withLock null
+        // Ручные записи целиком внутри вставки — им дорогу: вставка ужимается.
+        for (b in entries) {
+            if (b.source == "auto" || b.source == GAP_SOURCE || b.open) continue
+            if (b.start >= s0 && b.end <= e0) {
+                if (b.start - s0 >= e0 - b.end) e0 = b.start else s0 = b.end
+            }
+        }
+        if (e0 - s0 < 60_000L) {
+            logger?.invoke("вставка «$title» не поместилась: внутри уже есть записи владельца")
+            return@withLock null
+        }
+        snapshotLocked("вставка «${title.trim().ifBlank { "без названия" }}»")
+        val nowMs = System.currentTimeMillis()
+        val out = ArrayList<Entry>(entries.size + 3)
+        for (e in entries) {
+            if (e.source == "auto" || e.source == GAP_SOURCE) {
+                out.add(e)
+                continue
+            }
+            val eEnd = if (e.open) Long.MAX_VALUE else e.end
+            if (e.start >= e0 || eEnd <= s0) {
+                out.add(e)
+                continue
+            }
+            when {
+                // Накрывает вставку целиком: голова до, продолжение после.
+                e.start < s0 && eEnd > e0 -> {
+                    out.add(e.copy(end = s0, synced = false, notionSynced = false))
+                    out.add(
+                        e.copy(
+                            id = nextId(),
+                            raw = "",
+                            start = e0,
+                            end = if (e.open) 0L else e.end,
+                            pomodoros = 0,
+                            synced = false,
+                            notionSynced = false,
+                        )
+                    )
+                }
+                // Заходит слева — обрезаем её конец на старте вставки.
+                e.start < s0 -> out.add(e.copy(end = s0, synced = false, notionSynced = false))
+                // Выходит справа — сдвигаем её начало на конец вставки.
+                else -> out.add(e.copy(start = e0, synced = false, notionSynced = false))
+            }
+        }
+        val entry = Entry(
+            id = nextId(),
+            start = s0,
+            end = e0,
+            raw = raw.trim(),
+            title = title.trim(),
+            category = category.trim(),
+            client = client.trim(),
+            useful = useful.coerceIn(0, 5),
+            source = "voice",
+            synced = false,
+            createdAt = nowMs,
+        )
+        out.add(entry)
+        entries = out
+        normalizeLocked()
+        entries.sortBy { it.start }
+        persist()
+        entry
+    }
+
+    /**
      * A phone-detected interruption (attention-eater session, a call) lands
      * in the ribbon retroactively. If an open entry covers [start], it is cut
      * at [start]; with [resumePrevious] (calls) a copy of it reopens at [end]

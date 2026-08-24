@@ -37,8 +37,9 @@ class ZasechkaEngine(
         val entry: ZasechkaStore.Entry,
         val categorized: Boolean,
         val error: String?,
-        val action: String = "new",       // "new" | "edit" | "delete"
+        val action: String = "new",       // new | insert | edit | delete | stop | none
         val previousTitle: String = "",   // edit: what the entry used to say
+        val say: String = "",             // none: почему ничего не записано
     )
 
     // "четверг, 21 августа, 14:32" - the model needs the weekday and clock to
@@ -93,7 +94,80 @@ class ZasechkaEngine(
             onSuccess = { p ->
                 stats.recordAux(p.costUsd, p.tokensIn, p.tokensOut)
                 val target = today.getOrNull(p.entryIndex - 1)
+                // Вставка завершённого куска: границы должны сложиться в
+                // валидный отрезок В ПРОШЛОМ, иначе честнее записать новым
+                // делом (данные важнее красоты).
+                val insertSpan: Pair<Long, Long>? = if (p.action == "insert") {
+                    var s0 = timeOnDay(now, p.startTime)
+                        ?: if (p.startOffsetMin > 0) now - p.startOffsetMin * 60_000L else null
+                    if (s0 != null && s0 > now) s0 -= 86_400_000L
+                    var e0 = timeOnDay(now, p.endTime)
+                        ?: if (p.durationMin > 0 && s0 != null) s0 + p.durationMin * 60_000L else null
+                    if (e0 != null && s0 != null && e0 <= s0) e0 += 86_400_000L
+                    if (s0 != null && e0 != null && e0 > s0 && e0 <= now) s0 to e0 else null
+                } else null
                 when {
+                    // «Всё, закончил» — закрыть открытое, нового не начинать.
+                    p.action == "stop" -> {
+                        val at = (timeOnDay(now, p.endTime)
+                            ?: (now - p.startOffsetMin * 60_000L)).coerceAtMost(now)
+                        val closed = store.closeOpen(at)
+                        if (closed == null) {
+                            Outcome(
+                                fakeEntry(now, text),
+                                categorized = true,
+                                error = null,
+                                action = "none",
+                                say = "Открытого дела нет — закрывать нечего",
+                            )
+                        } else {
+                            eventLog.add("засечка: закрыто голосом «${closed.title}» (${closed.durationMin()} мин)")
+                            sync.kickSoon(scope)
+                            Outcome(closed, categorized = true, error = null, action = "stop")
+                        }
+                    }
+                    // Не про ленту (будущее, мусор распознавания) — не пишем.
+                    p.action == "none" -> {
+                        eventLog.add("засечка: не записано — ${p.say.ifBlank { "не про ленту" }}")
+                        Outcome(
+                            fakeEntry(now, text),
+                            categorized = true,
+                            error = null,
+                            action = "none",
+                            say = p.say.ifBlank { "это не про ленту" },
+                        )
+                    }
+                    insertSpan != null -> {
+                        val (insStart, insEnd) = insertSpan
+                        val entry = store.insertClosed(
+                            start = insStart,
+                            end = insEnd,
+                            raw = text,
+                            title = p.title.ifBlank { fallbackTitle(text) },
+                            category = categoryNames
+                                .firstOrNull { it.equals(p.category, ignoreCase = true) }
+                                ?: p.category,
+                            client = clients.firstOrNull { it.equals(p.client, ignoreCase = true) }
+                                ?: p.client,
+                            useful = p.useful,
+                        )
+                        if (entry == null) {
+                            eventLog.add("засечка-вставка: «${p.title}» не поместилась — внутри записи владельца")
+                            return@fold Outcome(
+                                fakeEntry(now, text),
+                                categorized = false,
+                                error = "Там уже есть твои записи — поправь руками",
+                                action = "insert",
+                            )
+                        }
+                        eventLog.add(
+                            "засечка-вставка: «${entry.title}» " +
+                                "[${entry.category.ifBlank { "без категории" }}] " +
+                                "${(insEnd - insStart) / 60_000} мин задним числом, обрамление продолжено"
+                        )
+                        sync.kickSoon(scope)
+                        Outcome(entry, categorized = true, error = null, action = "insert")
+                    }
                     // Edit: touch only the fields the owner asked to change.
                     // The numbered line may be one FRAGMENT of a sliced-up дело
                     // - words apply to the whole chain, a new start moves the
@@ -247,6 +321,21 @@ class ZasechkaEngine(
         }
         return closed
     }
+
+    /** Запись-пустышка для Outcome, когда в ленту ничего не легло. */
+    private fun fakeEntry(now: Long, raw: String) = ZasechkaStore.Entry(
+        id = 0,
+        start = now,
+        end = now,
+        raw = raw,
+        title = "",
+        category = "",
+        client = "",
+        useful = 0,
+        source = "voice",
+        synced = true,
+        createdAt = now,
+    )
 
     private fun fallbackTitle(text: String): String {
         val cut = text.take(60)

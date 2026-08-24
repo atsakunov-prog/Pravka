@@ -819,6 +819,10 @@ feel 1–5 по той же шкале. knee — «зелёный», «жёлт�
         val stablePrefix: String,
         val dictPart: String,
         val afterInput: String,
+        // Кэшировать stablePrefix и на Опусе: по умолчанию кэш живёт только
+        // на повседневном Сонете, но Засечка ходит Опусом десятки раз в день
+        // с одним и тем же сводом правил — там кэш окупается с двух вызовов.
+        val cacheStableAlways: Boolean = false,
     ) {
         val beforeInput: String get() = stablePrefix + dictPart
     }
