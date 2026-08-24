@@ -1522,33 +1522,70 @@ private fun ZaryadkaChecklist(
             loaded = true
         }
     }
-    val items = if (loaded) app.exerciseBook.ofBlock("Зарядка") else emptyList()
+    // Список зарядки — из СОБЫТИЯ календаря, ровно как у силовой: владелец
+    // правит дозы и состав неделя к неделе («9 пунктов, дозы конечные»), и
+    // показывать вместо этого статический блок из 15 позиций значило бы
+    // спорить с его же планом. Справочник — запасной вариант и источник
+    // техники для узнанных строк.
+    val planLines = remember(chargerPlan) { chargerPlan?.plannedLines().orEmpty() }
+    val items = remember(planLines, loaded) {
+        if (!loaded) emptyList()
+        else if (planLines.isNotEmpty()) {
+            planLines.mapIndexed { i, line ->
+                val exercise = app.exerciseBook.match(line)
+                DayTask(
+                    id = exercise?.id ?: taskId(i, line) + "-z",
+                    title = line,
+                    exercise = exercise,
+                    lastTime = null,
+                    history = emptyList(),
+                )
+            }
+        } else {
+            app.exerciseBook.ofBlock("Зарядка").map { exercise ->
+                DayTask(
+                    id = exercise.id,
+                    title = exercise.name,
+                    exercise = exercise,
+                    lastTime = null,
+                    history = emptyList(),
+                )
+            }
+        }
+    }
     if (items.isEmpty()) return
+    val allIds = remember(items) { items.map { it.id } }
     val doneIds = gtgToday?.doneIds ?: emptyList()
     val charged = gtgToday?.charged == true
     var openId by remember { mutableStateOf<String?>(null) }
-    var asking by remember { mutableStateOf<Pair<ExerciseBook.Exercise, Boolean>?>(null) }
+    var asking by remember { mutableStateOf<Triple<String, ExerciseBook.Exercise?, Boolean>?>(null) }
 
     PaperCard(
         label = "зарядка сегодня",
         trailing = {
             PaperHint(
                 if (charged) "✓ сделана"
-                else "${items.count { it.id in doneIds }} из ${items.size}"
+                else "${allIds.count { it in doneIds }} из ${items.size}"
             )
         },
     ) {
         // Заметка дня из календаря: «сокращённая версия», «дачная — турник
         // заменяется резинкой», «добавка недели — bird dog». Владелец пушит
         // её из чата вместе с планом, и меняется она чаще справочника.
+        // Нумерованный список из заметки не показываем: он и есть чек-лист
+        // ниже, дублировать его текстом сверху — читать одно дважды.
         val dayNote = chargerPlan?.description.orEmpty()
-            .substringBefore("Warmup").trim()
+            .substringBefore("Warmup")
+            .lines()
+            .takeWhile { !Regex("^\\d+[.)]\\s+\\S").containsMatchIn(it.trim()) }
+            .joinToString("\n")
+            .trim()
         if (dayNote.isNotBlank()) {
             Text(dayNote.take(400), style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(10.dp))
         }
-        for (exercise in items) {
-            val ticked = exercise.id in doneIds || charged
+        for (task in items) {
+            val ticked = task.id in doneIds || charged
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1556,27 +1593,34 @@ private fun ZaryadkaChecklist(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CheckDot(ticked) {
-                    app.appScope.launch { app.bodyEngine.toggleZaryadka(exercise.id) }
+                    app.appScope.launch {
+                        app.bodyEngine.toggleZaryadka(task.id, allIds = allIds)
+                    }
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(
                     Modifier
                         .weight(1f)
-                        .clickable { openId = if (openId == exercise.id) null else exercise.id }
+                        .clickable { openId = if (openId == task.id) null else task.id }
                 ) {
                     Text(
-                        exercise.name,
+                        task.title,
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (ticked) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.onSurface,
                     )
-                    if (exercise.scheme.isNotBlank()) PaperHint(exercise.scheme)
-                    if (openId == exercise.id) {
-                        if (exercise.how.isNotBlank()) {
+                    // Доза уже в строке плана; схему справочника показываем
+                    // только запасному списку, где строка — голое имя.
+                    val exercise = task.exercise
+                    if (planLines.isEmpty() && exercise != null && exercise.scheme.isNotBlank()) {
+                        PaperHint(exercise.scheme)
+                    }
+                    if (openId == task.id) {
+                        if (exercise != null && exercise.how.isNotBlank()) {
                             Spacer(Modifier.height(4.dp))
                             Text(exercise.how, style = MaterialTheme.typography.bodySmall)
                         }
-                        if (exercise.mistakes.isNotBlank()) {
+                        if (exercise != null && exercise.mistakes.isNotBlank()) {
                             Spacer(Modifier.height(2.dp))
                             Text(
                                 exercise.mistakes,
@@ -1586,10 +1630,10 @@ private fun ZaryadkaChecklist(
                         }
                         Spacer(Modifier.height(6.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { asking = exercise to true }) {
+                            OutlinedButton(onClick = { asking = Triple(task.title, exercise, true) }) {
                                 Text("Как делать?")
                             }
-                            OutlinedButton(onClick = { asking = exercise to false }) {
+                            OutlinedButton(onClick = { asking = Triple(task.title, exercise, false) }) {
                                 Text("Спросить")
                             }
                         }
@@ -1612,8 +1656,8 @@ private fun ZaryadkaChecklist(
             whereSaid = "в карточке зарядки",
         )
     }
-    asking?.let { (exercise, auto) ->
-        CoachDialog(app, exercise.name, exercise, autoAsk = auto, onClose = { asking = null })
+    asking?.let { (title, exercise, auto) ->
+        CoachDialog(app, title, exercise, autoAsk = auto, onClose = { asking = null })
     }
 }
 

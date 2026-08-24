@@ -226,11 +226,18 @@ class BodyEngine(
     suspend fun toggleZaryadka(
         exerciseId: String,
         date: String = dayKey(System.currentTimeMillis()),
+        /**
+         * Список задач зарядки ЭТОГО дня — тот, что видит владелец. Он приходит
+         * из события календаря и меняется неделя к неделе; считать «всё
+         * сделано» по статическому блоку значило бы требовать упражнения,
+         * которых сегодня в списке нет.
+         */
+        allIds: List<String> = emptyList(),
     ): StrengthStore.GtgDay {
         strengthStore.load()
         book.load()
         val day = strengthStore.toggleGtgItem(date, exerciseId)
-        val all = book.ofBlock("Зарядка").map { it.id }
+        val all = allIds.ifEmpty { book.ofBlock("Зарядка").map { it.id } }
         if (!day.charged && all.isNotEmpty() && all.all { it in day.doneIds }) {
             return strengthStore.putGtg(date = date, charged = true)
         }
