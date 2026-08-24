@@ -245,17 +245,22 @@ class BodyEngine(
     }
 
     /**
-     * Короткий комментарий к одному упражнению зарядки: «кошка-корова: спина
-     * хрустит». Копится в заметку дня (appendNote склеивает через «; ») и
-     * уезжает в intervals тем же wellness-комментарием, что и итог зарядки, —
-     * дальше по этим строкам правится план следующих дней.
+     * Отчёт по одному пункту зарядки из ✎-диалога: статус, факт, ощущение.
+     * Пункт считается обработанным; обработаны все пункты дня — день
+     * закрывается тем же правилом, что у галочек. «Не смог негативы» день
+     * НЕ ломает: он зарядку делал, статус дня скажет «частично».
      */
-    suspend fun noteZaryadka(
-        text: String,
+    suspend fun reportZaryadka(
+        item: StrengthStore.GtgItem,
+        allIds: List<String> = emptyList(),
         date: String = dayKey(System.currentTimeMillis()),
     ): StrengthStore.GtgDay {
         strengthStore.load()
-        return strengthStore.putGtg(date = date, note = text)
+        val day = strengthStore.putGtgItem(date, item)
+        if (!day.charged && allIds.isNotEmpty() && allIds.all { it in day.doneIds }) {
+            return strengthStore.putGtg(date = date, charged = true)
+        }
+        return day
     }
 
     /** Промахнулся кнопкой — снять отметку. Числа турника при этом остаются. */
@@ -272,6 +277,7 @@ class BodyEngine(
         scapular: Int? = null,
         pullups: Int? = null,
         knee: String? = null,
+        feel: Int? = null,
     ): StrengthStore.GtgDay {
         strengthStore.load()
         return strengthStore.putGtg(
@@ -282,6 +288,7 @@ class BodyEngine(
             scapular = scapular,
             pullups = pullups,
             knee = knee,
+            feel = feel,
             // Руками — значит заменить: только так чинится ослышка «вис 400
             // секунд», иначе она травила бы лучший вис вечно. Голосовая дорога
             // (hear → putGtg) остаётся на максимуме дня.

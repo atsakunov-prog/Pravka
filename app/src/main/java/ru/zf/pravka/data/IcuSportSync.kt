@@ -54,13 +54,24 @@ class IcuSportSync(
             val start = existing.indexOf(MARK_OPEN)
             val end = existing.indexOf(MARK_CLOSE)
             if (start >= 0 && end > start) {
+                // «null» перед блоком — мусор старой версии (optString на JSON
+                // null), не его текст: вычищается следующей же склейкой.
                 val before = existing.substring(0, start).trimEnd()
+                    .let { if (it == "null") "" else it }
                 val after = existing.substring(end + MARK_CLOSE.length).trimStart()
                 return listOf(before, block, after).filter { it.isNotBlank() }.joinToString("\n\n")
             }
-            val kept = existing.trim()
+            val kept = existing.trim().let { if (it == "null") "" else it }
             return if (kept.isEmpty()) block else kept + "\n\n" + block
         }
+
+        /**
+         * org.json на Android: optString у JSON null отдаёт СТРОКУ «null» —
+         * ровно так в описании зарядки завёлся мусорный первый абзац. Все
+         * свободные текстовые поля читать только через это.
+         */
+        fun text(o: JSONObject, key: String): String =
+            if (o.isNull(key)) "" else o.optString(key)
     }
 
     private val running = AtomicBoolean(false)
@@ -258,7 +269,7 @@ class IcuSportSync(
                     protein = w.optInt("protein", 0),
                     fat = w.optInt("fatTotal", 0),
                     carbs = w.optInt("carbohydrates", 0),
-                    comments = w.optString("comments"),
+                    comments = text(w, "comments"),
                 )
             )
         }
@@ -401,7 +412,7 @@ class IcuSportSync(
                 val auth = Credentials.basic("API_KEY", key)
                 val existingBody = get("$BASE/$athlete/wellness/$date", auth)
                     ?: throw IllegalStateException("wellness-день не прочитался — запись отложена")
-                val existing = runCatching { JSONObject(existingBody).optString("comments") }
+                val existing = runCatching { text(JSONObject(existingBody), "comments") }
                     .getOrDefault("")
                 val payload = JSONObject().apply {
                     put("id", date)
@@ -457,7 +468,7 @@ class IcuSportSync(
                         minutes = ((seconds + 30) / 60).toInt(),
                         load = e.optInt("icu_training_load", 0).takeIf { it > 0 }
                             ?: e.optInt("load_target", 0),
-                        description = e.optString("description"),
+                        description = text(e, "description"),
                         carbsPerHour = e.optInt("carbs_per_hour", 0),
                     )
                 )
@@ -516,7 +527,7 @@ class IcuSportSync(
     private fun activityDescription(activityId: String, auth: String): String? {
         val body = get("$ACTIVITY/$activityId", auth) ?: return null
         val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
-        return o.optString("description")
+        return text(o, "description")
     }
 
     /**

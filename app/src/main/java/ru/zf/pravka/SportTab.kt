@@ -1643,15 +1643,29 @@ private fun ZaryadkaChecklist(
         }
         for (task in items) {
             val ticked = task.id in doneIds || charged
+            val report = gtgToday?.items?.firstOrNull { it.id == task.id }
             Row(
                 Modifier
                     .fillMaxWidth()
                     .padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                CheckDot(ticked) {
-                    app.appScope.launch {
-                        app.bodyEngine.toggleZaryadka(task.id, allIds = allIds)
+                if (report != null && report.status != "ok") {
+                    // «Не смог» и «частично» — не галочка и не пустота: видно
+                    // без раскрытия. Тап открывает тот же ✎-отчёт.
+                    Text(
+                        if (report.status == "no") "✗" else "◐",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = toneColor(if (report.status == "no") -2 else -1),
+                        modifier = Modifier
+                            .clickable { noting = task }
+                            .padding(horizontal = 5.dp),
+                    )
+                } else {
+                    CheckDot(ticked) {
+                        app.appScope.launch {
+                            app.bodyEngine.toggleZaryadka(task.id, allIds = allIds)
+                        }
                     }
                 }
                 Spacer(Modifier.width(12.dp))
@@ -1673,6 +1687,11 @@ private fun ZaryadkaChecklist(
                         task.hint.isNotBlank() -> PaperHint(task.hint)
                         planLines.isEmpty() && exercise != null && exercise.scheme.isNotBlank() ->
                             PaperHint(exercise.scheme)
+                    }
+                    if (report != null &&
+                        (report.fact.isNotBlank() || report.note.isNotBlank() || report.status != "ok")
+                    ) {
+                        PaperHint("✎ " + report.brief().substringAfter(": "))
                     }
                     if (openId == task.id) {
                         if (exercise != null && exercise.how.isNotBlank()) {
@@ -1726,6 +1745,27 @@ private fun ZaryadkaChecklist(
                 }
             }
         }
+        // Самочувствие — в нативное поле feel зарядки-активности: intervals
+        // сам рисует по нему кривую, из слова «ужас» её не построишь.
+        if (charged || doneIds.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                PaperHint("самочувствие")
+                for (v in 1..5) {
+                    FilterChip(
+                        selected = gtgToday?.feel == v,
+                        onClick = {
+                            app.appScope.launch { app.bodyEngine.putGtgNumbers(feel = v) }
+                        },
+                        label = { Text("$v") },
+                    )
+                }
+            }
+            PaperHint("1 отлично — 5 развалина (шкала intervals)")
+        }
         Spacer(Modifier.height(4.dp))
         PaperHint(
             if (charged) "Числа виса и негативов — в карточке зарядки ниже."
@@ -1756,9 +1796,11 @@ private fun ZaryadkaChecklist(
         CoachDialog(app, title, exercise, autoAsk = auto, onClose = { asking = null })
     }
     noting?.let { task ->
-        ZaryadkaNoteDialog(
+        ZaryadkaReportDialog(
             app = app,
-            exerciseName = task.title.substringBefore(" — "),
+            task = task,
+            existing = gtgToday?.items?.firstOrNull { it.id == task.id },
+            allIds = allIds,
             onClose = { noting = null },
         )
     }
@@ -1768,38 +1810,74 @@ private fun ZaryadkaChecklist(
 private val HOLD_SEC = Regex("""(\d+)\s*сек""")
 
 /**
- * Короткий комментарий к одному упражнению зарядки: «спина хрустит», «легко,
- * можно дольше». Ложится в заметку дня с именем упражнения, оттуда — в
- * wellness-комментарий intervals и в контекст тренера: ровно то, по чему
- * правится план следующих дней.
+ * Отчёт по одному пункту зарядки — строка «таблицы выполнения»: статус
+ * (сделал/частично/не смог), факт и ощущение. Копится по дням в GtgDay.items —
+ * из этого потом графики; сегодня — строка «факт/план» в комментарии
+ * intervals, по которой чат правит следующие дни.
  */
 @Composable
-private fun ZaryadkaNoteDialog(app: PravkaApp, exerciseName: String, onClose: () -> Unit) {
-    var draft by remember { mutableStateOf("") }
+private fun ZaryadkaReportDialog(
+    app: PravkaApp,
+    task: DayTask,
+    existing: StrengthStore.GtgItem?,
+    allIds: List<String>,
+    onClose: () -> Unit,
+) {
+    val name = task.title.substringBefore(" — ")
+    val plan = task.title.substringAfter(" — ", "")
+    var status by remember { mutableStateOf(existing?.status ?: "ok") }
+    var fact by remember { mutableStateOf(existing?.fact.orEmpty()) }
+    var note by remember { mutableStateOf(existing?.note.orEmpty()) }
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text(exerciseName, style = MaterialTheme.typography.titleMedium) },
+        title = { Text(name, style = MaterialTheme.typography.titleMedium) },
         text = {
             Column {
+                if (plan.isNotBlank()) PaperHint("план: $plan")
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for ((key, label) in listOf("ok" to "Сделал", "part" to "Частично", "no" to "Не смог")) {
+                        FilterChip(
+                            selected = status == key,
+                            onClick = { status = key },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    label = { Text("Как пошло? «спина хрустит», «легко»…") },
-                    minLines = 2,
-                    maxLines = 4,
+                    value = fact,
+                    onValueChange = { fact = it },
+                    label = { Text("Факт: «10», «12 из 15»…") },
+                    minLines = 1,
                 )
                 Spacer(Modifier.height(6.dp))
-                PaperHint("Уедет с итогом дня в intervals — по этим заметкам правятся следующие дни.")
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Ощущение: «тяжело», «легко»…") },
+                    minLines = 1,
+                    maxLines = 3,
+                )
+                Spacer(Modifier.height(6.dp))
+                PaperHint("Уедет строкой «факт/план» в комментарий intervals — по ней правится план.")
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                val text = draft.trim()
-                if (text.isNotBlank()) {
-                    app.appScope.launch {
-                        app.bodyEngine.noteZaryadka("$exerciseName: $text")
-                        Feedback.toast(app, "✓ В заметке дня — уедет в intervals")
-                    }
+                app.appScope.launch {
+                    app.bodyEngine.reportZaryadka(
+                        StrengthStore.GtgItem(
+                            id = task.id,
+                            name = name,
+                            plan = plan,
+                            status = status,
+                            fact = fact.trim(),
+                            note = note.trim(),
+                        ),
+                        allIds = allIds,
+                    )
+                    Feedback.toast(app, "✓ В таблице дня — уедет в intervals")
                 }
                 onClose()
             }) { Text("Записать") }

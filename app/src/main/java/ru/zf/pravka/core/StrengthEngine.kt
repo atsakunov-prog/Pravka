@@ -285,6 +285,8 @@ class StrengthEngine(
      * недельной сводке, а не программа.
      */
     fun setLogText(session: StrengthStore.Session): String = buildString {
+        // Шапка с типом и датой — под один парсер с блоком зарядки.
+        append("СИЛОВАЯ ").append(session.date).append('\n')
         if (session.title.isNotBlank()) append(session.title).append('\n')
         for (e in session.exercises) {
             append("• ").append(e.name).append(": ").append(e.compact())
@@ -448,7 +450,7 @@ class StrengthEngine(
         // типом WeightTraining, что силовая, только короткая: в неё итог
         // вклеивается тоже.
         for (day in store.gtgNeedingSync().take(5)) {
-            val outcome = icu.spliceWellnessComment(day.date, day.line())
+            val outcome = icu.spliceWellnessComment(day.date, day.block())
             outcome.onSuccess {
                 runCatching { spliceGtgIntoActivity(day) }
                 store.markGtgSynced(day.date)
@@ -487,7 +489,9 @@ class StrengthEngine(
         // Одна-единственная активность дня при непустой сессии — это силовая,
         // даже короткая: журнал приедет в неё, зарядке остаётся wellness.
         if (acts.size == 1 && store.sessionsOn(day.date).any { !it.empty }) return
-        icu.writeSetLog(target.id, day.line(), 0, 0)
+        // Самочувствие — в нативное поле feel той же записью: intervals сам
+        // рисует по нему график, извлекать усталость из слова «ужас» не надо.
+        icu.writeSetLog(target.id, day.block(), day.feel, 0)
     }
 
     /**

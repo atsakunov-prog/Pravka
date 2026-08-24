@@ -145,6 +145,62 @@ class StrengthStore(private val context: Context) {
     }
 
     /**
+     * Отчёт по одному пункту зарядки — строка «таблицы выполнения». План
+     * хранится снимком на этот день: дозы владелец правит неделя к неделе,
+     * а «10/20–30 сек» должно читаться и через месяц без календаря под рукой.
+     */
+    data class GtgItem(
+        val id: String = "",
+        val name: String = "",
+        /** Доза из строки плана этого дня: «20–30 сек», «2–3». */
+        val plan: String = "",
+        /** ok — сделал; part — частично; no — не смог. Словарь фиксированный. */
+        val status: String = "ok",
+        /** Факт коротко: «10», «12 из 15». Пусто — достаточно статуса. */
+        val fact: String = "",
+        val note: String = "",
+    ) {
+        fun statusWord(): String = when (status) {
+            "no" -> "не смог"
+            "part" -> "частично"
+            else -> "сделал"
+        }
+
+        /** Кусок однострочной сводки: «Негативы: не смог — тяжело». */
+        fun brief(): String = buildString {
+            append(name).append(": ")
+            append(fact.ifBlank { statusWord() })
+            if (fact.isNotBlank() && status != "ok") append(" · ").append(statusWord())
+            if (note.isNotBlank()) append(" — ").append(note)
+        }
+
+        /** Строка блока: «Вис: 10/20–30 сек — тяжело». Числа берёт у дня. */
+        fun itemLine(day: GtgDay): String = buildString {
+            val lower = name.lowercase()
+            val num = when {
+                lower.contains("вис") -> day.hangSec
+                lower.contains("негатив") -> day.negatives
+                lower.contains("лопаточ") -> day.scapular
+                lower.contains("подтяг") -> day.pullups
+                else -> -1
+            }
+            val f = fact.ifBlank {
+                if (num > 0 || (num == 0 && status == "no")) "$num" else ""
+            }
+            append(name).append(": ")
+            append(
+                when {
+                    f.isNotBlank() && plan.isNotBlank() -> "$f/$plan"
+                    f.isNotBlank() -> f
+                    else -> statusWord()
+                }
+            )
+            if (f.isNotBlank() && status != "ok") append(" — ").append(statusWord())
+            if (note.isNotBlank()) append(" — ").append(note)
+        }
+    }
+
+    /**
      * GTG-день: зарядка сделана, вис в секундах, негативы и лопаточные в
      * повторах. Цепочка галочек, которая не должна рваться, — единственная
      * метрика, где визуализация streak правда меняет поведение. И этих данных
@@ -164,6 +220,10 @@ class StrengthStore(private val context: Context) {
         // потому что именно она решает, режем ли бег (он младший).
         val knee: String = "",
         val note: String = "",
+        /** Самочувствие 1–5 по шкале intervals: 1 отлично, 5 развалина. */
+        val feel: Int = 0,
+        /** Таблица выполнения: отчёты по пунктам зарядки этого дня. */
+        val items: List<GtgItem> = emptyList(),
         val ts: Long = 0L,
         /** Галочки чек-листа зарядки: id упражнений блока «Зарядка», отмеченных сегодня. */
         val doneIds: List<String> = emptyList(),
@@ -172,18 +232,77 @@ class StrengthStore(private val context: Context) {
     ) {
         val any: Boolean
             get() = charged || hangSec > 0 || negatives > 0 || scapular > 0 ||
-                pullups > 0 || knee.isNotBlank()
+                pullups > 0 || knee.isNotBlank() || note.isNotBlank() ||
+                feel > 0 || items.isNotEmpty() || doneIds.isNotEmpty()
 
-        /** День одной строкой — для комментария wellness, сводки и CSV. */
+        /**
+         * Статус дня фиксированным словарём — его чат просил ровно три слова:
+         * «не сделал», «не смог», «забил» — синонимы, которые превращают
+         * данные обратно в текст.
+         */
+        fun status(): String = when {
+            charged && items.none { it.status != "ok" } -> "выполнена"
+            charged || doneIds.isNotEmpty() || items.isNotEmpty() ||
+                hangSec > 0 || negatives > 0 || scapular > 0 || pullups > 0 -> "частично"
+            else -> "пропущена"
+        }
+
+        private fun statusKey(): String = when (status()) {
+            "выполнена" -> "done"
+            "частично" -> "part"
+            else -> "skip"
+        }
+
+        /** День одной строкой — для CSV, дайджеста и контекста коуча. */
         fun line(): String = buildString {
             append("Зарядка: ")
-            append(if (charged) "сделана" else "не отмечена")
+            append(status())
             if (pullups > 0) append(" · подтягивания $pullups")
             if (hangSec > 0) append(" · вис $hangSec сек")
             if (negatives > 0) append(" · негативы $negatives")
             if (scapular > 0) append(" · лопаточные $scapular")
             if (knee.isNotBlank()) append(" · колено $knee")
+            if (feel > 0) append(" · самочувствие $feel/5")
+            for (i in items) {
+                if (i.status == "ok" && i.note.isBlank()) continue
+                append(" · ").append(i.brief())
+            }
             if (note.isNotBlank()) append(" — ").append(note)
+        }
+
+        /**
+         * День развёрнутым блоком — для комментариев intervals (wellness и
+         * короткая активность зарядки). Протокол согласован с его чатом:
+         * шапка со статусом, строки «факт/план» по пунктам с отклонениями,
+         * живая заметка — и машинная строка #data, по которой графики
+         * строятся без разбора прозы. Ключи #data не менять: их читает чат
+         * по ту сторону intervals.
+         */
+        fun block(): String = buildString {
+            append("ЗАРЯДКА ").append(date).append(" · ").append(status()).append('\n')
+            val flagged = items.filter {
+                it.status != "ok" || it.fact.isNotBlank() || it.note.isNotBlank()
+            }
+            for (i in flagged) append(i.itemLine(this@GtgDay)).append('\n')
+            // Числа, наговоренные без ✎-отчёта, — своей строкой, один раз.
+            fun covered(word: String) = flagged.any { it.name.lowercase().contains(word) }
+            if (hangSec > 0 && !covered("вис")) append("Вис: $hangSec сек\n")
+            if (negatives > 0 && !covered("негатив")) append("Негативы: $negatives\n")
+            if (scapular > 0 && !covered("лопаточ")) append("Лопаточные: $scapular\n")
+            if (pullups > 0 && !covered("подтяг")) append("Подтягивания: $pullups\n")
+            val plainTicks = doneIds.count { id -> items.none { it.id == id } }
+            val quiet = items.count {
+                it.status == "ok" && it.fact.isBlank() && it.note.isBlank()
+            } + plainTicks
+            if (quiet > 0) append("По плану, без пометок: $quiet\n")
+            if (knee.isNotBlank()) append("Колено: ").append(knee).append('\n')
+            if (note.isNotBlank()) append("Заметка: ").append(note).append('\n')
+            append("#data status=").append(statusKey())
+            append(" hang=").append(hangSec)
+            append(" scap=").append(scapular)
+            append(" neg=").append(negatives)
+            append(" pull=").append(pullups)
+            if (feel > 0) append(" feel=").append(feel)
         }
     }
 
@@ -479,6 +598,7 @@ class StrengthStore(private val context: Context) {
         pullups: Int? = null,
         knee: String? = null,
         note: String? = null,
+        feel: Int? = null,
         /**
          * true — числа ЗАМЕНЯЮТ записанные (ручная правка в диалоге: только так
          * чинится ослышка «вис 400 секунд», иначе она травила бы лучший вис
@@ -504,9 +624,39 @@ class StrengthStore(private val context: Context) {
             // Заметки дня КОПЯТСЯ, а не затираются: «вис тяжело» утром и
             // «негативы легче» вечером — обе нужны тому, кто правит план.
             note = appendNote(old?.note.orEmpty(), note),
+            // Самочувствие — последнее сказанное, как колено: правка честнее максимума.
+            feel = feel?.takeIf { it in 1..5 } ?: old?.feel ?: 0,
+            items = old?.items ?: emptyList(),
             ts = System.currentTimeMillis(),
             doneIds = old?.doneIds ?: emptyList(),
             // День изменился — довезти его в intervals заново.
+            icuSynced = false,
+        )
+        _gtgFlow.value = (_gtgFlow.value.filterNot { it.date == date } + fresh)
+            .sortedByDescending { it.date }
+        persist()
+        fresh
+    }
+
+    /**
+     * Отчёт по одному пункту зарядки. Прежний отчёт того же пункта
+     * ПЕРЕЗАПИСЫВАЕТСЯ (правка честнее склейки: «не смог» утром может стать
+     * «сделал» вечером), пункт помечается обработанным в doneIds, день встаёт
+     * в очередь досыла.
+     */
+    suspend fun putGtgItem(date: String, item: GtgItem): GtgDay = mutex.withLock {
+        ensureLoaded()
+        val old = _gtgFlow.value.firstOrNull { it.date == date } ?: GtgDay(date = date)
+        val items = old.items.filterNot {
+            (item.id.isNotBlank() && it.id == item.id) || it.name == item.name
+        } + item
+        val done = if (item.id.isNotBlank() && item.id !in old.doneIds) {
+            old.doneIds + item.id
+        } else old.doneIds
+        val fresh = old.copy(
+            items = items,
+            doneIds = done,
+            ts = System.currentTimeMillis(),
             icuSynced = false,
         )
         _gtgFlow.value = (_gtgFlow.value.filterNot { it.date == date } + fresh)
@@ -706,8 +856,21 @@ class StrengthStore(private val context: Context) {
         put("pullups", g.pullups)
         put("knee", g.knee)
         put("note", g.note)
+        put("feel", g.feel)
         put("ts", g.ts)
         put("doneIds", JSONArray().apply { g.doneIds.forEach { put(it) } })
+        put("items", JSONArray().apply {
+            g.items.forEach { i ->
+                put(JSONObject().apply {
+                    put("id", i.id)
+                    put("name", i.name)
+                    put("plan", i.plan)
+                    put("status", i.status)
+                    put("fact", i.fact)
+                    put("note", i.note)
+                })
+            }
+        })
         put("icu", g.icuSynced)
     }
 
@@ -804,6 +967,22 @@ class StrengthStore(private val context: Context) {
                         da.optString(k).takeIf { it.isNotBlank() }?.let { doneIds.add(it) }
                     }
                 }
+                val items = mutableListOf<GtgItem>()
+                g.optJSONArray("items")?.let { ia ->
+                    for (k in 0 until ia.length()) {
+                        val i = ia.optJSONObject(k) ?: continue
+                        items.add(
+                            GtgItem(
+                                id = i.optString("id"),
+                                name = i.optString("name"),
+                                plan = i.optString("plan"),
+                                status = i.optString("status").ifBlank { "ok" },
+                                fact = i.optString("fact"),
+                                note = i.optString("note"),
+                            )
+                        )
+                    }
+                }
                 gtg.add(
                     GtgDay(
                         date = g.optString("date"),
@@ -814,6 +993,8 @@ class StrengthStore(private val context: Context) {
                         pullups = g.optInt("pullups"),
                         knee = g.optString("knee"),
                         note = g.optString("note"),
+                        feel = g.optInt("feel"),
+                        items = items,
                         ts = g.optLong("ts"),
                         doneIds = doneIds,
                         icuSynced = g.optBoolean("icu", false),
