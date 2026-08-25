@@ -1,6 +1,5 @@
 package ru.zf.pravka.data
 
-import android.content.Context
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -13,7 +12,7 @@ import org.json.JSONObject
 // "Обучить" round (his edits vs our output, analyzed by Opus). Enabled rules
 // ride into every CLEAN request as a permanent block in the uncached slot -
 // this is how the model "remembers" the owner's systematic preferences.
-class RulesStore(private val context: Context) {
+class RulesStore(private val dir: File) {
 
     data class Rule(
         val id: Long,
@@ -30,7 +29,7 @@ class RulesStore(private val context: Context) {
     private var loaded = false
     private val rules = mutableListOf<Rule>()
 
-    private fun file() = File(context.filesDir, "pravka-rules.json")
+    private fun file() = File(dir, "pravka-rules.json")
 
     private fun ensureLoaded() {
         if (loaded) return

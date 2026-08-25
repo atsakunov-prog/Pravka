@@ -1,21 +1,18 @@
 package ru.zf.pravka.data
 
-import android.content.Context
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.Prompts
 
-private val Context.promptDataStore by preferencesDataStore(name = "prompts")
-
 // Owner-editable prompt overrides (spec section 7). Factory texts stay as
-// constants in Prompts.kt; DataStore holds only the overrides, so an APK
+// constants in Prompts.kt; the store holds only the overrides, so an APK
 // update can refresh factory texts without touching the owner's edits.
-class PromptStore(private val context: Context) {
+//
+// Хранилище у каждой платформы своё (телефон - DataStore, воркстанция -
+// файл), а список промптов и заводские тексты - общие, поэтому здесь
+// интерфейс, а не класс.
+interface PromptStore {
 
     enum class PromptId(val storageKey: String) {
         CLEAN_CLAUDE("clean_claude"),
@@ -46,8 +43,7 @@ class PromptStore(private val context: Context) {
         PromptId.TASKS -> Prompts.TASKS
     }
 
-    fun overrideFlow(id: PromptId): Flow<String?> =
-        context.promptDataStore.data.map { it[stringPreferencesKey(id.storageKey)] }
+    fun overrideFlow(id: PromptId): Flow<String?>
 
     suspend fun effective(id: PromptId): String =
         overrideFlow(id).first() ?: factory(id)
@@ -55,12 +51,8 @@ class PromptStore(private val context: Context) {
     suspend fun effective(mode: ProofreadMode): String =
         effective(PromptId.of(mode))
 
-    suspend fun setOverride(id: PromptId, text: String) {
-        context.promptDataStore.edit { it[stringPreferencesKey(id.storageKey)] = text }
-    }
+    suspend fun setOverride(id: PromptId, text: String)
 
     /** "Вернуть заводской": removes the override, factory text applies again. */
-    suspend fun resetToFactory(id: PromptId) {
-        context.promptDataStore.edit { it.remove(stringPreferencesKey(id.storageKey)) }
-    }
+    suspend fun resetToFactory(id: PromptId)
 }

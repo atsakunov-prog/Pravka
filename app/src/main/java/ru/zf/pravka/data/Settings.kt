@@ -9,19 +9,22 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import ru.zf.pravka.core.Models
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
-class Settings(private val context: Context) {
+class Settings(private val context: Context) : PravkaSettings {
 
     companion object {
-        const val MODEL_SONNET = "claude-sonnet-5"
-        const val MODEL_OPUS = "claude-opus-5"   // redo chips only
+        // Сами значения живут в ядре (ru.zf.pravka.core.Models): на них
+        // смотрит и воркстанция. Здесь - привычные телефону имена.
+        const val MODEL_SONNET = Models.SONNET
+        const val MODEL_OPUS = Models.OPUS
 
         // Dictation engines.
-        const val SPEECH_GOOGLE = "google"          // live streaming, Gboard's engine
-        const val SPEECH_WHISPER_SMALL = "whisper-small"
-        const val SPEECH_WHISPER_BASE = "whisper-base"
+        const val SPEECH_GOOGLE = Models.SPEECH_GOOGLE
+        const val SPEECH_WHISPER_SMALL = Models.SPEECH_WHISPER_SMALL
+        const val SPEECH_WHISPER_BASE = Models.SPEECH_WHISPER_BASE
 
         private val KEY_API_KEY = stringPreferencesKey("anthropic_api_key")
         private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
@@ -57,7 +60,7 @@ class Settings(private val context: Context) {
 
     val apiKeyFlow = context.dataStore.data.map { it[KEY_API_KEY] ?: "" }
 
-    suspend fun apiKey(): String = apiKeyFlow.first()
+    override suspend fun apiKey(): String = apiKeyFlow.first()
 
     suspend fun setApiKey(value: String) {
         context.dataStore.edit { it[KEY_API_KEY] = value.trim() }
@@ -83,14 +86,14 @@ class Settings(private val context: Context) {
     }
 
     // Fiction mode: CLEAN gets the PROSE style directive (owner writes prose).
-    val proseModeFlow = context.dataStore.data.map { it[KEY_PROSE_MODE] ?: false }
+    override val proseModeFlow = context.dataStore.data.map { it[KEY_PROSE_MODE] ?: false }
     suspend fun setProseMode(value: Boolean) {
         context.dataStore.edit { it[KEY_PROSE_MODE] = value }
     }
 
     // Formatting rules are usually message-oriented and would fight the prose
     // directive - off in prose mode unless the owner flips this.
-    val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }
+    override val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }
     suspend fun setRulesInProse(value: Boolean) {
         context.dataStore.edit { it[KEY_RULES_IN_PROSE] = value }
     }

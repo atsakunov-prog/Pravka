@@ -127,6 +127,11 @@ kotlin {
 }
 
 dependencies {
+    implementation(project(":core"))
+    // Версия корутин задаётся явно и одна на оба артефакта: ядро тянет
+    // coroutines-core, а Dispatchers.Main на Android живёт в -android, и
+    // разъехавшиеся версии этой пары дают NoSuchMethodError в рантайме.
+    implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)

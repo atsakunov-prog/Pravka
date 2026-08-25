@@ -84,6 +84,7 @@ import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
+import ru.zf.pravka.data.shareIntent
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.trigger.PravkaAccessibilityService
@@ -1202,7 +1203,7 @@ private fun LogsTab(app: PravkaApp) {
             HintText("Полный журнал в JSONL — для разбора качества.")
             Spacer(Modifier.height(6.dp))
             OutlinedButton(onClick = {
-                share(app.historyLog.shareIntent(), "История правок")
+                share(app.historyLog.shareIntent(context), "История правок")
             }) { Text("Выгрузить JSONL") }
         }
     }
@@ -2032,7 +2033,7 @@ private fun StatsTab(stats: Stats, historyLog: HistoryLog) {
                     runCatching {
                         context.startActivity(
                             android.content.Intent.createChooser(
-                                historyLog.shareIntent(),
+                                historyLog.shareIntent(context),
                                 context.getString(R.string.stats_share_history),
                             )
                         )

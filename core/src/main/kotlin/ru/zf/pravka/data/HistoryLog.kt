@@ -1,7 +1,5 @@
 package ru.zf.pravka.data
 
-import android.content.Context
-import android.content.Intent
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -12,7 +10,7 @@ import org.json.JSONObject
 // it to a bigger model for quality analysis). This intentionally overrides
 // spec section 14 "do not persist fix texts": the owner asked for exactly
 // that, and the file never leaves the device except via his own share action.
-class HistoryLog(private val context: Context) {
+class HistoryLog(private val dir: File) {
 
     companion object {
         private const val FILE_NAME = "history.jsonl"
@@ -21,7 +19,8 @@ class HistoryLog(private val context: Context) {
 
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
 
-    private val file: File by lazy { File(context.filesDir, FILE_NAME) }
+    /** Публичный: экспорт «Поделиться» живёт на стороне телефона. */
+    val file: File by lazy { File(dir, FILE_NAME) }
 
     fun append(
         mode: String,
@@ -44,7 +43,7 @@ class HistoryLog(private val context: Context) {
         val at = Date()
         DiskWriter.post {
             if (file.exists() && file.length() > MAX_BYTES) {
-                val backup = File(context.filesDir, "$FILE_NAME.1")
+                val backup = File(dir, "$FILE_NAME.1")
                 backup.delete()
                 file.renameTo(backup)
             }
@@ -88,5 +87,4 @@ class HistoryLog(private val context: Context) {
         }.getOrElse { emptyList() }
     }
 
-    fun shareIntent(): Intent = shareFileIntent(context, file, "application/json")
 }

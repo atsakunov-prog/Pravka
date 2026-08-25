@@ -9,16 +9,18 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.core.DictMode
-import ru.zf.pravka.data.Settings
+import ru.zf.pravka.core.Models
+import ru.zf.pravka.data.PravkaSettings
+import ru.zf.pravka.data.UsageStats
 
 // Mines the proofread history for RECURRING recognition errors worth a
 // permanent dictionary entry, so the owner stops curating one word at a time
 // via the result bar. Manual action from the Dictionary tab; suggestions are
 // shown for review, nothing is added automatically.
 class DictMiner(
-    private val settings: Settings,
+    private val settings: PravkaSettings,
     private val client: OkHttpClient,
-    private val stats: ru.zf.pravka.data.Stats,
+    private val stats: UsageStats,
 ) {
 
     data class Suggestion(
@@ -57,7 +59,7 @@ $samples
 """.trimIndent()
 
                 val body = JSONObject().apply {
-                    put("model", Settings.MODEL_SONNET)
+                    put("model", Models.SONNET)
                     put("max_tokens", 2048)
                     put("thinking", JSONObject().put("type", "disabled"))
                     put(
@@ -86,7 +88,7 @@ $samples
                     root.optJSONObject("usage")?.let { u ->
                         val tIn = u.optInt("input_tokens")
                         val tOut = u.optInt("output_tokens")
-                        stats.recordAux(Pricing.costUsd(Settings.MODEL_SONNET, tIn, tOut), tIn, tOut)
+                        stats.recordAux(Pricing.costUsd(Models.SONNET, tIn, tOut), tIn, tOut)
                     }
                     val content = root.getJSONArray("content")
                     val sb = StringBuilder()

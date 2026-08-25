@@ -1,6 +1,6 @@
 package ru.zf.pravka.provider
 
-import ru.zf.pravka.data.Settings
+import ru.zf.pravka.core.Models
 
 // ONE price table for every API caller (ClaudeProvider and DictMiner used to
 // keep their own copies - a price change would silently desync the miner's
@@ -9,8 +9,8 @@ import ru.zf.pravka.data.Settings
 object Pricing {
 
     private val prices = mapOf(
-        Settings.MODEL_SONNET to (3.0 to 15.0),
-        Settings.MODEL_OPUS to (5.0 to 25.0),
+        Models.SONNET to (3.0 to 15.0),
+        Models.OPUS to (5.0 to 25.0),
     )
 
     fun costUsd(

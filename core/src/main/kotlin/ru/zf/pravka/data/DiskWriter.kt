@@ -12,7 +12,7 @@ import java.util.concurrent.Executors
 // and inside the gap between utterances, i.e. precisely where words get lost.
 //
 // A single thread (rather than a pool) keeps append order intact.
-internal object DiskWriter {
+object DiskWriter {
 
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "pravka-disk").apply {

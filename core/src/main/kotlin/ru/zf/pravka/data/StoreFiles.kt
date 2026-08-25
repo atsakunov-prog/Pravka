@@ -13,7 +13,7 @@ import java.io.FileOutputStream
 //   .corrupt) instead of staying in place, where the next persist() would
 //   silently overwrite it with an empty store, and `.prev` is tried before
 //   the store gives up and comes up empty.
-internal object StoreFiles {
+object StoreFiles {
 
     fun writeAtomic(file: File, text: String) {
         val tmp = File(file.parentFile, file.name + ".tmp")

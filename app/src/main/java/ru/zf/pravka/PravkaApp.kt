@@ -7,6 +7,7 @@ import ru.zf.pravka.core.DictionaryApplier
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.HistoryLog
+import ru.zf.pravka.data.AndroidPromptStore
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Recordings
 import ru.zf.pravka.data.Settings
@@ -35,10 +36,16 @@ class PravkaApp : Application() {
     }
 
     val settings by lazy { Settings(this) }
-    val promptStore by lazy { PromptStore(this) }
+    val promptStore: PromptStore by lazy { AndroidPromptStore(this) }
     val stats by lazy { Stats(this) }
-    val dictionaryStore by lazy { DictionaryStore(this) }
-    val historyLog by lazy { HistoryLog(this) }
+    val dictionaryStore by lazy {
+        DictionaryStore(filesDir) {
+            runCatching {
+                assets.open(DictionaryStore.SEED_ASSET).bufferedReader().use { it.readText() }
+            }.getOrNull()
+        }
+    }
+    val historyLog by lazy { HistoryLog(filesDir) }
     val transcriptionLog by lazy { TranscriptionLog(this) }
     val liveDraft by lazy { LiveDraft(this) }
     val eventLog by lazy { EventLog(this) }
@@ -60,7 +67,7 @@ class PravkaApp : Application() {
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main
     )
     val learnLog by lazy { ru.zf.pravka.data.EventLog(this, "learning.log") }
-    val rulesStore by lazy { ru.zf.pravka.data.RulesStore(this) }
+    val rulesStore by lazy { ru.zf.pravka.data.RulesStore(filesDir) }
     val learnStore by lazy { ru.zf.pravka.data.LearnStore(this) }
     val editWatch by lazy { ru.zf.pravka.data.EditWatchStore(this) }
     val evalStore by lazy { ru.zf.pravka.data.EvalStore(this) }

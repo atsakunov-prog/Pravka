@@ -15,17 +15,19 @@ import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.ProofreadProvider
 import ru.zf.pravka.core.ProofreadResult
 import ru.zf.pravka.core.Prompts
+import ru.zf.pravka.core.Models
+import ru.zf.pravka.data.PravkaSettings
 import ru.zf.pravka.data.PromptStore
-import ru.zf.pravka.data.Settings
+import ru.zf.pravka.data.RulesStore
 
 // Direct Anthropic Messages API client. The API key is entered by the owner
 // in the app settings and lives only in on-device DataStore (agreed deviation
 // from spec section 10 - no VPS proxy).
 class ClaudeProvider(
-    private val settings: Settings,
+    private val settings: PravkaSettings,
     private val promptStore: PromptStore,
     private val client: OkHttpClient,
-    private val rulesStore: ru.zf.pravka.data.RulesStore,
+    private val rulesStore: RulesStore,
 ) : ProofreadProvider {
 
     override val id = "claude"
@@ -84,7 +86,7 @@ class ClaudeProvider(
                     throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
                 }
                 // Sonnet by default; redo chips pass Opus for extra quality.
-                val model = modelOverride ?: Settings.MODEL_SONNET
+                val model = modelOverride ?: Models.SONNET
                 // ONE master template (CLEAN) for every mode; BUSINESS/SOFTEN
                 // are style directives riding in the uncached slot, so all
                 // modes share the same cached prefix.
@@ -144,7 +146,7 @@ class ClaudeProvider(
                 if (apiKey.isBlank()) {
                     throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
                 }
-                val model = Settings.MODEL_SONNET
+                val model = Models.SONNET
                 val prompt = instruction.trim() + "\n\n<текст>\n" + content + "\n</текст>"
                 val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
                 val started = System.currentTimeMillis()
@@ -252,9 +254,9 @@ class ClaudeProvider(
 $existingBlock$casesBlock
 """.trimIndent()
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
-            val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+            val reply = requestWithOneRetry(apiKey, Models.OPUS, parts, "", null)
             parseLearn(reply.text).copy(
-                costUsd = costUsd(Settings.MODEL_OPUS, reply),
+                costUsd = costUsd(Models.OPUS, reply),
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
             )
@@ -314,12 +316,12 @@ $existingBlock$casesBlock
 $listing
 """.trimIndent()
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
-            val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+            val reply = requestWithOneRetry(apiKey, Models.OPUS, parts, "", null)
             val parsed = parseLearn(reply.text)
             require(parsed.rules.isNotEmpty()) { "Опус не вернул правил — набор не тронут." }
             OptimizedRules(
                 rules = parsed.rules,
-                costUsd = costUsd(Settings.MODEL_OPUS, reply),
+                costUsd = costUsd(Models.OPUS, reply),
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
             )
@@ -452,9 +454,9 @@ $raw
 </фраза>
 """.trimIndent()
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
-            val reply = requestWithOneRetry(apiKey, Settings.MODEL_SONNET, parts, "", null)
+            val reply = requestWithOneRetry(apiKey, Models.SONNET, parts, "", null)
             parseZasechka(reply.text).copy(
-                costUsd = costUsd(Settings.MODEL_SONNET, reply),
+                costUsd = costUsd(Models.SONNET, reply),
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
             )
@@ -551,15 +553,15 @@ $raw
             }
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
             val started = System.currentTimeMillis()
-            val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+            val reply = requestWithOneRetry(apiKey, Models.OPUS, parts, "", null)
             val (tasks, notes) = parseTasks(reply.text, knownLabels, resolveProject)
             SplitResult(
                 tasks = tasks,
                 notes = notes,
-                costUsd = costUsd(Settings.MODEL_OPUS, reply),
+                costUsd = costUsd(Models.OPUS, reply),
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
-                model = Settings.MODEL_OPUS,
+                model = Models.OPUS,
                 latencyMs = System.currentTimeMillis() - started,
             )
         }
@@ -717,7 +719,7 @@ $raw
         // count toward max_tokens: without headroom a 350-char redo burned the
         // whole budget on thinking and died with stop_reason=max_tokens before
         // emitting a single word (owner saw an endless spinner, 2026-08-18).
-        val thinkingHeadroom = if (model == Settings.MODEL_SONNET) 0 else 8000
+        val thinkingHeadroom = if (model == Models.SONNET) 0 else 8000
         val maxTokens = (estimatedInputTokens * 13 / 10 + 300 + thinkingHeadroom)
             .coerceIn(1024, 16384)
 
@@ -732,7 +734,7 @@ $raw
             // cost, so it is disabled on Sonnet. On Opus (redo chips) the
             // parameter is omitted: adaptive thinking is its default, and an
             // explicit "disabled" there has documented failure modes.
-            if (model == Settings.MODEL_SONNET) {
+            if (model == Models.SONNET) {
                 put("thinking", JSONObject().put("type", "disabled"))
             }
             put(
@@ -758,7 +760,7 @@ $raw
                                         // Cache only the everyday Sonnet path: a
                                         // rare Opus redo would pay the 2x cache
                                         // write and likely never read it back.
-                                        if (model == Settings.MODEL_SONNET) {
+                                        if (model == Models.SONNET) {
                                             put(
                                                 "cache_control",
                                                 JSONObject().put("type", "ephemeral").put("ttl", "1h"),

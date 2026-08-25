@@ -6,7 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.HistoryLog
-import ru.zf.pravka.data.Stats
+import ru.zf.pravka.data.UsageStats
 import ru.zf.pravka.target.TextTarget
 
 // The single orchestrator every trigger goes through (spec section 4):
@@ -17,7 +17,7 @@ import ru.zf.pravka.target.TextTarget
 class ProofreadEngine(
     private val claude: ProofreadProvider,
     private val clipboardFallback: TextTarget,
-    private val stats: Stats,
+    private val stats: UsageStats,
     private val dictionary: DictionaryApplier,
     private val dictionaryStore: DictionaryStore,
     private val history: HistoryLog,

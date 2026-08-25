@@ -1,6 +1,5 @@
 package ru.zf.pravka.data
 
-import android.content.Context
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,12 +17,17 @@ import ru.zf.pravka.core.DictMode
 // file in the app's private storage (same format as export/import), written
 // atomically. Deviation from spec section 4 (Room): a JSON file IS the
 // exchange format the owner already works with, one storage instead of two.
-class DictionaryStore(private val context: Context) {
+class DictionaryStore(
+    private val dir: File,
+    // Заводской словарь: на телефоне это asset, на воркстанции - ресурс рядом
+    // с приложением. Читается лениво и только когда файла ещё нет.
+    private val seedJson: () -> String? = { null },
+) {
 
     companion object {
         const val FORMAT = "pravka-dictionary"
         private const val FILE_NAME = "dictionary.json"
-        private const val SEED_ASSET = "dictionary_seed.json"
+        const val SEED_ASSET = "dictionary_seed.json"
     }
 
     private val mutex = Mutex()
@@ -35,7 +39,7 @@ class DictionaryStore(private val context: Context) {
     private val _entriesFlow = MutableStateFlow<List<DictEntry>>(emptyList())
     val entriesFlow: StateFlow<List<DictEntry>> = _entriesFlow
 
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File get() = File(dir, FILE_NAME)
 
     suspend fun all(): List<DictEntry> = mutex.withLock {
         ensureLoaded()
@@ -108,9 +112,7 @@ class DictionaryStore(private val context: Context) {
     private suspend fun ensureLoaded() {
         if (loaded) return
         withContext(Dispatchers.IO) {
-            val seedRoot = runCatching {
-                JSONObject(context.assets.open(SEED_ASSET).bufferedReader().use { it.readText() })
-            }.getOrNull()
+            val seedRoot = runCatching { seedJson()?.let { JSONObject(it) } }.getOrNull()
             val assetSeedVersion = seedRoot?.optInt("seedVersion", 1) ?: 1
 
             // A corrupt dictionary quarantines to .corrupt instead of staying

@@ -16,7 +16,7 @@ private val Context.statsDataStore by preferencesDataStore(name = "stats")
 
 // Persistent usage counters. Only numbers live here - no text of any fix
 // is ever persisted (spec section 14).
-class Stats(private val context: Context) {
+class Stats(private val context: Context) : UsageStats {
 
     data class Snapshot(
         val total: Long,
@@ -93,7 +93,7 @@ class Stats(private val context: Context) {
         )
     }
 
-    suspend fun recordSuccess(
+    override suspend fun recordSuccess(
         mode: ProofreadMode,
         latencyMs: Long,
         charsIn: Int,
@@ -127,7 +127,7 @@ class Stats(private val context: Context) {
     /** Cost/token accounting for non-proofread API calls: assist actions,
      *  learning (Opus), the dictionary miner and eval runs. Money and tokens
      *  land in the same counters the owner reads in Статистика. */
-    suspend fun recordAux(costUsd: Double, tokensIn: Int, tokensOut: Int) {
+    override suspend fun recordAux(costUsd: Double, tokensIn: Int, tokensOut: Int) {
         context.statsDataStore.edit { p ->
             p[Keys.TOKENS_IN] = (p[Keys.TOKENS_IN] ?: 0) + tokensIn
             p[Keys.TOKENS_OUT] = (p[Keys.TOKENS_OUT] ?: 0) + tokensOut
@@ -153,7 +153,7 @@ class Stats(private val context: Context) {
             .forEach { p.remove(longPreferencesKey(it.name)) }
     }
 
-    suspend fun recordError() {
+    override suspend fun recordError() {
         context.statsDataStore.edit { p ->
             p[Keys.ERRORS] = (p[Keys.ERRORS] ?: 0) + 1
         }

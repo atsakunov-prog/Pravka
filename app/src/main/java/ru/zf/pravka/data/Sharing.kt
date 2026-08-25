@@ -11,6 +11,10 @@ import ru.zf.pravka.BuildConfig
 // These were five near-identical copies, plus a raw authority literal in the UI.
 private val AUTHORITY: String get() = "${BuildConfig.APPLICATION_ID}.files"
 
+/** Журнал правок (history.jsonl) - «Выгрузить JSONL». */
+internal fun HistoryLog.shareIntent(context: Context): Intent =
+    shareFileIntent(context, file, "application/json")
+
 internal fun shareFileIntent(context: Context, file: File, mime: String): Intent {
     val uri = FileProvider.getUriForFile(context, AUTHORITY, file)
     return Intent(Intent.ACTION_SEND).apply {
