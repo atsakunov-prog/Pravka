@@ -82,9 +82,19 @@ PORT = int(_env("PRAVKA_WHISPER_PORT", "8178"))
 DEFAULT_MODEL = _env("PRAVKA_WHISPER_MODEL", "large-v3-turbo")
 PRELOAD = [m for m in _env("PRAVKA_WHISPER_PRELOAD", DEFAULT_MODEL).split(",") if m.strip()]
 DEVICE = _env("PRAVKA_WHISPER_DEVICE", "cuda")
-COMPUTE = _env("PRAVKA_WHISPER_COMPUTE", "float16")
-MAX_LOADED = int(_env("PRAVKA_WHISPER_MAX_LOADED", "2"))
-BEAM = int(_env("PRAVKA_WHISPER_BEAM", "5"))
+COMPUTE = _env("PRAVKA_WHISPER_COMPUTE", "int8_float16")
+# Куда отступать, если видеопамяти не хватило: на этой машине GPU уже занят
+# разбором встреч, и диктовка обязана уступать ему, а не падать.
+FALLBACK_DEVICE = _env("PRAVKA_WHISPER_FALLBACK_DEVICE", "cpu")
+FALLBACK_COMPUTE = _env("PRAVKA_WHISPER_FALLBACK_COMPUTE", "int8")
+MAX_LOADED = int(_env("PRAVKA_WHISPER_MAX_LOADED", "1"))
+# Через сколько минут после нехватки видеопамяти пробовать GPU снова: бот
+# дорасшифровал встречу и память вернулась - глупо сидеть на процессоре вечно.
+RETRY_GPU_MIN = int(_env("PRAVKA_WHISPER_RETRY_GPU_MIN", "15"))
+# Луч 1 для диктовки: на короткой чистой фразе разницы с лучом 5 почти нет,
+# а памяти и времени он ест заметно меньше. Для встречи можно прислать beam
+# в самом запросе.
+BEAM = int(_env("PRAVKA_WHISPER_BEAM", "1"))
 DEFAULT_LANG = _env("PRAVKA_WHISPER_LANG", "ru")
 
 # Имена, которые faster-whisper знает не под тем названием, под которым их
@@ -97,47 +107,102 @@ ALIASES = {
 }
 
 
+def _is_out_of_memory(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "out of memory" in text or "cuda" in text and "alloc" in text
+
+
 class ModelPool:
-    """Загруженные модели с вытеснением самой давней (обычно их всего две:
-    turbo для диктовки, large-v3 для встреч)."""
+    """Загруженные модели с вытеснением самой давней.
+
+    По умолчанию держим ровно одну (диктовочную): видеопамять на этой машине
+    делится с ботом, который расшифровывает встречи, и вторая копия большой
+    модели там просто не поместится."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._models: "OrderedDict[str, object]" = OrderedDict()
+        self._devices: dict = {}
+        # Когда снова пробовать GPU после того, как память кончилась.
+        self._retry_gpu_at = 0.0
 
     def names(self) -> list:
         with self._lock:
-            return list(self._models.keys())
+            return [
+                name + " (" + self._devices.get(name, DEVICE) + ")"
+                for name in self._models
+            ]
+
+    def drop(self, name: str) -> None:
+        """Убирает модель из памяти - чтобы освободить GPU боту."""
+        with self._lock:
+            self._models.pop(name, None)
+            self._devices.pop(name, None)
+
+    def note_out_of_memory(self) -> None:
+        """Память кончилась: ближайшие RETRY_GPU_MIN минут работаем на CPU."""
+        with self._lock:
+            self._retry_gpu_at = time.monotonic() + RETRY_GPU_MIN * 60
+
+    def device_of(self, name: str) -> str:
+        return self._devices.get(name, DEVICE)
 
     @staticmethod
     def resolve(name: str) -> str:
         return ALIASES.get(name, name)
 
-    def get(self, name: str):
+    def get(self, name: str, prefer_device: str = ""):
         name = self.resolve(name)
         with self._lock:
             model = self._models.get(name)
             if model is not None:
-                self._models.move_to_end(name)
-                return model
+                on_fallback = self._devices.get(name) == FALLBACK_DEVICE
+                # Отсиделись на процессоре - пробуем вернуться на GPU:
+                # к этому времени бот обычно уже дорасшифровал встречу.
+                if on_fallback and DEVICE != FALLBACK_DEVICE and time.monotonic() > self._retry_gpu_at:
+                    log.info("пробую вернуть %s на %s", name, DEVICE)
+                    self._models.pop(name, None)
+                    self._devices.pop(name, None)
+                else:
+                    self._models.move_to_end(name)
+                    return model
 
         # Загрузка идёт ВНЕ общего замка: первая большая модель читается
         # десятки секунд, и всё это время короткие запросы к уже загруженной
         # модели должны обслуживаться, а не ждать.
         from faster_whisper import WhisperModel
 
+        # prefer_device - это "грузи прямо сюда": так возвращается запрос,
+        # у которого память кончилась уже посреди распознавания.
+        want_device = prefer_device or DEVICE
+        want_compute = FALLBACK_COMPUTE if want_device == FALLBACK_DEVICE else COMPUTE
+
         started = time.monotonic()
-        log.info("гружу модель %s (%s, %s)...", name, DEVICE, COMPUTE)
-        loaded = WhisperModel(name, device=DEVICE, compute_type=COMPUTE)
-        log.info("модель %s готова за %.1f с", name, time.monotonic() - started)
+        log.info("гружу модель %s (%s, %s)...", name, want_device, want_compute)
+        try:
+            loaded = WhisperModel(name, device=want_device, compute_type=want_compute)
+            device = want_device
+        except Exception as exc:  # noqa: BLE001
+            if want_device == FALLBACK_DEVICE:
+                raise
+            # Чаще всего это "видеопамять кончилась": бот разбирает встречу и
+            # держит свою модель. Уступаем: на процессоре медленнее, но
+            # диктовка работает, а чужой разбор не ломается.
+            log.warning("не влезли в %s (%s) - иду на %s: %s", want_device, want_compute, FALLBACK_DEVICE, exc)
+            self.note_out_of_memory()
+            loaded = WhisperModel(name, device=FALLBACK_DEVICE, compute_type=FALLBACK_COMPUTE)
+            device = FALLBACK_DEVICE
+        log.info("модель %s готова за %.1f с на %s", name, time.monotonic() - started, device)
 
         with self._lock:
             existing = self._models.get(name)
             if existing is not None:  # кто-то успел загрузить ту же модель
                 return existing
             self._models[name] = loaded
+            self._devices[name] = device
             while len(self._models) > MAX_LOADED:
                 dropped, _ = self._models.popitem(last=False)
+                self._devices.pop(dropped, None)
                 log.info("выгружаю модель %s (держим не больше %d)", dropped, MAX_LOADED)
             return loaded
 
@@ -167,6 +232,7 @@ def health() -> JSONResponse:
             "loaded": pool.names(),
             "device": DEVICE,
             "compute": COMPUTE,
+            "fallback": FALLBACK_DEVICE,
         }
     )
 
@@ -179,6 +245,7 @@ async def transcriptions(
     prompt: Optional[str] = Form(None),
     temperature: float = Form(0.0),
     response_format: str = Form("json"),
+    beam_size: Optional[int] = Form(None),
 ):
     payload = await file.read()
     if not payload:
@@ -196,30 +263,44 @@ async def transcriptions(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=503, detail=f"модель не загрузилась: {exc}") from exc
 
+        def run(model):
+            segments, info = model.transcribe(
+                tmp.name,
+                language=(language or DEFAULT_LANG) or None,
+                beam_size=beam_size or BEAM,
+                temperature=temperature,
+                # initial_prompt - это и есть словарь Правки: фамилии и термины
+                # начинают распознаваться правильно ДО правки.
+                initial_prompt=prompt or None,
+                # Без этого large-v3 на тишине умеет зацикливаться и повторять
+                # последнюю фразу до конца записи.
+                condition_on_previous_text=False,
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": 500},
+            )
+            # Генератор ленивый: реальная работа (и возможная нехватка
+            # памяти) случается здесь, а не на вызове transcribe.
+            return list(segments), info
+
         started = time.monotonic()
-        segments, info = engine.transcribe(
-            tmp.name,
-            language=(language or DEFAULT_LANG) or None,
-            beam_size=BEAM,
-            temperature=temperature,
-            # initial_prompt - это и есть словарь Правки: фамилии и термины
-            # начинают распознаваться правильно ДО правки.
-            initial_prompt=prompt or None,
-            # Без этого large-v3 на тишине умеет зацикливаться и повторять
-            # последнюю фразу до конца записи.
-            condition_on_previous_text=False,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500},
-        )
-        collected = []
-        for seg in segments:  # генератор: реальная работа происходит здесь
-            collected.append(seg)
+        try:
+            collected, info = run(engine)
+        except Exception as exc:  # noqa: BLE001
+            if not _is_out_of_memory(exc) or pool.device_of(resolved) == FALLBACK_DEVICE:
+                raise HTTPException(status_code=500, detail=f"распознавание не удалось: {exc}") from exc
+            # Память кончилась на середине - скорее всего бот взялся за
+            # встречу. Освобождаем GPU ему и доделываем на процессоре.
+            log.warning("кончилась видеопамять, ухожу на %s: %s", FALLBACK_DEVICE, exc)
+            pool.drop(resolved)
+            pool.note_out_of_memory()
+            collected, info = run(pool.get(resolved, prefer_device=FALLBACK_DEVICE))
         text = "".join(s.text for s in collected).strip()
         elapsed = time.monotonic() - started
         audio_s = getattr(info, "duration", 0.0) or 0.0
         log.info(
-            "%s · аудио %.1f с · распознано за %.1f с (x%.1f) · %d символов",
+            "%s (%s) · аудио %.1f с · распознано за %.1f с (x%.1f) · %d символов",
             resolved,
+            pool.device_of(resolved),
             audio_s,
             elapsed,
             (audio_s / elapsed) if elapsed > 0 else 0.0,
