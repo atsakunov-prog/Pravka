@@ -2999,13 +2999,19 @@ class PravkaAccessibilityService : AccessibilityService() {
         Feedback.toast(this, msg)
     }
 
+    // Следующая диктовка кнопки идёт через СТАРЫЙ роутер Тела (подходы,
+    // зарядка, вопрос) — взводится пунктом меню «Тело голосом». По умолчанию
+    // кнопка теперь ЕДА напрямую: владелец спорт наговаривает во вкладке.
+    @Volatile private var eRouteNext = false
+
     /**
-     * Сказанное в руках. Роутер и разбор — один вызов: модель сама решает,
-     * подходы это, еда, зарядка, самочувствие или вопрос.
+     * Сказанное в руках. Кнопка — теперь ЕДА напрямую: без роутера намерений,
+     * дешевле и однозначно; рацион в промпте имеет жёсткий приоритет — «мой
+     * обычный завтрак» разворачивается в весь набор сам. Спорт и зарядка
+     * голосом — пункт меню «Тело голосом» (прежний роутер).
      *
-     * Сказанное ложится на диск ДО модели (это делает движок), поэтому неудача
-     * разбора не стоит владельцу его слов: фраза останется во вкладке
-     * неразобранной, и её можно переиграть.
+     * Неудача разбора не стоит владельцу его слов: фраза ложится
+     * неразобранной (addRaw) и переигрывается из вкладки.
      */
     private fun onFoodText(raw: String) {
         val text = raw.trim()
@@ -3017,26 +3023,55 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         if (!scope.isActive) return
         eButton?.setBusy(true)
+        if (eRouteNext) {
+            eRouteNext = false
+            scope.launch {
+                val result = runCatching { app.bodyEngine.hear(text, "voice") }
+                    .getOrElse { e ->
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        app.eventLog.add("тело: hear бросил ${e.javaClass.simpleName}: ${e.message}")
+                        Result.failure(e)
+                    }
+                eButton?.setBusy(false)
+                val outcome = result.getOrElse { e ->
+                    Haptics.error(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        (e.message ?: getString(R.string.e_parse_failed)) +
+                            " Сказанное сохранено — можно разобрать заново.",
+                        long = true,
+                    )
+                    return@launch
+                }
+                Haptics.success(this@PravkaAccessibilityService)
+                showBodyPlate(outcome)
+            }
+            return
+        }
         scope.launch {
-            val result = runCatching { app.bodyEngine.hear(text, "voice") }
+            val result = runCatching { app.foodEngine.parse(text, source = "voice") }
                 .getOrElse { e ->
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    app.eventLog.add("тело: hear бросил ${e.javaClass.simpleName}: ${e.message}")
                     Result.failure(e)
                 }
             eButton?.setBusy(false)
-            val outcome = result.getOrElse { e ->
-                Haptics.error(this@PravkaAccessibilityService)
-                Feedback.toast(
-                    this@PravkaAccessibilityService,
-                    (e.message ?: getString(R.string.e_parse_failed)) +
-                        " Сказанное сохранено — можно разобрать заново.",
-                    long = true,
-                )
-                return@launch
-            }
-            Haptics.success(this@PravkaAccessibilityService)
-            showBodyPlate(outcome)
+            result.fold(
+                onSuccess = { parsed ->
+                    Haptics.success(this@PravkaAccessibilityService)
+                    showFoodPlate(parsed.meal.id)
+                },
+                onFailure = { e ->
+                    // Слова не теряем: неразобранное ждёт во вкладке Спорта.
+                    runCatching { app.strengthStore.addRaw(text, "food") }
+                    Haptics.error(this@PravkaAccessibilityService)
+                    Feedback.toast(
+                        this@PravkaAccessibilityService,
+                        (e.message ?: "Еду не разобрал") +
+                            " — сохранено; спорт голосом теперь в меню кнопки.",
+                        long = true,
+                    )
+                },
+            )
         }
     }
 
@@ -3383,10 +3418,15 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun openFoodTab() {
+    private fun openFoodTab(action: String = "") {
         startActivity(
             android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
                 .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_FOOD)
+                .apply {
+                    if (action.isNotBlank()) {
+                        putExtra(ru.zf.pravka.MainActivity.EXTRA_FOOD_ACTION, action)
+                    }
+                }
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
@@ -3484,6 +3524,20 @@ class PravkaAccessibilityService : AccessibilityService() {
                 )
             }
             items.add(BodyButtonController.MenuItem("Набрать текстом") { openFoodTypeIn("") })
+            // Долгое нажатие — дороги еды без слов (его просьба): снять
+            // тарелку или штрихкод. Открывают Тело (Е) с автозапуском.
+            items.add(
+                BodyButtonController.MenuItem("📷 Сфоткать тарелку") { openFoodTab("photo") }
+            )
+            items.add(
+                BodyButtonController.MenuItem("▥ Штрихкод") { openFoodTab("barcode") }
+            )
+            items.add(
+                BodyButtonController.MenuItem("🎙 Тело голосом (подходы, зарядка)") {
+                    eRouteNext = true
+                    onFoodTap()
+                }
+            )
             items.add(BodyButtonController.MenuItem("Открыть «Спорт»") { openSportTab() })
             items.add(BodyButtonController.MenuItem("Открыть «Еду»") { openFoodTab() })
             eButton?.showMenu(items)

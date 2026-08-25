@@ -136,6 +136,7 @@ class PravkaApp : Application() {
             dictionary = DictionaryApplier(dictionaryStore),
             dictionaryStore = dictionaryStore,
             store = foodStore,
+            ration = rationBook,
             sportStore = sportStore,
             icu = icuSportSync,
             zasechkaStore = zasechkaStore,

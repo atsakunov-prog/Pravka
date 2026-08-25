@@ -336,8 +336,8 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
         Text("Иконки вместо букв на кнопках", style = MaterialTheme.typography.bodyMedium)
     }
     HintText(
-        "«П/З/Д/Т» станут пиктограммами, как в нижней ленте: перо, часы, " +
-            "галочка, гантеля. Применяется сразу."
+        "«П/З/Д/Е» станут пиктограммами, как в нижней ленте: перо, часы, " +
+            "галочка, тарелка. Применяется сразу."
     )
 
     Spacer(Modifier.height(10.dp))

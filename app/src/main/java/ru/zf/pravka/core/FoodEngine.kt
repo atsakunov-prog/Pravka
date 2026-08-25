@@ -33,6 +33,7 @@ class FoodEngine(
     private val dictionary: DictionaryApplier,
     private val dictionaryStore: DictionaryStore,
     private val store: FoodStore,
+    private val ration: ru.zf.pravka.data.RationBook,
     private val sportStore: SportStore,
     private val icu: IcuSportSync,
     private val zasechkaStore: ZasechkaStore,
@@ -87,11 +88,16 @@ class FoodEngine(
         // остальное блоком {DICT} — те же правила, что у Правки и Разноски.
         val prepared = dictionary.prepare(text)
         val image = photo?.let { PhotoBytes.forApi(it) }
+        runCatching { ration.load() }
         val result = claude.parseFood(
             text = prepared.text,
             dictBlock = prepared.dictBlock,
             profileLine = profileLine(),
             image = image,
+            // «Отдавай приоритет моим продуктам жёстко»: рацион с точными
+            // КБЖУ — в промпт, «мой обычный завтрак» разворачивается сам.
+            rationBlock = runCatching { ration.promptBlock() }.getOrDefault("—"),
+            recentBlock = recentBlock(),
         )
         val parse = result.getOrElse { e ->
             eventLog.add("еда: разбор не вышел — ${e.message}")
@@ -159,6 +165,17 @@ class FoodEngine(
                 String.format(java.util.Locale.US, "%.3f", costUsd) + " USD"
         )
         return Parsed(meal, note)
+    }
+
+    /** Последние приёмы — модели: «как вчера», «то же самое» решаются отсюда. */
+    private fun recentBlock(): String {
+        val meals = store.mealsFlow.value.take(15)
+        if (meals.isEmpty()) return "—"
+        val fmt = java.text.SimpleDateFormat("dd.MM", java.util.Locale.US)
+        return meals.joinToString("\n") { m ->
+            "- " + fmt.format(java.util.Date(m.ts)) + " " +
+                m.kind.ifBlank { "приём" } + ": " + m.shortList
+        }
     }
 
     /**

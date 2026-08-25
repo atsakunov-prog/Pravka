@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Еда: «Е» тем же слэб-языком, что «П», «З» и «Д» — стойка слева и три
+     планки. Кнопка Тела стала кнопкой еды (владелец: спорт наговаривается
+     во вкладке); зелёный круг остался, буква сменилась. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+    <path
+        android:fillColor="#F7F3EA"
+        android:pathData="M30,22 h10 v56 h-10 z M30,22 h44 v10 h-44 z M30,45 h34 v10 h-34 z M30,68 h44 v10 h-44 z" />
+</vector>

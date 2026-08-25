@@ -714,6 +714,8 @@ $raw
         dictBlock: String,
         profileLine: String,
         image: ImagePart? = null,
+        rationBlock: String = "—",
+        recentBlock: String = "—",
     ): Result<FoodParse> = withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
@@ -726,6 +728,10 @@ $raw
                 .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
                 .replace("{NOW}", nowContext())
                 .replace("{PROFILE}", profileLine.ifBlank { "вес и пороги неизвестны" })
+                // Рацион статичен (assets) — уезжает в кэшируемую голову;
+                // история приёмов живая — в переменном хвосте после словаря.
+                .replace("{RATION}", rationBlock.ifBlank { "—" })
+                .replace("{RECENT}", recentBlock.ifBlank { "—" })
             if (image != null) prompt = prompt.trimEnd() + "\n\n" + Prompts.FOOD_PHOTO_HINT
             val said = text.ifBlank { "(без слов — только снимок)" }
             prompt = if (prompt.contains(Prompts.PLACEHOLDER_INPUT)) {

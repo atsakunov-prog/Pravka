@@ -91,7 +91,14 @@ private val FAT_COLOR = Color(0xFFCA8A04)
 private val CARBS_COLOR = Color(0xFF16A34A)
 
 @Composable
-internal fun FoodTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
+internal fun FoodTab(
+    app: PravkaApp,
+    onOpenSettings: () -> Unit = {},
+    // «Сфоткай тарелку»/«штрихкод» с кнопки еды: вкладка открывается и сразу
+    // запускает камеру или сканер, без лишнего тапа.
+    autoAction: String? = null,
+    onAutoConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val store = app.foodStore
     val meals by store.mealsFlow.collectAsState()
@@ -106,6 +113,7 @@ internal fun FoodTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     var editing by remember { mutableStateOf<Long?>(null) }
     // Куда камера положит кадр: файл нужен ДО съёмки, чтобы отдать в интент URI.
     var pendingPhoto by remember { mutableStateOf<File?>(null) }
+    var autoFired by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) { store.load() }
@@ -158,6 +166,41 @@ internal fun FoodTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             parsePhoto(file, caption)
         } else {
             runCatching { file?.delete() }
+        }
+    }
+
+    LaunchedEffect(autoAction) {
+        val action = autoAction ?: return@LaunchedEffect
+        if (autoFired) return@LaunchedEffect
+        autoFired = true
+        onAutoConsumed()
+        when (action) {
+            "photo" -> {
+                val file = File(context.cacheDir, "eda-shot.jpg")
+                pendingPhoto = file
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context, BuildConfig.APPLICATION_ID + ".files", file
+                )
+                camera.launch(uri)
+            }
+            "barcode" -> {
+                ru.zf.pravka.ui.scanBarcode(
+                    context = context,
+                    onFail = { message -> Feedback.toast(app, message, long = true) },
+                ) { code ->
+                    app.appScope.launch {
+                        val result = runCatching { app.foodEngine.parseBarcode(code) }
+                            .getOrElse { Result.failure(it) }
+                        result.onFailure { e ->
+                            Feedback.toast(
+                                app,
+                                (e.message ?: "Штрихкод не нашёлся") + " — сними этикетку камерой",
+                                long = true,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 

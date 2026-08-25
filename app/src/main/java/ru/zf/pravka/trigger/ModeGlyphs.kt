@@ -15,6 +15,7 @@ object ModeGlyphs {
     fun zasechka() = if (icons) R.drawable.ic_mode_zasechka_btn else R.drawable.ic_zfab_glyph
     fun raznoska() = if (icons) R.drawable.ic_mode_delo_btn else R.drawable.ic_razn_glyph
 
-    // «Т» — одна кнопка на весь домен Тела: гантеля, спорт в нём главный.
-    fun body() = if (icons) R.drawable.ic_mode_sport_btn else R.drawable.ic_body_glyph
+    // Зелёная кнопка теперь ЕДА (владелец: «кнопка спорта не нужна, спорт
+    // наговариваю во вкладке») — буква «Е», в режиме иконок — тарелка.
+    fun body() = if (icons) R.drawable.ic_mode_food_btn else R.drawable.ic_efab_glyph
 }

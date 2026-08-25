@@ -106,6 +106,10 @@ class MainActivity : ComponentActivity() {
         const val TAB_SPORT = "sport"
         const val TAB_FOOD = "food"
         const val TAB_SETTINGS = "settings"
+
+        // Кнопка еды: «сфоткай тарелку» / «штрихкод» с длинного нажатия
+        // открывают Тело (Е) и сразу запускают камеру или сканер.
+        const val EXTRA_FOOD_ACTION = "food_action"
     }
 
     private val serviceEnabled = mutableStateOf(false)
@@ -113,6 +117,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as PravkaApp
+        val foodAction = intent?.getStringExtra(EXTRA_FOOD_ACTION).orEmpty()
         val initialTab = when (intent?.getStringExtra(EXTRA_TAB)) {
             TAB_SETTINGS -> Tab.SETTINGS
             TAB_PRAVKA -> Tab.PRAVKA
@@ -129,6 +134,7 @@ class MainActivity : ComponentActivity() {
                 MainScreen(
                     app = app,
                     initialTab = initialTab,
+                    foodAction = foodAction,
                     settings = app.settings,
                     promptStore = app.promptStore,
                     stats = app.stats,
@@ -331,6 +337,7 @@ private fun MoreHeader(title: String, onBack: () -> Unit) {
 private fun MainScreen(
     app: PravkaApp,
     initialTab: Tab,
+    foodAction: String = "",
     settings: Settings,
     promptStore: PromptStore,
     stats: Stats,
@@ -357,6 +364,8 @@ private fun MainScreen(
     var moreTab by remember {
         mutableStateOf(if (initialTab in service) initialTab else null)
     }
+    // Одноразовый автозапуск камеры/сканера в Теле (Е) — из меню кнопки еды.
+    var foodActionPending by remember { mutableStateOf(foodAction.ifBlank { null }) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -436,7 +445,11 @@ private fun MainScreen(
                     Tab.ZASECHKA -> ZasechkaTab(app, openSettings)
                     Tab.TODOIST -> TodoistTab(app, openSettings)
                     Tab.SPORT -> SportTab(app, openSettings)
-                    Tab.FOOD -> FoodTab(app, openSettings)
+                    Tab.FOOD -> FoodTab(
+                        app, openSettings,
+                        autoAction = foodActionPending,
+                        onAutoConsumed = { foodActionPending = null },
+                    )
                     Tab.EXPORT -> ExportTab(app)
                     Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings)
                     Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
