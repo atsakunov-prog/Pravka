@@ -14,3 +14,8 @@ local.properties
 
 # adb Wi-Fi saved address (machine-specific)
 scripts/.adb-address
+
+# Локальный распознаватель: венв и мусор Python
+scripts/whisper/.venv/
+__pycache__/
+*.pyc
