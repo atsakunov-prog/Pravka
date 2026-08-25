@@ -340,6 +340,22 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
             "галочка, гантеля. Применяется сразу."
     )
 
+    Spacer(Modifier.height(10.dp))
+    val phoneMicOnly by settings.phoneMicOnlyFlow.collectAsState(initial = true)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = phoneMicOnly,
+            onCheckedChange = { on -> scope.launch { settings.setPhoneMicOnly(on) } },
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("Слушать только микрофон телефона", style = MaterialTheme.typography.bodyMedium)
+    }
+    HintText(
+        "Bluetooth машины и наушники не перехватывают диктовку: в дороге " +
+            "Правка слышит тебя, а не салон. Выключи, если наоборот нужен " +
+            "микрофон гарнитуры."
+    )
+
     Spacer(Modifier.height(18.dp))
     RecordingsSection(app.recordings, serviceEnabled)
 }

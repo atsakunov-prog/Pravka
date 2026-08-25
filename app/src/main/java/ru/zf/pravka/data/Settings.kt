@@ -72,6 +72,7 @@ class Settings(private val context: Context) {
         private val KEY_GOAL_WEIGHT = intPreferencesKey("body_goal_weight")
         private val KEY_SPORT_NOTIFY = booleanPreferencesKey("sport_notify_arrived")
         private val KEY_MODE_ICONS = booleanPreferencesKey("mode_icons_on_buttons")
+        private val KEY_PHONE_MIC_ONLY = booleanPreferencesKey("phone_mic_only")
         private val KEY_NOTION_DIARY = booleanPreferencesKey("notion_diary_push")
 
         const val FAB_SIZE_DEFAULT = 48
@@ -286,6 +287,16 @@ class Settings(private val context: Context) {
     }
 
     /** Уведомление, когда часы прислали тренировку: вердикт по правилам + feel. */
+    /**
+     * Слушать ТОЛЬКО встроенный микрофон телефона: Bluetooth машины и
+     * наушники не перехватывают диктовку. Владелец: «когда еду в машине,
+     * Правка меня не слышит» — салонный микрофон далеко и глухо.
+     */
+    val phoneMicOnlyFlow = context.dataStore.data.map { it[KEY_PHONE_MIC_ONLY] ?: true }
+    suspend fun setPhoneMicOnly(value: Boolean) {
+        context.dataStore.edit { it[KEY_PHONE_MIC_ONLY] = value }
+    }
+
     /** Иконки вместо букв «П/З/Д/Т» на плавающих кнопках — как в нижней ленте. */
     val modeIconsFlow = context.dataStore.data.map { it[KEY_MODE_ICONS] ?: false }
     suspend fun setModeIcons(value: Boolean) {

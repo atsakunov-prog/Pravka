@@ -146,6 +146,21 @@ class GoogleSpeechSession(
             active = true
             stopping = false
             errorStreak = 0
+            // Системному распознавателю входное устройство не укажешь, но
+            // Bluetooth-микрофон он берёт только при поднятом SCO-канале
+            // (машина после звонка, гарнитура). Роняем SCO перед стартом —
+            // и распознаватель слышит телефон, а не салон.
+            if ((context.applicationContext as? ru.zf.pravka.PravkaApp)?.phoneMicOnly != false) {
+                runCatching {
+                    val am = context.getSystemService(android.content.Context.AUDIO_SERVICE)
+                        as android.media.AudioManager
+                    @Suppress("DEPRECATION")
+                    if (am.isBluetoothScoOn) {
+                        am.stopBluetoothSco()
+                        onLog("BT SCO был поднят — уронил: слушаем микрофон телефона")
+                    }
+                }
+            }
             onLog(
                 "start onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} " +
                     "formatting=$formatting segmentedRequested=$segmentedSession"

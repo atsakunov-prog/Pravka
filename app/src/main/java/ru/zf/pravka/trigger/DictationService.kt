@@ -132,6 +132,18 @@ class DictationService : Service() {
             stopSelf()
             return
         }
+        // «Когда еду в машине, Правка меня не слышит»: VOICE_RECOGNITION
+        // уходит в Bluetooth-микрофон машины или наушников, а тот далеко и
+        // глухо. Прибиваем запись к встроенному микрофону телефона — всегда,
+        // пока включён тумблер в Общих настройках.
+        if ((application as? ru.zf.pravka.PravkaApp)?.phoneMicOnly != false) {
+            runCatching {
+                val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                am.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS)
+                    .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC }
+                    ?.let { recorder.setPreferredDevice(it) }
+            }
+        }
         val out = WavFile.Writer(currentFile)
         record = recorder
         writer = out

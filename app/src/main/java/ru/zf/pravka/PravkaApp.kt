@@ -2,6 +2,7 @@ package ru.zf.pravka
 
 import android.app.Application
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import ru.zf.pravka.core.DictionaryApplier
 import ru.zf.pravka.core.ProofreadEngine
@@ -26,12 +27,20 @@ import ru.zf.pravka.target.ClipboardTarget
 // that a DI framework would be an unjustified dependency (spec section 14).
 class PravkaApp : Application() {
 
+    /**
+     * «Слушать только микрофон телефона» — кэш для горячих дорог записи:
+     * DictationService стартует на главном потоке, читать DataStore там
+     * нельзя. Значение держит коллектор ниже, по умолчанию включено.
+     */
+    @Volatile var phoneMicOnly: Boolean = true
+
     override fun onCreate() {
         super.onCreate()
         // Копии на диск: раз в час их снимает тик службы, но старт процесса -
         // после обновления APK или перезагрузки телефона - тоже хороший момент
         // (и единственный, если служба доступности почему-то выключена).
         ru.zf.pravka.data.Backups.tick(this) { line -> eventLog.add(line) }
+        appScope.launch { settings.phoneMicOnlyFlow.collect { phoneMicOnly = it } }
     }
 
     val settings by lazy { Settings(this) }
