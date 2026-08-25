@@ -1,0 +1,10 @@
+# Локальный распознаватель Правки. Ставится в свой venv (см. README.md).
+faster-whisper>=1.1.0
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+
+# CTranslate2 на GPU просит cuBLAS и cuDNN 9. Если в системе уже стоит CUDA
+# Toolkit или PyTorch с CUDA - эти две строки можно закомментировать.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
