@@ -36,7 +36,8 @@ class PravkaApp : Application() {
     }
 
     val settings by lazy { Settings(this) }
-    val promptStore: PromptStore by lazy { AndroidPromptStore(this) }
+    private val androidPromptStore by lazy { AndroidPromptStore(this) }
+    val promptStore: PromptStore by lazy { androidPromptStore }
     val stats by lazy { Stats(this) }
     val dictionaryStore by lazy {
         DictionaryStore(filesDir) {
@@ -49,6 +50,26 @@ class PravkaApp : Application() {
     val transcriptionLog by lazy { TranscriptionLog(this) }
     val liveDraft by lazy { LiveDraft(this) }
     val eventLog by lazy { EventLog(this) }
+
+    // Общий словарь с воркстанцией (docs/pravka-sync.md). Без адреса таблицы
+    // ничего не делает и в сеть не ходит.
+    val pravkaSync by lazy {
+        ru.zf.pravka.data.PravkaSync(
+            client = httpClient,
+            dictionary = dictionaryStore,
+            rules = rulesStore,
+            settings = settings,
+            device = "pixel",
+            log = { line -> eventLog.add(line) },
+        ).also { sync ->
+            sync.contributor = ru.zf.pravka.data.PhoneSyncContributor(
+                settings = settings,
+                transcriptLog = transcriptionLog,
+                stats = stats,
+                promptSync = ru.zf.pravka.data.PromptSyncSupport(promptStore, androidPromptStore.syncMeta),
+            )
+        }
+    }
 
     val httpClient by lazy {
         OkHttpClient.Builder()

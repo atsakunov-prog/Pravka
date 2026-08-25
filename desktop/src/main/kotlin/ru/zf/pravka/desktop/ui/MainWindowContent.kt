@@ -90,6 +90,11 @@ private fun SettingsTab(controller: Controller, onHotkeysChanged: () -> Unit) {
     var urlDraft by remember(whisperUrl) { mutableStateOf(whisperUrl) }
     var modelDraft by remember(whisperModel) { mutableStateOf(whisperModel) }
     var health by remember { mutableStateOf("") }
+    val syncUrl by settings.syncUrlFlow.collectAsState()
+    val syncAt by settings.syncAtFlow.collectAsState()
+    val syncText by settings.syncTranscriptTextFlow.collectAsState()
+    var syncDraft by remember(syncUrl) { mutableStateOf(syncUrl) }
+    var syncStatus by remember { mutableStateOf("") }
     var hkDictate by remember(hotkeys) { mutableStateOf(hotkeys.dictate) }
     var hkClean by remember(hotkeys) { mutableStateOf(hotkeys.clean) }
     var hkMenu by remember(hotkeys) { mutableStateOf(hotkeys.menu) }
@@ -165,6 +170,43 @@ private fun SettingsTab(controller: Controller, onHotkeysChanged: () -> Unit) {
                 "второго нажатия."
         )
 
+        SectionTitle("Общий словарь")
+        OutlinedTextField(
+            value = syncDraft,
+            onValueChange = { syncDraft = it; syncStatus = "" },
+            label = { Text("Адрес таблицы (Apps Script)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = {
+                settings.setSyncUrl(syncDraft)
+                syncStatus = "Синхронизирую…"
+                scope.launch {
+                    syncStatus = app.sync.syncNow().fold(
+                        onSuccess = { r ->
+                            "Готово: словарь ${r.dictChanged}, правила ${r.rulesChanged}, " +
+                                "расшифровок отправлено ${r.pushed}"
+                        },
+                        onFailure = { it.message ?: "Не вышло" },
+                    )
+                }
+            }) { Text("Синхронизировать") }
+            Spacer(Modifier.width(12.dp))
+            if (syncAt > 0) {
+                Text(
+                    "Последний раз: " + java.text.SimpleDateFormat("dd.MM HH:mm", Locale.US)
+                        .format(java.util.Date(syncAt)),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Toggle("Слать текст расшифровок", syncText) { settings.setSyncTranscriptText(it) }
+        if (syncStatus.isNotBlank()) Hint(syncStatus)
+        Hint("Словарь, правила и промпты сводятся с телефоном; как поднять таблицу — docs/pravka-sync.md.")
+
         SectionTitle("Проверка")
         Row {
             OutlinedButton(onClick = { controller.clean() }) { Text("Причесать буфер") }
@@ -212,7 +254,11 @@ private fun DictionaryTab() {
                 onClick = {
                     val f = from; val t = to; val n = note; val m = mode
                     from = ""; to = ""; note = ""
-                    DesktopApp.scope.launch { app.dictionaryStore.add(f, t, m, n) }
+                    DesktopApp.scope.launch {
+                        app.dictionaryStore.add(f, t, m, n)
+                        // Новое слово должно доехать до телефона сегодня.
+                        app.sync.kickSoon(DesktopApp.scope)
+                    }
                 },
             ) { Text("Добавить") }
         }
@@ -224,14 +270,22 @@ private fun DictionaryTab() {
             items(entries, key = { it.id }) { entry ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(entry.enabled, onCheckedChange = { on ->
-                        DesktopApp.scope.launch { app.dictionaryStore.update(entry.copy(enabled = on)) }
+                        DesktopApp.scope.launch {
+                            app.dictionaryStore.update(entry.copy(enabled = on))
+                            app.sync.kickSoon(DesktopApp.scope)
+                        }
                     })
                     Text(modeTitle(entry.mode), Modifier.width(80.dp), fontSize = 12.sp, color = PravkaIcon.accent)
                     Text(entry.from, Modifier.weight(1f), fontSize = 13.sp)
                     Text(entry.to, Modifier.weight(1f), fontSize = 13.sp)
                     Text(entry.note, Modifier.weight(1f), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("${entry.hits}", Modifier.width(48.dp), fontSize = 12.sp)
-                    TextButton(onClick = { DesktopApp.scope.launch { app.dictionaryStore.delete(entry.id) } }) {
+                    TextButton(onClick = {
+                        DesktopApp.scope.launch {
+                            app.dictionaryStore.delete(entry.id)
+                            app.sync.kickSoon(DesktopApp.scope)
+                        }
+                    }) {
                         Text("Удалить", fontSize = 12.sp)
                     }
                 }

@@ -54,6 +54,25 @@ object DesktopApp {
     val whisper by lazy { WhisperServerClient(httpClient) }
     val recorder by lazy { Recorder() }
 
+    // Общий словарь с телефоном (docs/pravka-sync.md). Без адреса таблицы
+    // ничего не делает и в сеть не ходит.
+    val sync by lazy {
+        ru.zf.pravka.data.PravkaSync(
+            client = httpClient,
+            dictionary = dictionaryStore,
+            rules = rulesStore,
+            settings = settings,
+            device = "workstation",
+        ).also { s ->
+            s.contributor = ru.zf.pravka.desktop.data.DesktopSyncContributor(
+                settings = settings,
+                journal = transcripts,
+                stats = stats,
+                promptSync = ru.zf.pravka.data.PromptSyncSupport(promptStore, promptStore.syncMeta),
+            )
+        }
+    }
+
     val engine by lazy {
         ProofreadEngine(
             claude = claude,

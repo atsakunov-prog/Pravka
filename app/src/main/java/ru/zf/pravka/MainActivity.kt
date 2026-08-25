@@ -352,6 +352,13 @@ private fun SettingsTab(
     var savedMark by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
 
+    val pravkaApp = LocalContext.current.applicationContext as PravkaApp
+    val syncAt by settings.syncAtFlow.collectAsState(initial = 0L)
+    val syncUrl by settings.syncUrlFlow.collectAsState(initial = "")
+    val syncText by settings.syncTranscriptTextFlow.collectAsState(initial = true)
+    var syncUrlDraft by remember(syncUrl) { mutableStateOf(syncUrl) }
+    var syncStatus by remember { mutableStateOf("") }
+
     val fabSize by settings.fabSizeFlow.collectAsState(initial = Settings.FAB_SIZE_DEFAULT)
     val fabAlpha by settings.fabAlphaFlow.collectAsState(initial = Settings.FAB_ALPHA_DEFAULT)
     var sizeSlider by remember(fabSize) { mutableStateOf(fabSize.toFloat()) }
@@ -445,6 +452,58 @@ private fun SettingsTab(
                 enabled = loaded,
             ) {
                 Text(stringResource(if (savedMark) R.string.settings_saved else R.string.settings_save))
+            }
+        }
+
+        // Общий словарь с воркстанцией: адрес веб-приложения Apps Script.
+        // Пусто - синхронизация выключена и в сеть не ходит.
+        SectionCard(label = "Общий словарь") {
+            OutlinedTextField(
+                value = syncUrlDraft,
+                onValueChange = { syncUrlDraft = it; syncStatus = "" },
+                singleLine = true,
+                label = { Text("Адрес таблицы (Apps Script)") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(6.dp))
+            HintText(
+                "Словарь, правила и промпты сводятся с компьютером; расшифровки и " +
+                    "статистика уезжают наверх. Как поднять таблицу — docs/pravka-sync.md."
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = syncText,
+                    onCheckedChange = { on -> scope.launch { settings.setSyncTranscriptText(on) } },
+                )
+                Text("Слать текст расшифровок", style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = {
+                    scope.launch {
+                        settings.setSyncUrl(syncUrlDraft)
+                        syncStatus = "Синхронизирую…"
+                        syncStatus = pravkaApp.pravkaSync.syncNow().fold(
+                            onSuccess = { r ->
+                                "Готово: словарь ${r.dictChanged}, правила ${r.rulesChanged}, " +
+                                    "расшифровок отправлено ${r.pushed}"
+                            },
+                            onFailure = { it.message ?: "Не вышло" },
+                        )
+                    }
+                }) { Text("Синхронизировать") }
+                Spacer(Modifier.width(12.dp))
+                if (syncAt > 0) {
+                    HintText(
+                        "Последний раз: " + java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale.US)
+                            .format(java.util.Date(syncAt))
+                    )
+                }
+            }
+            if (syncStatus.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                HintText(syncStatus)
             }
         }
 
@@ -1242,7 +1301,11 @@ private fun DictionaryTab(
     // the composition and cancels DataStore/file writes mid-flight when the
     // owner switches tabs (the "принял четыре правила, записалось одно" bug
     // class - fixed in Learning, but these older tabs kept the old scope).
-    val scope = (LocalContext.current.applicationContext as PravkaApp).appScope
+    val app = LocalContext.current.applicationContext as PravkaApp
+    val scope = app.appScope
+    // Новое слово должно доехать до воркстанции сегодня, а не завтра: пачка
+    // правок подряд сходится в один запрос через полминуты.
+    val syncSoon = { app.pravkaSync.kickSoon(scope) }
     val entries by store.entriesFlow.collectAsState()
     var search by remember { mutableStateOf("") }
     var dialogEntry by remember { mutableStateOf<DictEntry?>(null) }
@@ -1379,7 +1442,7 @@ private fun DictionaryTab(
             }
             items(sectionEntries, key = { it.id }) { entry ->
                 DictRow(entry, onClick = { dialogEntry = entry }, onToggle = { enabled ->
-                    scope.launch { store.update(entry.copy(enabled = enabled)) }
+                    scope.launch { store.update(entry.copy(enabled = enabled)); syncSoon() }
                 })
             }
         }
@@ -1441,7 +1504,7 @@ private fun DictionaryTab(
             entry = null,
             onDismiss = { showAddDialog = false },
             onSave = { from, to, mode, note, _ ->
-                scope.launch { store.add(from, to, mode, note) }
+                scope.launch { store.add(from, to, mode, note); syncSoon() }
                 showAddDialog = false
             },
             onDelete = null,
@@ -1452,11 +1515,14 @@ private fun DictionaryTab(
             entry = entry,
             onDismiss = { dialogEntry = null },
             onSave = { from, to, mode, note, enabled ->
-                scope.launch { store.update(entry.copy(from = from, to = to, mode = mode, note = note, enabled = enabled)) }
+                scope.launch {
+                    store.update(entry.copy(from = from, to = to, mode = mode, note = note, enabled = enabled))
+                    syncSoon()
+                }
                 dialogEntry = null
             },
             onDelete = {
-                scope.launch { store.delete(entry.id) }
+                scope.launch { store.delete(entry.id); syncSoon() }
                 dialogEntry = null
             },
         )

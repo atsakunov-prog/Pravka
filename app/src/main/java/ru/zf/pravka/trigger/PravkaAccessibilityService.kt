@@ -1968,6 +1968,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             ru.zf.pravka.data.Backups.tick(this@PravkaAccessibilityService) { line ->
                 app.eventLog.add(line)
             }
+            // Общий словарь с воркстанцией: сам решает, прошли ли 12 часов,
+            // и молчит, если адрес таблицы не задан.
+            scope.launch { runCatching { app.pravkaSync.maybeSync() } }
             zasechkaReminderCheck()
             zReminderHandler.postDelayed(this, 5 * 60_000L)
         }

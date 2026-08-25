@@ -13,7 +13,7 @@ import ru.zf.pravka.core.Models
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
-class Settings(private val context: Context) : PravkaSettings {
+class Settings(private val context: Context) : PravkaSettings, SyncSettings {
 
     companion object {
         // Сами значения живут в ядре (ru.zf.pravka.core.Models): на них
@@ -37,6 +37,10 @@ class Settings(private val context: Context) : PravkaSettings {
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
         private val KEY_LEARN_AUTO = booleanPreferencesKey("learn_auto_capture")
+        // Общий словарь: адрес веб-приложения Apps Script (docs/pravka-sync.md).
+        private val KEY_SYNC_URL = stringPreferencesKey("sync_url")
+        private val KEY_SYNC_AT = androidx.datastore.preferences.core.longPreferencesKey("sync_last_at")
+        private val KEY_SYNC_TEXT = booleanPreferencesKey("sync_transcript_text")
 
         // Засечка (timesheet).
         private val KEY_Z_ENABLED = booleanPreferencesKey("z_enabled")
@@ -86,6 +90,26 @@ class Settings(private val context: Context) : PravkaSettings {
     }
 
     // Fiction mode: CLEAN gets the PROSE style directive (owner writes prose).
+    // --- общий словарь (docs/pravka-sync.md) ---
+
+    val syncUrlFlow = context.dataStore.data.map { it[KEY_SYNC_URL] ?: "" }
+    override suspend fun syncUrl(): String = syncUrlFlow.first()
+    suspend fun setSyncUrl(value: String) {
+        context.dataStore.edit { it[KEY_SYNC_URL] = value.trim() }
+    }
+
+    val syncAtFlow = context.dataStore.data.map { it[KEY_SYNC_AT] ?: 0L }
+    override suspend fun lastSyncAt(): Long = syncAtFlow.first()
+    override suspend fun setLastSyncAt(value: Long) {
+        context.dataStore.edit { it[KEY_SYNC_AT] = value }
+    }
+
+    /** Слать ли в таблицу сам текст расшифровок или только метрики. */
+    val syncTranscriptTextFlow = context.dataStore.data.map { it[KEY_SYNC_TEXT] ?: true }
+    suspend fun setSyncTranscriptText(value: Boolean) {
+        context.dataStore.edit { it[KEY_SYNC_TEXT] = value }
+    }
+
     override val proseModeFlow = context.dataStore.data.map { it[KEY_PROSE_MODE] ?: false }
     suspend fun setProseMode(value: Boolean) {
         context.dataStore.edit { it[KEY_PROSE_MODE] = value }

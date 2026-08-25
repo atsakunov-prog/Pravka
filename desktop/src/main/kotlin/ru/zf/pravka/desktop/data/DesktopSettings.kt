@@ -5,10 +5,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import ru.zf.pravka.core.Models
 import ru.zf.pravka.data.PravkaSettings
+import ru.zf.pravka.data.SyncSettings
 
 // Настройки воркстанции: settings.json рядом со словарём. Реализует
 // PravkaSettings, поэтому движок из :core не отличает эту машину от телефона.
-class DesktopSettings(dir: File = Paths.dir) : PravkaSettings {
+class DesktopSettings(dir: File = Paths.dir) : PravkaSettings, SyncSettings {
 
     companion object {
         const val DEFAULT_WHISPER_URL = "http://127.0.0.1:8178/v1/audio/transcriptions"
@@ -117,6 +118,32 @@ class DesktopSettings(dir: File = Paths.dir) : PravkaSettings {
         val menu: String,
         val undo: String,
     )
+
+    // --- общий словарь (docs/pravka-sync.md) ---
+
+    private val _syncUrl = MutableStateFlow(store.string("sync_url", ""))
+    val syncUrlFlow: StateFlow<String> = _syncUrl
+    override suspend fun syncUrl(): String = _syncUrl.value
+    fun setSyncUrl(value: String) {
+        _syncUrl.value = value.trim()
+        store.put("sync_url", value.trim())
+    }
+
+    private val _syncAt = MutableStateFlow(store.long("sync_last_at", 0))
+    val syncAtFlow: StateFlow<Long> = _syncAt
+    override suspend fun lastSyncAt(): Long = _syncAt.value
+    override suspend fun setLastSyncAt(value: Long) {
+        _syncAt.value = value
+        store.put("sync_last_at", value)
+    }
+
+    /** Слать ли в таблицу сам текст расшифровок или только метрики. */
+    private val _syncText = MutableStateFlow(store.boolean("sync_transcript_text", true))
+    val syncTranscriptTextFlow: StateFlow<Boolean> = _syncText
+    fun setSyncTranscriptText(value: Boolean) {
+        _syncText.value = value
+        store.put("sync_transcript_text", value)
+    }
 
     // --- модель правки ---
 

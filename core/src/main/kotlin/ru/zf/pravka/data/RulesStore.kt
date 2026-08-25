@@ -1,6 +1,7 @@
 package ru.zf.pravka.data
 
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -19,6 +20,12 @@ class RulesStore(private val dir: File) {
         val text: String,
         val enabled: Boolean = true,
         val createdTs: Long = 0L,
+        // Те же три поля, что у записи словаря: устойчивый ключ, время правки
+        // и надгробие - без них правило, удалённое на телефоне, вернулось бы
+        // с воркстанции при следующей синхронизации.
+        val uid: String = "",
+        val updatedAt: Long = 0L,
+        val deleted: Boolean = false,
         // A mini before/after from the owner's actual edit: few-shot for the
         // model, and lets the owner judge what the rule really does.
         val exampleBefore: String = "",
@@ -49,6 +56,9 @@ class RulesStore(private val dir: File) {
                         text = t,
                         enabled = o.optBoolean("enabled", true),
                         createdTs = o.optLong("created"),
+                        uid = o.optString("uid", ""),
+                        updatedAt = o.optLong("updatedAt", o.optLong("created")),
+                        deleted = o.optBoolean("deleted", false),
                         exampleBefore = o.optString("before"),
                         exampleAfter = o.optString("after"),
                     )
@@ -57,6 +67,19 @@ class RulesStore(private val dir: File) {
             out
         }
         if (parsed != null) rules.addAll(parsed)
+
+        // Устойчивые ключи для правил, живших до синхронизации, и уборка
+        // старых надгробий - один раз при загрузке.
+        var touched = false
+        for (i in rules.indices) {
+            if (rules[i].uid.isBlank()) {
+                rules[i] = rules[i].copy(uid = UUID.randomUUID().toString())
+                touched = true
+            }
+        }
+        val cutoff = System.currentTimeMillis() - 90L * 24 * 60 * 60 * 1000
+        if (rules.removeAll { it.deleted && it.updatedAt < cutoff }) touched = true
+        if (touched) persist()
     }
 
     private fun persist() {
@@ -69,6 +92,9 @@ class RulesStore(private val dir: File) {
                         put("text", r.text)
                         put("enabled", r.enabled)
                         put("created", r.createdTs)
+                        put("uid", r.uid)
+                        put("updatedAt", r.updatedAt)
+                        if (r.deleted) put("deleted", true)
                         put("before", r.exampleBefore)
                         put("after", r.exampleAfter)
                     }
@@ -78,7 +104,13 @@ class RulesStore(private val dir: File) {
         }
     }
 
+    /** Живые правила: надгробия наружу не показываются. */
     suspend fun all(): List<Rule> = withContext(Dispatchers.IO) {
+        mutex.withLock { ensureLoaded(); rules.filter { !it.deleted } }
+    }
+
+    /** Всё, включая надгробия, - только для синхронизации. */
+    suspend fun allForSync(): List<Rule> = withContext(Dispatchers.IO) {
         mutex.withLock { ensureLoaded(); rules.toList() }
     }
 
@@ -87,11 +119,13 @@ class RulesStore(private val dir: File) {
             mutex.withLock {
                 ensureLoaded()
                 val t = text.trim()
-                if (t.isNotEmpty() && rules.none { it.text.equals(t, ignoreCase = true) }) {
+                if (t.isNotEmpty() && rules.none { !it.deleted && it.text.equals(t, ignoreCase = true) }) {
                     val id = (rules.maxOfOrNull { it.id } ?: 0L) + 1
+                    val now = System.currentTimeMillis()
                     rules.add(
                         Rule(
-                            id, t, enabled = true, createdTs = System.currentTimeMillis(),
+                            id, t, enabled = true, createdTs = now,
+                            uid = UUID.randomUUID().toString(), updatedAt = now,
                             exampleBefore = exampleBefore.take(160), exampleAfter = exampleAfter.take(160),
                         )
                     )
@@ -104,13 +138,19 @@ class RulesStore(private val dir: File) {
     suspend fun replaceAll(newRules: List<Triple<String, String, String>>) = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureLoaded()
-            rules.clear()
-            var id = 1L
+            // Прежние правила не исчезают, а становятся надгробиями: иначе
+            // второе устройство вернуло бы весь старый набор обратно.
             val now = System.currentTimeMillis()
+            val buried = rules.filter { !it.deleted }
+                .map { it.copy(deleted = true, updatedAt = now) }
+            rules.clear()
+            rules.addAll(buried)
+            var id = (buried.maxOfOrNull { it.id } ?: 0L) + 1
             for ((text, before, after) in newRules) {
                 val t = text.trim()
                 if (t.isEmpty()) continue
                 rules.add(Rule(id++, t, enabled = true, createdTs = now,
+                    uid = UUID.randomUUID().toString(), updatedAt = now,
                     exampleBefore = before.take(160), exampleAfter = after.take(160)))
             }
             persist()
@@ -121,14 +161,49 @@ class RulesStore(private val dir: File) {
         mutex.withLock {
             ensureLoaded()
             val i = rules.indexOfFirst { it.id == id }
-            if (i >= 0) { rules[i] = rules[i].copy(enabled = on); persist() }
+            if (i >= 0) {
+                rules[i] = rules[i].copy(enabled = on, updatedAt = System.currentTimeMillis())
+                persist()
+            }
         }
     }
 
     suspend fun delete(id: Long) = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureLoaded()
-            if (rules.removeAll { it.id == id }) persist()
+            val i = rules.indexOfFirst { it.id == id }
+            if (i >= 0) {
+                rules[i] = rules[i].copy(deleted = true, updatedAt = System.currentTimeMillis())
+                persist()
+            }
+        }
+    }
+
+    /** Слияние с общей таблицей - по тем же правилам, что и словарь. */
+    suspend fun mergeFromSync(incoming: List<Rule>): Int = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            ensureLoaded()
+            var changed = 0
+            for (remote in incoming) {
+                if (remote.text.isBlank()) continue
+                val index = rules.indexOfFirst {
+                    (remote.uid.isNotBlank() && it.uid == remote.uid) ||
+                        it.text.equals(remote.text, ignoreCase = true)
+                }
+                if (index < 0) {
+                    if (remote.deleted) continue
+                    val id = (rules.maxOfOrNull { it.id } ?: 0L) + 1
+                    rules.add(remote.copy(id = id, uid = remote.uid.ifBlank { UUID.randomUUID().toString() }))
+                    changed++
+                    continue
+                }
+                val local = rules[index]
+                if (remote.updatedAt <= local.updatedAt) continue
+                rules[index] = remote.copy(id = local.id, uid = remote.uid.ifBlank { local.uid })
+                changed++
+            }
+            if (changed > 0) persist()
+            changed
         }
     }
 
@@ -139,7 +214,7 @@ class RulesStore(private val dir: File) {
     suspend fun enabledBlock(): String = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureLoaded()
-            val active = rules.filter { it.enabled }
+            val active = rules.filter { it.enabled && !it.deleted }
             if (active.isEmpty()) return@withLock ""
             val sb = StringBuilder("Постоянные правила владельца (соблюдай):\n")
             var used = 0

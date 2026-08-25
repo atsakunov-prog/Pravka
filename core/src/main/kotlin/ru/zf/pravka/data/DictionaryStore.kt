@@ -1,6 +1,7 @@
 package ru.zf.pravka.data
 
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +27,8 @@ class DictionaryStore(
 
     companion object {
         const val FORMAT = "pravka-dictionary"
+        /** Сколько дней держим надгробия, чтобы удаление точно доехало. */
+        const val TOMBSTONE_DAYS = 90L
         private const val FILE_NAME = "dictionary.json"
         const val SEED_ASSET = "dictionary_seed.json"
     }
@@ -41,20 +44,30 @@ class DictionaryStore(
 
     private val file: File get() = File(dir, FILE_NAME)
 
+    /** Живые записи: удалённые (надгробия) наружу не показываются. */
     suspend fun all(): List<DictEntry> = mutex.withLock {
+        ensureLoaded()
+        entries.filter { !it.deleted }
+    }
+
+    /** Всё, включая надгробия, - это нужно только синхронизации. */
+    suspend fun allForSync(): List<DictEntry> = mutex.withLock {
         ensureLoaded()
         entries.toList()
     }
 
     suspend fun add(from: String, to: String, mode: DictMode, note: String): DictEntry = mutex.withLock {
         ensureLoaded()
+        val now = System.currentTimeMillis()
         val entry = DictEntry(
             id = nextId++,
+            uid = UUID.randomUUID().toString(),
             from = from.trim(),
             to = to.trim(),
             mode = mode,
             note = note.trim(),
-            createdAt = System.currentTimeMillis(),
+            createdAt = now,
+            updatedAt = now,
         )
         entries.add(entry)
         persist()
@@ -65,14 +78,23 @@ class DictionaryStore(
         ensureLoaded()
         val index = entries.indexOfFirst { it.id == entry.id }
         if (index >= 0) {
-            entries[index] = entry
+            entries[index] = entry.copy(updatedAt = System.currentTimeMillis())
             persist()
         }
     }
 
+    /**
+     * Удаление - это надгробие, а не пропажа строки: иначе второе устройство
+     * при следующей синхронизации вернуло бы запись обратно. Совсем из файла
+     * надгробия уходят через TOMBSTONE_DAYS дней (см. ensureLoaded).
+     */
     suspend fun delete(id: Long): Unit = mutex.withLock {
         ensureLoaded()
-        if (entries.removeAll { it.id == id }) persist()
+        val index = entries.indexOfFirst { it.id == id }
+        if (index >= 0) {
+            entries[index] = entries[index].copy(deleted = true, updatedAt = System.currentTimeMillis())
+            persist()
+        }
     }
 
     suspend fun incrementHits(ids: Collection<Long>): Unit = mutex.withLock {
@@ -145,9 +167,22 @@ class DictionaryStore(
                 seedVersion = assetSeedVersion
                 persistQueued()
             }
+
+            // Устойчивые идентификаторы для записей, созданных до
+            // синхронизации, и уборка старых надгробий - один раз при загрузке.
+            var touched = false
+            entries = entries.map { e ->
+                if (e.uid.isBlank()) {
+                    touched = true
+                    e.copy(uid = java.util.UUID.randomUUID().toString())
+                } else e
+            }.toMutableList()
+            val cutoff = System.currentTimeMillis() - TOMBSTONE_DAYS * 24 * 60 * 60 * 1000
+            if (entries.removeAll { it.deleted && it.updatedAt < cutoff }) touched = true
+            if (touched) persistQueued()
         }
         loaded = true
-        _entriesFlow.value = entries.toList()
+        publish()
     }
 
     // EVERY dictionary write goes through the single DiskWriter thread, with
@@ -157,7 +192,65 @@ class DictionaryStore(
     // write - was the one way to corrupt this file.)
     private fun persist() {
         persistQueued()
-        _entriesFlow.value = entries.toList()
+        publish()
+    }
+
+    // Наружу - только живые записи: надгробия существуют ради синхронизации,
+    // и им нечего делать ни в списке словаря, ни в подсказке модели.
+    private fun publish() {
+        _entriesFlow.value = entries.filter { !it.deleted }
+    }
+
+    /**
+     * Слияние с тем, что приехало из общей таблицы. Спор решается временем
+     * правки: чья запись новее, та и права. Совпадения ищутся сперва по uid,
+     * а если его нет - по паре "слышится + режим": так словарь телефона и
+     * заводской словарь воркстанции сходятся, а не удваиваются.
+     *
+     * Счётчик срабатываний берём наибольший: он косметический, а складывать
+     * приросты значило бы вести на каждом устройстве ещё и учёт отправленного.
+     *
+     * @return сколько записей изменилось локально.
+     */
+    suspend fun mergeFromSync(incoming: List<DictEntry>): Int = mutex.withLock {
+        ensureLoaded()
+        var changed = 0
+        for (remote in incoming) {
+            if (remote.from.isBlank() && !remote.deleted) continue
+            val index = entries.indexOfFirst {
+                (remote.uid.isNotBlank() && it.uid == remote.uid) ||
+                    (it.from.equals(remote.from, ignoreCase = true) && it.mode == remote.mode)
+            }
+            if (index < 0) {
+                if (remote.deleted) continue  // надгробие записи, которой у нас и не было
+                entries.add(
+                    remote.copy(
+                        id = nextId++,
+                        uid = remote.uid.ifBlank { java.util.UUID.randomUUID().toString() },
+                    )
+                )
+                changed++
+                continue
+            }
+            val local = entries[index]
+            if (remote.updatedAt <= local.updatedAt) {
+                // Наша версия свежее - но uid надо свести, иначе следующая
+                // синхронизация опять будет искать по названию.
+                if (local.uid != remote.uid && remote.uid.isNotBlank() && remote.updatedAt > 0) {
+                    entries[index] = local.copy(uid = remote.uid)
+                    changed++
+                }
+                continue
+            }
+            entries[index] = remote.copy(
+                id = local.id,
+                uid = remote.uid.ifBlank { local.uid },
+                hits = maxOf(local.hits, remote.hits),
+            )
+            changed++
+        }
+        if (changed > 0) persist()
+        changed
     }
 
     private fun persistQueued() {
@@ -176,6 +269,7 @@ class DictionaryStore(
             result.add(
                 DictEntry(
                     id = o.optLong("id", 0),
+                    uid = o.optString("uid", ""),
                     from = from,
                     to = o.optString("to", "").trim(),
                     mode = mode,
@@ -183,6 +277,8 @@ class DictionaryStore(
                     hits = o.optInt("hits", 0),
                     enabled = o.optBoolean("enabled", true),
                     createdAt = o.optLong("createdAt", System.currentTimeMillis()),
+                    updatedAt = o.optLong("updatedAt", o.optLong("createdAt", 0L)),
+                    deleted = o.optBoolean("deleted", false),
                 )
             )
         }
@@ -200,6 +296,7 @@ class DictionaryStore(
                     put(
                         JSONObject().apply {
                             put("id", e.id)
+                            put("uid", e.uid)
                             put("from", e.from)
                             put("to", e.to)
                             put("mode", e.mode.name)
@@ -207,6 +304,8 @@ class DictionaryStore(
                             put("hits", e.hits)
                             put("enabled", e.enabled)
                             put("createdAt", e.createdAt)
+                            put("updatedAt", e.updatedAt)
+                            if (e.deleted) put("deleted", true)
                         }
                     )
                 }

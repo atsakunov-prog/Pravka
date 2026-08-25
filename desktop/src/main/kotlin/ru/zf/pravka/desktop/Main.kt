@@ -46,6 +46,15 @@ fun main() = application {
         menuOpen = true
     }
 
+    // Общий словарь: обмен при запуске, дальше раз в 12 часов. Без адреса
+    // таблицы maybeSync молча ничего не делает.
+    LaunchedEffect(Unit) {
+        while (true) {
+            runCatching { DesktopApp.sync.maybeSync() }
+            kotlinx.coroutines.delay(30 * 60 * 1000L)
+        }
+    }
+
     LaunchedEffect(hotkeyEpoch) {
         DesktopApp.transcripts.load()
         hotkeyError = Hotkeys.start()
