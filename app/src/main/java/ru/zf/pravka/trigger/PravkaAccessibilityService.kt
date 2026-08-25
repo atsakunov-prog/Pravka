@@ -149,8 +149,12 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     private val app: PravkaApp by lazy { application as PravkaApp }
 
+    /** Автопилот Засечки: Wi-Fi-места, BT машины, «точно ещё …?». */
+    val autoPilot by lazy { AutoPilot(this, app, scope) }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
+        runCatching { autoPilot.start() }
         instance = this
         // A fresh "connected" after takes were mid-flight = the process died
         // and the system rebound the service. Makes crashes visible in the log.
@@ -2183,6 +2187,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // правилам и кнопками самочувствия. Замыкает петлю feel,
                 // которую иначе надо помнить самому.
                 runCatching { notifyArrivedWorkouts() }
+                runCatching { autoPilot.tick() }
             }
             scope.launch { runCatching { app.foodEngine.syncPending() } }
             // Дневник в Notion: галочки, feel, колено и вес уезжают сами.
@@ -3557,6 +3562,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
+        runCatching { autoPilot.stop() }
         ripenessHandler.removeCallbacks(ripenessCheck)
         zReminderHandler.removeCallbacks(zReminderTick)
         pomodoroHandler.removeCallbacks(pomodoroTicker)

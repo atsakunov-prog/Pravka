@@ -73,6 +73,12 @@ class Settings(private val context: Context) {
         private val KEY_SPORT_NOTIFY = booleanPreferencesKey("sport_notify_arrived")
         private val KEY_MODE_ICONS = booleanPreferencesKey("mode_icons_on_buttons")
         private val KEY_PHONE_MIC_ONLY = booleanPreferencesKey("phone_mic_only")
+        private val KEY_AUTO_PLACES = stringPreferencesKey("auto_places")
+        private val KEY_AUTO_CAR_BT = stringPreferencesKey("auto_car_bt")
+        private val KEY_AUTO_ARRIVE = booleanPreferencesKey("auto_arrive_close")
+        private val KEY_AUTO_LEAVE_ASK = booleanPreferencesKey("auto_leave_ask")
+        private val KEY_AUTO_CAR_ASK = booleanPreferencesKey("auto_car_ask")
+        private val KEY_AUTO_STILL_ASK = booleanPreferencesKey("auto_still_ask")
         private val KEY_NOTION_DIARY = booleanPreferencesKey("notion_diary_push")
 
         const val FAB_SIZE_DEFAULT = 48
@@ -287,6 +293,63 @@ class Settings(private val context: Context) {
     }
 
     /** Уведомление, когда часы прислали тренировку: вердикт по правилам + feel. */
+    // ---- Автопилот Засечки: места по Wi-Fi, машина по Bluetooth ----
+
+    /** Именованные места: SSID → имя («дом», «дача»). JSON-объект строкой. */
+    val autoPlacesFlow = context.dataStore.data.map { prefs ->
+        val raw = prefs[KEY_AUTO_PLACES].orEmpty()
+        if (raw.isBlank()) emptyMap()
+        else runCatching {
+            val o = org.json.JSONObject(raw)
+            o.keys().asSequence().associateWith { k -> o.optString(k) }
+        }.getOrDefault(emptyMap())
+    }
+
+    suspend fun addAutoPlace(ssid: String, name: String) {
+        context.dataStore.edit { prefs ->
+            val o = runCatching { org.json.JSONObject(prefs[KEY_AUTO_PLACES].orEmpty()) }
+                .getOrDefault(org.json.JSONObject())
+            o.put(ssid, name.trim())
+            prefs[KEY_AUTO_PLACES] = o.toString()
+        }
+    }
+
+    suspend fun removeAutoPlace(ssid: String) {
+        context.dataStore.edit { prefs ->
+            val o = runCatching { org.json.JSONObject(prefs[KEY_AUTO_PLACES].orEmpty()) }
+                .getOrDefault(org.json.JSONObject())
+            o.remove(ssid)
+            prefs[KEY_AUTO_PLACES] = o.toString()
+        }
+    }
+
+    /** Имя Bluetooth-устройства машины: подключился — «сел в машину?». */
+    val autoCarBtFlow = context.dataStore.data.map { it[KEY_AUTO_CAR_BT] ?: "" }
+    suspend fun setAutoCarBt(value: String) {
+        context.dataStore.edit { it[KEY_AUTO_CAR_BT] = value.trim() }
+    }
+
+    /** Приезд в известную сеть закрывает открытое «Передвижение» сам. */
+    val autoArriveFlow = context.dataStore.data.map { it[KEY_AUTO_ARRIVE] ?: true }
+    suspend fun setAutoArrive(value: Boolean) {
+        context.dataStore.edit { it[KEY_AUTO_ARRIVE] = value }
+    }
+
+    val autoLeaveAskFlow = context.dataStore.data.map { it[KEY_AUTO_LEAVE_ASK] ?: true }
+    suspend fun setAutoLeaveAsk(value: Boolean) {
+        context.dataStore.edit { it[KEY_AUTO_LEAVE_ASK] = value }
+    }
+
+    val autoCarAskFlow = context.dataStore.data.map { it[KEY_AUTO_CAR_ASK] ?: true }
+    suspend fun setAutoCarAsk(value: Boolean) {
+        context.dataStore.edit { it[KEY_AUTO_CAR_ASK] = value }
+    }
+
+    val autoStillAskFlow = context.dataStore.data.map { it[KEY_AUTO_STILL_ASK] ?: true }
+    suspend fun setAutoStillAsk(value: Boolean) {
+        context.dataStore.edit { it[KEY_AUTO_STILL_ASK] = value }
+    }
+
     /**
      * Слушать ТОЛЬКО встроенный микрофон телефона: Bluetooth машины и
      * наушники не перехватывают диктовку. Владелец: «когда еду в машине,

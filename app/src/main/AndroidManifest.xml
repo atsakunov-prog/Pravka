@@ -18,6 +18,13 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <!-- Автопилот Засечки: имя Wi-Fi-сети система отдаёт только с
+         местоположением (GPS при этом не включается), имя BT-устройства
+         на Android 12+ — только с «устройствами поблизости». -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <!-- Android 11+ package visibility hides other apps' names from us; the
          phone-time list needs real labels ("Telegram", not "messenger.web").
          Personal app, no Play Store - the blanket permission is the fix. -->
@@ -113,6 +120,13 @@
 
         <activity
             android:name=".trigger.SportQuickActivity"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false" />
+
+        <activity
+            android:name=".trigger.AutoPilotActivity"
             android:theme="@style/Theme.Transparent"
             android:excludeFromRecents="true"
             android:noHistory="true"

@@ -2,6 +2,8 @@ package ru.zf.pravka
 
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -1266,6 +1268,196 @@ internal fun ZasechkaSettings(app: PravkaApp) {
                 context.startActivity(app.zasechkaStore.shareCsvIntent())
             }
         }) { Text("Выгрузить CSV") }
+
+        Spacer(Modifier.height(18.dp))
+        AutoPilotSection(app)
+    }
+}
+
+/**
+ * Автопилот: телефон сам замечает швы дня. Приезд в известный Wi-Fi закрывает
+ * открытое «Передвижение» сам; отъезд из места и подключение машины спрашивают
+ * пушем; длинное сидячее дело проверяется, когда телефон значимо задвигался.
+ * Имя Wi-Fi система отдаёт только с разрешением «Местоположение» (GPS при этом
+ * не включается), имя BT-устройства на Android 12+ — с «Устройствами рядом».
+ */
+@Composable
+private fun AutoPilotSection(app: PravkaApp) {
+    val context = LocalContext.current
+    val scope = app.appScope
+    val settings = app.settings
+
+    Text("Автопилот", style = MaterialTheme.typography.titleSmall)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        "Wi-Fi-места, Bluetooth машины и датчик движения: приезд закрывает " +
+            "передвижение сам, остальное — вопросом-пушем.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    var permTick by remember { mutableStateOf(0) }
+    val askPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { permTick++ }
+
+    val places by settings.autoPlacesFlow.collectAsState(initial = emptyMap<String, String>())
+    val carBt by settings.autoCarBtFlow.collectAsState(initial = "")
+
+    // ---- Места по Wi-Fi ----
+    Spacer(Modifier.height(10.dp))
+    val hasLocation = remember(permTick) {
+        context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+    if (!hasLocation) {
+        OutlinedButton(onClick = {
+            askPermission.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        }) { Text("Дать доступ к имени Wi-Fi") }
+        Text(
+            "Android отдаёт имя сети только с разрешением «Местоположение»; " +
+                "GPS при этом не включается, в сеть ничего не уезжает.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        @Suppress("DEPRECATION")
+        val currentSsid = remember(permTick) {
+            runCatching {
+                (context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE)
+                    as android.net.wifi.WifiManager).connectionInfo?.ssid.orEmpty()
+                    .trim().trim('"')
+            }.getOrDefault("").takeIf { !it.equals("<unknown ssid>", true) }.orEmpty()
+        }
+        if (currentSsid.isNotBlank() && !places.containsKey(currentSsid)) {
+            var placeName by remember(currentSsid) { mutableStateOf("") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = placeName,
+                    onValueChange = { placeName = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Сеть «$currentSsid» — это…") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        val name = placeName.trim()
+                        if (name.isNotBlank()) {
+                            scope.launch { settings.addAutoPlace(currentSsid, name) }
+                        }
+                    },
+                ) { Text("Запомнить") }
+            }
+            Text(
+                "«дом», «дача», «офис» — нажми, когда подключён к этой сети.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        for ((ssid, name) in places) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "$name — $ssid",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { scope.launch { settings.removeAutoPlace(ssid) } }) {
+                    Text("✕")
+                }
+            }
+        }
+        if (places.isEmpty() && currentSsid.isBlank()) {
+            Text(
+                "Подключись к домашнему Wi-Fi и вернись сюда — появится кнопка «Запомнить».",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    // ---- Машина по Bluetooth ----
+    Spacer(Modifier.height(12.dp))
+    val needBtPerm = android.os.Build.VERSION.SDK_INT >= 31 &&
+        context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) !=
+        android.content.pm.PackageManager.PERMISSION_GRANTED
+    // permTick пересчитывает и это условие тоже.
+    val btPermTick = remember(permTick) { needBtPerm }
+    when {
+        carBt.isNotBlank() -> {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Машина: $carBt",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { scope.launch { settings.setAutoCarBt("") } }) {
+                    Text("Убрать")
+                }
+            }
+        }
+        btPermTick -> {
+            OutlinedButton(onClick = {
+                askPermission.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+            }) { Text("Дать доступ к Bluetooth-устройствам") }
+        }
+        else -> {
+            val bonded = remember(permTick) {
+                runCatching {
+                    (context.getSystemService(android.content.Context.BLUETOOTH_SERVICE)
+                        as android.bluetooth.BluetoothManager)
+                        .adapter?.bondedDevices?.mapNotNull { it.name }?.sorted()
+                }.getOrNull().orEmpty()
+            }
+            if (bonded.isEmpty()) {
+                Text(
+                    "Спаренных Bluetooth-устройств не видно.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text("Какое устройство — машина?", style = MaterialTheme.typography.bodyMedium)
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    for (name in bonded) {
+                        FilterChip(
+                            selected = false,
+                            onClick = { scope.launch { settings.setAutoCarBt(name) } },
+                            label = { Text(name) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Тумблеры ----
+    Spacer(Modifier.height(12.dp))
+    val autoArrive by settings.autoArriveFlow.collectAsState(initial = true)
+    val leaveAsk by settings.autoLeaveAskFlow.collectAsState(initial = true)
+    val carAsk by settings.autoCarAskFlow.collectAsState(initial = true)
+    val stillAsk by settings.autoStillAskFlow.collectAsState(initial = true)
+    @Composable
+    fun toggle(checked: Boolean, label: String, onChange: (Boolean) -> Unit) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = checked, onCheckedChange = onChange)
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    toggle(autoArrive, "Приезд в место закрывает передвижение") { on ->
+        scope.launch { settings.setAutoArrive(on) }
+    }
+    toggle(leaveAsk, "Спрашивать при отъезде из места") { on ->
+        scope.launch { settings.setAutoLeaveAsk(on) }
+    }
+    toggle(carAsk, "Спрашивать, когда подключилась машина") { on ->
+        scope.launch { settings.setAutoCarAsk(on) }
+    }
+    toggle(stillAsk, "«Точно ещё …?», когда телефон задвигался") { on ->
+        scope.launch { settings.setAutoStillAsk(on) }
     }
 }
 
