@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "Pravka"
 include(":app")
 include(":core")
+include(":desktop")

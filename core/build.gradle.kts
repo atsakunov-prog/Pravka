@@ -23,4 +23,13 @@ dependencies {
     // org.json на Android даёт сама система, поэтому в ядре он только для
     // компиляции; настоящую реализацию подкладывает :desktop.
     compileOnly(libs.json)
+
+    // Тесты гоняют настоящую реализацию org.json - ту самую, что подкладывает
+    // воркстанция; на телефоне её роль играет система.
+    testImplementation(kotlin("test"))
+    testImplementation(libs.json)
+}
+
+tasks.test {
+    useJUnitPlatform()
 }

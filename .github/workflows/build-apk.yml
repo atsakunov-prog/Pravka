@@ -32,6 +32,12 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      # Ядро общее с воркстанцией, и ломается оно тихо: тесты дешевле, чем
+      # разбирать потом, почему на одной машине команда сработала, а на
+      # другой нет.
+      - name: Test core
+        run: ./gradlew :core:test --no-daemon
+
       - name: Build debug APK
         run: ./gradlew assembleDebug -PbuildNumber=${{ github.run_number }} --no-daemon
 

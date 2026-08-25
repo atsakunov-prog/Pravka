@@ -6,15 +6,20 @@ package ru.zf.pravka.core
 // something the model must infer.
 object VoiceCommands {
 
-    // (?i) only: Android's ICU regex rejects the JVM-only (?U) flag with a
-    // PatternSyntaxException in the class initializer - which killed the whole
-    // insert path on every dictation (ExceptionInInitializerError, then
-    // NoClassDefFoundError forever after). ICU's \b and character classes are
-    // Unicode-aware by default, so (?U) is unnecessary on Android anyway.
-    // Surrounding commas/periods the recognizer may have added are swallowed
-    // into the break.
+    // Границы слова - через lookaround по \p{L}\p{N}, а НЕ через \b.
+    //
+    // На Android ICU \b знает про кириллицу, а на обычной JVM (воркстанция)
+    // \w - это ASCII, поэтому \b перед "с" границей не считается и команда
+    // не срабатывала совсем. Тот же приём, что в DictionaryApplier, работает
+    // одинаково на обеих машинах.
+    //
+    // Флаг (?U) на Android бросает PatternSyntaxException в инициализаторе
+    // класса и убивает вставку навсегда; (?iu) - безопасен и там, и там.
+    // Запятые и точки, которые распознаватель поставил вокруг команды,
+    // съедаются вместе с ней.
     private val newParagraph = Regex(
-        "(?i)\\s*[,.]?\\s*\\b(с новой строки|новая строка|новый абзац|абзац)\\b[,.]?\\s*",
+        "(?iu)\\s*[,.]?\\s*(?<![\\p{L}\\p{N}])(с новой строки|новая строка|новый абзац|абзац)" +
+            "(?![\\p{L}\\p{N}])[,.]?\\s*",
     )
 
     fun apply(text: String): String {
