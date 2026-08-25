@@ -9,17 +9,33 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 // Запись с микрофона в WAV. Живёт на своём потоке: пропуск буфера здесь -
-// это проглоченное слово, поэтому в цикле чтения не должно быть ничего,
-// кроме чтения, подсчёта громкости и записи на диск.
+// это проглоченное слово, поэтому в цикле чтения нет ничего, кроме чтения,
+// подсчёта громкости и записи на диск.
+//
+// Формат подбирается под железо. 16 кГц моно - идеал (столько же пишет
+// телефон, и распознавателю не придётся ничего пересчитывать), но далеко не
+// каждый микрофон на Windows отдаёт его напрямую, а падать из-за этого при
+// первой же диктовке нельзя. Что записалось - то и уедет на сервер: он
+// принимает любую частоту и приводит её сам.
 class Recorder {
 
     class AudioException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-    private val format = AudioFormat(16_000f, 16, 1, true, false)
+    private val preferred = listOf(
+        AudioFormat(16_000f, 16, 1, true, false),
+        AudioFormat(48_000f, 16, 1, true, false),
+        AudioFormat(44_100f, 16, 1, true, false),
+        AudioFormat(48_000f, 16, 2, true, false),
+        AudioFormat(44_100f, 16, 2, true, false),
+    )
 
     @Volatile private var line: TargetDataLine? = null
     @Volatile private var thread: Thread? = null
     @Volatile private var writer: WavWriter? = null
+
+    /** Формат, на котором в итоге удалось открыть микрофон, - для журнала. */
+    @Volatile var format: AudioFormat? = null
+        private set
 
     /** Громкость 0..1 для полоски в плашке. */
     private val _level = MutableStateFlow(0f)
@@ -30,24 +46,41 @@ class Recorder {
     /** Начинает запись в [file]. Бросает AudioException, если микрофона нет. */
     fun start(file: File) {
         if (recording) return
-        val info = DataLine.Info(TargetDataLine::class.java, format)
-        if (!AudioSystem.isLineSupported(info)) {
-            throw AudioException("Микрофон не поддерживает 16 кГц моно.")
-        }
-        val opened = try {
-            (AudioSystem.getLine(info) as TargetDataLine).apply {
-                open(format, 16_000)  // буфер примерно на полсекунды
-                start()
+
+        var opened: TargetDataLine? = null
+        var chosen: AudioFormat? = null
+        var lastError: Exception? = null
+        for (candidate in preferred) {
+            val info = DataLine.Info(TargetDataLine::class.java, candidate)
+            if (!AudioSystem.isLineSupported(info)) continue
+            try {
+                opened = (AudioSystem.getLine(info) as TargetDataLine).apply {
+                    // Буфер примерно на полсекунды звука.
+                    open(candidate, (candidate.frameSize * candidate.sampleRate / 2).toInt())
+                    start()
+                }
+                chosen = candidate
+                break
+            } catch (e: Exception) {
+                lastError = e
             }
-        } catch (e: Exception) {
-            throw AudioException("Не удалось открыть микрофон: ${e.message}", e)
         }
+        if (opened == null || chosen == null) {
+            throw AudioException(
+                "Не удалось открыть микрофон" +
+                    (lastError?.message?.let { ": $it" } ?: ". Проверь, что он есть и разрешён в Windows."),
+                lastError,
+            )
+        }
+
         line = opened
-        val out = WavWriter(file)
+        format = chosen
+        val out = WavWriter(file, chosen.sampleRate.toInt(), chosen.channels)
         writer = out
 
         thread = Thread({
-            val buffer = ByteArray(3_200)  // 100 мс
+            // Примерно 100 мс звука за чтение.
+            val buffer = ByteArray(chosen.frameSize * chosen.sampleRate.toInt() / 10)
             try {
                 while (line === opened) {
                     val read = opened.read(buffer, 0, buffer.size)
@@ -56,7 +89,7 @@ class Recorder {
                     _level.value = rms(buffer, read)
                 }
             } catch (_: Exception) {
-                // Обрыв линии - не повод падать: то, что записалось, уже на диске.
+                // Обрыв линии - не повод падать: что записалось, уже на диске.
             }
         }, "pravka-recorder").apply {
             isDaemon = true
@@ -86,7 +119,8 @@ class Recorder {
         var i = 0
         while (i + 1 < length) {
             val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xff)).toShort()
-            sum += (sample.toDouble() / Short.MAX_VALUE) * (sample.toDouble() / Short.MAX_VALUE)
+            val normalized = sample.toDouble() / Short.MAX_VALUE
+            sum += normalized * normalized
             i += 2
         }
         val count = length / 2

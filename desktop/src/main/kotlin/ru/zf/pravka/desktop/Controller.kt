@@ -123,8 +123,14 @@ class Controller {
                 hint = hint,
             )
             val elapsed = System.currentTimeMillis() - started
+            val recorded = app.recorder.format
+            val engineLabel = if (recorded != null && recorded.sampleRate.toInt() != 16_000) {
+                // Видно сразу, что микрофон отдал не 16 кГц и сервер
+                // пересчитывал сам, - это стоит миллисекунд.
+                "$model @ ${recorded.sampleRate.toInt() / 1000} кГц"
+            } else model
             app.transcripts.append(
-                engine = model,
+                engine = engineLabel,
                 audioMs = audioMs,
                 transcribeMs = elapsed,
                 text = result.getOrNull().orEmpty(),
