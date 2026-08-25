@@ -140,6 +140,37 @@ private fun capFirst(s: String): String = s.replaceFirstChar { it.uppercase() }
 private fun pointsOf(worth: Int, ms: Long): Int =
     kotlin.math.round(worth * ms.toDouble() / 3_600_000.0).toInt()
 
+/**
+ * Категория тегом-прямоугольником (макет владельца): цвет категории и её
+ * же тон фоном, скруглённые углы. Вторая строка записи читается как
+ * «[тег] · 33 м · +1» и влезает и в сложенный экран.
+ */
+@Composable
+private fun CategoryTag(category: String) {
+    val color = categoryColor(category)
+    Text(
+        category.ifBlank { "—" },
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = color,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .background(color.copy(alpha = 0.16f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+    )
+}
+
+@Composable
+private fun DotSep() {
+    Text(
+        "·",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 6.dp),
+    )
+}
+
 /** «+12» / «−4» / «·» - what this row did to the day's score. */
 @Composable
 private fun PointsChip(points: Int, bold: Boolean = false) {
@@ -844,41 +875,42 @@ private fun EntryRow(
         Box(
             Modifier
                 .width(3.dp)
-                .height(30.dp)
+                .height(38.dp)
                 .background(categoryColor(entry.category), RoundedCornerShape(2.dp)),
         )
-        // A table, not a ragged line (owner's spec): category and
-        // duration sit in fixed columns, the title takes the rest.
-        Text(
-            entry.category.ifBlank { "—" },
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-            color = categoryColor(entry.category),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(104.dp).padding(start = 6.dp),
-        )
-        Text(
-            fmtDur(entry.durationMin(now)),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            modifier = Modifier.width(58.dp).padding(start = 4.dp),
-        )
-        PointsChip(pointsOf(worthOf(entry.category), entry.durationMs(now)))
-        val title = buildString {
-            append(capFirst(entry.title.ifBlank { entry.raw.take(60) }))
-            if (entry.client.isNotBlank()) append(" · ${entry.client}")
-            if (entry.useful > 0) append(" ★${entry.useful}")
-            if (entry.pomodoros > 0) append(" 🍅×${entry.pomodoros}")
+        // Две строки (макет владельца): сверху ЛИЧНОЕ название дела, снизу
+        // «[тег категории] · длительность · ±баллы» — так читается и на
+        // сложенном экране, без ужатых колонок.
+        Column(Modifier.weight(1f).padding(start = 8.dp)) {
+            val title = buildString {
+                append(capFirst(entry.title.ifBlank { entry.raw.take(60) }))
+                if (entry.client.isNotBlank()) append(" · ${entry.client}")
+                if (entry.useful > 0) append(" ★${entry.useful}")
+                if (entry.pomodoros > 0) append(" 🍅×${entry.pomodoros}")
+            }
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CategoryTag(entry.category)
+                DotSep()
+                Text(
+                    fmtDur(entry.durationMin(now)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+                val pts = pointsOf(worthOf(entry.category), entry.durationMs(now))
+                if (pts != 0) {
+                    DotSep()
+                    PointsChip(pts)
+                }
+            }
         }
-        Text(
-            title,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(start = 6.dp),
-        )
         if (onStop != null) {
             IconButton(onClick = onStop, modifier = Modifier.size(30.dp)) {
                 Box(
@@ -958,45 +990,42 @@ private fun ChainBlock(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth().clickable(onClick = onEdit),
             ) {
-                Text(
-                    head.category.ifBlank { "—" },
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = categoryColor(head.category),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.width(104.dp).padding(start = 6.dp),
-                )
-                // The number he otherwise sums by hand: net time of the
-                // activity across all its fragments. Bold = it's a total.
-                Text(
-                    fmtDur(unit.totalMin(now)),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    modifier = Modifier.width(58.dp).padding(start = 4.dp),
-                )
-                PointsChip(
-                    pointsOf(
-                        worthOf(head.category),
-                        unit.fragments.sumOf { it.durationMs(now) },
-                    ),
-                    bold = true,
-                )
-                val pomos = unit.fragments.sumOf { it.pomodoros }
-                val title = buildString {
-                    append(capFirst(head.title.ifBlank { head.raw.take(60) }))
-                    if (head.client.isNotBlank()) append(" · ${head.client}")
-                    if (head.useful > 0) append(" ★${head.useful}")
-                    if (pomos > 0) append(" 🍅×$pomos")
+                // Те же две строки, что у одиночной записи; время — НЕТТО по
+                // всем фрагментам дела (жирным: это сумма).
+                Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                    val pomos = unit.fragments.sumOf { it.pomodoros }
+                    val title = buildString {
+                        append(capFirst(head.title.ifBlank { head.raw.take(60) }))
+                        if (head.client.isNotBlank()) append(" · ${head.client}")
+                        if (head.useful > 0) append(" ★${head.useful}")
+                        if (pomos > 0) append(" 🍅×$pomos")
+                    }
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CategoryTag(head.category)
+                        DotSep()
+                        Text(
+                            fmtDur(unit.totalMin(now)),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                        val pts = pointsOf(
+                            worthOf(head.category),
+                            unit.fragments.sumOf { it.durationMs(now) },
+                        )
+                        if (pts != 0) {
+                            DotSep()
+                            PointsChip(pts, bold = true)
+                        }
+                    }
                 }
-                Text(
-                    title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(start = 6.dp),
-                )
                 if (onStop != null) {
                     IconButton(onClick = onStop, modifier = Modifier.size(30.dp)) {
                         Box(
@@ -1023,54 +1052,9 @@ private fun ChainBlock(
                     )
                 }
             }
-            for (br in unit.interruptions) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(IntrinsicSize.Min)
-                        .clickable { onEditInterruption(br) }
-                        .padding(vertical = 1.dp),
-                ) {
-                    // No time range here (owner: «уберём, с какого по какое») -
-                    // the row lines up with its parent instead. Its stripe is
-                    // as wide as the block's own and stands OFF it (5.dp), so
-                    // the two lines read as parent and child, not as one
-                    // smudge; 5 + 3 + 96 = the parent's 104 category column,
-                    // and everything after it stays in the same columns.
-                    Spacer(Modifier.width(5.dp))
-                    Box(
-                        Modifier
-                            .width(3.dp)
-                            .fillMaxHeight()
-                            .background(categoryColor(br.category), RoundedCornerShape(2.dp)),
-                    )
-                    Text(
-                        br.category.ifBlank { "—" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = categoryColor(br.category),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.width(96.dp).padding(start = 6.dp),
-                    )
-                    Text(
-                        fmtDur(br.durationMin(now)),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        modifier = Modifier.width(58.dp).padding(start = 4.dp),
-                    )
-                    PointsChip(pointsOf(worthOf(br.category), br.durationMs(now)))
-                    Text(
-                        capFirst(br.title.ifBlank { br.raw.take(60) }),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(start = 6.dp),
-                    )
-                }
-            }
+            // Врезки (звонки, YouTube) в ленте больше не рисуются — владелец:
+            // «очень сильно засоряет». Их минуты живут в экранном времени, а
+            // старые записи остаются в данных и в выгрузках.
         }
     }
 }
@@ -1973,6 +1957,24 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+    // Врезки роботов в ленту — по умолчанию ВЫКЛ (владелец: «засоряет ленту,
+    // и не всегда это потеря»). Суммы выше остаются, сон-вставка живёт всегда.
+    val zInserts by app.settings.zAutoInsertsFlow.collectAsState(initial = false)
+    Spacer(Modifier.height(6.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = zInserts,
+            onCheckedChange = { on -> app.appScope.launch { app.settings.setZAutoInserts(on) } },
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("Врезки в ленту: звонки и пожиратели", style = MaterialTheme.typography.bodyMedium)
+    }
+    Text(
+        "Выключено: лента не режется на куски, суммы экранного времени выше " +
+            "остаются — по ним и следим за YouTube. Сон приезжает как раньше.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 
     // Chrome per-site rows removed with the omnibox poller (owner's call:
     // the fold black-screens correlated with it). Old site data stays in

@@ -73,6 +73,7 @@ class Settings(private val context: Context) {
         private val KEY_SPORT_NOTIFY = booleanPreferencesKey("sport_notify_arrived")
         private val KEY_MODE_ICONS = booleanPreferencesKey("mode_icons_on_buttons")
         private val KEY_PHONE_MIC_ONLY = booleanPreferencesKey("phone_mic_only")
+        private val KEY_Z_AUTO_INSERTS = booleanPreferencesKey("z_auto_inserts")
         private val KEY_AUTO_PLACES = stringPreferencesKey("auto_places")
         private val KEY_AUTO_CAR_BT = stringPreferencesKey("auto_car_bt")
         private val KEY_AUTO_ARRIVE = booleanPreferencesKey("auto_arrive_close")
@@ -293,6 +294,17 @@ class Settings(private val context: Context) {
     }
 
     /** Уведомление, когда часы прислали тренировку: вердикт по правилам + feel. */
+    /**
+     * Врезки роботов в ленту (звонки, пожиратели внимания). Владелец их
+     * выключил: «очень сильно засоряет ленту, и не всегда это потеря — я
+     * готовил еду и смотрел про часы». Суммы остаются в экранном времени,
+     * лента не режется. Сон-вставка живёт отдельно и не выключается.
+     */
+    val zAutoInsertsFlow = context.dataStore.data.map { it[KEY_Z_AUTO_INSERTS] ?: false }
+    suspend fun setZAutoInserts(value: Boolean) {
+        context.dataStore.edit { it[KEY_Z_AUTO_INSERTS] = value }
+    }
+
     // ---- Автопилот Засечки: места по Wi-Fi, машина по Bluetooth ----
 
     /** Именованные места: SSID → имя («дом», «дача»). JSON-объект строкой. */

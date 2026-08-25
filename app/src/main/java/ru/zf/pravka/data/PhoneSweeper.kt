@@ -245,9 +245,14 @@ class PhoneSweeper(
 
         var insertedAny = false
         if (detectSleep(now, usm)) insertedAny = true
+        // Врезки пожирателей владелец выключил («засоряет ленту, YouTube за
+        // готовкой — не потеря»): суммы остаются в экранном времени ниже,
+        // а лента не режется. Сон выше — отдельно, он не врезка.
+        val insertsOn = settings.zAutoInsertsFlow.first()
         val allLabels = knownLabels + newLabels
         candidates.sortBy { it.start }
         for (c in candidates) {
+            if (!insertsOn) break
             if (zasechkaStore.coveredByOwner(c.start, c.end)) continue
             val label = allLabels[c.pkg] ?: c.pkg.substringAfterLast('.')
             // Owner's rule: an attention eater is an interruption exactly like
@@ -266,7 +271,7 @@ class PhoneSweeper(
             }
         }
 
-        if (settings.zCallsFlow.first() && hasCallLogAccess(context)) {
+        if (insertsOn && settings.zCallsFlow.first() && hasCallLogAccess(context)) {
             if (sweepCalls(now, st.lastCallSweep)) insertedAny = true
         }
 
