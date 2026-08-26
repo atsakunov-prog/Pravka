@@ -1290,6 +1290,16 @@ private fun AutoPilotSection(app: PravkaApp) {
 
     // ---- Места по Wi-Fi ----
     Spacer(Modifier.height(10.dp))
+    // Что автопилот видит ПРЯМО СЕЙЧАС. Первая версия молчала, и понять это
+    // было нельзя ниоткуда — теперь состояние на виду.
+    val pilot = ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoPilot
+    Text(
+        pilot?.statusLine() ?: "Служба выключена — автопилот спит",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+
     val hasLocation = remember(permTick) {
         context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -1305,60 +1315,88 @@ private fun AutoPilotSection(app: PravkaApp) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     } else {
-        @Suppress("DEPRECATION")
-        val currentSsid = remember(permTick) {
-            runCatching {
-                (context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE)
-                    as android.net.wifi.WifiManager).connectionInfo?.ssid.orEmpty()
-                    .trim().trim('"')
-            }.getOrDefault("").takeIf { !it.equals("<unknown ssid>", true) }.orEmpty()
-        }
-        if (currentSsid.isNotBlank() && !places.containsKey(currentSsid)) {
-            var placeName by remember(currentSsid) { mutableStateOf("") }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = placeName,
-                    onValueChange = { placeName = it },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("Сеть «$currentSsid» — это…") },
-                    singleLine = true,
-                )
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = {
-                        val name = placeName.trim()
-                        if (name.isNotBlank()) {
-                            scope.launch { settings.addAutoPlace(currentSsid, name) }
-                        }
-                    },
-                ) { Text("Запомнить") }
+        // Сети, которые служба уже видела: владелец называет каждую местом
+        // («это дача») — ровно то, что он просил, вместо угадывания SSID.
+        val seen by settings.autoSeenFlow.collectAsState(initial = emptyMap<String, Long>())
+        var namingSsid by remember { mutableStateOf<String?>(null) }
+        var placeName by remember { mutableStateOf("") }
+        val unnamed = seen.keys.filter { !places.containsKey(it) }
+            .sortedByDescending { seen[it] ?: 0L }
+
+        if (places.isNotEmpty()) {
+            Text("Мои места", style = MaterialTheme.typography.bodyMedium)
+            for ((ssid, name) in places) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "$name — $ssid",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { scope.launch { settings.removeAutoPlace(ssid) } }) {
+                        Text("✕")
+                    }
+                }
             }
+            Spacer(Modifier.height(6.dp))
+        }
+
+        if (unnamed.isEmpty()) {
             Text(
-                "«дом», «дача», «офис» — нажми, когда подключён к этой сети.",
+                if (places.isEmpty()) {
+                    "Новых сетей пока не видел. Подключись к домашнему Wi-Fi — " +
+                        "он появится здесь (и придёт пуш «что это за место?»)."
+                } else "Все увиденные сети названы.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        for ((ssid, name) in places) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "$name — $ssid",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { scope.launch { settings.removeAutoPlace(ssid) } }) {
-                    Text("✕")
+        } else {
+            Text("Что это за сети?", style = MaterialTheme.typography.bodyMedium)
+            for (ssid in unnamed) {
+                if (namingSsid == ssid) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = placeName,
+                            onValueChange = { placeName = it },
+                            modifier = Modifier.weight(1f),
+                            label = { Text("«$ssid» — это…") },
+                            singleLine = true,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Button(onClick = {
+                            val name = placeName.trim()
+                            if (name.isNotBlank()) {
+                                scope.launch {
+                                    settings.addAutoPlace(ssid, name)
+                                    settings.removeAutoSeen(ssid)
+                                }
+                            }
+                            namingSsid = null
+                            placeName = ""
+                        }) { Text("Готово") }
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(ssid, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "видел " + SimpleDateFormat("dd.MM HH:mm", Locale.US)
+                                    .format(Date(seen[ssid] ?: 0L)),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(onClick = { namingSsid = ssid; placeName = "" }) {
+                            Text("Это место…")
+                        }
+                        TextButton(onClick = { scope.launch { settings.removeAutoSeen(ssid) } }) {
+                            Text("Не место")
+                        }
+                    }
                 }
             }
         }
-        if (places.isEmpty() && currentSsid.isBlank()) {
-            Text(
-                "Подключись к домашнему Wi-Fi и вернись сюда — появится кнопка «Запомнить».",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
+
 
     // ---- Машина по Bluetooth ----
     Spacer(Modifier.height(12.dp))

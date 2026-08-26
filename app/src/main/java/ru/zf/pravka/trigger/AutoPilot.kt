@@ -28,24 +28,27 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.R
+import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.ui.Feedback
 
 // Автопилот Засечки: телефон сам замечает швы дня и либо чинит ленту, либо
-// спрашивает одним пушем. Три сигнала, все дешёвые по батарее:
+// спрашивает одним пушем. Три сигнала, все дешёвые по батарее и без GPS.
 //
-// 1. Wi-Fi как места. Поймал известную сеть при открытом «Передвижении» —
-//    приехал: передвижение закрывается САМО (ложных срабатываний почти не
-//    бывает: к домашнему Wi-Fi в дороге не подключишься). Потерял сеть
-//    известного места и три минуты не вернулся — «уехал?» ВОПРОСОМ, не сам:
-//    роутер перезагрузился или дальний угол двора — не отъезд.
-// 2. Bluetooth машины: магнитола подцепилась — «сел в машину?» вопросом.
-// 3. Significant motion — аппаратный одноразовый датчик «телефон значимо
-//    переместился», спит бесплатно: сидячее дело идёт ≥30 минут и телефон
-//    задвигался — «всё ещё …?». Свайп уведомления = «да, продолжаю».
-//
-// Владелец: «я выхожу из домашнего Wi-Fi — явно начинается передвижение;
-// поймал дачный — значит приехал; телефон задвигался — спроси, точно ли ещё
-// работа». Никакого GPS: только события системы.
+// ПЕРВАЯ ВЕРСИЯ МОЛЧАЛА, и вот почему — это стоит помнить:
+// 1. Имя сети в настройках читалось устаревшим WifiManager.connectionInfo,
+//    который на новых Android отдаёт «<unknown ssid>» кому угодно, кроме
+//    активного владельца сети. Кнопка «Запомнить» не появлялась, мест не
+//    было — и весь автопилот вежливо ничего не делал. Теперь SSID знает
+//    СЛУЖБА (живой колбэк с FLAG_INCLUDE_LOCATION_INFO), а настройки берут
+//    значение у неё; плюс опрос на тике ловит то, что колбэк пропустил.
+// 2. Приезд закрывал только категории «Передвижение…», а «Поездка на
+//    велосипеде» лежала в «Спорт: вело» — и оставалась открытой (а потом
+//    старая проверка «всё ещё …?» про неё же и спрашивала). Теперь дорога
+//    узнаётся и по названию, а спортивную запись автопилот не закрывает
+//    молча — предлагает кнопкой.
+// 3. Ничего не было видно снаружи. Теперь [statusLine] показывает в
+//    настройках, какую сеть служба видит прямо сейчас, сколько мест
+//    заведено и когда автопилот срабатывал последний раз.
 class AutoPilot(
     private val service: PravkaAccessibilityService,
     private val app: PravkaApp,
@@ -62,10 +65,25 @@ class AutoPilot(
         private const val STILL_THROTTLE_MS = 20 * 60_000L
         // Повторная поимка того же места — не событие.
         private const val ARRIVE_DEBOUNCE_MS = 10 * 60_000L
+        // Про одну и ту же незнакомую сеть спрашиваем раз в сутки.
+        private const val UNKNOWN_ASK_MS = 24 * 3_600_000L
 
         const val WHAT_MOVE_CAR = "move_car"
         const val WHAT_MOVE_WALK = "move_walk"
         const val WHAT_STILL_DONE = "still_done"
+        const val WHAT_CLOSE_OPEN = "close_open"
+
+        /** Дорога узнаётся по категории ИЛИ по названию: «Поездка домой». */
+        fun travelish(e: ZasechkaStore.Entry): Boolean {
+            if (e.category.startsWith("Передвижение", ignoreCase = true)) return true
+            val t = e.title.lowercase()
+            return listOf("поездка", "поехал", "дорога", "едем", "еду ", "в пути", "такси")
+                .any { t.contains(it) }
+        }
+
+        /** Тренировка: приехал домой — скорее всего закончил, но спросим. */
+        fun sporty(e: ZasechkaStore.Entry): Boolean =
+            e.category.startsWith("Спорт", ignoreCase = true)
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -78,16 +96,30 @@ class AutoPilot(
     @Volatile private var askCar = true
     @Volatile private var askStill = true
 
-    private var currentSsid = ""
+    /** Что служба видит прямо сейчас — для строки состояния в настройках. */
+    @Volatile var seenSsid: String = ""
+        private set
+    @Volatile private var lastFire: String = ""
+
     private var lastPlace = ""
     private var lastArriveAt = 0L
     private var pendingLeave: Runnable? = null
+    private var leftPlace = ""
     private var leftAtMs = 0L
     private var lastStillAsk = 0L
+    private val unknownAsked = HashMap<String, Long>()
     private var motionArmed = false
     private var connectivity: ConnectivityManager? = null
     private var netCallback: ConnectivityManager.NetworkCallback? = null
     private var btReceiver: BroadcastReceiver? = null
+
+    /** Одной строкой для настроек: видно, живой автопилот или спит впустую. */
+    fun statusLine(): String = buildString {
+        append(if (seenSsid.isBlank()) "Сеть не вижу" else "Вижу сеть «$seenSsid»")
+        append(" · мест: ${places.size}")
+        if (carBt.isNotBlank()) append(" · машина: $carBt")
+        if (lastFire.isNotBlank()) append(" · последнее: $lastFire")
+    }
 
     fun start() {
         jobs += scope.launch { app.settings.autoPlacesFlow.collect { places = it } }
@@ -98,6 +130,8 @@ class AutoPilot(
         jobs += scope.launch { app.settings.autoStillAskFlow.collect { askStill = it } }
         startWifiWatch()
         startBtWatch()
+        // Сеть могла подключиться до старта службы — колбэка по ней не будет.
+        handler.postDelayed({ pollWifi() }, 3_000)
     }
 
     fun stop() {
@@ -121,10 +155,11 @@ class AutoPilot(
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .build()
         val cb = if (Build.VERSION.SDK_INT >= 31) {
+            // Только колбэк, зарегистрированный с этим флагом, получает SSID
+            // нередактированным — на этом и держится всё определение мест.
             object : ConnectivityManager.NetworkCallback(FLAG_INCLUDE_LOCATION_INFO) {
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                    val info = caps.transportInfo as? WifiInfo ?: return
-                    onSsid(cleanSsid(info.ssid))
+                    onSsid(cleanSsid((caps.transportInfo as? WifiInfo)?.ssid))
                 }
 
                 override fun onLost(network: Network) = onWifiLost()
@@ -152,13 +187,39 @@ class AutoPilot(
     /** Система отдаёт SSID в кавычках, а без доступа — «<unknown ssid>». */
     private fun cleanSsid(raw: String?): String {
         val s = raw.orEmpty().trim().trim('"')
-        return if (s.isBlank() || s.equals("<unknown ssid>", ignoreCase = true)) "" else s
+        return if (s.isBlank() || s.equals("<unknown ssid>", ignoreCase = true) ||
+            s.equals("<unknown>", ignoreCase = true)
+        ) "" else s
+    }
+
+    /**
+     * Опрос на всякий случай: колбэк мог не прийти (служба поднялась позже
+     * подключения, Doze проглотил событие). Отъезд отсюда НЕ объявляем —
+     * пустой ответ опроса бывает и просто редактированием данных.
+     */
+    @SuppressLint("MissingPermission")
+    private fun pollWifi() {
+        val cm = connectivity ?: return
+        val ssid = runCatching {
+            val net = cm.activeNetwork ?: return
+            val caps = cm.getNetworkCapabilities(net) ?: return
+            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return
+            cleanSsid((caps.transportInfo as? WifiInfo)?.ssid).ifBlank { cleanSsid(legacySsid()) }
+        }.getOrDefault("")
+        if (ssid.isNotBlank()) onSsid(ssid)
     }
 
     private fun onSsid(ssid: String) {
-        if (ssid.isBlank() || ssid == currentSsid) return
-        currentSsid = ssid
-        val place = places[ssid] ?: return
+        if (ssid.isBlank() || ssid == seenSsid) return
+        seenSsid = ssid
+        // Любая увиденная сеть попадает в список для настроек — там владелец
+        // и называет её местом («это дача»), как он и просил.
+        scope.launch { runCatching { app.settings.addAutoSeen(ssid, System.currentTimeMillis()) } }
+        val place = places[ssid]
+        if (place == null) {
+            askAboutUnknown(ssid)
+            return
+        }
         // Вернулись в известное место — «уехал?» отменяется.
         pendingLeave?.let { handler.removeCallbacks(it) }
         pendingLeave = null
@@ -168,41 +229,87 @@ class AutoPilot(
         lastArriveAt = now
         app.eventLog.add("автопилот: Wi-Fi «$ssid» — место «$place»")
         if (!autoArrive) return
-        scope.launch {
-            val open = app.zasechkaStore.all().lastOrNull { it.open } ?: return@launch
-            if (!open.category.startsWith("Передвижение", ignoreCase = true)) return@launch
-            val closed = app.zasechkaEngine.closeOpen() ?: return@launch
-            notify(
-                "✓ Приехал: $place",
-                "«${closed.title}» закрыто, ${closed.durationMin()} мин.",
-                emptyList(),
-            )
-            app.eventLog.add("автопилот: приехал «$place» — закрыто «${closed.title}»")
+        scope.launch { onArrived(place, now) }
+    }
+
+    /** Приехал в место: дорогу закрываем сами, тренировку предлагаем закрыть. */
+    private suspend fun onArrived(place: String, now: Long) {
+        val open = app.zasechkaStore.all().lastOrNull { it.open }
+        if (open == null) {
+            lastFire = "приехал «$place», нечего закрывать"
+            app.eventLog.add("автопилот: приехал «$place», открытых дел нет")
+            return
+        }
+        when {
+            travelish(open) -> {
+                val closed = app.zasechkaEngine.closeOpen() ?: return
+                lastFire = "приехал «$place» ${timeHm(now)}"
+                notify(
+                    "✓ Приехал: $place",
+                    "«${closed.title}» закрыто, ${closed.durationMin()} мин.",
+                    emptyList(),
+                )
+                app.eventLog.add("автопилот: приехал «$place» — закрыл «${closed.title}»")
+            }
+            sporty(open) -> {
+                // Молча закрывать тренировку нельзя: он мог заехать домой за
+                // водой и поехать дальше. Но и висеть она не должна.
+                lastFire = "спросил про «${open.title}»"
+                notify(
+                    "Приехал: $place",
+                    "«${open.title}» ещё идёт, ${open.durationMin(now)} мин. Закончил?",
+                    listOf(action("Закрыть «${open.title.take(18)}»", WHAT_CLOSE_OPEN, now, "")),
+                )
+                app.eventLog.add("автопилот: приехал «$place» — спросил про «${open.title}»")
+            }
+            else -> {
+                // Работал дома и роутер мигнул — не повод дёргать владельца.
+                app.eventLog.add(
+                    "автопилот: приехал «$place», но открыто «${open.title}» " +
+                        "[${open.category}] — не дорога, промолчал"
+                )
+            }
         }
     }
 
+    /** Незнакомая сеть — спрашиваем, что это за место (раз в сутки на сеть). */
+    private fun askAboutUnknown(ssid: String) {
+        val now = System.currentTimeMillis()
+        val asked = unknownAsked[ssid] ?: 0L
+        if (now - asked < UNKNOWN_ASK_MS) return
+        unknownAsked[ssid] = now
+        app.eventLog.add("автопилот: новая сеть «$ssid» — спросил, что это за место")
+        notify(
+            "Новая сеть: «$ssid»",
+            "Что это за место? Открой Настройки → Засечка → Автопилот и назови " +
+                "её — дом, дача, офис. Не место — просто смахни.",
+            emptyList(),
+            openSettings = true,
+        )
+    }
+
     private fun onWifiLost() {
-        val fromPlace = places[currentSsid]
-        currentSsid = ""
+        val fromPlace = places[seenSsid]
+        seenSsid = ""
         if (fromPlace == null || !askLeave) return
+        leftPlace = fromPlace
         leftAtMs = System.currentTimeMillis()
         pendingLeave?.let { handler.removeCallbacks(it) }
         val ask = Runnable {
             pendingLeave = null
             scope.launch {
                 val open = app.zasechkaStore.all().lastOrNull { it.open }
-                if (open != null && open.category.startsWith("Передвижение", ignoreCase = true)) {
-                    return@launch
-                }
+                if (open != null && travelish(open)) return@launch
+                lastFire = "спросил про отъезд из «$leftPlace»"
                 notify(
-                    "Уехал из «$fromPlace»?",
+                    "Уехал из «$leftPlace»?",
                     "Начну с момента потери сети, ${timeHm(leftAtMs)}. Нет — просто смахни.",
                     listOf(
-                        action("Транспорт", WHAT_MOVE_CAR, leftAtMs, fromPlace),
-                        action("Пешком", WHAT_MOVE_WALK, leftAtMs, fromPlace),
+                        action("Транспорт", WHAT_MOVE_CAR, leftAtMs, leftPlace),
+                        action("Пешком", WHAT_MOVE_WALK, leftAtMs, leftPlace),
                     ),
                 )
-                app.eventLog.add("автопилот: потерял «$fromPlace» — спросил про передвижение")
+                app.eventLog.add("автопилот: потерял «$leftPlace» — спросил про передвижение")
             }
         }
         pendingLeave = ask
@@ -245,7 +352,8 @@ class AutoPilot(
         val at = System.currentTimeMillis()
         scope.launch {
             val open = app.zasechkaStore.all().lastOrNull { it.open }
-            if (open != null && open.category.startsWith("Передвижение", ignoreCase = true)) return@launch
+            if (open != null && travelish(open)) return@launch
+            lastFire = "машина в ${timeHm(at)}"
             notify(
                 "Сел в машину?",
                 "«$carBt» подключилась в ${timeHm(at)}. Нет — просто смахни.",
@@ -264,8 +372,9 @@ class AutoPilot(
         }
     }
 
-    /** Тик службы (раз в ~5 минут): взводим датчик, только когда есть что охранять. */
+    /** Тик службы (раз в ~5 минут): опрос сети и взвод датчика движения. */
     fun tick() {
+        pollWifi()
         if (!askStill) return
         scope.launch {
             val open = app.zasechkaStore.all().lastOrNull { it.open } ?: return@launch
@@ -294,6 +403,7 @@ class AutoPilot(
             if (!sedentary(open.category)) return@launch
             if (now - open.start < SEDENTARY_MIN_MS) return@launch
             lastStillAsk = now
+            lastFire = "движение при «${open.title}»"
             notify(
                 "Всё ещё «${open.title}»?",
                 "Телефон задвигался в ${timeHm(now)}. Продолжаешь — просто смахни.",
@@ -329,7 +439,7 @@ class AutoPilot(
                     Feedback.toast(app, "⏱ ${entry.title} — с ${timeHm(entry.start)}")
                     app.eventLog.add("автопилот: начато «${entry.title}»")
                 }
-                WHAT_STILL_DONE -> {
+                WHAT_STILL_DONE, WHAT_CLOSE_OPEN -> {
                     val closed = app.zasechkaStore.closeOpen(atMs)
                     Feedback.toast(
                         app,
@@ -337,7 +447,7 @@ class AutoPilot(
                         else "⏹ «${closed.title}» закрыто на ${timeHm(atMs)}",
                     )
                     if (closed != null) {
-                        app.eventLog.add("автопилот: «${closed.title}» закрыто моментом движения")
+                        app.eventLog.add("автопилот: «${closed.title}» закрыто кнопкой уведомления")
                     }
                 }
             }
@@ -362,7 +472,12 @@ class AutoPilot(
         ).build()
     }
 
-    private fun notify(title: String, text: String, actions: List<Notification.Action>) {
+    private fun notify(
+        title: String,
+        text: String,
+        actions: List<Notification.Action>,
+        openSettings: Boolean = false,
+    ) {
         runCatching {
             val nm = service.getSystemService(NotificationManager::class.java)
             if (nm.getNotificationChannel(CHANNEL) == null) {
@@ -376,8 +491,23 @@ class AutoPilot(
             val b = Notification.Builder(service, CHANNEL)
                 .setContentTitle(title)
                 .setContentText(text)
+                .setStyle(Notification.BigTextStyle().bigText(text))
                 .setSmallIcon(R.drawable.ic_tile)
                 .setAutoCancel(true)
+            if (openSettings) {
+                b.setContentIntent(
+                    PendingIntent.getActivity(
+                        service, 71,
+                        Intent(service, ru.zf.pravka.MainActivity::class.java)
+                            .putExtra(
+                                ru.zf.pravka.MainActivity.EXTRA_TAB,
+                                ru.zf.pravka.MainActivity.TAB_SETTINGS,
+                            )
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    )
+                )
+            }
             actions.forEach { b.addAction(it) }
             nm.notify((title + text).hashCode(), b.build())
         }

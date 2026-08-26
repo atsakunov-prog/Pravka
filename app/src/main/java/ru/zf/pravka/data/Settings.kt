@@ -75,6 +75,7 @@ class Settings(private val context: Context) {
         private val KEY_PHONE_MIC_ONLY = booleanPreferencesKey("phone_mic_only")
         private val KEY_Z_AUTO_INSERTS = booleanPreferencesKey("z_auto_inserts")
         private val KEY_AUTO_PLACES = stringPreferencesKey("auto_places")
+        private val KEY_AUTO_SEEN = stringPreferencesKey("auto_seen_ssids")
         private val KEY_AUTO_CAR_BT = stringPreferencesKey("auto_car_bt")
         private val KEY_AUTO_ARRIVE = booleanPreferencesKey("auto_arrive_close")
         private val KEY_AUTO_LEAVE_ASK = booleanPreferencesKey("auto_leave_ask")
@@ -332,6 +333,44 @@ class Settings(private val context: Context) {
                 .getOrDefault(org.json.JSONObject())
             o.remove(ssid)
             prefs[KEY_AUTO_PLACES] = o.toString()
+        }
+    }
+
+    /**
+     * Сети, которые телефон видел: SSID → когда последний раз. Владелец:
+     * «пускай он спрашивает про разные Wi-Fi — что это за место». Из этого
+     * списка в настройках и называют места; сами по себе они ничего не делают.
+     */
+    val autoSeenFlow = context.dataStore.data.map { prefs ->
+        val raw = prefs[KEY_AUTO_SEEN].orEmpty()
+        if (raw.isBlank()) emptyMap()
+        else runCatching {
+            val o = org.json.JSONObject(raw)
+            o.keys().asSequence().associateWith { k -> o.optLong(k) }
+        }.getOrDefault(emptyMap())
+    }
+
+    suspend fun addAutoSeen(ssid: String, at: Long) {
+        if (ssid.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val o = runCatching { org.json.JSONObject(prefs[KEY_AUTO_SEEN].orEmpty()) }
+                .getOrDefault(org.json.JSONObject())
+            o.put(ssid, at)
+            // Держим двадцать последних: список для глаз, а не архив.
+            if (o.length() > 20) {
+                val oldest = o.keys().asSequence().minByOrNull { o.optLong(it) }
+                if (oldest != null) o.remove(oldest)
+            }
+            prefs[KEY_AUTO_SEEN] = o.toString()
+        }
+    }
+
+    suspend fun removeAutoSeen(ssid: String) {
+        context.dataStore.edit { prefs ->
+            val o = runCatching { org.json.JSONObject(prefs[KEY_AUTO_SEEN].orEmpty()) }
+                .getOrDefault(org.json.JSONObject())
+            o.remove(ssid)
+            prefs[KEY_AUTO_SEEN] = o.toString()
         }
     }
 
