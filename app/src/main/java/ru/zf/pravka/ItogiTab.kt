@@ -56,6 +56,7 @@ internal fun ItogiTab(app: PravkaApp) {
     val nightly by app.settings.analysisNightlyFlow.collectAsState(initial = true)
     val savedContext by app.settings.analysisContextFlow.collectAsState(initial = "")
     var busy by remember { mutableStateOf(false) }
+    val patterns by app.analysisStore.patternsFlow.collectAsState()
     var openId by remember { mutableStateOf<Long?>(null) }
     var contextDraft by remember(savedContext) { mutableStateOf(savedContext) }
 
@@ -67,22 +68,20 @@ internal fun ItogiTab(app: PravkaApp) {
         if (busy) return
         busy = true
         scope.launch {
+            // immediate = true: кнопка «сейчас» ждёт ответа здесь и сейчас,
+            // полной ценой. Батч остаётся ночному расписанию.
             val outcome = when (what) {
-                "daily" -> app.analysisEngine.requestDaily(force = true)
+                "daily" -> app.analysisEngine.requestDaily(force = true, immediate = true)
                 "today" -> app.analysisEngine.requestDaily(
-                    date = app.analysisEngine.today(), force = true,
+                    date = app.analysisEngine.today(), force = true, immediate = true,
                 )
-                "weekly" -> app.analysisEngine.requestWeekly(force = true)
-                else -> app.analysisEngine.requestDeep(30, force = true)
+                "weekly" -> app.analysisEngine.requestWeekly(force = true, immediate = true)
+                else -> app.analysisEngine.requestDeep(30, force = true, immediate = true)
             }
             busy = false
             outcome.fold(
                 onSuccess = {
-                    Feedback.toast(
-                        app,
-                        "Заявка ушла батчем — разбор появится здесь сам, обычно за несколько минут",
-                        long = true,
-                    )
+                    Feedback.toast(app, "Готово — разбор ниже", long = true)
                 },
                 onFailure = { e -> Feedback.toast(app, e.message ?: "Не вышло", long = true) },
             )
@@ -131,9 +130,10 @@ internal fun ItogiTab(app: PravkaApp) {
                 if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             }
             HintText(
-                "Ежедневный — за вчера, еженедельный — за последние семь дней. " +
-                    "«Сегодня» разбирает день до текущей минуты: удобно проверить, " +
-                    "но выводы по неполному дню слабее."
+                "Кнопки считают СРАЗУ и по полной цене — минута ожидания. Ночной " +
+                    "разбор уходит батчем, вдвое дешевле. Ежедневный — за вчера, " +
+                    "еженедельный — за последние семь дней; «Сегодня» — день до " +
+                    "текущей минуты (удобно проверить, но выводы по неполному дню слабее)."
             )
         }
 
@@ -173,6 +173,16 @@ internal fun ItogiTab(app: PravkaApp) {
                 "Уезжает в разбор: правило промпта — сначала контекст, потом " +
                     "диагноз, иначе каникулы читаются как развал."
             )
+        }
+
+        if (patterns.isNotEmpty()) {
+            item {
+                HintText(
+                    "Помнит паттернов: ${patterns.size}. Они уезжают в каждый " +
+                        "следующий разбор — модель обязана сказать по каждому: " +
+                        "подтвердился, ослаб или исчез."
+                )
+            }
         }
 
         if (reports.isEmpty()) {

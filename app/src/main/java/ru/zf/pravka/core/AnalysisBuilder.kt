@@ -31,6 +31,7 @@ class AnalysisBuilder(
     private val food: FoodStore,
     private val plan: ru.zf.pravka.data.PlanStore,
     private val icu: ru.zf.pravka.data.IcuSportSync,
+    private val reports: ru.zf.pravka.data.AnalysisStore,
 ) {
 
     companion object {
@@ -123,6 +124,7 @@ class AnalysisBuilder(
             appendTriggers(entries, now)
             appendPlan(dates, now)
             appendDataQuality(entries, dates, now)
+            appendMemory()
             appendTimeline(mode, entries, now, to)
         }
         return Built(text, hashOf(text), text.length, days)
@@ -695,6 +697,49 @@ class AnalysisBuilder(
         append("<data_quality>\nАвтоматически найденные аномалии.\n")
         issues.take(20).forEach { append("- ").append(it).append("\n") }
         append("</data_quality>\n\n")
+    }
+
+    /**
+     * Память между разборами: свои же прошлые паттерны и главные наблюдения.
+     * Без этого каждый разбор начинался с чистого листа и повторял одно и то
+     * же из недели в неделю — владелец просил ровно обратного: «он про меня
+     * много знает».
+     */
+    private suspend fun StringBuilder.appendMemory() {
+        runCatching { reports.load() }
+        val patterns = reports.patternsFlow.value
+        if (patterns.isNotEmpty()) {
+            append("<known_patterns>\n")
+            append("Твои же находки прошлых разборов. По каждому скажи: подтвердился, ")
+            append("ослаб, исчез или данных не хватило.\n")
+            append("паттерн;впервые;последний_раз;разборов_подряд;была_уверенность\n")
+            for (pt in patterns) {
+                append(pt.text.replace(';', ',')).append(";")
+                    .append(pt.firstSeen).append(";")
+                    .append(pt.lastSeen).append(";")
+                    .append(pt.times).append(";")
+                    .append(pt.confidence.ifBlank { "—" }).append("\n")
+            }
+            append("</known_patterns>\n\n")
+        }
+        // Главные наблюдения прошлых разборов: первые строки текста, без
+        // машинного хвоста. Нужны, чтобы не пересказывать себя же.
+        val history = reports.reportsFlow.value.filter { it.ready }.take(3)
+        if (history.isEmpty()) return
+        append("<history>\n")
+        append("Прошлые разборы — начала, чтобы не повторяться дословно.\n")
+        for (h in history) {
+            val head = h.text.lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("##") }
+                .take(3)
+                .joinToString(" ")
+                .take(400)
+            append("- ").append(h.mode).append(" ").append(h.from)
+            if (h.to != h.from) append("—").append(h.to)
+            append(": ").append(head).append("\n")
+        }
+        append("</history>\n\n")
     }
 
     private fun StringBuilder.appendTimeline(

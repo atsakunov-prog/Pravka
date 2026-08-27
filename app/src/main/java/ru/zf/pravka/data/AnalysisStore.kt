@@ -60,12 +60,35 @@ class AnalysisStore(private val context: Context) {
         }
     }
 
+    /**
+     * Паттерн, который модель уже называла. Живёт между разборами: в следующий
+     * уезжает блоком <known_patterns>, и модель обязана сказать по каждому —
+     * подтвердился, ослаб, исчез или данных не хватило. Владелец: «мы же не
+     * разбираем один день как сферический конь в вакууме».
+     */
+    data class Pattern(
+        val text: String,
+        val firstSeen: String,
+        val lastSeen: String,
+        val times: Int,
+        val points: Int,
+        val confidence: String,
+    ) {
+        /** Ключ сравнения: формулировку модель повторяет не буква в букву. */
+        fun key(): String = text.lowercase()
+            .replace(Regex("[^а-яёa-z0-9 ]"), " ")
+            .split(' ').filter { it.length > 3 }.take(5).sorted().joinToString(" ")
+    }
+
     private val mutex = Mutex()
     private val file: File get() = File(context.filesDir, FILE_NAME)
     private var loaded = false
 
     private val _reportsFlow = MutableStateFlow<List<Report>>(emptyList())
     val reportsFlow: StateFlow<List<Report>> = _reportsFlow
+
+    private val _patternsFlow = MutableStateFlow<List<Pattern>>(emptyList())
+    val patternsFlow: StateFlow<List<Pattern>> = _patternsFlow
 
     var logger: ((String) -> Unit)? = null
 
@@ -137,6 +160,47 @@ class AnalysisStore(private val context: Context) {
         persist()
     }
 
+    /**
+     * Слить свежие паттерны с прежними: тот же паттерн — счётчик подтверждений
+     * растёт, новый — добавляется, пропавший НЕ удаляется сразу (модель должна
+     * увидеть его в следующий раз и сказать, что он исчез). Дольше трёх
+     * разборов без подтверждения — забываем, иначе список станет свалкой.
+     */
+    suspend fun mergePatterns(fresh: List<Pattern>, date: String) = mutex.withLock {
+        ensureLoaded()
+        val old = _patternsFlow.value
+        val out = old.toMutableList()
+        for (f in fresh) {
+            val at = out.indexOfFirst { it.key() == f.key() }
+            if (at >= 0) {
+                val prev = out[at]
+                out[at] = prev.copy(
+                    text = f.text,
+                    lastSeen = date,
+                    times = prev.times + 1,
+                    points = f.points,
+                    confidence = f.confidence,
+                )
+            } else {
+                out.add(f.copy(firstSeen = date, lastSeen = date, times = 1))
+            }
+        }
+        // Три разбора не виден — отпускаем.
+        _patternsFlow.value = out
+            .filter { it.lastSeen >= shiftDays(date, -21) || it.lastSeen == date }
+            .sortedByDescending { it.times }
+            .take(12)
+        persist()
+    }
+
+    private fun shiftDays(date: String, days: Int): String = runCatching {
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val cal = java.util.Calendar.getInstance()
+        cal.time = fmt.parse(date)!!
+        cal.add(java.util.Calendar.DAY_OF_YEAR, days)
+        fmt.format(cal.time)
+    }.getOrDefault(date)
+
     fun pending(): List<Report> = _reportsFlow.value.filter { it.pending }
 
     /** Последний разбор этого режима — по нему решается, пора ли новый. */
@@ -174,6 +238,23 @@ class AnalysisStore(private val context: Context) {
             }
         }
         _reportsFlow.value = list.sortedByDescending { it.createdAt }
+        val pats = mutableListOf<Pattern>()
+        root.optJSONArray("patterns")?.let { a ->
+            for (i in 0 until a.length()) {
+                val o = a.optJSONObject(i) ?: continue
+                pats.add(
+                    Pattern(
+                        text = o.optString("text"),
+                        firstSeen = o.optString("first"),
+                        lastSeen = o.optString("last"),
+                        times = o.optInt("times", 1),
+                        points = o.optInt("points"),
+                        confidence = o.optString("conf"),
+                    )
+                )
+            }
+        }
+        _patternsFlow.value = pats
     }
 
     private fun persist() {
@@ -196,6 +277,18 @@ class AnalysisStore(private val context: Context) {
                         put("tout", r.tokensOut)
                         put("hash", r.inputHash)
                         put("chars", r.inputChars)
+                    })
+                }
+            })
+            put("patterns", JSONArray().apply {
+                _patternsFlow.value.forEach { pt ->
+                    put(JSONObject().apply {
+                        put("text", pt.text)
+                        put("first", pt.firstSeen)
+                        put("last", pt.lastSeen)
+                        put("times", pt.times)
+                        put("points", pt.points)
+                        put("conf", pt.confidence)
                     })
                 }
             })

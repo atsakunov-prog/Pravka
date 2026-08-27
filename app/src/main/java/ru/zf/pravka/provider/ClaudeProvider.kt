@@ -1298,6 +1298,40 @@ $raw
         val error: String = "",
     )
 
+    /**
+     * Разбор ПРЯМО СЕЙЧАС, обычным запросом. Владелец: «если сделать разбор
+     * сейчас — он не батчем должен уходить, а то я сижу жду». Батч дешевле
+     * вдвое, но отвечает когда захочет; ручная кнопка платит полную цену за
+     * ответ через минуту. Запрос идёт потоком, поэтому 90-секундный
+     * readTimeout становится таймаутом между кусками, а не потолком на всю
+     * генерацию.
+     */
+    suspend fun analyzeNow(
+        system: String,
+        user: String,
+        model: String,
+    ): Result<BatchAnswer> = withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+            val parts = Prompts.PromptParts(
+                stablePrefix = system.trim() + "\n\n",
+                dictPart = user,
+                afterInput = "",
+                // Свод правил и профиль владельца стабильны байт-в-байт —
+                // ночной батч и ручной запуск греют один и тот же кэш.
+                cacheStableAlways = true,
+            )
+            val reply = requestWithOneRetry(apiKey, model, parts, "", null)
+            BatchAnswer(
+                text = reply.text.trim(),
+                costUsd = costUsd(model, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+            )
+        }
+    }
+
     /** Заявка в батч. Возвращает id, по которому потом забирается ответ. */
     suspend fun submitBatch(
         system: String,

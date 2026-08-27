@@ -52,16 +52,22 @@ class AnalysisEngine(
     suspend fun requestDaily(
         date: String = builder.yesterday(),
         force: Boolean = false,
-    ): Result<String> = submit("daily", date, date, MODEL_DAILY, MAX_TOKENS_DAILY, force)
+        immediate: Boolean = false,
+    ): Result<String> =
+        submit("daily", date, date, MODEL_DAILY, MAX_TOKENS_DAILY, force, immediate)
 
-    suspend fun requestWeekly(force: Boolean = false): Result<String> {
+    suspend fun requestWeekly(force: Boolean = false, immediate: Boolean = false): Result<String> {
         val (from, to) = builder.weekAgo(7)
-        return submit("weekly", from, to, MODEL_WEEKLY, MAX_TOKENS_WEEKLY, force)
+        return submit("weekly", from, to, MODEL_WEEKLY, MAX_TOKENS_WEEKLY, force, immediate)
     }
 
-    suspend fun requestDeep(days: Int = 30, force: Boolean = false): Result<String> {
+    suspend fun requestDeep(
+        days: Int = 30,
+        force: Boolean = false,
+        immediate: Boolean = false,
+    ): Result<String> {
         val (from, to) = builder.weekAgo(days)
-        return submit("deep", from, to, MODEL_WEEKLY, MAX_TOKENS_WEEKLY, force)
+        return submit("deep", from, to, MODEL_WEEKLY, MAX_TOKENS_WEEKLY, force, immediate)
     }
 
     private suspend fun submit(
@@ -71,6 +77,13 @@ class AnalysisEngine(
         model: String,
         maxTokens: Int,
         force: Boolean = false,
+        /**
+         * true — ответ нужен сейчас: обычный запрос, полная цена, минута
+         * ожидания. false — ночная заявка батчем: вдвое дешевле, но приезжает
+         * когда захочет. Владелец: «если сделать разбор сейчас, он не батчем
+         * должен уходить, а то я сижу жду».
+         */
+        immediate: Boolean = false,
     ): Result<String> {
         store.load()
         val already = store.reportsFlow.value.any {
@@ -94,6 +107,25 @@ class AnalysisEngine(
             return Result.failure(IllegalStateException("За этот период почти нет данных"))
         }
         val system = prompts.effective(PromptStore.PromptId.ANALYSIS)
+        if (immediate) {
+            val report = store.addPending(mode, from, to, "", model, built.hash, built.chars)
+            val answer = claude.analyzeNow(system, built.text, model).getOrElse { e ->
+                store.fail(report.id, e.message ?: "не вышло")
+                eventLog.add("итоги: разбор сейчас не вышел — ${e.message}")
+                return Result.failure(e)
+            }
+            if (answer.text.isBlank()) {
+                store.fail(report.id, "пустой ответ")
+                return Result.failure(IllegalStateException("Модель вернула пустой разбор"))
+            }
+            runCatching { stats.recordAux(answer.costUsd, answer.tokensIn, answer.tokensOut) }
+            finish(report.id, to, answer)
+            eventLog.add(
+                "итоги: разбор $mode $from — $to сделан сразу, ${answer.text.length} зн., " +
+                    String.format(java.util.Locale.US, "%.3f", answer.costUsd) + " USD"
+            )
+            return Result.success("сразу")
+        }
         val outcome = claude.submitBatch(system, built.text, model, maxTokens)
         return outcome.fold(
             onSuccess = { batchId ->
@@ -147,9 +179,7 @@ class AnalysisEngine(
                 continue
             }
             runCatching { stats.recordAux(answer.costUsd, answer.tokensIn, answer.tokensOut) }
-            val saved = store.complete(
-                report.id, answer.text, answer.costUsd, answer.tokensIn, answer.tokensOut,
-            )
+            val saved = finish(report.id, report.to, answer)
             eventLog.add(
                 "итоги: готов разбор ${report.mode} ${report.from} — ${report.to}, " +
                     "${answer.text.length} зн., " +
@@ -158,6 +188,54 @@ class AnalysisEngine(
             return saved
         }
         return null
+    }
+
+    /**
+     * Сохранить готовый разбор: машинный хвост #patterns уходит в память
+     * паттернов и ВЫРЕЗАЕТСЯ из текста — он для кода, не для чтения.
+     */
+    private suspend fun finish(
+        id: Long,
+        date: String,
+        answer: ClaudeProvider.BatchAnswer,
+    ): ru.zf.pravka.data.AnalysisStore.Report? {
+        val fresh = parsePatterns(answer.text)
+        if (fresh.isNotEmpty()) {
+            runCatching { store.mergePatterns(fresh, date) }
+            eventLog.add("итоги: запомнил паттернов ${fresh.size}")
+        }
+        val clean = answer.text.substringBefore("#patterns").trim()
+        return store.complete(
+            id,
+            clean.ifBlank { answer.text },
+            answer.costUsd,
+            answer.tokensIn,
+            answer.tokensOut,
+        )
+    }
+
+    /** «формулировка | точек | уверенность» из хвоста ответа. */
+    private fun parsePatterns(text: String): List<ru.zf.pravka.data.AnalysisStore.Pattern> {
+        val tail = text.substringAfter("#patterns", "").trim()
+        if (tail.isBlank() || tail.lowercase().startsWith("нет")) return emptyList()
+        return tail.lineSequence()
+            .map { it.trim().removePrefix("-").trim() }
+            .filter { it.contains('|') }
+            .take(6)
+            .mapNotNull { line ->
+                val parts = line.split('|').map { it.trim() }
+                val body = parts.getOrNull(0).orEmpty()
+                if (body.length < 8) return@mapNotNull null
+                ru.zf.pravka.data.AnalysisStore.Pattern(
+                    text = body.take(200),
+                    firstSeen = "",
+                    lastSeen = "",
+                    times = 1,
+                    points = parts.getOrNull(1)?.filter { it.isDigit() }?.toIntOrNull() ?: 0,
+                    confidence = parts.getOrNull(2).orEmpty().take(20),
+                )
+            }
+            .toList()
     }
 
     /**
