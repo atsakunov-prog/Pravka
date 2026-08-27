@@ -667,6 +667,20 @@ class AnalysisBuilder(
                 )
             }
         }
+        // Поехавшая таксономия: одно и то же дело внутри периода лежит в
+        // разных категориях (YouTube был «Отдых», стал «Потери»). Сравнимость
+        // ломается молча, и заметить это можно только так.
+        entries.filter { it.title.isNotBlank() && it.category.isNotBlank() }
+            .groupBy { it.title.trim().lowercase() }
+            .forEach { (title, list) ->
+                val cats = list.map { it.category.trim() }.distinctBy { it.lowercase() }
+                if (cats.size > 1) {
+                    issues.add(
+                        "«$title» внутри периода лежит в разных категориях: " +
+                            cats.joinToString(", ") + " — сравнимость по этой активности ломается"
+                    )
+                }
+            }
         for (d in dates) {
             val meals = food.mealsOn(d)
             val bySameMinute = meals.groupBy { it.ts / 60_000 }.filterValues { it.size > 3 }
