@@ -43,18 +43,25 @@ class AnalysisEngine(
         private const val PENDING_TTL_MS = 26 * 3_600_000L
     }
 
-    /** Ручной запуск из вкладки: тот же путь, что у ночного. */
-    suspend fun requestDaily(date: String = builder.yesterday()): Result<String> =
-        submit("daily", date, date, MODEL_DAILY, MAX_TOKENS_DAILY)
+    /**
+     * Ручной запуск из вкладки: тот же путь, что у ночного, но с [force] —
+     * кнопка «сейчас» обязана срабатывать даже когда разбор за этот период
+     * уже лежит. Иначе её нечем проверить, а перечитать день по свежим
+     * правкам ленты бывает нужно и просто так.
+     */
+    suspend fun requestDaily(
+        date: String = builder.yesterday(),
+        force: Boolean = false,
+    ): Result<String> = submit("daily", date, date, MODEL_DAILY, MAX_TOKENS_DAILY, force)
 
-    suspend fun requestWeekly(): Result<String> {
+    suspend fun requestWeekly(force: Boolean = false): Result<String> {
         val (from, to) = builder.weekAgo(7)
-        return submit("weekly", from, to, MODEL_WEEKLY, MAX_TOKENS_WEEKLY)
+        return submit("weekly", from, to, MODEL_WEEKLY, MAX_TOKENS_WEEKLY, force)
     }
 
-    suspend fun requestDeep(days: Int = 30): Result<String> {
+    suspend fun requestDeep(days: Int = 30, force: Boolean = false): Result<String> {
         val (from, to) = builder.weekAgo(days)
-        return submit("deep", from, to, MODEL_WEEKLY, MAX_TOKENS_WEEKLY)
+        return submit("deep", from, to, MODEL_WEEKLY, MAX_TOKENS_WEEKLY, force)
     }
 
     private suspend fun submit(
@@ -63,10 +70,19 @@ class AnalysisEngine(
         to: String,
         model: String,
         maxTokens: Int,
+        force: Boolean = false,
     ): Result<String> {
         store.load()
-        if (store.reportsFlow.value.any { it.mode == mode && it.from == from && it.to == to && (it.pending || it.ready) }) {
+        val already = store.reportsFlow.value.any {
+            it.mode == mode && it.from == from && it.to == to && (it.pending || it.ready)
+        }
+        if (already && !force) {
             return Result.failure(IllegalStateException("Разбор за этот период уже есть"))
+        }
+        // Две заявки на один период в очереди — деньги на ветер: батч уже
+        // считается, дождись его.
+        if (force && store.pending().any { it.mode == mode && it.from == from && it.to == to }) {
+            return Result.failure(IllegalStateException("Такой разбор уже считается — подожди его"))
         }
         val built = runCatching {
             builder.build(mode, from, to, context = settings.analysisContext())

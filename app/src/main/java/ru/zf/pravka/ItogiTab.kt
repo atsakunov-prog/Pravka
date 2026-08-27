@@ -61,14 +61,19 @@ internal fun ItogiTab(app: PravkaApp) {
 
     LaunchedEffect(Unit) { app.analysisStore.load() }
 
+    // force = true: кнопки «сейчас» нажимают руками, и они обязаны
+    // срабатывать даже если разбор за этот период уже есть.
     fun request(what: String) {
         if (busy) return
         busy = true
         scope.launch {
             val outcome = when (what) {
-                "daily" -> app.analysisEngine.requestDaily()
-                "weekly" -> app.analysisEngine.requestWeekly()
-                else -> app.analysisEngine.requestDeep(30)
+                "daily" -> app.analysisEngine.requestDaily(force = true)
+                "today" -> app.analysisEngine.requestDaily(
+                    date = app.analysisEngine.today(), force = true,
+                )
+                "weekly" -> app.analysisEngine.requestWeekly(force = true)
+                else -> app.analysisEngine.requestDeep(30, force = true)
             }
             busy = false
             outcome.fold(
@@ -99,12 +104,37 @@ internal fun ItogiTab(app: PravkaApp) {
         }
 
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { request("daily") }, enabled = !busy) { Text("За вчера") }
-                Button(onClick = { request("weekly") }, enabled = !busy) { Text("За неделю") }
-                OutlinedButton(onClick = { request("deep") }, enabled = !busy) { Text("За месяц") }
+            // Ночью разбор собирается сам; эти кнопки — «хочу сейчас» и
+            // «проверить, что всё работает».
+            Button(
+                onClick = { request("daily") },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Сделать ежедневный разбор сейчас") }
+            Spacer(Modifier.height(6.dp))
+            Button(
+                onClick = { request("weekly") },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Сделать еженедельный разбор сейчас") }
+            Spacer(Modifier.height(6.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(onClick = { request("today") }, enabled = !busy) {
+                    Text("Сегодня")
+                }
+                OutlinedButton(onClick = { request("deep") }, enabled = !busy) {
+                    Text("За месяц")
+                }
                 if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             }
+            HintText(
+                "Ежедневный — за вчера, еженедельный — за последние семь дней. " +
+                    "«Сегодня» разбирает день до текущей минуты: удобно проверить, " +
+                    "но выводы по неполному дню слабее."
+            )
         }
 
         item {
