@@ -30,6 +30,7 @@ class AnalysisBuilder(
     private val strength: StrengthStore,
     private val food: FoodStore,
     private val plan: ru.zf.pravka.data.PlanStore,
+    private val icu: ru.zf.pravka.data.IcuSportSync,
 ) {
 
     companion object {
@@ -89,6 +90,13 @@ class AnalysisBuilder(
         runCatching { sport.load() }
         runCatching { strength.load() }
         runCatching { food.load() }
+        runCatching { plan.load() }
+        // Перед разбором тянем intervals.icu: там и активности с Garmin, и
+        // план событиями. Разбирать по чёрствому кэшу — значит объявлять
+        // «тренировок не было» там, где их просто не выгрузили. Сети нет —
+        // работаем по кэшу, но скажем об этом в <meta>.
+        runCatching { icu.refresh(force = true) }
+        runCatching { icu.refreshPlan(plan, back = 40, ahead = 7) }
 
         val from = dayStartMs(parseDate(fromDate))
         val to = dayStartMs(parseDate(toDate)) + 86_400_000L
@@ -108,6 +116,7 @@ class AnalysisBuilder(
             appendBaseline(entries, from, dates.size, now)
             appendHoles(entries, now)
             appendSleep(dates, entries, now)
+            appendHealth(dates)
             appendNutrition(dates)
             appendTraining(from, to, now, dates)
             appendCorrelations(entries, dates, now, from, to)
@@ -142,6 +151,15 @@ class AnalysisBuilder(
         append("покрытие таймшита: ").append(pct(coveredMs.toDouble() / elapsed)).append("\n")
         append("доля \"не размечено\": ").append(pct(unmarkedMs.toDouble() / elapsed)).append("\n")
         if (context.isNotBlank()) append("известный контекст: ").append(context.trim()).append("\n")
+        // Свежесть выгрузки из intervals: по ней видно, можно ли верить
+        // блокам <training> и <health>, или они просто не доехали.
+        val syncedAt = runCatching { sport.lastSyncAt() }.getOrDefault(0L)
+        append("выгрузка intervals.icu: ")
+        append(
+            if (syncedAt <= 0L) "не было ни разу — тренировки и здоровье могут быть неполными"
+            else "обновлена " + ((now - syncedAt) / 60_000L) + " мин назад"
+        )
+        append("\n")
         append("</meta>\n\n")
     }
 
@@ -281,6 +299,31 @@ class AnalysisBuilder(
         append("</sleep>\n\n")
     }
 
+    /**
+     * Здоровье с часов через intervals.icu: HRV, пульс покоя, сон, шаги, вес и
+     * форма (CTL/ATL/TSB). Это второй по важности источник после ленты: он
+     * объясняет провалы, которые из таймшита выглядят как лень.
+     */
+    private fun StringBuilder.appendHealth(dates: List<String>) {
+        val rows = dates.mapNotNull { d -> sport.healthOn(d)?.let { d to it } }
+        if (rows.isEmpty()) return
+        append("<health>\n")
+        append("Из intervals.icu (данные Garmin).\n")
+        append("дата;hrv;пульс_покоя;сон_ч;счёт_сна;шаги;вес;ctl;atl;tsb\n")
+        for ((d, h) in rows) {
+            append(d).append(";")
+                .append(if (h.hrv > 0) h.hrv.toString() else "").append(";")
+                .append(if (h.restingHr > 0) h.restingHr.toString() else "").append(";")
+                .append(if (h.sleepHours > 0) fmt2(h.sleepHours) else "").append(";")
+                .append(if (h.sleepScore > 0) h.sleepScore.toString() else "").append(";")
+                .append(if (h.steps > 0) h.steps.toString() else "").append(";")
+                .append(if (h.weightKg > 0) fmt2(h.weightKg) else "").append(";")
+                .append(fmt2(h.ctl)).append(";").append(fmt2(h.atl)).append(";")
+                .append(fmt2(h.tsb)).append("\n")
+        }
+        append("</health>\n\n")
+    }
+
     private fun StringBuilder.appendNutrition(dates: List<String>) {
         val rows = mutableListOf<String>()
         for (d in dates) {
@@ -409,6 +452,21 @@ class AnalysisBuilder(
         pearson(sleepH, charged)?.let {
             lines.add("сон_часы vs зарядка_сделана_тот_же_день (1/0): r=${fmt2(it)} (n=${sleepH.size})")
         }
+        // HRV и форма — из intervals: объясняют провал, который из таймшита
+        // выглядит просто ленью.
+        val hrv = dates.map { d -> sport.healthOn(d)?.hrv?.toDouble() ?: 0.0 }
+        val tsb = dates.map { d -> sport.healthOn(d)?.tsb ?: 0.0 }
+        if (hrv.count { it > 0 } >= 4) {
+            pearson(hrv, holeMin)?.let {
+                lines.add("hrv vs дыры_мин_тот_же_день: r=${fmt2(it)} (n=${hrv.size})")
+            }
+        }
+        if (tsb.count { it != 0.0 } >= 4) {
+            pearson(tsb, trainMin)?.let {
+                lines.add("форма_tsb vs тренировка_мин: r=${fmt2(it)} (n=${tsb.size})")
+            }
+        }
+
         // «Пожарный»: чем тушится состояние — потери, отдых, соло.
         val fireMin = dates.map { d ->
             entries.filter { it.category.trim().lowercase() in FIREFIGHTER_CATEGORIES }
@@ -519,16 +577,36 @@ class AnalysisBuilder(
             append("Запланировано в календаре intervals (владелец пушит из чата).\n")
             append("дата;сессия;тип;мин;load;сделано_факт\n")
             for (p in planned.sortedBy { it.date }) {
-                // Факт: активность того же типа в тот же день.
-                val done = sport.workoutsFlow.value.any {
+                // Факт — из intervals: активность того же типа в тот же день.
+                // Пишем не «да/нет», а минуты и load: «планировал 60, сделал
+                // 22» и есть тот разговор, который стоит вести.
+                val actual = sport.workoutsFlow.value.filter {
                     dayKey(it.start) == p.date && it.type.equals(p.type, ignoreCase = true)
+                }
+                val fact = when {
+                    actual.isEmpty() -> "нет"
+                    else -> "да, " + actual.sumOf { it.minutes } + " мин, load " +
+                        actual.sumOf { it.load }
                 }
                 append(p.date).append(";")
                     .append(p.name.replace(';', ',')).append(";")
                     .append(p.type).append(";")
                     .append(p.minutes).append(";")
                     .append(p.load).append(";")
-                    .append(if (done) "да" else "нет").append("\n")
+                    .append(fact).append("\n")
+            }
+            // Активности, которых в плане не было вовсе — «делал не то».
+            val planTypes = planned.map { it.type.lowercase() to it.date }.toSet()
+            val unplanned = sport.workoutsFlow.value.filter { w ->
+                dayKey(w.start) in dates && (w.type.lowercase() to dayKey(w.start)) !in planTypes
+            }
+            if (unplanned.isNotEmpty()) {
+                append("не по плану: ")
+                append(unplanned.joinToString("; ") {
+                    dayKey(it.start) + " " + SportCoach.sportName(it.type) + " " +
+                        it.minutes + " мин load " + it.load
+                })
+                append("\n")
             }
         }
         if (rules != null && rules.known) {

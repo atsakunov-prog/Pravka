@@ -176,6 +176,7 @@ class PravkaApp : Application() {
             strength = strengthStore,
             food = foodStore,
             plan = planStore,
+            icu = icuSportSync,
         )
     }
     val analysisEngine by lazy {
