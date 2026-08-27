@@ -178,6 +178,12 @@ class PravkaApp : Application() {
             plan = planStore,
             icu = icuSportSync,
             reports = analysisStore,
+            todoist = todoistStore,
+            stats = stats,
+            transcripts = transcriptionLog,
+            history = historyLog,
+            raznoska = raznoskaStore,
+            diary = notionDiarySync,
         )
     }
     val analysisEngine by lazy {

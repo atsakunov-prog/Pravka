@@ -32,10 +32,30 @@ class AnalysisBuilder(
     private val plan: ru.zf.pravka.data.PlanStore,
     private val icu: ru.zf.pravka.data.IcuSportSync,
     private val reports: ru.zf.pravka.data.AnalysisStore,
+    // Домены, которых разбор раньше не видел вообще. Владелец: «пускай
+    // учитывает и интерфейсы, и Notion, и вообще всё». Каждый из них
+    // необязателен: нет токена, нет журнала, нет сети — блок просто не
+    // появится, а разбор соберётся.
+    private val todoist: ru.zf.pravka.data.TodoistStore? = null,
+    private val stats: ru.zf.pravka.data.Stats? = null,
+    private val transcripts: ru.zf.pravka.data.TranscriptionLog? = null,
+    private val history: ru.zf.pravka.data.HistoryLog? = null,
+    private val raznoska: ru.zf.pravka.data.RaznoskaStore? = null,
+    private val diary: ru.zf.pravka.data.NotionDiarySync? = null,
 ) {
 
     companion object {
         private const val BASELINE_DAYS = 28
+        // База считается только если суток с данными хватает. Иначе выходит
+        // то, что владелец увидел своими глазами: «сон в базе 1.54 ч в сутки»
+        // — это не его жизнь, это деление шести суток на двадцать восемь.
+        private const val BASELINE_MIN_DAYS = 5
+        // Окно «его же последние недели» — то, с чем сравнивается один день.
+        // Без него разбор дня был сферическим конём: 40 минут работы — это
+        // мало или это его обычный вторник? Ответ только отсюда.
+        private const val RECENT_DAYS = 21
+        // Сутки считаются размеченными, если лента покрывает хотя бы столько.
+        private const val DAY_COVERED_MIN = 240L
         // Дыра короче этого — микро-заход (фрагментация внимания).
         private const val MICRO_MAX_MIN = 15
         // Дыра длиннее этого — обвал (оцепенение). Механика разная.
@@ -51,6 +71,7 @@ class AnalysisBuilder(
         // Событие-триггер: либо разговор с человеком, либо длинный блок с
         // названным именем. Короткие созвоны на минуту сюда не идут.
         private const val TRIGGER_MIN_MIN = 10
+        private val WEEKDAYS = listOf("вс", "пн", "вт", "ср", "чт", "пт", "сб")
 
         /** Группа категории — таксономия для промпта, по имени категории. */
         fun groupOf(category: String): String {
@@ -115,6 +136,7 @@ class AnalysisBuilder(
             appendTaxonomy(entries, categories)
             appendAggregates(entries, dates, now)
             appendBaseline(entries, from, dates.size, now)
+            appendRecent(from, to, now)
             appendHoles(entries, now)
             appendSleep(dates, entries, now)
             appendHealth(dates)
@@ -123,6 +145,9 @@ class AnalysisBuilder(
             appendCorrelations(entries, dates, now, from, to)
             appendTriggers(entries, now)
             appendPlan(dates, now)
+            appendTasks(dates, now)
+            appendDiary(fromDate, toDate)
+            appendAppUse(dates, now)
             appendDataQuality(entries, dates, now)
             appendMemory()
             appendTimeline(mode, entries, now, to)
@@ -152,6 +177,18 @@ class AnalysisBuilder(
         append("суток: ").append(days).append("\n")
         append("покрытие таймшита: ").append(pct(coveredMs.toDouble() / elapsed)).append("\n")
         append("доля \"не размечено\": ").append(pct(unmarkedMs.toDouble() / elapsed)).append("\n")
+        // Недоделанные сутки — отдельная строка, а не сноска. Разбор дня, чей
+        // лог кончается в обед, обязан считать день незаконченным: иначе
+        // «работы 40 минут» звучит как приговор дню, который ещё идёт.
+        val lastMark = entries.maxOfOrNull { if (it.open) now else it.end } ?: 0L
+        if (rangeTo >= now - 60_000L) {
+            append("период включает сегодня, день НЕ ЗАКОНЧЕН: сейчас ")
+                .append(hm.format(Date(now)))
+            if (lastMark > 0L) append(", лента доведена до ").append(hm.format(Date(lastMark)))
+            append(". Прошло ").append(fmt2((now - dayStartMs(now)) / 3_600_000.0))
+                .append(" ч из 24 — суммы по этому дню неполные по определению,")
+                .append(" не называй их итогом дня\n")
+        }
         if (context.isNotBlank()) append("известный контекст: ").append(context.trim()).append("\n")
         // Свежесть выгрузки из intervals: по ней видно, можно ли верить
         // блокам <training> и <health>, или они просто не доехали.
@@ -217,23 +254,47 @@ class AnalysisBuilder(
         val baseFrom = baseTo - BASELINE_DAYS * 86_400_000L
         val base = zasechka.forRange(baseFrom, baseTo)
         if (base.isEmpty()) return
+        // ДЕЛИМ НА СУТКИ С ДАННЫМИ, А НЕ НА КАЛЕНДАРНЫЕ. Владелец поймал этот
+        // баг на своём же разборе: «сон в базе 1.54 ч в сутки против 7.40 в
+        // периоде, отклонение +381 процент — это не изменение поведения, это
+        // дефект расчёта базы». Лента жила шесть суток, а делилось на 28.
+        val baseDates = (0 until BASELINE_DAYS).map { dayKey(baseFrom + it * 86_400_000L) }
+        val realDays = baseDates.count { d ->
+            base.sumOf { minutesIn(it, d, now) } >= DAY_COVERED_MIN
+        }
+        if (realDays < BASELINE_MIN_DAYS) {
+            append("<baseline>\n")
+            append("Базы нет: за предыдущие ").append(BASELINE_DAYS).append(" дн. размечено ")
+                .append(realDays).append(" сут. (порог ").append(BASELINE_MIN_DAYS)
+                .append("). Сравнивать период не с чем — не сравнивай и не выдумывай ")
+                .append("отклонений. Для дня сравнение бери из <recent>.\n")
+            append("</baseline>\n\n")
+            return
+        }
         val cats = (base + periodEntries).map { it.category.trim().ifBlank { "без категории" } }
             .distinctBy { it.lowercase() }
             .sorted()
         append("<baseline>\n")
-        append("Часы в сутки за предыдущие ").append(BASELINE_DAYS)
-            .append(" дн. против периода.\nкатегория;ч_в_сутки_база;ч_в_сутки_период;отклонение_%\n")
+        append("Часы в сутки до периода против периода. База: ").append(realDays)
+            .append(" размеченных суток из ").append(BASELINE_DAYS)
+            .append(" (делится на них, не на календарь).\n")
+        append("категория;ч_в_сутки_база;ч_в_сутки_период;отклонение_%\n")
         for (cat in cats) {
             val key = cat.lowercase()
             val baseH = base.filter { it.category.trim().lowercase() == key }
-                .sumOf { it.durationMsIn(baseFrom, baseTo, now) } / 3_600_000.0 / BASELINE_DAYS
+                .sumOf { it.durationMsIn(baseFrom, baseTo, now) } / 3_600_000.0 / realDays
             val periodH = periodEntries.filter { it.category.trim().lowercase() == key }
                 .sumOf { it.durationMs(now) } / 3_600_000.0 / periodDays
             if (baseH < 0.02 && periodH < 0.02) continue
-            val dev = if (baseH < 0.02) 999.0 else (periodH - baseH) / baseH * 100
+            // Пустая клетка — это «нет базы» или «не было в периоде», а не
+            // «минус сто процентов»: минус сто процентов от нуля — не число.
+            val dev = when {
+                baseH < 0.02 -> "нет базы"
+                periodH < 0.02 -> "не было в периоде"
+                else -> ((periodH - baseH) / baseH * 100).roundToInt().toString()
+            }
             append(cat).append(";").append(fmt2(baseH)).append(";").append(fmt2(periodH))
-                .append(";").append(if (dev >= 999) "нет базы" else dev.roundToInt().toString())
-                .append("\n")
+                .append(";").append(dev).append("\n")
         }
         append("</baseline>\n\n")
     }
@@ -642,6 +703,267 @@ class AnalysisBuilder(
         append("</plan>\n\n")
     }
 
+    /**
+     * ЕГО ЖЕ ПОСЛЕДНИЕ ТРИ НЕДЕЛИ — одной таблицей. Это лекарство от того,
+     * что владелец назвал «совершенно неинтересный разбор»: без окна разбор
+     * одного дня рассуждал о сферическом коне. «Работа 40 минут» — это провал
+     * или его обычная среда? Ответ только из сравнения с собственной нормой,
+     * и медиана внизу таблицы даёт его прямо, без пересчёта в уме.
+     */
+    private suspend fun StringBuilder.appendRecent(periodFrom: Long, toExclusive: Long, now: Long) {
+        val windowFrom = dayStartMs(toExclusive - 1) - (RECENT_DAYS - 1L) * 86_400_000L
+        val windowTo = minOf(toExclusive, now)
+        val entries = zasechka.forRange(windowFrom, windowTo)
+        if (entries.isEmpty()) return
+        val dates = (0 until RECENT_DAYS)
+            .map { dayKey(windowFrom + it * 86_400_000L) }
+            .filter { parseDate(it) < windowTo }
+        val rows = mutableListOf<List<String>>()
+        val numeric = mutableListOf<List<Double?>>()
+        for (d in dates) {
+            val covered = entries.sumOf { minutesIn(it, d, now) }
+            if (covered < 30) continue
+            val health = sport.healthOn(d)
+            val meal = food.dayTotal(d)
+            val trained = sport.workoutsFlow.value
+                .filter { dayKey(it.start) == d }.sumOf { it.minutes }
+            val sleep = minutesOf(entries, "Сон", d, now) / 60.0
+            val work = groupMinutes(entries, "работа", d, now)
+            val prep = groupMinutes(entries, "подготовка", d, now)
+            val holes = groupMinutes(entries, "дыра", d, now)
+            val body = groupMinutes(entries, "тело", d, now)
+            val family = groupMinutes(entries, "семья", d, now)
+            val reg = groupMinutes(entries, "регуляция", d, now)
+            val charged = runCatching { strength.gtgOn(d)?.charged == true }.getOrDefault(false)
+            rows.add(
+                listOf(
+                    d, weekday(d), fmt2(sleep), work.toString(), prep.toString(),
+                    holes.toString(), body.toString(), family.toString(), reg.toString(),
+                    (covered * 100 / 1440).toString(),
+                    if (meal.empty) "" else meal.kcal.toString(),
+                    if (meal.empty) "" else meal.protein.toString(),
+                    health?.steps?.takeIf { it > 0 }?.toString() ?: "",
+                    health?.hrv?.takeIf { it > 0 }?.toString() ?: "",
+                    if (health != null) fmt2(health.tsb) else "",
+                    trained.toString(),
+                    if (charged) "да" else "нет",
+                )
+            )
+            numeric.add(
+                listOf(
+                    sleep, work.toDouble(), prep.toDouble(), holes.toDouble(), body.toDouble(),
+                    family.toDouble(), reg.toDouble(), null,
+                    if (meal.empty) null else meal.kcal.toDouble(),
+                    if (meal.empty) null else meal.protein.toDouble(),
+                    health?.steps?.takeIf { it > 0 }?.toDouble(),
+                    health?.hrv?.takeIf { it > 0 }?.toDouble(),
+                    health?.tsb,
+                    trained.toDouble(),
+                    null,
+                )
+            )
+        }
+        if (rows.size < 3) return
+        append("<recent>\n")
+        append("Его собственная норма: последние ").append(rows.size)
+            .append(" размеченных суток по ").append(RECENT_DAYS)
+            .append("-дневному окну, включая период. Сравнивай день и период ")
+            .append("ИМЕННО С ЭТИМ, а не с представлениями о правильной жизни.\n")
+        append("дата;день;сон_ч;работа_м;систем_м;дыры_м;тело_м;семья_м;регуляц_м;")
+        append("покрытие_%;ккал;белок_г;шаги;hrv;tsb;трен_м;зарядка\n")
+        rows.forEach { append(it.joinToString(";")).append("\n") }
+        // Медиана устойчивее среднего: одна ночь на три часа не должна
+        // переписывать «обычную ночь».
+        val medians = (0 until 15).map { i ->
+            val col = numeric.mapNotNull { it.getOrNull(i) }
+            if (col.isEmpty()) "" else fmt2(median(col))
+        }
+        append("МЕДИАНА;—;").append(medians[0]).append(";")
+        append(medians.subList(1, 7).joinToString(";")).append(";—;")
+        append(medians.subList(8, 14).joinToString(";")).append(";—\n")
+        // Цифры окна без слов окна — половина дела: повтор ищется по смыслу
+        // заметок, а не по минутам. Заметки самого периода тут не нужны, они
+        // целиком лежат в <timeline>.
+        val words = entries
+            .filter { it.start < periodFrom }
+            .filter { it.raw.trim().length > 25 }
+            .sortedBy { it.start }
+        if (words.isNotEmpty()) {
+            append("Его заметки из этих суток (до периода; заметки самого ")
+            append("периода — в <timeline>):\n")
+            append("дата;время;категория;название;заметка\n")
+            words.takeLast(80).forEach { e ->
+                append(dayKey(e.start)).append(";")
+                    .append(hm.format(Date(e.start))).append(";")
+                    .append(e.category.ifBlank { "—" }).append(";")
+                    .append(e.title.ifBlank { "—" }).append(";")
+                    .append(e.raw.trim().replace('\n', ' ').take(180)).append("\n")
+            }
+        }
+        append("</recent>\n\n")
+    }
+
+    /**
+     * ДЕЛА ИЗ TODOIST — то, что он сам себе поставил. До этого разбор судил о
+     * работе только по минутам в ленте и не знал, на что эти минуты должны
+     * были уйти. Просроченный список — самая честная улика «чего изволите»:
+     * своё лежит, а чужое сделано в тот же день.
+     */
+    private suspend fun StringBuilder.appendTasks(dates: List<String>, now: Long) {
+        val store = todoist ?: return
+        runCatching { store.load() }
+        val tasks = store.tasksFlow.value
+        if (tasks.isEmpty()) return
+        val today = dayKey(now)
+        val projects = store.projectsFlow.value.associateBy { it.id }
+        fun pathOf(id: String): String =
+            projects[id]?.let { runCatching { store.path(it) }.getOrDefault(it.name) } ?: "—"
+        fun overdueDays(due: String): Long =
+            if (due.isBlank() || due >= today) 0
+            else (parseDate(today) - parseDate(due)) / 86_400_000L
+
+        val overdue = tasks.filter { it.due.isNotBlank() && it.due < today }
+        append("<tasks>\n")
+        append("Открытые дела Todoist на сейчас. Списка «сделано» здесь нет — ")
+        append("Todoist закрытые не отдаёт, поэтому судить о выполнении можно ")
+        append("только по тому, что ушло из списка и что в нём залежалось.\n")
+        append("всего открытых: ").append(tasks.size)
+        append("; просрочено: ").append(overdue.size)
+        append("; на сегодня: ").append(tasks.count { it.due == today })
+        append("; без срока: ").append(tasks.count { it.due.isBlank() })
+        append("; p1: ").append(tasks.count { it.priority >= 4 }).append("\n")
+        val synced = store.syncedAtFlow.value
+        append("список обновлялся: ")
+            .append(if (synced <= 0) "не было ни разу" else ((now - synced) / 60_000L).toString() + " мин назад")
+            .append("\n")
+        append("проект;открытых;просрочено;самая старая просрочка_дн\n")
+        tasks.groupBy { pathOf(it.projectId) }
+            .entries.sortedByDescending { it.value.size }
+            .take(14)
+            .forEach { (path, list) ->
+                val late = list.filter { it.due.isNotBlank() && it.due < today }
+                append(path.replace(';', ',')).append(";").append(list.size).append(";")
+                    .append(late.size).append(";")
+                    .append(late.maxOfOrNull { overdueDays(it.due) } ?: 0).append("\n")
+            }
+        if (overdue.isNotEmpty()) {
+            append("просроченные поимённо (до 20, дольше всех сверху):\n")
+            overdue.sortedByDescending { overdueDays(it.due) }.take(20).forEach {
+                append("- ").append(it.content.take(120))
+                    .append(" | ").append(pathOf(it.projectId))
+                    .append(" | срок ").append(it.due)
+                    .append(", лежит ").append(overdueDays(it.due)).append(" дн.")
+                    .append(if (it.priority >= 4) ", p1" else "")
+                    .append("\n")
+            }
+        }
+        val dueInPeriod = tasks.filter { it.due in dates }
+        if (dueInPeriod.isNotEmpty()) {
+            append("срок приходился на период и дело ВСЁ ЕЩЁ открыто:\n")
+            dueInPeriod.take(15).forEach {
+                append("- ").append(it.due).append(" ").append(it.content.take(120))
+                    .append(" | ").append(pathOf(it.projectId)).append("\n")
+            }
+        }
+        append("Сверь это с названиями в <timeline>: на какие проекты минуты в ")
+        append("ленте были, а на какие открытых дел много и минут нет вовсе.\n")
+        append("</tasks>\n\n")
+    }
+
+    /**
+     * ПРИЛОЖЕНИЕ КАК УЛИКА. Владелец сам разрабатывает Правку, и в ленте это
+     * лежит как «Систематизация» — часы. А здесь то, чего в ленте нет:
+     * деньги на модель по суткам и объём того, что он в приложение наговорил.
+     * Часы и рубли рядом и есть материал для разговора про «паттерн сначала»,
+     * причём материал, который нельзя оспорить.
+     */
+    private suspend fun StringBuilder.appendAppUse(dates: List<String>, now: Long) {
+        val costs = stats?.let { runCatching { it.dailyCosts(RECENT_DAYS) }.getOrNull() }
+        val voice = transcripts?.let { runCatching { it.readLast(800) }.getOrNull() }
+        val edits = history?.let { runCatching { it.readMeta(800) }.getOrNull() }
+        val drafts = raznoska?.let { runCatching { it.load() }.getOrNull() }
+        if (costs.isNullOrEmpty() && voice.isNullOrEmpty() && edits.isNullOrEmpty()) return
+        append("<app>\n")
+        append("Правка — его собственное приложение, он его и пишет. В ленте эта ")
+        append("работа лежит как «Систематизация», здесь — то, чего в ленте нет.\n")
+        val spentDays = costs.orEmpty().filter { it.second > 0.0001 }
+        if (spentDays.isNotEmpty()) {
+            append("деньги на модель по суткам (USD), свежий день первым: ")
+            append(spentDays.joinToString(", ") {
+                it.first + " " + String.format(Locale.US, "%.2f", it.second)
+            })
+            append("\n")
+            val periodCost = spentDays.filter { it.first in dates }.sumOf { it.second }
+            val windowCost = spentDays.sumOf { it.second }
+            append("за период: ").append(String.format(Locale.US, "%.2f", periodCost))
+                .append(" USD; за ").append(RECENT_DAYS).append(" дн.: ")
+                .append(String.format(Locale.US, "%.2f", windowCost)).append(" USD\n")
+        }
+        if (!voice.isNullOrEmpty()) {
+            val byDay = voice.groupBy { it.ts.take(10) }
+            append("диктовки по суткам: дата;записей;знаков;минут_речи;ошибок\n")
+            byDay.entries.sortedByDescending { it.key }.take(RECENT_DAYS).forEach { (d, list) ->
+                append(d).append(";").append(list.size).append(";")
+                    .append(list.sumOf { it.chars }).append(";")
+                    .append(fmt2(list.sumOf { it.audioMs } / 60_000.0)).append(";")
+                    .append(list.count { !it.ok }).append("\n")
+            }
+        }
+        if (!edits.isNullOrEmpty()) {
+            val inWindow = edits.filter { it.date >= (dates.firstOrNull() ?: "") }
+            if (inWindow.isNotEmpty()) {
+                append("обращения к модели по режимам за период и позже: ")
+                append(inWindow.groupBy { it.mode.ifBlank { "—" } }
+                    .entries.sortedByDescending { it.value.size }
+                    .joinToString(", ") { it.key + " " + it.value.size })
+                append("\n")
+            }
+        }
+        if (!drafts.isNullOrEmpty()) {
+            val pending = drafts.count { it.pending }
+            append("разноска: черновиков ").append(drafts.size)
+                .append(", неразобранных ").append(pending).append("\n")
+        }
+        append("</app>\n\n")
+    }
+
+    /**
+     * ДНЕВНИК NOTION — ЕГО СЛОВАМИ. Самый дорогой текст в системе: в ленте
+     * «Работа, 90 мин», а в дневнике то, что он про этот день сам написал.
+     * Приложение пишет в ту же базу цифры, поэтому свой текст мы отсюда
+     * вырезаем: процитировать модели нашу же арифметику как его слова — это
+     * подделка данных, а не разбор.
+     */
+    private suspend fun StringBuilder.appendDiary(fromDate: String, toDate: String) {
+        val sync = diary ?: return
+        // Берём шире периода: его запись про вчерашний вечер объясняет
+        // сегодняшнее утро, а разбор дня без соседних дней слеп.
+        val wide = dayKey(dayStartMs(parseDate(fromDate)) - 6L * 86_400_000L)
+        val rows = runCatching { sync.readRange(wide, toDate) }.getOrNull()
+            ?.filter { it.any } ?: return
+        if (rows.isEmpty()) return
+        append("<diary>\n")
+        append("База «Дневник» в Notion. Колонки «План» и «Заметки» пишет он ")
+        append("сам — это его формулировки, цитируй дословно. Галочки, Feel, ")
+        append("колено и вес приложение ставит автоматически: расхождение ")
+        append("галочки с лентой — дефект данных, а не его забывчивость.\n")
+        for (r in rows.sortedBy { it.date }) {
+            val inPeriod = r.date >= fromDate && r.date <= toDate
+            append(if (inPeriod) "- " else "- (до периода) ").append(r.date).append(": ")
+            val bits = mutableListOf<String>()
+            if (r.feel.isNotBlank()) bits.add("feel " + r.feel)
+            if (r.knee.isNotBlank()) bits.add("колено " + r.knee)
+            if (r.weightKg > 0) bits.add("вес " + fmt2(r.weightKg))
+            bits.add("зарядка " + if (r.charged) "да" else "нет")
+            bits.add("сессия " + if (r.done) "да" else "нет")
+            append(bits.joinToString(", "))
+            val his = r.hisWords
+            if (his.isNotBlank()) append(" | ЕГО СЛОВАМИ: ").append(his.take(700))
+            append("\n")
+        }
+        append("</diary>\n\n")
+    }
+
     private fun StringBuilder.appendDataQuality(
         entries: List<ZasechkaStore.Entry>,
         dates: List<String>,
@@ -778,6 +1100,28 @@ class AnalysisBuilder(
         return entries
             .filter { it.category.trim().ifBlank { "без категории" }.lowercase() == key }
             .sumOf { minutesIn(it, date, now) }
+    }
+
+    /** Минуты группы таксономии за сутки — так считаются колонки <recent>. */
+    private fun groupMinutes(
+        entries: List<ZasechkaStore.Entry>,
+        group: String,
+        date: String,
+        now: Long,
+    ): Long = entries
+        .filter { groupOf(it.category) == group }
+        .sumOf { minutesIn(it, date, now) }
+
+    private fun median(values: List<Double>): Double {
+        if (values.isEmpty()) return 0.0
+        val sorted = values.sorted()
+        val mid = sorted.size / 2
+        return if (sorted.size % 2 == 1) sorted[mid] else (sorted[mid - 1] + sorted[mid]) / 2
+    }
+
+    private fun weekday(date: String): String {
+        val cal = Calendar.getInstance().apply { timeInMillis = parseDate(date) }
+        return WEEKDAYS[cal.get(Calendar.DAY_OF_WEEK) - 1]
     }
 
     private fun minutesIn(e: ZasechkaStore.Entry, date: String, now: Long): Long {

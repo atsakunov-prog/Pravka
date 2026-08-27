@@ -9,6 +9,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import java.util.Calendar
 import java.util.Locale
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import ru.zf.pravka.core.ProofreadMode
 
@@ -151,6 +152,23 @@ class Stats(private val context: Context) {
         p.asMap().keys
             .filter { it.name.length == cutoff.length && it.name.startsWith("cost_2") && it.name < cutoff }
             .forEach { p.remove(longPreferencesKey(it.name)) }
+    }
+
+    /**
+     * Деньги на модель по суткам, свежий день первым. Нужны разбору «Итогов»:
+     * в ленте видно, сколько часов ушло в «Систематизацию», а здесь — сколько
+     * это стоило деньгами. Две цифры рядом и есть та самая улика, которую
+     * владелец сам называет «паттерн сначала»: сначала построить систему,
+     * потом делать дело. Ведро на день живёт 62 суток, дальше не спрашивать.
+     */
+    suspend fun dailyCosts(days: Int): List<Pair<String, Double>> {
+        val prefs = context.statsDataStore.data.first()
+        return (0 until days.coerceIn(1, 62)).map { back ->
+            val key = dayKey(back)
+            val date = key.removePrefix("cost_")
+            val iso = date.substring(0, 4) + "-" + date.substring(4, 6) + "-" + date.substring(6, 8)
+            iso to ((prefs[longPreferencesKey(key)] ?: 0L) / 1_000_000.0)
+        }
     }
 
     suspend fun recordError() {

@@ -1310,6 +1310,8 @@ $raw
         system: String,
         user: String,
         model: String,
+        maxTokens: Int,
+        effort: String = "high",
     ): Result<BatchAnswer> = withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
@@ -1322,7 +1324,14 @@ $raw
                 // ночной батч и ручной запуск греют один и тот же кэш.
                 cacheStableAlways = true,
             )
-            val reply = requestWithOneRetry(apiKey, model, parts, "", null)
+            // Бюджет и глубину задаём явно теми же числами, что у батча:
+            // иначе ручной разбор и ночной отвечали бы по-разному, и сравнить
+            // их было бы нельзя.
+            val reply = requestWithOneRetry(
+                apiKey, model, parts, "", null,
+                maxTokensOverride = maxTokens,
+                effortOverride = effort,
+            )
             BatchAnswer(
                 text = reply.text.trim(),
                 costUsd = costUsd(model, reply),
@@ -1493,6 +1502,8 @@ $raw
         input: String,
         onDelta: ((String) -> Unit)?,
         images: List<ImagePart> = emptyList(),
+        maxTokensOverride: Int = 0,
+        effortOverride: String = "",
     ): ApiReply {
         // Spec 6.1: one retry on network error or timeout; none on client 4xx.
         // Transient server blips (429/500/529 "overloaded") last seconds - one
@@ -1500,14 +1511,14 @@ $raw
         // nothing. A short pause before the network retry too: an instant
         // re-POST into the same dead socket just fails the same way.
         return try {
-            request(apiKey, model, parts, input, onDelta, images)
+            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride)
         } catch (e: IOException) {
             Thread.sleep(1000)
-            request(apiKey, model, parts, input, onDelta, images)
+            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride)
         } catch (e: ApiException) {
             if (!e.retryable) throw e
             Thread.sleep(e.retryDelayMs)
-            request(apiKey, model, parts, input, onDelta, images)
+            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride)
         }
     }
 
@@ -1518,6 +1529,8 @@ $raw
         input: String,
         onDelta: ((String) -> Unit)?,
         images: List<ImagePart> = emptyList(),
+        maxTokensOverride: Int = 0,
+        effortOverride: String = "",
     ): ApiReply {
         // Rough token estimate for Russian text (~2.5 chars/token) + 30% headroom.
         // Counts BOTH slots: assist/learn tasks carry all their content in
@@ -1533,12 +1546,17 @@ $raw
         // whole budget on thinking and died with stop_reason=max_tokens before
         // emitting a single word (owner saw an endless spinner, 2026-08-18).
         val thinkingHeadroom = if (model == Settings.MODEL_SONNET) 0 else 8000
-        val maxTokens = (estimatedInputTokens * 13 / 10 + 300 + thinkingHeadroom)
-            .coerceIn(1024, 16384)
+        // Оценка по длине входа врёт там, где длинный вход просит короткий
+        // ответ и наоборот (разбор «Итогов»): такой вызов задаёт бюджет сам.
+        val maxTokens = if (maxTokensOverride > 0) maxTokensOverride
+        else (estimatedInputTokens * 13 / 10 + 300 + thinkingHeadroom).coerceIn(1024, 16384)
 
         val body = JSONObject().apply {
             put("model", model)
             put("max_tokens", maxTokens)
+            if (effortOverride.isNotBlank()) {
+                put("output_config", JSONObject().put("effort", effortOverride))
+            }
             // SSE streaming: first corrected words reach the ticker in well under
             // a second, and the 90s readTimeout becomes a per-chunk timeout
             // instead of a hard ceiling on total generation time.

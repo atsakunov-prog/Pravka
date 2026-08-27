@@ -88,5 +88,31 @@ class HistoryLog(private val context: Context) {
         }.getOrElse { emptyList() }
     }
 
+    /** Что делал сам владелец в приложении: режим, день, деньги. Без текстов. */
+    data class Meta(val date: String, val mode: String, val costUsd: Double, val changed: Boolean)
+
+    /**
+     * Хвост журнала правок без самих текстов — только по чему и когда.
+     * Разбору нужно понимать, чем владелец пользовался в приложении: диктовки,
+     * разноска, помощник. Тексты правок в разбор не идут: они и так живут в
+     * ленте, а лишний мегабайт в промпте стоит денег.
+     */
+    fun readMeta(limit: Int): List<Meta> {
+        if (!file.exists()) return emptyList()
+        return runCatching {
+            file.readLines().takeLast(limit).mapNotNull { line ->
+                runCatching {
+                    val o = JSONObject(line)
+                    Meta(
+                        date = o.optString("ts").take(10),
+                        mode = o.optString("mode"),
+                        costUsd = o.optDouble("cost_usd", 0.0),
+                        changed = o.optBoolean("changed", false),
+                    )
+                }.getOrNull()
+            }
+        }.getOrElse { emptyList() }
+    }
+
     fun shareIntent(): Intent = shareFileIntent(context, file, "application/json")
 }

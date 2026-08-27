@@ -58,6 +58,11 @@ class NotionDiarySync(
             5 to "5 · развалина",
         )
         private val WEEKDAYS = listOf("Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб")
+
+        // Форма того, что в дневник пишет само приложение: «2100 ккал · Б140
+        // Ж70 У200» и список подходов «Присед 3×12; ... · вис 40 сек».
+        private val OUR_FOOD = Regex("""^\s*\d+\s*ккал""")
+        private val OUR_NOTES = Regex("""\d+\s*[x×]\s*\d+|вис \d+ сек|негативы \d+|подтягивания \d+""")
     }
 
     @Volatile private var lastRun = 0L
@@ -230,6 +235,121 @@ class NotionDiarySync(
             eventLog.add("дневник → Notion: $date уехал (${if (existing != null) "обновил" else "создал"})")
         }
         return ok
+    }
+
+    /**
+     * Строка дневника ЕГО РУКОЙ. Приложение пишет в дневник цифры, а он пишет
+     * туда слова — и до разбора эти слова не доезжали вообще. Это самый
+     * дорогой текст во всей системе: в ленте «Работа, 90 мин», а в дневнике
+     * «сорвался на Борю, стыдно». Одно без другого не разбирается.
+     */
+    data class DiaryRow(
+        val date: String,
+        val feel: String,
+        val knee: String,
+        val weightKg: Double,
+        val food: String,
+        val notes: String,
+        val plan: String,
+        val charged: Boolean,
+        val done: Boolean,
+    ) {
+        // «Еду» и «Заметки» в пустую ячейку пишем мы сами — и отдавать разбору
+        // собственную арифметику под видом его слов нельзя: модель обязана
+        // цитировать ЕГО дословно, а процитирует наш же «2100 ккал · Б140».
+        // Свой текст узнаётся по форме, её задаёт snapshotOf() выше.
+        val foodIsOurs: Boolean get() = OUR_FOOD.containsMatchIn(food)
+        val notesIsOurs: Boolean get() = OUR_NOTES.containsMatchIn(notes)
+
+        /** Только его текст: план дня и заметки, которые писал он. */
+        val hisWords: String get() = listOfNotNull(
+            plan.takeIf { it.isNotBlank() },
+            notes.takeIf { it.isNotBlank() && !notesIsOurs },
+            food.takeIf { it.isNotBlank() && !foodIsOurs },
+        ).joinToString(" · ")
+
+        val any: Boolean get() = hisWords.isNotBlank() || feel.isNotBlank() ||
+            knee.isNotBlank() || charged || done
+    }
+
+    /**
+     * Дневник за период, для разбора. Читаем всегда, когда есть токен: тумблер
+     * [Settings.notionDiary] разрешает ЗАПИСЬ, а чтение своих же заметок
+     * запрещать незачем. Сети нет — пустой список, разбор просто обойдётся.
+     */
+    suspend fun readRange(from: String, to: String): List<DiaryRow> {
+        val token = settings.notionToken().trim()
+        if (token.isBlank()) return emptyList()
+        return withContext(Dispatchers.IO) {
+            val payload = JSONObject().apply {
+                put("filter", JSONObject().put("and", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("property", "Дата")
+                        put("date", JSONObject().put("on_or_after", from))
+                    })
+                    put(JSONObject().apply {
+                        put("property", "Дата")
+                        put("date", JSONObject().put("on_or_before", to))
+                    })
+                }))
+                put("sorts", JSONArray().put(JSONObject().apply {
+                    put("property", "Дата")
+                    put("direction", "ascending")
+                }))
+                put("page_size", 100)
+            }
+            val body = call("$API/databases/$DATABASE_ID/query", token, payload.toString(), patch = false)
+                ?: return@withContext emptyList()
+            runCatching {
+                val results = JSONObject(body).optJSONArray("results") ?: return@runCatching emptyList<DiaryRow>()
+                (0 until results.length()).mapNotNull { i ->
+                    val props = results.optJSONObject(i)?.optJSONObject("properties")
+                        ?: return@mapNotNull null
+                    val date = props.optJSONObject("Дата")?.optJSONObject("date")
+                        ?.optString("start").orEmpty().take(10)
+                    if (date.isBlank()) return@mapNotNull null
+                    DiaryRow(
+                        date = date,
+                        feel = selectOf(props, "Feel"),
+                        knee = selectOf(props, "Колено"),
+                        weightKg = props.optJSONObject("Вес, кг")?.optDouble("number", 0.0) ?: 0.0,
+                        food = plainText(props, "Еда"),
+                        notes = plainText(props, "Заметки"),
+                        // «План» пишет только он — мы к этой колонке не
+                        // прикасаемся. Значит, это чистый его текст.
+                        plan = plainText(props, "План"),
+                        charged = props.optJSONObject("Зарядка")?.optBoolean("checkbox") == true,
+                        done = props.optJSONObject("Сделано")?.optBoolean("checkbox") == true,
+                    )
+                }
+            }.getOrDefault(emptyList())
+        }
+    }
+
+    private fun selectOf(props: JSONObject, name: String): String =
+        props.optJSONObject(name)?.optJSONObject("select")?.optString("name").orEmpty()
+
+    /**
+     * Текст свойства, каким бы типом оно ни было. Тип колонки в его базе —
+     * его дело: «План» может быть и текстом, и селектом, и от смены типа
+     * разбор не должен молча терять его слова.
+     */
+    private fun plainText(props: JSONObject, name: String): String {
+        val prop = props.optJSONObject(name) ?: return ""
+        val array = prop.optJSONArray("rich_text") ?: prop.optJSONArray("title")
+        if (array != null) {
+            return (0 until array.length())
+                .mapNotNull { array.optJSONObject(it)?.optString("plain_text") }
+                .joinToString("")
+                .trim()
+        }
+        prop.optJSONObject("select")?.optString("name")?.takeIf { it.isNotBlank() }?.let { return it }
+        prop.optJSONArray("multi_select")?.let { ms ->
+            return (0 until ms.length())
+                .mapNotNull { ms.optJSONObject(it)?.optString("name") }
+                .joinToString(", ")
+        }
+        return ""
     }
 
     private class Row(val pageId: String, val foodEmpty: Boolean, val notesEmpty: Boolean)

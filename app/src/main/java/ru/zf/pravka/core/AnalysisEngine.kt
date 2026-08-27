@@ -36,8 +36,11 @@ class AnalysisEngine(
         private const val NIGHT_HOUR = 4
         private const val MODEL_DAILY = Settings.MODEL_OPUS
         private const val MODEL_WEEKLY = Settings.MODEL_OPUS
-        private const val MAX_TOKENS_DAILY = 4000
-        private const val MAX_TOKENS_WEEKLY = 12000
+        // Бюджет ответа, а не входа. Опус думает адаптивно, и мысли тоже
+        // считаются в max_tokens: при 4000 разбор дня на 1200 слов обрывался
+        // бы на середине, не начав писать. Платим только за выданное.
+        private const val MAX_TOKENS_DAILY = 14000
+        private const val MAX_TOKENS_WEEKLY = 24000
         // Опрос батча — не чаще раза в пять минут (тик службы) и не дольше
         // суток: столько живёт заявка по договору.
         private const val PENDING_TTL_MS = 26 * 3_600_000L
@@ -109,7 +112,7 @@ class AnalysisEngine(
         val system = prompts.effective(PromptStore.PromptId.ANALYSIS)
         if (immediate) {
             val report = store.addPending(mode, from, to, "", model, built.hash, built.chars)
-            val answer = claude.analyzeNow(system, built.text, model).getOrElse { e ->
+            val answer = claude.analyzeNow(system, built.text, model, maxTokens).getOrElse { e ->
                 store.fail(report.id, e.message ?: "не вышло")
                 eventLog.add("итоги: разбор сейчас не вышел — ${e.message}")
                 return Result.failure(e)
