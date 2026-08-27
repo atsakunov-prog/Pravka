@@ -3,6 +3,7 @@ package ru.zf.pravka
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -40,6 +41,7 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.data.AnalysisStore
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.MarkdownText
 
 /**
  * Итоги: разборы жизненного лога, которые пишет Опус по ночам.
@@ -181,10 +183,39 @@ internal fun ItogiTab(app: PravkaApp) {
 
         if (patterns.isNotEmpty()) {
             item {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Паттерны",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 HintText(
-                    "Помнит паттернов: ${patterns.size}. Они уезжают в каждый " +
-                        "следующий разбор — модель обязана сказать по каждому: " +
-                        "подтвердился, ослаб или исчез."
+                    "Это нашла модель — но она видит цифры, а не тебя. Скажи по " +
+                        "каждому «про меня» или «не про меня»: твой ответ уезжает " +
+                        "в следующий разбор и весит больше её уверенности. " +
+                        "Отклонённый не вернётся, пока не появятся новые точки. " +
+                        "Тап по той же кнопке снимает ответ."
+                )
+            }
+            items(patterns.size) { i ->
+                val pattern = patterns[i]
+                PatternCard(
+                    pattern = pattern,
+                    onVerdict = { verdict ->
+                        scope.launch {
+                            app.analysisStore.setVerdict(
+                                pattern.key(), verdict, app.analysisEngine.today(),
+                            )
+                        }
+                    },
+                )
+            }
+            item {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Разборы",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
         }
@@ -220,6 +251,99 @@ internal fun ItogiTab(app: PravkaApp) {
         }
 
         item { Spacer(Modifier.height(20.dp)) }
+    }
+}
+
+/**
+ * Паттерн с вердиктом владельца.
+ *
+ * Владелец: «это паттерны, которые я увидел, модель, но может быть не увидел,
+ * ну может быть я не подтвержу». В этом весь смысл экрана: модель видит
+ * повтор в цифрах и всё равно может ошибаться в том, что он значит, а
+ * проверить это может только он. Его слово — единственная в системе оценка
+ * модели человеком, и она уезжает в каждый следующий разбор.
+ */
+@Composable
+private fun PatternCard(
+    pattern: AnalysisStore.Pattern,
+    onVerdict: (String) -> Unit,
+) {
+    val accent = when {
+        pattern.accepted -> MaterialTheme.colorScheme.primary
+        pattern.rejected -> MaterialTheme.colorScheme.outline
+        else -> MaterialTheme.colorScheme.tertiary
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = 6.dp)
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant.copy(
+                    alpha = if (pattern.rejected) 0.18f else 0.4f,
+                ),
+                RoundedCornerShape(12.dp),
+            )
+            .padding(14.dp),
+    ) {
+        Text(
+            pattern.text,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (pattern.accepted) FontWeight.Medium else FontWeight.Normal,
+            // Отклонённый не исчезает, но и не лезет в глаза: он остался,
+            // чтобы модель не предлагала его снова.
+            color = if (pattern.rejected) MaterialTheme.colorScheme.onSurfaceVariant
+            else MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(5.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                buildString {
+                    append("точек ").append(pattern.points)
+                    append(" · разборов ").append(pattern.times)
+                    if (pattern.confidence.isNotBlank()) {
+                        append(" · уверенность ").append(pattern.confidence)
+                    }
+                    append(" · с ").append(pattern.firstSeen)
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            if (pattern.judged) {
+                Text(
+                    if (pattern.accepted) "про меня" else "не про меня",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            VerdictButton(
+                label = "Про меня",
+                chosen = pattern.accepted,
+                onClick = { onVerdict(AnalysisStore.VERDICT_YES) },
+            )
+            VerdictButton(
+                label = "Не про меня",
+                chosen = pattern.rejected,
+                onClick = { onVerdict(AnalysisStore.VERDICT_NO) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun VerdictButton(label: String, chosen: Boolean, onClick: () -> Unit) {
+    if (chosen) {
+        Button(onClick = onClick, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+            Text(label, style = MaterialTheme.typography.labelMedium)
+        }
+    } else {
+        OutlinedButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+            Text(label, style = MaterialTheme.typography.labelMedium)
+        }
     }
 }
 
@@ -273,10 +397,16 @@ private fun ReportCard(
         }
         if (report.ready) {
             Spacer(Modifier.height(6.dp))
-            Text(
-                if (expanded) report.text else report.text.take(180).trim() + "…",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            if (expanded) {
+                // Раскрытый разбор — версткой; свёрнутый — первым живым
+                // абзацем, потому что заголовок в превью не говорит ничего.
+                MarkdownText(report.text)
+            } else {
+                Text(
+                    report.preview(180),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
             Spacer(Modifier.height(6.dp))
             HintText(
                 "${report.tokensIn / 1000} тыс. вход · ${report.tokensOut} выход · " +

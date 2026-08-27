@@ -28,6 +28,10 @@ class AnalysisStore(private val context: Context) {
         // Разборы — это тексты по несколько килобайт. Год храним спокойно,
         // а список в интерфейсе всё равно листается.
         private const val KEEP = 200
+
+        /** Вердикты владельца по паттерну. Пусто — он ещё не смотрел. */
+        const val VERDICT_YES = "да"
+        const val VERDICT_NO = "нет"
     }
 
     data class Report(
@@ -53,6 +57,21 @@ class AnalysisStore(private val context: Context) {
         val pending: Boolean get() = status == "ждёт"
         val ready: Boolean get() = status == "готов"
 
+        /**
+         * Превью в свёрнутой карточке. Первый ЖИВОЙ абзац, а не первые N
+         * знаков: разбор начинается заголовком и рамкой выборки, и в превью
+         * из них видно только «## Рамка» — то есть ничего.
+         */
+        fun preview(limit: Int): String {
+            val body = text.lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("---") }
+                .firstOrNull { it.length > 40 }
+                ?: text.trim()
+            val clean = body.replace("**", "").replace("*", "").trim()
+            return if (clean.length <= limit) clean else clean.take(limit).trim() + "…"
+        }
+
         fun title(): String = when (mode) {
             "daily" -> "День $from"
             "weekly" -> "Неделя $from — $to"
@@ -73,7 +92,21 @@ class AnalysisStore(private val context: Context) {
         val times: Int,
         val points: Int,
         val confidence: String,
+        /**
+         * Слово владельца: [VERDICT_YES] — «да, это про меня»,
+         * [VERDICT_NO] — «не про меня», пусто — он ещё не смотрел.
+         * Это единственная в системе оценка модели человеком, и она
+         * весит больше любой уверенности самой модели: паттерн можно
+         * увидеть в цифрах и всё равно ошибиться в том, что он значит.
+         */
+        val verdict: String = "",
+        /** Когда он вынес вердикт — чтобы модель видела, что он не свежий. */
+        val verdictAt: String = "",
     ) {
+        val judged: Boolean get() = verdict.isNotBlank()
+        val accepted: Boolean get() = verdict == VERDICT_YES
+        val rejected: Boolean get() = verdict == VERDICT_NO
+
         /** Ключ сравнения: формулировку модель повторяет не буква в букву. */
         fun key(): String = text.lowercase()
             .replace(Regex("[^а-яёa-z0-9 ]"), " ")
@@ -166,6 +199,24 @@ class AnalysisStore(private val context: Context) {
      * увидеть его в следующий раз и сказать, что он исчез). Дольше трёх
      * разборов без подтверждения — забываем, иначе список станет свалкой.
      */
+    /**
+     * Вердикт владельца по паттерну. Отклонённый паттерн НЕ удаляется:
+     * он уезжает в следующий разбор с пометкой «человек это отклонил», и
+     * модель обязана либо принести новые точки, либо не возвращаться к нему.
+     * Молча забыть отклонение — значит предлагать одно и то же по кругу.
+     */
+    suspend fun setVerdict(key: String, verdict: String, date: String) = mutex.withLock {
+        ensureLoaded()
+        _patternsFlow.value = _patternsFlow.value.map {
+            if (it.key() != key) it
+            // Повторный тап по той же кнопке снимает вердикт: передумать
+            // можно, и это не должно требовать отдельной кнопки «сброс».
+            else if (it.verdict == verdict) it.copy(verdict = "", verdictAt = "")
+            else it.copy(verdict = verdict, verdictAt = date)
+        }
+        persist()
+    }
+
     suspend fun mergePatterns(fresh: List<Pattern>, date: String) = mutex.withLock {
         ensureLoaded()
         val old = _patternsFlow.value
@@ -180,16 +231,22 @@ class AnalysisStore(private val context: Context) {
                     times = prev.times + 1,
                     points = f.points,
                     confidence = f.confidence,
+                    // verdict и verdictAt не трогаем: слово владельца не
+                    // отменяется тем, что модель увидела паттерн ещё раз.
                 )
             } else {
                 out.add(f.copy(firstSeen = date, lastSeen = date, times = 1))
             }
         }
-        // Три разбора не виден — отпускаем.
+        // Три недели не виден — отпускаем. Но подтверждённое им держим:
+        // «да, это про меня» — не наблюдение периода, а знание о нём, и
+        // выбрасывать его по таймеру нельзя.
         _patternsFlow.value = out
-            .filter { it.lastSeen >= shiftDays(date, -21) || it.lastSeen == date }
-            .sortedByDescending { it.times }
-            .take(12)
+            .filter {
+                it.accepted || it.lastSeen >= shiftDays(date, -21) || it.lastSeen == date
+            }
+            .sortedWith(compareByDescending<Pattern> { it.accepted }.thenByDescending { it.times })
+            .take(14)
         persist()
     }
 
@@ -250,6 +307,8 @@ class AnalysisStore(private val context: Context) {
                         times = o.optInt("times", 1),
                         points = o.optInt("points"),
                         confidence = o.optString("conf"),
+                        verdict = o.optString("verdict"),
+                        verdictAt = o.optString("verdictAt"),
                     )
                 )
             }
@@ -289,6 +348,8 @@ class AnalysisStore(private val context: Context) {
                         put("times", pt.times)
                         put("points", pt.points)
                         put("conf", pt.confidence)
+                        put("verdict", pt.verdict)
+                        put("verdictAt", pt.verdictAt)
                     })
                 }
             })

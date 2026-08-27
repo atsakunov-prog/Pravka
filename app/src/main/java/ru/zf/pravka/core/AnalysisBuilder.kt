@@ -150,6 +150,7 @@ class AnalysisBuilder(
             appendAppUse(dates, now)
             appendDataQuality(entries, dates, now)
             appendMemory()
+            appendModules()
             appendTimeline(mode, entries, now, to)
         }
         return Built(text, hashOf(text), text.length, days)
@@ -1034,13 +1035,24 @@ class AnalysisBuilder(
             append("<known_patterns>\n")
             append("Твои же находки прошлых разборов. По каждому скажи: подтвердился, ")
             append("ослаб, исчез или данных не хватило.\n")
-            append("паттерн;впервые;последний_раз;разборов_подряд;была_уверенность\n")
+            // Колонка «слово Саши» — единственная в системе оценка модели
+            // человеком, и она весит больше её собственной уверенности:
+            // повтор можно увидеть в цифрах и всё равно ошибиться в том, что
+            // он значит. Проверить это может только он.
+            append("паттерн;впервые;последний_раз;разборов_подряд;была_уверенность;")
+            append("слово_Саши\n")
             for (pt in patterns) {
+                val verdict = when {
+                    pt.accepted -> "ПОДТВЕРДИЛ (" + pt.verdictAt + ")"
+                    pt.rejected -> "ОТКЛОНИЛ: не про него (" + pt.verdictAt + ")"
+                    else -> "не смотрел"
+                }
                 append(pt.text.replace(';', ',')).append(";")
                     .append(pt.firstSeen).append(";")
                     .append(pt.lastSeen).append(";")
                     .append(pt.times).append(";")
-                    .append(pt.confidence.ifBlank { "—" }).append("\n")
+                    .append(pt.confidence.ifBlank { "—" }).append(";")
+                    .append(verdict).append("\n")
             }
             append("</known_patterns>\n\n")
         }
@@ -1062,6 +1074,37 @@ class AnalysisBuilder(
             append(": ").append(head).append("\n")
         }
         append("</history>\n\n")
+    }
+
+    /**
+     * КАРТА ВКЛАДОК. Владелец просил разбор ещё и по своим программам —
+     * отдельно Правка, Итоги, Засечка, Дело, Тело (С), Тело (Е). Названия и
+     * границы направлений задаём здесь, а не оставляем модели: иначе каждый
+     * разбор придумает свою нарезку и сравнить их между собой будет нельзя.
+     */
+    private fun StringBuilder.appendModules() {
+        append("<modules>\n")
+        append("Вкладки приложения — это его собственная нарезка жизни. ")
+        append("Разбор по направлениям делай ИМЕННО В ЭТИХ границах и под ")
+        append("этими именами.\n")
+        append("вкладка | про что | откуда данные\n")
+        append("Правка | диктовки и тексты: сколько наговорено, чем ")
+            .append("пользовался, где спотыкалось | <app>\n")
+        append("Итоги | сам разбор: подтверждаются ли прошлые находки, ")
+            .append("отклонял ли он их, читает ли он это вообще | ")
+            .append("<known_patterns>, <history>\n")
+        append("Засечка | таймшит суток: структура, покрытие, дыры, ")
+            .append("триггеры, сон | <aggregates>, <recent>, <holes>, ")
+            .append("<sleep>, <triggers>, <timeline>\n")
+        append("Дело | работа и дела: чистое рабочее время, чем ")
+            .append("инициировано, что просрочено | <tasks>, <aggregates>, ")
+            .append("<timeline>\n")
+        append("Тело (С) | спорт: план против факта, объём, ")
+            .append("самочувствие, форма, зарядка | <training>, <plan>, ")
+            .append("<health>\n")
+        append("Тело (Е) | еда: калораж, белок, распределение по суткам, ")
+            .append("пропуски логирования | <nutrition>\n")
+        append("</modules>\n\n")
     }
 
     private fun StringBuilder.appendTimeline(
