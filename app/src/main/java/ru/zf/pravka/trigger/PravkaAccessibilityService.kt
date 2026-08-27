@@ -2059,6 +2059,52 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Итоги: забрать готовый батч и, если ночь пришла, отправить новый.
+     * Разбор приезжает уведомлением — иначе он тихо лежал бы во вкладке,
+     * которую владелец открывает раз в неделю.
+     */
+    private suspend fun analysisTick() {
+        val ready = app.analysisEngine.tick() ?: return
+        runCatching {
+            val nm = getSystemService(android.app.NotificationManager::class.java)
+            val channelId = "pravka-itogi"
+            if (nm.getNotificationChannel(channelId) == null) {
+                nm.createNotificationChannel(
+                    android.app.NotificationChannel(
+                        channelId, "Итоги: разбор готов",
+                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                    )
+                )
+            }
+            val open = android.app.PendingIntent.getActivity(
+                this, 73,
+                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                    .putExtra(
+                        ru.zf.pravka.MainActivity.EXTRA_TAB,
+                        ru.zf.pravka.MainActivity.TAB_ITOGI,
+                    )
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                android.app.PendingIntent.FLAG_IMMUTABLE or
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val preview = ready.text.lineSequence()
+                .map { it.trim() }
+                .firstOrNull { it.isNotBlank() }
+                .orEmpty()
+                .take(200)
+            val notif = android.app.Notification.Builder(this, channelId)
+                .setContentTitle("Разбор готов: " + ready.title())
+                .setContentText(preview)
+                .setStyle(android.app.Notification.BigTextStyle().bigText(preview))
+                .setSmallIcon(R.drawable.ic_tile)
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(("itogi" + ready.id).hashCode(), notif)
+        }
+    }
+
     private fun sportNotify(workoutId: String, title: String, text: String) {
         runCatching {
             val nm = getSystemService(android.app.NotificationManager::class.java)
@@ -2188,6 +2234,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // которую иначе надо помнить самому.
                 runCatching { notifyArrivedWorkouts() }
                 runCatching { autoPilot.tick() }
+                runCatching { analysisTick() }
             }
             scope.launch { runCatching { app.foodEngine.syncPending() } }
             // Дневник в Notion: галочки, feel, колено и вес уезжают сами.

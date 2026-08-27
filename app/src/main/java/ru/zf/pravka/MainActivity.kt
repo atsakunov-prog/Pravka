@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
         const val TAB_SPORT = "sport"
         const val TAB_FOOD = "food"
         const val TAB_SETTINGS = "settings"
+        const val TAB_ITOGI = "itogi"
 
         // Кнопка еды: «сфоткай тарелку» / «штрихкод» с длинного нажатия
         // открывают Тело (Е) и сразу запускают камеру или сканер.
@@ -120,6 +121,7 @@ class MainActivity : ComponentActivity() {
         val foodAction = intent?.getStringExtra(EXTRA_FOOD_ACTION).orEmpty()
         val initialTab = when (intent?.getStringExtra(EXTRA_TAB)) {
             TAB_SETTINGS -> Tab.SETTINGS
+            TAB_ITOGI -> Tab.ITOGI
             TAB_PRAVKA -> Tab.PRAVKA
             TAB_ZASECHKA -> Tab.ZASECHKA
             TAB_TODOIST -> Tab.TODOIST
@@ -173,6 +175,7 @@ internal enum class Tab(val titleRes: Int) {
     SPORT(R.string.tab_sport),
     FOOD(R.string.tab_food),
     MORE(R.string.tab_more),
+    ITOGI(R.string.tab_itogi),
     EXPORT(R.string.tab_export),
     SETTINGS(R.string.tab_settings),
     DICTIONARY(R.string.tab_dictionary),
@@ -191,6 +194,7 @@ internal enum class Tab(val titleRes: Int) {
  * вниз или сюда. Внизу места ровно на пять кнопок.
  */
 private val SERVICE_TABS = listOf(
+    Tab.ITOGI,
     Tab.EXPORT,
     Tab.SETTINGS,
     Tab.DICTIONARY,
@@ -202,6 +206,7 @@ private val SERVICE_TABS = listOf(
 
 /** Одна строка про то, зачем эта вкладка — чтобы не открывать её наугад. */
 private fun serviceHint(tab: Tab): String = when (tab) {
+    Tab.ITOGI -> "Ночной разбор дня и недели: что происходит с твоим временем"
     Tab.EXPORT -> "Вся жизнь одним CSV: таймшит, еда, спорт — файл для разбора в чате"
     Tab.SETTINGS -> "Ключ Anthropic, распознавание, служба, сохранённые записи"
     Tab.DICTIONARY -> "Как писать имена и термины: заменять, подсказывать, не трогать"
@@ -450,6 +455,7 @@ private fun MainScreen(
                         autoAction = foodActionPending,
                         onAutoConsumed = { foodActionPending = null },
                     )
+                    Tab.ITOGI -> ItogiTab(app)
                     Tab.EXPORT -> ExportTab(app)
                     Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings)
                     Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)

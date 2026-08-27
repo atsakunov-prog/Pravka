@@ -74,6 +74,8 @@ class Settings(private val context: Context) {
         private val KEY_MODE_ICONS = booleanPreferencesKey("mode_icons_on_buttons")
         private val KEY_PHONE_MIC_ONLY = booleanPreferencesKey("phone_mic_only")
         private val KEY_Z_AUTO_INSERTS = booleanPreferencesKey("z_auto_inserts")
+        private val KEY_ANALYSIS_NIGHTLY = booleanPreferencesKey("analysis_nightly")
+        private val KEY_ANALYSIS_CONTEXT = stringPreferencesKey("analysis_context")
         private val KEY_AUTO_PLACES = stringPreferencesKey("auto_places")
         private val KEY_AUTO_SEEN = stringPreferencesKey("auto_seen_ssids")
         private val KEY_AUTO_CAR_BT = stringPreferencesKey("auto_car_bt")
@@ -295,6 +297,26 @@ class Settings(private val context: Context) {
     }
 
     /** Уведомление, когда часы прислали тренировку: вердикт по правилам + feel. */
+    // ---- Итоги: ночной разбор жизненного лога ----
+
+    /** Ночью отправлять разбор вчерашнего дня, в воскресенье — недели. */
+    val analysisNightlyFlow = context.dataStore.data.map { it[KEY_ANALYSIS_NIGHTLY] ?: true }
+    suspend fun analysisNightly(): Boolean = analysisNightlyFlow.first()
+    suspend fun setAnalysisNightly(value: Boolean) {
+        context.dataStore.edit { it[KEY_ANALYSIS_NIGHTLY] = value }
+    }
+
+    /**
+     * Известный контекст периода прозой: «школьные каникулы», «отпуск до
+     * 11.08», «болел». Уезжает в блок <meta>: правило промпта — сначала
+     * контекст, потом диагноз, иначе каникулы читаются как развал.
+     */
+    val analysisContextFlow = context.dataStore.data.map { it[KEY_ANALYSIS_CONTEXT] ?: "" }
+    suspend fun analysisContext(): String = analysisContextFlow.first()
+    suspend fun setAnalysisContext(value: String) {
+        context.dataStore.edit { it[KEY_ANALYSIS_CONTEXT] = value.trim() }
+    }
+
     /**
      * Врезки роботов в ленту (звонки, пожиратели внимания). Владелец их
      * выключил: «очень сильно засоряет ленту, и не всегда это потеря — я

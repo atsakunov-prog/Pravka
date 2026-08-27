@@ -165,6 +165,30 @@ class PravkaApp : Application() {
     // Справочники в assets намеренно: карточка тренировки открывается каждый
     // день, в том числе в подвале на даче, а список движений меняется раз в
     // месяц. Собираются из Notion скриптом tools/gen_reference.py.
+    // Итоги: ночной разбор жизненного лога батчем (половина цены за то, что
+    // ответ не нужен немедленно). Числа считает AnalysisBuilder, модель их
+    // только интерпретирует.
+    val analysisStore by lazy { ru.zf.pravka.data.AnalysisStore(this).also { it.logger = { l -> eventLog.add(l) } } }
+    val analysisBuilder by lazy {
+        ru.zf.pravka.core.AnalysisBuilder(
+            zasechka = zasechkaStore,
+            sport = sportStore,
+            strength = strengthStore,
+            food = foodStore,
+        )
+    }
+    val analysisEngine by lazy {
+        ru.zf.pravka.core.AnalysisEngine(
+            claude = claudeProvider,
+            builder = analysisBuilder,
+            store = analysisStore,
+            prompts = promptStore,
+            settings = settings,
+            stats = stats,
+            eventLog = eventLog,
+        )
+    }
+
     val exerciseBook by lazy { ru.zf.pravka.data.ExerciseBook(this) }
     val rationBook by lazy { ru.zf.pravka.data.RationBook(this) }
 

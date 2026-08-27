@@ -188,6 +188,7 @@
     <string name="tab_sport">Тело (С)</string>
     <string name="tab_food">Тело (Е)</string>
     <string name="tab_export">Выгрузки</string>
+    <string name="tab_itogi">Итоги</string>
     <string name="e_busy">Микрофон занят другой записью — сначала заверши её</string>
     <string name="e_busy_pravka">Идёт запись Тела — останови её кнопкой «Т»</string>
     <string name="e_parse_failed">Не разобрал — скажи ещё раз или набери текстом</string>

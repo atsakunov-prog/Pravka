@@ -1279,6 +1279,164 @@ $raw
         return LearnProposals(dict, rules)
     }
 
+    // ---- Итоги: разбор жизненного лога БАТЧЕМ ----
+    //
+    // Batches API берёт половину цены за то, что ответ не нужен немедленно:
+    // заявка уходит ночью, результат забирается опросом (обычно минуты, по
+    // договору — до суток). Для ночного разбора это ровно тот случай, когда
+    // ждать нечего и скидка достаётся даром.
+    //
+    // temperature здесь НЕ передаётся сознательно: на Opus 5 и Sonnet 5
+    // параметры сэмплирования удалены и запрос с ними отвергается с 400.
+    // Глубину задаёт output_config.effort, а не температура.
+
+    data class BatchAnswer(
+        val text: String,
+        val costUsd: Double,
+        val tokensIn: Int,
+        val tokensOut: Int,
+        val error: String = "",
+    )
+
+    /** Заявка в батч. Возвращает id, по которому потом забирается ответ. */
+    suspend fun submitBatch(
+        system: String,
+        user: String,
+        model: String,
+        maxTokens: Int,
+        effort: String = "high",
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+            val params = JSONObject().apply {
+                put("model", model)
+                put("max_tokens", maxTokens)
+                put("output_config", JSONObject().put("effort", effort))
+                put("system", JSONArray().put(JSONObject().apply {
+                    put("type", "text")
+                    put("text", system)
+                }))
+                put("messages", JSONArray().put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", JSONArray().put(JSONObject().apply {
+                        put("type", "text")
+                        put("text", user)
+                    }))
+                }))
+            }
+            val body = JSONObject().put(
+                "requests",
+                JSONArray().put(JSONObject().apply {
+                    put("custom_id", "analysis")
+                    put("params", params)
+                }),
+            )
+            val request = Request.Builder()
+                .url("https://api.anthropic.com/v1/messages/batches")
+                .header("x-api-key", apiKey)
+                .header("anthropic-version", "2023-06-01")
+                .post(body.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    throw ApiException("Батч не принят: HTTP ${response.code} ${text.take(200)}")
+                }
+                JSONObject(text).optString("id").ifBlank {
+                    throw ApiException("Батч принят, но без id")
+                }
+            }
+        }
+    }
+
+    /**
+     * Ответ батча, если он готов. null — ещё считается: это НЕ ошибка, опрос
+     * просто повторится на следующем тике службы.
+     */
+    suspend fun batchAnswer(batchId: String, model: String): Result<BatchAnswer?> =
+        withContext(Dispatchers.IO) {
+            runCatchingApi {
+                val apiKey = settings.apiKey()
+                if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+                val head = Request.Builder()
+                    .url("https://api.anthropic.com/v1/messages/batches/" + batchId)
+                    .header("x-api-key", apiKey)
+                    .header("anthropic-version", "2023-06-01")
+                    .get()
+                    .build()
+                val status = client.newCall(head).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw ApiException("Батч не читается: HTTP ${response.code}")
+                    }
+                    JSONObject(text)
+                }
+                if (status.optString("processing_status") != "ended") return@runCatchingApi null
+                val resultsUrl = status.optString("results_url").ifBlank {
+                    "https://api.anthropic.com/v1/messages/batches/" + batchId + "/results"
+                }
+                val results = Request.Builder()
+                    .url(resultsUrl)
+                    .header("x-api-key", apiKey)
+                    .header("anthropic-version", "2023-06-01")
+                    .get()
+                    .build()
+                client.newCall(results).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw ApiException("Результат не забрался: HTTP ${response.code}")
+                    }
+                    // Результаты приезжают построчным JSON (JSONL) и в любом
+                    // порядке — у нас в батче одна заявка, берём первую строку
+                    // с нашим custom_id.
+                    val line = text.lineSequence()
+                        .map { it.trim() }
+                        .filter { it.startsWith("{") }
+                        .firstOrNull { it.contains("\"analysis\"") }
+                        ?: throw ApiException("Батч закончился, но результата нет")
+                    val o = JSONObject(line)
+                    val result = o.optJSONObject("result") ?: JSONObject()
+                    when (result.optString("type")) {
+                        "succeeded" -> {
+                            val message = result.optJSONObject("message") ?: JSONObject()
+                            val content = message.optJSONArray("content") ?: JSONArray()
+                            val out = StringBuilder()
+                            for (i in 0 until content.length()) {
+                                val block = content.optJSONObject(i) ?: continue
+                                if (block.optString("type") == "text") out.append(block.optString("text"))
+                            }
+                            val usage = message.optJSONObject("usage") ?: JSONObject()
+                            val tin = usage.optInt("input_tokens") +
+                                usage.optInt("cache_creation_input_tokens") +
+                                usage.optInt("cache_read_input_tokens")
+                            val tout = usage.optInt("output_tokens")
+                            BatchAnswer(
+                                text = out.toString().trim(),
+                                // Батч стоит половину обычного вызова.
+                                costUsd = Pricing.costUsd(
+                                    model,
+                                    inputTokens = usage.optInt("input_tokens"),
+                                    outputTokens = tout,
+                                    cacheWriteTokens = usage.optInt("cache_creation_input_tokens"),
+                                    cacheReadTokens = usage.optInt("cache_read_input_tokens"),
+                                ) / 2.0,
+                                tokensIn = tin,
+                                tokensOut = tout,
+                            )
+                        }
+                        "errored" -> BatchAnswer(
+                            "", 0.0, 0, 0,
+                            error = result.optJSONObject("error")?.optString("message")
+                                .orEmpty().ifBlank { "модель вернула ошибку" },
+                        )
+                        "expired" -> BatchAnswer("", 0.0, 0, 0, error = "батч просрочен, нужен новый")
+                        else -> BatchAnswer("", 0.0, 0, 0, error = "батч отменён")
+                    }
+                }
+            }
+        }
+
     private fun costUsd(model: String, reply: ApiReply): Double = Pricing.costUsd(
         model,
         inputTokens = reply.inputTokens,
