@@ -29,6 +29,7 @@ class AnalysisBuilder(
     private val sport: SportStore,
     private val strength: StrengthStore,
     private val food: FoodStore,
+    private val plan: ru.zf.pravka.data.PlanStore,
 ) {
 
     companion object {
@@ -39,6 +40,15 @@ class AnalysisBuilder(
         private const val COLLAPSE_MIN_MIN = 90
         private const val ANOMALY_DURATION_MIN = 600
         private val HOLE_CATEGORIES = setOf("потери", "не размечено")
+        // «Пожарный» в языке IFS: чем человек тушит состояние. Владелец
+        // разбирает эти категории функционально, а не морально.
+        private val FIREFIGHTER_CATEGORIES = setOf("потери", "не размечено", "секс: соло", "отдых")
+        // Окно «что было после события»: три часа — столько живёт хвост
+        // тяжёлой встречи, дальше начинается уже другой день.
+        private const val AFTER_WINDOW_MIN = 180
+        // Событие-триггер: либо разговор с человеком, либо длинный блок с
+        // названным именем. Короткие созвоны на минуту сюда не идут.
+        private const val TRIGGER_MIN_MIN = 10
 
         /** Группа категории — таксономия для промпта, по имени категории. */
         fun groupOf(category: String): String {
@@ -101,6 +111,8 @@ class AnalysisBuilder(
             appendNutrition(dates)
             appendTraining(from, to, now, dates)
             appendCorrelations(entries, dates, now, from, to)
+            appendTriggers(entries, now)
+            appendPlan(dates, now)
             appendDataQuality(entries, dates, now)
             appendTimeline(mode, entries, now, to)
         }
@@ -382,10 +394,172 @@ class AnalysisBuilder(
         pearson(sleepH, trainMin)?.let {
             lines.add("сон_часы vs тренировка_мин: r=${fmt2(it)} (n=${sleepH.size})")
         }
+        // Сон и зарядка СЛЕДУЮЩЕГО утра: «мало спал — забил зарядку» это
+        // ровно эта пара, и её надо считать, а не угадывать по таймлайну.
+        val charged = dates.map { d ->
+            if (strength.gtgFlow.value.firstOrNull { it.date == d }?.charged == true) 1.0 else 0.0
+        }
+        if (dates.size >= 5) {
+            val x = sleepH.dropLast(1)
+            val y = charged.drop(1)
+            pearson(x, y)?.let {
+                lines.add("сон_часы vs зарядка_сделана_след_день (1/0): r=${fmt2(it)} (n=${x.size})")
+            }
+        }
+        pearson(sleepH, charged)?.let {
+            lines.add("сон_часы vs зарядка_сделана_тот_же_день (1/0): r=${fmt2(it)} (n=${sleepH.size})")
+        }
+        // «Пожарный»: чем тушится состояние — потери, отдых, соло.
+        val fireMin = dates.map { d ->
+            entries.filter { it.category.trim().lowercase() in FIREFIGHTER_CATEGORIES }
+                .sumOf { minutesIn(it, d, now) }.toDouble()
+        }
+        pearson(sleepH, fireMin)?.let {
+            lines.add("сон_часы vs регуляция_мин_тот_же_день: r=${fmt2(it)} (n=${sleepH.size})")
+        }
+        if (dates.size >= 5) {
+            val x = trainMin.dropLast(1)
+            val y = fireMin.drop(1)
+            pearson(x, y)?.let {
+                lines.add("тренировка_мин vs регуляция_мин_след_день: r=${fmt2(it)} (n=${x.size})")
+            }
+        }
         if (lines.isEmpty()) return
         append("<correlations>\n")
         lines.forEach { append(it).append("\n") }
         append("</correlations>\n\n")
+    }
+
+    /**
+     * Что происходит ПОСЛЕ событий с людьми — то, что владелец называет
+     * «встретился с Тимофеем, и сразу включается Пожарный». Три часа после
+     * каждого разговора, минуты по группам, и рядом — средние три часа дня
+     * для сравнения: без базы «47 минут потерь» ничего не значат.
+     *
+     * Считаем ровно факты. Является ли это паттерном, решает модель по своему
+     * правилу «три совпадения и больше», и она же обязана назвать это
+     * гипотезой, а не диагнозом.
+     */
+    private fun StringBuilder.appendTriggers(entries: List<ZasechkaStore.Entry>, now: Long) {
+        // Событие с человеком: имя в поле «клиент» или в названии разговора.
+        val triggers = entries.filter { e ->
+            e.durationMin(now) >= TRIGGER_MIN_MIN &&
+                (e.client.isNotBlank() ||
+                    e.category.trim().lowercase().let { it == "звонки" || it.startsWith("работа: звонки") } ||
+                    Regex("(?i)(встреч|созвон|звонок|разговор|терапи)").containsMatchIn(e.title))
+        }
+        if (triggers.isEmpty()) return
+
+        fun windowMinutes(afterMs: Long, filter: (ZasechkaStore.Entry) -> Boolean): Long {
+            val to = afterMs + AFTER_WINDOW_MIN * 60_000L
+            return entries.filter(filter).sumOf { it.durationMsIn(afterMs, to, now) } / 60_000L
+        }
+
+        // База: сколько «регуляции» в среднем приходится на любые три часа
+        // периода. Ниже с этим и сравнивается хвост события.
+        val totalMs = entries.sumOf { it.durationMs(now) }.coerceAtLeast(1L)
+        val fireShare = entries
+            .filter { it.category.trim().lowercase() in FIREFIGHTER_CATEGORIES }
+            .sumOf { it.durationMs(now) }.toDouble() / totalMs
+        append("<triggers>\n")
+        append("Что было в ").append(AFTER_WINDOW_MIN)
+            .append(" мин после разговоров и встреч. Для сравнения: в среднем по периоду ")
+            .append("регуляция (потери, отдых, соло) занимает ").append(pct(fireShare))
+            .append(" времени, то есть примерно ")
+            .append((fireShare * AFTER_WINDOW_MIN).roundToInt())
+            .append(" мин из каждых ").append(AFTER_WINDOW_MIN).append(".\n")
+        append("событие;дата;время;длит_мин;кто;после_регуляция_мин;после_работа_мин;после_сон_мин\n")
+        for (t in triggers.sortedBy { it.start }) {
+            val end = if (t.open) now else t.end
+            val fire = windowMinutes(end) {
+                it.category.trim().lowercase() in FIREFIGHTER_CATEGORIES
+            }
+            val work = windowMinutes(end) {
+                val c = it.category.trim().lowercase()
+                c.startsWith("работа") || c == "систематизация"
+            }
+            val sleep = windowMinutes(end) { it.category.trim().equals("Сон", true) }
+            append(t.title.ifBlank { t.category }.replace(';', ',')).append(";")
+                .append(dayKey(t.start)).append(";")
+                .append(hm.format(Date(t.start))).append(";")
+                .append(t.durationMin(now)).append(";")
+                .append(t.client.ifBlank { "—" }.replace(';', ',')).append(";")
+                .append(fire).append(";").append(work).append(";").append(sleep).append("\n")
+        }
+        // Сводка по людям: сколько событий и средний хвост регуляции. Именно
+        // здесь видно «после Ильи всегда провал», если оно есть.
+        val byPerson = triggers.filter { it.client.isNotBlank() }.groupBy { it.client }
+        if (byPerson.isNotEmpty()) {
+            append("по людям: ")
+            append(byPerson.entries.sortedByDescending { it.value.size }.joinToString("; ") { (who, list) ->
+                val avg = list.map { t ->
+                    val end = if (t.open) now else t.end
+                    windowMinutes(end) { it.category.trim().lowercase() in FIREFIGHTER_CATEGORIES }
+                }.average()
+                "$who: событий ${list.size}, регуляция после в среднем ${avg.roundToInt()} мин"
+            })
+            append("\n")
+        }
+        append("</triggers>\n\n")
+    }
+
+    /**
+     * План против факта и ЕГО ПРАВИЛА. План владелец пушит из чата в календарь
+     * intervals, правила блока живут страницей в Notion — без этого разбор
+     * рассуждает о тренировках в вакууме: «мало бегал» вместо «по плану было
+     * три пробежки, сделана одна, и это его же правило про потолок пульса».
+     */
+    private suspend fun StringBuilder.appendPlan(dates: List<String>, now: Long) {
+        runCatching { plan.load() }
+        val planned = dates.flatMap { d -> runCatching { plan.dayOf(d) }.getOrNull().orEmpty() }
+        val rules = runCatching { plan.rulesFlow.value }.getOrNull()
+        if (planned.isEmpty() && (rules == null || !rules.known)) return
+        append("<plan>\n")
+        if (planned.isNotEmpty()) {
+            append("Запланировано в календаре intervals (владелец пушит из чата).\n")
+            append("дата;сессия;тип;мин;load;сделано_факт\n")
+            for (p in planned.sortedBy { it.date }) {
+                // Факт: активность того же типа в тот же день.
+                val done = sport.workoutsFlow.value.any {
+                    dayKey(it.start) == p.date && it.type.equals(p.type, ignoreCase = true)
+                }
+                append(p.date).append(";")
+                    .append(p.name.replace(';', ',')).append(";")
+                    .append(p.type).append(";")
+                    .append(p.minutes).append(";")
+                    .append(p.load).append(";")
+                    .append(if (done) "да" else "нет").append("\n")
+            }
+        }
+        if (rules != null && rules.known) {
+            append("Его правила блока (страница Notion, правит руками)")
+            if (rules.blockTitle.isNotBlank()) append(": ").append(rules.blockTitle)
+            append("\n")
+            if (rules.runHrCeiling > 0) append("потолок лёгкого бега: ").append(rules.runHrCeiling).append("\n")
+            if (rules.greyZoneLow > 0 && rules.greyZoneHigh > 0) {
+                append("серая зона (не работать): ").append(rules.greyZoneLow)
+                    .append("–").append(rules.greyZoneHigh).append("\n")
+            }
+            if (rules.runsPerWeekMax > 0) append("пробежек в неделю не больше: ").append(rules.runsPerWeekMax).append("\n")
+            if (rules.hoursBetweenRuns > 0) append("между пробежками часов: ").append(rules.hoursBetweenRuns).append("\n")
+            if (rules.cancelOrder.isNotBlank()) append("что выпадает первым: ").append(rules.cancelOrder).append("\n")
+            if (rules.kneeGreen.isNotBlank() || rules.kneeRed.isNotBlank()) {
+                append("светофор колена — зелёный: ").append(rules.kneeGreen)
+                    .append("; жёлтый: ").append(rules.kneeYellow)
+                    .append("; красный: ").append(rules.kneeRed).append("\n")
+            }
+            if (rules.weekPlan.isNotEmpty()) {
+                append("неделя по плану: ")
+                append(rules.weekPlan.joinToString(", ") { (day, session) -> "$day — $session" })
+                append("\n")
+            }
+            if (rules.sourceText.isNotBlank()) {
+                append("страница блока прозой (тут объяснено почему):\n")
+                append(rules.sourceText.take(3000))
+                append("\n")
+            }
+        }
+        append("</plan>\n\n")
     }
 
     private fun StringBuilder.appendDataQuality(
