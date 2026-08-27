@@ -60,6 +60,13 @@ internal fun ItogiTab(app: PravkaApp) {
     var busy by remember { mutableStateOf(false) }
     val patterns by app.analysisStore.patternsFlow.collectAsState()
     var openId by remember { mutableStateOf<Long?>(null) }
+    // Список паттернов растёт без потолка, и он не должен отодвигать разборы
+    // на два экрана вниз. Раскрыт, пока есть неразобранные: они и есть
+    // просьба к владельцу. Разобрал все — складка закрывается сама.
+    var patternsOpen by remember(patterns.count { !it.judged } > 0) {
+        mutableStateOf(patterns.any { !it.judged })
+    }
+    var rejectedOpen by remember { mutableStateOf(false) }
     var contextDraft by remember(savedContext) { mutableStateOf(savedContext) }
 
     LaunchedEffect(Unit) { app.analysisStore.load() }
@@ -182,33 +189,94 @@ internal fun ItogiTab(app: PravkaApp) {
         }
 
         if (patterns.isNotEmpty()) {
+            // Несудённые сверху: это единственное, что просит его внимания.
+            // Отклонённые — вниз и под отдельную складку: они остались только
+            // чтобы модель не предлагала их снова.
+            val fresh = patterns.filter { !it.judged }
+            val accepted = patterns.filter { it.accepted }
+            val rejected = patterns.filter { it.rejected }
+            val shown = fresh + accepted
+
             item {
                 Spacer(Modifier.height(6.dp))
-                Text(
-                    "Паттерны",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                HintText(
-                    "Это нашла модель — но она видит цифры, а не тебя. Скажи по " +
-                        "каждому «про меня» или «не про меня»: твой ответ уезжает " +
-                        "в следующий разбор и весит больше её уверенности. " +
-                        "Отклонённый не вернётся, пока не появятся новые точки. " +
-                        "Тап по той же кнопке снимает ответ."
-                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { patternsOpen = !patternsOpen }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (patternsOpen) "▾" else "▸",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Паттерны · ${patterns.size}",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (fresh.isEmpty()) "все разобраны" else "новых ${fresh.size}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (fresh.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.tertiary,
+                    )
+                }
             }
-            items(patterns.size) { i ->
-                val pattern = patterns[i]
-                PatternCard(
-                    pattern = pattern,
-                    onVerdict = { verdict ->
-                        scope.launch {
-                            app.analysisStore.setVerdict(
-                                pattern.key(), verdict, app.analysisEngine.today(),
+            if (patternsOpen) {
+                item {
+                    HintText(
+                        "Это нашла модель — но она видит цифры, а не тебя. Скажи по " +
+                            "каждому «про меня» или «не про меня»: твой ответ уезжает " +
+                            "в следующий разбор и весит больше её уверенности. " +
+                            "Отклонённый не вернётся, пока не появятся новые точки. " +
+                            "Тап по той же кнопке снимает ответ."
+                    )
+                }
+                items(shown.size) { i ->
+                    val pattern = shown[i]
+                    PatternCard(
+                        pattern = pattern,
+                        onVerdict = { verdict ->
+                            scope.launch {
+                                app.analysisStore.setVerdict(
+                                    pattern.key(), verdict, app.analysisEngine.today(),
+                                )
+                            }
+                        },
+                    )
+                }
+                if (rejected.isNotEmpty()) {
+                    item {
+                        Text(
+                            (if (rejectedOpen) "▾ " else "▸ ") +
+                                "отклонённые · ${rejected.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .clickable { rejectedOpen = !rejectedOpen }
+                                .padding(vertical = 6.dp),
+                        )
+                    }
+                    if (rejectedOpen) {
+                        items(rejected.size) { i ->
+                            val pattern = rejected[i]
+                            PatternCard(
+                                pattern = pattern,
+                                onVerdict = { verdict ->
+                                    scope.launch {
+                                        app.analysisStore.setVerdict(
+                                            pattern.key(), verdict, app.analysisEngine.today(),
+                                        )
+                                    }
+                                },
                             )
                         }
-                    },
-                )
+                    }
+                }
             }
             item {
                 Spacer(Modifier.height(10.dp))
@@ -382,10 +450,27 @@ private fun ReportCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // Крестик виден ВСЕГДА, в том числе у «ждёт». Раньше удалить
+            // можно было только раскрытый готовый разбор — а убрать нужно
+            // ровно зависший, и именно он такой возможности не имел.
+            Spacer(Modifier.width(4.dp))
+            Text(
+                "✕",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .clickable(onClick = onDelete)
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+            )
         }
         if (report.pending) {
             Spacer(Modifier.height(4.dp))
-            HintText("Батч считается. Обычно минуты, по договору — до суток.")
+            HintText(
+                if (report.batchId.isNotBlank())
+                    "Батч считается. Обычно минуты, по договору — до суток."
+                else "Считается прямо сейчас. Если приложение закрыть — оборвётся, " +
+                    "и тогда сними крестиком."
+            )
         }
         if (report.error.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
@@ -413,10 +498,7 @@ private fun ReportCard(
                     String.format(Locale.US, "%.3f", report.costUsd) + " USD (батч, −50%)"
             )
             if (expanded) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = onShare) { Text("Поделиться") }
-                    TextButton(onClick = onDelete) { Text("Удалить") }
-                }
+                TextButton(onClick = onShare) { Text("Поделиться") }
             }
         }
     }

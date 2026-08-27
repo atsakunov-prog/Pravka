@@ -44,6 +44,9 @@ class AnalysisEngine(
         // Опрос батча — не чаще раза в пять минут (тик службы) и не дольше
         // суток: столько живёт заявка по договору.
         private const val PENDING_TTL_MS = 26 * 3_600_000L
+        // Столько живёт строка «ждёт» у разбора «сейчас». Дольше — значит
+        // процесс убили посреди запроса, и ждать больше нечего.
+        private const val IMMEDIATE_TTL_MS = 15 * 60_000L
     }
 
     /**
@@ -96,9 +99,15 @@ class AnalysisEngine(
             return Result.failure(IllegalStateException("Разбор за этот период уже есть"))
         }
         // Две заявки на один период в очереди — деньги на ветер: батч уже
-        // считается, дождись его.
+        // считается, дождись его. Но сперва подметаем мёртвые, иначе одна
+        // оборванная строка «ждёт» блокирует кнопку до завтра.
+        sweepStuck()
         if (force && store.pending().any { it.mode == mode && it.from == from && it.to == to }) {
-            return Result.failure(IllegalStateException("Такой разбор уже считается — подожди его"))
+            return Result.failure(
+                IllegalStateException(
+                    "Такой разбор уже считается. Если он завис — удали его крестиком в списке"
+                )
+            )
         }
         val built = runCatching {
             builder.build(mode, from, to, context = settings.analysisContext())
@@ -158,16 +167,46 @@ class AnalysisEngine(
         return done
     }
 
+    /**
+     * Заявки, которые уже никогда не ответят, — в «не вышло».
+     *
+     * Разбор «сейчас» идёт без батча: строка «ждёт» появляется до запроса, а
+     * закрывает её сам вызов. Если приложение в этот момент убили, строка
+     * остаётся висеть вечно — и блокирует кнопку сообщением «такой разбор уже
+     * считается», хотя не считается ничто. Владелец на это и наткнулся.
+     * Отличаем такую строку по пустому batchId: у настоящей заявки он есть.
+     */
+    private suspend fun sweepStuck() {
+        val now = System.currentTimeMillis()
+        for (report in store.pending()) {
+            val age = now - report.createdAt
+            val dead = when {
+                // Батч по договору живёт сутки.
+                report.batchId.isNotBlank() -> age > PENDING_TTL_MS
+                // Разбор «сейчас» не бывает дольше четверти часа даже на
+                // самом длинном месяце: значит, его оборвали.
+                else -> age > IMMEDIATE_TTL_MS
+            }
+            if (!dead) continue
+            store.fail(
+                report.id,
+                if (report.batchId.isNotBlank()) "батч не ответил за сутки"
+                else "оборвалось на середине — приложение закрыли во время разбора",
+            )
+            eventLog.add("итоги: снял зависшую заявку ${report.mode} ${report.from}")
+        }
+    }
+
     /** Опрос батчей: готово — сохраняем, просрочено — помечаем. */
     private suspend fun collect(): AnalysisStore.Report? {
+        sweepStuck()
         val pending = store.pending()
         if (pending.isEmpty()) return null
         for (report in pending) {
-            if (System.currentTimeMillis() - report.createdAt > PENDING_TTL_MS) {
-                store.fail(report.id, "батч не ответил за сутки")
-                eventLog.add("итоги: батч ${report.batchId} просрочен")
-                continue
-            }
+            // Строка без batchId — это разбор «сейчас», который ещё идёт в
+            // этом же процессе. Спрашивать про него батч-API бессмысленно:
+            // получим 404 и будем получать его каждый тик.
+            if (report.batchId.isBlank()) continue
             val answer = claude.batchAnswer(report.batchId, report.model).getOrElse { e ->
                 eventLog.add("итоги: опрос батча не вышел — ${e.message}")
                 null
