@@ -107,7 +107,18 @@ class AnalysisBuilder(
      * последние семь суток целиком плюс заметки за остальное — заметки важнее
      * строк, именно в них живёт то, чего не видно в цифрах.
      */
-    suspend fun build(mode: String, fromDate: String, toDate: String, context: String = ""): Built {
+    suspend fun build(
+        mode: String,
+        fromDate: String,
+        toDate: String,
+        context: String = "",
+    ): Built = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        // ОБЯЗАТЕЛЬНО НЕ НА ГЛАВНОМ ПОТОКЕ. Сборка ходит в сеть (intervals,
+        // Notion) и читает мегабайтные журналы с диска, а зовут её из
+        // appScope, который живёт на Dispatchers.Main. Владелец на это и
+        // наткнулся: «нельзя переключаться, неприятно» — интерфейс замирал на
+        // всё время сборки. Держать это знание в вызывающем нельзя: вызовов
+        // несколько, и забыть достаточно в одном.
         zasechka.all()
         runCatching { sport.load() }
         runCatching { strength.load() }
@@ -153,7 +164,7 @@ class AnalysisBuilder(
             appendModules()
             appendTimeline(mode, entries, now, to)
         }
-        return Built(text, hashOf(text), text.length, days)
+        Built(text, hashOf(text), text.length, days)
     }
 
     // ---- блоки ----

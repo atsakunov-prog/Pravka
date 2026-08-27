@@ -36,11 +36,13 @@ class AnalysisEngine(
         private const val NIGHT_HOUR = 4
         private const val MODEL_DAILY = Settings.MODEL_OPUS
         private const val MODEL_WEEKLY = Settings.MODEL_OPUS
-        // Бюджет ответа, а не входа. Опус думает адаптивно, и мысли тоже
-        // считаются в max_tokens: при 4000 разбор дня на 1200 слов обрывался
-        // бы на середине, не начав писать. Платим только за выданное.
-        private const val MAX_TOKENS_DAILY = 14000
-        private const val MAX_TOKENS_WEEKLY = 24000
+        // Бюджет ответа, а не входа, и он ПОТОЛОК, а не смета: платим только
+        // за выданное. Скупиться тут нельзя — Опус думает адаптивно, и мысли
+        // тоже считаются в max_tokens. На 14000 разбор упирался в потолок, и
+        // владелец получал «ответ обрезан по длине» вместо разбора. Опус 5
+        // держит до 128 тысяч на выход, запрос идёт потоком — места хватает.
+        private const val MAX_TOKENS_DAILY = 32000
+        private const val MAX_TOKENS_WEEKLY = 64000
         // Опрос батча — не чаще раза в пять минут (тик службы) и не дольше
         // суток: столько живёт заявка по договору.
         private const val PENDING_TTL_MS = 26 * 3_600_000L

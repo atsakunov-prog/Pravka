@@ -1331,6 +1331,7 @@ $raw
                 apiKey, model, parts, "", null,
                 maxTokensOverride = maxTokens,
                 effortOverride = effort,
+                tolerateTruncation = true,
             )
             BatchAnswer(
                 text = reply.text.trim(),
@@ -1504,6 +1505,7 @@ $raw
         images: List<ImagePart> = emptyList(),
         maxTokensOverride: Int = 0,
         effortOverride: String = "",
+        tolerateTruncation: Boolean = false,
     ): ApiReply {
         // Spec 6.1: one retry on network error or timeout; none on client 4xx.
         // Transient server blips (429/500/529 "overloaded") last seconds - one
@@ -1511,14 +1513,14 @@ $raw
         // nothing. A short pause before the network retry too: an instant
         // re-POST into the same dead socket just fails the same way.
         return try {
-            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride)
+            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
         } catch (e: IOException) {
             Thread.sleep(1000)
-            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride)
+            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
         } catch (e: ApiException) {
             if (!e.retryable) throw e
             Thread.sleep(e.retryDelayMs)
-            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride)
+            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
         }
     }
 
@@ -1531,6 +1533,13 @@ $raw
         images: List<ImagePart> = emptyList(),
         maxTokensOverride: Int = 0,
         effortOverride: String = "",
+        /**
+         * true — «обрезан по длине» не ошибка, а неполный ответ. Для правки
+         * текста обрезанный ответ опасен (получишь полтекста вместо текста), а
+         * для разбора «Итогов» девяносто процентов разбора несравнимо лучше
+         * красной надписи вместо него.
+         */
+        tolerateTruncation: Boolean = false,
     ): ApiReply {
         // Rough token estimate for Russian text (~2.5 chars/token) + 30% headroom.
         // Counts BOTH slots: assist/learn tasks carry all their content in
@@ -1636,10 +1645,19 @@ $raw
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        val call = client.newCall(request)
+        // Опус думает адаптивно, и на разборе «Итогов» пауза между кусками
+        // потока доходит до минут: 90-секундный таймаут общего клиента рвёт
+        // ровно те запросы, ради которых он и заводился длинным.
+        val callClient =
+            if (maxTokensOverride > 30_000) {
+                client.newBuilder()
+                    .readTimeout(10, java.util.concurrent.TimeUnit.MINUTES)
+                    .build()
+            } else client
+        val call = callClient.newCall(request)
         activeCalls.add(call)
         try {
-            return executeStreaming(call, onDelta)
+            return executeStreaming(call, onDelta, tolerateTruncation)
         } catch (e: IOException) {
             // "Сброс" closed the socket: that is a cancellation, not a network
             // error - it must NOT fall into the retry path and re-bill.
@@ -1657,7 +1675,11 @@ $raw
         }
     }
 
-    private fun executeStreaming(call: okhttp3.Call, onDelta: ((String) -> Unit)?): ApiReply {
+    private fun executeStreaming(
+        call: okhttp3.Call,
+        onDelta: ((String) -> Unit)?,
+        tolerateTruncation: Boolean = false,
+    ): ApiReply {
         call.execute().use { response ->
             if (!response.isSuccessful) {
                 val responseBody = response.body?.string().orEmpty()
@@ -1728,7 +1750,13 @@ $raw
             }
             when (stopReason) {
                 "end_turn", "stop_sequence" -> Unit
-                "max_tokens" -> throw ApiException("Ответ модели обрезан по длине. Попробуй ещё раз или сократи текст.")
+                "max_tokens" ->
+                    // Обрезано, но текст есть и он длинный — отдаём как есть.
+                    // Разбор без последнего абзаца полезнее красной надписи
+                    // вместо разбора.
+                    if (!tolerateTruncation || sb.length < 500) {
+                        throw ApiException("Ответ модели обрезан по длине. Попробуй ещё раз или сократи текст.")
+                    }
                 "refusal" -> throw ApiException("Модель отказалась обрабатывать этот текст.")
                 // Clean connection drop before message_delta: same event as an
                 // IOException mid-stream, so it retries the same way.

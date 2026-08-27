@@ -2,6 +2,8 @@ package ru.zf.pravka.data
 
 import android.content.Context
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -125,7 +127,9 @@ class AnalysisStore(private val context: Context) {
 
     var logger: ((String) -> Unit)? = null
 
-    suspend fun load() = mutex.withLock { ensureLoaded() }
+    // Файл разборов — до мегабайта текста. Читать его с главного потока
+    // значит показывать вкладку рывком; все входы в стор ведут через load().
+    suspend fun load() = withContext(Dispatchers.IO) { mutex.withLock { ensureLoaded() } }
 
     /** Заявка ушла в батч: запись появляется сразу, ещё без текста. */
     suspend fun addPending(
@@ -268,6 +272,7 @@ class AnalysisStore(private val context: Context) {
     private fun ensureLoaded() {
         if (loaded) return
         loaded = true
+
         val root = StoreFiles.readOrQuarantine(file) { JSONObject(it) } ?: return
         val list = mutableListOf<Report>()
         root.optJSONArray("reports")?.let { a ->
@@ -354,7 +359,14 @@ class AnalysisStore(private val context: Context) {
                 }
             })
         }
-        runCatching { StoreFiles.writeAtomic(file, root.toString()) }
-            .onFailure { logger?.invoke("итоги: не записалось — ${it.message}") }
+        // Разборов до двухсот, и каждый — текст на килобайты: сериализация с
+        // записью тянет на мегабайт. Зовут это из appScope, а он на главном
+        // потоке — значит, писать надо с чужого. Один поток DiskWriter, как у
+        // остальных журналов: порядок записей сохраняется, интерфейс не ждёт.
+        val payload = root.toString()
+        DiskWriter.post {
+            runCatching { StoreFiles.writeAtomic(file, payload) }
+                .onFailure { logger?.invoke("итоги: не записалось — ${it.message}") }
+        }
     }
 }
