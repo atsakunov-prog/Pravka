@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -838,6 +839,26 @@ private fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
 // automation sliced up, shown whole again).
 // ---------------------------------------------------------------------------
 
+/**
+ * Идущее прямо сейчас дело. Владелец: «удобно, что вижу текущее (нужно другим
+ * цветом)». Раньше это была серая подложка surfaceVariant — тот же серый, что
+ * у половины интерфейса, и в ленте из тридцати строк она не читалась.
+ * Теперь цвет акцента и рамка: единственная строка, которая ещё идёт, должна
+ * находиться взглядом без чтения.
+ */
+@Composable
+private fun Modifier.runningNow(): Modifier = this
+    .background(
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.13f),
+        RoundedCornerShape(10.dp),
+    )
+    .border(
+        1.dp,
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
+        RoundedCornerShape(10.dp),
+    )
+
+
 @Composable
 private fun EntryRow(
     entry: ZasechkaStore.Entry,
@@ -852,10 +873,7 @@ private fun EntryRow(
         modifier = Modifier
             .fillMaxWidth()
             .then(
-                if (entry.open) Modifier.background(
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    RoundedCornerShape(10.dp),
-                ) else Modifier
+                if (entry.open) Modifier.runningNow() else Modifier
             )
             .clickable(onClick = onEdit)
             .padding(vertical = 2.dp),
@@ -960,10 +978,7 @@ private fun ChainBlock(
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
             .then(
-                if (unit.open) Modifier.background(
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    RoundedCornerShape(10.dp),
-                ) else Modifier
+                if (unit.open) Modifier.runningNow() else Modifier
             )
             .padding(vertical = 2.dp),
     ) {

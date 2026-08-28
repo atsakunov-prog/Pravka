@@ -1066,34 +1066,44 @@ class PravkaAccessibilityService : AccessibilityService() {
     fun redoWithDirective(directive: String) =
         runProofread(ProofreadMode.CLEAN, directive = directive, strongModel = true)
 
-    // Long press = "the text is already in the field": clean it with the
-    // standard model, or run a one-tap rework on the stronger one.
+    /**
+     * Меню кнопки «П». Владелец: «из кнопок я использую только чистку,
+     * причесать стиль, обучить и сброс».
+     *
+     * Отсюда убраны «Короче», «Длиннее», «Откатить», «Коротко», «Ответить»,
+     * «Перевод». Это не поломка — все они живы на панели результата и в
+     * приложении; в меню их не стало, потому что меню из десяти пунктов, из
+     * которых нужны четыре, стоит дороже, чем отсутствующая строка: каждый
+     * раз он читает десять, чтобы выбрать одну.
+     */
     private fun showFabMenu() {
         val red = FloatingButtonController.REC_RED
-        val orange = FloatingButtonController.ACCENT
         floatingButton?.toggleMenu(
             listOf(
-                // Editing actions (red). A selection in the field narrows every
-                // one of them to just that fragment (AccessibilityTarget keeps
-                // an existing selection as the work item).
                 listOf(
                     FloatingButtonController.MenuItem(getString(R.string.quick_clean), red) { runProofread(ProofreadMode.CLEAN) },
-                    FloatingButtonController.MenuItem(getString(R.string.redo_shorter), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_SHORTER) },
-                    FloatingButtonController.MenuItem(getString(R.string.redo_longer), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_LONGER) },
                     FloatingButtonController.MenuItem(getString(R.string.redo_polish), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
-                    FloatingButtonController.MenuItem(getString(R.string.fab_menu_undo), red) { undoLast() },
                     FloatingButtonController.MenuItem("Обучить", red) { learnFromField() },
                     FloatingButtonController.MenuItem("Сброс", red) { resetStuck() },
-                ),
-                // AI actions (orange): work on the selection, else the whole
-                // field, else the clipboard; the answer goes to the clipboard.
-                listOf(
-                    FloatingButtonController.MenuItem("Коротко", orange) { runAssist("summary", ru.zf.pravka.core.Prompts.ASSIST_SUMMARY) },
-                    FloatingButtonController.MenuItem("Ответить", orange) { runAssist("reply", ru.zf.pravka.core.Prompts.ASSIST_REPLY) },
-                    FloatingButtonController.MenuItem("Перевод", orange) { runAssist("translate", ru.zf.pravka.core.Prompts.ASSIST_TRANSLATE) },
+                    FloatingButtonController.MenuItem("Открыть Правку", red) { openPravkaPrompts() },
+                    FloatingButtonController.MenuItem("Закрыть", red) { floatingButton?.hideMenu() },
                 ),
             )
         )
+    }
+
+    /** «Открыть Правку»: приложение на экране промптов — там он их и правит. */
+    private fun openPravkaPrompts() {
+        runCatching {
+            startActivity(
+                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                    .putExtra(
+                        ru.zf.pravka.MainActivity.EXTRA_TAB,
+                        ru.zf.pravka.MainActivity.TAB_PROMPTS,
+                    )
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
     }
 
     // ---- Learning: the owner hand-edited our output; extract what to keep ----
@@ -1787,57 +1797,64 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             zButton?.setRemind(false)
             val entry = outcome.entry
+            // Записка на две секунды вместо тоста — владелец просил показывать
+            // «что за дело записано и что за дело исправлено и как». Главное
+            // здесь — ЧТО ИМЕННО и КУДА: без времени и категории строка «⏱
+            // Работа» не говорит ничего, а по ней и надо ловить промахи
+            // разбора, пока они свежие.
+            val tail = listOf(entry.category, entry.client)
+                .filter { it.isNotBlank() }
+                .joinToString(" · ")
             when {
                 outcome.action == "none" -> {
                     Haptics.success(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
+                    zButton?.showNote(
                         "🤷 Не записал: ${outcome.say.ifBlank { "это не про ленту" }}",
+                        ok = false,
                     )
                 }
                 outcome.action == "stop" -> {
                     Haptics.success(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "⏹ «${entry.title}» закрыто, ${entry.durationMin()} мин",
+                    zButton?.showNote(
+                        "⏹ «${entry.title}» закрыто\n" +
+                            "${zTime(entry.start)}–${zTime(entry.end)}, ${entry.durationMin()} мин"
                     )
                 }
                 outcome.action == "insert" && outcome.error == null -> {
                     Haptics.success(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "⤵ Вставлено: «${entry.title}» ${zTime(entry.start)}–${zTime(entry.end)}" +
-                            " — обрамляющее дело продолжено",
+                    zButton?.showNote(
+                        "⤵ Вставлено «${entry.title}»\n" +
+                            "${zTime(entry.start)}–${zTime(entry.end)}" +
+                            (if (tail.isBlank()) "" else " · $tail") +
+                            "\nобрамляющее дело продолжено"
                     )
                 }
                 outcome.action == "edit" -> {
                     Haptics.success(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "✏️ «${outcome.previousTitle}» → «${entry.title}» [${entry.category}]",
+                    zButton?.showNote(
+                        "✏️ Исправлено ${zTime(entry.start)}–${zTime(entry.end)}\n" +
+                            "«${outcome.previousTitle}» → «${entry.title}»" +
+                            (if (tail.isBlank()) "" else "\n$tail")
                     )
                 }
                 outcome.action == "delete" -> {
                     Haptics.success(this@PravkaAccessibilityService)
-                    Feedback.toast(this@PravkaAccessibilityService, "🗑 «${entry.title}» удалена")
+                    zButton?.showNote("🗑 Удалено «${entry.title}» ${zTime(entry.start)}")
                 }
                 outcome.categorized -> {
                     Haptics.success(this@PravkaAccessibilityService)
-                    val tail = listOf(entry.category, entry.client)
-                        .filter { it.isNotBlank() }
-                        .joinToString(" · ")
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "⏱ ${entry.title}" + (if (tail.isBlank()) "" else " — $tail") +
-                            " (с ${zTime(entry.start)})",
+                    zButton?.showNote(
+                        "⏱ ${entry.title}\nс ${zTime(entry.start)}" +
+                            (if (tail.isBlank()) "" else " · $tail")
                     )
                 }
                 else -> {
                     // Saved raw: quieter success, the owner sorts it in the tab.
                     Haptics.error(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
+                    zButton?.showNote(
                         getString(R.string.z_saved_raw, outcome.error ?: ""),
+                        ok = false,
+                        holdMs = 4_000,
                     )
                 }
             }
@@ -1885,36 +1902,26 @@ class PravkaAccessibilityService : AccessibilityService() {
                 } else "— сейчас ничего не идёт",
                 goTab,
             )
-            val undoLabel = app.zasechkaStore.undoFlow.value
-            val undoItem = undoLabel?.let { label ->
-                ZasechkaButtonController.MenuItem("↩︎ Отменить $label") {
-                    scope.launch {
-                        val undone = runCatching { app.zasechkaStore.undoLast() }.getOrNull()
-                        app.zasechkaSync.kickSoon(scope)
-                        Feedback.toast(
-                            this@PravkaAccessibilityService,
-                            if (undone != null) "↩︎ Отменено: $undone" else "Отменять нечего",
-                        )
-                    }
-                }
-            }
+            // Владелец: «допом использую только 25 минут, 5 минут перерыв».
+            // «50 минут» и «Отменить» убраны: отмена живёт в ленте, где видно,
+            // что именно откатываешь, а полсотни минут он не ставил ни разу.
+            val close = ZasechkaButtonController.MenuItem("Закрыть") { zButton?.hideMenu() }
             val items = if (pomodoroEndsAt > 0) {
                 listOfNotNull(
                     header,
-                    undoItem,
                     ZasechkaButtonController.MenuItem(
                         if (pomodoroIsBreak) "Стоп: перерыв" else "Стоп: помидор"
                     ) { stopPomodoro(byUser = true) },
                     openTab,
+                    close,
                 )
             } else {
                 listOfNotNull(
                     header,
-                    undoItem,
                     ZasechkaButtonController.MenuItem("🍅 25 минут") { startPomodoro(25, isBreak = false) },
-                    ZasechkaButtonController.MenuItem("🍅 50 минут") { startPomodoro(50, isBreak = false) },
                     ZasechkaButtonController.MenuItem("Перерыв 5") { startPomodoro(5, isBreak = true) },
                     openTab,
+                    close,
                 )
             }
             zButton?.showMenu(items)
@@ -2752,11 +2759,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         when {
             failed == 0 && created > 0 -> {
                 Haptics.success(this)
-                // Записка вместо тоста: у неё есть ручка отмены.
-                rButton?.showNote(
-                    text = "✓ " + raznCount(created) + " в Todoist",
-                    actionLabel = "↩︎",
-                ) { undoRaznoska() }
+                // Тост, а не записка. Владелец: «после того, как дело записано,
+                // оно почему-то висит рядом баблом — то бесполезно и не нужно».
+                // Он дело только что одобрил сам, подтверждать ему нечего.
+                // Отмена не потеряна: она живёт во вкладке «Дела», где видно,
+                // что именно откатываешь.
+                Feedback.toast(this, "✓ " + raznCount(created) + " в Todoist")
             }
             created > 0 -> {
                 Haptics.error(this)
@@ -2868,46 +2876,22 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Меню кнопки «Д». Владелец: «убери целиком все меню, ничего не
+     * использую… там должно быть: открыть Дело, закрыть».
+     *
+     * Всё, что здесь было — отправить, показать разбор, разобрать заново,
+     * отменить отправку, разобрать текст, набрать текстом, — живёт на плашке
+     * разбора и во вкладке «Дела». Дублировать это в меню незачем: он
+     * подтверждает дела на плашке, а меню держит только чтобы попасть внутрь.
+     */
     private fun showRaznoskaMenu() {
-        scope.launch {
-            runCatching { app.raznoskaStore.load() }
-            val pending = app.raznoskaStore.pending()
-            val waiting = pending.sumOf { it.pendingCount }
-            val items = mutableListOf<RaznoskaButtonController.MenuItem>()
-            if (waiting > 0) {
-                val newest = pending.first()
-                items.add(
-                    RaznoskaButtonController.MenuItem("✓ Отправить ${raznCount(waiting)}") {
-                        sendRaznoska(pending.map { it.id })
-                    }
-                )
-                items.add(
-                    RaznoskaButtonController.MenuItem("Показать разбор") {
-                        showRaznoskaPlate(newest.id)
-                    }
-                )
-                items.add(
-                    RaznoskaButtonController.MenuItem("Разобрать заново") {
-                        resplitRaznoska(newest.id)
-                    }
-                )
-            }
-            if (app.raznoskaEngine.undoAvailable()) {
-                items.add(
-                    RaznoskaButtonController.MenuItem(
-                        "↩︎ Отменить отправку (" + app.raznoskaEngine.undoCount() + ")"
-                    ) { undoRaznoska() }
-                )
-            }
-            items.add(
-                RaznoskaButtonController.MenuItem("Разобрать текст") { raznoskaFromSelection() }
+        rButton?.showMenu(
+            listOf(
+                RaznoskaButtonController.MenuItem("Открыть Дело") { openTodoistTab() },
+                RaznoskaButtonController.MenuItem("Закрыть") { rButton?.hideMenu() },
             )
-            items.add(
-                RaznoskaButtonController.MenuItem("Набрать текстом") { openRaznoskaTypeIn("") }
-            )
-            items.add(RaznoskaButtonController.MenuItem("Открыть «Дела»") { openTodoistTab() })
-            rButton?.showMenu(items)
-        }
+        )
     }
 
     // ---- Еда: тап -> сказал, что съел -> КБЖУ -> дневник ----
@@ -3486,109 +3470,22 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
     }
 
+    /**
+     * Меню кнопки «Е». Владелец: «куча всего, но на самом деле нужно только
+     * записать еду и закрыть».
+     *
+     * План на сегодня, отдых, зарядка, подходы, фото тарелки, штрихкод и обе
+     * дороги «Открыть» отсюда убраны — всё это есть во вкладках Тело (С) и
+     * Тело (Е), где ещё и видно, что происходит. Меню на десять строк перед
+     * одним действием — это налог на каждое нажатие.
+     */
     private fun showFoodMenu() {
-        scope.launch {
-            runCatching { app.foodStore.load() }
-            runCatching { app.strengthStore.load() }
-            runCatching { app.planStore.load() }
-            val today = ru.zf.pravka.data.dayKey(System.currentTimeMillis())
-            val items = mutableListOf<BodyButtonController.MenuItem>()
-
-            // Первой строкой — что сегодня по плану. Чаще всего кнопку держат
-            // именно за этим: «а что у меня сегодня».
-            val planned = app.planStore.mainOf(today)
-            items.add(
-                BodyButtonController.MenuItem(
-                    planned?.let { p ->
-                        "▶ " + p.name + (if (p.minutes > 0) " · ${p.minutes} мин" else "")
-                    } ?: "План на сегодня не найден"
-                ) { openSportTab() }
+        eButton?.showMenu(
+            listOf(
+                BodyButtonController.MenuItem("Записать еду") { onFoodTap() },
+                BodyButtonController.MenuItem("Закрыть") { eButton?.hideMenu() },
             )
-
-            // Отдых: идёт — оборвать, не идёт — запустить.
-            if (restUntil > System.currentTimeMillis()) {
-                val left = ((restUntil - System.currentTimeMillis()) / 1000L).toInt()
-                items.add(BodyButtonController.MenuItem("⏱ Отдых $left сек — стоп") { stopRest() })
-            } else {
-                items.add(
-                    BodyButtonController.MenuItem("⏱ Отдых $cachedRestSec сек") {
-                        startRest(cachedRestSec)
-                    }
-                )
-            }
-
-            // Зарядка одной кнопкой, без модели и без токенов. Подпись говорит
-            // ровно одно: отметить или уже отмечено. Цепочка рядом — она и есть
-            // то, что не должно рваться. Висы и негативы отсюда не пишутся: их
-            // числа наговариваются или ставятся во вкладке, и мешать их с
-            // отметкой «делал» было ровно той путаницей, из которой всё
-            // непонимание и росло.
-            val gtg = app.strengthStore.gtgOn(today)
-            val streak = app.strengthStore.streak(today)
-            if (gtg?.charged == true) {
-                items.add(
-                    BodyButtonController.MenuItem("✓ Зарядка сделана · цепочка $streak дн.") {
-                        openSportTab()
-                    }
-                )
-            } else {
-                items.add(
-                    BodyButtonController.MenuItem(
-                        "Зарядка сделана" +
-                            (if (streak > 0) " · цепочка $streak дн." else " · цепочка начнётся")
-                    ) { markCharged() }
-                )
-            }
-
-            val session = app.strengthStore.sessionsOn(today).firstOrNull { !it.empty }
-            if (session != null) {
-                // Куда уехал журнал — прямо в подписи: «ждём часы» это ответ на
-                // вопрос «а записалось ли», а пустая строка — нет.
-                val route = app.strengthEngine.routeOf(session)
-                items.add(
-                    BodyButtonController.MenuItem(
-                        "Подходы сегодня (${session.setCount}) · " +
-                            (if (route.tone == 1) "уехало" else route.headline.lowercase())
-                    ) { showStrengthPlate(session.id, null) }
-                )
-            }
-
-            val food = app.foodStore.dayTotal(today)
-            val target = runCatching { app.settings.foodTargets().kcal }.getOrDefault(0)
-            items.add(
-                BodyButtonController.MenuItem(
-                    if (food.empty) "Еды сегодня не записано"
-                    else "Еда: ${food.kcal}" + (if (target > 0) " из $target" else "") + " ккал"
-                ) { openFoodTab() }
-            )
-
-            val pending = app.foodStore.pending()
-            if (pending.isNotEmpty()) {
-                items.add(
-                    BodyButtonController.MenuItem("Показать разбор еды (${pending.size})") {
-                        showFoodPlate(pending.first().id)
-                    }
-                )
-            }
-            items.add(BodyButtonController.MenuItem("Набрать текстом") { openFoodTypeIn("") })
-            // Долгое нажатие — дороги еды без слов (его просьба): снять
-            // тарелку или штрихкод. Открывают Тело (Е) с автозапуском.
-            items.add(
-                BodyButtonController.MenuItem("📷 Сфоткать тарелку") { openFoodTab("photo") }
-            )
-            items.add(
-                BodyButtonController.MenuItem("▥ Штрихкод") { openFoodTab("barcode") }
-            )
-            items.add(
-                BodyButtonController.MenuItem("🎙 Тело голосом (подходы, зарядка)") {
-                    eRouteNext = true
-                    onFoodTap()
-                }
-            )
-            items.add(BodyButtonController.MenuItem("Открыть «Спорт»") { openSportTab() })
-            items.add(BodyButtonController.MenuItem("Открыть «Еду»") { openFoodTab() })
-            eButton?.showMenu(items)
-        }
+        )
     }
 
     /** «Зарядка сделана»: одна отметка, ноль токенов, цепочка не рвётся. */

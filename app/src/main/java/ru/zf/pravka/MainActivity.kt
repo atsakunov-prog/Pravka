@@ -107,6 +107,7 @@ class MainActivity : ComponentActivity() {
         const val TAB_FOOD = "food"
         const val TAB_SETTINGS = "settings"
         const val TAB_ITOGI = "itogi"
+        const val TAB_PROMPTS = "prompts"
 
         // Кнопка еды: «сфоткай тарелку» / «штрихкод» с длинного нажатия
         // открывают Тело (Е) и сразу запускают камеру или сканер.
@@ -115,28 +116,53 @@ class MainActivity : ComponentActivity() {
 
     private val serviceEnabled = mutableStateOf(false)
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        val app = application as PravkaApp
-        val foodAction = intent?.getStringExtra(EXTRA_FOOD_ACTION).orEmpty()
-        val initialTab = when (intent?.getStringExtra(EXTRA_TAB)) {
+    // «Открыть Засечку» из меню кнопки обязано приземлять именно на Засечку.
+    // Раньше вкладка читалась только в onCreate — а приложение почти всегда
+    // уже запущено, интент приходит в onNewIntent, и владелец оставался там,
+    // где был («должно попадать на засечку»). Теперь просьба живёт состоянием,
+    // и экран на неё реагирует в любой момент жизни активити.
+    private val tabRequest = mutableStateOf<Tab?>(null)
+    private val foodActionRequest = mutableStateOf("")
+
+    private fun tabOf(intent: android.content.Intent?): Tab? =
+        when (intent?.getStringExtra(EXTRA_TAB)) {
             TAB_SETTINGS -> Tab.SETTINGS
             TAB_ITOGI -> Tab.ITOGI
+            TAB_PROMPTS -> Tab.PROMPTS
             TAB_PRAVKA -> Tab.PRAVKA
             TAB_ZASECHKA -> Tab.ZASECHKA
             TAB_TODOIST -> Tab.TODOIST
             TAB_SPORT -> Tab.SPORT
             TAB_FOOD -> Tab.FOOD
-            // The timesheet is the screen the owner opens daily; everything
-            // else is service tooling.
-            else -> Tab.ZASECHKA
+            else -> null
         }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        tabOf(intent)?.let { tabRequest.value = it }
+        intent.getStringExtra(EXTRA_FOOD_ACTION)?.takeIf { it.isNotBlank() }?.let {
+            foodActionRequest.value = it
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val app = application as PravkaApp
+        val foodAction = intent?.getStringExtra(EXTRA_FOOD_ACTION).orEmpty()
+        // Без явной просьбы открываем таймшит: это экран, который он смотрит
+        // каждый день, всё остальное — служебное.
+        val initialTab = tabOf(intent) ?: Tab.ZASECHKA
         setContent {
             PravkaTheme {
                 MainScreen(
                     app = app,
                     initialTab = initialTab,
                     foodAction = foodAction,
+                    tabRequest = tabRequest.value,
+                    onTabRequestHandled = { tabRequest.value = null },
+                    foodActionRequest = foodActionRequest.value,
+                    onFoodActionHandled = { foodActionRequest.value = "" },
                     settings = app.settings,
                     promptStore = app.promptStore,
                     stats = app.stats,
@@ -376,6 +402,10 @@ private fun MainScreen(
     app: PravkaApp,
     initialTab: Tab,
     foodAction: String = "",
+    tabRequest: Tab? = null,
+    onTabRequestHandled: () -> Unit = {},
+    foodActionRequest: String = "",
+    onFoodActionHandled: () -> Unit = {},
     settings: Settings,
     promptStore: PromptStore,
     stats: Stats,
@@ -404,6 +434,25 @@ private fun MainScreen(
     }
     // Одноразовый автозапуск камеры/сканера в Теле (Е) — из меню кнопки еды.
     var foodActionPending by remember { mutableStateOf(foodAction.ifBlank { null }) }
+
+    // Просьба извне при живом приложении: переключаемся и сообщаем, что
+    // услышали, — иначе следующая перерисовка увела бы вкладку обратно.
+    LaunchedEffect(tabRequest) {
+        val want = tabRequest ?: return@LaunchedEffect
+        if (want in service) {
+            tab = Tab.MORE
+            moreTab = want
+        } else {
+            tab = want
+            moreTab = null
+        }
+        onTabRequestHandled()
+    }
+    LaunchedEffect(foodActionRequest) {
+        if (foodActionRequest.isBlank()) return@LaunchedEffect
+        foodActionPending = foodActionRequest
+        onFoodActionHandled()
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,

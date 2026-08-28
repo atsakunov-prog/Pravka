@@ -812,16 +812,14 @@ class RaznoskaButtonController(
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
         }
         positionInput(p)
         input = row
         runCatching { windowManager.addView(row, p) }
-        row.post {
-            edit.requestFocus()
-            service.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
-                ?.showSoftInput(edit, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
-        }
+        // Не один showSoftInput, а до победного: окно оверлея получает фокус
+        // уже после addView, и первый вызов молча возвращает false.
+        ImeKick.raise(service, edit)
     }
 
     fun hideInput() {

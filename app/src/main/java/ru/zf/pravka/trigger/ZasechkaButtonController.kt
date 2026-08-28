@@ -51,6 +51,9 @@ class ZasechkaButtonController(
         private val AMBER_DEEP = 0xFFEA580C.toInt()   // remind pulse
         private val REC_RED = FloatingButtonController.REC_RED
         private val PAPER = 0xFFF7F3EA.toInt()
+        // Записка «не смог»: тот же красный, что у записи, — цвет уже значит
+        // «внимание сюда», второй заводить незачем.
+        private val NOTE_BAD = REC_RED
 
         // Pomodoro faces: pine for focus, ink-soft for the break.
         val POMO_FOCUS = 0xFF2F6B5E.toInt()
@@ -337,6 +340,64 @@ class ZasechkaButtonController(
                 lastTickerAt = 0L
             }
         }.start()
+    }
+
+    // ---- Записка: что именно записалось, на две секунды ----
+    //
+    // Владелец: «засечка должна баблом на 2 секунды показывать, что за дело
+    // записано. и что за дело исправлено и как». Раньше это был тост — а тост
+    // на современном Android коротким не сделаешь, он душится системой при
+    // частых показах и не даёт ни двух строк, ни цвета. Своя записка рядом с
+    // кнопкой: две строки, свой цвет на удачу и на ошибку, свои две секунды.
+
+    private var note: android.widget.TextView? = null
+    private val noteDismiss = Runnable { hideNote() }
+
+    fun hideNote() {
+        val n = note ?: return
+        n.removeCallbacks(noteDismiss)
+        note = null
+        n.animate().alpha(0f).setDuration(160).withEndAction {
+            runCatching { windowManager.removeView(n) }
+        }.start()
+    }
+
+    /** [ok] = false красит записку в красный: это не «записал», а «не смог». */
+    fun showNote(text: String, ok: Boolean = true, holdMs: Long = 2_000) {
+        hideNote()
+        val view = TextView(service).apply {
+            this.text = text
+            setTextColor(PAPER)
+            textSize = 14f
+            maxLines = 3
+            background = GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat()
+                setColor(if (ok) AMBER else NOTE_BAD)
+            }
+            alpha = 0f
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setOnClickListener { hideNote() }
+        }
+        val p = WindowManager.LayoutParams(
+            tickerWidthPx(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+        val bp = params
+        val (w, h) = screenSize()
+        if (bp != null) {
+            val centerX = bp.x + buttonSize / 2
+            p.x = if (centerX < w / 2) bp.x else (bp.x + buttonSize - tickerWidthPx()).coerceAtLeast(dp(8))
+            // Над кнопкой, если она в нижней половине, иначе под ней: записка
+            // не должна закрывать сам палец.
+            p.y = if (bp.y > h / 2) (bp.y - dp(64)).coerceAtLeast(0) else bp.y + buttonSize + dp(8)
+        }
+        note = view
+        runCatching { windowManager.addView(view, p) }
+        view.animate().alpha(0.97f).setDuration(140).start()
+        view.postDelayed(noteDismiss, holdMs)
     }
 
     // ---- Long-press menu: a single column of amber pills ----
@@ -764,16 +825,14 @@ class ZasechkaButtonController(
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
         }
         positionInput(p)
         input = row
         runCatching { windowManager.addView(row, p) }
-        row.post {
-            edit.requestFocus()
-            service.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
-                ?.showSoftInput(edit, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
-        }
+        // Не один showSoftInput, а до победного: окно оверлея получает фокус
+        // уже после addView, и первый вызов молча возвращает false.
+        ImeKick.raise(service, edit)
     }
 
     fun hideInput() {

@@ -94,18 +94,18 @@ class ZasechkaEngine(
             onSuccess = { p ->
                 stats.recordAux(p.costUsd, p.tokensIn, p.tokensOut)
                 val target = today.getOrNull(p.entryIndex - 1)
-                // Вставка завершённого куска: границы должны сложиться в
-                // валидный отрезок В ПРОШЛОМ, иначе честнее записать новым
-                // делом (данные важнее красоты).
-                val insertSpan: Pair<Long, Long>? = if (p.action == "insert") {
-                    var s0 = timeOnDay(now, p.startTime)
-                        ?: if (p.startOffsetMin > 0) now - p.startOffsetMin * 60_000L else null
-                    if (s0 != null && s0 > now) s0 -= 86_400_000L
-                    var e0 = timeOnDay(now, p.endTime)
-                        ?: if (p.durationMin > 0 && s0 != null) s0 + p.durationMin * 60_000L else null
-                    if (e0 != null && s0 != null && e0 <= s0) e0 += 86_400_000L
-                    if (s0 != null && e0 != null && e0 > s0 && e0 <= now) s0 to e0 else null
-                } else null
+                // ВРЕМЯ РЕШАЕТ, А НЕ СЛОВО МОДЕЛИ. Раньше вставка задним
+                // числом случалась только когда модель САМА назвала намерение
+                // «insert», а начало из «с 12:00» в ветке new просто терялось —
+                // запись начиналась «сейчас». Отсюда и шло то, что владелец
+                // назвал «очень нестабильно работает текст в таймшит, если по
+                // предыдущему»: одна и та же фраза то ложилась верно, то
+                // съедала полдня. Теперь границы считаются ВСЕГДА, а new это
+                // или insert — выводится из них: назван конец в прошлом,
+                // значит кусок закрыт, что бы модель ни думала.
+                val said = spokenSpan(p, now)
+                val insertSpan: Pair<Long, Long>? =
+                    if (p.action == "new" || p.action == "insert") said.closedPast(now) else null
                 when {
                     // «Всё, закончил» — закрыть открытое, нового не начинать.
                     p.action == "stop" -> {
@@ -224,7 +224,11 @@ class ZasechkaEngine(
                     // Everything else (including an edit that failed to point
                     // at a real entry) lands as a NEW entry - data first.
                     else -> {
-                        val start = now - p.startOffsetMin * 60_000L
+                        // Начало берём из названного времени, если оно было:
+                        // «с 12:00 время с семьёй» обязано начаться в 12:00,
+                        // а не сейчас. Не назвали — отступ назад, не назвали и
+                        // его — сейчас.
+                        val start = said.start ?: now
                         val entry = store.startEntry(
                             start = start,
                             raw = text,
@@ -240,7 +244,9 @@ class ZasechkaEngine(
                         )
                         eventLog.add(
                             "засечка: «${entry.title}» [${entry.category.ifBlank { "без категории" }}]" +
-                                (if (p.startOffsetMin > 0) " с −${p.startOffsetMin} мин" else "")
+                                (if (start < now - 60_000L)
+                                    " задним числом с " + timeFormat.format(Date(start))
+                                else "")
                         )
                         sync.kickSoon(scope)
                         Outcome(entry, categorized = true, error = null)
@@ -264,6 +270,49 @@ class ZasechkaEngine(
                 Outcome(entry, categorized = false, error = e.message)
             },
         )
+    }
+
+    /**
+     * Что владелец сказал про время — одним местом и по одним правилам.
+     *
+     * Модель возвращает четыре поля, и раньше каждая ветка разбирала их
+     * по-своему: вставка смотрела на все четыре, новая запись — только на
+     * отступ назад, а названное «с 12:00» в ней терялось молча. Здесь они
+     * сводятся один раз, и дальше обе ветки работают с готовыми границами.
+     *
+     * Порядок приоритетов ровно такой, каким владелец и говорит: названное
+     * время точнее, чем «полчаса назад», а «полчаса назад» точнее, чем
+     * ничего.
+     */
+    private data class Span(val start: Long?, val end: Long?) {
+        /**
+         * Закрытый кусок в прошлом — то, что кладётся вставкой. Обе границы
+         * известны, конец позже начала и не в будущем. Минута запаса: пока
+         * фраза договаривается и уезжает в модель, «до 16:52» успевает стать
+         * будущим на десяток секунд.
+         */
+        fun closedPast(now: Long): Pair<Long, Long>? {
+            val s = start ?: return null
+            val e = end ?: return null
+            if (e <= s) return null
+            if (e > now + 60_000L) return null
+            return s to minOf(e, now)
+        }
+    }
+
+    private fun spokenSpan(p: ClaudeProvider.ZasechkaParse, now: Long): Span {
+        // Начало: названное время, иначе отступ назад, иначе неизвестно.
+        var start = timeOnDay(now, p.startTime)
+            ?: if (p.startOffsetMin > 0) now - p.startOffsetMin * 60_000L else null
+        // Время «в будущем» на сегодняшней дате — это вчерашний вечер:
+        // в час ночи «с 23:30» означает вчера, а не через сутки.
+        if (start != null && start > now + 60_000L) start -= 86_400_000L
+
+        var end = timeOnDay(now, p.endTime)
+            ?: if (p.durationMin > 0 && start != null) start + p.durationMin * 60_000L else null
+        // «с 23:40 до 00:20» — конец уже за полночь.
+        if (end != null && start != null && end <= start) end += 86_400_000L
+        return Span(start, end)
     }
 
     /**
