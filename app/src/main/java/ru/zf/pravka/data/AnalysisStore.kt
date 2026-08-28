@@ -27,9 +27,9 @@ class AnalysisStore(private val context: Context) {
 
     companion object {
         private const val FILE_NAME = "analysis.json"
-        // Разборы — это тексты по несколько килобайт. Год храним спокойно,
-        // а список в интерфейсе всё равно листается.
-        private const val KEEP = 200
+        // Журнал запусков, а не архив разборов: строчка на ночь. Месяца
+        // хватает, чтобы увидеть, что поиск идёт и во что обходится.
+        private const val KEEP = 40
 
         /** Вердикты владельца по паттерну. Пусто — он ещё не смотрел. */
         const val VERDICT_YES = "да"
@@ -263,6 +263,40 @@ class AnalysisStore(private val context: Context) {
     }.getOrDefault(date)
 
     fun pending(): List<Report> = _reportsFlow.value.filter { it.pending }
+
+    /**
+     * Паттерны прозой — для запроса, который владелец копирует к себе в чат.
+     *
+     * Чат знает о нём всё, кроме одного: что за прошлые недели нашла модель в
+     * приложении и что он на это ответил. Ради этого блока кнопка и заведена.
+     * Несудённые сюда НЕ идут: их ценность в том, что он их ещё не проверил,
+     * а чату они уехали бы как факты о нём.
+     */
+    fun handoffBlock(): String {
+        val accepted = _patternsFlow.value.filter { it.accepted }
+        val rejected = _patternsFlow.value.filter { it.rejected }
+        if (accepted.isEmpty() && rejected.isEmpty()) {
+            return "Пока ни одного проверенного паттерна: приложение ещё не " +
+                "накопило их или я не успел ответить по ним. Разбирай с нуля."
+        }
+        return buildString {
+            if (accepted.isNotEmpty()) {
+                append("ПОДТВЕРЖДЁННЫЕ МНОЙ — это про меня, проверено:\n")
+                accepted.forEach { pt ->
+                    append("- ").append(pt.text)
+                    append(" (замечен ").append(pt.firstSeen)
+                    append(", подтверждался в ").append(pt.times)
+                    append(" поисках, точек в последний раз ").append(pt.points).append(")\n")
+                }
+            }
+            if (rejected.isNotEmpty()) {
+                if (accepted.isNotEmpty()) append("\n")
+                append("ОТКЛОНЁННЫЕ МНОЙ — не про меня, не предлагай снова без ")
+                append("новых точек:\n")
+                rejected.forEach { pt -> append("- ").append(pt.text).append("\n") }
+            }
+        }.trim()
+    }
 
     /** Последний разбор этого режима — по нему решается, пора ли новый. */
     fun latest(mode: String): Report? = _reportsFlow.value.firstOrNull { it.mode == mode }

@@ -44,11 +44,16 @@ import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.MarkdownText
 
 /**
- * Итоги: разборы жизненного лога, которые пишет Опус по ночам.
+ * Паттерны: повторы, которые Опус ищет по всему логу каждую ночь.
  *
- * Экран нарочно скучный: список разборов, тап — раскрыть текст. Вся работа
- * происходит без него — ночью уходит заявка батчем, утром здесь лежит готовый
- * текст. Кнопки сверху нужны на случай «хочу сейчас» и для первого запуска.
+ * Экран был списком ночных разборов текстом. Владелец их снял — «очень плохо
+ * работает тема с итогами, но замечательно работает тема с паттернами» — и
+ * теперь разборы он делает сам в чате по выгруженному CSV, а здесь остаётся
+ * то единственное, что приложение умеет лучше чата: методично, каждую ночь,
+ * искать повторы и помнить их годами вместе с ЕГО вердиктом по каждому.
+ *
+ * Список разборов внизу остался журналом запусков: когда искали, сколько
+ * нашли, во что обошлось. Читать там нечего — крестик и есть его назначение.
  */
 @Composable
 internal fun ItogiTab(app: PravkaApp) {
@@ -79,19 +84,12 @@ internal fun ItogiTab(app: PravkaApp) {
         scope.launch {
             // immediate = true: кнопка «сейчас» ждёт ответа здесь и сейчас,
             // полной ценой. Батч остаётся ночному расписанию.
-            val outcome = when (what) {
-                "daily" -> app.analysisEngine.requestDaily(force = true, immediate = true)
-                "today" -> app.analysisEngine.requestDaily(
-                    date = app.analysisEngine.today(), force = true, immediate = true,
-                )
-                "weekly" -> app.analysisEngine.requestWeekly(force = true, immediate = true)
-                else -> app.analysisEngine.requestDeep(30, force = true, immediate = true)
-            }
+            val date =
+                if (what == "today") app.analysisEngine.today() else app.analysisEngine.yesterday()
+            val outcome = app.analysisEngine.huntPatterns(date, force = true, immediate = true)
             busy = false
             outcome.fold(
-                onSuccess = {
-                    Feedback.toast(app, "Готово — разбор ниже", long = true)
-                },
+                onSuccess = { Feedback.toast(app, "Готово — паттерны обновлены", long = true) },
                 onFailure = { e -> Feedback.toast(app, e.message ?: "Не вышло", long = true) },
             )
         }
@@ -104,14 +102,14 @@ internal fun ItogiTab(app: PravkaApp) {
         item {
             ScreenTitle(stringRes(R.string.tab_itogi))
             HintText(
-                "Опус разбирает всё сразу: лента и еда из Правки, сон, HRV и " +
-                    "тренировки с часов, план и правила блока из intervals и " +
-                    "Notion, дела из Todoist, твой дневник в Notion твоими же " +
-                    "словами и расход на модель. Плюс твои последние три недели " +
-                    "по суткам — чтобы день сравнивался с твоей нормой, а не с " +
-                    "пустотой. Все числа считает приложение, модель их только " +
-                    "читает. Отправка батчем — половина цены за то, что ответ не " +
-                    "нужен сию секунду."
+                "Каждую ночь Опус прогоняет весь лог и ищет повторы: лента и еда " +
+                    "из Правки, сон, HRV и тренировки с часов, план из intervals, " +
+                    "дела из Todoist, дневник в Notion и расход на модель — плюс " +
+                    "твои последние три недели по суткам, потому что внутри одного " +
+                    "дня повтора не бывает. Ответ — только строки ниже, текстов он " +
+                    "больше не пишет. Разбор ты делаешь в чате: «Ещё → Выгрузки», " +
+                    "там CSV и кнопка «Скопировать запрос для чата» с этими же " +
+                    "паттернами."
             )
         }
 
@@ -119,26 +117,17 @@ internal fun ItogiTab(app: PravkaApp) {
             // Ночью разбор собирается сам; эти кнопки — «хочу сейчас» и
             // «проверить, что всё работает».
             Button(
-                onClick = { request("daily") },
+                onClick = { request("yesterday") },
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Сделать ежедневный разбор сейчас") }
-            Spacer(Modifier.height(6.dp))
-            Button(
-                onClick = { request("weekly") },
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Сделать еженедельный разбор сейчас") }
+            ) { Text("Поискать паттерны сейчас") }
             Spacer(Modifier.height(6.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 OutlinedButton(onClick = { request("today") }, enabled = !busy) {
-                    Text("Сегодня")
-                }
-                OutlinedButton(onClick = { request("deep") }, enabled = !busy) {
-                    Text("За месяц")
+                    Text("Считая сегодня")
                 }
                 if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             }
@@ -147,15 +136,15 @@ internal fun ItogiTab(app: PravkaApp) {
                 // Уйти со вкладки теперь можно: сборка данных ушла с главного
                 // потока, а запрос живёт в appScope и переживёт уход.
                 HintText(
-                    "Считает. Опус думает несколько минут — можно уйти на другую " +
-                        "вкладку, разбор досчитается и появится здесь."
+                    "Ищет. Опус думает несколько минут — можно уйти на другую " +
+                        "вкладку, паттерны обновятся сами."
                 )
             }
             HintText(
-                "Кнопки считают СРАЗУ и по полной цене — минута ожидания. Ночной " +
-                    "разбор уходит батчем, вдвое дешевле. Ежедневный — за вчера, " +
-                    "еженедельный — за последние семь дней; «Сегодня» — день до " +
-                    "текущей минуты (удобно проверить, но выводы по неполному дню слабее)."
+                "Кнопка считает СРАЗУ и по полной цене. Ночью то же самое уходит " +
+                    "батчем, вдвое дешевле. Ищет по вчерашнему дню и трём неделям " +
+                    "вокруг; «Считая сегодня» добавляет незакрытый день — полезно " +
+                    "проверить, что всё работает."
             )
         }
 
@@ -222,7 +211,7 @@ internal fun ItogiTab(app: PravkaApp) {
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "Паттерны · ${patterns.size}",
+                        "Найдено · ${patterns.size}",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
@@ -290,16 +279,17 @@ internal fun ItogiTab(app: PravkaApp) {
             item {
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "Разборы",
+                    "Журнал поисков",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
+                HintText("Когда искали и во что обошлось. Читать нечего — крестик убирает.")
             }
         }
 
         if (reports.isEmpty()) {
             item {
-                HintText("Разборов пока нет. Нажми «За вчера» — или подожди ночи.")
+                HintText("Ещё не искали. Нажми кнопку выше — или подожди ночи.")
             }
         }
 

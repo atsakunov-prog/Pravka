@@ -37,8 +37,12 @@ class PromptStore(private val context: Context) {
         BODY("body"),
         // Правила блока: проза Notion -> числа (Сонет).
         RULES("rules"),
-        // Итоги: разбор жизненного лога за день или неделю (Опус, батчем).
-        ANALYSIS("analysis");
+        // Паттерны: ночной поиск повторов по всему логу (Опус). Разборы
+        // владелец делает сам в чате — здесь только охота за повторами.
+        PATTERNS("patterns"),
+        // Запрос, который владелец копирует в чат вместе с выгрузкой CSV:
+        // туда подставляются его подтверждённые и отклонённые паттерны.
+        CHAT_HANDOFF("chat_handoff");
 
         companion object {
             fun of(mode: ProofreadMode): PromptId = when (mode) {
@@ -61,7 +65,8 @@ class PromptStore(private val context: Context) {
         PromptId.TRAINER -> Prompts.TRAINER
         PromptId.BODY -> Prompts.BODY
         PromptId.RULES -> Prompts.RULES
-        PromptId.ANALYSIS -> Prompts.ANALYSIS
+        PromptId.PATTERNS -> Prompts.PATTERNS
+        PromptId.CHAT_HANDOFF -> Prompts.CHAT_HANDOFF
     }
 
     fun overrideFlow(id: PromptId): Flow<String?> =

@@ -1217,14 +1217,10 @@ class AnalysisBuilder(
             .take(12)
     }.getOrDefault(text.hashCode().toString(16))
 
-    /** «Вчера» и «прошлая неделя» — в датах, как их ждёт build(). */
+    /**
+     * «Вчера» — единственный период, за который теперь ходит поиск. Недельный
+     * и месячный разборы сняты (владелец делает их в чате), а окно для
+     * повторов даёт блок <recent>: три недели по суткам приходят всегда.
+     */
     fun yesterday(): String = dayKey(System.currentTimeMillis() - 86_400_000L)
-
-    fun weekAgo(days: Int = 7): Pair<String, String> {
-        val cal = Calendar.getInstance()
-        cal.timeInMillis = System.currentTimeMillis() - 86_400_000L
-        val to = dayKey(cal.timeInMillis)
-        val from = dayKey(cal.timeInMillis - (days - 1) * 86_400_000L)
-        return from to to
-    }
 }

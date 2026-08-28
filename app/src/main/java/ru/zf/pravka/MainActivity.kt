@@ -206,8 +206,8 @@ private val SERVICE_TABS = listOf(
 
 /** Одна строка про то, зачем эта вкладка — чтобы не открывать её наугад. */
 private fun serviceHint(tab: Tab): String = when (tab) {
-    Tab.ITOGI -> "Ночной разбор дня и недели: что происходит с твоим временем"
-    Tab.EXPORT -> "Вся жизнь одним CSV: таймшит, еда, спорт — файл для разбора в чате"
+    Tab.ITOGI -> "Повторы, которые Опус находит по всему логу каждую ночь"
+    Tab.EXPORT -> "Вся жизнь одним CSV плюс запрос для чата с твоими паттернами"
     Tab.SETTINGS -> "Ключ Anthropic, распознавание, служба, сохранённые записи"
     Tab.DICTIONARY -> "Как писать имена и термины: заменять, подсказывать, не трогать"
     Tab.STATS -> "Токены и деньги по дням"
@@ -307,11 +307,44 @@ private fun ExportTab(app: PravkaApp) {
             },
             enabled = !busy,
         ) { Text(if (busy) "Собираю…" else "CSV всей жизни") }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(16.dp))
+        // Разбор владелец делает в чате, а не здесь. Единственное, чего у
+        // чата нет и быть не может, — накопленные паттерны с ЕГО вердиктами:
+        // они живут только в приложении. Кнопка ровно про это, и стоит она
+        // вплотную к CSV, потому что копируются они парой.
+        Text(
+            "Запрос для чата",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        HintText(
+            "Копирует в буфер текст запроса вместе со всеми паттернами, " +
+                "которые ты подтвердил, и теми, что отклонил. Порядок такой: " +
+                "выгрузи CSV, прицепи его в чат, вставь этот текст. " +
+                "Отклонённые уезжают нарочно — чтобы он не предлагал их снова."
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = {
+                app.appScope.launch {
+                    runCatching { app.analysisStore.load() }
+                    val text = app.promptStore
+                        .effective(PromptStore.PromptId.CHAT_HANDOFF)
+                        .replace("{PATTERNS}", app.analysisStore.handoffBlock())
+                        .replace("{TODAY}", app.analysisEngine.today())
+                    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(
+                        android.content.ClipData.newPlainText("Запрос для чата", text)
+                    )
+                    Feedback.toast(app, "Запрос скопирован — вставляй в чат", long = true)
+                }
+            },
+        ) { Text("Скопировать запрос для чата") }
+        Spacer(Modifier.height(14.dp))
         HintText(
             "Сводки текстом за день и неделю — во вкладке Тело (С), карточка " +
                 "«Сводка для чата». Выгрузки одной Засечки и одной Еды — в их " +
-                "вкладках."
+                "вкладках. Сам текст запроса правится в «Ещё → Промпты»."
         )
     }
 }

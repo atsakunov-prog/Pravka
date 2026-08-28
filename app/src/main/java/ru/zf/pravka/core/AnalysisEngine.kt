@@ -10,16 +10,23 @@ import ru.zf.pravka.data.dayKey
 import ru.zf.pravka.provider.ClaudeProvider
 
 /**
- * Итоги: ночной разбор жизненного лога.
+ * Ночная охота за паттернами.
  *
- * Три вещи, ради которых движок отдельный:
- * 1. ЧИСЛА СЧИТАЕТ КОД. [AnalysisBuilder] собирает агрегаты детерминированно,
- *    модель получает готовые цифры и занимается только интерпретацией.
+ * Движок родился как «Итоги» — ночной разбор дня и недели текстом. Владелец
+ * его свернул: «очень плохо работает тема с итогами, но замечательно работает
+ * тема с паттернами — давай оставим только ежедневный поиск по паттернам».
+ * Разборы он делает сам в чате по выгруженному CSV, и это честнее: чат видит
+ * его целиком и умеет спорить, а приложение хорошо умеет ровно одно —
+ * методично, каждую ночь, искать повторы и помнить их годами.
+ *
+ * Что осталось от прежней конструкции и почему:
+ * 1. ЧИСЛА СЧИТАЕТ КОД. [AnalysisBuilder] собирает агрегаты детерминированно.
+ *    Модель ищет смысл, а не складывает четырёхзначные числа по тремстам
+ *    строкам.
  * 2. ОТПРАВКА БАТЧЕМ. Половина цены за то, что ответ не нужен сию секунду.
- *    Заявка уходит ночью, результат забирается опросом на тике службы.
- * 3. РАСПИСАНИЕ. Разбор дня — ночью за вчера, разбор недели — ночью в
- *    воскресенье. Повторно за тот же период не отправляем: дважды платить за
- *    один и тот же текст незачем.
+ *    Ночью уходит заявка, результат забирается опросом на тике службы.
+ * 3. РАСПИСАНИЕ. Раз в сутки, ночью, за вчера — но со всем окном <recent>:
+ *    повтор не виден внутри одного дня по определению.
  */
 class AnalysisEngine(
     private val claude: ClaudeProvider,
@@ -34,15 +41,13 @@ class AnalysisEngine(
     companion object {
         // Ночью: и день закрыт, и лента уже нормализована после полуночи.
         private const val NIGHT_HOUR = 4
-        private const val MODEL_DAILY = Settings.MODEL_OPUS
-        private const val MODEL_WEEKLY = Settings.MODEL_OPUS
-        // Бюджет ответа, а не входа, и он ПОТОЛОК, а не смета: платим только
-        // за выданное. Скупиться тут нельзя — Опус думает адаптивно, и мысли
-        // тоже считаются в max_tokens. На 14000 разбор упирался в потолок, и
-        // владелец получал «ответ обрезан по длине» вместо разбора. Опус 5
-        // держит до 128 тысяч на выход, запрос идёт потоком — места хватает.
-        private const val MAX_TOKENS_DAILY = 32000
-        private const val MAX_TOKENS_WEEKLY = 64000
+        private const val MODEL = Settings.MODEL_OPUS
+        // Ответ — шесть строк, но думает Опус адаптивно, и мысли тоже
+        // считаются в max_tokens. Это ПОТОЛОК, а не смета: платим только за
+        // выданное, поэтому скупиться незачем — на тесном потолке модель
+        // упиралась в него, не дойдя до строк, и владелец получал «ответ
+        // обрезан по длине» вместо паттернов.
+        private const val MAX_TOKENS = 32000
         // Опрос батча — не чаще раза в пять минут (тик службы) и не дольше
         // суток: столько живёт заявка по договору.
         private const val PENDING_TTL_MS = 26 * 3_600_000L
@@ -52,38 +57,20 @@ class AnalysisEngine(
     }
 
     /**
-     * Ручной запуск из вкладки: тот же путь, что у ночного, но с [force] —
-     * кнопка «сейчас» обязана срабатывать даже когда разбор за этот период
-     * уже лежит. Иначе её нечем проверить, а перечитать день по свежим
-     * правкам ленты бывает нужно и просто так.
+     * Охота за вчера. [force] — кнопка «сейчас» обязана срабатывать, даже если
+     * за этот день уже искали: перечитать день по свежим правкам ленты бывает
+     * нужно и просто так, иначе кнопку нечем проверить.
      */
-    suspend fun requestDaily(
+    suspend fun huntPatterns(
         date: String = builder.yesterday(),
         force: Boolean = false,
         immediate: Boolean = false,
-    ): Result<String> =
-        submit("daily", date, date, MODEL_DAILY, MAX_TOKENS_DAILY, force, immediate)
-
-    suspend fun requestWeekly(force: Boolean = false, immediate: Boolean = false): Result<String> {
-        val (from, to) = builder.weekAgo(7)
-        return submit("weekly", from, to, MODEL_WEEKLY, MAX_TOKENS_WEEKLY, force, immediate)
-    }
-
-    suspend fun requestDeep(
-        days: Int = 30,
-        force: Boolean = false,
-        immediate: Boolean = false,
-    ): Result<String> {
-        val (from, to) = builder.weekAgo(days)
-        return submit("deep", from, to, MODEL_WEEKLY, MAX_TOKENS_WEEKLY, force, immediate)
-    }
+    ): Result<String> = submit("daily", date, date, force, immediate)
 
     private suspend fun submit(
         mode: String,
         from: String,
         to: String,
-        model: String,
-        maxTokens: Int,
         force: Boolean = false,
         /**
          * true — ответ нужен сейчас: обычный запрос, полная цена, минута
@@ -120,10 +107,10 @@ class AnalysisEngine(
         if (built.text.length < 400) {
             return Result.failure(IllegalStateException("За этот период почти нет данных"))
         }
-        val system = prompts.effective(PromptStore.PromptId.ANALYSIS)
+        val system = prompts.effective(PromptStore.PromptId.PATTERNS)
         if (immediate) {
-            val report = store.addPending(mode, from, to, "", model, built.hash, built.chars)
-            val answer = claude.analyzeNow(system, built.text, model, maxTokens).getOrElse { e ->
+            val report = store.addPending(mode, from, to, "", MODEL, built.hash, built.chars)
+            val answer = claude.analyzeNow(system, built.text, MODEL, MAX_TOKENS).getOrElse { e ->
                 store.fail(report.id, e.message ?: "не вышло")
                 eventLog.add("итоги: разбор сейчас не вышел — ${e.message}")
                 return Result.failure(e)
@@ -140,10 +127,10 @@ class AnalysisEngine(
             )
             return Result.success("сразу")
         }
-        val outcome = claude.submitBatch(system, built.text, model, maxTokens)
+        val outcome = claude.submitBatch(system, built.text, MODEL, MAX_TOKENS)
         return outcome.fold(
             onSuccess = { batchId ->
-                store.addPending(mode, from, to, batchId, model, built.hash, built.chars)
+                store.addPending(mode, from, to, batchId, MODEL, built.hash, built.chars)
                 eventLog.add(
                     "итоги: заявка $mode $from — $to ушла батчем " +
                         "(${built.chars / 1000} тыс. знаков, батч $batchId)"
@@ -235,8 +222,11 @@ class AnalysisEngine(
     }
 
     /**
-     * Сохранить готовый разбор: машинный хвост #patterns уходит в память
-     * паттернов и ВЫРЕЗАЕТСЯ из текста — он для кода, не для чтения.
+     * Разложить ответ: строки #patterns уходят в память паттернов, а в журнал
+     * запусков ложится короткая запись о том, что нашли. Раньше здесь
+     * сохранялся текст разбора; текстов модель больше не пишет, и хранить
+     * сырой машинный блок как «разбор» значило бы показывать владельцу
+     * решётки вместо смысла.
      */
     private suspend fun finish(
         id: Long,
@@ -248,10 +238,21 @@ class AnalysisEngine(
             runCatching { store.mergePatterns(fresh, date) }
             eventLog.add("итоги: запомнил паттернов ${fresh.size}")
         }
-        val clean = answer.text.substringBefore("#patterns").trim()
+        val record = buildString {
+            append(if (fresh.isEmpty()) "Повторов не набралось." else "Нашёл повторов: " + fresh.size + ".")
+            fresh.forEach { pt ->
+                append("\n- ").append(pt.text)
+                append(" — точек ").append(pt.points)
+                if (pt.confidence.isNotBlank()) append(", уверенность ").append(pt.confidence)
+            }
+            // Если модель вдруг написала что-то помимо блока — сохраним и это,
+            // иначе диагностировать сорванный ответ будет нечем.
+            val extra = answer.text.substringBefore("#patterns").trim()
+            if (extra.isNotBlank()) append("\n\n").append(extra.take(1500))
+        }
         return store.complete(
             id,
-            clean.ifBlank { answer.text },
+            record,
             answer.costUsd,
             answer.tokensIn,
             answer.tokensOut,
@@ -295,20 +296,11 @@ class AnalysisEngine(
         val haveDaily = store.reportsFlow.value.any {
             it.mode == "daily" && it.from == yesterday && (it.pending || it.ready)
         }
-        if (!haveDaily) {
-            requestDaily(yesterday)
-            return
-        }
-        // Воскресенье: неделя целиком. Отдельным тиком, чтобы две тяжёлые
-        // заявки не уходили одной пачкой.
-        if (cal.get(Calendar.DAY_OF_WEEK) != Calendar.SUNDAY) return
-        val (from, to) = builder.weekAgo(7)
-        val haveWeekly = store.reportsFlow.value.any {
-            it.mode == "weekly" && it.from == from && it.to == to && (it.pending || it.ready)
-        }
-        if (!haveWeekly) requestWeekly()
+        if (!haveDaily) huntPatterns(yesterday)
     }
 
     /** Сегодняшняя дата — для подписи «за какой день считаем». */
     fun today(): String = dayKey(System.currentTimeMillis())
+
+    fun yesterday(): String = builder.yesterday()
 }
