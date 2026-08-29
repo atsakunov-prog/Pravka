@@ -129,6 +129,21 @@ class FloatingButtonController(
     /** Where this button should appear when it shows up (docked over "З"). */
     var pairAnchor: (() -> Pair<Int, Int>?)? = null
 
+
+    /**
+     * Кнопка в стопке: приглушена и чуть меньше. Не скрыта — из-под верхней
+     * должен торчать край, иначе стопка читается как «кнопки пропали».
+     */
+    fun setStacked(value: Boolean) {
+        val v = button ?: return
+        v.animate()
+            .alpha(if (value) 0.55f else 1f)
+            .scaleX(if (value) 0.9f else 1f)
+            .scaleY(if (value) 0.9f else 1f)
+            .setDuration(180)
+            .start()
+    }
+
     fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
     fun buttonSizePx(): Int = buttonSize

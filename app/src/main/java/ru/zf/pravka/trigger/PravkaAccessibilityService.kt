@@ -43,6 +43,22 @@ class PravkaAccessibilityService : AccessibilityService() {
         // A reply chain: entries closer than this are one conversation.
         private const val CONVO_GAP_MS = 10L * 60 * 1000
 
+        /** Окно двойного тапа по «З» на локскрине. */
+        private const val LOCK_DOUBLE_TAP_MS = 1_500L
+
+        /**
+         * Потолок записи, начатой с заблокированного экрана. Владелец: «через
+         * 40 секунд вообще, потому что я больше и не говорю». Разблокировал —
+         * потолок снимается: он тут, и говорит сколько нужно.
+         */
+        private const val LOCKED_TAKE_CAP_MS = 40_000L
+
+        /**
+         * Через столько без касаний кнопки собираются в стопку. Полминуты —
+         * не мгновение (успеть додумать, куда жать) и не вечность.
+         */
+        private const val STACK_IDLE_MS = 30_000L
+
         // Internal bookkeeping prefs, read by the Learning tab too.
         const val PREFS_INTERNAL = "pravka_internal"
         const val KEY_LAST_LEARN_BATCH = "last_learn_batch"
@@ -94,6 +110,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     // Tap on the live plate: kill the mic, type instead (confidential takes).
     @Volatile private var zTypeInstead = false
     @Volatile private var cachedZEnabled = true
+    @Volatile private var cachedStackIdle = true
     @Volatile private var cachedZGapMin = 45
     @Volatile private var cachedZCheckins = true
     @Volatile private var cachedZDayStart = 9
@@ -229,24 +246,28 @@ class PravkaAccessibilityService : AccessibilityService() {
         // trail behind on a rubber band, in order "П" - "З" - "Д" - "Т".
         val pairGap = (8 * resources.displayMetrics.density).toInt()
         floatingButton?.onDragged = { x, y, dropped ->
+            expandButtons()
             val size = floatingButton?.buttonSizePx() ?: 0
             zButton?.followTo(x, y + size + pairGap, dropped)
             rButton?.followTo(x, y + 2 * (size + pairGap), dropped)
             eButton?.followTo(x, y + 3 * (size + pairGap), dropped)
         }
         zButton?.onDragged = { x, y, dropped ->
+            expandButtons()
             val size = floatingButton?.buttonSizePx() ?: 0
             floatingButton?.followTo(x, y - size - pairGap, dropped)
             rButton?.followTo(x, y + size + pairGap, dropped)
             eButton?.followTo(x, y + 2 * (size + pairGap), dropped)
         }
         rButton?.onDragged = { x, y, dropped ->
+            expandButtons()
             val size = floatingButton?.buttonSizePx() ?: 0
             zButton?.followTo(x, y - size - pairGap, dropped)
             floatingButton?.followTo(x, y - 2 * (size + pairGap), dropped)
             eButton?.followTo(x, y + size + pairGap, dropped)
         }
         eButton?.onDragged = { x, y, dropped ->
+            expandButtons()
             val size = floatingButton?.buttonSizePx() ?: 0
             rButton?.followTo(x, y - size - pairGap, dropped)
             zButton?.followTo(x, y - 2 * (size + pairGap), dropped)
@@ -263,6 +284,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // take still works: CLEAN runs and the result lands in the clipboard
         // plus a notification (the no-field path).
         floatingButton?.show()
+        chromeHandler.post(chromeTicker)
         scope.launch {
             app.settings.zEnabledFlow.collect {
                 cachedZEnabled = it
@@ -279,6 +301,14 @@ class PravkaAccessibilityService : AccessibilityService() {
             app.settings.tEnabledFlow.collect {
                 cachedEEnabled = it
                 eButton?.setEnabled(it)
+            }
+        }
+        scope.launch {
+            app.settings.stackIdleFlow.collect {
+                cachedStackIdle = it
+                // Выключили при сложенных кнопках — разложить сейчас же,
+                // иначе тумблер выглядит сломанным.
+                if (!it && stacked) expandButtons()
             }
         }
         scope.launch { app.settings.restSecFlow.collect { cachedRestSec = it } }
@@ -439,6 +469,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Short tap: stop the active session if any, else start per the engine. */
     private fun onDictateTap() {
+        if (expandButtons()) return
         if (isLockedIdle()) return
         // One microphone, one take at a time: a Засечка recording must be
         // stopped from its own button, not silently hijacked by this one.
@@ -1077,6 +1108,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * раз он читает десять, чтобы выбрать одну.
      */
     private fun showFabMenu() {
+        if (expandButtons()) return
         val red = FloatingButtonController.REC_RED
         val accent = FloatingButtonController.ACCENT
         // Первой строкой — что с кнопкой прямо сейчас. Владелец: «на каждой
@@ -1633,8 +1665,38 @@ class PravkaAccessibilityService : AccessibilityService() {
     // ---- Засечка: tap -> capture -> categorize -> timesheet (no field) ----
 
     /** The "З" button, the notification action and the tab's mic button. */
+    // ---- Засечка с заблокированного экрана ----
+    //
+    // Карманный страж глушит все касания на локскрине: случайное нажатие в
+    // кармане не должно ни начать запись, ни открыть меню. Но владелец хочет
+    // диктовать НЕ разблокируя — и это правильно, ради того Засечка и есть.
+    // Компромисс — двойной тап: в кармане он практически невозможен, а
+    // намеренно делается за полсекунды. Только по «З»: остальным кнопкам
+    // диктовать с локскрина незачем.
+    private var lockArmedAt = 0L
+
+    private fun lockedDoubleTapArmed(now: Long): Boolean {
+        val armed = now - lockArmedAt in 1..LOCK_DOUBLE_TAP_MS
+        lockArmedAt = if (armed) 0L else now
+        return armed
+    }
+
     fun onZasechkaTap() {
-        if (isLockedIdle()) return
+        if (expandButtons()) return
+        if (isLockedIdle()) {
+            if (!lockedDoubleTapArmed(System.currentTimeMillis())) {
+                // Первый тап только взводит — и показывает это, иначе жест
+                // неотличим от «кнопка сломалась».
+                Haptics.start(this)
+                zButton?.showNote("Ещё раз — и пишу", holdMs = LOCK_DOUBLE_TAP_MS)
+                return
+            }
+            zButton?.hideNote()
+            // Запись с локскрина живёт 40 секунд. Владелец: «через 40 секунд
+            // вообще, потому что я больше и не говорю». Разблокировал —
+            // потолок снимается, значит он тут и говорит сколько нужно.
+            lockedTakeCapAt = System.currentTimeMillis() + LOCKED_TAKE_CAP_MS
+        }
         if (zSession != null) { stopZasechkaLive(); return }
         if (zWhisperRecording && DictationService.recording) {
             zButton?.setBusy(true)
@@ -1886,6 +1948,115 @@ class PravkaAccessibilityService : AccessibilityService() {
     // queue waits behind it. The owner's fold black-screens correlated with
     // it, so the whole feature is out; per-app minutes from UsageStats stay.
 
+    // ---- Потолок записи с локскрина и стопка кнопок ----
+    //
+    // Один общий тик на две вещи: обе живут по таймеру и обе должны молчать,
+    // пока таймера нет. Отдельный Handler вместо корутины сознательно — это
+    // работа с окнами, ей место на главном потоке, и снимается она одной
+    // строкой в onDestroy.
+
+    private var lockedTakeCapAt = 0L
+    private var lastTouchAt = System.currentTimeMillis()
+    private var stacked = false
+    private val chromeHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val chromeTicker = object : Runnable {
+        override fun run() {
+            tickChrome()
+            chromeHandler.postDelayed(this, 2_000)
+        }
+    }
+
+    private fun tickChrome() {
+        val now = System.currentTimeMillis()
+        val screenLocked = runCatching { keyguardManager?.isKeyguardLocked == true }
+            .getOrDefault(false)
+
+        // На локскрине стопки быть не должно: двойной тап целится в «З», а из
+        // сложенной стопки торчит «П». Разворачиваем молча — вибрация от
+        // того, что телефон просто заблокировали, была бы бессмыслицей.
+        if (screenLocked && stacked) expandButtons(silent = true)
+
+        // Потолок записи, начатой с заблокированного экрана.
+        if (lockedTakeCapAt > 0) {
+            val locked = screenLocked
+            val recording = zSession != null || zWhisperRecording
+            when {
+                // Разблокировал — он тут и говорит: потолок снимаем.
+                !locked -> lockedTakeCapAt = 0L
+                !recording -> lockedTakeCapAt = 0L
+                now >= lockedTakeCapAt -> {
+                    lockedTakeCapAt = 0L
+                    app.eventLog.add("засечка: запись с локскрина закрыта по потолку 40 сек")
+                    onZasechkaTap()   // тот же путь, что у ручной остановки
+                }
+            }
+        }
+
+        // Стопка: собрать кнопки, когда их давно не трогали. Посреди работы
+        // не складываем никогда — кнопка, уехавшая под другую в тот момент,
+        // когда её собираются нажать, это худший из возможных сюрпризов.
+        val working = busy || googleSession != null || zSession != null ||
+            rSession != null || eSession != null || DictationService.recording ||
+            zWhisperRecording || rWhisperRecording || eWhisperRecording
+        if (!stacked && cachedStackIdle && !working && !screenLocked &&
+            now - lastTouchAt >= STACK_IDLE_MS
+        ) {
+            collapseButtons()
+        }
+    }
+
+    /** Любое касание любой кнопки — отсчёт до стопки начинается заново. */
+    private fun touched() {
+        lastTouchAt = System.currentTimeMillis()
+    }
+
+    /**
+     * Кнопки в стопку. Владелец: «чтобы кнопки собирались стопкой (но было
+     * видно, что это стопка), и если я нажимаю, то они раскрываются».
+     *
+     * Поэтому не «спрятать», а именно сложить: три нижние уезжают под
+     * верхнюю с небольшим сдвигом и приглушённые — из-под края видно, что
+     * там ещё что-то есть, и понятно, что тап их вернёт. Спрятанная кнопка
+     * выглядела бы как пропавшая, а это худшее, что можно сделать с
+     * инструментом, которым размечают день.
+     */
+    private fun collapseButtons() {
+        if (stacked) return
+        val (x, y) = floatingButton?.currentPosition() ?: return
+        val step = (5 * resources.displayMetrics.density).toInt()
+        stacked = true
+        zButton?.followTo(x + step, y + step, true)
+        rButton?.followTo(x + 2 * step, y + 2 * step, true)
+        eButton?.followTo(x + 3 * step, y + 3 * step, true)
+        floatingButton?.setStacked(true)
+        zButton?.setStacked(true)
+        rButton?.setStacked(true)
+        eButton?.setStacked(true)
+    }
+
+    /**
+     * Развернуть обратно в цепочку. Возвращает true, если разворот и был
+     * действием — тогда сам тап не должен ничего запускать: первое нажатие по
+     * стопке это «покажи кнопки», а не «пиши».
+     */
+    private fun expandButtons(silent: Boolean = false): Boolean {
+        if (!silent) touched()
+        if (!stacked) return false
+        stacked = false
+        val (x, y) = floatingButton?.currentPosition() ?: return false
+        val size = floatingButton?.buttonSizePx() ?: 0
+        val gap = (8 * resources.displayMetrics.density).toInt()
+        zButton?.followTo(x, y + size + gap, true)
+        rButton?.followTo(x, y + 2 * (size + gap), true)
+        eButton?.followTo(x, y + 3 * (size + gap), true)
+        floatingButton?.setStacked(false)
+        zButton?.setStacked(false)
+        rButton?.setStacked(false)
+        eButton?.setStacked(false)
+        if (!silent) Haptics.start(this)
+        return true
+    }
+
     // ---- Помидоры: the "З" button doubles as a pomodoro timer ----
 
     private var pomodoroEndsAt = 0L
@@ -1899,6 +2070,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     private fun showZasechkaMenu() {
+        if (expandButtons()) return
         val goTab: () -> Unit = {
             startActivity(
                 android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
@@ -2468,6 +2640,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Кнопка «Д» (и вкладка «Дела»): старт наговора, второй тап — разбор. */
     fun onRaznoskaTap() {
+        if (expandButtons()) return
         if (isLockedIdle()) return
         if (rSession != null) { stopRaznoskaLive(); return }
         if (rWhisperRecording && DictationService.recording) {
@@ -2902,6 +3075,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * подтверждает дела на плашке, а меню держит только чтобы попасть внутрь.
      */
     private fun showRaznoskaMenu() {
+        if (expandButtons()) return
         scope.launch {
             runCatching { app.raznoskaStore.load() }
             val waiting = app.raznoskaStore.pending().sumOf { it.pendingCount }
@@ -2926,6 +3100,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Кнопка «Е»: старт наговора, второй тап — разбор по КБЖУ. */
     fun onFoodTap() {
+        if (expandButtons()) return
         if (isLockedIdle()) return
         if (eSession != null) { stopFoodLive(); return }
         if (eWhisperRecording && DictationService.recording) {
@@ -3508,6 +3683,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * одним действием — это налог на каждое нажатие.
      */
     private fun showFoodMenu() {
+        if (expandButtons()) return
         scope.launch {
             runCatching { app.foodStore.load() }
             val today = ru.zf.pravka.data.dayKey(System.currentTimeMillis())
@@ -3604,6 +3780,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         ripenessHandler.removeCallbacks(ripenessCheck)
         zReminderHandler.removeCallbacks(zReminderTick)
         pomodoroHandler.removeCallbacks(pomodoroTicker)
+        chromeHandler.removeCallbacks(chromeTicker)
         lagHandler.removeCallbacks(lagTick)
         configHandler.removeCallbacks(configSettled)
         googleSession?.stop()

@@ -221,6 +221,21 @@ class ZasechkaButtonController(
     /** Fired while the owner drags THIS button (and once more on drop). */
     var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
 
+
+    /**
+     * Кнопка в стопке: приглушена и чуть меньше. Не скрыта — из-под верхней
+     * должен торчать край, иначе стопка читается как «кнопки пропали».
+     */
+    fun setStacked(value: Boolean) {
+        val v = button ?: return
+        v.animate()
+            .alpha(if (value) 0.55f else 1f)
+            .scaleX(if (value) 0.9f else 1f)
+            .scaleY(if (value) 0.9f else 1f)
+            .setDuration(180)
+            .start()
+    }
+
     fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
     fun buttonSizePx(): Int = buttonSize
@@ -867,10 +882,21 @@ class ZasechkaButtonController(
         }
 
         override fun onTouch(view: View, event: MotionEvent): Boolean {
-            // Lockscreen pocket guard: while idle, the whole gesture is
-            // swallowed - no tap, no menu, no drag (a running take keeps
-            // the button alive so its stop-tap still works).
-            if (service.isLockedIdle()) return true
+            // Карманный страж: на локскрине в покое жест глотается целиком —
+            // ни тапа, ни меню, ни перетаскивания (идущая запись кнопку не
+            // глушит, чтобы стоп-тап доходил).
+            //
+            // ИСКЛЮЧЕНИЕ только у «З» и только для короткого тапа: владелец
+            // хочет диктовать не разблокируя, ради этого Засечка и есть.
+            // Одиночный тап по-прежнему ничего не делает — служба ждёт
+            // второго за полторы секунды. В кармане это почти невозможно,
+            // намеренно делается за полсекунды.
+            if (service.isLockedIdle()) {
+                if (event.actionMasked == MotionEvent.ACTION_UP && !busy && !recording) {
+                    onShortTap()
+                }
+                return true
+            }
             val p = params ?: return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {

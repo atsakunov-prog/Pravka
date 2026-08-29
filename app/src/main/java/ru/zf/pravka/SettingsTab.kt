@@ -341,6 +341,24 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
     )
 
     Spacer(Modifier.height(10.dp))
+    val stackIdle by settings.stackIdleFlow.collectAsState(initial = true)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = stackIdle,
+            onCheckedChange = { on -> scope.launch { settings.setStackIdle(on) } },
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("Складывать кнопки в стопку", style = MaterialTheme.typography.bodyMedium)
+    }
+    HintText(
+        "Полминуты без касаний — четыре кнопки съезжают друг под друга " +
+            "уголками, чтобы не занимать полэкрана. Видно, что это стопка: " +
+            "из-под верхней торчат края. Любой тап раскладывает обратно и " +
+            "ничего при этом не запускает. Посреди записи или разбора не " +
+            "складываются никогда."
+    )
+
+    Spacer(Modifier.height(10.dp))
     val phoneMicOnly by settings.phoneMicOnlyFlow.collectAsState(initial = true)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Switch(

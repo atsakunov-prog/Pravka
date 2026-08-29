@@ -37,6 +37,7 @@ class Settings(private val context: Context) {
 
         // Засечка (timesheet).
         private val KEY_Z_ENABLED = booleanPreferencesKey("z_enabled")
+        private val KEY_STACK_IDLE = booleanPreferencesKey("buttons_stack_idle")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -172,6 +173,17 @@ class Settings(private val context: Context) {
     // ---- Засечка (timesheet) ----
 
     /** The always-on timesheet button. */
+    /**
+     * Собирать кнопки в стопку, когда их долго не трогают. Владелец просил
+     * сам, поэтому по умолчанию включено — но тумблер обязателен: четыре
+     * кнопки, внезапно уехавшие друг под друга, без объяснения выглядят как
+     * поломка.
+     */
+    val stackIdleFlow = context.dataStore.data.map { it[KEY_STACK_IDLE] ?: true }
+    suspend fun setStackIdle(value: Boolean) {
+        context.dataStore.edit { it[KEY_STACK_IDLE] = value }
+    }
+
     val zEnabledFlow = context.dataStore.data.map { it[KEY_Z_ENABLED] ?: true }
     suspend fun setZEnabled(value: Boolean) {
         context.dataStore.edit { it[KEY_Z_ENABLED] = value }
