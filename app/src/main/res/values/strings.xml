@@ -129,6 +129,8 @@
     <string name="prompt_title_trainer">Тренер (вопрос про упражнение)</string>
     <string name="prompt_title_body">Тело (подходы, еда, зарядка)</string>
     <string name="prompt_title_rules">Правила блока из Notion</string>
+    <string name="prompt_title_patterns">Паттерны: ночной поиск повторов</string>
+    <string name="prompt_title_handoff">Запрос для чата (копируется в Выгрузках)</string>
     <string name="tab_learning">Обучение</string>
     <string name="tab_logs">Логи</string>
     <string name="prompt_modified">изменён</string>

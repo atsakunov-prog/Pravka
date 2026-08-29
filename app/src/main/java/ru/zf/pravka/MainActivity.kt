@@ -1693,6 +1693,8 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.TRAINER to R.string.prompt_title_trainer,
     PromptStore.PromptId.BODY to R.string.prompt_title_body,
     PromptStore.PromptId.RULES to R.string.prompt_title_rules,
+    PromptStore.PromptId.PATTERNS to R.string.prompt_title_patterns,
+    PromptStore.PromptId.CHAT_HANDOFF to R.string.prompt_title_handoff,
 )
 
 @Composable
@@ -1768,7 +1770,11 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            stringResource(promptTitles.getValue(id)),
+                            // getValue кидал NoSuchElement на промпте, для
+                            // которого забыли заголовок, — и весь экран падал.
+                            // Новый промпт не должен ронять Промпты: покажем
+                            // его ключом, это уродливо и видно, что чинить.
+                            promptTitles[id]?.let { stringResource(it) } ?: id.storageKey,
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
                         )
@@ -1834,7 +1840,7 @@ private fun PromptEditor(
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text(stringResource(R.string.prompt_back)) }
             Text(
-                stringResource(promptTitles.getValue(id)),
+                promptTitles[id]?.let { stringResource(it) } ?: id.storageKey,
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )

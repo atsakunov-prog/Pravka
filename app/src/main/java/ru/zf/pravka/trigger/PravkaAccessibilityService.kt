@@ -1078,9 +1078,25 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     private fun showFabMenu() {
         val red = FloatingButtonController.REC_RED
+        val accent = FloatingButtonController.ACCENT
+        // Первой строкой — что с кнопкой прямо сейчас. Владелец: «на каждой
+        // должно быть открыть, закрыть и что-то текущее». Для Правки текущее
+        // это состояние работы: идёт ли она и есть ли что откатить. Поле
+        // читать отсюда нельзя — это чужой процесс и запрос через биндер;
+        // хватает того, что стопка отката непуста, а совпадение с текстом
+        // проверит сам откат и честно скажет, если не сошлось.
+        val canUndo = !UndoStack.isEmpty()
+        val state = when {
+            busy -> "⋯ Идёт правка"
+            canUndo -> "↩︎ Откатить последнюю"
+            else -> "Готово к правке"
+        }
         floatingButton?.toggleMenu(
             listOf(
                 listOf(
+                    FloatingButtonController.MenuItem(state, accent) {
+                        if (canUndo && !busy) undoLast()
+                    },
                     FloatingButtonController.MenuItem(getString(R.string.quick_clean), red) { runProofread(ProofreadMode.CLEAN) },
                     FloatingButtonController.MenuItem(getString(R.string.redo_polish), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
                     FloatingButtonController.MenuItem("Обучить", red) { learnFromField() },
@@ -2886,12 +2902,24 @@ class PravkaAccessibilityService : AccessibilityService() {
      * подтверждает дела на плашке, а меню держит только чтобы попасть внутрь.
      */
     private fun showRaznoskaMenu() {
-        rButton?.showMenu(
-            listOf(
-                RaznoskaButtonController.MenuItem("Открыть Дело") { openTodoistTab() },
-                RaznoskaButtonController.MenuItem("Закрыть") { rButton?.hideMenu() },
+        scope.launch {
+            runCatching { app.raznoskaStore.load() }
+            val waiting = app.raznoskaStore.pending().sumOf { it.pendingCount }
+            // Первой строкой — что сейчас: сколько дел разобрано и ждёт
+            // отправки. Тап по ней открывает плашку, где их и подтверждают.
+            val head = if (waiting > 0) "✓ Ждут отправки: " + raznCount(waiting)
+            else "— неотправленных дел нет"
+            rButton?.showMenu(
+                listOf(
+                    RaznoskaButtonController.MenuItem(head) {
+                        val newest = app.raznoskaStore.pending().firstOrNull()
+                        if (newest != null) showRaznoskaPlate(newest.id) else openTodoistTab()
+                    },
+                    RaznoskaButtonController.MenuItem("Открыть Дело") { openTodoistTab() },
+                    RaznoskaButtonController.MenuItem("Закрыть") { rButton?.hideMenu() },
+                )
             )
-        )
+        }
     }
 
     // ---- Еда: тап -> сказал, что съел -> КБЖУ -> дневник ----
@@ -3480,12 +3508,24 @@ class PravkaAccessibilityService : AccessibilityService() {
      * одним действием — это налог на каждое нажатие.
      */
     private fun showFoodMenu() {
-        eButton?.showMenu(
-            listOf(
-                BodyButtonController.MenuItem("Записать еду") { onFoodTap() },
-                BodyButtonController.MenuItem("Закрыть") { eButton?.hideMenu() },
+        scope.launch {
+            runCatching { app.foodStore.load() }
+            val today = ru.zf.pravka.data.dayKey(System.currentTimeMillis())
+            val food = app.foodStore.dayTotal(today)
+            val target = runCatching { app.settings.foodTargets().kcal }.getOrDefault(0)
+            // Первой строкой — что сейчас: сколько съедено за день. Это
+            // единственная цифра, ради которой он вообще держит кнопку.
+            val head = if (food.empty) "— еды сегодня не записано"
+            else "Сегодня: ${food.kcal}" + (if (target > 0) " из $target" else "") +
+                " ккал · Б${food.protein}"
+            eButton?.showMenu(
+                listOf(
+                    BodyButtonController.MenuItem(head) { openFoodTab() },
+                    BodyButtonController.MenuItem("Записать еду") { onFoodTap() },
+                    BodyButtonController.MenuItem("Закрыть") { eButton?.hideMenu() },
+                )
             )
-        )
+        }
     }
 
     /** «Зарядка сделана»: одна отметка, ноль токенов, цепочка не рвётся. */

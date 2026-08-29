@@ -23,6 +23,10 @@ object UndoStack {
         return entries.lastOrNull { it.after.trim() == trimmed }
     }
 
+    /** Есть ли вообще что откатывать — для подписи в меню кнопки. */
+    @Synchronized
+    fun isEmpty(): Boolean = entries.isEmpty()
+
     @Synchronized
     fun remove(entry: Entry) {
         entries.remove(entry)

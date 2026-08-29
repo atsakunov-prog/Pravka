@@ -55,24 +55,16 @@ class AnalysisStore(private val context: Context) {
         val inputHash: String = "",
         /** Сколько знаков ушло в модель — видно, не раздулся ли период. */
         val inputChars: Int = 0,
+        /**
+         * «ночью» или «вручную». Владелец: «ночной разбор не виден, надо
+         * показывать, что в 4:00 ушёл разбор». Без этого поля журнал отвечал
+         * только на «когда приехал ответ», а вопрос был другой: сработало ли
+         * расписание вообще.
+         */
+        val source: String = "вручную",
     ) {
         val pending: Boolean get() = status == "ждёт"
         val ready: Boolean get() = status == "готов"
-
-        /**
-         * Превью в свёрнутой карточке. Первый ЖИВОЙ абзац, а не первые N
-         * знаков: разбор начинается заголовком и рамкой выборки, и в превью
-         * из них видно только «## Рамка» — то есть ничего.
-         */
-        fun preview(limit: Int): String {
-            val body = text.lineSequence()
-                .map { it.trim() }
-                .filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("---") }
-                .firstOrNull { it.length > 40 }
-                ?: text.trim()
-            val clean = body.replace("**", "").replace("*", "").trim()
-            return if (clean.length <= limit) clean else clean.take(limit).trim() + "…"
-        }
 
         fun title(): String = when (mode) {
             "daily" -> "День $from"
@@ -140,6 +132,7 @@ class AnalysisStore(private val context: Context) {
         model: String,
         inputHash: String,
         inputChars: Int,
+        source: String,
     ): Report = mutex.withLock {
         ensureLoaded()
         val now = System.currentTimeMillis()
@@ -154,6 +147,7 @@ class AnalysisStore(private val context: Context) {
             model = model,
             inputHash = inputHash,
             inputChars = inputChars,
+            source = source,
         )
         _reportsFlow.value = (listOf(report) + _reportsFlow.value).take(KEEP)
         persist()
@@ -329,6 +323,7 @@ class AnalysisStore(private val context: Context) {
                         tokensOut = o.optInt("tout"),
                         inputHash = o.optString("hash"),
                         inputChars = o.optInt("chars"),
+                        source = o.optString("source").ifBlank { "вручную" },
                     )
                 )
             }
@@ -375,6 +370,7 @@ class AnalysisStore(private val context: Context) {
                         put("tout", r.tokensOut)
                         put("hash", r.inputHash)
                         put("chars", r.inputChars)
+                        put("source", r.source)
                     })
                 }
             })

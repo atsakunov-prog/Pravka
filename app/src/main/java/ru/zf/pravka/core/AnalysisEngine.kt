@@ -109,7 +109,9 @@ class AnalysisEngine(
         }
         val system = prompts.effective(PromptStore.PromptId.PATTERNS)
         if (immediate) {
-            val report = store.addPending(mode, from, to, "", MODEL, built.hash, built.chars)
+            val report = store.addPending(
+                mode, from, to, "", MODEL, built.hash, built.chars, source = "вручную",
+            )
             val answer = claude.analyzeNow(system, built.text, MODEL, MAX_TOKENS).getOrElse { e ->
                 store.fail(report.id, e.message ?: "не вышло")
                 eventLog.add("итоги: разбор сейчас не вышел — ${e.message}")
@@ -130,7 +132,10 @@ class AnalysisEngine(
         val outcome = claude.submitBatch(system, built.text, MODEL, MAX_TOKENS)
         return outcome.fold(
             onSuccess = { batchId ->
-                store.addPending(mode, from, to, batchId, MODEL, built.hash, built.chars)
+                store.addPending(
+                    mode, from, to, batchId, MODEL, built.hash, built.chars,
+                    source = if (immediate) "вручную" else "ночью",
+                )
                 eventLog.add(
                     "итоги: заявка $mode $from — $to ушла батчем " +
                         "(${built.chars / 1000} тыс. знаков, батч $batchId)"

@@ -433,21 +433,33 @@ private fun ReportCard(
             .padding(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                report.title(),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-            )
+            Column(Modifier.weight(1f)) {
+                // Заголовок отвечает на «во сколько ушёл поиск и какой».
+                // Владелец: «ночной разбор не виден, надо показывать, что в
+                // 4:00 ушёл разбор». Время запуска стоит теперь и у неудачных
+                // — по ним как раз и видно, что расписание сработало, а
+                // споткнулась сеть.
+                Text(
+                    (if (report.source == "ночью") "Ночью " else "Вручную ") +
+                        SimpleDateFormat("dd.MM HH:mm", Locale.US).format(Date(report.createdAt)),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "по дню " + report.from,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
                 when {
                     report.pending -> "ждёт"
-                    report.ready -> SimpleDateFormat("dd.MM HH:mm", Locale.US)
-                        .format(Date(report.createdAt))
+                    report.ready -> "готово"
                     else -> "не вышло"
                 },
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (report.ready) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.error,
             )
             // Крестик виден ВСЕГДА, в том числе у «ждёт». Раньше удалить
             // можно было только раскрытый готовый разбор — а убрать нужно
@@ -481,20 +493,17 @@ private fun ReportCard(
         }
         if (report.ready) {
             Spacer(Modifier.height(6.dp))
-            if (expanded) {
-                // Раскрытый разбор — версткой; свёрнутый — первым живым
-                // абзацем, потому что заголовок в превью не говорит ничего.
-                MarkdownText(report.text)
-            } else {
-                Text(
-                    report.preview(180),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
+            // Первая строка записи — «Нашёл повторов: 3», дальше сами
+            // строки. В свёрнутом виде нужна первая, в раскрытом — все.
+            Text(
+                if (expanded) report.text else report.text.lineSequence().first().trim(),
+                style = MaterialTheme.typography.bodyMedium,
+            )
             Spacer(Modifier.height(6.dp))
             HintText(
                 "${report.tokensIn / 1000} тыс. вход · ${report.tokensOut} выход · " +
-                    String.format(Locale.US, "%.3f", report.costUsd) + " USD (батч, −50%)"
+                    String.format(Locale.US, "%.3f", report.costUsd) + " USD" +
+                    (if (report.source == "ночью") " (батч, −50%)" else "")
             )
             if (expanded) {
                 TextButton(onClick = onShare) { Text("Поделиться") }
