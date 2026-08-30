@@ -260,6 +260,8 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.height(14.dp))
+            LoveLine(alpha = 0.45f, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(48.dp))
         }
     }

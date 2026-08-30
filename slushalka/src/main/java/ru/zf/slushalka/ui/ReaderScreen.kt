@@ -326,11 +326,15 @@ fun ReaderScreen(
                     .navigationBarsPadding()
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             ) {
-                Text(
-                    "стр. ${t.pageOf(offset)} из ${t.pages}",
-                    color = palette.dim,
-                    fontSize = 12.sp,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "стр. ${t.pageOf(offset)} из ${t.pages}",
+                        color = palette.dim,
+                        fontSize = 12.sp,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    LoveLine(alpha = 0.3f, size = 10, color = palette.fg)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     TextButton(onClick = {
                         state.listenFrom(offset)

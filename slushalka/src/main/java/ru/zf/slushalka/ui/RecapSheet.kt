@@ -120,6 +120,10 @@ fun RecapSheet(
                         )
                         else -> Text(answer, style = MaterialTheme.typography.bodyLarge)
                     }
+                    if (answer.isNotBlank() && remember(answer) { Love.rarely() }) {
+                        Spacer(Modifier.height(10.dp))
+                        LoveLine(alpha = 0.4f, modifier = Modifier.fillMaxWidth())
+                    }
                 }
             }
         },

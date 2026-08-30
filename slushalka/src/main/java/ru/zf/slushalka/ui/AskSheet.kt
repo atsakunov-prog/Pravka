@@ -282,6 +282,7 @@ fun AskSheet(
                     Text(it, color = MaterialTheme.colorScheme.error)
                 }
 
+                val loveHere = remember(answer) { answer.isNotBlank() && Love.rarely() }
                 if (answer.isNotBlank()) {
                     Spacer(Modifier.height(14.dp))
                     Card(
@@ -298,6 +299,9 @@ fun AskSheet(
                                 TextButton(onClick = { app.speaker.stop() }) { Text("Тише") }
                                 Spacer(Modifier.weight(1f))
                                 TextButton(onClick = { finish() }) { Text("Дальше слушать") }
+                            }
+                            if (loveHere) {
+                                LoveLine(alpha = 0.4f, modifier = Modifier.fillMaxWidth())
                             }
                         }
                     }

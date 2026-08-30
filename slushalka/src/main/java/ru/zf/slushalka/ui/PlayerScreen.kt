@@ -158,6 +158,8 @@ fun PlayerScreen(
 
                     Spacer(Modifier.height(14.dp))
                     PositionBar(app, play.absMs, b.totalMs, play.speed)
+                    // Тёмным по тёмному: видно, только если приглядеться.
+                    LoveLine(alpha = 0.09f, size = 10, modifier = Modifier.fillMaxWidth())
 
                     Spacer(Modifier.height(10.dp))
                     // Сон слева, скорость справа, посередине - то, чем
@@ -524,6 +526,8 @@ private fun SleepDialog(app: SlushalkaApp, leftMs: Long, onDismiss: () -> Unit) 
                             Text("Отменить")
                         }
                     }
+                    Spacer(Modifier.height(6.dp))
+                    LoveLine(text = Love.NIGHT, alpha = 0.55f)
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         listOf(15, 30, 45, 60).forEach { m ->
