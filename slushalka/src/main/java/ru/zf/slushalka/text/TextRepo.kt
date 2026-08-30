@@ -21,6 +21,20 @@ class TextRepo(private val context: Context) {
     private val dir get() = File(context.filesDir, "text").apply { mkdirs() }
     private val coverDir get() = File(context.filesDir, "covers").apply { mkdirs() }
     private val memory = HashMap<String, BookText>()
+    private val reports = HashMap<String, ParseReport>()
+
+    /** Что разбор увидел в файле книги - показывается, когда картинок нет. */
+    fun reportFor(bookId: String): ParseReport? = reports[bookId]
+
+    /** Забыть разобранное: следующий заход прочитает файл книги заново. */
+    fun forget(bookId: String) {
+        memory.remove(bookId)
+        reports.remove(bookId)
+        val k = key(bookId)
+        runCatching { File(dir, "$k.txt").delete() }
+        runCatching { File(dir, "$k.json").delete() }
+        runCatching { picturesDir(bookId).listFiles()?.forEach { it.delete() } }
+    }
 
     fun coverFile(bookId: String): File = File(coverDir, key(bookId) + ".img")
 
@@ -29,6 +43,16 @@ class TextRepo(private val context: Context) {
         File(File(context.filesDir, "images"), key(bookId)).apply { mkdirs() }
 
     fun pictureFile(bookId: String, name: String): File = File(picturesDir(bookId), name)
+
+    /**
+     * Все картинки, вынутые из файла книги, - в порядке появления.
+     *
+     * Показываются даже те, которым не нашлось места в тексте: карта нужна
+     * читателю независимо от того, сумел ли разбор понять, к какому абзацу
+     * она относится.
+     */
+    fun allPictures(bookId: String): List<File> =
+        picturesDir(bookId).listFiles()?.sortedBy { it.lastModified() }.orEmpty()
 
     fun cached(bookId: String): BookText? = memory[bookId]
 
@@ -48,6 +72,9 @@ class TextRepo(private val context: Context) {
             }.getOrNull()
             if (cached != null) {
                 memory[book.id] = cached
+                reports[book.id] = runCatching {
+                    ParseReport.fromJson(JSONObject(meta.readText()).optJSONObject("report"))
+                }.getOrDefault(ParseReport())
                 return@withContext cached
             }
         }
@@ -76,9 +103,14 @@ class TextRepo(private val context: Context) {
                 refToFile[pic.ref.lowercase()]?.let { pic.copy(file = it) }
             },
         )
+        val report = parsed.report.copy(
+            written = refToFile.size,
+            matched = ready.pictures.size,
+        )
+        reports[book.id] = report
         runCatching {
             txt.writeText(ready.plain)
-            meta.writeText(ready.metaJson().toString())
+            meta.writeText(ready.metaJson().put("report", report.toJson()).toString())
             parsed.cover?.let { bytes -> if (bytes.size > 1000) coverFile(book.id).writeBytes(bytes) }
         }
         memory[book.id] = ready

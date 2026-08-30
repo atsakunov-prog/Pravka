@@ -437,11 +437,8 @@ fun PictureGallery(app: SlushalkaApp, onClose: () -> Unit) {
     val book = app.state.current.collectAsState().value ?: return
     val text = app.state.text.collectAsState().value ?: return
     var open by remember { mutableStateOf<File?>(null) }
-    val files = remember(text) {
-        text.pictures.filter { it.file.isNotBlank() }
-            .map { app.texts.pictureFile(book.id, it.file) }
-            .filter { it.exists() }
-    }
+    // Всё, что вынуто из файла, а не только размещённое в тексте.
+    val files = remember(text) { app.texts.allPictures(book.id) }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Картинки книги") },

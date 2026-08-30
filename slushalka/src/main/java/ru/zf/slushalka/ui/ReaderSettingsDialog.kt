@@ -86,15 +86,40 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
                 ) { scope.launch { s.setReaderMargin(it) } }
 
                 val pics = state.text.collectAsState().value?.pictures?.size ?: 0
-                if (pics > 0) {
-                    Label("Картинки")
-                    Text(
-                        "В книге их $pics. Стоят на своих местах в тексте; пока читаешь рядом, " +
-                            "миниатюра висит в углу.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    TextButton(onClick = { onClose(); onGallery() }) { Text("Показать все") }
+                val extracted = state.picturesOnDisk()
+                Label("Картинки")
+                Text(
+                    when {
+                        pics > 0 ->
+                            "В книге их $pics. Стоят на своих местах в тексте; пока читаешь " +
+                                "рядом, миниатюра висит в углу."
+                        extracted > 0 ->
+                            "Вынуто из файла: $extracted, но место в тексте для них не нашлось - " +
+                                "смотреть их можно списком."
+                        else -> "В этой книге картинок не нашлось."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (pics == 0 || extracted > pics) {
+                    // Голое «не нашлось» ничего не объясняет: показываем, что
+                    // именно разбор увидел в файле - по этим числам сразу ясно,
+                    // чего не хватило.
+                    state.parseReport()?.let { r ->
+                        Text(
+                            "Разбор увидел: ${r.line()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (extracted > 0) {
+                        TextButton(onClick = { onClose(); onGallery() }) { Text("Показать все") }
+                    }
+                    TextButton(onClick = { state.reparseText(); onClose() }) {
+                        Text("Разобрать книгу заново")
+                    }
                 }
 
                 Label("Бумага")

@@ -112,7 +112,7 @@ class BookText(
          * готовый кэш никто бы не перечитал. Версия 2 - картинки, версия 3 -
          * они же, но найденные по-настоящему (см. Fb2Parser.hrefOf).
          */
-        const val CACHE_VERSION = 3
+        const val CACHE_VERSION = 4
 
         fun fromMeta(plain: String, meta: JSONObject): BookText {
             val arr = meta.optJSONArray("chapters") ?: JSONArray()
@@ -156,5 +156,53 @@ class BookText(
     }
 }
 
+/**
+ * Что разбор увидел в файле. Нужен, когда картинок нет: по этим числам сразу
+ * видно, чего именно не хватило - ссылок в тексте, самих картинок в файле или
+ * совпадения между ними.
+ */
+data class ParseReport(
+    /** Ссылок на картинки в тексте книги. */
+    val refs: Int = 0,
+    /** Вложений в файле всего и из них картинок. */
+    val blocks: Int = 0,
+    val imageBlocks: Int = 0,
+    /** Сохранено на диск и сошлось со ссылками. */
+    val written: Int = 0,
+    val matched: Int = 0,
+    val sample: String = "",
+) {
+    fun line(): String = buildString {
+        append("ссылок в тексте: ").append(refs)
+        append(", вложений: ").append(blocks)
+        append(" (картинок ").append(imageBlocks).append(")")
+        append(", сохранено: ").append(written)
+        append(", сошлось: ").append(matched)
+        if (sample.isNotBlank()) append(". ").append(sample)
+    }
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("refs", refs).put("blocks", blocks).put("imageBlocks", imageBlocks)
+        .put("written", written).put("matched", matched).put("sample", sample)
+
+    companion object {
+        fun fromJson(o: JSONObject?): ParseReport {
+            if (o == null) return ParseReport()
+            return ParseReport(
+                refs = o.optInt("refs"),
+                blocks = o.optInt("blocks"),
+                imageBlocks = o.optInt("imageBlocks"),
+                written = o.optInt("written"),
+                matched = o.optInt("matched"),
+                sample = o.optString("sample"),
+            )
+        }
+    }
+}
+
 /** Что удалось достать из файла книги: текст, обложка и картинки. */
-class ParsedBook(val text: BookText, val cover: ByteArray?)
+class ParsedBook(
+    val text: BookText,
+    val cover: ByteArray?,
+    val report: ParseReport = ParseReport(),
+)

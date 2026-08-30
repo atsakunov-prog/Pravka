@@ -68,6 +68,9 @@ object Fb2Parser {
         var binaryBuf: StringBuilder? = null
         var binaryOverflow = false
         var images = 0
+        var blocks = 0
+        val sampleRefs = ArrayList<String>()
+        val sampleIds = ArrayList<String>()
 
         fun flushParagraph() {
             val p = para ?: return
@@ -94,6 +97,8 @@ object Fb2Parser {
                         "binary" -> {
                             val id = parser.getAttributeValue(null, "id").orEmpty()
                             val type = parser.getAttributeValue(null, "content-type").orEmpty()
+                            blocks++
+                            if (sampleIds.size < 2) sampleIds.add("$id ($type)")
                             val wantedCover = coverHref?.removePrefix("#")
                             binaryIsCover = when {
                                 wantedCover != null -> id.equals(wantedCover, true)
@@ -116,6 +121,7 @@ object Fb2Parser {
                             when {
                                 path.contains("coverpage") && coverHref == null -> coverHref = href
                                 bodyDepth > 0 && href != null && pictures.size < MAX_PICTURES -> {
+                                    if (sampleRefs.size < 2) sampleRefs.add(href)
                                     // Абзац НЕ закрываем: картинка часто стоит
                                     // внутри <p>, и закрытие съело бы остаток
                                     // его текста. Место картинки - перед этим
@@ -212,6 +218,22 @@ object Fb2Parser {
             author = authorParts.joinToString(" ").trim(),
             pictures = pictures,
         )
-        return ParsedBook(text, coverBytes)
+        val sample = buildString {
+            if (sampleRefs.isNotEmpty()) append("ссылки: ").append(sampleRefs.joinToString(", "))
+            if (sampleIds.isNotEmpty()) {
+                if (isNotEmpty()) append("; ")
+                append("вложения: ").append(sampleIds.joinToString(", "))
+            }
+        }
+        return ParsedBook(
+            text,
+            coverBytes,
+            ParseReport(
+                refs = pictures.size,
+                blocks = blocks,
+                imageBlocks = images,
+                sample = sample,
+            ),
+        )
     }
 }

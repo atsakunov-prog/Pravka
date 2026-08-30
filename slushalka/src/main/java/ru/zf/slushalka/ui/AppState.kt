@@ -184,6 +184,20 @@ class AppState(private val app: SlushalkaApp) {
             book.textDocId != null
     }
 
+    /** Разобрать книгу заново - когда с картинками или главами что-то не так. */
+    fun reparseText() {
+        val book = _current.value ?: return
+        app.texts.forget(book.id)
+        _text.value = null
+        _alignment.value = null
+        loadText(book)
+    }
+
+    fun parseReport(): ru.zf.slushalka.text.ParseReport? =
+        _current.value?.let { app.texts.reportFor(it.id) }
+
+    fun picturesOnDisk(): Int = _current.value?.let { app.texts.allPictures(it.id).size } ?: 0
+
     fun dismissRecap() {
         _recapOffer.value = false
     }

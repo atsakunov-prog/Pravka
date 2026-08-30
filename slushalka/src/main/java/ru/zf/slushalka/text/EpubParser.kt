@@ -40,6 +40,9 @@ object EpubParser {
             val body = StringBuilder()
             val marks = ArrayList<Pair<String, Int>>()
             val pictures = ArrayList<Picture>()
+            var seenTags = 0
+            var missing = 0
+            val sample = ArrayList<String>()
             for (idref in spine) {
                 val item = items[idref] ?: continue
                 if (item.props.contains("nav")) continue          // оглавление - не глава
@@ -59,9 +62,15 @@ object EpubParser {
                 // Ссылка на картинку - относительно самой главы, а не OPF.
                 val chapterDir = itemPath.substringBeforeLast('/', "")
                 for ((offset, src) in imageMarks) {
+                    seenTags++
                     if (pictures.size >= MAX_PICTURES) break
                     val full = resolve(chapterDir, src)
-                    val bytes = zip.bytesOf(full) ?: continue
+                    if (sample.size < 2) sample.add(full)
+                    val bytes = zip.bytesOf(full)
+                    if (bytes == null) {
+                        missing++
+                        continue
+                    }
                     if (bytes.size !in 1..MAX_PICTURE_BYTES) continue
                     pictures.add(Picture(body.length + offset, full))
                     onImage(full, bytes)
@@ -84,6 +93,12 @@ object EpubParser {
                     pictures = pictures,
                 ),
                 cover,
+                ParseReport(
+                    refs = seenTags,
+                    blocks = seenTags,
+                    imageBlocks = seenTags - missing,
+                    sample = if (sample.isEmpty()) "" else "картинки: " + sample.joinToString(", "),
+                ),
             )
         }
     }
