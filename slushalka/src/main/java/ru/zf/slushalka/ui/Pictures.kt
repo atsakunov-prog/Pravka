@@ -10,14 +10,18 @@ import kotlinx.coroutines.withContext
 /** Картинки книги: карты, планы, портреты. Читаются с диска и держатся в памяти. */
 object Pictures {
 
+    const val DEFAULT_TARGET = 1400
+
     private val cache = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
 
-    fun cached(file: File): Bitmap? = cache.get(file.absolutePath)
+    fun cached(file: File, target: Int = DEFAULT_TARGET): Bitmap? = cache.get(keyOf(file, target))
 
-    suspend fun load(file: File, target: Int = 1400): Bitmap? = withContext(Dispatchers.IO) {
-        val key = file.absolutePath + "@" + target
+    private fun keyOf(file: File, target: Int) = file.absolutePath + "@" + target
+
+    suspend fun load(file: File, target: Int = DEFAULT_TARGET): Bitmap? = withContext(Dispatchers.IO) {
+        val key = keyOf(file, target)
         cache.get(key)?.let { return@withContext it }
         if (!file.exists()) return@withContext null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -37,4 +41,21 @@ object Pictures {
         cache.put(key, bmp)
         bmp
     }
+}
+
+/**
+ * Картинка для экрана.
+ *
+ * Важная мелочь: при смене файла значение сбрасывается и грузится заново.
+ * Прежний вариант грузил «только если пусто» - и при перемотке на экране
+ * оставалась предыдущая картинка, хотя приложение уже знало про новую.
+ */
+@androidx.compose.runtime.Composable
+fun rememberPicture(file: java.io.File, target: Int = Pictures.DEFAULT_TARGET): Bitmap? {
+    val state = androidx.compose.runtime.produceState<Bitmap?>(
+        Pictures.cached(file, target), file.path, target,
+    ) {
+        value = Pictures.cached(file, target) ?: Pictures.load(file, target)
+    }
+    return state.value
 }

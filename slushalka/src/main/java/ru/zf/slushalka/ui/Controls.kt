@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -16,6 +17,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -139,5 +141,81 @@ private fun DrawScope.drawSkipArc(color: Color) {
             close()
         }
         drawPath(p, color)
+    }
+}
+
+/**
+ * Таймер сна - месяцем слева от play. Идёт отсчёт - месяц окрашивается, а под
+ * ним встают оставшиеся минуты: сколько ещё книге играть, видно не заходя в меню.
+ */
+@Composable
+fun SleepButton(leftMs: Long, size: Dp = 46.dp, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val active = leftMs > 0
+    val tint = if (active) scheme.primary else scheme.onSurfaceVariant
+    Box(
+        Modifier.size(size).clip(CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Canvas(Modifier.size(size * 0.44f)) {
+                // Месяц - круг за вычетом сдвинутого круга: так у него ровные
+                // рога, чего не даёт ни дуга, ни две накладки.
+                val r = this.size.minDimension / 2f
+                val full = Path().apply {
+                    addOval(
+                        androidx.compose.ui.geometry.Rect(
+                            Offset(this@Canvas.size.width / 2f, this@Canvas.size.height / 2f), r,
+                        )
+                    )
+                }
+                val bite = Path().apply {
+                    addOval(
+                        androidx.compose.ui.geometry.Rect(
+                            Offset(
+                                this@Canvas.size.width / 2f + r * 0.52f,
+                                this@Canvas.size.height / 2f - r * 0.14f,
+                            ),
+                            r * 0.92f,
+                        )
+                    )
+                }
+                drawPath(Path.combine(PathOperation.Difference, full, bite), tint)
+            }
+            if (active) {
+                Text(
+                    "${(leftMs / 60_000) + 1}",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = (size.value * 0.2f).sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    color = tint,
+                )
+            }
+        }
+    }
+}
+
+/** Скорость - справа от play, числом: цифра тут понятнее любой пиктограммы. */
+@Composable
+fun SpeedButton(speed: Float, size: Dp = 46.dp, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val changed = kotlin.math.abs(speed - 1f) > 0.01f
+    Box(
+        Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(if (changed) scheme.primaryContainer else Color.Transparent)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            formatSpeed(speed),
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontSize = (size.value * 0.26f).sp,
+                fontWeight = FontWeight.Bold,
+            ),
+            color = if (changed) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
+        )
     }
 }

@@ -66,6 +66,8 @@ fun AskSheet(
     onClose: () -> Unit,
     /** Место в тексте, если спрашивают из читалки; иначе считается по записи. */
     atChar: Int? = null,
+    /** Готовый вопрос (например, про картинку) - уходит сам, без лишнего тапа. */
+    initialQuestion: String? = null,
 ) {
     val state = app.state
     val book by state.current.collectAsState()
@@ -121,6 +123,8 @@ fun AskSheet(
         onClose()
     }
 
+    var autoSent by remember { mutableStateOf(false) }
+
     fun send(q: String) {
         val b = book ?: return
         val c = ctx ?: return
@@ -144,6 +148,16 @@ fun AskSheet(
                     }
                 }
             }.onFailure { error = it.message ?: "Не вышло спросить" }
+        }
+    }
+
+    // Вопрос, заданный кнопкой («расскажи про картинку»), отправляется сам,
+    // как только контекст собран: тапать «Спросить» ещё раз незачем.
+    LaunchedEffect(ctx, initialQuestion) {
+        if (!autoSent && initialQuestion != null && ctx != null) {
+            autoSent = true
+            question = initialQuestion
+            send(initialQuestion)
         }
     }
 

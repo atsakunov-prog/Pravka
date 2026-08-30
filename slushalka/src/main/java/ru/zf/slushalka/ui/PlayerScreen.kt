@@ -65,7 +65,7 @@ import ru.zf.slushalka.data.Bookmark
 fun PlayerScreen(
     app: SlushalkaApp,
     onBack: () -> Unit,
-    onAsk: () -> Unit,
+    onAsk: (charOffset: Int?, question: String?) -> Unit,
     onRead: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -86,7 +86,7 @@ fun PlayerScreen(
     var showMarks by remember { mutableStateOf(false) }
     var showRecap by remember { mutableStateOf(false) }
     var showGallery by remember { mutableStateOf(false) }
-    var fullPicture by remember { mutableStateOf<java.io.File?>(null) }
+    var fullPicture by remember { mutableStateOf<ShownPicture?>(null) }
 
     val b = book
     if (b == null) {
@@ -160,50 +160,40 @@ fun PlayerScreen(
                     PositionBar(app, play.absMs, b.totalMs, play.speed)
 
                     Spacer(Modifier.height(10.dp))
+                    // Сон слева, скорость справа, посередине - то, чем
+                    // пользуются каждую минуту. Всё в одну строку, а не кучей
+                    // одинаковых плашек под ней.
                     Row(
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                        horizontalArrangement = Arrangement.Center,
                     ) {
-                        SkipButton(prefs.skipSec, forward = false) { app.player.skip(-prefs.skipSec) }
-                        PlayPauseButton(play.playing) { app.player.playPause() }
-                        SkipButton(prefs.skipSec, forward = true) { app.player.skip(prefs.skipSec) }
+                        SleepButton(play.sleepLeftMs, size = 44.dp) { showSleep = true }
+                        Spacer(Modifier.width(6.dp))
+                        SkipButton(prefs.skipSec, forward = false, size = 56.dp) {
+                            app.player.skip(-prefs.skipSec)
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        PlayPauseButton(play.playing, size = 72.dp) { app.player.playPause() }
+                        Spacer(Modifier.width(4.dp))
+                        SkipButton(prefs.skipSec, forward = true, size = 56.dp) {
+                            app.player.skip(prefs.skipSec)
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        SpeedButton(play.speed, size = 44.dp) { showSpeed = true }
                     }
 
-                    Spacer(Modifier.height(14.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AssistChip(
-                            onClick = { showSpeed = true },
-                            label = { Text(formatSpeed(play.speed)) },
-                        )
-                        AssistChip(
-                            onClick = { showSleep = true },
-                            label = {
-                                Text(
-                                    if (play.sleepLeftMs > 0)
-                                        "сон ${(play.sleepLeftMs / 60_000) + 1} м"
-                                    else "сон"
-                                )
-                            },
-                        )
-                        AssistChip(
-                            onClick = { showChapters = true },
-                            label = { Text("главы") },
-                        )
-                        AssistChip(
-                            onClick = { showMarks = true },
-                            label = { Text("закладки") },
-                        )
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        TextButton(onClick = { showChapters = true }) { Text("Главы") }
+                        TextButton(onClick = { showMarks = true }) { Text("Закладки") }
                         if (b.textDocId != null) {
-                            AssistChip(
-                                onClick = { showRecap = true },
-                                label = { Text("что там было") },
-                            )
-                        }
-                        if (state.picturesOnDisk() > 0) {
-                            AssistChip(
-                                onClick = { showGallery = true },
-                                label = { Text("картинки") },
-                            )
+                            TextButton(onClick = { showRecap = true }) {
+                                Text("Напомнить содержание")
+                            }
                         }
                     }
 
@@ -213,7 +203,7 @@ fun PlayerScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Button(
-                            onClick = onAsk,
+                            onClick = { onAsk(null, null) },
                             modifier = Modifier.weight(1f).height(54.dp),
                         ) {
                             Text(
@@ -350,11 +340,7 @@ fun PlayerScreen(
                         app, b, livePicture,
                         Modifier.weight(1f).aspectRatio(1f).clip(MaterialTheme.shapes.large),
                         textSize = 20,
-                        onTap = {
-                            val f = livePicture?.let { app.texts.pictureFile(b.id, it.file) }
-                            if (f != null && f.exists()) fullPicture = f
-                            else if (state.picturesOnDisk() > 0) showGallery = true
-                        },
+                        onTap = { openArt(app, b, livePicture, { fullPicture = it }, { showGallery = true }) },
                     )
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { controls() }
                 }
@@ -373,11 +359,7 @@ fun PlayerScreen(
                             .aspectRatio(1f)
                             .clip(MaterialTheme.shapes.large),
                         textSize = 18,
-                        onTap = {
-                            val f = livePicture?.let { app.texts.pictureFile(b.id, it.file) }
-                            if (f != null && f.exists()) fullPicture = f
-                            else if (state.picturesOnDisk() > 0) showGallery = true
-                        },
+                        onTap = { openArt(app, b, livePicture, { fullPicture = it }, { showGallery = true }) },
                     )
                     Spacer(Modifier.height(16.dp))
                     controls()
@@ -404,9 +386,22 @@ fun PlayerScreen(
         RecapSheet(app, cutoffChar = cutoff, absMs = play.absMs, onClose = { showRecap = false })
     }
     if (showGallery) {
-        PictureGallery(app) { showGallery = false }
+        PictureGallery(
+            app,
+            onAsk = { at, q -> showGallery = false; onAsk(at, q) },
+            onClose = { showGallery = false },
+        )
     }
-    fullPicture?.let { f -> ImageViewer(f) { fullPicture = null } }
+    fullPicture?.let { shown ->
+        ImageViewer(
+            shown = shown,
+            onAsk = {
+                fullPicture = null
+                onAsk(shown.charOffset, ru.zf.slushalka.ask.Prompts.picture(shown.caption))
+            },
+            onClose = { fullPicture = null },
+        )
+    }
 }
 
 /** Полоса позиции: тянется пальцем, во время перетаскивания тик не мешает. */
@@ -639,11 +634,7 @@ private fun BookArt(
             CoverImage(app, book, Modifier.fillMaxSize(), textSize = textSize)
             return@Box
         }
-        val bitmap by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(
-            Pictures.cached(file), file.path,
-        ) {
-            if (value == null) value = Pictures.load(file)
-        }
+        val bitmap = rememberPicture(file)
         Box(
             Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center,
@@ -661,7 +652,7 @@ private fun BookArt(
             Text(
                 picture.caption,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onPrimary,
+                color = androidx.compose.ui.graphics.Color(0xFFF2F0EC),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -672,5 +663,21 @@ private fun BookArt(
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             )
         }
+    }
+}
+
+/** Тап по картинке в плеере: свою - во весь экран, обложку - в галерею. */
+private fun openArt(
+    app: SlushalkaApp,
+    book: ru.zf.slushalka.library.Book,
+    picture: ru.zf.slushalka.text.Picture?,
+    show: (ShownPicture) -> Unit,
+    gallery: () -> Unit,
+) {
+    val file = picture?.let { app.texts.pictureFile(book.id, it.file) }
+    if (picture != null && file != null && file.exists()) {
+        show(ShownPicture(file, picture.caption, picture.charOffset))
+    } else if (app.state.picturesOnDisk() > 0) {
+        gallery()
     }
 }

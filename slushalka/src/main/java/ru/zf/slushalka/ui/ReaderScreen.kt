@@ -112,7 +112,7 @@ fun ReaderScreen(
     app: SlushalkaApp,
     onBack: () -> Unit,
     onListen: () -> Unit,
-    onAsk: (charOffset: Int) -> Unit,
+    onAsk: (charOffset: Int, question: String?) -> Unit,
 ) {
     val state = app.state
     val book by state.current.collectAsState()
@@ -125,7 +125,7 @@ fun ReaderScreen(
     var showSettings by remember { mutableStateOf(false) }
     var showRecap by remember { mutableStateOf(false) }
     var showGallery by remember { mutableStateOf(false) }
-    var picture by remember { mutableStateOf<File?>(null) }
+    var picture by remember { mutableStateOf<ShownPicture?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var pressed by remember { mutableStateOf<Int?>(null) }
     var offset by remember { mutableIntStateOf(0) }
@@ -204,7 +204,7 @@ fun ReaderScreen(
 
     Box(Modifier.fillMaxSize().background(palette.bg)) {
         val onLong: (Int) -> Unit = { pressed = it }
-        val onTapPicture: (File) -> Unit = { picture = it }
+        val onTapPicture: (ShownPicture) -> Unit = { picture = it }
         if (prefs.readerPaged) {
             PagedBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette,
@@ -234,7 +234,7 @@ fun ReaderScreen(
         near?.let { pic ->
             val file = app.texts.pictureFile(bk.id, pic.file)
             PictureChip(file, palette, Modifier.align(Alignment.BottomEnd).padding(14.dp)) {
-                picture = file
+                picture = ShownPicture(file, pic.caption, pic.charOffset)
             }
         }
 
@@ -295,8 +295,8 @@ fun ReaderScreen(
                         state.listenFrom(offset)
                         onListen()
                     }) { Text("Слушать отсюда", color = palette.fg) }
-                    TextButton(onClick = { showRecap = true }) { Text("Что там было", color = palette.fg) }
-                    TextButton(onClick = { onAsk(offset) }) { Text("Спросить", color = palette.fg) }
+                    TextButton(onClick = { showRecap = true }) { Text("Содержание", color = palette.fg) }
+                    TextButton(onClick = { onAsk(offset, null) }) { Text("Спросить", color = palette.fg) }
                 }
             }
         }
@@ -324,7 +324,11 @@ fun ReaderScreen(
         )
     }
     if (showGallery) {
-        PictureGallery(app) { showGallery = false }
+        PictureGallery(
+            app,
+            onAsk = { at, q -> showGallery = false; onAsk(at, q) },
+            onClose = { showGallery = false },
+        )
     }
     if (showRecap) {
         RecapSheet(
@@ -334,7 +338,16 @@ fun ReaderScreen(
             onClose = { showRecap = false },
         )
     }
-    picture?.let { file -> ImageViewer(file) { picture = null } }
+    picture?.let { shown ->
+        ImageViewer(
+            shown = shown,
+            onAsk = {
+                picture = null
+                onAsk(shown.charOffset, ru.zf.slushalka.ask.Prompts.picture(shown.caption))
+            },
+            onClose = { picture = null },
+        )
+    }
     pressed?.let { at ->
         AlertDialog(
             onDismissRequest = { pressed = null },
@@ -386,7 +399,7 @@ private fun ScrollBody(
     onTargetUsed: () -> Unit,
     onOffset: (Int) -> Unit,
     onToggleBars: () -> Unit,
-    onPicture: (File) -> Unit,
+    onPicture: (ShownPicture) -> Unit,
     onLongPress: (Int) -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -443,7 +456,9 @@ private fun ScrollBody(
                 val pic = block.picture
                 if (pic != null) {
                     val file = app.texts.pictureFile(bookId, pic.file)
-                    PictureBlock(file, pic.caption, palette) { onPicture(file) }
+                    PictureBlock(file, pic.caption, palette) {
+                        onPicture(ShownPicture(file, pic.caption, pic.charOffset))
+                    }
                 } else {
                     val heading = isHeading(block)
                     Text(
@@ -474,7 +489,7 @@ private fun PagedBody(
     onTargetUsed: () -> Unit,
     onOffset: (Int) -> Unit,
     onToggleBars: () -> Unit,
-    onPicture: (File) -> Unit,
+    onPicture: (ShownPicture) -> Unit,
     onLongPress: (Int) -> Unit,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -594,7 +609,9 @@ private fun PagedBody(
                         val pic = piece.picture
                         if (pic != null) {
                             val file = app.texts.pictureFile(bookId, pic.file)
-                            PictureBlock(file, pic.caption, palette) { onPicture(file) }
+                            PictureBlock(file, pic.caption, palette) {
+                                onPicture(ShownPicture(file, pic.caption, pic.charOffset))
+                            }
                         } else {
                             Text(
                                 piece.text,
@@ -628,9 +645,7 @@ private fun PictureBlock(
     palette: ReaderPalette,
     onOpen: () -> Unit,
 ) {
-    val bitmap by produceState<android.graphics.Bitmap?>(Pictures.cached(file), file.path) {
-        if (value == null) value = Pictures.load(file)
-    }
+    val bitmap = rememberPicture(file)
     val bmp = bitmap ?: return
     Column(
         Modifier
@@ -669,17 +684,18 @@ private fun PictureBlock(
 /** Все картинки книги разом - чтобы карту можно было открыть, когда вздумается. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PictureGallery(app: SlushalkaApp, onClose: () -> Unit) {
+fun PictureGallery(
+    app: SlushalkaApp,
+    onAsk: ((charOffset: Int, question: String) -> Unit)? = null,
+    onClose: () -> Unit,
+) {
     val book = app.state.current.collectAsState().value ?: return
     val text = app.state.text.collectAsState().value
-    var open by remember { mutableStateOf<File?>(null) }
+    var open by remember { mutableStateOf<ShownPicture?>(null) }
     // Всё, что вынуто из файла, а не только размещённое в тексте.
     val files = remember(text) { app.texts.allPictures(book.id) }
-    val captions = remember(text) {
-        text?.picturesWithCaptions
-            ?.filter { it.file.isNotBlank() && it.caption.isNotBlank() }
-            ?.associate { it.file to it.caption }
-            .orEmpty()
+    val byFile = remember(text) {
+        text?.picturesWithCaptions?.filter { it.file.isNotBlank() }?.associateBy { it.file }.orEmpty()
     }
     AlertDialog(
         onDismissRequest = onClose,
@@ -695,21 +711,30 @@ fun PictureGallery(app: SlushalkaApp, onClose: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     items(files) { file ->
-                        Thumb(file, captions[file.name].orEmpty()) { open = file }
+                        val pic = byFile[file.name]
+                        Thumb(file, pic?.caption.orEmpty()) {
+                            open = ShownPicture(file, pic?.caption.orEmpty(), pic?.charOffset ?: 0)
+                        }
                     }
                 }
             }
         },
         confirmButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
     )
-    open?.let { file -> ImageViewer(file) { open = null } }
+    open?.let { shown ->
+        ImageViewer(
+            shown = shown,
+            onAsk = onAsk?.let {
+                { open = null; onClose(); it(shown.charOffset, ru.zf.slushalka.ask.Prompts.picture(shown.caption)) }
+            },
+            onClose = { open = null },
+        )
+    }
 }
 
 @Composable
 private fun Thumb(file: File, caption: String, onOpen: () -> Unit) {
-    val bitmap by produceState<android.graphics.Bitmap?>(Pictures.cached(file), file.path) {
-        if (value == null) value = Pictures.load(file, target = 300)
-    }
+    val bitmap = rememberPicture(file, target = 300)
     Column(Modifier.clickable(onClick = onOpen)) {
         Box(
             Modifier
@@ -745,9 +770,7 @@ private fun PictureChip(
     modifier: Modifier = Modifier,
     onOpen: () -> Unit,
 ) {
-    val bitmap by produceState<android.graphics.Bitmap?>(Pictures.cached(file), file.path) {
-        if (value == null) value = Pictures.load(file, target = 220)
-    }
+    val bitmap = rememberPicture(file, target = 220)
     val bmp = bitmap ?: return
     Row(
         modifier

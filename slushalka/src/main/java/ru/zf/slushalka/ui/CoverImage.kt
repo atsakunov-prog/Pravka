@@ -29,10 +29,11 @@ import ru.zf.slushalka.library.Book
 @Composable
 fun CoverImage(app: SlushalkaApp, book: Book, modifier: Modifier = Modifier, textSize: Int = 13) {
     val tree = app.state.treeUri()
+    // Значение сбрасывается при смене книги, а не «грузим, если пусто»: иначе
+    // от прошлой книги остаётся её обложка.
     val bitmap by produceState<Bitmap?>(Covers.cached(book.id), book.id) {
-        if (value == null && tree != null) {
-            value = runCatching { Covers.load(app, tree, book, app.texts) }.getOrNull()
-        }
+        value = Covers.cached(book.id)
+            ?: tree?.let { runCatching { Covers.load(app, it, book, app.texts) }.getOrNull() }
     }
     Box(modifier, contentAlignment = Alignment.Center) {
         val bmp = bitmap

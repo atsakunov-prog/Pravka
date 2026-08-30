@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
         var screen by remember { mutableStateOf(Screen.LIBRARY) }
         var asking by remember { mutableStateOf(false) }
         var askAtChar by remember { mutableStateOf<Int?>(null) }
+        var askPrefill by remember { mutableStateOf<String?>(null) }
         val current by state.current.collectAsState()
 
         BackHandler(enabled = screen != Screen.LIBRARY || asking) {
@@ -115,7 +116,11 @@ class MainActivity : ComponentActivity() {
                 Screen.PLAYER -> PlayerScreen(
                     app = app,
                     onBack = { screen = Screen.LIBRARY },
-                    onAsk = { asking = true },
+                    onAsk = { at, question ->
+                        askAtChar = at
+                        askPrefill = question
+                        asking = true
+                    },
                     onRead = {
                         // Перешёл читать - звук замолкает: слушать и читать
                         // одновременно всё равно не выходит.
@@ -129,7 +134,11 @@ class MainActivity : ComponentActivity() {
                     app = app,
                     onBack = { screen = Screen.PLAYER },
                     onListen = { screen = Screen.PLAYER },
-                    onAsk = { at -> askAtChar = at; asking = true },
+                    onAsk = { at, question ->
+                        askAtChar = at
+                        askPrefill = question
+                        asking = true
+                    },
                 )
 
                 Screen.SETTINGS -> SettingsScreen(
@@ -144,8 +153,9 @@ class MainActivity : ComponentActivity() {
                     app = app,
                     hasMic = hasMic,
                     onNeedMic = onNeedMic,
-                    onClose = { asking = false; askAtChar = null },
+                    onClose = { asking = false; askAtChar = null; askPrefill = null },
                     atChar = askAtChar,
+                    initialQuestion = askPrefill,
                 )
             }
         }
