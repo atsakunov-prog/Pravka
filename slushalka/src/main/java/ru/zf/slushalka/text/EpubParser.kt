@@ -11,7 +11,13 @@ object EpubParser {
 
     private class Item(val id: String, val href: String, val mime: String, val props: String)
 
-    fun parse(file: File): ParsedBook {
+    private const val MAX_PICTURES = 60
+    private const val MAX_PICTURE_BYTES = 8 * 1024 * 1024
+
+    fun parse(
+        file: File,
+        onImage: (ref: String, bytes: ByteArray) -> Unit = { _, _ -> },
+    ): ParsedBook {
         ZipFile(file).use { zip ->
             val container = zip.textOf("META-INF/container.xml").orEmpty()
             val opfPath = Regex("full-path=\"([^\"]+)\"").find(container)?.groupValues?.get(1)
@@ -33,17 +39,33 @@ object EpubParser {
 
             val body = StringBuilder()
             val marks = ArrayList<Pair<String, Int>>()
+            val pictures = ArrayList<Picture>()
             for (idref in spine) {
                 val item = items[idref] ?: continue
                 if (item.props.contains("nav")) continue          // оглавление - не глава
                 if (item.mime.isNotBlank() && !item.mime.contains("html")) continue
-                val html = zip.textOf(resolve(base, item.href)) ?: continue
-                val text = TextExtract.stripHtml(html)
+                val itemPath = resolve(base, item.href)
+                val html = zip.textOf(itemPath) ?: continue
+                // Картинки помечаются ДО вычистки тегов, иначе они исчезнут
+                // вместе с разметкой и мест для них не останется.
+                val (text, imageMarks) = TextExtract.takeMarks(
+                    TextExtract.stripHtml(TextExtract.markImages(html))
+                )
                 if (text.isBlank()) continue
                 val title = TextExtract.firstHeading(html)
                     ?: text.lineSequence().firstOrNull { it.isNotBlank() }?.take(80)
                     ?: "Глава ${marks.size + 1}"
                 marks.add(title.trim() to body.length)
+                // Ссылка на картинку - относительно самой главы, а не OPF.
+                val chapterDir = itemPath.substringBeforeLast('/', "")
+                for ((offset, src) in imageMarks) {
+                    if (pictures.size >= MAX_PICTURES) break
+                    val full = resolve(chapterDir, src)
+                    val bytes = zip.bytesOf(full) ?: continue
+                    if (bytes.size !in 1..MAX_PICTURE_BYTES) continue
+                    pictures.add(Picture(body.length + offset, full))
+                    onImage(full, bytes)
+                }
                 body.append(text).append("\n\n")
             }
 
@@ -59,6 +81,7 @@ object EpubParser {
                     marks = marks,
                     title = tag(opf, "dc:title").orEmpty(),
                     author = tag(opf, "dc:creator").orEmpty(),
+                    pictures = pictures,
                 ),
                 cover,
             )

@@ -72,4 +72,47 @@ object TextExtract {
         }
         return null
     }
+
+    /**
+     * Картинки внутри epub-главы.
+     *
+     * Теги вычищаются регулярками, поэтому `<img>` сначала подменяется
+     * маркером из символа, которого в книгах не бывает, а уже после вычистки
+     * маркеры снимаются - и их места в готовом тексте становятся местами
+     * картинок.
+     */
+    private const val MARK = '\u0001'
+
+    private val IMG = Regex("(?is)<(img|image)\\s[^>]*>")
+
+    fun markImages(html: String): String = IMG.replace(html) { m ->
+        val attrs = m.value
+        val src = Regex("(?i)(?:xlink:href|href|src)\\s*=\\s*[\"']([^\"']+)[\"']")
+            .find(attrs)?.groupValues?.get(1)
+        if (src.isNullOrBlank()) "" else "$MARK$src$MARK"
+    }
+
+    /** Снимает маркеры и отдаёт чистый текст вместе с местами картинок. */
+    fun takeMarks(text: String): Pair<String, List<Pair<Int, String>>> {
+        if (MARK !in text) return text to emptyList()
+        val sb = StringBuilder(text.length)
+        val marks = ArrayList<Pair<Int, String>>()
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            if (c != MARK) {
+                sb.append(c)
+                i++
+                continue
+            }
+            val end = text.indexOf(MARK, i + 1)
+            if (end < 0) {
+                i++
+                continue
+            }
+            marks.add(sb.length to text.substring(i + 1, end))
+            i = end + 1
+        }
+        return sb.toString() to marks
+    }
 }

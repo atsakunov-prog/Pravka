@@ -46,7 +46,17 @@ class AskEngine(
     fun context(book: Book, text: BookText, align: Alignment, absMs: Long): Ctx {
         val p = settings.now()
         val cutoffMs = (absMs - p.spoilerMarginSec * 1000L).coerceAtLeast(0L)
-        val cutoff = align.charAt(cutoffMs).coerceIn(0, text.length)
+        return contextAt(book, text, align.charAt(cutoffMs), absMs)
+    }
+
+    /**
+     * То же, но место задано точкой в тексте. Так спрашивают из читалки: там
+     * запас против спойлера не нужен - страница перед глазами, и что прочитано,
+     * известно точно.
+     */
+    fun contextAt(book: Book, text: BookText, cutoffChar: Int, absMs: Long): Ctx {
+        val p = settings.now()
+        val cutoff = cutoffChar.coerceIn(0, text.length)
         val want = p.contextPages * Settings.PAGE_CHARS
         val from = (cutoff - want).coerceAtLeast(0)
         val chapter = text.chapterAt(cutoff)
@@ -63,7 +73,7 @@ class AskEngine(
             fragment = text.slice(fragStart, cutoff),
             prefix = prefix,
             chapter = chapter?.title.orEmpty(),
-            percent = if (book.totalMs > 0) (absMs * 100 / book.totalMs).toInt() else 0,
+            percent = if (text.length > 0) (cutoff * 100 / text.length) else 0,
             cutoffChar = cutoff,
             elapsed = formatClock(absMs),
         )
@@ -102,36 +112,63 @@ class AskEngine(
         }
     }
 
+    /** Насколько глубоко напоминать. */
+    enum class Depth(val label: String, val chapters: Int) {
+        CHAPTER("текущая глава", 1),
+        TWO("две главы", 2),
+        THREE("три главы", 3),
+    }
+
     /**
-     * «Что было в прошлый раз»: пересказ последних минут перед перерывом.
-     * Сонет справляется и стоит вчетверо дешевле Опуса.
+     * Границы пересказа: от начала главы, отстоящей на [depth] назад, и до
+     * текущего места. По главам, а не по минутам, потому что «что там было»
+     * человек помнит именно главами.
+     *
+     * Длина подрезается сверху: три главы толстого романа - это уже сотня
+     * страниц, а пересказ нужен короткий и дешёвый.
+     */
+    fun recapRange(text: BookText, cutoffChar: Int, depth: Depth): IntRange {
+        val here = text.chapterIndexAt(cutoffChar)
+        val firstChapter = (here - (depth.chapters - 1)).coerceAtLeast(0)
+        val from = text.chapters.getOrNull(firstChapter)?.start ?: 0
+        val capped = (cutoffChar - MAX_RECAP_CHARS).coerceAtLeast(0)
+        return maxOf(from, capped)..cutoffChar.coerceIn(0, text.length)
+    }
+
+    /**
+     * «Что там было»: пересказ последних глав. Сонетом - он справляется и
+     * стоит вчетверо дешевле Опуса. Спойлеров тут не бывает по построению:
+     * дальше текущего места модели просто нечего не показали.
      */
     suspend fun recap(
         book: Book,
         text: BookText,
-        align: Alignment,
+        range: IntRange,
         absMs: Long,
-        minutes: Int = 30,
         onDelta: (String) -> Unit = {},
     ): Result<String> {
-        val cutoff = align.charAt((absMs - settings.now().spoilerMarginSec * 1000L).coerceAtLeast(0L))
-        val from = align.charAt((absMs - minutes * 60_000L).coerceAtLeast(0L))
-        val fragment = text.slice(from.coerceAtMost(cutoff), cutoff)
+        val fragment = text.slice(range.first, range.last)
         if (fragment.length < 400) return Result.success("")
+        val chapter = text.chapterAt(range.last)?.title.orEmpty()
         return client.ask(
             model = Settings.MODEL_SONNET,
             system = listOf(
                 ClaudeClient.Block(Prompts.RECAP_RULES, cache = true),
                 ClaudeClient.Block(
-                    Prompts.place(book.title, book.author, "", 0, formatClock(absMs)) +
+                    Prompts.place(book.title, book.author, chapter, 0, formatClock(absMs)) +
                         "\n\n" + Prompts.fragment(fragment)
                 ),
             ),
-            question = "Напомни, чем кончилось прослушанное.",
-            maxTokens = 900,
+            question = "Напомни, что было в этом куске.",
+            maxTokens = 1100,
             onDelta = onDelta,
         ).map { it.text }
     }
 
     fun cancel() = client.cancel()
+
+    private companion object {
+        /** Потолок пересказа: тридцать страниц - это уже не «напомни», а чтение заново. */
+        const val MAX_RECAP_CHARS = 54_000
+    }
 }

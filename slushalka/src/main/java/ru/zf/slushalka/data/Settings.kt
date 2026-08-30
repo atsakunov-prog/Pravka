@@ -48,6 +48,16 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         // Через сколько часов паузы предлагать пересказ «что было в прошлый раз».
         val recapAfterHours: Int = 8,
         val skipSilence: Boolean = false,
+        // Читалка.
+        val readerFont: String = FONT_SERIF,
+        val readerSize: Int = 19,
+        val readerLineHeight: Float = 1.5f,
+        val readerMargin: Int = 20,
+        val readerJustify: Boolean = true,
+        val readerTheme: String = THEME_AUTO,
+        val readerKeepAwake: Boolean = true,
+        /** Сверять переход «звук → текст» распознаванием последних секунд. */
+        val refineOnSwitch: Boolean = true,
     )
 
     val flow: StateFlow<Prefs> = context.dataStore.data
@@ -68,6 +78,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 syncPositions = p[KEY_SYNC] ?: true,
                 recapAfterHours = p[KEY_RECAP_H] ?: 8,
                 skipSilence = p[KEY_SKIP_SILENCE] ?: false,
+                readerFont = p[KEY_R_FONT] ?: FONT_SERIF,
+                readerSize = p[KEY_R_SIZE] ?: 19,
+                readerLineHeight = p[KEY_R_LINE] ?: 1.5f,
+                readerMargin = p[KEY_R_MARGIN] ?: 20,
+                readerJustify = p[KEY_R_JUSTIFY] ?: true,
+                readerTheme = p[KEY_R_THEME] ?: THEME_AUTO,
+                readerKeepAwake = p[KEY_R_AWAKE] ?: true,
+                refineOnSwitch = p[KEY_REFINE] ?: true,
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -92,6 +110,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setSyncPositions(v: Boolean) = edit { it[KEY_SYNC] = v }
     suspend fun setRecapAfterHours(v: Int) = edit { it[KEY_RECAP_H] = v.coerceIn(1, 240) }
     suspend fun setSkipSilence(v: Boolean) = edit { it[KEY_SKIP_SILENCE] = v }
+    suspend fun setReaderFont(v: String) = edit { it[KEY_R_FONT] = v }
+    suspend fun setReaderSize(v: Int) = edit { it[KEY_R_SIZE] = v.coerceIn(12, 34) }
+    suspend fun setReaderLineHeight(v: Float) = edit { it[KEY_R_LINE] = v.coerceIn(1.0f, 2.4f) }
+    suspend fun setReaderMargin(v: Int) = edit { it[KEY_R_MARGIN] = v.coerceIn(0, 64) }
+    suspend fun setReaderJustify(v: Boolean) = edit { it[KEY_R_JUSTIFY] = v }
+    suspend fun setReaderTheme(v: String) = edit { it[KEY_R_THEME] = v }
+    suspend fun setReaderKeepAwake(v: Boolean) = edit { it[KEY_R_AWAKE] = v }
+    suspend fun setRefineOnSwitch(v: Boolean) = edit { it[KEY_REFINE] = v }
 
     companion object {
         const val MODEL_OPUS = "claude-opus-5"
@@ -99,6 +125,18 @@ class Settings(private val context: Context, scope: CoroutineScope) {
 
         /** Знаков в «странице»: стандартная машинописная - 1800. */
         const val PAGE_CHARS = 1800
+
+        const val FONT_SERIF = "serif"
+        const val FONT_SANS = "sans"
+        const val FONT_MONO = "mono"
+
+        // Тема читалки живёт отдельно от темы приложения: читают и днём на
+        // свету, и ночью в постели, и переключать это хочется одним тапом.
+        const val THEME_AUTO = "auto"
+        const val THEME_PAPER = "paper"
+        const val THEME_SEPIA = "sepia"
+        const val THEME_GREY = "grey"
+        const val THEME_BLACK = "black"
 
         private val KEY_API: Preferences.Key<String> = stringPreferencesKey("anthropic_api_key")
         private val KEY_LIB = stringPreferencesKey("library_uri")
@@ -114,5 +152,13 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_SYNC = booleanPreferencesKey("sync_positions")
         private val KEY_RECAP_H = intPreferencesKey("recap_after_hours")
         private val KEY_SKIP_SILENCE = booleanPreferencesKey("skip_silence")
+        private val KEY_R_FONT = stringPreferencesKey("reader_font")
+        private val KEY_R_SIZE = intPreferencesKey("reader_size")
+        private val KEY_R_LINE = floatPreferencesKey("reader_line")
+        private val KEY_R_MARGIN = intPreferencesKey("reader_margin")
+        private val KEY_R_JUSTIFY = booleanPreferencesKey("reader_justify")
+        private val KEY_R_THEME = stringPreferencesKey("reader_theme")
+        private val KEY_R_AWAKE = booleanPreferencesKey("reader_keep_awake")
+        private val KEY_REFINE = booleanPreferencesKey("refine_on_switch")
     }
 }

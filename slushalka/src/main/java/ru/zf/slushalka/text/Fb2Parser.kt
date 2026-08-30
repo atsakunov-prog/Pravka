@@ -8,7 +8,8 @@ import org.xmlpull.v1.XmlPullParser
 /**
  * fb2 - обычный XML, и это лучший из форматов для нашей задачи: главы уже
  * размечены тегами, значит и привязка аудио к тексту получается по главам, а
- * не «в среднем по книге». Заодно из fb2 достаётся обложка.
+ * не «в среднем по книге». Обложка и картинки (карты, планы, портреты) лежат
+ * тут же, в `<binary>`, и достаются вместе с текстом.
  */
 object Fb2Parser {
 
@@ -16,17 +17,24 @@ object Fb2Parser {
     // в текст не попадает.
     private val PARAGRAPH = setOf("p", "v", "subtitle", "text-author")
 
-    fun parse(input: InputStream): ParsedBook {
+    private const val MAX_PICTURES = 60
+    private const val MAX_PICTURE_BYTES = 8 * 1024 * 1024
+
+    fun parse(
+        input: InputStream,
+        onImage: (ref: String, bytes: ByteArray) -> Unit = { _, _ -> },
+    ): ParsedBook {
         val parser = Xml.newPullParser()
         runCatching { parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false) }
         parser.setInput(input, null)
 
         val body = StringBuilder()
         val marks = ArrayList<Pair<String, Int>>()
+        val pictures = ArrayList<Picture>()
         val path = ArrayList<String>()
 
         var bodyDepth = 0          // >0 - мы внутри основного <body>
-        var skipUntilDepth = -1    // пропускаем поддерево (сноски, чужой binary)
+        var skipUntilDepth = -1    // пропускаем поддерево (сноски)
         var para: StringBuilder? = null
         var titleBuf: StringBuilder? = null
         var titleStart = -1
@@ -34,8 +42,13 @@ object Fb2Parser {
         var bookTitle = ""
         val authorParts = ArrayList<String>()
         var coverHref: String? = null
-        var coverBase64: StringBuilder? = null
         var coverBytes: ByteArray? = null
+
+        // Разбор <binary>: base64 приезжает кусками, и держать в памяти
+        // хочется только те картинки, на которые в тексте есть ссылка.
+        var binaryId: String? = null
+        var binaryIsCover = false
+        var binaryBuf: StringBuilder? = null
 
         fun flushParagraph() {
             val p = para ?: return
@@ -62,20 +75,27 @@ object Fb2Parser {
                         "binary" -> {
                             val id = parser.getAttributeValue(null, "id").orEmpty()
                             val type = parser.getAttributeValue(null, "content-type").orEmpty()
-                            val wanted = coverHref?.removePrefix("#")
-                            val isCover =
-                                if (wanted != null) id.equals(wanted, true)
-                                else type.startsWith("image/") && coverBytes == null
-                            if (isCover) coverBase64 = StringBuilder()
-                            else skipUntilDepth = path.size   // чужие картинки - мимо
+                            val wantedCover = coverHref?.removePrefix("#")
+                            binaryIsCover = when {
+                                wantedCover != null -> id.equals(wantedCover, true)
+                                // Обложка не объявлена: годится первая картинка.
+                                else -> type.startsWith("image/") && coverBytes == null
+                            }
+                            val referenced = pictures.any { it.ref.equals(id, true) }
+                            binaryId = id
+                            binaryBuf = if (binaryIsCover || referenced) StringBuilder() else null
+                            if (binaryBuf == null) skipUntilDepth = path.size
                         }
                         "image" -> {
-                            if (path.contains("coverpage") && coverHref == null) {
-                                coverHref = parser.getAttributeValue(null, "l:href")
-                                    ?: parser.getAttributeValue(null, "href")
-                                    ?: parser.getAttributeValue(
-                                        "http://www.w3.org/1999/xlink", "href"
-                                    )
+                            val href = parser.getAttributeValue(null, "l:href")
+                                ?: parser.getAttributeValue(null, "href")
+                                ?: parser.getAttributeValue("http://www.w3.org/1999/xlink", "href")
+                            when {
+                                path.contains("coverpage") && coverHref == null -> coverHref = href
+                                bodyDepth > 0 && href != null && pictures.size < MAX_PICTURES -> {
+                                    flushParagraph()
+                                    pictures.add(Picture(body.length, href.removePrefix("#")))
+                                }
                             }
                         }
                         "title" -> {
@@ -96,9 +116,9 @@ object Fb2Parser {
                 XmlPullParser.TEXT -> {
                     if (skipUntilDepth < 0) {
                         val raw = parser.text ?: ""
-                        coverBase64?.append(raw)
+                        binaryBuf?.append(raw)
                         para?.append(raw.replace('\n', ' '))
-                        if (para == null && coverBase64 == null && raw.isNotBlank()) {
+                        if (para == null && binaryBuf == null && raw.isNotBlank()) {
                             when (path.lastOrNull()) {
                                 "book-title" -> if (bookTitle.isBlank()) bookTitle = raw.trim()
                                 "first-name", "middle-name", "last-name" ->
@@ -113,12 +133,23 @@ object Fb2Parser {
                     if (skipUntilDepth < 0) when (name) {
                         "body" -> if (bodyDepth > 0) bodyDepth--
                         "binary" -> {
-                            coverBase64?.let { b64 ->
-                                coverBytes = runCatching {
-                                    Base64.decode(b64.toString().filterNot { it.isWhitespace() }, Base64.DEFAULT)
+                            val buf = binaryBuf
+                            val id = binaryId
+                            if (buf != null && id != null && buf.length < MAX_PICTURE_BYTES * 2) {
+                                val bytes = runCatching {
+                                    Base64.decode(
+                                        buf.toString().filterNot { it.isWhitespace() },
+                                        Base64.DEFAULT,
+                                    )
                                 }.getOrNull()
+                                if (bytes != null && bytes.size in 1..MAX_PICTURE_BYTES) {
+                                    if (binaryIsCover && coverBytes == null) coverBytes = bytes
+                                    if (pictures.any { it.ref.equals(id, true) }) onImage(id, bytes)
+                                }
                             }
-                            coverBase64 = null
+                            binaryBuf = null
+                            binaryId = null
+                            binaryIsCover = false
                         }
                         "title" -> {
                             flushParagraph()
@@ -148,6 +179,7 @@ object Fb2Parser {
             marks = marks,
             title = bookTitle,
             author = authorParts.joinToString(" ").trim(),
+            pictures = pictures,
         )
         return ParsedBook(text, coverBytes)
     }

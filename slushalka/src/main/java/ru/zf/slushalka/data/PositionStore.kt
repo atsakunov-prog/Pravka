@@ -25,6 +25,8 @@ data class BookState(
     val history: List<Mark> = emptyList(),
     val listenedMs: Long = 0,
     val finished: Boolean = false,
+    /** Где остановились глазами. -1 - читалку в этой книге ещё не открывали. */
+    val readChar: Int = -1,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("file", fileIndex)
@@ -35,6 +37,7 @@ data class BookState(
         .put("anchors", Alignment.listToJson(anchors))
         .put("listened", listenedMs)
         .put("finished", finished)
+        .put("read", readChar)
         .put("history", JSONArray().apply {
             history.forEach { put(JSONObject().put("abs", it.absMs).put("at", it.at)) }
         })
@@ -52,6 +55,7 @@ data class BookState(
                 anchors = Alignment.listFromJson(o.optJSONArray("anchors")),
                 listenedMs = o.optLong("listened"),
                 finished = o.optBoolean("finished"),
+                readChar = o.optInt("read", -1),
                 history = (0 until h.length()).map {
                     val m = h.getJSONObject(it)
                     Mark(m.optLong("abs"), m.optLong("at"))
@@ -127,6 +131,16 @@ class PositionStore(context: Context) {
             updatedAt = remote.updatedAt,
             finished = remote.finished,
         )
+        persist()
+    }
+
+    /** Место в читалке пишется тем же порядком, что и место в записи. */
+    @Synchronized
+    fun setReadChar(bookId: String, offset: Int) {
+        val s = states[bookId] ?: BookState(bookId)
+        if (s.readChar == offset) return
+        states[bookId] = s.copy(readChar = offset, updatedAt = System.currentTimeMillis())
+        lastBookId = bookId
         persist()
     }
 

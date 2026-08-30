@@ -25,11 +25,11 @@ import androidx.core.content.ContextCompat
 import ru.zf.slushalka.ui.AskSheet
 import ru.zf.slushalka.ui.LibraryScreen
 import ru.zf.slushalka.ui.PlayerScreen
+import ru.zf.slushalka.ui.ReaderScreen
 import ru.zf.slushalka.ui.SettingsScreen
 import ru.zf.slushalka.ui.SlushalkaTheme
-import ru.zf.slushalka.ui.TextScreen
 
-enum class Screen { LIBRARY, PLAYER, TEXT, SETTINGS }
+enum class Screen { LIBRARY, PLAYER, READER, SETTINGS }
 
 class MainActivity : ComponentActivity() {
 
@@ -88,12 +88,13 @@ class MainActivity : ComponentActivity() {
         val state = app.state
         var screen by remember { mutableStateOf(Screen.LIBRARY) }
         var asking by remember { mutableStateOf(false) }
+        var askAtChar by remember { mutableStateOf<Int?>(null) }
         val current by state.current.collectAsState()
 
         BackHandler(enabled = screen != Screen.LIBRARY || asking) {
             when {
                 asking -> asking = false
-                screen == Screen.TEXT -> screen = Screen.PLAYER
+                screen == Screen.READER -> screen = Screen.PLAYER
                 else -> screen = Screen.LIBRARY
             }
         }
@@ -115,11 +116,21 @@ class MainActivity : ComponentActivity() {
                     app = app,
                     onBack = { screen = Screen.LIBRARY },
                     onAsk = { asking = true },
-                    onText = { screen = Screen.TEXT },
+                    onRead = {
+                        // Перешёл читать - звук замолкает: слушать и читать
+                        // одновременно всё равно не выходит.
+                        app.player.pauseForAsking()
+                        screen = Screen.READER
+                    },
                     onSettings = { screen = Screen.SETTINGS },
                 )
 
-                Screen.TEXT -> TextScreen(app = app, onBack = { screen = Screen.PLAYER })
+                Screen.READER -> ReaderScreen(
+                    app = app,
+                    onBack = { screen = Screen.PLAYER },
+                    onListen = { screen = Screen.PLAYER },
+                    onAsk = { at -> askAtChar = at; asking = true },
+                )
 
                 Screen.SETTINGS -> SettingsScreen(
                     app = app,
@@ -133,7 +144,8 @@ class MainActivity : ComponentActivity() {
                     app = app,
                     hasMic = hasMic,
                     onNeedMic = onNeedMic,
-                    onClose = { asking = false },
+                    onClose = { asking = false; askAtChar = null },
+                    atChar = askAtChar,
                 )
             }
         }

@@ -22,7 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -33,6 +32,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -62,7 +62,7 @@ fun PlayerScreen(
     app: SlushalkaApp,
     onBack: () -> Unit,
     onAsk: () -> Unit,
-    onText: () -> Unit,
+    onRead: () -> Unit,
     onSettings: () -> Unit,
 ) {
     val state = app.state
@@ -71,14 +71,14 @@ fun PlayerScreen(
     val prefs by state.prefs.collectAsState()
     val busy by state.busy.collectAsState()
     val recapOffer by state.recapOffer.collectAsState()
+    val alignment by state.alignment.collectAsState()
     val scope = rememberCoroutineScope()
 
     var showChapters by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
     var showSleep by remember { mutableStateOf(false) }
     var showMarks by remember { mutableStateOf(false) }
-    var recapText by remember { mutableStateOf<String?>(null) }
-    var recapBusy by remember { mutableStateOf(false) }
+    var showRecap by remember { mutableStateOf(false) }
 
     val b = book
     if (b == null) {
@@ -101,9 +101,6 @@ fun PlayerScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onText) {
-                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Текст книги")
-                    }
                     IconButton(onClick = onSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Настройки")
                     }
@@ -182,18 +179,36 @@ fun PlayerScreen(
                             onClick = { showMarks = true },
                             label = { Text("закладки") },
                         )
+                        if (b.textDocId != null) {
+                            AssistChip(
+                                onClick = { showRecap = true },
+                                label = { Text("что там было") },
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(16.dp))
-                    Button(
-                        onClick = onAsk,
-                        modifier = Modifier.fillMaxWidth().height(54.dp),
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Text(
-                            if (b.textDocId != null) "Спросить по книге"
-                            else "Спросить (текста книги нет)",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
+                        Button(
+                            onClick = onAsk,
+                            modifier = Modifier.weight(1f).height(54.dp),
+                        ) {
+                            Text(
+                                if (b.textDocId != null) "Спросить" else "Спросить (нет текста)",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                        }
+                        if (b.textDocId != null) {
+                            OutlinedButton(
+                                onClick = onRead,
+                                modifier = Modifier.weight(1f).height(54.dp),
+                            ) {
+                                Text("Читать", style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
                     }
 
                     if (recapOffer) {
@@ -211,28 +226,10 @@ fun PlayerScreen(
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
                                 Row {
-                                    TextButton(
-                                        enabled = !recapBusy,
-                                        onClick = {
-                                            recapBusy = true
-                                            scope.launch {
-                                                val text = state.text.value
-                                                val align = state.alignment.value
-                                                if (text == null || align == null) {
-                                                    recapBusy = false
-                                                    recapText = "Текст книги ещё не разобран."
-                                                    return@launch
-                                                }
-                                                val r = app.ask.recap(b, text, align, play.absMs)
-                                                recapBusy = false
-                                                recapText = r.getOrElse { "Не вышло: ${it.message}" }
-                                                if (prefs.speakAnswers) {
-                                                    recapText?.let { app.speaker.speak(it) }
-                                                }
-                                                state.dismissRecap()
-                                            }
-                                        },
-                                    ) { Text(if (recapBusy) "Вспоминаю…" else "Напомни") }
+                                    TextButton(onClick = {
+                                        showRecap = true
+                                        state.dismissRecap()
+                                    }) { Text("Напомни") }
                                     TextButton(onClick = { state.dismissRecap() }) { Text("Не надо") }
                                 }
                             }
@@ -307,19 +304,9 @@ fun PlayerScreen(
     if (showMarks) {
         BookmarksDialog(app, onDismiss = { showMarks = false })
     }
-    recapText?.let { text ->
-        AlertDialog(
-            onDismissRequest = { recapText = null; app.speaker.stop() },
-            title = { Text("Что было в прошлый раз") },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Text(text, style = MaterialTheme.typography.bodyLarge)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { recapText = null; app.speaker.stop() }) { Text("Понятно") }
-            },
-        )
+    if (showRecap) {
+        val cutoff = alignment?.charAt(play.absMs) ?: 0
+        RecapSheet(app, cutoffChar = cutoff, absMs = play.absMs, onClose = { showRecap = false })
     }
 }
 

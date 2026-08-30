@@ -64,6 +64,8 @@ fun AskSheet(
     hasMic: () -> Boolean,
     onNeedMic: () -> Unit,
     onClose: () -> Unit,
+    /** Место в тексте, если спрашивают из читалки; иначе считается по записи. */
+    atChar: Int? = null,
 ) {
     val state = app.state
     val book by state.current.collectAsState()
@@ -97,11 +99,19 @@ fun AskSheet(
         }
     }
 
-    val ctx: AskEngine.Ctx? = remember(book?.id, text, alignment, askedAtMs, prefs.contextPages, prefs.wholeBookContext, prefs.spoilerMarginSec) {
+    val ctx: AskEngine.Ctx? = remember(
+        book?.id, text, alignment, askedAtMs, atChar,
+        prefs.contextPages, prefs.wholeBookContext, prefs.spoilerMarginSec,
+    ) {
         val b = book
         val t = text
         val a = alignment
-        if (b == null || t == null || a == null) null else app.ask.context(b, t, a, askedAtMs)
+        when {
+            b == null || t == null -> null
+            atChar != null -> app.ask.contextAt(b, t, atChar, askedAtMs)
+            a == null -> null
+            else -> app.ask.context(b, t, a, askedAtMs)
+        }
     }
 
     fun finish() {

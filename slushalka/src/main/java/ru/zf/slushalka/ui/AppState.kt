@@ -14,9 +14,12 @@ import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
 import ru.zf.slushalka.library.Durations
 import ru.zf.slushalka.library.LibraryScanner
+import ru.zf.slushalka.library.documentUri
+import ru.zf.slushalka.player.AudioChunk
 import ru.zf.slushalka.text.Alignment
 import ru.zf.slushalka.text.Anchor
 import ru.zf.slushalka.text.BookText
+import ru.zf.slushalka.text.Locator
 
 /**
  * Состояние приложения между экранами: библиотека, открытая книга, её текст и
@@ -216,6 +219,115 @@ class AppState(private val app: SlushalkaApp) {
 
     fun stateOf(bookId: String): BookState = app.positions.get(bookId)
 
+    // ------------------------------------------------- звук <-> текст
+
+    /**
+     * Где открыть читалку, когда переходишь со звука.
+     *
+     * Карта даёт место с точностью до страницы-другой. Если разрешена сверка,
+     * последние секунды записи расшифровываются прямо из файла и ищутся в
+     * тексте - тогда переход попадает в то самое предложение. Найденное место
+     * становится отметкой на карте, поэтому со временем сверка нужна всё реже.
+     */
+    suspend fun readingOffsetNow(): Int {
+        val book = _current.value ?: return 0
+        val text = _text.value ?: return 0
+        val align = _alignment.value ?: return 0
+        val absMs = app.player.state.value.absMs
+        val estimate = align.charAt(absMs)
+        if (!prefs.value.refineOnSwitch || !app.recognizer.supported) return estimate
+
+        val hit = refineAt(book, text, align, absMs)
+        return hit ?: estimate
+    }
+
+    /** Расшифровывает последние секунды перед [absMs] и ищет их в книге. */
+    private suspend fun refineAt(
+        book: Book,
+        text: BookText,
+        align: Alignment,
+        absMs: Long,
+        note: String = "Слушаю последние секунды…",
+    ): Int? {
+        val tree = treeUri() ?: return null
+        val (index, inFile) = book.locate(absMs)
+        val file = book.files.getOrNull(index) ?: return null
+        val from = (inFile - CHUNK_MS).coerceAtLeast(0L)
+        val span = (inFile - from).coerceAtMost(CHUNK_MS)
+        if (span < 4000) return null      // меньше четырёх секунд не о чем расшифровывать
+
+        _busy.value = note
+        val transcript = withContext(Dispatchers.IO) {
+            AudioChunk.decode(app, documentUri(tree, file.docId), from, span)
+        }?.let { app.recognizer.recognize(it) }
+        val hit = transcript?.let { Locator.find(text, it, align.charAt(absMs)) }
+        _busy.value = null
+
+        if (hit == null) return null
+        addAnchor(absMs, hit.charOffset)
+        return hit.charOffset
+    }
+
+    /**
+     * Выверка книги: несколько проб по всей записи разом. После неё карта
+     * точна везде, а не только там, куда успел дойти слушатель.
+     */
+    fun calibrate(points: Int = 6) {
+        val book = _current.value ?: return
+        val text = _text.value ?: return
+        if (!app.recognizer.supported) {
+            _busy.value = "Распознавание на этом устройстве недоступно"
+            app.scope.launch { kotlinx.coroutines.delay(2500); _busy.value = null }
+            return
+        }
+        app.scope.launch {
+            var found = 0
+            for (i in 1..points) {
+                val at = book.totalMs * i / (points + 1)
+                val align = _alignment.value ?: break
+                val hit = refineAt(book, text, align, at, "Выверяю книгу: проба $i из $points")
+                if (hit != null) found++
+            }
+            _busy.value = if (found == 0) {
+                "Выверка не удалась: записанное не нашлось в тексте"
+            } else {
+                "Выверено по $found ${if (found == 1) "пробе" else "пробам"}"
+            }
+            kotlinx.coroutines.delay(3000)
+            _busy.value = null
+        }
+    }
+
+    /** Обратный переход: читал глазами - продолжаю слушать отсюда. */
+    fun listenFrom(charOffset: Int) {
+        val align = _alignment.value ?: return
+        app.player.seekTo(align.audioAt(charOffset))
+        if (!app.player.state.value.playing) app.player.playPause()
+    }
+
+    fun saveReadChar(offset: Int) {
+        val book = _current.value ?: return
+        app.positions.setReadChar(book.id, offset)
+    }
+
+    /** Откуда открыть читалку. [fromAudio] - место взято из записи, его стоит сверить. */
+    data class ReadStart(val offset: Int, val fromAudio: Boolean)
+
+    fun readingStart(): ReadStart {
+        val book = _current.value ?: return ReadStart(0, false)
+        val saved = app.positions.get(book.id).readChar
+        val align = _alignment.value
+        val byAudio = align?.charAt(app.player.state.value.absMs) ?: 0
+        // Читал глазами и с тех пор не слушал - продолжаем оттуда же, и
+        // сверять по звуку нечего.
+        return if (saved >= 0 && kotlin.math.abs(saved - byAudio) < 4000) {
+            ReadStart(saved, false)
+        } else {
+            ReadStart(byAudio, true)
+        }
+    }
+
+
     // ---------------------------------------------------- синхронизация мест
 
     suspend fun syncPush(bookId: String) {
@@ -268,6 +380,11 @@ class AppState(private val app: SlushalkaApp) {
             app.player.open(treeUri() ?: return@launch, ready, startAbsMs = offer.absMs)
             loadText(ready)
         }
+    }
+
+    companion object {
+        /** Сколько записи расшифровывать для сверки: тринадцати секунд хватает. */
+        private const val CHUNK_MS = 13_000L
     }
 
     fun declineResume() {

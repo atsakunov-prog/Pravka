@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import ru.zf.slushalka.ask.AskEngine
+import ru.zf.slushalka.ask.ChunkRecognizer
 import ru.zf.slushalka.ask.ClaudeClient
 import ru.zf.slushalka.ask.Speaker
 import ru.zf.slushalka.data.AskLog
@@ -33,6 +34,7 @@ class SlushalkaApp : Application() {
     lateinit var player: PlayerHolder; private set
     lateinit var ask: AskEngine; private set
     lateinit var speaker: Speaker; private set
+    lateinit var recognizer: ChunkRecognizer; private set
     lateinit var state: AppState; private set
 
     override fun onCreate() {
@@ -45,6 +47,7 @@ class SlushalkaApp : Application() {
         askLog = AskLog(this)
         sync = PositionSync(this)
         speaker = Speaker(this)
+        recognizer = ChunkRecognizer(this)
         ask = AskEngine(settings, ClaudeClient(settings), askLog)
         player = PlayerHolder(this, settings, positions) { bookId ->
             scope.launch { state.syncPush(bookId) }

@@ -9,16 +9,34 @@ data class Chapter(val title: String, val start: Int, val end: Int) {
 }
 
 /**
- * Книга в виде одной строки плюс разметка глав. Позиция в аудио превращается в
- * смещение в этой строке (см. Alignment), из него режется кусок для вопроса.
+ * Картинка книги на своём месте в тексте. [ref] - как она называлась внутри
+ * файла (id для fb2, путь в архиве для epub), [file] - куда её положили.
+ */
+data class Picture(val charOffset: Int, val ref: String, val file: String = "")
+
+/** Кусок читалки: либо абзац, либо картинка. */
+data class Block(val start: Int, val text: String, val picture: Picture?) {
+    val end get() = start + text.length + 1
+}
+
+/**
+ * Книга в виде одной строки плюс разметка глав и картинок. Позиция в аудио
+ * превращается в смещение в этой строке (см. Alignment), из него режется кусок
+ * для вопроса и от него же отсчитывается страница в читалке.
  */
 class BookText(
     val plain: String,
     val chapters: List<Chapter>,
     val title: String = "",
     val author: String = "",
+    val pictures: List<Picture> = emptyList(),
 ) {
     val length get() = plain.length
+
+    /** Страниц в книге по машинописной мерке: 1800 знаков. */
+    val pages get() = (length / PAGE_CHARS + 1).coerceAtLeast(1)
+
+    fun pageOf(offset: Int) = (offset / PAGE_CHARS + 1).coerceIn(1, pages)
 
     fun chapterAt(offset: Int): Chapter? =
         chapters.lastOrNull { offset >= it.start } ?: chapters.firstOrNull()
@@ -44,6 +62,31 @@ class BookText(
         return plain.substring(start, end.coerceAtLeast(start))
     }
 
+    /**
+     * Абзацы и картинки подряд - то, что листает читалка. Считается один раз
+     * на книгу: у романа таких кусков тысячи, и делать это на каждом кадре
+     * было бы расточительно.
+     */
+    val blocks: List<Block> by lazy(LazyThreadSafetyMode.NONE) {
+        val out = ArrayList<Block>(plain.length / 120 + 16)
+        val byOffset = pictures.groupBy { it.charOffset }
+        var offset = 0
+        for (line in plain.split('\n')) {
+            byOffset[offset]?.forEach { out.add(Block(offset, "", it)) }
+            if (line.isNotBlank()) out.add(Block(offset, line, null))
+            offset += line.length + 1
+        }
+        // Картинки, попавшие за последний абзац (в конце книги).
+        pictures.filter { it.charOffset >= offset }.forEach { out.add(Block(offset, "", it)) }
+        out
+    }
+
+    /** Номер блока, в котором лежит это место текста. */
+    fun blockIndexAt(offset: Int): Int {
+        val i = blocks.indexOfLast { it.start <= offset }
+        return if (i >= 0) i else 0
+    }
+
     fun metaJson(): JSONObject = JSONObject()
         .put("title", title)
         .put("author", author)
@@ -52,10 +95,19 @@ class BookText(
                 put(JSONObject().put("t", it.title).put("s", it.start).put("e", it.end))
             }
         })
+        .put("pictures", JSONArray().apply {
+            pictures.forEach {
+                put(JSONObject().put("c", it.charOffset).put("r", it.ref).put("f", it.file))
+            }
+        })
 
     companion object {
+        /** Знаков в «странице»: стандартная машинописная - 1800. */
+        const val PAGE_CHARS = 1800
+
         fun fromMeta(plain: String, meta: JSONObject): BookText {
             val arr = meta.optJSONArray("chapters") ?: JSONArray()
+            val pics = meta.optJSONArray("pictures") ?: JSONArray()
             return BookText(
                 plain = plain,
                 chapters = (0 until arr.length()).map {
@@ -64,6 +116,10 @@ class BookText(
                 },
                 title = meta.optString("title"),
                 author = meta.optString("author"),
+                pictures = (0 until pics.length()).map {
+                    val o = pics.getJSONObject(it)
+                    Picture(o.optInt("c"), o.optString("r"), o.optString("f"))
+                },
             )
         }
 
@@ -73,6 +129,7 @@ class BookText(
             marks: List<Pair<String, Int>>,
             title: String,
             author: String,
+            pictures: List<Picture> = emptyList(),
         ): BookText {
             val plain = body.toString()
             val chapters = marks.mapIndexed { i, (t, start) ->
@@ -84,10 +141,11 @@ class BookText(
                 chapters = chapters.ifEmpty { listOf(Chapter("Книга", 0, plain.length)) },
                 title = title,
                 author = author,
+                pictures = pictures.filter { it.charOffset <= plain.length },
             )
         }
     }
 }
 
-/** Что удалось достать из файла книги: текст и, если повезло, обложка. */
+/** Что удалось достать из файла книги: текст, обложка и картинки. */
 class ParsedBook(val text: BookText, val cover: ByteArray?)
