@@ -220,6 +220,12 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
 
             Section("Обновление")
             val update by app.updater.status.collectAsState()
+            // Своя версия - прямо здесь, а не только в «О приложении» внизу:
+            // без неё вопрос «почему не обновляется» не с чем сопоставить.
+            Text(
+                "Установлено: ${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
             Text(
                 when (val u = update) {
                     is ru.zf.slushalka.data.Updater.Status.Ready ->
@@ -227,7 +233,8 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                             (if (u.update.builtAt.isBlank()) "" else " от ${u.update.builtAt}")
                     is ru.zf.slushalka.data.Updater.Status.Downloading -> "Качаю: ${u.percent}%"
                     ru.zf.slushalka.data.Updater.Status.Checking -> "Смотрю…"
-                    ru.zf.slushalka.data.Updater.Status.UpToDate -> "Стоит последняя версия"
+                    is ru.zf.slushalka.data.Updater.Status.UpToDate ->
+                        "Стоит последняя версия · проверено ${formatAgo(u.at)}"
                     is ru.zf.slushalka.data.Updater.Status.Failed -> u.message
                     else -> "Проверяется само при каждом запуске, не чаще раза в полчаса"
                 },

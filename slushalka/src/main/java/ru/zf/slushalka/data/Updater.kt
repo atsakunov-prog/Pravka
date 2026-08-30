@@ -39,7 +39,8 @@ class Updater(private val context: Context, private val settings: Settings) {
     sealed interface Status {
         data object Idle : Status
         data object Checking : Status
-        data object UpToDate : Status
+        /** [at] - когда это выяснили: ответ получасовой давности выглядит как свежий. */
+        data class UpToDate(val at: Long) : Status
         data class Ready(val update: Available) : Status
         data class Downloading(val percent: Int) : Status
         data class Failed(val message: String) : Status
@@ -82,7 +83,7 @@ class Updater(private val context: Context, private val settings: Settings) {
                     .toMap()
                 val code = fields["versionCode"]?.toIntOrNull()
                     ?: return@runCatching Status.Failed("В файле версий нет versionCode")
-                if (code <= BuildConfig.VERSION_CODE) return@runCatching Status.UpToDate
+                if (code <= BuildConfig.VERSION_CODE) return@runCatching Status.UpToDate(now)
                 Status.Ready(
                     Available(
                         versionCode = code,
@@ -194,7 +195,11 @@ class Updater(private val context: Context, private val settings: Settings) {
     private companion object {
         /** Запасное имя - для случая, когда в build-info его не указали. */
         const val APK_NAME = "slushalka.apk"
-        /** Чаще, чем раз в полчаса, спрашивать про новую версию незачем. */
-        const val QUIET_MS = 30 * 60_000L
+        /**
+         * Файл версий - двести байт, и полчаса тишины были перестраховкой: за
+         * это время успевала выйти новая сборка, а на экране висел прежний
+         * ответ, выглядевший свежим. Пяти минут хватает и сети не жалко.
+         */
+        const val QUIET_MS = 5 * 60_000L
     }
 }
