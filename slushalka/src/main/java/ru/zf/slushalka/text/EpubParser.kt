@@ -61,9 +61,11 @@ object EpubParser {
                 marks.add(title.trim() to body.length)
                 // Ссылка на картинку - относительно самой главы, а не OPF.
                 val chapterDir = itemPath.substringBeforeLast('/', "")
-                for ((offset, src) in imageMarks) {
+                for ((offset, mark) in imageMarks) {
                     seenTags++
                     if (pictures.size >= MAX_PICTURES) break
+                    val src = mark.substringBefore('\u0002')
+                    val caption = mark.substringAfter('\u0002', "").trim()
                     val full = resolve(chapterDir, src)
                     if (sample.size < 2) sample.add(full)
                     val bytes = zip.bytesOf(full)
@@ -72,7 +74,7 @@ object EpubParser {
                         continue
                     }
                     if (bytes.size !in 1..MAX_PICTURE_BYTES) continue
-                    pictures.add(Picture(body.length + offset, full))
+                    pictures.add(Picture(body.length + offset, full, caption = caption))
                     onImage(full, bytes)
                 }
                 body.append(text).append("\n\n")

@@ -82,6 +82,7 @@ object TextExtract {
      * картинок.
      */
     private const val MARK = '\u0001'
+    private const val SEP = '\u0002'
 
     private val IMG = Regex("(?is)<(img|image)\\s[^>]*>")
 
@@ -89,7 +90,9 @@ object TextExtract {
         val attrs = m.value
         val src = Regex("(?i)(?:xlink:href|href|src)\\s*=\\s*[\"']([^\"']+)[\"']")
             .find(attrs)?.groupValues?.get(1)
-        if (src.isNullOrBlank()) "" else "$MARK$src$MARK"
+        val caption = Regex("(?i)(?:alt|title)\\s*=\\s*[\"']([^\"']*)[\"']")
+            .find(attrs)?.groupValues?.get(1).orEmpty()
+        if (src.isNullOrBlank()) "" else "$MARK$src$SEP$caption$MARK"
     }
 
     /** Снимает маркеры и отдаёт чистый текст вместе с местами картинок. */

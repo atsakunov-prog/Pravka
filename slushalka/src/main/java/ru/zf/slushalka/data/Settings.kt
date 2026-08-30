@@ -56,6 +56,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerJustify: Boolean = true,
         val readerTheme: String = THEME_AUTO,
         val readerKeepAwake: Boolean = true,
+        /** true - листание постранично, false - обычная прокрутка. */
+        val readerPaged: Boolean = false,
         /** Сверять переход «звук → текст» распознаванием последних секунд. */
         val refineOnSwitch: Boolean = true,
     )
@@ -85,6 +87,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerJustify = p[KEY_R_JUSTIFY] ?: true,
                 readerTheme = p[KEY_R_THEME] ?: THEME_AUTO,
                 readerKeepAwake = p[KEY_R_AWAKE] ?: true,
+                readerPaged = p[KEY_R_PAGED] ?: false,
                 refineOnSwitch = p[KEY_REFINE] ?: true,
             )
         }
@@ -117,6 +120,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderJustify(v: Boolean) = edit { it[KEY_R_JUSTIFY] = v }
     suspend fun setReaderTheme(v: String) = edit { it[KEY_R_THEME] = v }
     suspend fun setReaderKeepAwake(v: Boolean) = edit { it[KEY_R_AWAKE] = v }
+    suspend fun setReaderPaged(v: Boolean) = edit { it[KEY_R_PAGED] = v }
     suspend fun setRefineOnSwitch(v: Boolean) = edit { it[KEY_REFINE] = v }
 
     companion object {
@@ -159,6 +163,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_JUSTIFY = booleanPreferencesKey("reader_justify")
         private val KEY_R_THEME = stringPreferencesKey("reader_theme")
         private val KEY_R_AWAKE = booleanPreferencesKey("reader_keep_awake")
+        private val KEY_R_PAGED = booleanPreferencesKey("reader_paged")
         private val KEY_REFINE = booleanPreferencesKey("refine_on_switch")
     }
 }

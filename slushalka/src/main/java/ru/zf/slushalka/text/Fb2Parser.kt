@@ -126,7 +126,15 @@ object Fb2Parser {
                                     // внутри <p>, и закрытие съело бы остаток
                                     // его текста. Место картинки - перед этим
                                     // абзацем, этого достаточно.
-                                    pictures.add(Picture(body.length, href.removePrefix("#")))
+                                    pictures.add(
+                                        Picture(
+                                            charOffset = body.length,
+                                            ref = href.removePrefix("#"),
+                                            caption = (parser.getAttributeValue(null, "title")
+                                                ?: parser.getAttributeValue(null, "alt")).orEmpty()
+                                                .trim(),
+                                        )
+                                    )
                                 }
                             }
                         }

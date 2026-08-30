@@ -12,7 +12,13 @@ data class Chapter(val title: String, val start: Int, val end: Int) {
  * Картинка книги на своём месте в тексте. [ref] - как она называлась внутри
  * файла (id для fb2, путь в архиве для epub), [file] - куда её положили.
  */
-data class Picture(val charOffset: Int, val ref: String, val file: String = "")
+data class Picture(
+    val charOffset: Int,
+    val ref: String,
+    val file: String = "",
+    /** Название из самого файла (title/alt). Если его нет - берём строку под картинкой. */
+    val caption: String = "",
+)
 
 /** Кусок читалки: либо абзац, либо картинка. */
 data class Block(val start: Int, val text: String, val picture: Picture?) {
@@ -72,14 +78,40 @@ class BookText(
         val byOffset = pictures.groupBy { it.charOffset }
         var offset = 0
         for (line in plain.split('\n')) {
-            byOffset[offset]?.forEach { out.add(Block(offset, "", it)) }
-            if (line.isNotBlank()) out.add(Block(offset, line, null))
+            val here = byOffset[offset].orEmpty()
+            var lineIsCaption = false
+            for ((k, pic) in here.withIndex()) {
+                val own = pic.caption.trim()
+                val under = line.trim()
+                // Подпись: своя из файла, а если её нет - строка под картинкой.
+                // Длинная строка - это уже проза, её не забираем.
+                val takeLine = own.isBlank() && k == here.lastIndex &&
+                    under.isNotEmpty() && under.length <= CAPTION_MAX
+                if (takeLine) lineIsCaption = true
+                out.add(
+                    Block(offset, "", pic.copy(caption = if (own.isNotBlank()) own else if (takeLine) under else ""))
+                )
+            }
+            if (!lineIsCaption && line.isNotBlank()) out.add(Block(offset, line, null))
             offset += line.length + 1
         }
         // Картинки, попавшие за последний абзац (в конце книги).
         pictures.filter { it.charOffset >= offset }.forEach { out.add(Block(offset, "", it)) }
         out
     }
+
+    /** Картинки с уже разобранными подписями - для галереи и для плеера. */
+    val picturesWithCaptions: List<Picture> by lazy(LazyThreadSafetyMode.NONE) {
+        blocks.mapNotNull { it.picture }
+    }
+
+    /**
+     * Какую картинку показывать в этом месте книги. Картинка становится
+     * текущей **за страницу** до того, как до неё дойдёт текст: к тому времени,
+     * как о ней зайдёт речь, она уже перед глазами.
+     */
+    fun pictureAt(offset: Int): Picture? =
+        picturesWithCaptions.lastOrNull { it.charOffset <= offset + PAGE_CHARS }
 
     /** Номер блока, в котором лежит это место текста. */
     fun blockIndexAt(offset: Int): Int {
@@ -98,7 +130,10 @@ class BookText(
         })
         .put("pictures", JSONArray().apply {
             pictures.forEach {
-                put(JSONObject().put("c", it.charOffset).put("r", it.ref).put("f", it.file))
+                put(
+                    JSONObject().put("c", it.charOffset).put("r", it.ref)
+                        .put("f", it.file).put("cap", it.caption)
+                )
             }
         })
 
@@ -112,7 +147,10 @@ class BookText(
          * готовый кэш никто бы не перечитал. Версия 2 - картинки, версия 3 -
          * они же, но найденные по-настоящему (см. Fb2Parser.hrefOf).
          */
-        const val CACHE_VERSION = 4
+        const val CACHE_VERSION = 5
+
+        /** Длиннее этого строка под картинкой - уже проза, а не подпись. */
+        const val CAPTION_MAX = 140
 
         fun fromMeta(plain: String, meta: JSONObject): BookText {
             val arr = meta.optJSONArray("chapters") ?: JSONArray()
@@ -127,7 +165,7 @@ class BookText(
                 author = meta.optString("author"),
                 pictures = (0 until pics.length()).map {
                     val o = pics.getJSONObject(it)
-                    Picture(o.optInt("c"), o.optString("r"), o.optString("f"))
+                    Picture(o.optInt("c"), o.optString("r"), o.optString("f"), o.optString("cap"))
                 },
             )
         }

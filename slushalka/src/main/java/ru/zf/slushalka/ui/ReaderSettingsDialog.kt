@@ -46,6 +46,27 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
         text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
 
+                Label("Как листать")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(false to "Прокруткой", true to "Страницами").forEach { (paged, title) ->
+                        FilterChip(
+                            selected = prefs.readerPaged == paged,
+                            onClick = { scope.launch { s.setReaderPaged(paged) } },
+                            label = { Text(title) },
+                        )
+                    }
+                }
+                Text(
+                    if (prefs.readerPaged)
+                        "Настоящие страницы: текст меряется в той ширине и тем шрифтом, каким " +
+                            "будет нарисован, поэтому строка не режется краем пополам. " +
+                            "Перелистывается смахиванием вбок и тапом по краям."
+                    else "Обычная лента. Тап по краям экрана прокручивает на экран, " +
+                        "по середине - прячет панели.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
                 Label("Шрифт")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(

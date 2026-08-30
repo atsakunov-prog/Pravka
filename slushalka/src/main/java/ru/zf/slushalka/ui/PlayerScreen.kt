@@ -32,6 +32,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -50,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -74,6 +77,7 @@ fun PlayerScreen(
     val recapOffer by state.recapOffer.collectAsState()
     val alignment by state.alignment.collectAsState()
     val markup by state.markupProgress.collectAsState()
+    val bookText by state.text.collectAsState()
     val scope = rememberCoroutineScope()
 
     var showChapters by remember { mutableStateOf(false) }
@@ -82,6 +86,7 @@ fun PlayerScreen(
     var showMarks by remember { mutableStateOf(false) }
     var showRecap by remember { mutableStateOf(false) }
     var showGallery by remember { mutableStateOf(false) }
+    var fullPicture by remember { mutableStateOf<java.io.File?>(null) }
 
     val b = book
     if (b == null) {
@@ -111,6 +116,12 @@ fun PlayerScreen(
             )
         },
     ) { padding ->
+        // Картинка этого места книги: становится текущей за страницу до того,
+        // как до неё дойдёт текст. Нет такой - на месте остаётся обложка.
+        val livePicture = remember(bookText, play.absMs / 5000, alignment) {
+            val at = alignment?.charAt(play.absMs)
+            if (at == null) null else bookText?.pictureAt(at)?.takeIf { it.file.isNotBlank() }
+        }
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             // Разложенный Fold - две колонки: обложке не место в узкой полоске
             // сверху, когда рядом полэкрана пустует.
@@ -335,10 +346,15 @@ fun PlayerScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
-                    CoverImage(
-                        app, b,
+                    BookArt(
+                        app, b, livePicture,
                         Modifier.weight(1f).aspectRatio(1f).clip(MaterialTheme.shapes.large),
                         textSize = 20,
+                        onTap = {
+                            val f = livePicture?.let { app.texts.pictureFile(b.id, it.file) }
+                            if (f != null && f.exists()) fullPicture = f
+                            else if (state.picturesOnDisk() > 0) showGallery = true
+                        },
                     )
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { controls() }
                 }
@@ -350,13 +366,18 @@ fun PlayerScreen(
                         .padding(horizontal = 20.dp, vertical = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    CoverImage(
-                        app, b,
+                    BookArt(
+                        app, b, livePicture,
                         Modifier
                             .fillMaxWidth(0.72f)
                             .aspectRatio(1f)
                             .clip(MaterialTheme.shapes.large),
                         textSize = 18,
+                        onTap = {
+                            val f = livePicture?.let { app.texts.pictureFile(b.id, it.file) }
+                            if (f != null && f.exists()) fullPicture = f
+                            else if (state.picturesOnDisk() > 0) showGallery = true
+                        },
                     )
                     Spacer(Modifier.height(16.dp))
                     controls()
@@ -385,6 +406,7 @@ fun PlayerScreen(
     if (showGallery) {
         PictureGallery(app) { showGallery = false }
     }
+    fullPicture?.let { f -> ImageViewer(f) { fullPicture = null } }
 }
 
 /** Полоса позиции: тянется пальцем, во время перетаскивания тик не мешает. */
@@ -595,4 +617,60 @@ private fun BookmarksDialog(app: SlushalkaApp, onDismiss: () -> Unit) {
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
     )
+}
+
+/**
+ * Обложка книги - или картинка того места, где мы сейчас. Иллюстрация встаёт
+ * на место обложки за страницу до того, как о ней зайдёт речь, и уходит, когда
+ * подходит следующая. Подпись лежит полосой понизу, как на конверте пластинки.
+ */
+@Composable
+private fun BookArt(
+    app: SlushalkaApp,
+    book: ru.zf.slushalka.library.Book,
+    picture: ru.zf.slushalka.text.Picture?,
+    modifier: Modifier = Modifier,
+    textSize: Int = 18,
+    onTap: () -> Unit,
+) {
+    val file = picture?.let { app.texts.pictureFile(book.id, it.file) }?.takeIf { it.exists() }
+    Box(modifier.clickable(onClick = onTap), contentAlignment = Alignment.Center) {
+        if (file == null) {
+            CoverImage(app, book, Modifier.fillMaxSize(), textSize = textSize)
+            return@Box
+        }
+        val bitmap by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(
+            Pictures.cached(file), file.path,
+        ) {
+            if (value == null) value = Pictures.load(file)
+        }
+        Box(
+            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center,
+        ) {
+            bitmap?.let {
+                androidx.compose.foundation.Image(
+                    bitmap = it.asImageBitmap(),
+                    contentDescription = picture.caption,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        if (picture.caption.isNotBlank()) {
+            Text(
+                picture.caption,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(androidx.compose.ui.graphics.Color(0xB3000000))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
+    }
 }
