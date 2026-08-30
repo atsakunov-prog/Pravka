@@ -8,7 +8,9 @@ import ru.zf.slushalka.text.Block
 import ru.zf.slushalka.text.Picture
 
 /** Кусок страницы: либо часть абзаца, либо картинка. */
-data class PagePiece(val text: String, val picture: Picture?)
+data class PagePiece(val text: String, val picture: Picture?, val start: Int = 0) {
+    val end get() = start + text.length + 1
+}
 
 /** Готовая страница: с какого знака книги начинается и что на ней стоит. */
 data class Page(val startChar: Int, val pieces: List<PagePiece>)
@@ -57,7 +59,7 @@ object Paginator {
                 // Картинке - своя страница: так она видна целиком, и не надо
                 // гадать, влезет ли она в остаток текущей.
                 flush()
-                pages.add(Page(block.start, listOf(PagePiece("", block.picture))))
+                pages.add(Page(block.start, listOf(PagePiece("", block.picture, block.start))))
                 continue
             }
 
@@ -74,7 +76,7 @@ object Paginator {
                 )
                 if (layout.size.height <= remaining) {
                     if (pageStart < 0) pageStart = base
-                    pieces.add(PagePiece(text, null))
+                    pieces.add(PagePiece(text, null, base))
                     used += layout.size.height + gapPx
                     break
                 }
@@ -93,7 +95,7 @@ object Paginator {
                 }
                 val end = layout.getLineEnd(last, visibleEnd = true).coerceIn(1, text.length)
                 if (pageStart < 0) pageStart = base
-                pieces.add(PagePiece(text.substring(0, end), null))
+                pieces.add(PagePiece(text.substring(0, end), null, base))
                 flush()
                 val rest = text.substring(end)
                 val trimmed = rest.trimStart()

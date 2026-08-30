@@ -18,16 +18,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * Кнопки плеера рисуются, а не берутся из набора иконок: в material-icons-core
@@ -79,12 +73,16 @@ fun PlayPauseButton(
     }
 }
 
-/** Круговая стрелка с числом внутри: «назад на 15» и «вперёд на 15». */
+/**
+ * Перемотка на N секунд. Кнопка крупная - в неё попадают на ходу и не глядя, -
+ * а рисунок в ней простой: двойная стрелка и число. Круговая стрелка с цифрой
+ * внутри выглядела наряднее, но читалась хуже.
+ */
 @Composable
 fun SkipButton(
     seconds: Int,
     forward: Boolean,
-    size: Dp = 60.dp,
+    size: Dp = 68.dp,
     onClick: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -95,59 +93,42 @@ fun SkipButton(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(size)) {
-            if (forward) drawSkipArc(scheme.onSurface) else {
-                scale(scaleX = -1f, scaleY = 1f) { drawSkipArc(scheme.onSurface) }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Canvas(Modifier.size(width = size * 0.46f, height = size * 0.24f)) {
+                val c = scheme.onSurface
+                val w = this.size.width
+                val h = this.size.height
+                val half = w * 0.46f
+                fun triangle(left: Float) {
+                    val p = Path().apply {
+                        if (forward) {
+                            moveTo(left, 0f)
+                            lineTo(left + half, h / 2f)
+                            lineTo(left, h)
+                        } else {
+                            moveTo(left + half, 0f)
+                            lineTo(left, h / 2f)
+                            lineTo(left + half, h)
+                        }
+                        close()
+                    }
+                    drawPath(p, c)
+                }
+                triangle(0f)
+                triangle(w - half)
             }
+            Text(
+                text = "$seconds",
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = (size.value * 0.23f).sp,
+                ),
+                color = scheme.onSurface,
+            )
         }
-        Text(
-            text = "$seconds",
-            style = MaterialTheme.typography.labelLarge.copy(
-                fontWeight = FontWeight.Bold,
-                fontSize = (size.value * 0.26f).sp,
-            ),
-            color = scheme.onSurface,
-        )
     }
 }
 
-private fun DrawScope.drawSkipArc(color: Color) {
-    val stroke = size.minDimension * 0.055f
-    val inset = stroke * 1.4f
-    val diameter = size.minDimension - inset * 2
-    drawArc(
-        color = color,
-        // Разрыв сверху справа - туда встаёт остриё стрелки.
-        startAngle = -50f,
-        sweepAngle = 285f,
-        useCenter = false,
-        topLeft = Offset(inset, inset),
-        size = Size(diameter, diameter),
-        style = Stroke(width = stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round),
-    )
-    // Остриё: маленький треугольник у конца дуги, повёрнутый по касательной.
-    val r = diameter / 2
-    val angle = Math.toRadians(-50.0)
-    val tip = Offset(
-        (size.width / 2 + r * cos(angle)).toFloat(),
-        (size.height / 2 + r * sin(angle)).toFloat(),
-    )
-    rotate(degrees = -50f + 90f, pivot = tip) {
-        val a = stroke * 2.1f
-        val p = Path().apply {
-            moveTo(tip.x, tip.y - a * 0.62f)
-            lineTo(tip.x - a * 0.62f, tip.y + a * 0.45f)
-            lineTo(tip.x + a * 0.62f, tip.y + a * 0.45f)
-            close()
-        }
-        drawPath(p, color)
-    }
-}
-
-/**
- * Таймер сна - месяцем слева от play. Идёт отсчёт - месяц окрашивается, а под
- * ним встают оставшиеся минуты: сколько ещё книге играть, видно не заходя в меню.
- */
 @Composable
 fun SleepButton(leftMs: Long, size: Dp = 46.dp, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme

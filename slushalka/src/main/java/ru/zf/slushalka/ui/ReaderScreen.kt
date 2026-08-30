@@ -130,6 +130,8 @@ fun ReaderScreen(
     var pressed by remember { mutableStateOf<Int?>(null) }
     var offset by remember { mutableIntStateOf(0) }
     var target by remember { mutableStateOf<Int?>(null) }
+    var highlightAt by remember { mutableIntStateOf(-1) }
+    val highlight = remember { androidx.compose.animation.core.Animatable(0f) }
 
     val palette = readerPalette(prefs.readerTheme, isSystemInDarkTheme())
 
@@ -157,6 +159,9 @@ fun ReaderScreen(
     }
 
     val blocks = t.blocks
+    // Считается один раз на книгу: панель читалки перерисовывается на каждой
+    // прокрутке, и лазить в файловую систему на каждом кадре ей незачем.
+    val hasPictures = remember(t, bk.id) { app.state.picturesOnDisk() > 0 }
     val chapterStarts = remember(t) { t.chapters.map { it.start }.toHashSet() }
     val isHeading: (Block) -> Boolean = { it.picture == null && it.start in chapterStarts && it.text.length < 120 }
 
@@ -195,6 +200,22 @@ fun ReaderScreen(
     }
     DisposableEffect(Unit) { onDispose { state.saveReadChar(offset) } }
 
+    // Найденное место коротко подсвечивается и гаснет: глазами сразу видно,
+    // откуда читать, а через пару секунд ничто не мешает тексту.
+    LaunchedEffect(target) {
+        val at = target ?: return@LaunchedEffect
+        highlightAt = at
+        highlight.snapTo(1f)
+        highlight.animateTo(
+            targetValue = 0f,
+            animationSpec = androidx.compose.animation.core.tween(
+                durationMillis = 2600,
+                delayMillis = 700,
+            ),
+        )
+        highlightAt = -1
+    }
+
     LaunchedEffect(notice) {
         if (notice != null) {
             kotlinx.coroutines.delay(2600)
@@ -212,6 +233,7 @@ fun ReaderScreen(
                 target = target, onTargetUsed = { target = null },
                 onOffset = { offset = it }, onToggleBars = { bars = !bars },
                 onPicture = onTapPicture, onLongPress = onLong,
+                highlightAt = highlightAt, highlightAlpha = highlight.value,
             )
         } else {
             ScrollBody(
@@ -220,6 +242,7 @@ fun ReaderScreen(
                 target = target, onTargetUsed = { target = null },
                 onOffset = { offset = it }, onToggleBars = { bars = !bars },
                 onPicture = onTapPicture, onLongPress = onLong,
+                highlightAt = highlightAt, highlightAlpha = highlight.value,
             )
         }
 
@@ -261,7 +284,7 @@ fun ReaderScreen(
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
                 )
-                if (app.state.picturesOnDisk() > 0) {
+                if (hasPictures) {
                     TextButton(onClick = { showGallery = true }) {
                         Text("Картинки", color = palette.fg)
                     }
@@ -401,6 +424,8 @@ private fun ScrollBody(
     onToggleBars: () -> Unit,
     onPicture: (ShownPicture) -> Unit,
     onLongPress: (Int) -> Unit,
+    highlightAt: Int,
+    highlightAlpha: Float,
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -461,12 +486,18 @@ private fun ScrollBody(
                     }
                 } else {
                     val heading = isHeading(block)
+                    val lit = highlightAlpha > 0.01f && highlightAt in block.start until block.end
                     Text(
                         text = block.text,
                         style = styleFor(heading),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = if (heading) 28.dp else 0.dp, bottom = 10.dp),
+                            .padding(top = if (heading) 28.dp else 0.dp)
+                            .background(
+                                if (lit) palette.fg.copy(alpha = 0.16f * highlightAlpha)
+                                else Color.Transparent
+                            )
+                            .padding(bottom = 10.dp),
                     )
                 }
             }
@@ -491,6 +522,8 @@ private fun PagedBody(
     onToggleBars: () -> Unit,
     onPicture: (ShownPicture) -> Unit,
     onLongPress: (Int) -> Unit,
+    highlightAt: Int,
+    highlightAlpha: Float,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -613,10 +646,18 @@ private fun PagedBody(
                                 onPicture(ShownPicture(file, pic.caption, pic.charOffset))
                             }
                         } else {
+                            val lit = highlightAlpha > 0.01f &&
+                                highlightAt in piece.start until piece.end
                             Text(
                                 piece.text,
                                 style = style,
-                                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        if (lit) palette.fg.copy(alpha = 0.16f * highlightAlpha)
+                                        else Color.Transparent
+                                    )
+                                    .padding(bottom = 10.dp),
                             )
                         }
                     }

@@ -21,6 +21,34 @@ object Locator {
     /** Окно поиска: примерно ±17 страниц, это больше любой разумной ошибки карты. */
     const val DEFAULT_RADIUS = 30_000
 
+    /**
+     * Ступени окна для перехода: сперва пара абзацев вокруг предполагаемого
+     * места, и только если там не нашлось - шире. Обычно хватает первой
+     * ступени, а она считается почти мгновенно.
+     */
+    private val STAGES = intArrayOf(1_800, 5_000, 14_000, DEFAULT_RADIUS)
+
+    /**
+     * Поиск с расширением окна. [bounds] - границы, дальше которых уходить
+     * незачем: между двумя выверенными точками карты место лежать не может.
+     */
+    fun findStaged(
+        text: BookText,
+        transcript: String,
+        aroundChar: Int,
+        bounds: IntRange? = null,
+        minVotes: Int = MIN_VOTES,
+    ): Hit? {
+        for (radius in STAGES) {
+            find(text, transcript, aroundChar, radius, minVotes, bounds)?.let { return it }
+            // Окно уже упёрлось в границы - шире делать нечего.
+            if (bounds != null &&
+                aroundChar - radius <= bounds.first && aroundChar + radius >= bounds.last
+            ) break
+        }
+        return null
+    }
+
     fun find(
         text: BookText,
         transcript: String,
@@ -28,12 +56,16 @@ object Locator {
         radius: Int = DEFAULT_RADIUS,
         /** Разметка идёт без человека, и планку там держим выше. */
         minVotes: Int = MIN_VOTES,
+        /** Границы, за которые место выйти не может. */
+        bounds: IntRange? = null,
     ): Hit? {
         val needle = stems(transcript)
         if (needle.size < MIN_WORDS) return null
 
-        val from = (aroundChar - radius).coerceIn(0, text.length)
-        val to = (aroundChar + radius).coerceIn(from, text.length)
+        val loLimit = (bounds?.first ?: 0).coerceIn(0, text.length)
+        val hiLimit = (bounds?.last ?: text.length).coerceIn(loLimit, text.length)
+        val from = (aroundChar - radius).coerceIn(loLimit, hiLimit)
+        val to = (aroundChar + radius).coerceIn(from, hiLimit)
         if (to - from < 200) return null
         val window = text.plain.substring(from, to)
         val words = tokenize(window)

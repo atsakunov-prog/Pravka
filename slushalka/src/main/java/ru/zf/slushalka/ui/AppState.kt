@@ -278,42 +278,77 @@ class AppState(private val app: SlushalkaApp) {
         val transcript: String?,
         val decodedMs: Long,
         val miss: Miss,
+        /** Время записи, которому соответствует найденное место. */
+        val anchorMs: Long = 0,
     )
 
     /**
-     * Одна проба: кусок записи перед [absMs] расшифровывается **на телефоне**
-     * и ищется в тексте. Ни сети, ни моделей, ни денег - системный
-     * распознаватель Андроида плюс обычный поиск по книге.
+     * Одна проба: кусок записи расшифровывается **на телефоне** и ищется в
+     * тексте. Ни сети, ни моделей, ни денег - системный распознаватель
+     * Андроида плюс обычный поиск по книге.
+     *
+     * [forward] - взять кусок ПОСЛЕ [atMs], а не перед ним. Так проверяется
+     * переход из читалки в звук: перемотали по карте - и слушаем, туда ли
+     * попали.
      */
     private suspend fun probe(
         book: Book,
         text: BookText,
         align: Alignment,
-        absMs: Long,
-        minVotes: Int,
-        radius: Int,
+        atMs: Long,
+        forward: Boolean = false,
+        minVotes: Int = Locator.MIN_VOTES,
+        staged: Boolean = true,
+        radius: Int = Locator.DEFAULT_RADIUS,
     ): Probe {
         val tree = treeUri() ?: return Probe(null, null, 0, Miss.NO_AUDIO)
-        val (index, inFile) = book.locate(absMs)
+        val (index, inFile) = book.locate(atMs)
         val file = book.files.getOrNull(index) ?: return Probe(null, null, 0, Miss.NO_AUDIO)
-        val from = (inFile - CHUNK_MS).coerceAtLeast(0L)
-        val span = (inFile - from).coerceAtMost(CHUNK_MS)
+        val from: Long
+        val span: Long
+        if (forward) {
+            from = inFile
+            span = minOf(CHUNK_MS, (file.durationMs - inFile).coerceAtLeast(0L))
+        } else {
+            from = (inFile - CHUNK_MS).coerceAtLeast(0L)
+            span = (inFile - from).coerceAtMost(CHUNK_MS)
+        }
         if (span < 4000) return Probe(null, null, 0, Miss.NO_AUDIO)
+        // Место, которому отвечает услышанное, - конец куска.
+        val anchorMs = if (forward) atMs + span else atMs
 
         val pcm = withContext(Dispatchers.IO) {
             AudioChunk.decode(app, documentUri(tree, file.docId), from, span)
-        } ?: return Probe(null, null, 0, Miss.NO_AUDIO)
+        } ?: return Probe(null, null, 0, Miss.NO_AUDIO, anchorMs)
 
         val transcript = app.recognizer.recognize(pcm)
-            ?: return Probe(null, null, pcm.durationMs, Miss.NO_SPEECH)
+            ?: return Probe(null, null, pcm.durationMs, Miss.NO_SPEECH, anchorMs)
 
-        val hit = Locator.find(text, transcript, align.charAt(absMs), radius, minVotes)
+        val estimate = align.charAt(anchorMs)
+        val bounds = boundsFor(align, text, anchorMs)
+        val hit = if (staged) {
+            Locator.findStaged(text, transcript, estimate, bounds, minVotes)
+        } else {
+            Locator.find(text, transcript, estimate, radius, minVotes, bounds)
+        }
         return Probe(
             charOffset = hit?.charOffset,
             transcript = transcript,
             decodedMs = pcm.durationMs,
             miss = if (hit == null) Miss.NOT_FOUND else Miss.OK,
+            anchorMs = anchorMs,
         )
+    }
+
+    /**
+     * Между двумя выверенными точками карты место лежать не может - дальше них
+     * искать незачем. Это и ускоряет поиск, и не даёт уехать в чужую главу.
+     */
+    private fun boundsFor(align: Alignment, text: BookText, atMs: Long): IntRange {
+        val manual = align.anchors.filter { it.manual }
+        val lo = manual.lastOrNull { it.audioMs < atMs }?.charOffset ?: 0
+        val hi = manual.firstOrNull { it.audioMs > atMs }?.charOffset ?: text.length
+        return lo..hi.coerceAtLeast(lo)
     }
 
     /**
@@ -329,7 +364,7 @@ class AppState(private val app: SlushalkaApp) {
             _markupProgress.value = MarkupProgress(0, 1, 0, true, "Пробую…")
             val align = _alignment.value ?: return@launch
             val at = app.player.state.value.absMs.takeIf { it > 20_000 } ?: (book.totalMs / 3)
-            val r = probe(book, text, align, at, Locator.MIN_VOTES, Locator.DEFAULT_RADIUS)
+            val r = probe(book, text, align, at)
             val note = when (r.miss) {
                 Miss.NO_AUDIO -> "Звук не декодировался. Формат файла плеер играет, а декодер " +
                     "не осилил - напиши, какой это формат."
@@ -347,8 +382,8 @@ class AppState(private val app: SlushalkaApp) {
 
     /** Сверка при переходе: одна проба и отметка на карте, если попали. */
     private suspend fun refineAt(book: Book, text: BookText, align: Alignment, absMs: Long): Int? {
-        _busy.value = "Слушаю последние секунды…"
-        val r = probe(book, text, align, absMs, Locator.MIN_VOTES, Locator.DEFAULT_RADIUS)
+        _busy.value = "Ищу это место в книге…"
+        val r = probe(book, text, align, absMs)
         _busy.value = null
         r.charOffset?.let { addAnchor(absMs, it) }
         return r.charOffset
@@ -426,7 +461,10 @@ class AppState(private val app: SlushalkaApp) {
                     _markupProgress.value = MarkupProgress(done, total, hits, true)
 
                     val radius = radiusFor(align, at)
-                    val r = probe(book, text, align, at, MARKUP_MIN_VOTES, radius)
+                    val r = probe(
+                        book, text, align, at,
+                        minVotes = MARKUP_MIN_VOTES, staged = false, radius = radius,
+                    )
                     when (r.miss) {
                         Miss.NO_AUDIO -> noAudio++
                         Miss.NO_SPEECH -> noSpeech++
@@ -538,11 +576,40 @@ class AppState(private val app: SlushalkaApp) {
         bump()
     }
 
-    /** Обратный переход: читал глазами - продолжаю слушать отсюда. */
+    /**
+     * Обратный переход: читал глазами - продолжаю слушать отсюда.
+     *
+     * Перемотка по карте - мгновенная, но карта может ошибаться. Поэтому,
+     * если рядом нет выверенной точки, приложение слушает несколько секунд с
+     * того места, куда попало, находит их в тексте и **поправляет перемотку** -
+     * заодно оставляя на карте новую отметку.
+     */
     fun listenFrom(charOffset: Int) {
         val align = _alignment.value ?: return
-        app.player.seekTo(align.audioAt(charOffset))
-        if (!app.player.state.value.playing) app.player.playPause()
+        val book = _current.value ?: return
+        val text = _text.value ?: return
+        val first = align.audioAt(charOffset)
+        app.player.seekTo(first)
+
+        val trusted = align.distanceToAnchor(first) < TRUST_MAP_MS
+        if (trusted || !prefs.value.refineOnSwitch || !app.recognizer.supported ||
+            markupJob?.isActive == true
+        ) {
+            if (!app.player.state.value.playing) app.player.playPause()
+            return
+        }
+        app.scope.launch {
+            _busy.value = "Ищу это место в записи…"
+            val r = probe(book, text, align, first, forward = true)
+            _busy.value = null
+            r.charOffset?.let { found ->
+                addAnchor(r.anchorMs, found)
+                val corrected = (_alignment.value ?: align).audioAt(charOffset)
+                // Поправляем, только если промах слышимый.
+                if (kotlin.math.abs(corrected - first) > 3_000) app.player.seekTo(corrected)
+            }
+            if (!app.player.state.value.playing) app.player.playPause()
+        }
     }
 
     fun saveReadChar(offset: Int) {
@@ -623,8 +690,9 @@ class AppState(private val app: SlushalkaApp) {
     }
 
     companion object {
-        /** Сколько записи расшифровывать для сверки: тринадцати секунд хватает. */
-        private const val CHUNK_MS = 13_000L
+        /** Сколько записи расшифровывать для сверки. Десяти секунд хватает, а
+         * распознаётся такой кусок заметно быстрее. */
+        private const val CHUNK_MS = 10_000L
         /** Ближе этого к выверенной точке карте можно верить как есть. */
         private const val TRUST_MAP_MS = 12 * 60_000L
         /** Разметка не переделывает то, что уже размечено. */

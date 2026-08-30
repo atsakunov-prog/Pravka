@@ -48,7 +48,7 @@ class ChunkRecognizer(private val context: Context) {
     private suspend fun attempt(
         pcm: AudioChunk.Pcm,
         onDevice: Boolean,
-        timeoutMs: Long = 15_000,
+        timeoutMs: Long = 9_000,
     ): String? {
         return suspendCancellableCoroutine { cont ->
             val main = Handler(Looper.getMainLooper())

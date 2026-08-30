@@ -168,19 +168,19 @@ fun PlayerScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center,
                     ) {
-                        SleepButton(play.sleepLeftMs, size = 44.dp) { showSleep = true }
-                        Spacer(Modifier.width(6.dp))
-                        SkipButton(prefs.skipSec, forward = false, size = 56.dp) {
+                        SleepButton(play.sleepLeftMs, size = 42.dp) { showSleep = true }
+                        Spacer(Modifier.width(2.dp))
+                        SkipButton(prefs.skipSec, forward = false, size = 66.dp) {
                             app.player.skip(-prefs.skipSec)
                         }
-                        Spacer(Modifier.width(4.dp))
-                        PlayPauseButton(play.playing, size = 72.dp) { app.player.playPause() }
-                        Spacer(Modifier.width(4.dp))
-                        SkipButton(prefs.skipSec, forward = true, size = 56.dp) {
+                        Spacer(Modifier.width(2.dp))
+                        PlayPauseButton(play.playing, size = 74.dp) { app.player.playPause() }
+                        Spacer(Modifier.width(2.dp))
+                        SkipButton(prefs.skipSec, forward = true, size = 66.dp) {
                             app.player.skip(prefs.skipSec)
                         }
-                        Spacer(Modifier.width(6.dp))
-                        SpeedButton(play.speed, size = 44.dp) { showSpeed = true }
+                        Spacer(Modifier.width(2.dp))
+                        SpeedButton(play.speed, size = 42.dp) { showSpeed = true }
                     }
 
                     Spacer(Modifier.height(8.dp))
