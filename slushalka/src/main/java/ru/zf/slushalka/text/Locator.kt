@@ -26,6 +26,8 @@ object Locator {
         transcript: String,
         aroundChar: Int,
         radius: Int = DEFAULT_RADIUS,
+        /** Разметка идёт без человека, и планку там держим выше. */
+        minVotes: Int = MIN_VOTES,
     ): Hit? {
         val needle = stems(transcript)
         if (needle.size < MIN_WORDS) return null
@@ -73,7 +75,7 @@ object Locator {
             if (v > second) second = v
         }
 
-        val needed = maxOf(MIN_VOTES, (pairs * MIN_SHARE).toInt())
+        val needed = maxOf(minVotes, (pairs * MIN_SHARE).toInt())
         if (best < needed) return null
         if (second > 0 && best < second * MIN_MARGIN) return null
 
@@ -121,7 +123,8 @@ object Locator {
         (a.hashCode().toLong() shl 32) xor (b.hashCode().toLong() and 0xFFFFFFFFL)
 
     private const val MIN_WORDS = 5
-    private const val MIN_VOTES = 3
+    /** Порог попадания при ручном переходе; разметка требует больше. */
+    const val MIN_VOTES = 3
     private const val MIN_SHARE = 0.30
     private const val MIN_MARGIN = 1.6
     private const val MAX_OCCURRENCES = 12

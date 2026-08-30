@@ -31,6 +31,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -72,6 +73,7 @@ fun PlayerScreen(
     val busy by state.busy.collectAsState()
     val recapOffer by state.recapOffer.collectAsState()
     val alignment by state.alignment.collectAsState()
+    val markup by state.markupProgress.collectAsState()
     val scope = rememberCoroutineScope()
 
     var showChapters by remember { mutableStateOf(false) }
@@ -207,6 +209,61 @@ fun PlayerScreen(
                                 modifier = Modifier.weight(1f).height(54.dp),
                             ) {
                                 Text("Читать", style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+                    }
+
+                    // Разметка: без неё переход между звуком и текстом
+                    // приблизительный, с ней - мгновенный и точный.
+                    val needsMarkup = b.textDocId != null && alignment != null &&
+                        !state.isMarkedUp() && app.recognizer.supported
+                    if (markup != null || needsMarkup) {
+                        Spacer(Modifier.height(12.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.padding(14.dp)) {
+                                val m = markup
+                                when {
+                                    m != null && m.running -> {
+                                        Text(
+                                            "Размечаю книгу: ${m.done} из ${m.total}, " +
+                                                "нашлось ${m.hits}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        LinearProgressIndicator(
+                                            progress = {
+                                                if (m.total > 0) m.done.toFloat() / m.total else 0f
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                        TextButton(onClick = { state.cancelMarkup() }) {
+                                            Text("Остановить")
+                                        }
+                                    }
+                                    m != null && m.note.isNotBlank() -> {
+                                        Text(m.note, style = MaterialTheme.typography.bodyMedium)
+                                        TextButton(onClick = { state.dismissMarkupNote() }) {
+                                            Text("Понятно")
+                                        }
+                                    }
+                                    else -> {
+                                        Text(
+                                            "Книга не размечена: переход между звуком и текстом " +
+                                                "попадёт примерно. Разметка пройдёт по записи " +
+                                                "пробами прямо на телефоне и ляжет файлом рядом " +
+                                                "с книгой.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        TextButton(onClick = { state.markupBook() }) {
+                                            Text("Разметить книгу")
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

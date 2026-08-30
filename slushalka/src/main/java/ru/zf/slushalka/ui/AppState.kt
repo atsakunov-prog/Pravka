@@ -170,6 +170,7 @@ class AppState(private val app: SlushalkaApp) {
             _text.value = t
             if (t != null) {
                 _alignment.value = Alignment.build(book, t, app.positions.get(book.id).anchors)
+                loadMarkup(book, t)
             }
         }
     }
@@ -203,14 +204,23 @@ class AppState(private val app: SlushalkaApp) {
         app.positions.setAnchors(book.id, anchors)
         _alignment.value = Alignment.build(book, text, anchors)
         bump()
+        // Отметка тут же уезжает в файл рядом с книгой - другим устройствам
+        // не придётся выяснять то же самое заново.
+        if (markupJob?.isActive != true) app.scope.launch { saveMarkup() }
     }
 
     fun dropAnchors() {
         val book = _current.value ?: return
         val text = _text.value ?: return
+        cancelMarkup()
         app.positions.setAnchors(book.id, emptyList())
         _alignment.value = Alignment.build(book, text, emptyList())
+        _markupProgress.value = null
         bump()
+        // Вместе с отметками уходит и файл разметки: иначе та же карта
+        // вернулась бы при следующем открытии книги.
+        val tree = treeUri() ?: return
+        app.scope.launch { withContext(Dispatchers.IO) { app.markup.delete(tree, book) } }
     }
 
     fun bump() {
@@ -235,19 +245,27 @@ class AppState(private val app: SlushalkaApp) {
         val align = _alignment.value ?: return 0
         val absMs = app.player.state.value.absMs
         val estimate = align.charAt(absMs)
+        // Книга размечена и точка рядом - карта здесь уже точная, слушать
+        // и распознавать нечего.
+        if (align.distanceToAnchor(absMs) < TRUST_MAP_MS) return estimate
         if (!prefs.value.refineOnSwitch || !app.recognizer.supported) return estimate
 
         val hit = refineAt(book, text, align, absMs)
         return hit ?: estimate
     }
 
-    /** Расшифровывает последние секунды перед [absMs] и ищет их в книге. */
-    private suspend fun refineAt(
+    /**
+     * Одна проба: кусок записи перед [absMs] расшифровывается **на телефоне**
+     * и ищется в тексте. Ни сети, ни моделей, ни денег - системный
+     * распознаватель Андроида плюс обычный поиск по книге.
+     */
+    private suspend fun probe(
         book: Book,
         text: BookText,
         align: Alignment,
         absMs: Long,
-        note: String = "Слушаю последние секунды…",
+        minVotes: Int,
+        radius: Int,
     ): Int? {
         val tree = treeUri() ?: return null
         val (index, inFile) = book.locate(absMs)
@@ -256,46 +274,181 @@ class AppState(private val app: SlushalkaApp) {
         val span = (inFile - from).coerceAtMost(CHUNK_MS)
         if (span < 4000) return null      // меньше четырёх секунд не о чем расшифровывать
 
-        _busy.value = note
         val transcript = withContext(Dispatchers.IO) {
             AudioChunk.decode(app, documentUri(tree, file.docId), from, span)
-        }?.let { app.recognizer.recognize(it) }
-        val hit = transcript?.let { Locator.find(text, it, align.charAt(absMs)) }
-        _busy.value = null
+        }?.let { app.recognizer.recognize(it) } ?: return null
+        return Locator.find(text, transcript, align.charAt(absMs), radius, minVotes)?.charOffset
+    }
 
-        if (hit == null) return null
-        addAnchor(absMs, hit.charOffset)
-        return hit.charOffset
+    /** Сверка при переходе: одна проба и отметка на карте, если попали. */
+    private suspend fun refineAt(book: Book, text: BookText, align: Alignment, absMs: Long): Int? {
+        _busy.value = "Слушаю последние секунды…"
+        val hit = probe(book, text, align, absMs, Locator.MIN_VOTES, Locator.DEFAULT_RADIUS)
+        _busy.value = null
+        if (hit != null) addAnchor(absMs, hit)
+        return hit
+    }
+
+    // --------------------------------------------------------------- разметка
+
+    data class MarkupProgress(
+        val done: Int,
+        val total: Int,
+        val hits: Int,
+        val running: Boolean,
+        val note: String = "",
+    )
+
+    private val _markupProgress = MutableStateFlow<MarkupProgress?>(null)
+    val markupProgress: StateFlow<MarkupProgress?> = _markupProgress
+
+    private var markupJob: kotlinx.coroutines.Job? = null
+
+    /** Есть ли у книги готовая разметка (своя или приехавшая из файла). */
+    fun isMarkedUp(): Boolean = (_alignment.value?.manualCount ?: 0) >= MARKUP_ENOUGH
+
+    fun cancelMarkup() {
+        markupJob?.cancel()
+        markupJob = null
     }
 
     /**
-     * Выверка книги: несколько проб по всей записи разом. После неё карта
-     * точна везде, а не только там, куда успел дойти слушатель.
+     * Разметка книги: [perHour] проб на каждый час записи, вразнобой внутри
+     * часа. Идёт по порядку - каждая следующая проба опирается на уже
+     * найденные точки, поэтому окно поиска сужается, а попаданий становится
+     * больше.
+     *
+     * Прерванную разметку можно запустить снова: места, рядом с которыми точка
+     * уже есть, пропускаются.
      */
-    fun calibrate(points: Int = 6) {
+    fun markupBook(perHour: Int = 3) {
         val book = _current.value ?: return
         val text = _text.value ?: return
+        if (markupJob?.isActive == true) return
         if (!app.recognizer.supported) {
-            _busy.value = "Распознавание на этом устройстве недоступно"
-            app.scope.launch { kotlinx.coroutines.delay(2500); _busy.value = null }
+            _markupProgress.value = MarkupProgress(
+                0, 0, 0, false,
+                "Распознавание на этом устройстве недоступно - разметку не сделать",
+            )
             return
         }
-        app.scope.launch {
-            var found = 0
-            for (i in 1..points) {
-                val at = book.totalMs * i / (points + 1)
-                val align = _alignment.value ?: break
-                val hit = refineAt(book, text, align, at, "Выверяю книгу: проба $i из $points")
-                if (hit != null) found++
+        val hours = (book.totalMs / 3600_000.0).coerceAtLeast(0.5)
+        val total = (hours * perHour).toInt().coerceIn(4, 200)
+        val rnd = java.util.Random(book.id.hashCode().toLong())
+
+        markupJob = app.scope.launch {
+            var done = 0
+            var hits = 0
+            _markupProgress.value = MarkupProgress(0, total, 0, true)
+            try {
+                for (i in 0 until total) {
+                    val step = book.totalMs.toDouble() / total
+                    // Вразнобой внутри своего отрезка: строгая сетка норовит
+                    // попадать на стыки файлов, заставки и музыку.
+                    val at = (step * (i + 0.2 + rnd.nextDouble() * 0.6))
+                        .toLong()
+                        .coerceIn(20_000L, (book.totalMs - 20_000L).coerceAtLeast(20_000L))
+
+                    val align = _alignment.value ?: break
+                    done++
+                    if (align.distanceToAnchor(at) < ALREADY_NEAR_MS) {
+                        _markupProgress.value = MarkupProgress(done, total, hits, true)
+                        continue
+                    }
+                    _markupProgress.value = MarkupProgress(done, total, hits, true)
+
+                    val radius = radiusFor(align, at)
+                    val hit = probe(book, text, align, at, MARKUP_MIN_VOTES, radius)
+                    if (hit != null && monotonic(align, at, hit)) {
+                        addAnchor(at, hit)
+                        hits++
+                        _markupProgress.value = MarkupProgress(done, total, hits, true)
+                    }
+                }
+                val saved = saveMarkup()
+                _markupProgress.value = MarkupProgress(
+                    done, total, hits, false,
+                    when {
+                        hits == 0 -> "Ни одна проба не нашлась в тексте. Тот ли это текст к записи?"
+                        // Папка книги может оказаться доступной только на чтение -
+                        // об этом лучше сказать, чем молча оставить карту здесь.
+                        !saved -> "Готово: карта выверена по $hits ${plural(hits)}, но записать " +
+                            "её в папку книги не вышло - она осталась только на этом телефоне"
+                        else -> "Готово: карта выверена по $hits ${plural(hits)} и лежит рядом с книгой"
+                    },
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Найденное до отмены - уже польза, его и сохраняем.
+                saveMarkup()
+                _markupProgress.value = MarkupProgress(done, total, hits, false, "Остановлено")
+                throw e
             }
-            _busy.value = if (found == 0) {
-                "Выверка не удалась: записанное не нашлось в тексте"
-            } else {
-                "Выверено по $found ${if (found == 1) "пробе" else "пробам"}"
-            }
-            kotlinx.coroutines.delay(3000)
-            _busy.value = null
         }
+    }
+
+    private fun plural(n: Int): String = when {
+        n % 10 == 1 && n % 100 != 11 -> "месту"
+        n % 10 in 2..4 && n % 100 !in 12..14 -> "местам"
+        else -> "местам"
+    }
+
+    /**
+     * Окно поиска. Пока точек нет, карта - одна пропорция на всю книгу, и
+     * ошибаться она может страниц на тридцать. Когда точка есть с обеих
+     * сторон, промахнуться уже почти негде.
+     */
+    private fun radiusFor(align: Alignment, at: Long): Int {
+        val near = align.distanceToAnchor(at)
+        return when {
+            near < 45 * 60_000L -> 12_000
+            align.manualCount > 0 -> 30_000
+            else -> 60_000
+        }
+    }
+
+    /**
+     * Время идёт вперёд, текст тоже. Проба, которая просит поставить точку
+     * назад относительно соседей, - это промах распознавания, а не открытие.
+     */
+    private fun monotonic(align: Alignment, at: Long, charOffset: Int): Boolean {
+        val manual = align.anchors.filter { it.manual }
+        val prev = manual.lastOrNull { it.audioMs < at }
+        val next = manual.firstOrNull { it.audioMs > at }
+        if (prev != null && charOffset <= prev.charOffset) return false
+        if (next != null && charOffset >= next.charOffset) return false
+        return true
+    }
+
+    fun dismissMarkupNote() {
+        if (_markupProgress.value?.running != true) _markupProgress.value = null
+    }
+
+    /** Карта уезжает файлом в папку книги - оттуда её возьмут другие устройства. */
+    private suspend fun saveMarkup(): Boolean {
+        val tree = treeUri() ?: return false
+        val book = _current.value ?: return false
+        val text = _text.value ?: return false
+        val anchors = app.positions.get(book.id).anchors.filter { it.manual }
+        if (anchors.isEmpty()) return false
+        return withContext(Dispatchers.IO) {
+            app.markup.write(tree, book, text, prefs.value.profile.ifBlank { "без имени" }, anchors)
+        }
+    }
+
+    /** Разметка, приехавшая вместе с книгой: считать заново ничего не надо. */
+    private suspend fun loadMarkup(book: Book, text: BookText) {
+        val tree = treeUri() ?: return
+        val map = withContext(Dispatchers.IO) { app.markup.read(tree, book) } ?: return
+        if (!map.matches(book, text)) return
+        val mine = app.positions.get(book.id).anchors
+        // Свои отметки главнее: их ставили руками и здесь.
+        val merged = (mine + map.anchors.filter { remote ->
+            mine.none { kotlin.math.abs(it.audioMs - remote.audioMs) < 30_000 }
+        }).sortedBy { it.audioMs }
+        if (merged.size == mine.size) return
+        app.positions.setAnchors(book.id, merged)
+        _alignment.value = Alignment.build(book, text, merged)
+        bump()
     }
 
     /** Обратный переход: читал глазами - продолжаю слушать отсюда. */
@@ -385,6 +538,14 @@ class AppState(private val app: SlushalkaApp) {
     companion object {
         /** Сколько записи расшифровывать для сверки: тринадцати секунд хватает. */
         private const val CHUNK_MS = 13_000L
+        /** Ближе этого к выверенной точке карте можно верить как есть. */
+        private const val TRUST_MAP_MS = 12 * 60_000L
+        /** Разметка не переделывает то, что уже размечено. */
+        private const val ALREADY_NEAR_MS = 4 * 60_000L
+        /** Проба идёт без человека - планка попадания выше, чем при ручном переходе. */
+        private const val MARKUP_MIN_VOTES = 5
+        /** Столько выверенных точек - и книга считается размеченной. */
+        private const val MARKUP_ENOUGH = 6
     }
 
     fun declineResume() {

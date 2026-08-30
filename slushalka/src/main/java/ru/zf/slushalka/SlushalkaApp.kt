@@ -12,6 +12,7 @@ import ru.zf.slushalka.ask.Speaker
 import ru.zf.slushalka.data.AskLog
 import ru.zf.slushalka.data.Bookmarks
 import ru.zf.slushalka.data.LibraryStore
+import ru.zf.slushalka.data.Markup
 import ru.zf.slushalka.data.PositionStore
 import ru.zf.slushalka.data.PositionSync
 import ru.zf.slushalka.data.Settings
@@ -31,6 +32,7 @@ class SlushalkaApp : Application() {
     lateinit var bookmarks: Bookmarks; private set
     lateinit var askLog: AskLog; private set
     lateinit var sync: PositionSync; private set
+    lateinit var markup: Markup; private set
     lateinit var player: PlayerHolder; private set
     lateinit var ask: AskEngine; private set
     lateinit var speaker: Speaker; private set
@@ -46,6 +48,7 @@ class SlushalkaApp : Application() {
         bookmarks = Bookmarks(this)
         askLog = AskLog(this)
         sync = PositionSync(this)
+        markup = Markup(this)
         speaker = Speaker(this)
         recognizer = ChunkRecognizer(this)
         ask = AskEngine(settings, ClaudeClient(settings), askLog)

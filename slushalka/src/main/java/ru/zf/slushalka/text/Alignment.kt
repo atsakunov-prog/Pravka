@@ -28,6 +28,13 @@ class Alignment(val anchors: List<Anchor>) {
 
     val manualCount = anchors.count { it.manual }
 
+    /**
+     * Далеко ли до ближайшей выверенной точки. Если рядом - карта здесь уже
+     * точная, и распознавать при переходе нечего.
+     */
+    fun distanceToAnchor(audioMs: Long): Long =
+        anchors.filter { it.manual }.minOfOrNull { abs(it.audioMs - audioMs) } ?: Long.MAX_VALUE
+
     fun charAt(audioMs: Long): Int {
         if (anchors.isEmpty()) return 0
         if (audioMs <= anchors.first().audioMs) return anchors.first().charOffset

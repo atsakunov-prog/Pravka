@@ -111,23 +111,37 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onClose: () -> Unit) {
                 }
 
                 Label("Переход со звука")
-                Toggle("Сверять место по звуку", prefs.refineOnSwitch) {
-                    scope.launch { s.setRefineOnSwitch(it) }
-                }
+                val marked = state.isMarkedUp()
                 Text(
-                    if (app.recognizer.supported)
-                        "Последние секунды записи расшифровываются на телефоне и ищутся в " +
-                            "тексте - переход попадает в то самое предложение. Найденное место " +
-                            "запоминается, поэтому дальше сверка нужна всё реже."
-                    else "На этом устройстве распознавание файла недоступно - место берётся " +
-                        "по карте, с точностью до страницы-другой.",
+                    when {
+                        marked ->
+                            "Книга размечена: место при переходе считается по карте мгновенно, " +
+                                "ничего не распознаётся."
+                        !app.recognizer.supported ->
+                            "На этом устройстве распознавание файла недоступно - место берётся " +
+                                "по карте, с точностью до страницы-другой."
+                        else ->
+                            "Книга не размечена. Разметка пройдёт по записи пробами, распознает " +
+                                "их прямо на телефоне и найдёт в тексте - это ничего не стоит и " +
+                                "не ходит в сеть. Карта ляжет файлом в папку книги, и другие " +
+                                "устройства возьмут готовую."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (app.recognizer.supported) {
-                    TextButton(onClick = { state.calibrate(); onClose() }) {
-                        Text("Выверить книгу целиком")
+                    TextButton(onClick = { state.markupBook(); onClose() }) {
+                        Text(if (marked) "Разметить ещё раз" else "Разметить книгу")
                     }
+                    Toggle("Сверять место при переходе", prefs.refineOnSwitch) {
+                        scope.launch { s.setRefineOnSwitch(it) }
+                    }
+                    Text(
+                        "Про запас, для мест, до которых разметка не добралась: одна проба " +
+                            "перед самым переходом.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         },
