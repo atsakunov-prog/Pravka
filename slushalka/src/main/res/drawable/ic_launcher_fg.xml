@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Раскрытая книга, в силуэте которой угадывается сердце: верхние углы
      створок скруглены долями, низ сходится к середине. Между створками -
-     чуть заметный серый корешок, на створках - строки.
+     чуть заметный серый корешок, на створках - строки текста.
 
-     Вся картинка ужата группой до безопасной зоны адаптивной иконки: у неё
-     из 108 единиц холста гарантированно видны только центральные 66,
-     остальное система срезает маской - оттого рисунок и вылезал за кружок. -->
+     Строки нарезаны по контуру створки: они прижаты к внешнему краю с
+     одинаковым отступом, а у корешка обрываются вразнобой - как настоящий
+     текстовый блок на странице. Верхние оттого и короче: там створка уже.
+
+     Вся картинка ужата группой до безопасной зоны адаптивной иконки: из 108
+     единиц холста система гарантированно показывает только центральные 66,
+     остальное срезает маской - оттого рисунок и вылезал за кружок. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
@@ -25,29 +29,83 @@
             android:fillColor="#D32F2F"
             android:pathData="M57,40 C64,29 77,24 86,31 C96,39 95,54 90,63 C84,73 70,78 57,82 Z" />
 
-        <!-- Строки на страницах -->
-        <path android:strokeColor="#FBF6EC" android:strokeWidth="2.6" android:strokeAlpha="0.62"
-            android:strokeLineCap="round" android:fillColor="#00000000"
-            android:pathData="M25,45 L46,49" />
-        <path android:strokeColor="#FBF6EC" android:strokeWidth="2.6" android:strokeAlpha="0.62"
-            android:strokeLineCap="round" android:fillColor="#00000000"
-            android:pathData="M23,55 L46,59" />
-        <path android:strokeColor="#FBF6EC" android:strokeWidth="2.6" android:strokeAlpha="0.62"
-            android:strokeLineCap="round" android:fillColor="#00000000"
-            android:pathData="M23,65 L46,69" />
-        <path android:strokeColor="#FBF6EC" android:strokeWidth="2.6" android:strokeAlpha="0.62"
-            android:strokeLineCap="round" android:fillColor="#00000000"
-            android:pathData="M83,45 L62,49" />
-        <path android:strokeColor="#FBF6EC" android:strokeWidth="2.6" android:strokeAlpha="0.62"
-            android:strokeLineCap="round" android:fillColor="#00000000"
-            android:pathData="M85,55 L62,59" />
-        <path android:strokeColor="#FBF6EC" android:strokeWidth="2.6" android:strokeAlpha="0.62"
-            android:strokeLineCap="round" android:fillColor="#00000000"
-            android:pathData="M85,65 L62,69" />
+        <path
+            android:strokeColor="#FBF6EC"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.66"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M31.9,32.0 L44.5,39.9" />
+        <path
+            android:strokeColor="#FBF6EC"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.66"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M76.1,32.0 L63.5,39.9" />
+        <path
+            android:strokeColor="#FBF6EC"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.66"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M25.4,36.5 L44.5,48.4" />
+        <path
+            android:strokeColor="#FBF6EC"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.66"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M82.6,36.5 L63.5,48.4" />
+        <path
+            android:strokeColor="#FBF6EC"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.66"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M21.5,42.6 L44.5,56.9" />
+        <path
+            android:strokeColor="#FBF6EC"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.66"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M86.5,42.6 L63.5,56.9" />
+        <path
+            android:strokeColor="#FBF6EC"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.66"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M19.9,50.1 L44.5,65.4" />
+        <path
+            android:strokeColor="#FBF6EC"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.66"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M88.1,50.1 L63.5,65.4" />
+        <path
+            android:strokeColor="#FBF6EC"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.66"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M20.8,59.1 L44.5,73.9" />
+        <path
+            android:strokeColor="#FBF6EC"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.66"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M87.2,59.1 L63.5,73.9" />
 
-        <!-- Корешок -->
-        <path android:strokeColor="#A6998A" android:strokeWidth="2.2" android:strokeAlpha="0.5"
-            android:strokeLineCap="round" android:fillColor="#00000000"
+        <path
+            android:strokeColor="#A6998A"
+            android:strokeWidth="2.2"
+            android:strokeAlpha="0.5"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
             android:pathData="M54,38 L54,83" />
     </group>
 </vector>
