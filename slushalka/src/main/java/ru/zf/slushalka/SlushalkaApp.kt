@@ -16,6 +16,7 @@ import ru.zf.slushalka.data.Markup
 import ru.zf.slushalka.data.PositionStore
 import ru.zf.slushalka.data.PositionSync
 import ru.zf.slushalka.data.Settings
+import ru.zf.slushalka.data.Updater
 import ru.zf.slushalka.player.PlayerHolder
 import ru.zf.slushalka.text.TextRepo
 import ru.zf.slushalka.ui.AppState
@@ -33,6 +34,7 @@ class SlushalkaApp : Application() {
     lateinit var askLog: AskLog; private set
     lateinit var sync: PositionSync; private set
     lateinit var markup: Markup; private set
+    lateinit var updater: Updater; private set
     lateinit var player: PlayerHolder; private set
     lateinit var ask: AskEngine; private set
     lateinit var speaker: Speaker; private set
@@ -49,6 +51,7 @@ class SlushalkaApp : Application() {
         askLog = AskLog(this)
         sync = PositionSync(this)
         markup = Markup(this)
+        updater = Updater(this, settings)
         speaker = Speaker(this)
         recognizer = ChunkRecognizer(this)
         ask = AskEngine(settings, ClaudeClient(settings), askLog)

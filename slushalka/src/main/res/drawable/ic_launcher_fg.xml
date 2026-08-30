@@ -1,27 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Открытая книга, из корешка которой выходит звук: тот же бумажно-чернильный
-     язык, что у «П», «З» и «Р» в Правке. -->
+<!-- Раскрытая книга, в силуэте которой угадывается сердце: верхние углы
+     створок скруглены долями, низ сходится к середине. Читается сначала как
+     книга - обрез страниц не даёт ошибиться, - а сердце проступает вторым
+     взглядом. Оранжевая створка и красная. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
     <path
-        android:fillColor="#241F19"
-        android:pathData="M30,38 C38,34 46,34 52,38 L52,74 C46,70 38,70 30,74 Z" />
+        android:fillColor="#F97316"
+        android:pathData="M51,40 C44,29 31,24 22,31 C12,39 13,54 18,63 C24,73 38,78 51,82 Z" />
     <path
-        android:fillColor="#9A3412"
-        android:pathData="M78,38 C70,34 62,34 56,38 L56,74 C62,70 70,70 78,74 Z" />
+        android:fillColor="#D32F2F"
+        android:pathData="M57,40 C64,29 77,24 86,31 C96,39 95,54 90,63 C84,73 70,78 57,82 Z" />
+
     <path
-        android:strokeColor="#EA580C"
-        android:strokeWidth="3.2"
+        android:strokeColor="#FBF6EC"
+        android:strokeWidth="2.2"
+        android:strokeAlpha="0.6"
         android:strokeLineCap="round"
         android:fillColor="#00000000"
-        android:pathData="M54,30 L54,20" />
+        android:pathData="M22,60 C30,67 40,71 49,74" />
     <path
-        android:strokeColor="#EA580C"
-        android:strokeWidth="3.2"
+        android:strokeColor="#FBF6EC"
+        android:strokeWidth="2.2"
+        android:strokeAlpha="0.42"
         android:strokeLineCap="round"
         android:fillColor="#00000000"
-        android:pathData="M64,24 A14,14 0 0 0 44,24" />
+        android:pathData="M18,50 C27,58 38,63 49,66" />
+    <path
+        android:strokeColor="#FBF6EC"
+        android:strokeWidth="2.2"
+        android:strokeAlpha="0.6"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M86,60 C78,67 68,71 59,74" />
+    <path
+        android:strokeColor="#FBF6EC"
+        android:strokeWidth="2.2"
+        android:strokeAlpha="0.42"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M90,50 C81,58 70,63 59,66" />
 </vector>

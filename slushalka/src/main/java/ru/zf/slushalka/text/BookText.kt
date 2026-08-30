@@ -44,6 +44,41 @@ class BookText(
 
     fun pageOf(offset: Int) = (offset / PAGE_CHARS + 1).coerceIn(1, pages)
 
+    /**
+     * Границы предложения вокруг этого места.
+     *
+     * Нужно для подсветки найденного: подсвечивать весь абзац - слишком грубо,
+     * человек ищет глазами именно ту фразу, на которой остановилась запись.
+     * Точка считается концом предложения, только если за ней пробел: иначе
+     * инициалы и сокращения рвали бы фразу на куски.
+     */
+    fun sentenceAt(offset: Int): IntRange {
+        if (plain.isEmpty()) return 0..0
+        val at = offset.coerceIn(0, plain.length - 1)
+        var start = at
+        val floor = (at - SENTENCE_SCAN).coerceAtLeast(0)
+        while (start > floor) {
+            val prev = plain[start - 1]
+            if (prev == '\n') break
+            if (prev in TERMINATORS && (start >= plain.length || plain[start].isWhitespace())) break
+            start--
+        }
+        while (start < plain.length && plain[start].isWhitespace()) start++
+        var end = at
+        val ceil = (at + SENTENCE_SCAN).coerceAtMost(plain.length)
+        while (end < ceil) {
+            val c = plain[end]
+            end++
+            if (c == '\n') break
+            if (c in TERMINATORS) {
+                // Закрывающие кавычки и скобки - тоже часть фразы.
+                while (end < ceil && plain[end] in CLOSERS) end++
+                break
+            }
+        }
+        return start..end.coerceIn(start, plain.length)
+    }
+
     fun chapterAt(offset: Int): Chapter? =
         chapters.lastOrNull { offset >= it.start } ?: chapters.firstOrNull()
 
@@ -151,6 +186,11 @@ class BookText(
 
         /** Длиннее этого строка под картинкой - уже проза, а не подпись. */
         const val CAPTION_MAX = 140
+
+        private const val SENTENCE_SCAN = 1200
+        private const val TERMINATORS = ".!?…"
+        private const val CLOSERS = "»\"')"
+
 
         fun fromMeta(plain: String, meta: JSONObject): BookText {
             val arr = meta.optJSONArray("chapters") ?: JSONArray()

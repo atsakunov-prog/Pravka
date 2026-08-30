@@ -33,6 +33,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.zf.slushalka.SlushalkaApp
+import kotlinx.coroutines.launch
 import ru.zf.slushalka.library.Book
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,6 +59,8 @@ fun LibraryScreen(
     val offer by state.resumeOffer.collectAsState()
     val rev by state.positionsRev.collectAsState()
     val prefs by state.prefs.collectAsState()
+    val update by app.updater.status.collectAsState()
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -91,6 +95,27 @@ fun LibraryScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // Новая версия - первой строкой: чтобы обновиться, не надо ничего
+            // никуда закидывать, довольно одной кнопки.
+            (update as? ru.zf.slushalka.data.Updater.Status.Ready)?.let { ready ->
+                item(key = "update") {
+                    UpdateCard(ready.update.versionName) {
+                        scope.launch { app.updater.downloadAndInstall(ready.update) }
+                    }
+                }
+            }
+            (update as? ru.zf.slushalka.data.Updater.Status.Downloading)?.let { d ->
+                item(key = "downloading") {
+                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                        Text("Качаю новую версию: ${d.percent}%", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(6.dp))
+                        LinearProgressIndicator(
+                            progress = { d.percent / 100f },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            }
             if (last != null) {
                 item(key = "continue") {
                     ContinueCard(app, last, rev, onOpen)
@@ -268,6 +293,30 @@ private fun BookRow(
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
+        }
+    }
+}
+
+/** «Есть новая версия» - одна кнопка, дальше система сама поставит поверх. */
+@Composable
+private fun UpdateCard(versionName: String, onUpdate: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(start = 14.dp, top = 6.dp, end = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Есть новая версия $versionName",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onUpdate) { Text("Обновить") }
         }
     }
 }

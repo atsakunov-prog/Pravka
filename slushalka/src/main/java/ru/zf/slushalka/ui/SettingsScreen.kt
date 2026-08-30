@@ -218,6 +218,42 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
+            Section("Обновление")
+            val update by app.updater.status.collectAsState()
+            Text(
+                when (val u = update) {
+                    is ru.zf.slushalka.data.Updater.Status.Ready ->
+                        "Есть версия ${u.update.versionName}" +
+                            (if (u.update.builtAt.isBlank()) "" else " от ${u.update.builtAt}")
+                    is ru.zf.slushalka.data.Updater.Status.Downloading -> "Качаю: ${u.percent}%"
+                    ru.zf.slushalka.data.Updater.Status.Checking -> "Смотрю…"
+                    ru.zf.slushalka.data.Updater.Status.UpToDate -> "Стоит последняя версия"
+                    is ru.zf.slushalka.data.Updater.Status.Failed -> u.message
+                    else -> "Проверяется само при каждом запуске, не чаще раза в полчаса"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { scope.launch { app.updater.check(manual = true) } }) {
+                    Text("Проверить сейчас")
+                }
+                (update as? ru.zf.slushalka.data.Updater.Status.Ready)?.let { ready ->
+                    TextButton(onClick = {
+                        scope.launch { app.updater.downloadAndInstall(ready.update) }
+                    }) { Text("Обновить") }
+                }
+            }
+            Toggle("Проверять само", prefs.updateAuto) {
+                scope.launch { state.settings.setUpdateAuto(it) }
+            }
+            Note(
+                "Сборка каждой правки уезжает в ветку apk-builds, оттуда приложение её и берёт. " +
+                    "Подпись та же, поэтому обновление ставится поверх и ничего не стирает: " +
+                    "позиции, закладки и разметка книг остаются на месте.\n\n" +
+                    "В первый раз Андроид спросит разрешение «Установка неизвестных приложений» — " +
+                    "его надо дать один раз."
+            )
+
             Section("О приложении")
             Text(
                 "Слушалка ${BuildConfig.VERSION_NAME}, сборка ${BuildConfig.BUILD_TIME}",

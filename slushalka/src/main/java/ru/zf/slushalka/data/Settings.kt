@@ -58,6 +58,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerKeepAwake: Boolean = true,
         /** true - листание постранично, false - обычная прокрутка. */
         val readerPaged: Boolean = false,
+        // Обновление приложения.
+        val updateUrl: String = DEFAULT_UPDATE_URL,
+        val updateAuto: Boolean = true,
         /** Сверять переход «звук → текст» распознаванием последних секунд. */
         val refineOnSwitch: Boolean = true,
     )
@@ -88,6 +91,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerTheme = p[KEY_R_THEME] ?: THEME_AUTO,
                 readerKeepAwake = p[KEY_R_AWAKE] ?: true,
                 readerPaged = p[KEY_R_PAGED] ?: false,
+                updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
+                updateAuto = p[KEY_UPD_AUTO] ?: true,
                 refineOnSwitch = p[KEY_REFINE] ?: true,
             )
         }
@@ -121,6 +126,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderTheme(v: String) = edit { it[KEY_R_THEME] = v }
     suspend fun setReaderKeepAwake(v: Boolean) = edit { it[KEY_R_AWAKE] = v }
     suspend fun setReaderPaged(v: Boolean) = edit { it[KEY_R_PAGED] = v }
+    suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
+    suspend fun setUpdateAuto(v: Boolean) = edit { it[KEY_UPD_AUTO] = v }
     suspend fun setRefineOnSwitch(v: Boolean) = edit { it[KEY_REFINE] = v }
 
     companion object {
@@ -129,6 +136,13 @@ class Settings(private val context: Context, scope: CoroutineScope) {
 
         /** Знаков в «странице»: стандартная машинописная - 1800. */
         const val PAGE_CHARS = 1800
+
+        /**
+         * Где приложение ищет свежую сборку. Каждый коммит уезжает в ветку
+         * `apk-builds` вместе с файлом версий - его и читаем.
+         */
+        const val DEFAULT_UPDATE_URL =
+            "https://raw.githubusercontent.com/atsakunov-prog/Pravka/apk-builds/build-info.txt"
 
         const val FONT_SERIF = "serif"
         const val FONT_SANS = "sans"
@@ -164,6 +178,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_THEME = stringPreferencesKey("reader_theme")
         private val KEY_R_AWAKE = booleanPreferencesKey("reader_keep_awake")
         private val KEY_R_PAGED = booleanPreferencesKey("reader_paged")
+        private val KEY_UPD_URL = stringPreferencesKey("update_url")
+        private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")
         private val KEY_REFINE = booleanPreferencesKey("refine_on_switch")
     }
 }

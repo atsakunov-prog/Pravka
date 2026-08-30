@@ -134,7 +134,7 @@ fun ReaderScreen(
     var pressed by remember { mutableStateOf<Int?>(null) }
     var offset by remember { mutableIntStateOf(0) }
     var target by remember { mutableStateOf<Int?>(null) }
-    var highlightAt by remember { mutableIntStateOf(-1) }
+    var highlightRange by remember { mutableStateOf<IntRange?>(null) }
     val highlight = remember { androidx.compose.animation.core.Animatable(0f) }
 
     val palette = readerPalette(prefs.readerTheme, isSystemInDarkTheme())
@@ -212,16 +212,18 @@ fun ReaderScreen(
     // откуда читать, а через пару секунд ничто не мешает тексту.
     LaunchedEffect(pendingHighlight) {
         val at = pendingHighlight ?: return@LaunchedEffect
-        highlightAt = at
+        // Подсвечиваем именно ту фразу, на которой остановилась запись, а не
+        // весь абзац: глаз цепляется за неё сразу.
+        highlightRange = t.sentenceAt(at)
         highlight.snapTo(1f)
         highlight.animateTo(
             targetValue = 0f,
             animationSpec = androidx.compose.animation.core.tween(
-                durationMillis = 2600,
-                delayMillis = 900,
+                durationMillis = 3400,
+                delayMillis = 1800,
             ),
         )
-        highlightAt = -1
+        highlightRange = null
         pendingHighlight = null
     }
 
@@ -249,7 +251,7 @@ fun ReaderScreen(
                 target = target, onTargetUsed = { target = null },
                 onOffset = { offset = it }, onToggleBars = { bars = !bars },
                 onPicture = onTapPicture, onLongPress = onLong,
-                highlightAt = highlightAt, highlightAlpha = highlight.value,
+                highlight = highlightRange, highlightAlpha = highlight.value,
             )
         } else {
             ScrollBody(
@@ -258,7 +260,7 @@ fun ReaderScreen(
                 target = target, onTargetUsed = { target = null },
                 onOffset = { offset = it }, onToggleBars = { bars = !bars },
                 onPicture = onTapPicture, onLongPress = onLong,
-                highlightAt = highlightAt, highlightAlpha = highlight.value,
+                highlight = highlightRange, highlightAlpha = highlight.value,
             )
         }
 
@@ -440,7 +442,7 @@ private fun ScrollBody(
     onToggleBars: () -> Unit,
     onPicture: (ShownPicture) -> Unit,
     onLongPress: (Int) -> Unit,
-    highlightAt: Int,
+    highlight: IntRange?,
     highlightAlpha: Float,
 ) {
     val listState = rememberLazyListState()
@@ -502,18 +504,12 @@ private fun ScrollBody(
                     }
                 } else {
                     val heading = isHeading(block)
-                    val lit = highlightAlpha > 0.01f && highlightAt in block.start until block.end
                     Text(
-                        text = block.text,
+                        text = litText(block.text, block.start, highlight, highlightAlpha, palette),
                         style = styleFor(heading),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = if (heading) 28.dp else 0.dp)
-                            .background(
-                                if (lit) palette.fg.copy(alpha = 0.16f * highlightAlpha)
-                                else Color.Transparent
-                            )
-                            .padding(bottom = 10.dp),
+                            .padding(top = if (heading) 28.dp else 0.dp, bottom = 10.dp),
                     )
                 }
             }
@@ -538,7 +534,7 @@ private fun PagedBody(
     onToggleBars: () -> Unit,
     onPicture: (ShownPicture) -> Unit,
     onLongPress: (Int) -> Unit,
-    highlightAt: Int,
+    highlight: IntRange?,
     highlightAlpha: Float,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -662,18 +658,10 @@ private fun PagedBody(
                                 onPicture(ShownPicture(file, pic.caption, pic.charOffset))
                             }
                         } else {
-                            val lit = highlightAlpha > 0.01f &&
-                                highlightAt in piece.start until piece.end
                             Text(
-                                piece.text,
+                                litText(piece.text, piece.start, highlight, highlightAlpha, palette),
                                 style = style,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(
-                                        if (lit) palette.fg.copy(alpha = 0.16f * highlightAlpha)
-                                        else Color.Transparent
-                                    )
-                                    .padding(bottom = 10.dp),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
                             )
                         }
                     }
@@ -846,5 +834,31 @@ private fun PictureChip(
         Spacer(Modifier.width(8.dp))
         Text("картинка", color = palette.fg, fontSize = 12.sp)
         Spacer(Modifier.width(4.dp))
+    }
+}
+
+/**
+ * Тот же текст, но с подсвеченной фразой. Подсветка живёт внутри строки, а не
+ * заливает абзац целиком: найденное предложение видно, соседние - нет.
+ */
+private fun litText(
+    text: String,
+    start: Int,
+    highlight: IntRange?,
+    alpha: Float,
+    palette: ReaderPalette,
+): androidx.compose.ui.text.AnnotatedString {
+    if (highlight == null || alpha <= 0.01f) return androidx.compose.ui.text.AnnotatedString(text)
+    val from = (highlight.first - start).coerceIn(0, text.length)
+    val to = (highlight.last - start).coerceIn(from, text.length)
+    if (to <= from) return androidx.compose.ui.text.AnnotatedString(text)
+    return androidx.compose.ui.text.buildAnnotatedString {
+        append(text)
+        addStyle(
+            androidx.compose.ui.text.SpanStyle(
+                background = palette.fg.copy(alpha = 0.22f * alpha),
+            ),
+            from, to,
+        )
     }
 }

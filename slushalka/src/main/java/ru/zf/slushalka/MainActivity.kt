@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
 import ru.zf.slushalka.ui.AskSheet
 import ru.zf.slushalka.ui.LibraryScreen
 import ru.zf.slushalka.ui.PlayerScreen
@@ -74,6 +75,8 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         app.state.syncPull()
+        // Сам Updater не спрашивает чаще раза в полчаса.
+        app.scope.launch { app.updater.check(manual = false) }
     }
 
     override fun onStop() {

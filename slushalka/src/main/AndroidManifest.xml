@@ -9,6 +9,9 @@
     <!-- Playback must survive a dozing screen: an audiobook runs for hours
          with the phone in a pocket. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Обновление изнутри приложения: скачанный APK отдаётся системному
+         установщику. Ключ подписи тот же, поэтому данные переживают установку. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Android 11+ hides other apps from us; without these the question box
          reports "распознавание недоступно" and the answer never speaks. -->
@@ -53,5 +56,14 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="ru.zf.slushalka.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

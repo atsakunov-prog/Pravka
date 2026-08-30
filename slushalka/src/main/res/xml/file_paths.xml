@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Скачанный APK отдаётся системному установщику через FileProvider:
+         напрямую file:// система от приложений уже не принимает. -->
+    <files-path name="updates" path="updates/" />
+</paths>
