@@ -127,6 +127,10 @@ fun ReaderScreen(
     var showGallery by remember { mutableStateOf(false) }
     var picture by remember { mutableStateOf<ShownPicture?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
+    // Плашка «делаю прямо сейчас» держится, пока идёт дело, а не гаснет по
+    // таймеру, как короткие сообщения.
+    var working by remember { mutableStateOf<String?>(null) }
+    var pendingHighlight by remember { mutableStateOf<Int?>(null) }
     var pressed by remember { mutableStateOf<Int?>(null) }
     var offset by remember { mutableIntStateOf(0) }
     var target by remember { mutableStateOf<Int?>(null) }
@@ -178,19 +182,47 @@ fun ReaderScreen(
         color = palette.fg,
     )
 
-    // Открываемся там, где кончился звук, и, если разрешено, уточняем место
-    // расшифровкой последних секунд - уже после того, как страница показана.
+    // Открываемся сразу - там, где место по карте, - и уже на открытой
+    // странице слушаем оригинал и уточняем. Подсвечиваем только то, что
+    // действительно нашли: подсветка на догадке карты вводит в заблуждение.
     LaunchedEffect(t, bk.id) {
         val start = state.readingStart()
         offset = start.offset
         target = start.offset
-        if (start.fromAudio && prefs.refineOnSwitch && app.recognizer.supported) {
-            val exact = state.readingOffsetNow()
-            if (kotlin.math.abs(exact - start.offset) > 300) {
-                target = exact
-                notice = "Место уточнено по звуку"
+        if (!start.fromAudio) return@LaunchedEffect
+
+        working = "Слушаю оригинал…"
+        val result = state.refineReading()
+        working = null
+        when (result) {
+            is AppState.Refine.Found -> {
+                target = result.charOffset
+                pendingHighlight = result.charOffset
             }
+            AppState.Refine.Trusted -> pendingHighlight = start.offset
+            AppState.Refine.NotFound ->
+                notice = "Услышал, но в тексте не нашёл — место примерное"
+            AppState.Refine.NoSpeech ->
+                notice = "Не расслышал запись — место примерное"
+            AppState.Refine.Off -> Unit
         }
+    }
+
+    // Найденное место коротко подсвечивается и гаснет: глазами сразу видно,
+    // откуда читать, а через пару секунд ничто не мешает тексту.
+    LaunchedEffect(pendingHighlight) {
+        val at = pendingHighlight ?: return@LaunchedEffect
+        highlightAt = at
+        highlight.snapTo(1f)
+        highlight.animateTo(
+            targetValue = 0f,
+            animationSpec = androidx.compose.animation.core.tween(
+                durationMillis = 2600,
+                delayMillis = 900,
+            ),
+        )
+        highlightAt = -1
+        pendingHighlight = null
     }
 
     LaunchedEffect(offset) {
@@ -199,22 +231,6 @@ fun ReaderScreen(
         state.saveReadChar(offset)
     }
     DisposableEffect(Unit) { onDispose { state.saveReadChar(offset) } }
-
-    // Найденное место коротко подсвечивается и гаснет: глазами сразу видно,
-    // откуда читать, а через пару секунд ничто не мешает тексту.
-    LaunchedEffect(target) {
-        val at = target ?: return@LaunchedEffect
-        highlightAt = at
-        highlight.snapTo(1f)
-        highlight.animateTo(
-            targetValue = 0f,
-            animationSpec = androidx.compose.animation.core.tween(
-                durationMillis = 2600,
-                delayMillis = 700,
-            ),
-        )
-        highlightAt = -1
-    }
 
     LaunchedEffect(notice) {
         if (notice != null) {
@@ -324,7 +340,7 @@ fun ReaderScreen(
             }
         }
 
-        (notice ?: busy)?.let { line ->
+        (notice ?: working ?: busy)?.let { line ->
             Text(
                 line,
                 color = palette.bg,

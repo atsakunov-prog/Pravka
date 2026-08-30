@@ -5,6 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -93,42 +96,60 @@ fun SkipButton(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Canvas(Modifier.size(width = size * 0.46f, height = size * 0.24f)) {
-                val c = scheme.onSurface
-                val w = this.size.width
-                val h = this.size.height
-                val half = w * 0.46f
-                fun triangle(left: Float) {
-                    val p = Path().apply {
-                        if (forward) {
-                            moveTo(left, 0f)
-                            lineTo(left + half, h / 2f)
-                            lineTo(left, h)
-                        } else {
-                            moveTo(left + half, 0f)
-                            lineTo(left, h / 2f)
-                            lineTo(left + half, h)
-                        }
-                        close()
-                    }
-                    drawPath(p, c)
-                }
-                triangle(0f)
-                triangle(w - half)
+        // Стрелки и число - в одну строку: столбиком рисунок уезжал вверх, и
+        // кнопка вставала не вровень с кнопкой пуска.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!forward) {
+                Arrows(forward = false, height = size * 0.26f, color = scheme.onSurface)
+                Spacer(Modifier.width(size * 0.04f))
             }
             Text(
                 text = "$seconds",
                 style = MaterialTheme.typography.labelLarge.copy(
                     fontWeight = FontWeight.Bold,
-                    fontSize = (size.value * 0.23f).sp,
+                    fontSize = (size.value * 0.27f).sp,
                 ),
                 color = scheme.onSurface,
             )
+            if (forward) {
+                Spacer(Modifier.width(size * 0.04f))
+                Arrows(forward = true, height = size * 0.26f, color = scheme.onSurface)
+            }
         }
     }
 }
 
+/** Двойная стрелка перемотки - остриями наружу, от кнопки пуска. */
+@Composable
+private fun Arrows(forward: Boolean, height: Dp, color: Color) {
+    Canvas(Modifier.size(width = height * 1.2f, height = height)) {
+        val w = size.width
+        val h = size.height
+        val half = w * 0.52f
+        fun triangle(left: Float) {
+            val path = Path().apply {
+                if (forward) {
+                    moveTo(left, 0f)
+                    lineTo(left + half, h / 2f)
+                    lineTo(left, h)
+                } else {
+                    moveTo(left + half, 0f)
+                    lineTo(left, h / 2f)
+                    lineTo(left + half, h)
+                }
+                close()
+            }
+            drawPath(path, color)
+        }
+        triangle(0f)
+        triangle(w - half)
+    }
+}
+
+/**
+ * Таймер сна - месяцем слева от пуска. Идёт отсчёт - месяц окрашивается, а под
+ * ним встают оставшиеся минуты: сколько ещё книге играть, видно не заходя в меню.
+ */
 @Composable
 fun SleepButton(leftMs: Long, size: Dp = 46.dp, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme

@@ -33,7 +33,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val libraryUri: String = "",
         // Чьё это устройство - имя дорожки в синхронизации позиций.
         val profile: String = "",
-        val skipSec: Int = 15,
+        val skipSec: Int = 10,
         val speed: Float = 1.0f,
         val speakAnswers: Boolean = false,
         val pauseWhileAsking: Boolean = true,
@@ -69,7 +69,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 apiKey = p[KEY_API] ?: "",
                 libraryUri = p[KEY_LIB] ?: "",
                 profile = p[KEY_PROFILE] ?: "",
-                skipSec = p[KEY_SKIP] ?: 15,
+                skipSec = p[KEY_SKIP] ?: 10,
                 speed = p[KEY_SPEED] ?: 1.0f,
                 speakAnswers = p[KEY_SPEAK] ?: false,
                 pauseWhileAsking = p[KEY_PAUSE_ASK] ?: true,

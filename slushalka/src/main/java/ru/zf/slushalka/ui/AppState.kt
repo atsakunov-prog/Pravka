@@ -245,29 +245,53 @@ class AppState(private val app: SlushalkaApp) {
 
     // ------------------------------------------------- звук <-> текст
 
-    /**
-     * Где открыть читалку, когда переходишь со звука.
-     *
-     * Карта даёт место с точностью до страницы-другой. Если разрешена сверка,
-     * последние секунды записи расшифровываются прямо из файла и ищутся в
-     * тексте - тогда переход попадает в то самое предложение. Найденное место
-     * становится отметкой на карте, поэтому со временем сверка нужна всё реже.
-     */
-    suspend fun readingOffsetNow(): Int {
-        val book = _current.value ?: return 0
-        val text = _text.value ?: return 0
-        val align = _alignment.value ?: return 0
-        val absMs = app.player.state.value.absMs
-        val estimate = align.charAt(absMs)
-        // Книга размечена и точка рядом - карта здесь уже точная, слушать
-        // и распознавать нечего.
-        if (align.distanceToAnchor(absMs) < TRUST_MAP_MS) return estimate
-        if (!prefs.value.refineOnSwitch || !app.recognizer.supported) return estimate
-        // Распознаватель один: пока идёт разметка, переход его не отнимает.
-        if (markupJob?.isActive == true) return estimate
+    /** Чем кончилась сверка места по звуку. */
+    sealed interface Refine {
+        /** Нашли: вот оно, место в тексте. */
+        data class Found(val charOffset: Int) : Refine
 
-        val hit = refineAt(book, text, align, absMs)
-        return hit ?: estimate
+        /** Рядом выверенная точка карты - слушать нечего, месту и так верим. */
+        data object Trusted : Refine
+
+        /** Сверка выключена или недоступна. */
+        data object Off : Refine
+
+        /** Распознаватель ничего не разобрал. */
+        data object NoSpeech : Refine
+
+        /** Расслышали, но в тексте не нашли. */
+        data object NotFound : Refine
+    }
+
+    /**
+     * Сверка места при переходе «слушаю → читаю».
+     *
+     * Читалка к этому времени уже открыта на месте по карте. Здесь слушаются
+     * последние секунды записи и ищутся в ближайших абзацах - и только
+     * найденное показывается человеку как точное. Не нашли - так и говорим,
+     * а не делаем вид, будто нашли.
+     */
+    suspend fun refineReading(): Refine {
+        val book = _current.value ?: return Refine.Off
+        val text = _text.value ?: return Refine.Off
+        val align = _alignment.value ?: return Refine.Off
+        val absMs = app.player.state.value.absMs
+        if (absMs <= 0) return Refine.Off
+        if (align.distanceToAnchor(absMs) < TRUST_MAP_MS) return Refine.Trusted
+        if (!prefs.value.refineOnSwitch || !app.recognizer.supported) return Refine.Off
+        // Распознаватель один: пока идёт разметка, переход его не отнимает.
+        if (markupJob?.isActive == true) return Refine.Off
+
+        val r = probe(book, text, align, absMs)
+        val hit = r.charOffset
+        return when {
+            hit != null -> {
+                addAnchor(absMs, hit)
+                Refine.Found(hit)
+            }
+            r.miss == Miss.NOT_FOUND -> Refine.NotFound
+            else -> Refine.NoSpeech
+        }
     }
 
     /** Чем кончилась проба - нужно, чтобы понимать, где рвётся, а не гадать. */
@@ -378,15 +402,6 @@ class AppState(private val app: SlushalkaApp) {
             }
             _markupProgress.value = MarkupProgress(1, 1, if (r.miss == Miss.OK) 1 else 0, false, note)
         }
-    }
-
-    /** Сверка при переходе: одна проба и отметка на карте, если попали. */
-    private suspend fun refineAt(book: Book, text: BookText, align: Alignment, absMs: Long): Int? {
-        _busy.value = "Ищу это место в книге…"
-        val r = probe(book, text, align, absMs)
-        _busy.value = null
-        r.charOffset?.let { addAnchor(absMs, it) }
-        return r.charOffset
     }
 
     // --------------------------------------------------------------- разметка
@@ -690,11 +705,12 @@ class AppState(private val app: SlushalkaApp) {
     }
 
     companion object {
-        /** Сколько записи расшифровывать для сверки. Десяти секунд хватает, а
-         * распознаётся такой кусок заметно быстрее. */
-        private const val CHUNK_MS = 10_000L
-        /** Ближе этого к выверенной точке карте можно верить как есть. */
-        private const val TRUST_MAP_MS = 12 * 60_000L
+        /** Сколько записи расшифровывать для сверки: шести секунд хватает на
+         * полтора десятка слов, а распознаётся такой кусок за секунду-другую. */
+        private const val CHUNK_MS = 6_000L
+        /** Ближе этого к выверенной точке карте можно верить как есть. Полминуты
+         * записи - это абзац-другой, дальше карта уже промахивается заметно. */
+        private const val TRUST_MAP_MS = 45_000L
         /** Разметка не переделывает то, что уже размечено. */
         private const val ALREADY_NEAR_MS = 4 * 60_000L
         /** Проба идёт без человека - планка попадания выше, чем при ручном переходе. */
