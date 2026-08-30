@@ -54,7 +54,7 @@ jobs:
           cp "$SLU" /tmp/apkpub/slushalka-debug.apk
           {
             echo "pravka=2.0.${{ github.run_number }}"
-            echo "slushalka=1.0.${{ github.run_number }}"
+            echo "slushalka=1.1.${{ github.run_number }}"
             echo "apk=slushalka.apk"
             echo "versionCode=${{ github.run_number }}"
             echo "commit=${GITHUB_SHA}"
