@@ -69,6 +69,15 @@ class PlayerHolder(
     private var lastTickAt = 0L
     private var sleepDeadline = 0L
     private var sleepFading = false
+    private var shownArt: Uri? = null
+    private var lastArtAt = 0L
+
+    /**
+     * Что показывать в шторке и на экране блокировки вместо обложки: картинку
+     * этого места книги, если она есть. Ставится приложением - плеер не знает
+     * ни про текст, ни про разметку, и знать не должен.
+     */
+    var artworkFor: ((bookId: String, absMs: Long) -> Uri?)? = null
 
     val player: ExoPlayer by lazy {
         ExoPlayer.Builder(context)
@@ -151,6 +160,8 @@ class PlayerHolder(
                 .build()
         }
         player.setMediaItems(items)
+        shownArt = coverUri
+        lastArtAt = 0L
         val target = startAbsMs ?: rewound(saved)
         val (index, inFile) = b.locate(target)
         player.seekTo(index, inFile)
@@ -172,6 +183,42 @@ class PlayerHolder(
     private fun coverKey(bookId: String): String {
         val md = java.security.MessageDigest.getInstance("SHA-1").digest(bookId.toByteArray())
         return md.joinToString("") { "%02x".format(it) }.take(16) + ".img"
+    }
+
+    /**
+     * Обложка в шторке живая: когда книга доходит до карты, в шторке
+     * появляется карта - та же самая, что на экране плеера. Иначе в шторке
+     * жила бы своя, отдельная правда.
+     *
+     * Метаданные подменяются на месте: URI файла тот же, поэтому ExoPlayer
+     * обновляет элемент, а не пересоздаёт его, и звук не прерывается. Позиция
+     * всё равно проверяется до и после - молчаливый прыжок в начало файла был
+     * бы худшей из возможных поломок, и лучше поймать его здесь.
+     */
+    fun refreshArtwork(force: Boolean = false) {
+        val b = book ?: return
+        if (player.mediaItemCount == 0) return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastArtAt < ART_EVERY_MS) return
+        lastArtAt = now
+        val want = artworkFor?.invoke(b.id, absNow()) ?: treeUri?.let { coverUriFor(it, b) }
+        if (want == shownArt) return
+        val index = player.currentMediaItemIndex
+        val item = player.getMediaItemAt(index)
+        val before = player.currentPosition
+        val done = runCatching {
+            player.replaceMediaItem(
+                index,
+                item.buildUpon()
+                    .setMediaMetadata(item.mediaMetadata.buildUpon().setArtworkUri(want).build())
+                    .build(),
+            )
+        }.isSuccess
+        if (!done) return
+        shownArt = want
+        if (player.currentMediaItemIndex != index || before - player.currentPosition > 2_000) {
+            player.seekTo(index, before)
+        }
     }
 
     /**
@@ -227,6 +274,7 @@ class PlayerHolder(
         val (index, inFile) = b.locate(target)
         player.seekTo(index, inFile)
         saveNow(markHistory = true)
+        refreshArtwork(force = true)
         push()
     }
 
@@ -294,6 +342,7 @@ class PlayerHolder(
                 listenedAcc += (now - lastTickAt).coerceIn(0, 2000)
                 lastTickAt = now
                 if (now - lastSaveAt > SAVE_EVERY_MS) saveNow()
+                refreshArtwork()
                 if (now - lastSyncAt > SYNC_EVERY_MS) {
                     lastSyncAt = now
                     book?.id?.let(onSyncDue)
@@ -394,5 +443,7 @@ class PlayerHolder(
         /** В папку библиотеки пишем реже: это уже настоящий файловый обмен. */
         private const val SYNC_EVERY_MS = 120_000L
         private const val FADE_MS = 20_000L
+        /** Реже, чем тик: картинка в книге меняется раз в несколько страниц. */
+        private const val ART_EVERY_MS = 3_000L
     }
 }

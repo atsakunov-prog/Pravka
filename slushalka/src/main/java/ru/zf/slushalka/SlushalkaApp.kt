@@ -59,5 +59,6 @@ class SlushalkaApp : Application() {
             scope.launch { state.syncPush(bookId) }
         }
         state = AppState(this)
+        player.artworkFor = { bookId, absMs -> state.pictureUriAt(bookId, absMs) }
     }
 }

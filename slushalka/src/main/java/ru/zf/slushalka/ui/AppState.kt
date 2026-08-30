@@ -171,6 +171,8 @@ class AppState(private val app: SlushalkaApp) {
             if (t != null) {
                 _alignment.value = Alignment.build(book, t, app.positions.get(book.id).anchors)
                 loadMarkup(book, t)
+                // Текст разобран - теперь шторке есть что показать вместо обложки.
+                app.player.refreshArtwork(force = true)
             }
         }
     }
@@ -190,11 +192,37 @@ class AppState(private val app: SlushalkaApp) {
         app.texts.forget(book.id)
         _text.value = null
         _alignment.value = null
+        artKey = null
         loadText(book)
     }
 
     fun parseReport(): ru.zf.slushalka.text.ParseReport? =
         _current.value?.let { app.texts.reportFor(it.id) }
+
+    /**
+     * Картинка этого места книги - для шторки и экрана блокировки. Считается
+     * ровно так же, как на экране плеера: одна книга, одна картинка, где бы на
+     * неё ни смотрели.
+     */
+    fun pictureUriAt(bookId: String, absMs: Long): Uri? {
+        val book = _current.value?.takeIf { it.id == bookId } ?: return null
+        val align = _alignment.value ?: return null
+        val text = _text.value ?: return null
+        val picture = text.pictureAt(align.charAt(absMs))?.takeIf { it.file.isNotBlank() } ?: return null
+        // Спрашивают раз в три секунды из тика плеера, а картинка держится
+        // несколько страниц: ходить на диск каждый раз незачем. Ключ с номером
+        // книги обязателен - имена картинок внутри fb2 сплошь «0.jpg», и на
+        // одном имени соседняя книга получила бы чужую иллюстрацию.
+        val key = book.id + "/" + picture.file
+        if (key == artKey) return artUri
+        val file = app.texts.pictureFile(book.id, picture.file)
+        artKey = key
+        artUri = if (file.exists()) Uri.fromFile(file) else null
+        return artUri
+    }
+
+    private var artKey: String? = null
+    private var artUri: Uri? = null
 
     fun picturesOnDisk(): Int = _current.value?.let { app.texts.allPictures(it.id).size } ?: 0
 
