@@ -88,7 +88,10 @@ class Updater(private val context: Context, private val settings: Settings) {
                         versionCode = code,
                         versionName = fields["slushalka"] ?: code.toString(),
                         builtAt = fields["builtAt"].orEmpty(),
-                        apkUrl = infoUrl.substringBeforeLast('/') + "/" + APK_NAME,
+                        // Имя файла приезжает из того же build-info: переименование
+                        // сборки не потребует новой версии приложения.
+                        apkUrl = infoUrl.substringBeforeLast('/') + "/" +
+                            (fields["apk"]?.takeIf { it.isNotBlank() } ?: APK_NAME),
                     )
                 )
             }.getOrElse { Status.Failed(readable(it)) }
@@ -189,7 +192,8 @@ class Updater(private val context: Context, private val settings: Settings) {
     }
 
     private companion object {
-        const val APK_NAME = "slushalka-debug.apk"
+        /** Запасное имя - для случая, когда в build-info его не указали. */
+        const val APK_NAME = "slushalka.apk"
         /** Чаще, чем раз в полчаса, спрашивать про новую версию незачем. */
         const val QUIET_MS = 30 * 60_000L
     }

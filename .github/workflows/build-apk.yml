@@ -32,21 +32,30 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Build debug APKs
-        run: ./gradlew assembleDebug -PbuildNumber=${{ github.run_number }} --no-daemon
+      - name: Build APKs
+        # Слушалка собирается РЕЛИЗНОЙ: отладочная помечена debuggable, и
+        # Play Protect ругается на неё заметно охотнее. Ключ подписи тот же,
+        # поэтому релиз спокойно встаёт поверх прежней отладочной.
+        run: >
+          ./gradlew assembleDebug :slushalka:assembleRelease
+          -PbuildNumber=${{ github.run_number }} --no-daemon
 
       - name: Publish APKs to apk-builds branch
         run: |
           APK=app/build/outputs/apk/debug/app-debug.apk
-          SLU=slushalka/build/outputs/apk/debug/slushalka-debug.apk
+          SLU=slushalka/build/outputs/apk/release/slushalka-release.apk
           test -f "$APK"
           test -f "$SLU"
           mkdir /tmp/apkpub
           cp "$APK" /tmp/apkpub/pravka-debug.apk
+          cp "$SLU" /tmp/apkpub/slushalka.apk
+          # Прежнее имя оставлено для уже установленных копий: их обновлятор
+          # умеет искать только его. Уберётся, когда оба телефона перешагнут.
           cp "$SLU" /tmp/apkpub/slushalka-debug.apk
           {
             echo "pravka=2.0.${{ github.run_number }}"
             echo "slushalka=1.0.${{ github.run_number }}"
+            echo "apk=slushalka.apk"
             echo "versionCode=${{ github.run_number }}"
             echo "commit=${GITHUB_SHA}"
             echo "branch=${GITHUB_REF_NAME}"
@@ -66,4 +75,4 @@ jobs:
           name: debug-apks
           path: |
             app/build/outputs/apk/debug/app-debug.apk
-            slushalka/build/outputs/apk/debug/slushalka-debug.apk
+            slushalka/build/outputs/apk/release/slushalka-release.apk
