@@ -18,14 +18,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -98,6 +103,7 @@ fun ReaderScreen(
     var bars by remember { mutableStateOf(true) }
     var showSettings by remember { mutableStateOf(false) }
     var showRecap by remember { mutableStateOf(false) }
+    var showGallery by remember { mutableStateOf(false) }
     var picture by remember { mutableStateOf<File?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     var pressed by remember { mutableStateOf<Int?>(null) }
@@ -207,7 +213,7 @@ fun ReaderScreen(
                 val pic = block.picture
                 if (pic != null) {
                     val file = app.texts.pictureFile(bk.id, pic.file)
-                    PictureBlock(file) { picture = file }
+                    PictureBlock(file, palette) { picture = file }
                 } else {
                     val isHeading = block.start in chapterStarts && block.text.length < 120
                     Text(
@@ -317,7 +323,14 @@ fun ReaderScreen(
     }
 
     if (showSettings) {
-        ReaderSettingsDialog(app) { showSettings = false }
+        ReaderSettingsDialog(
+            app,
+            onGallery = { showGallery = true },
+            onClose = { showSettings = false },
+        )
+    }
+    if (showGallery) {
+        PictureGallery(app) { showGallery = false }
     }
     if (showRecap) {
         RecapSheet(
@@ -381,24 +394,100 @@ fun fontOf(name: String): FontFamily = when (name) {
     else -> FontFamily.Serif
 }
 
+/**
+ * Картинка в тексте - карточкой в рамке, как обложка: вписана целиком, а не
+ * растянута во всю полосу. Тап открывает её во весь экран с увеличением.
+ */
 @Composable
-private fun PictureBlock(file: File, onOpen: () -> Unit) {
+private fun PictureBlock(file: File, palette: ReaderPalette, onOpen: () -> Unit) {
     val bitmap by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(
         Pictures.cached(file), file.path,
     ) {
         if (value == null) value = Pictures.load(file)
     }
-    bitmap?.let { bmp ->
+    val bmp = bitmap ?: return
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 18.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+            .background(palette.fg.copy(alpha = 0.06f))
+            .clickable(onClick = onOpen)
+            .padding(10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Image(
             bitmap = bmp.asImageBitmap(),
             contentDescription = null,
-            contentScale = ContentScale.FillWidth,
+            contentScale = ContentScale.Fit,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 14.dp)
-                .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                .clickable(onClick = onOpen),
+                .heightIn(max = 420.dp)
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
         )
+        Spacer(Modifier.height(8.dp))
+        Text("нажми, чтобы рассмотреть", color = palette.dim, fontSize = 11.sp)
+    }
+}
+
+/** Все картинки книги разом - чтобы карту можно было открыть, когда вздумается. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PictureGallery(app: SlushalkaApp, onClose: () -> Unit) {
+    val book = app.state.current.collectAsState().value ?: return
+    val text = app.state.text.collectAsState().value ?: return
+    var open by remember { mutableStateOf<File?>(null) }
+    val files = remember(text) {
+        text.pictures.filter { it.file.isNotBlank() }
+            .map { app.texts.pictureFile(book.id, it.file) }
+            .filter { it.exists() }
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Картинки книги") },
+        text = {
+            if (files.isEmpty()) {
+                Text("В файле книги картинок не нашлось.")
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(96.dp),
+                    modifier = Modifier.heightIn(max = 420.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(files) { file ->
+                        Thumb(file) { open = file }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
+    )
+    open?.let { file -> ImageViewer(file) { open = null } }
+}
+
+@Composable
+private fun Thumb(file: File, onOpen: () -> Unit) {
+    val bitmap by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(
+        Pictures.cached(file), file.path,
+    ) {
+        if (value == null) value = Pictures.load(file, target = 300)
+    }
+    Box(
+        Modifier
+            .height(96.dp)
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .clickable(onClick = onOpen),
+    ) {
+        bitmap?.let {
+            Image(
+                bitmap = it.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 

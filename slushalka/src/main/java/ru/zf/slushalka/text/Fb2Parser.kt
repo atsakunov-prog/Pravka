@@ -19,6 +19,23 @@ object Fb2Parser {
 
     private const val MAX_PICTURES = 60
     private const val MAX_PICTURE_BYTES = 8 * 1024 * 1024
+    /** Base64 длиннее самой картинки примерно на треть. */
+    private const val MAX_BASE64 = 12 * 1024 * 1024
+    private val IMAGE_EXT = setOf("jpg", "jpeg", "png", "gif", "webp")
+
+    /**
+     * Ссылка на картинку. В одних книгах это `l:href`, в других `xlink:href`,
+     * изредка просто `href` - пространства имён выключены, поэтому имя
+     * атрибута приезжает как написано. Ищем любой, чей хвост - «href»:
+     * из-за жёсткой проверки только на `l:href` иллюстрации и терялись.
+     */
+    private fun XmlPullParser.hrefOf(): String? {
+        for (i in 0 until attributeCount) {
+            val name = getAttributeName(i) ?: continue
+            if (name == "href" || name.endsWith(":href")) return getAttributeValue(i)
+        }
+        return null
+    }
 
     fun parse(
         input: InputStream,
@@ -49,6 +66,8 @@ object Fb2Parser {
         var binaryId: String? = null
         var binaryIsCover = false
         var binaryBuf: StringBuilder? = null
+        var binaryOverflow = false
+        var images = 0
 
         fun flushParagraph() {
             val p = para ?: return
@@ -81,19 +100,26 @@ object Fb2Parser {
                                 // Обложка не объявлена: годится первая картинка.
                                 else -> type.startsWith("image/") && coverBytes == null
                             }
-                            val referenced = pictures.any { it.ref.equals(id, true) }
                             binaryId = id
-                            binaryBuf = if (binaryIsCover || referenced) StringBuilder() else null
+                            // Берём каждую картинку, а не только ту, на которую
+                            // ссылку уже встретили: в части книг <binary> лежат
+                            // ПЕРЕД телом, и в тот момент ссылок ещё нет вовсе.
+                            // Именно поэтому иллюстрации и не появлялись.
+                            val isImage = type.startsWith("image/") ||
+                                id.substringAfterLast('.', "").lowercase() in IMAGE_EXT
+                            binaryBuf = if (isImage && images < MAX_PICTURES) StringBuilder() else null
+                            binaryOverflow = false
                             if (binaryBuf == null) skipUntilDepth = path.size
                         }
                         "image" -> {
-                            val href = parser.getAttributeValue(null, "l:href")
-                                ?: parser.getAttributeValue(null, "href")
-                                ?: parser.getAttributeValue("http://www.w3.org/1999/xlink", "href")
+                            val href = parser.hrefOf()
                             when {
                                 path.contains("coverpage") && coverHref == null -> coverHref = href
                                 bodyDepth > 0 && href != null && pictures.size < MAX_PICTURES -> {
-                                    flushParagraph()
+                                    // Абзац НЕ закрываем: картинка часто стоит
+                                    // внутри <p>, и закрытие съело бы остаток
+                                    // его текста. Место картинки - перед этим
+                                    // абзацем, этого достаточно.
                                     pictures.add(Picture(body.length, href.removePrefix("#")))
                                 }
                             }
@@ -116,7 +142,10 @@ object Fb2Parser {
                 XmlPullParser.TEXT -> {
                     if (skipUntilDepth < 0) {
                         val raw = parser.text ?: ""
-                        binaryBuf?.append(raw)
+                        binaryBuf?.let { buf ->
+                            // Разворот на восемь мегабайт в память не тащим.
+                            if (buf.length < MAX_BASE64) buf.append(raw) else binaryOverflow = true
+                        }
                         para?.append(raw.replace('\n', ' '))
                         if (para == null && binaryBuf == null && raw.isNotBlank()) {
                             when (path.lastOrNull()) {
@@ -135,7 +164,7 @@ object Fb2Parser {
                         "binary" -> {
                             val buf = binaryBuf
                             val id = binaryId
-                            if (buf != null && id != null && buf.length < MAX_PICTURE_BYTES * 2) {
+                            if (buf != null && id != null && !binaryOverflow) {
                                 val bytes = runCatching {
                                     Base64.decode(
                                         buf.toString().filterNot { it.isWhitespace() },
@@ -144,12 +173,14 @@ object Fb2Parser {
                                 }.getOrNull()
                                 if (bytes != null && bytes.size in 1..MAX_PICTURE_BYTES) {
                                     if (binaryIsCover && coverBytes == null) coverBytes = bytes
-                                    if (pictures.any { it.ref.equals(id, true) }) onImage(id, bytes)
+                                    onImage(id, bytes)
+                                    images++
                                 }
                             }
                             binaryBuf = null
                             binaryId = null
                             binaryIsCover = false
+                            binaryOverflow = false
                         }
                         "title" -> {
                             flushParagraph()

@@ -109,9 +109,10 @@ class BookText(
         /**
          * Версия разбора. Растёт, когда из книги начинают доставать что-то
          * новое: иначе уже разобранная книга так и осталась бы без этого -
-         * готовый кэш никто бы не перечитал. Версия 2 - картинки.
+         * готовый кэш никто бы не перечитал. Версия 2 - картинки, версия 3 -
+         * они же, но найденные по-настоящему (см. Fb2Parser.hrefOf).
          */
-        const val CACHE_VERSION = 2
+        const val CACHE_VERSION = 3
 
         fun fromMeta(plain: String, meta: JSONObject): BookText {
             val arr = meta.optJSONArray("chapters") ?: JSONArray()

@@ -58,9 +58,11 @@ class TextRepo(private val context: Context) {
         val refToFile = HashMap<String, String>()
         val parsed = runCatching {
             parse(treeUri, docId, book.textName.orEmpty()) { ref, bytes ->
-                val name = key(ref) + ".img"
+                // Регистр ссылки и регистр id в книге совпадают не всегда.
+                val norm = ref.lowercase()
+                val name = key(norm) + ".img"
                 runCatching { File(pics, name).writeBytes(bytes) }
-                    .onSuccess { refToFile[ref] = name }
+                    .onSuccess { refToFile[norm] = name }
             }
         }.getOrNull() ?: return@withContext null
         if (parsed.text.length < 200) return@withContext null
@@ -71,7 +73,7 @@ class TextRepo(private val context: Context) {
             title = parsed.text.title,
             author = parsed.text.author,
             pictures = parsed.text.pictures.mapNotNull { pic ->
-                refToFile[pic.ref]?.let { pic.copy(file = it) }
+                refToFile[pic.ref.lowercase()]?.let { pic.copy(file = it) }
             },
         )
         runCatching {

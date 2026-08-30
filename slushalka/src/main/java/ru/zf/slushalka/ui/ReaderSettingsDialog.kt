@@ -34,7 +34,7 @@ import ru.zf.slushalka.data.Settings
 /** Шрифт, кегль, поля, интерлиньяж, цвет бумаги - обычный набор читалки. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ReaderSettingsDialog(app: SlushalkaApp, onClose: () -> Unit) {
+fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -> Unit) {
     val state = app.state
     val prefs by state.prefs.collectAsState()
     val scope = rememberCoroutineScope()
@@ -94,6 +94,7 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onClose: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    TextButton(onClick = { onClose(); onGallery() }) { Text("Показать все") }
                 }
 
                 Label("Бумага")
