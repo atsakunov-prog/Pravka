@@ -3,19 +3,19 @@ package ru.zf.slushalka.player
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.graphics.drawable.IconCompat
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
-import androidx.media3.session.SessionCommand
 import com.google.common.collect.ImmutableList
 import ru.zf.slushalka.MainActivity
 import ru.zf.slushalka.R
 import ru.zf.slushalka.SlushalkaApp
+import ru.zf.slushalka.data.Settings
 
 /**
  * Плеер в шторке. Слушают книгу, как правило, не глядя в приложение: телефон
@@ -25,11 +25,7 @@ import ru.zf.slushalka.SlushalkaApp
  */
 object Shade {
 
-    const val BACK = "ru.zf.slushalka.SHADE_BACK"
-    const val FORWARD = "ru.zf.slushalka.SHADE_FORWARD"
     const val CHANNEL = "slushalka-playback"
-
-    fun command(action: String): SessionCommand = SessionCommand(action, Bundle.EMPTY)
 
     fun openApp(context: Context): PendingIntent = PendingIntent.getActivity(
         context,
@@ -39,11 +35,6 @@ object Shade {
         PendingIntent.FLAG_IMMUTABLE,
     )
 
-    /**
-     * Кнопки перемотки шторки берут шаг из настроек, а не из встроенных в
-     * ExoPlayer пятнадцати секунд: иначе в приложении «10», а в шторке «15»,
-     * и это замечаешь ровно в тот момент, когда переспрашиваешь фразу.
-     */
     fun skipSeconds(context: Context): Int =
         (context.applicationContext as SlushalkaApp).settings.now().skipSec
 
@@ -73,27 +64,38 @@ object Shade {
      * именно iconResId, а сам по себе он из ICON_-константы не выводится - и
      * кнопка уезжает в шторку пустой, без значка.
      */
-    fun button(icon: Int, action: String, name: String): CommandButton =
+    fun button(icon: Int, playerCommand: Int, name: String): CommandButton =
         CommandButton.Builder(icon)
             .setIconResId(CommandButton.getIconResIdForIconConstant(icon))
-            .setSessionCommand(command(action))
+            .setPlayerCommand(playerCommand)
             .setDisplayName(name)
             .build()
+}
 
-    fun playPause(pausing: Boolean): CommandButton {
-        val icon = if (pausing) CommandButton.ICON_PAUSE else CommandButton.ICON_PLAY
-        return CommandButton.Builder(icon)
-            .setIconResId(CommandButton.getIconResIdForIconConstant(icon))
-            .setPlayerCommand(Player.COMMAND_PLAY_PAUSE)
-            .setDisplayName(if (pausing) "Пауза" else "Слушать")
-            .build()
-    }
+/**
+ * Плеер для сессии. Нужен ровно затем, чтобы перемотка из шторки, с гарнитуры
+ * и из автомагнитолы шла на тот же шаг, что кнопки в приложении: у ExoPlayer
+ * шаг задаётся один раз при сборке, а в настройках его меняют на ходу.
+ *
+ * Обычными командами плеера, а не своими: свои команды надо выдавать каждому
+ * контроллеру отдельно, и уведомление собирается вокруг них заметно более
+ * хрупко - а здесь всё делается тем же COMMAND_SEEK_BACK, что понимают и часы,
+ * и магнитола.
+ */
+class ShadePlayer(
+    private val holder: PlayerHolder,
+    private val settings: Settings,
+) : ForwardingPlayer(holder.player) {
 
-    /** Раскладка для системных потребителей: Bluetooth, часы, автомагнитола. */
-    fun layout(sec: Int): List<CommandButton> = listOf(
-        button(backIcon(sec), BACK, "Назад $sec с"),
-        button(forwardIcon(sec), FORWARD, "Вперёд $sec с"),
-    )
+    private val step: Int get() = settings.now().skipSec
+
+    override fun seekBack() = holder.skip(-step)
+
+    override fun seekForward() = holder.skip(step)
+
+    override fun getSeekBackIncrement(): Long = step * 1000L
+
+    override fun getSeekForwardIncrement(): Long = step * 1000L
 }
 
 /**
@@ -122,12 +124,22 @@ class ShadeNotificationProvider(private val context: Context) : DefaultMediaNoti
         customLayout: ImmutableList<CommandButton>,
         showPauseButton: Boolean,
     ): ImmutableList<CommandButton> {
-        val sec = Shade.skipSeconds(context)
-        return ImmutableList.of(
-            Shade.button(Shade.backIcon(sec), Shade.BACK, "Назад $sec с"),
-            Shade.playPause(showPauseButton),
-            Shade.button(Shade.forwardIcon(sec), Shade.FORWARD, "Вперёд $sec с"),
-        )
+        // Своя раскладка не стоит пустой шторки: если она почему-то не
+        // соберётся, пусть будет стандартный плеер media3, а не ничего.
+        return runCatching {
+            val sec = Shade.skipSeconds(context)
+            ImmutableList.of(
+                Shade.button(Shade.backIcon(sec), Player.COMMAND_SEEK_BACK, "Назад $sec с"),
+                Shade.button(
+                    if (showPauseButton) CommandButton.ICON_PAUSE else CommandButton.ICON_PLAY,
+                    Player.COMMAND_PLAY_PAUSE,
+                    if (showPauseButton) "Пауза" else "Слушать",
+                ),
+                Shade.button(Shade.forwardIcon(sec), Player.COMMAND_SEEK_FORWARD, "Вперёд $sec с"),
+            )
+        }.getOrElse {
+            super.getMediaButtons(session, playerCommands, customLayout, showPauseButton)
+        }
     }
 
     /**
@@ -141,14 +153,17 @@ class ShadeNotificationProvider(private val context: Context) : DefaultMediaNoti
         builder: NotificationCompat.Builder,
         actionFactory: MediaNotification.ActionFactory,
     ): IntArray {
-        super.addNotificationActions(session, mediaButtons, builder, actionFactory)
-        builder.addAction(
-            NotificationCompat.Action.Builder(
-                IconCompat.createWithResource(context, R.drawable.ic_shade_open),
-                "Открыть Слушалку",
-                Shade.openApp(context),
-            ).build()
-        )
+        val indices = super.addNotificationActions(session, mediaButtons, builder, actionFactory)
+        runCatching {
+            builder.addAction(
+                NotificationCompat.Action.Builder(
+                    IconCompat.createWithResource(context, R.drawable.ic_shade_open),
+                    "Открыть Слушалку",
+                    Shade.openApp(context),
+                ).build()
+            )
+        }
+        if (mediaButtons.isEmpty()) return indices
         // Свёрнутое уведомление показывает три кнопки: перемотка, пауза,
         // перемотка. «Открыть» остаётся в развёрнутом - туда и так ведёт
         // нажатие на само уведомление.
