@@ -1,0 +1,75 @@
+package ru.zf.slushalka.text
+
+// Разбор HTML внутри epub делается регулярками, а не XML-парсером: в живых
+// книгах попадаются необъявленные сущности и незакрытые теги, на которых
+// строгий парсер падает целиком, а нам нужен текст, пусть и не идеальный.
+object TextExtract {
+
+    private val DROP_BLOCKS = Regex("(?is)<(script|style|head)[^>]*>.*?</\\1>")
+    private val BREAKS = Regex("(?i)</(p|div|h[1-6]|li|tr|blockquote)>|<br\\s*/?>")
+    private val TAGS = Regex("<[^>]*>")
+    private val MANY_NL = Regex("\n{3,}")
+    private val SPACES = Regex("[ \t ]{2,}")
+
+    fun stripHtml(html: String): String {
+        var s = html
+        s = DROP_BLOCKS.replace(s, " ")
+        s = BREAKS.replace(s, "\n")
+        s = TAGS.replace(s, "")
+        s = decodeEntities(s)
+        s = s.replace("\r\n", "\n").replace('\r', '\n')
+        s = s.lines().joinToString("\n") { it.trim() }
+        s = MANY_NL.replace(s, "\n\n")
+        return SPACES.replace(s, " ").trim()
+    }
+
+    fun decodeEntities(s: String): String {
+        if ('&' !in s) return s
+        val sb = StringBuilder(s.length)
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c != '&') {
+                sb.append(c); i++; continue
+            }
+            val semi = s.indexOf(';', i + 1)
+            if (semi < 0 || semi - i > 10) {
+                sb.append(c); i++; continue
+            }
+            val name = s.substring(i + 1, semi)
+            val replacement = when {
+                name.startsWith("#x") || name.startsWith("#X") ->
+                    name.drop(2).toIntOrNull(16)?.let { String(Character.toChars(it)) }
+                name.startsWith("#") ->
+                    name.drop(1).toIntOrNull()?.let { String(Character.toChars(it)) }
+                else -> NAMED[name]
+            }
+            if (replacement == null) {
+                sb.append(c); i++
+            } else {
+                sb.append(replacement); i = semi + 1
+            }
+        }
+        return sb.toString()
+    }
+
+    private val NAMED = mapOf(
+        "amp" to "&", "lt" to "<", "gt" to ">", "quot" to "\"", "apos" to "'",
+        "nbsp" to " ", "mdash" to "—", "ndash" to "–", "laquo" to "«", "raquo" to "»",
+        "hellip" to "…", "rsquo" to "’", "lsquo" to "‘", "ldquo" to "“", "rdquo" to "”",
+        "shy" to "", "copy" to "©", "deg" to "°", "middot" to "·", "bull" to "•",
+    )
+
+    /** Заголовок главы из первого <h1>..<h3>, иначе из <title>. */
+    fun firstHeading(html: String): String? {
+        Regex("(?is)<h[1-3][^>]*>(.*?)</h[1-3]>").find(html)?.let {
+            val t = stripHtml(it.groupValues[1]).lines().firstOrNull()?.trim()
+            if (!t.isNullOrBlank()) return t
+        }
+        Regex("(?is)<title[^>]*>(.*?)</title>").find(html)?.let {
+            val t = decodeEntities(it.groupValues[1]).trim()
+            if (t.isNotBlank()) return t
+        }
+        return null
+    }
+}

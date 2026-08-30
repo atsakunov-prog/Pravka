@@ -1,5 +1,5 @@
-# Builds the signed debug APK on every push and publishes it to the
-# orphan branch "apk-builds" (single force-pushed commit, so the repo
+# Builds the signed debug APKs (Правка and Слушалка) on every push and
+# publishes them to the orphan branch "apk-builds" (single force-pushed commit, so the repo
 # does not grow). The development session fetches the APK from that
 # branch and hands it to the owner.
 #
@@ -32,17 +32,21 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Build debug APK
+      - name: Build debug APKs
         run: ./gradlew assembleDebug -PbuildNumber=${{ github.run_number }} --no-daemon
 
-      - name: Publish APK to apk-builds branch
+      - name: Publish APKs to apk-builds branch
         run: |
           APK=app/build/outputs/apk/debug/app-debug.apk
+          SLU=slushalka/build/outputs/apk/debug/slushalka-debug.apk
           test -f "$APK"
+          test -f "$SLU"
           mkdir /tmp/apkpub
           cp "$APK" /tmp/apkpub/pravka-debug.apk
+          cp "$SLU" /tmp/apkpub/slushalka-debug.apk
           {
-            echo "versionName=2.0.${{ github.run_number }}"
+            echo "pravka=2.0.${{ github.run_number }}"
+            echo "slushalka=1.0.${{ github.run_number }}"
             echo "versionCode=${{ github.run_number }}"
             echo "commit=${GITHUB_SHA}"
             echo "branch=${GITHUB_REF_NAME}"
@@ -53,11 +57,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -q -m "Pravka debug APK 1.0.${{ github.run_number }} from ${GITHUB_SHA::7} (${GITHUB_REF_NAME})"
+          git commit -q -m "Debug APKs (Правка + Слушалка) ${{ github.run_number }} from ${GITHUB_SHA::7} (${GITHUB_REF_NAME})"
           git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" apk-builds
 
-      - name: Upload APK as workflow artifact
+      - name: Upload APKs as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pravka-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: debug-apks
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            slushalka/build/outputs/apk/debug/slushalka-debug.apk

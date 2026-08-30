@@ -7,6 +7,7 @@ composeBom = "2025.10.01"
 lifecycle = "2.9.2"
 datastore = "1.1.7"
 okhttp = "4.12.0"
+media3 = "1.5.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -18,6 +19,8 @@ compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = 
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
 compose-ui = { group = "androidx.compose.ui", name = "ui" }
+media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

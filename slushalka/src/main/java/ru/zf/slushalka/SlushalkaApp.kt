@@ -1,0 +1,54 @@
+package ru.zf.slushalka
+
+import android.app.Application
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import ru.zf.slushalka.ask.AskEngine
+import ru.zf.slushalka.ask.ClaudeClient
+import ru.zf.slushalka.ask.Speaker
+import ru.zf.slushalka.data.AskLog
+import ru.zf.slushalka.data.Bookmarks
+import ru.zf.slushalka.data.LibraryStore
+import ru.zf.slushalka.data.PositionStore
+import ru.zf.slushalka.data.PositionSync
+import ru.zf.slushalka.data.Settings
+import ru.zf.slushalka.player.PlayerHolder
+import ru.zf.slushalka.text.TextRepo
+import ru.zf.slushalka.ui.AppState
+
+/** Сервис-локатор: всё хозяйство приложения в одном месте, как PravkaApp. */
+class SlushalkaApp : Application() {
+
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    lateinit var settings: Settings; private set
+    lateinit var positions: PositionStore; private set
+    lateinit var library: LibraryStore; private set
+    lateinit var texts: TextRepo; private set
+    lateinit var bookmarks: Bookmarks; private set
+    lateinit var askLog: AskLog; private set
+    lateinit var sync: PositionSync; private set
+    lateinit var player: PlayerHolder; private set
+    lateinit var ask: AskEngine; private set
+    lateinit var speaker: Speaker; private set
+    lateinit var state: AppState; private set
+
+    override fun onCreate() {
+        super.onCreate()
+        settings = Settings(this, scope)
+        positions = PositionStore(this)
+        library = LibraryStore(this)
+        texts = TextRepo(this)
+        bookmarks = Bookmarks(this)
+        askLog = AskLog(this)
+        sync = PositionSync(this)
+        speaker = Speaker(this)
+        ask = AskEngine(settings, ClaudeClient(settings), askLog)
+        player = PlayerHolder(this, settings, positions) { bookId ->
+            scope.launch { state.syncPush(bookId) }
+        }
+        state = AppState(this)
+    }
+}
