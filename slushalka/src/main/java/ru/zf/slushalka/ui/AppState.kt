@@ -145,9 +145,12 @@ class AppState(private val app: SlushalkaApp) {
             }
             if (!app.player.isOpen(ready.id)) {
                 app.player.open(tree, ready, autoPlay = autoPlay)
-            } else if (autoPlay) {
+            } else if (autoPlay && !app.player.state.value.playing) {
                 app.player.playPause()
             }
+            // Книгу открыли руками - вопрос «продолжить с другого устройства?»
+            // про неё уже неактуален.
+            if (_resumeOffer.value?.bookId == ready.id) _resumeOffer.value = null
             offerRecapIfDue(ready)
             loadText(ready)
         }

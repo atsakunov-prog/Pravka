@@ -265,7 +265,11 @@ class PlayerHolder(
         player.volume = 1f
         sleepDeadline = when {
             untilChapterEnd -> {
-                val left = (player.duration - player.currentPosition).coerceAtLeast(0L)
+                // Пока файл не подготовился, длительность = TIME_UNSET, и
+                // «остаток» вышел бы отрицательным - таймер сработал бы сразу.
+                val duration = player.duration
+                if (duration <= 0) return
+                val left = (duration - player.currentPosition).coerceAtLeast(0L)
                 System.currentTimeMillis() + (left / player.playbackParameters.speed).toLong()
             }
             minutes > 0 -> System.currentTimeMillis() + minutes * 60_000L

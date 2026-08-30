@@ -28,8 +28,9 @@ fun formatLeft(leftMs: Long, speed: Float): String {
     return formatSpan(real)
 }
 
+/** 1× · 1,2× · 1,25× - хвостовые нули только мешают читать. */
 fun formatSpeed(v: Float): String =
-    if (v == v.toInt().toFloat()) "%.0f×".format(v) else "%.2f×".format(v).replace(".", ",").replace(",00", "")
+    "%.2f".format(v).replace('.', ',').trimEnd('0').trimEnd(',') + "×"
 
 fun formatDate(at: Long): String {
     val fmt = java.text.SimpleDateFormat("d MMMM, HH:mm", java.util.Locale.forLanguageTag("ru"))
