@@ -81,6 +81,7 @@ fun PlayerScreen(
     var showSleep by remember { mutableStateOf(false) }
     var showMarks by remember { mutableStateOf(false) }
     var showRecap by remember { mutableStateOf(false) }
+    var showGallery by remember { mutableStateOf(false) }
 
     val b = book
     if (b == null) {
@@ -185,6 +186,12 @@ fun PlayerScreen(
                             AssistChip(
                                 onClick = { showRecap = true },
                                 label = { Text("что там было") },
+                            )
+                        }
+                        if (state.picturesOnDisk() > 0) {
+                            AssistChip(
+                                onClick = { showGallery = true },
+                                label = { Text("картинки") },
                             )
                         }
                     }
@@ -374,6 +381,9 @@ fun PlayerScreen(
     if (showRecap) {
         val cutoff = alignment?.charAt(play.absMs) ?: 0
         RecapSheet(app, cutoffChar = cutoff, absMs = play.absMs, onClose = { showRecap = false })
+    }
+    if (showGallery) {
+        PictureGallery(app) { showGallery = false }
     }
 }
 

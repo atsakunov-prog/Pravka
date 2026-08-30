@@ -51,6 +51,9 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
 
     var key by remember { mutableStateOf(prefs.apiKey) }
     var profile by remember { mutableStateOf(prefs.profile) }
+    var showGallery by remember { mutableStateOf(false) }
+    val current by state.current.collectAsState()
+    val text by state.text.collectAsState()
 
     Scaffold(
         topBar = {
@@ -80,6 +83,38 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onPickTree) { Text("Выбрать папку") }
                 TextButton(onClick = { state.rescan() }) { Text("Перечитать") }
+            }
+
+            // Раздел про открытую книгу - здесь, а не только в настройках
+            // читалки: сюда заходят в первую очередь, и «где мои картинки»
+            // спрашивают именно тут.
+            current?.let { book ->
+                Section("Открытая книга")
+                Text(book.title, style = MaterialTheme.typography.bodyLarge)
+                val pics = text?.pictures?.size ?: 0
+                val extracted = state.picturesOnDisk()
+                Text(
+                    when {
+                        text == null -> "Текст книги ещё не разобран."
+                        pics > 0 -> "Картинок в тексте: $pics — стоят на своих местах, " +
+                            "тап открывает во весь экран."
+                        extracted > 0 -> "Вынуто из файла: $extracted, но место в тексте для них " +
+                            "не нашлось — смотри списком."
+                        else -> "Картинок в книге не нашлось."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (text != null && pics == 0) {
+                    state.parseReport()?.let { r ->
+                        Note("Разбор увидел: ${r.line()}")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (extracted > 0) {
+                        TextButton(onClick = { showGallery = true }) { Text("Показать картинки") }
+                    }
+                    TextButton(onClick = { state.reparseText() }) { Text("Разобрать заново") }
+                }
             }
 
             Section("Кто слушает")
@@ -191,6 +226,10 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             )
             Spacer(Modifier.height(48.dp))
         }
+    }
+
+    if (showGallery) {
+        PictureGallery(app) { showGallery = false }
     }
 }
 
