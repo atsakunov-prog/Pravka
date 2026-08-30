@@ -16,7 +16,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -202,11 +207,14 @@ fun ReaderScreen(
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
+            // Читалка рисуется во весь экран, без Scaffold, поэтому системные
+            // отступы считаем сами: иначе первая строка уезжает под часы, а
+            // панель с «Аа» становится не видна вовсе.
             contentPadding = PaddingValues(
                 start = prefs.readerMargin.dp,
                 end = prefs.readerMargin.dp,
-                top = 56.dp,
-                bottom = 90.dp,
+                top = 56.dp + WindowInsets.statusBars.asPaddingValues().calculateTopPadding(),
+                bottom = 110.dp,
             ),
         ) {
             itemsIndexed(blocks, key = { i, _ -> i }) { _, block ->
@@ -263,6 +271,7 @@ fun ReaderScreen(
                 Modifier
                     .fillMaxWidth()
                     .background(palette.bg.copy(alpha = 0.96f))
+                    .statusBarsPadding()
                     .padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -275,7 +284,14 @@ fun ReaderScreen(
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
                 )
-                TextButton(onClick = { showSettings = true }) { Text("Аа", color = palette.fg) }
+                if (app.state.picturesOnDisk() > 0) {
+                    TextButton(onClick = { showGallery = true }) {
+                        Text("Картинки", color = palette.fg)
+                    }
+                }
+                TextButton(onClick = { showSettings = true }) {
+                    Text("Аа  Вид", color = palette.fg)
+                }
             }
         }
 
@@ -289,6 +305,7 @@ fun ReaderScreen(
                 Modifier
                     .fillMaxWidth()
                     .background(palette.bg.copy(alpha = 0.96f))
+                    .navigationBarsPadding()
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             ) {
                 Text(
