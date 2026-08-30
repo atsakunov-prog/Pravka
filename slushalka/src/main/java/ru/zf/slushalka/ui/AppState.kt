@@ -249,10 +249,22 @@ class AppState(private val app: SlushalkaApp) {
         // и распознавать нечего.
         if (align.distanceToAnchor(absMs) < TRUST_MAP_MS) return estimate
         if (!prefs.value.refineOnSwitch || !app.recognizer.supported) return estimate
+        // Распознаватель один: пока идёт разметка, переход его не отнимает.
+        if (markupJob?.isActive == true) return estimate
 
         val hit = refineAt(book, text, align, absMs)
         return hit ?: estimate
     }
+
+    /** Чем кончилась проба - нужно, чтобы понимать, где рвётся, а не гадать. */
+    private enum class Miss { OK, NO_AUDIO, NO_SPEECH, NOT_FOUND }
+
+    private class Probe(
+        val charOffset: Int?,
+        val transcript: String?,
+        val decodedMs: Long,
+        val miss: Miss,
+    )
 
     /**
      * Одна проба: кусок записи перед [absMs] расшифровывается **на телефоне**
@@ -266,27 +278,66 @@ class AppState(private val app: SlushalkaApp) {
         absMs: Long,
         minVotes: Int,
         radius: Int,
-    ): Int? {
-        val tree = treeUri() ?: return null
+    ): Probe {
+        val tree = treeUri() ?: return Probe(null, null, 0, Miss.NO_AUDIO)
         val (index, inFile) = book.locate(absMs)
-        val file = book.files.getOrNull(index) ?: return null
+        val file = book.files.getOrNull(index) ?: return Probe(null, null, 0, Miss.NO_AUDIO)
         val from = (inFile - CHUNK_MS).coerceAtLeast(0L)
         val span = (inFile - from).coerceAtMost(CHUNK_MS)
-        if (span < 4000) return null      // меньше четырёх секунд не о чем расшифровывать
+        if (span < 4000) return Probe(null, null, 0, Miss.NO_AUDIO)
 
-        val transcript = withContext(Dispatchers.IO) {
+        val pcm = withContext(Dispatchers.IO) {
             AudioChunk.decode(app, documentUri(tree, file.docId), from, span)
-        }?.let { app.recognizer.recognize(it) } ?: return null
-        return Locator.find(text, transcript, align.charAt(absMs), radius, minVotes)?.charOffset
+        } ?: return Probe(null, null, 0, Miss.NO_AUDIO)
+
+        val transcript = app.recognizer.recognize(pcm)
+            ?: return Probe(null, null, pcm.durationMs, Miss.NO_SPEECH)
+
+        val hit = Locator.find(text, transcript, align.charAt(absMs), radius, minVotes)
+        return Probe(
+            charOffset = hit?.charOffset,
+            transcript = transcript,
+            decodedMs = pcm.durationMs,
+            miss = if (hit == null) Miss.NOT_FOUND else Miss.OK,
+        )
+    }
+
+    /**
+     * Одиночная проба напоказ: сколько звука вынули, что услышали, нашлось ли
+     * это в книге. Когда разметка не находит ничего, только это и отвечает на
+     * вопрос «а что, собственно, сломалось».
+     */
+    fun testProbe() {
+        val book = _current.value ?: return
+        val text = _text.value ?: return
+        if (markupJob?.isActive == true) return
+        app.scope.launch {
+            _markupProgress.value = MarkupProgress(0, 1, 0, true, "Пробую…")
+            val align = _alignment.value ?: return@launch
+            val at = app.player.state.value.absMs.takeIf { it > 20_000 } ?: (book.totalMs / 3)
+            val r = probe(book, text, align, at, Locator.MIN_VOTES, Locator.DEFAULT_RADIUS)
+            val note = when (r.miss) {
+                Miss.NO_AUDIO -> "Звук не декодировался. Формат файла плеер играет, а декодер " +
+                    "не осилил - напиши, какой это формат."
+                Miss.NO_SPEECH -> "Звук вынут (${r.decodedMs / 1000} с, 16 кГц), но распознаватель " +
+                    "не вернул ни слова. Похоже, офлайн-распознавание русского на телефоне не " +
+                    "поставлено: Настройки → Система → Языки → Голосовой ввод → Распознавание речи."
+                Miss.NOT_FOUND -> "Услышано: «${r.transcript?.take(120)}». В тексте книги это место " +
+                    "не нашлось - либо текст не от этой записи, либо кусок пришёлся на музыку."
+                Miss.OK -> "Услышано: «${r.transcript?.take(120)}». Нашлось на странице " +
+                    "${text.pageOf(r.charOffset ?: 0)} - всё работает."
+            }
+            _markupProgress.value = MarkupProgress(1, 1, if (r.miss == Miss.OK) 1 else 0, false, note)
+        }
     }
 
     /** Сверка при переходе: одна проба и отметка на карте, если попали. */
     private suspend fun refineAt(book: Book, text: BookText, align: Alignment, absMs: Long): Int? {
         _busy.value = "Слушаю последние секунды…"
-        val hit = probe(book, text, align, absMs, Locator.MIN_VOTES, Locator.DEFAULT_RADIUS)
+        val r = probe(book, text, align, absMs, Locator.MIN_VOTES, Locator.DEFAULT_RADIUS)
         _busy.value = null
-        if (hit != null) addAnchor(absMs, hit)
-        return hit
+        r.charOffset?.let { addAnchor(absMs, it) }
+        return r.charOffset
     }
 
     // --------------------------------------------------------------- разметка
@@ -339,6 +390,9 @@ class AppState(private val app: SlushalkaApp) {
         markupJob = app.scope.launch {
             var done = 0
             var hits = 0
+            var noAudio = 0
+            var noSpeech = 0
+            var notFound = 0
             _markupProgress.value = MarkupProgress(0, total, 0, true)
             try {
                 for (i in 0 until total) {
@@ -358,23 +412,42 @@ class AppState(private val app: SlushalkaApp) {
                     _markupProgress.value = MarkupProgress(done, total, hits, true)
 
                     val radius = radiusFor(align, at)
-                    val hit = probe(book, text, align, at, MARKUP_MIN_VOTES, radius)
+                    val r = probe(book, text, align, at, MARKUP_MIN_VOTES, radius)
+                    when (r.miss) {
+                        Miss.NO_AUDIO -> noAudio++
+                        Miss.NO_SPEECH -> noSpeech++
+                        Miss.NOT_FOUND -> notFound++
+                        Miss.OK -> {}
+                    }
+                    val hit = r.charOffset
                     if (hit != null && monotonic(align, at, hit)) {
                         addAnchor(at, hit)
                         hits++
                         _markupProgress.value = MarkupProgress(done, total, hits, true)
                     }
+                    // Если распознаватель молчит с самого начала, дальше молоть
+                    // тридцать проб незачем - лучше сказать об этом сразу.
+                    if (done >= EARLY_GIVE_UP && hits == 0 && noSpeech + noAudio >= done) break
                 }
                 val saved = saveMarkup()
                 _markupProgress.value = MarkupProgress(
                     done, total, hits, false,
                     when {
-                        hits == 0 -> "Ни одна проба не нашлась в тексте. Тот ли это текст к записи?"
+                        hits == 0 && noSpeech > noAudio + notFound ->
+                            "Распознаватель не вернул ни слова ни на одной пробе. Проверь, что " +
+                                "стоит офлайн-распознавание русского: Настройки → Система → " +
+                                "Языки → Голосовой ввод → Распознавание речи."
+                        hits == 0 && noAudio > 0 ->
+                            "Звук не декодировался ($noAudio из $done проб). Напиши, в каком " +
+                                "формате файлы книги."
+                        hits == 0 ->
+                            "Услышанное не нашлось в тексте ни разу. Похоже, текст не от этой " +
+                                "записи - другое издание или другая начитка."
                         // Папка книги может оказаться доступной только на чтение -
                         // об этом лучше сказать, чем молча оставить карту здесь.
-                        !saved -> "Готово: карта выверена по $hits ${plural(hits)}, но записать " +
-                            "её в папку книги не вышло - она осталась только на этом телефоне"
-                        else -> "Готово: карта выверена по $hits ${plural(hits)} и лежит рядом с книгой"
+                        !saved -> "Готово: выверено $hits из $done, но записать карту в папку " +
+                            "книги не вышло - она осталась только на этом телефоне"
+                        else -> "Готово: выверено $hits из $done, карта лежит рядом с книгой"
                     },
                 )
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -546,6 +619,8 @@ class AppState(private val app: SlushalkaApp) {
         private const val MARKUP_MIN_VOTES = 5
         /** Столько выверенных точек - и книга считается размеченной. */
         private const val MARKUP_ENOUGH = 6
+        /** Столько пустых проб подряд - и дальше молоть незачем. */
+        private const val EARLY_GIVE_UP = 5
     }
 
     fun declineResume() {

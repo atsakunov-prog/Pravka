@@ -31,8 +31,25 @@ class ChunkRecognizer(private val context: Context) {
     val supported: Boolean
         get() = Build.VERSION.SDK_INT >= 33 && SpeechRecognizer.isRecognitionAvailable(context)
 
-    suspend fun recognize(pcm: AudioChunk.Pcm, timeoutMs: Long = 25_000): String? {
+    /**
+     * Сначала пробуем полностью локальный распознаватель, а если его на
+     * устройстве нет или он промолчал - обычный. Оба бесплатны; разница в том,
+     * что первый заведомо не выходит в сеть.
+     */
+    suspend fun recognize(pcm: AudioChunk.Pcm): String? {
         if (!supported) return null
+        val onDevice = Build.VERSION.SDK_INT >= 33 &&
+            runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }
+                .getOrDefault(false)
+        attempt(pcm, onDevice = onDevice)?.let { return it }
+        return if (onDevice) attempt(pcm, onDevice = false) else null
+    }
+
+    private suspend fun attempt(
+        pcm: AudioChunk.Pcm,
+        onDevice: Boolean,
+        timeoutMs: Long = 15_000,
+    ): String? {
         return suspendCancellableCoroutine { cont ->
             val main = Handler(Looper.getMainLooper())
             main.post {
@@ -58,7 +75,7 @@ class ChunkRecognizer(private val context: Context) {
                 if (read == null || write == null) return@post done(null)
 
                 val r = runCatching {
-                    if (Build.VERSION.SDK_INT >= 33) {
+                    if (onDevice && Build.VERSION.SDK_INT >= 33) {
                         SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
                     } else {
                         SpeechRecognizer.createSpeechRecognizer(context)
@@ -104,7 +121,7 @@ class ChunkRecognizer(private val context: Context) {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, onDevice)
                     putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, read)
                     putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
                     putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)

@@ -39,11 +39,16 @@ class TextRepo(private val context: Context) {
         val txt = File(dir, "$k.txt")
         val meta = File(dir, "$k.json")
         if (txt.exists() && meta.exists()) {
-            runCatching {
-                BookText.fromMeta(txt.readText(), JSONObject(meta.readText()))
-            }.getOrNull()?.let {
-                memory[book.id] = it
-                return@withContext it
+            val cached = runCatching {
+                val json = JSONObject(meta.readText())
+                // Кэш прежней версии разбирали, когда картинки ещё не доставали.
+                // Такой перечитываем заново, иначе они не появятся никогда.
+                if (json.optInt("v") < BookText.CACHE_VERSION) null
+                else BookText.fromMeta(txt.readText(), json)
+            }.getOrNull()
+            if (cached != null) {
+                memory[book.id] = cached
+                return@withContext cached
             }
         }
         val docId = book.textDocId ?: return@withContext null

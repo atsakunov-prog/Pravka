@@ -85,6 +85,17 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onClose: () -> Unit) {
                     format = { "$it" },
                 ) { scope.launch { s.setReaderMargin(it) } }
 
+                val pics = state.text.collectAsState().value?.pictures?.size ?: 0
+                if (pics > 0) {
+                    Label("Картинки")
+                    Text(
+                        "В книге их $pics. Стоят на своих местах в тексте; пока читаешь рядом, " +
+                            "миниатюра висит в углу.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
                 Label("Бумага")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(
@@ -130,8 +141,13 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onClose: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (app.recognizer.supported) {
-                    TextButton(onClick = { state.markupBook(); onClose() }) {
-                        Text(if (marked) "Разметить ещё раз" else "Разметить книгу")
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = { state.markupBook(); onClose() }) {
+                            Text(if (marked) "Разметить ещё раз" else "Разметить книгу")
+                        }
+                        TextButton(onClick = { state.testProbe(); onClose() }) {
+                            Text("Одна проба")
+                        }
                     }
                     Toggle("Сверять место при переходе", prefs.refineOnSwitch) {
                         scope.launch { s.setRefineOnSwitch(it) }

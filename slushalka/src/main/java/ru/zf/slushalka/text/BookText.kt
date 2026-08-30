@@ -88,6 +88,7 @@ class BookText(
     }
 
     fun metaJson(): JSONObject = JSONObject()
+        .put("v", CACHE_VERSION)
         .put("title", title)
         .put("author", author)
         .put("chapters", JSONArray().apply {
@@ -104,6 +105,13 @@ class BookText(
     companion object {
         /** Знаков в «странице»: стандартная машинописная - 1800. */
         const val PAGE_CHARS = 1800
+
+        /**
+         * Версия разбора. Растёт, когда из книги начинают доставать что-то
+         * новое: иначе уже разобранная книга так и осталась бы без этого -
+         * готовый кэш никто бы не перечитал. Версия 2 - картинки.
+         */
+        const val CACHE_VERSION = 2
 
         fun fromMeta(plain: String, meta: JSONObject): BookText {
             val arr = meta.optJSONArray("chapters") ?: JSONArray()

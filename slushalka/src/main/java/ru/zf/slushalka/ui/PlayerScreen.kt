@@ -247,8 +247,13 @@ fun PlayerScreen(
                                     }
                                     m != null && m.note.isNotBlank() -> {
                                         Text(m.note, style = MaterialTheme.typography.bodyMedium)
-                                        TextButton(onClick = { state.dismissMarkupNote() }) {
-                                            Text("Понятно")
+                                        Row {
+                                            TextButton(onClick = { state.dismissMarkupNote() }) {
+                                                Text("Понятно")
+                                            }
+                                            TextButton(onClick = { state.testProbe() }) {
+                                                Text("Ещё проба")
+                                            }
                                         }
                                     }
                                     else -> {
@@ -259,8 +264,13 @@ fun PlayerScreen(
                                                 "с книгой.",
                                             style = MaterialTheme.typography.bodyMedium,
                                         )
-                                        TextButton(onClick = { state.markupBook() }) {
-                                            Text("Разметить книгу")
+                                        Row {
+                                            TextButton(onClick = { state.markupBook() }) {
+                                                Text("Разметить книгу")
+                                            }
+                                            TextButton(onClick = { state.testProbe() }) {
+                                                Text("Одна проба")
+                                            }
                                         }
                                     }
                                 }
