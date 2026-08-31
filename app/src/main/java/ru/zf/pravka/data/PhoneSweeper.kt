@@ -318,7 +318,10 @@ class PhoneSweeper(
             // живую настоящим концом, а кандидата убираем: это одна запись.
             val done = candidates.firstOrNull { c ->
                 (allLabels[c.pkg] ?: c.pkg.substringAfterLast('.')) == liveNow.title &&
-                    kotlin.math.abs(c.start - liveNow.start) < 60_000
+                    // Живая могла начаться ПОЗЖЕ сессии: её обрезал конец
+                    // дела, и свип открыл её заново с этого шва. Совпадением
+                    // считаем и это, иначе сессия приехала бы ещё раз целиком.
+                    c.start <= liveNow.start + 60_000L && c.end >= liveNow.start
             }
             if (done != null) {
                 zasechkaStore.closeParallel(done.end)

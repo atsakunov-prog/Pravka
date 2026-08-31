@@ -580,9 +580,63 @@ class ZasechkaStore(private val context: Context) {
         return true
     }
 
+    /**
+     * Параллель не может тикать дольше дела, поверх которого идёт. Владелец
+     * нашёл это прямо на экране: «параллельное дело должно заканчиваться
+     * вместе с основным делом, этот счётчик не может идти больше конца
+     * основного дела». Он прав и по смыслу второго трека: параллель — это
+     * «что шло ПОВЕРХ вот этого», а поверх кончившегося дела идти нечему.
+     * Без правила счётчик уезжал в бесконечность: «Клод 4 ч» под делом на
+     * двадцать минут.
+     *
+     * Трогается только ОТКРЫТАЯ параллель, то есть тот самый счётчик.
+     * Закрытая — это факт с измеренными границами (книга за рулём из фоновой
+     * службы, разметка задним числом за месяц), и обрезать её концом первого
+     * же дела значило бы стирать прожитое.
+     *
+     * Хозяин ищется ЦЕПОЧКОЙ: дело могло быть разрезано полуночью, врезкой
+     * или вставкой задним числом — это по-прежнему одно дело, и параллель
+     * живёт до конца всей цепочки, а не до первого шва.
+     */
+    private fun capOpenParallelLocked(): Boolean {
+        val mains = entries.filter { !it.parallel }.sortedBy { it.start }
+        if (mains.isEmpty()) return false
+        var changed = false
+        for (i in entries.indices) {
+            val p = entries[i]
+            if (!p.open || !p.parallel) continue
+            var at = mains.indexOfLast { it.start <= p.start }
+            if (at < 0) continue
+            var chainEnd = mains[at].end
+            var running = mains[at].open
+            while (!running && at + 1 < mains.size) {
+                val next = mains[at + 1]
+                if (next.start > chainEnd + 1_000L) break
+                if (!sameDeal(mains[at], next)) break
+                at++
+                chainEnd = next.end
+                running = next.open
+            }
+            // Дело ещё идёт — параллели есть над чем идти.
+            if (running) continue
+            if (chainEnd <= p.start) continue
+            entries[i] = p.copy(end = chainEnd, synced = false, notionSynced = false)
+            changed = true
+        }
+        return changed
+    }
+
+    /** Два куска одного дела: полночь и врезки режут запись, но не смысл. */
+    private fun sameDeal(a: Entry, b: Entry): Boolean =
+        a.title.trim().equals(b.title.trim(), ignoreCase = true) &&
+            a.category.trim().equals(b.category.trim(), ignoreCase = true)
+
     /** All ribbon invariants in one locked pass; true when anything changed. */
     private fun normalizeLocked(): Boolean {
         var changed = splitMidnightLocked()
+        // До dropCrumbs: обрезанная в ноль параллель — мусор, а не факт,
+        // и уходить она должна тем же проходом.
+        if (capOpenParallelLocked()) changed = true
         if (dropCrumbsLocked()) changed = true
         if (trimFillersLocked()) changed = true
         if (spliceOverlapsLocked()) changed = true
@@ -932,9 +986,23 @@ class ZasechkaStore(private val context: Context) {
         mutex.withLock {
             ensureLoaded()
             if (entries.any { it.open && it.parallel }) return@withLock null
+            // Живая могла только что упереться в конец дела и закрыться
+            // (capOpenParallelLocked), а приложение работает дальше — свип
+            // на следующем тике открывает её снова и снова с начала СЕССИИ.
+            // Без сдвига к шву одно и то же время посчиталось бы дважды.
+            // Сдвигаться надо за ВСЕ уже записанные куски этой же сессии, а
+            // не только за тот, что накрывает начало: за длинную сессию швов
+            // набирается несколько, и шаг «до первого» топтался бы на месте,
+            // плодя одинаковые строки каждый тик.
+            val from = entries
+                .filter {
+                    it.parallel && !it.open && it.end > start &&
+                        it.title.trim().equals(title.trim(), ignoreCase = true)
+                }
+                .maxOfOrNull { it.end } ?: start
             val entry = Entry(
                 id = nextId(),
-                start = start,
+                start = from,
                 end = 0L,
                 raw = "",
                 title = title.trim(),
