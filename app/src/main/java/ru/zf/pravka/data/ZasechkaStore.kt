@@ -39,7 +39,12 @@ class ZasechkaStore(private val context: Context) {
 
         // The owner's rule: unrecorded time is not "unknown", it is «Потери».
         // Bounded holes at least this long become gap-filler entries...
-        private const val GAP_FILL_MIN_MS = 5 * 60_000L
+        // Дыра короче этого не заполняется. Было пять минут - и лента,
+        // которая обещает быть непрерывной, ею не была: у владельца день
+        // выходил в 1428 минут вместо 1440, потому что три-четыре щели по
+        // паре минут не закрывал никто. Минута - предел, ниже которого
+        // разница всё равно тонет в округлении до минут.
+        private const val GAP_FILL_MIN_MS = 60_000L
         // ...but only once the right edge has stood for a while: retro
         // dictation ("обедаю с 12:30") usually lands within the hour, and an
         // eagerly created filler would already be mirrored to Sheets.
@@ -543,6 +548,36 @@ class ZasechkaStore(private val context: Context) {
         createdAt = nowMs,
     )
 
+    /**
+     * Щели короче минуты - не «Не размечено», а мусор округления: обрезок
+     * сплайса, выброшенная крошка, секунды между делами. Строкой такое
+     * показывать нечего, а оставлять нельзя: минуты суток считаются
+     * округлением, и щель в двадцать секунд, попавшая на границу минуты,
+     * стоит дню целой минуты. Владелец видел это как «сутки 1428».
+     *
+     * Поэтому такие щели закрываются молча - концом предыдущей записи. Всё,
+     * что длиннее минуты, по-прежнему становится честной строкой
+     * «Не размечено»: это уже потерянное время, и прятать его нельзя.
+     */
+    private fun closeHairlineGapsLocked(): Boolean {
+        // В том же окне, что и остальные инварианты: трогать полгода истории
+        // ради секунд значит переписать и разослать заново всё зеркало.
+        val windowStart = System.currentTimeMillis() - NORMALIZE_WINDOW_MS
+        val asc = entries.filter { !it.parallel && it.start > windowStart }.sortedBy { it.start }
+        var changed = false
+        for (i in 0 until asc.size - 1) {
+            val a = asc[i]
+            val b = asc[i + 1]
+            if (a.open || b.start <= a.end) continue
+            if (b.start - a.end >= GAP_FILL_MIN_MS) continue
+            val at = entries.indexOfFirst { it.id == a.id }
+            if (at < 0) continue
+            entries[at] = a.copy(end = b.start, synced = false, notionSynced = false)
+            changed = true
+        }
+        return changed
+    }
+
     private fun fillGapsLocked(): Boolean {
         val nowMs = System.currentTimeMillis()
         val cutoff = nowMs - GAP_FILL_QUARANTINE_MS
@@ -651,6 +686,9 @@ class ZasechkaStore(private val context: Context) {
         if (fillGapsLocked()) changed = true
         // Fillers created just now may cross midnight themselves.
         if (splitMidnightLocked()) changed = true
+        // Последним: заполнитель мог сам оставить волосяную щель, а после
+        // него лента обязана быть непрерывной по-настоящему.
+        if (closeHairlineGapsLocked()) changed = true
         return changed
     }
 
@@ -1102,25 +1140,69 @@ class ZasechkaStore(private val context: Context) {
                         kotlin.math.max(e.start, start)).coerceAtLeast(0L) * 2 >= end - start
             }
         ) return@withLock null
-        val entry = Entry(
-            id = nextId(),
-            start = start,
-            end = end,
-            raw = "",
-            title = title.trim(),
-            category = category.trim(),
-            client = client.trim(),
-            useful = 0,
-            source = "auto",
-            synced = false,
-            createdAt = nowMs,
-            track = if (parallel) 1 else 0,
-        )
-        entries.add(entry)
+        // Параллель режется по границам дел: одна строка - один носитель.
+        // Основной трек не режем - там за стыковку отвечает сплайс.
+        val spans = if (parallel) splitByHostsLocked(start, end) else listOf(start to end)
+        var first: Entry? = null
+        for ((s0, e0) in spans) {
+            val entry = Entry(
+                id = nextId(),
+                start = s0,
+                end = e0,
+                raw = "",
+                title = title.trim(),
+                category = category.trim(),
+                client = client.trim(),
+                useful = 0,
+                source = "auto",
+                synced = false,
+                createdAt = nowMs,
+                track = if (parallel) 1 else 0,
+            )
+            entries.add(entry)
+            if (first == null) first = entry
+        }
         normalizeLocked()
         entries.sortBy { it.start }
         persist()
-        entry
+        first
+    }
+
+    /**
+     * Разрезать отрезок по границам ДЕЛ основной ленты. Ютуб на 25 минут,
+     * попавший наполовину на «Смену белья» (13 минут) и наполовину на
+     * неразмеченное, лежал одной строкой - и получалось, что параллель длиннее
+     * того, поверх чего она якобы шла. Читатель файла нашёл четырнадцать таких
+     * из двухсот пятидесяти и сказал по делу: тогда «поверх чего» перестаёт
+     * быть ответом на вопрос.
+     *
+     * Куски ОДНОГО дела (разрезанного полуночью или врезкой) швом не считаются:
+     * дело есть дело. Резать пополам на кусочки короче полуминуты тоже не
+     * будем - такие обрезки нормализация всё равно выбросит, и минуты пропали
+     * бы. Ни одной минуты отрезок при этом не теряет: куски стыкуются встык.
+     */
+    private fun splitByHostsLocked(start: Long, end: Long): List<Pair<Long, Long>> {
+        val mains = entries.filter { !it.parallel }.sortedBy { it.start }
+        val cuts = ArrayList<Long>()
+        for (i in mains.indices) {
+            val m = mains[i]
+            if (m.start <= start || m.start >= end) continue
+            val prev = mains.getOrNull(i - 1)
+            if (prev != null && !prev.open && sameDeal(prev, m) &&
+                m.start <= prev.end + 1_000L
+            ) continue
+            cuts.add(m.start)
+        }
+        if (cuts.isEmpty()) return listOf(start to end)
+        val out = ArrayList<Pair<Long, Long>>(cuts.size + 1)
+        var from = start
+        for (c in cuts) {
+            if (c - from < CRUMB_MS || end - c < CRUMB_MS) continue
+            out.add(from to c)
+            from = c
+        }
+        out.add(from to end)
+        return out
     }
 
     /** Один факт из памяти телефона для разметки задним числом. */
@@ -1165,22 +1247,26 @@ class ZasechkaStore(private val context: Context) {
         for (f in wanted) {
             // Проверяем ещё раз: дубль мог приехать в этом же заходе.
             if (autoDuplicateLocked(f.start, f.end, f.title)) continue
-            entries.add(
-                Entry(
-                    id = nextId(),
-                    start = f.start,
-                    end = f.end,
-                    raw = "",
-                    title = f.title.trim(),
-                    category = f.category.trim(),
-                    client = f.client.trim(),
-                    useful = 0,
-                    source = "auto",
-                    synced = false,
-                    createdAt = nowMs,
-                    track = 1,
+            // Так же кусками по делам, как и живая разметка: параллель,
+            // накрывающая два дела, ни на один вопрос не отвечает.
+            for ((s0, e0) in splitByHostsLocked(f.start, f.end)) {
+                entries.add(
+                    Entry(
+                        id = nextId(),
+                        start = s0,
+                        end = e0,
+                        raw = "",
+                        title = f.title.trim(),
+                        category = f.category.trim(),
+                        client = f.client.trim(),
+                        useful = 0,
+                        source = "auto",
+                        synced = false,
+                        createdAt = nowMs,
+                        track = 1,
+                    )
                 )
-            )
+            }
             added++
         }
         if (added == 0) return@withLock 0
@@ -1390,8 +1476,8 @@ class ZasechkaStore(private val context: Context) {
             for (e in list) {
                 val end = if (e.open) now else e.end
                 append(dateFormat.format(Date(e.start))).append(',')
-                append(timeFormat.format(Date(e.start))).append(',')
-                append(timeFormat.format(Date(end))).append(',')
+                append(hm(timeFormat, e.start)).append(',')
+                append(hm(timeFormat, end)).append(',')
                 // id и parallel_of — по замечанию читателя файла, и он прав:
                 // «одинаковый старт плюс одинаковая заметка» это догадка, а
                 // не связь. Теперь связь названа номером.
@@ -1450,6 +1536,18 @@ class ZasechkaStore(private val context: Context) {
      * при отсчёте конца от его собственных суток давало минуту 0 и строку
      * длиной −1380 минут.
      */
+    /**
+     * Время строки печатается ОКРУГЛЁННЫМ до ближайшей минуты — до той самой,
+     * которую считает [dayMinutes]. Иначе выходило вот что: минуты брались
+     * округлением, а часы-минуты — усечением, и на половине стыков
+     * «время начала плюс minutes» не попадало в начало следующей строки.
+     * Читатель файла насчитал 107 таких разрывов на 291 стык, сто из них
+     * ровно в минуту, — и был прав: два округления от одного числа обязаны
+     * быть одним округлением. Проверено на 19 тысячах стыков: при усечении
+     * расходится 51%, при округлении — ноль.
+     */
+    private fun hm(fmt: SimpleDateFormat, ms: Long): String = fmt.format(Date(ms + 30_000L))
+
     private fun dayMinutes(start: Long, end: Long): Long {
         val base = dayStartMs(start)
         return (end - base + 30_000L) / 60_000L - (start - base + 30_000L) / 60_000L
@@ -1499,6 +1597,11 @@ class ZasechkaStore(private val context: Context) {
         #   minutes_parallel  минуты наложения. У основной строки пусто. Сумма — это
         #                     «сколько шло вторым слоем», к суткам не прибавляется.
         #   over              для параллельной строки: дело, поверх которого шла.
+        #                     Параллель режется по границам дел, поэтому лежит
+        #                     внутри своего носителя. Вылезти она может не
+        #                     больше чем на полминуты: резать мельче нельзя —
+        #                     обрезок короче этого лента считает мусором и
+        #                     выбрасывает, и минуты пропали бы.
         #   title             название дела словами владельца.
         #   category          категория из его списка.
         #   client            клиент/проект или собеседник звонка.
@@ -1531,9 +1634,8 @@ class ZasechkaStore(private val context: Context) {
      * в другом месте, а ссылка на носителя нужна и там: без неё две строки
      * с одинаковым временем связывает только догадка.
      */
-    fun hostOf(e: Entry, all: List<Entry>, now: Long): Entry? =
-        all.asSequence()
-            .filter { !it.parallel && it.source != GAP_SOURCE }
+    fun hostOf(e: Entry, all: List<Entry>, now: Long): Entry? {
+        fun best(pool: List<Entry>): Entry? = pool.asSequence()
             .map { m ->
                 val mEnd = if (m.open) now else m.end
                 val eEnd = if (e.open) now else e.end
@@ -1543,6 +1645,22 @@ class ZasechkaStore(private val context: Context) {
             .filter { it.second > 0 }
             .maxByOrNull { it.second }
             ?.first
+        val mains = all.filter { !it.parallel }
+        val span = (if (e.open) now else e.end) - e.start
+        val real = best(mains.filter { it.source != GAP_SOURCE })
+        // Настоящее дело в приоритете - но только если оно и правда носитель,
+        // то есть накрывает хотя бы половину параллели. Иначе «поверх чего»
+        // отвечало бы делом, задевшим её краем на секунду, а на деле она шла
+        // поверх неразмеченного - и честный ответ именно такой, а не пустая
+        // клетка и не первое подвернувшееся название.
+        if (real != null) {
+            val realEnd = if (real.open) now else real.end
+            val cover = (kotlin.math.min(realEnd, if (e.open) now else e.end) -
+                kotlin.math.max(real.start, e.start)).coerceAtLeast(0L)
+            if (cover * 2 >= span) return real
+        }
+        return best(mains) ?: real
+    }
 
     private fun overTitle(e: Entry, all: List<Entry>, now: Long): String =
         hostOf(e, all, now)?.title.orEmpty()
