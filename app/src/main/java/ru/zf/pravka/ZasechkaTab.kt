@@ -2151,6 +2151,7 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
     val days by app.phoneStore.daysFlow.collectAsState()
     val immersive by app.phoneStore.immersiveFlow.collectAsState()
     val audioApps by app.phoneStore.audioFlow.collectAsState()
+    val offApps by app.phoneStore.offFlow.collectAsState()
     val labels by app.phoneStore.labelsFlow.collectAsState()
     val categoryEntries by app.zasechkaStore.categoriesFlow.collectAsState()
     val categories = remember(categoryEntries) { categoryEntries.map { it.name } }
@@ -2345,6 +2346,69 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
                         app.appScope.launch { app.settings.setZCallCategory(c) }
                     })
                 }
+            }
+        }
+    }
+
+    // Список того, что пишется в ленту, — тумблерами, а не догадками по
+    // серому списку экранного времени. Выключенное приложение остаётся в
+    // списке со своей категорией: тумблер обратно — и оно снова пишется.
+    Spacer(Modifier.height(12.dp))
+    Text("Приложения в ленте", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "Их сессии ложатся параллельным треком поверх текущего дела. Тап по " +
+            "строке — категория и «звук в фоне».",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (immersive.isEmpty()) {
+        Text(
+            "Пока пусто — отметь приложение тапом в списке выше.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    for ((pkg, category) in immersive.entries.sortedBy { appLabelOf(labels, it.key).lowercase() }) {
+        val on = pkg !in offApps
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { editingApp = pkg }
+                .padding(vertical = 2.dp),
+        ) {
+            Switch(
+                checked = on,
+                onCheckedChange = { v -> app.appScope.launch { app.phoneStore.setTracked(pkg, v) } },
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    appLabelOf(labels, pkg),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (on) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    category.ifBlank { "без категории" } +
+                        (if (pkg in audioApps) " · звук в фоне" else ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+            IconButton(
+                onClick = { app.appScope.launch { app.phoneStore.forgetApp(pkg) } },
+                modifier = Modifier.size(30.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Clear,
+                    contentDescription = "убрать из списка",
+                    modifier = Modifier.size(15.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

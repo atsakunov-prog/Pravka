@@ -34,11 +34,18 @@ class PhoneStore(private val context: Context) {
         // First seed: the canonical attention eater. Everything else the
         // owner adds by tapping an app row in the tab. YouTube counts as
         // «Потери» (owner's call) - unnamed screen time is lost time.
+        // То, о чём договорились: ютуб, Слушалка, Телеграм, Клод. Категории
+        // здесь - предположение, а не приговор: меняются тапом по строке.
+        // Телеграм владелец добавил сам, хотя переписка поверх работы скорее
+        // ворует у неё внимание, чем добавляет; его решение, его лента.
         val DEFAULT_IMMERSIVE = mapOf(
             "com.google.android.youtube" to "Потери",
             "ru.zf.slushalka" to "Чтение",
+            "org.telegram.messenger" to "Социальное: внешнее",
+            "org.telegram.messenger.web" to "Социальное: внешнее",
+            "com.anthropic.claude" to "Систематизация",
         )
-        private const val IMMERSIVE_SEED_V = 3
+        private const val IMMERSIVE_SEED_V = 4
         // Слушалка - его собственная читалка книг: играет с погасшим экраном,
         // и по переднему плану её время не поймать вовсе.
         val DEFAULT_AUDIO = setOf("ru.zf.slushalka")
@@ -93,6 +100,10 @@ class PhoneStore(private val context: Context) {
     // погасшим экраном, и сессия приложения кончается на первом же гашении.
     // Такие ловятся по фоновой службе (см. PhoneSweeper).
     private var audio = LinkedHashSet<String>()
+    // Выключенные тумблером. Отдельно от immersive нарочно: выключить
+    // приложение и не потерять назначенную ему категорию - это две разные
+    // вещи, а удаление из карты стирало бы вторую вместе с первой.
+    private var offApps = LinkedHashSet<String>()
     private var labels = HashMap<String, String>()           // pkg -> human name
     private var state = SweepState()
 
@@ -102,6 +113,8 @@ class PhoneStore(private val context: Context) {
     val immersiveFlow: StateFlow<Map<String, String>> = _immersiveFlow
     private val _audioFlow = MutableStateFlow<Set<String>>(emptySet())
     val audioFlow: StateFlow<Set<String>> = _audioFlow
+    private val _offFlow = MutableStateFlow<Set<String>>(emptySet())
+    val offFlow: StateFlow<Set<String>> = _offFlow
     private val _labelsFlow = MutableStateFlow<Map<String, String>>(emptyMap())
     val labelsFlow: StateFlow<Map<String, String>> = _labelsFlow
 
@@ -127,6 +140,28 @@ class PhoneStore(private val context: Context) {
     suspend fun audioApps(): Set<String> = mutex.withLock {
         ensureLoaded()
         audio.toSet()
+    }
+
+    /** Приложения, которые пишутся в ленту прямо сейчас: назначены и не выключены. */
+    suspend fun trackedApps(): Map<String, String> = mutex.withLock {
+        ensureLoaded()
+        immersive.filterKeys { it !in offApps }
+    }
+
+    /** Тумблер строки: выключить, не теряя категорию. */
+    suspend fun setTracked(pkg: String, on: Boolean): Unit = mutex.withLock {
+        ensureLoaded()
+        if (on) offApps.remove(pkg) else offApps.add(pkg)
+        persist()
+    }
+
+    /** Убрать приложение из списка совсем. */
+    suspend fun forgetApp(pkg: String): Unit = mutex.withLock {
+        ensureLoaded()
+        immersive.remove(pkg)
+        audio.remove(pkg)
+        offApps.remove(pkg)
+        persist()
     }
 
     /** «Звук в фоне»: считать по фоновой службе, а не по переднему плану. */
@@ -236,6 +271,12 @@ class PhoneStore(private val context: Context) {
                 }
                 persistQueued()
             }
+            offApps = LinkedHashSet()
+            root?.optJSONArray("offApps")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    arr.optString(i).takeIf { it.isNotBlank() }?.let { offApps.add(it) }
+                }
+            }
             audio = LinkedHashSet()
             root?.optJSONArray("audio")?.let { arr ->
                 for (i in 0 until arr.length()) {
@@ -265,6 +306,7 @@ class PhoneStore(private val context: Context) {
         _daysFlow.value = days.toMap()
         _immersiveFlow.value = immersive.toMap()
         _audioFlow.value = audio.toSet()
+        _offFlow.value = offApps.toSet()
         _labelsFlow.value = labels.toMap()
     }
 
@@ -291,6 +333,7 @@ class PhoneStore(private val context: Context) {
         put("carryAudioAt", state.carryAudioAt)
         put("immersive", JSONObject(immersive.toMap()))
         put("audio", org.json.JSONArray(audio.toList()))
+        put("offApps", org.json.JSONArray(offApps.toList()))
         put("labels", JSONObject(labels.toMap()))
         put(
             "days",

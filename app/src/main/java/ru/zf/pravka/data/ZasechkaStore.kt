@@ -55,7 +55,10 @@ class ZasechkaStore(private val context: Context) {
         // normalized and immutable in practice, so the pass stops looking at it
         // - otherwise the work grows with every logged day (and the owner's
         // symptom was exactly "the longer it runs, the worse the fold").
-        private const val NORMALIZE_WINDOW_MS = 5 * 86_400_000L
+        // Владелец: десять дней, не пять. Правит он и задним числом, и через
+        // неделю после события - за пределами окна лента уже не чинится, и
+        // короткое окно молча оставляло бы наложения в позавчерашнем дне.
+        private const val NORMALIZE_WINDOW_MS = 10 * 86_400_000L
         // Undo: a mutation snapshots the recent slice of the ribbon, so one
         // press puts back exactly what was there - including entries a voice
         // "удали обед" removed. Two days is far more than any single edit
@@ -996,7 +999,7 @@ class ZasechkaStore(private val context: Context) {
      * Всё уходит ТОЛЬКО во второй трек, и это не лень, а осторожность:
      * прошлые дни уже сложились в свои 24 часа, и класть туда строки основной
      * ленты значило бы переписывать прожитое. Вдобавок нормализация не
-     * заглядывает дальше пяти суток (NORMALIZE_WINDOW_MS), так что дыры и
+     * заглядывает дальше десяти суток (NORMALIZE_WINDOW_MS), так что дыры и
      * наложения в старом дне просто некому починить - а параллельному треку
      * чинить нечего: он ни у кого ничего не отнимает и в сутки не входит.
      *

@@ -139,7 +139,9 @@ class PhoneSweeper(
         }
 
         val excluded = excludedPackages()
-        val immersive = phoneStore.immersiveMap()
+        // Только включённые тумблером: выключенное приложение сохраняет свою
+        // категорию, но в ленту не идёт.
+        val immersive = phoneStore.trackedApps()
         val audioApps = phoneStore.audioApps()
         val immersiveMinMs = settings.zImmersiveMinFlow.first() * 60_000L
         val candidates = ArrayList<Candidate>()
@@ -528,7 +530,7 @@ class PhoneSweeper(
         val now = System.currentTimeMillis()
         val from = now - days * 86_400_000L
         val sources = ArrayList<RetroSource>()
-        val immersive = runCatching { phoneStore.immersiveMap() }.getOrDefault(emptyMap())
+        val immersive = runCatching { phoneStore.trackedApps() }.getOrDefault(emptyMap())
         var appsFrom = 0L
         var callsFrom = 0L
 

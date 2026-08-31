@@ -142,17 +142,29 @@ class ZasechkaEngine(
                     // «Параллельно слушаю Акунина» — только второй трек:
                     // основное дело как шло, так и идёт, и минут не теряет.
                     p.action == "parallel" -> {
-                        val span = said.closedPast(now)
                         val title = p.title.ifBlank { fallbackTitle(text) }
                         val category = canonicalCategory(p.category, categoryNames)
                         val client = canonicalClient(p.client, clients)
-                        val entry = if (span != null) {
-                            store.insertParallel(
+                        // «Ой, пока был в туалете, смотрел ютуб» — параллель к
+                        // УЖЕ ЗАПИСАННОМУ делу: границы берутся у него, а не у
+                        // часов. Целиком по цепочке: дело могло быть разрезано.
+                        val over = target?.let { expandChain(it, today) }
+                        val span = said.closedPast(now)
+                        val entry = when {
+                            // Дело ещё идёт — параллель тоже открытая, с его начала.
+                            over != null && over.last().open -> store.startParallel(
+                                start = over.first().start, raw = text,
+                                title = title, category = category, client = client, source = source,
+                            )
+                            over != null -> store.insertParallel(
+                                start = over.first().start, end = over.last().end, raw = text,
+                                title = title, category = category, client = client, source = source,
+                            )
+                            span != null -> store.insertParallel(
                                 start = span.first, end = span.second, raw = text,
                                 title = title, category = category, client = client, source = source,
                             )
-                        } else {
-                            store.startParallel(
+                            else -> store.startParallel(
                                 start = said.start ?: now, raw = text,
                                 title = title, category = category, client = client, source = source,
                             )
@@ -163,7 +175,10 @@ class ZasechkaEngine(
                                 error = "Параллель не записалась", action = "none",
                             )
                         } else {
-                            eventLog.add("засечка ∥ «${entry.title}» [${entry.category.ifBlank { "без категории" }}]")
+                            eventLog.add(
+                                "засечка ∥ «${entry.title}» [${entry.category.ifBlank { "без категории" }}]" +
+                                    (over?.let { " поверх «${it.first().title}»" } ?: "")
+                            )
                             sync.kickSoon(scope)
                             Outcome(entry, categorized = true, error = null, action = "parallel")
                         }
