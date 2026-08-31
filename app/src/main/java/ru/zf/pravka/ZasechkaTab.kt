@@ -261,6 +261,44 @@ private data class DayUnit(
     fun totalMin(now: Long): Long = msToMin(fragments.sumOf { it.durationMs(now) })
 }
 
+/**
+ * Один источник параллели внутри дела: все звонки одной строкой, весь ютуб
+ * одной, весь Клод одной. Иначе час готовки с ютубом и тремя звонками даёт в
+ * ленте пять строк мелочи — владелец назвал это мусором, и он прав: важно
+ * «сколько всего», а не каждый заход.
+ */
+private data class ParallelGroup(
+    val key: String,
+    val title: String,
+    val category: String,
+    val entries: List<ZasechkaStore.Entry>,
+) {
+    val open: Boolean get() = entries.any { it.open }
+    fun ms(now: Long): Long = entries.sumOf { it.durationMs(now) }
+    /** Собеседники у звонков, приписка к названию: «Звонки ×3 · Мама, Петя». */
+    val clients: String
+        get() = entries.mapNotNull { it.client.takeIf { c -> c.isNotBlank() } }
+            .distinct().take(3).joinToString(", ")
+}
+
+/** Звонки сворачиваются все вместе — собеседник уходит в приписку. */
+private fun parallelKey(e: ZasechkaStore.Entry): String =
+    if (e.title.trimStart().startsWith("звонок", ignoreCase = true)) "звонок"
+    else e.title.trim().lowercase() + "|" + e.category.trim().lowercase()
+
+private fun groupParallels(list: List<ZasechkaStore.Entry>): List<ParallelGroup> =
+    list.groupBy { parallelKey(it) }
+        .map { (key, group) ->
+            val head = group.first()
+            ParallelGroup(
+                key = key,
+                title = if (key == "звонок") "Звонки" else capFirst(head.title.ifBlank { "без названия" }),
+                category = head.category,
+                entries = group.sortedBy { it.start },
+            )
+        }
+        .sortedByDescending { g -> g.entries.sumOf { it.durationMs() } }
+
 private fun entrySig(e: ZasechkaStore.Entry): String =
     "${e.title.trim().lowercase()}|${e.category.trim().lowercase()}|${e.client.trim().lowercase()}"
 
@@ -1182,14 +1220,25 @@ private fun ChainBlock(
             // старые записи остаются в данных и в выгрузках.
             //
             // А вот второй трек рисуется — потому что он ничего не отнял.
-            // Строка идёт правее и со знаком «∥»: это шло ОДНОВРЕМЕННО с
-            // делом, и Σ дела выше от неё не уменьшилась.
-            for (pr in unit.parallels) {
+            // Одной строкой на источник: все звонки вместе, весь ютуб вместе,
+            // весь Клод вместе. Иначе час готовки с ютубом и тремя звонками
+            // давал бы пять строк мелочи. Тап разворачивает свёртку в
+            // отдельные заходы — если понадобилось, кто именно звонил и когда.
+            var opened by remember(head.id) { mutableStateOf(emptySet<String>()) }
+            for (g in groupParallels(unit.parallels)) {
+                val ms = g.ms(now)
+                val many = g.entries.size > 1
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onEditInterruption(pr) }
+                        .clickable {
+                            if (many) {
+                                opened = if (g.key in opened) opened - g.key else opened + g.key
+                            } else {
+                                onEditInterruption(g.entries.first())
+                            }
+                        }
                         .padding(start = 8.dp, top = 2.dp, bottom = 2.dp),
                 ) {
                     Text(
@@ -1200,8 +1249,8 @@ private fun ChainBlock(
                     )
                     Column(Modifier.weight(1f)) {
                         Text(
-                            capFirst(pr.title.ifBlank { pr.raw.take(60) }) +
-                                (if (pr.client.isNotBlank()) " · ${pr.client}" else ""),
+                            g.title + (if (many) " ×${g.entries.size}" else "") +
+                                (if (g.clients.isNotBlank()) " · ${g.clients}" else ""),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -1209,30 +1258,64 @@ private fun ChainBlock(
                         )
                         Spacer(Modifier.height(2.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            CategoryTag(pr.category)
+                            CategoryTag(g.category)
                             DotSep()
                             Text(
-                                fmtDur(pr.durationMin(now)) + (if (pr.open) " …" else ""),
+                                fmtDur(msToMin(ms)) + (if (g.open) " …" else ""),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                             )
-                            val pts = pointsOf(worthOf(pr.category), pr.durationMs(now))
+                            val pts = pointsOf(worthOf(g.category), ms)
                             if (pts != 0) {
                                 DotSep()
                                 PointsChip(pts)
                             }
                         }
                     }
-                    if (pr.open) {
+                    if (g.open) {
                         IconButton(
-                            onClick = { onStopParallel(pr) },
+                            onClick = { onStopParallel(g.entries.last { it.open }) },
                             modifier = Modifier.size(30.dp),
                         ) {
                             Box(
                                 Modifier
                                     .size(11.dp)
                                     .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp)),
+                            )
+                        }
+                    }
+                }
+                // Развёрнутая свёртка: заходы по одному, каждый правится сам.
+                if (g.key in opened) {
+                    for (pr in g.entries) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onEditInterruption(pr) }
+                                .padding(start = 30.dp, top = 1.dp, bottom = 1.dp),
+                        ) {
+                            Text(
+                                fmtTime(pr.start) + "–" + (if (pr.open) "…" else fmtTime(pr.end)),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(92.dp),
+                            )
+                            Text(
+                                fmtDur(pr.durationMin(now)),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(56.dp),
+                            )
+                            Text(
+                                capFirst(pr.title.ifBlank { "—" }) +
+                                    (if (pr.client.isNotBlank()) " · ${pr.client}" else ""),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
                             )
                         }
                     }
@@ -2067,6 +2150,7 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
     val context = LocalContext.current
     val days by app.phoneStore.daysFlow.collectAsState()
     val immersive by app.phoneStore.immersiveFlow.collectAsState()
+    val audioApps by app.phoneStore.audioFlow.collectAsState()
     val labels by app.phoneStore.labelsFlow.collectAsState()
     val categoryEntries by app.zasechkaStore.categoriesFlow.collectAsState()
     val categories = remember(categoryEntries) { categoryEntries.map { it.name } }
@@ -2286,11 +2370,15 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         ImmersiveAppDialog(
             label = appLabelOf(labels, pkg),
             currentCategory = immersive[pkg],
+            currentAudio = pkg in audioApps,
             categories = categories,
             onDismiss = { editingApp = null },
-            onSave = { category ->
+            onSave = { category, audio ->
                 editingApp = null
-                app.appScope.launch { app.phoneStore.setImmersive(pkg, category) }
+                app.appScope.launch {
+                    app.phoneStore.setImmersive(pkg, category)
+                    app.phoneStore.setAudio(pkg, audio)
+                }
             },
         )
     }
@@ -2484,12 +2572,14 @@ private fun RetroDialog(app: PravkaApp, categories: List<String>, onDismiss: () 
 private fun ImmersiveAppDialog(
     label: String,
     currentCategory: String?,
+    currentAudio: Boolean,
     categories: List<String>,
     onDismiss: () -> Unit,
-    onSave: (String?) -> Unit,
+    onSave: (String?, Boolean) -> Unit,
 ) {
     var enabled by remember { mutableStateOf(currentCategory != null) }
     var category by remember { mutableStateOf(currentCategory ?: "Отдых") }
+    var audio by remember { mutableStateOf(currentAudio) }
     var menu by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2498,9 +2588,10 @@ private fun ImmersiveAppDialog(
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Пожиратель внимания", style = MaterialTheme.typography.bodyMedium)
+                        Text("Писать в ленту", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "Сессия в этом приложении сама прерывает текущее дело и встаёт в ленту",
+                            "Сессия в этом приложении встаёт параллельным треком поверх " +
+                                "текущего дела и ничего у него не отнимает",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -2508,6 +2599,21 @@ private fun ImmersiveAppDialog(
                     Switch(checked = enabled, onCheckedChange = { enabled = it })
                 }
                 if (enabled) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Звук в фоне", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "Для аудиокниг, подкастов и музыки: время считается по " +
+                                    "фоновой службе, а не по переднему плану — книга играет " +
+                                    "с погасшим экраном, и иначе её не поймать вовсе",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(checked = audio, onCheckedChange = { audio = it })
+                    }
+                    Spacer(Modifier.height(8.dp))
                     Box {
                         OutlinedButton(onClick = { menu = true }) { Text("Категория: $category") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -2520,7 +2626,9 @@ private fun ImmersiveAppDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onSave(if (enabled) category else null) }) { Text("Сохранить") }
+            Button(onClick = { onSave(if (enabled) category else null, enabled && audio) }) {
+                Text("Сохранить")
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     )

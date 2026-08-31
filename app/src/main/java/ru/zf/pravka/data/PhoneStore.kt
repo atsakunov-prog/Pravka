@@ -34,8 +34,14 @@ class PhoneStore(private val context: Context) {
         // First seed: the canonical attention eater. Everything else the
         // owner adds by tapping an app row in the tab. YouTube counts as
         // «Потери» (owner's call) - unnamed screen time is lost time.
-        val DEFAULT_IMMERSIVE = mapOf("com.google.android.youtube" to "Потери")
-        private const val IMMERSIVE_SEED_V = 2
+        val DEFAULT_IMMERSIVE = mapOf(
+            "com.google.android.youtube" to "Потери",
+            "ru.zf.slushalka" to "Чтение",
+        )
+        private const val IMMERSIVE_SEED_V = 3
+        // Слушалка - его собственная читалка книг: играет с погасшим экраном,
+        // и по переднему плану её время не поймать вовсе.
+        val DEFAULT_AUDIO = setOf("ru.zf.slushalka")
     }
 
     /** One day of phone life, everything additive. */
@@ -70,13 +76,23 @@ class PhoneStore(private val context: Context) {
         val lastCallSweep: Long = 0,
         val carryPkg: String = "",
         val carryPkgStartedAt: Long = 0,   // real session start (for immersive spans)
-        val carryScreenOnAt: Long = 0,     // 0 = screen was off
+        val carryScreenOnAt: Long = 0,
+        // Фоновая служба «слушающего» приложения, начатая и ещё не
+        // остановленная: книга играет через тик службы и через смерть
+        // процесса, и span закрывается только по настоящему стопу.
+        val carryAudioPkg: String = "",
+        val carryAudioAt: Long = 0,     // 0 = screen was off
     )
 
     private val mutex = Mutex()
     private var loaded = false
     private var days = LinkedHashMap<String, Day>()
     private var immersive = LinkedHashMap<String, String>()  // pkg -> category
+    // Приложения, которые СЛУШАЮТ, а не смотрят: аудиокниги, подкасты,
+    // музыка. Их время нельзя считать по переднему плану - книга играет с
+    // погасшим экраном, и сессия приложения кончается на первом же гашении.
+    // Такие ловятся по фоновой службе (см. PhoneSweeper).
+    private var audio = LinkedHashSet<String>()
     private var labels = HashMap<String, String>()           // pkg -> human name
     private var state = SweepState()
 
@@ -84,6 +100,8 @@ class PhoneStore(private val context: Context) {
     val daysFlow: StateFlow<Map<String, Day>> = _daysFlow
     private val _immersiveFlow = MutableStateFlow<Map<String, String>>(emptyMap())
     val immersiveFlow: StateFlow<Map<String, String>> = _immersiveFlow
+    private val _audioFlow = MutableStateFlow<Set<String>>(emptySet())
+    val audioFlow: StateFlow<Set<String>> = _audioFlow
     private val _labelsFlow = MutableStateFlow<Map<String, String>>(emptyMap())
     val labelsFlow: StateFlow<Map<String, String>> = _labelsFlow
 
@@ -103,6 +121,18 @@ class PhoneStore(private val context: Context) {
     suspend fun setImmersive(pkg: String, category: String?): Unit = mutex.withLock {
         ensureLoaded()
         if (category.isNullOrBlank()) immersive.remove(pkg) else immersive[pkg] = category
+        persist()
+    }
+
+    suspend fun audioApps(): Set<String> = mutex.withLock {
+        ensureLoaded()
+        audio.toSet()
+    }
+
+    /** «Звук в фоне»: считать по фоновой службе, а не по переднему плану. */
+    suspend fun setAudio(pkg: String, on: Boolean): Unit = mutex.withLock {
+        ensureLoaded()
+        if (on) audio.add(pkg) else audio.remove(pkg)
         persist()
     }
 
@@ -198,8 +228,20 @@ class PhoneStore(private val context: Context) {
                 if (immersive["com.google.android.youtube"] == "Отдых") {
                     immersive["com.google.android.youtube"] = "Потери"
                 }
+                // Seed v3: Слушалка. Книга в наушниках — второй трек по
+                // определению, и без категории её время легло бы безымянным.
+                // Рука владельца сильнее: уже назначенное не трогаем.
+                for ((pkg, category) in DEFAULT_IMMERSIVE) {
+                    if (!immersive.containsKey(pkg)) immersive[pkg] = category
+                }
                 persistQueued()
             }
+            audio = LinkedHashSet()
+            root?.optJSONArray("audio")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    arr.optString(i).takeIf { it.isNotBlank() }?.let { audio.add(it) }
+                }
+            } ?: run { audio.addAll(DEFAULT_AUDIO) }
             labels = HashMap()
             root?.optJSONObject("labels")?.let { m ->
                 for (key in m.keys()) m.optString(key).takeIf { it.isNotBlank() }?.let { labels[key] = it }
@@ -210,6 +252,8 @@ class PhoneStore(private val context: Context) {
                 carryPkg = root?.optString("carryPkg").orEmpty(),
                 carryPkgStartedAt = root?.optLong("carryPkgStartedAt") ?: 0,
                 carryScreenOnAt = root?.optLong("carryScreenOnAt") ?: 0,
+                carryAudioPkg = root?.optString("carryAudioPkg").orEmpty(),
+                carryAudioAt = root?.optLong("carryAudioAt") ?: 0,
             )
             if (root == null) persistQueued()
         }
@@ -220,6 +264,7 @@ class PhoneStore(private val context: Context) {
     private fun publish() {
         _daysFlow.value = days.toMap()
         _immersiveFlow.value = immersive.toMap()
+        _audioFlow.value = audio.toSet()
         _labelsFlow.value = labels.toMap()
     }
 
@@ -242,7 +287,10 @@ class PhoneStore(private val context: Context) {
         put("carryPkg", state.carryPkg)
         put("carryPkgStartedAt", state.carryPkgStartedAt)
         put("carryScreenOnAt", state.carryScreenOnAt)
+        put("carryAudioPkg", state.carryAudioPkg)
+        put("carryAudioAt", state.carryAudioAt)
         put("immersive", JSONObject(immersive.toMap()))
+        put("audio", org.json.JSONArray(audio.toList()))
         put("labels", JSONObject(labels.toMap()))
         put(
             "days",

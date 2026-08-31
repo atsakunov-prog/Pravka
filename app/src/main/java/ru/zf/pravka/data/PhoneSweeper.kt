@@ -57,6 +57,10 @@ class PhoneSweeper(
         // Ретро-скан: ключ строки «все звонки» и нижний порог сессии.
         const val CALLS_KEY = "\u0000calls"
         private const val RETRO_MIN_SESSION_MS = 2 * 60_000L
+        // Висящий хвост фоновой службы: служба могла умереть без события.
+        private const val AUDIO_CARRY_CAP_MS = 24L * 3600 * 1000
+        // Пауза короче этого - тот же сеанс слушания.
+        private const val AUDIO_GAP_MS = 5 * 60_000L
 
         /** The special "Доступ к статистике использования" toggle. */
         fun hasUsageAccess(context: Context): Boolean {
@@ -136,8 +140,23 @@ class PhoneSweeper(
 
         val excluded = excludedPackages()
         val immersive = phoneStore.immersiveMap()
+        val audioApps = phoneStore.audioApps()
         val immersiveMinMs = settings.zImmersiveMinFlow.first() * 60_000L
         val candidates = ArrayList<Candidate>()
+        // «Слушающие» приложения (аудиокниги, подкасты, музыка) считаются по
+        // ФОНОВОЙ СЛУЖБЕ, а не по переднему плану: книга играет с погасшим
+        // экраном, и сессия приложения кончается на первом же гашении - её
+        // время не поймать вовсе. Служба живёт ровно столько, сколько идёт
+        // воспроизведение, и это единственный честный источник.
+        var audioPkg = st.carryAudioPkg.takeIf { it.isNotBlank() }
+        var audioAt = st.carryAudioAt
+        // Служба могла умереть без события (приложение убили) - висящий
+        // хвост старше суток бросаем, иначе он не закроется никогда.
+        if (audioPkg != null && now - audioAt > AUDIO_CARRY_CAP_MS) {
+            audioPkg = null
+            audioAt = 0
+        }
+        val audioSpans = ArrayList<Candidate>()
 
         // Carry-in: a session/screen still open when the last sweep ended.
         // Aggregation resumes from `begin` (time before it is already
@@ -163,7 +182,9 @@ class PhoneSweeper(
                 val d = delta(currentStartedAt)
                 d.appSessions[pkg] = (d.appSessions[pkg] ?: 0) + 1
             }
-            if (immersive.containsKey(pkg) && span >= immersiveMinMs) {
+            // Слушающее приложение в ленту по переднему плану не идёт: его
+            // время придёт из фоновой службы, и две дороги дали бы дубль.
+            if (immersive.containsKey(pkg) && pkg !in audioApps && span >= immersiveMinMs) {
                 candidates.add(Candidate(pkg, currentStartedAt, at))
             }
         }
@@ -187,6 +208,23 @@ class PhoneSweeper(
                     if (event.packageName == currentPkg) {
                         currentPkg?.let { closeSession(it, ts) }
                         currentPkg = null
+                    }
+                }
+                UsageEvents.Event.FOREGROUND_SERVICE_START -> {
+                    val pkg = event.packageName ?: continue
+                    // Событие есть с Android 10; на девятке его просто не
+                    // будет, и слушающие приложения останутся без времени.
+                    if (pkg in audioApps && audioPkg == null) {
+                        audioPkg = pkg
+                        audioAt = ts
+                    }
+                }
+                UsageEvents.Event.FOREGROUND_SERVICE_STOP -> {
+                    val pkg = event.packageName ?: continue
+                    if (pkg == audioPkg) {
+                        if (ts - audioAt >= MIN_SESSION_MS) audioSpans.add(Candidate(pkg, audioAt, ts))
+                        audioPkg = null
+                        audioAt = 0
                     }
                 }
                 UsageEvents.Event.SCREEN_INTERACTIVE -> {
@@ -243,6 +281,8 @@ class PhoneSweeper(
                 carryPkg = currentPkg.orEmpty(),
                 carryPkgStartedAt = if (currentPkg != null) currentStartedAt else 0L,
                 carryScreenOnAt = screenOnAt,
+                carryAudioPkg = audioPkg.orEmpty(),
+                carryAudioAt = if (audioPkg != null) audioAt else 0L,
             ),
         )
 
@@ -255,6 +295,10 @@ class PhoneSweeper(
         // потеря» перестало быть проблемой, потому что готовка остаётся
         // готовкой. Если время было ничьё, факт идёт обычной строкой.
         // Сон выше - отдельно, он занимает время по-настоящему.
+        // Пауза и продолжение через минуту - одно слушание, а не два: рвать
+        // книгу на куски по каждому светофору незачем. В ленту идут только
+        // те, кому назначена категория, - как и у пожирателей.
+        candidates.addAll(mergeSpans(audioSpans).filter { immersive.containsKey(it.pkg) })
         val insertsOn = settings.zParallelAutoFlow.first()
         val allLabels = knownLabels + newLabels
         candidates.sortBy { it.start }
@@ -421,6 +465,21 @@ class PhoneSweeper(
             pkg.contains("incallui", ignoreCase = true) ||
             pkg.contains("telecom", ignoreCase = true)
 
+    /** Склеивает соседние куски одного приложения, если пауза между ними мала. */
+    private fun mergeSpans(spans: List<Candidate>): List<Candidate> {
+        if (spans.size < 2) return spans
+        val out = ArrayList<Candidate>()
+        for (c in spans.sortedWith(compareBy({ it.pkg }, { it.start }))) {
+            val last = out.lastOrNull()
+            if (last != null && last.pkg == c.pkg && c.start - last.end <= AUDIO_GAP_MS) {
+                out[out.size - 1] = last.copy(end = max(last.end, c.end))
+            } else {
+                out.add(c)
+            }
+        }
+        return out
+    }
+
     private fun appLabel(pkg: String): String? = runCatching {
         val pm = context.packageManager
         pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
@@ -476,6 +535,7 @@ class PhoneSweeper(
         val usm = context.getSystemService(UsageStatsManager::class.java)
         if (hasUsageAccess(context) && usm != null) {
             val excluded = excludedPackages()
+            val audioApps = phoneStore.audioApps()
             // Порог сессии его же, из настроек, но не мельче двух минут:
             // ретро-скан поднимает недели, и минутные заглядывания в ленту
             // превратились бы в кашу.
@@ -484,11 +544,16 @@ class PhoneSweeper(
             var currentPkg: String? = null
             var startedAt = 0L
             fun close(pkg: String, at: Long) {
-                if (isExcluded(pkg, excluded)) return
+                // Слушающее приложение считается по фоновой службе ниже:
+                // передний план у книги почти пуст, экран же погашен.
+                if (isExcluded(pkg, excluded) || pkg in audioApps) return
                 if (at - startedAt >= minMs) {
                     spans.getOrPut(pkg) { ArrayList() }.add(startedAt to at)
                 }
             }
+            // Фоновые службы слушающих приложений: пара «старт — стоп».
+            val audioOpen = HashMap<String, Long>()
+            val audioSpans = ArrayList<Candidate>()
             val events = usm.queryEvents(from, now)
             val event = UsageEvents.Event()
             while (events.hasNextEvent()) {
@@ -511,11 +576,24 @@ class PhoneSweeper(
                         }
                     }
                     // Экран погас - смотреть больше нечего, сессия кончилась.
+                    // Слушать при этом можно, и это ловится службой ниже.
                     UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
                         currentPkg?.let { close(it, ts) }
                         currentPkg = null
                     }
+                    UsageEvents.Event.FOREGROUND_SERVICE_START -> {
+                        val pkg = event.packageName ?: continue
+                        if (pkg in audioApps && !audioOpen.containsKey(pkg)) audioOpen[pkg] = ts
+                    }
+                    UsageEvents.Event.FOREGROUND_SERVICE_STOP -> {
+                        val pkg = event.packageName ?: continue
+                        val from = audioOpen.remove(pkg) ?: continue
+                        if (ts - from >= MIN_SESSION_MS) audioSpans.add(Candidate(pkg, from, ts))
+                    }
                 }
+            }
+            for (c in mergeSpans(audioSpans)) {
+                spans.getOrPut(c.pkg) { ArrayList() }.add(c.start to c.end)
             }
             val known = phoneStore.labelsFlow.value
             for ((pkg, list) in spans) {
