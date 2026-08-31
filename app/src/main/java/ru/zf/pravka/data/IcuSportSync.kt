@@ -32,6 +32,9 @@ class IcuSportSync(
 ) {
 
     companion object {
+        /** Потолок длительности одной тренировки: забытые часы дальше врут. */
+        private const val MAX_WORKOUT_S = 12 * 3_600L
+
         private const val PERIOD_MS = 30 * 60_000L
         private const val DEEP_PERIOD_MS = 24 * 3_600_000L
         private const val SHALLOW_DAYS = 10
@@ -199,7 +202,7 @@ class IcuSportSync(
                     start = start,
                     type = a.optString("type"),
                     name = a.optString("name").ifBlank { a.optString("type") },
-                    seconds = a.optLong("elapsed_time", 0).takeIf { it > 0 } ?: movingSeconds,
+                    seconds = saneSeconds(a.optLong("elapsed_time", 0), movingSeconds),
                     movingSeconds = movingSeconds,
                     distanceM = distance,
                     elevationM = a.optDouble("total_elevation_gain", 0.0),
@@ -660,4 +663,23 @@ class IcuSportSync(
 
     private fun dayString(at: Long): String =
         SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(at))
+    /**
+     * Часы забывают остановить, и intervals.icu честно отдаёт elapsed_time
+     * таким, какой он есть. У владельца в ленте лежало «Вело — 10471 минута»,
+     * то есть семь суток на велосипеде; прогулка по Ла-Рошели с незакрытой
+     * записью весила 488 минут вместо реальной ходьбы.
+     *
+     * Elapsed сам по себе честнее moving: кофе посреди покатушки — часть
+     * покатушки. Поэтому берём его, пока он правдоподобен — не больше чем
+     * втрое дольше времени в движении. Дальше это уже не тренировка, а
+     * забытые часы, и там вернее moving. Сверху жёсткий потолок: двенадцать
+     * часов — предел того, что владелец может провести на ногах или в седле,
+     * а всё, что длиннее, в любом случае мусор, и в ленту его пускать нельзя.
+     */
+    private fun saneSeconds(elapsed: Long, moving: Long): Long = when {
+        elapsed <= 0L -> moving.coerceAtMost(MAX_WORKOUT_S)
+        moving > 0L && elapsed > moving * 3 -> moving.coerceAtMost(MAX_WORKOUT_S)
+        else -> elapsed.coerceAtMost(MAX_WORKOUT_S)
+    }
+
 }

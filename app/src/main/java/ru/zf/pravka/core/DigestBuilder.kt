@@ -5,6 +5,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.data.FoodStore
 import ru.zf.pravka.data.PlanStore
@@ -334,32 +335,69 @@ class DigestBuilder(
      * комментарии — одним файлом, строка на событие, хронологически.
      * Владелец так и сказал: «фактически вся моя жизнь, всеобъемлющий файл».
      *
-     * Колонки нарочно одни на все домены: date,time,domain,name,detail,note.
-     * Числа живут внутри detail строкой — файл кормят Клоду и открывают
-     * глазами, а не сводят в Excel формулами; для формул есть выгрузки
-     * Засечки и Еды по отдельности.
+     * ПОЧЕМУ ФАЙЛ ПЕРЕДЕЛАН. Владелец скормил его модели, и та разнесла — по
+     * делу. Файл выглядел как таблица минут, а таблицей минут не был:
+     * «Укладывание детей 28 мин» и «программирую засечку 27 мин» с одним
+     * стартом давали 55 минут там, где прошло 28; звонки, Телеграм и ютуб
+     * ложились поверх ручных блоков и раздували сутки до 1805 минут. Модель
+     * сделала единственно возможный вывод — «данные переписались задним
+     * числом» — и была неправа: лента цела, основной трек по-прежнему
+     * сходится в 1440. Врал не таймшит, врала ВЫГРУЗКА: она не говорила, что
+     * слоёв два, а домены «тренировка» и «еда» — это пометки на том же
+     * времени, а не время сверх него.
+     *
+     * Поэтому у файла теперь есть легенда и четыре машинные колонки: id,
+     * parallel_of, source и budget. Складывать можно ровно одну колонку —
+     * minutes при budget=1, — и она даёт сутки.
      */
     suspend fun lifeCsvIntent(): android.content.Intent = withContext(Dispatchers.IO) {
         loadAll()
+        // Тот же тумблер, что у выгрузки Засечки: файл уходит и туда, где
+        // объяснять формат некому.
+        val withParallel = settings.csvParallelFlow.first()
         val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
         fun cell(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
-        data class Row(val ts: Long, val domain: String, val name: String, val detail: String, val note: String)
+        data class Row(
+            val ts: Long,
+            val domain: String,
+            val name: String,
+            val detail: String,
+            val note: String,
+            val id: String,
+            val parallelOf: String = "",
+            val source: String = "manual",
+            val budget: Boolean = false,
+            val minutes: Long = 0L,
+        )
         val rows = mutableListOf<Row>()
 
-        for (e in zasechka.entriesFlow.value.filterNot { it.open }) {
+        val nowMs = System.currentTimeMillis()
+        val ribbon = zasechka.entriesFlow.value
+        for (e in ribbon.filterNot { it.open || (it.parallel && !withParallel) }) {
+            val host = if (e.parallel) zasechka.hostOf(e, ribbon, nowMs) else null
             rows.add(
                 Row(
                     ts = e.start,
-                    domain = "таймшит",
+                    domain = if (e.parallel) "таймшит∥" else "таймшит",
                     name = e.title.ifBlank { e.category.ifBlank { "без названия" } },
                     detail = listOfNotNull(
                         e.category.takeIf { it.isNotBlank() },
                         "${e.durationMin()} мин",
                         e.client.takeIf { it.isNotBlank() },
+                        host?.let { "поверх «${it.title}»" },
                     ).joinToString(" · "),
                     // КБЖУ-хвост, дописанный едой к записи ленты, в CSV не
                     // нужен: те же приёмы лежат рядом строками домена «еда».
                     note = e.raw.substringBefore("\nКБЖУ:").trim(),
+                    id = "t${e.id}",
+                    parallelOf = host?.let { "t${it.id}" }.orEmpty(),
+                    source = zasechka.sourceKind(e),
+                    // Единственный домен, который ЗАНИМАЕТ время суток, и то
+                    // только основным треком. Минуты берутся те же, что в
+                    // выгрузке Засечки, — разностью минут суток, иначе день из
+                    // сорока строк приезжает мимо 1440 на пару минут.
+                    budget = !e.parallel,
+                    minutes = if (e.parallel) e.durationMin() else zasechka.budgetMinutes(e, nowMs),
                 )
             )
         }
@@ -371,6 +409,7 @@ class DigestBuilder(
                     name = m.kind.ifBlank { "приём" },
                     detail = m.shortList + " · ${m.kcal} ккал · Б${m.protein} Ж${m.fat} У${m.carbs}",
                     note = m.raw,
+                    id = "f${m.ts}",
                 )
             )
         }
@@ -390,6 +429,9 @@ class DigestBuilder(
                         if (w.feel > 0) "самочувствие ${w.feel}/5" else null,
                     ).joinToString(" · "),
                     note = "",
+                    id = "w${w.id.ifBlank { w.start.toString() }}",
+                    source = "auto",
+                    minutes = w.minutes,
                 )
             )
         }
@@ -403,6 +445,8 @@ class DigestBuilder(
                         (if (s.feel in 1..5) " · самочувствие ${s.feel}/5" else "") +
                         (if (s.minutes > 0) " · ${s.minutes} мин" else ""),
                     note = s.note,
+                    id = "s${s.date}",
+                    minutes = s.minutes.toLong(),
                 )
             )
         }
@@ -415,18 +459,25 @@ class DigestBuilder(
                     // Проза дня — только в note; detail держит структуру.
                     detail = g.line(withNote = false).removePrefix("Зарядка: "),
                     note = g.note,
+                    id = "g${g.date}",
                 )
             )
         }
         for (r in strength.rawFlow.value.filter { it.kind == "comment" }) {
-            rows.add(Row(r.ts, "комментарий", "к тренировке", r.text, ""))
+            rows.add(Row(r.ts, "комментарий", "к тренировке", r.text, "", "c${r.ts}"))
         }
 
-        val sb = StringBuilder("date,time,domain,name,detail,note\n")
+        val sb = StringBuilder(lifeCsvLegend(withParallel))
+        sb.append("date,time,domain,id,parallel_of,source,budget,minutes,name,detail,note\n")
         for (r in rows.sortedBy { it.ts }) {
             sb.append(dayKey(r.ts)).append(',')
                 .append(timeFormat.format(Date(r.ts))).append(',')
                 .append(cell(r.domain)).append(',')
+                .append(r.id).append(',')
+                .append(r.parallelOf).append(',')
+                .append(r.source).append(',')
+                .append(if (r.budget) "1" else "0").append(',')
+                .append(if (r.minutes > 0) r.minutes.toString() else "").append(',')
                 .append(cell(r.name)).append(',')
                 .append(cell(r.detail)).append(',')
                 .append(cell(r.note)).append('\n')
@@ -435,6 +486,68 @@ class DigestBuilder(
         out.writeText(sb.toString())
         shareFileIntent(context, out, "text/csv")
     }
+
+    /**
+     * Легенда файла «вся жизнь». Строки с «#» — общепринятая пометка
+     * комментария (в pandas это comment='#'), а модель читает их просто как
+     * текст и с первых строк знает, чего в файле складывать нельзя.
+     *
+     * Кавычек внутри нет намеренно: парсер CSV принял бы их за начало ячейки.
+     */
+    private fun lifeCsvLegend(withParallel: Boolean): String = (if (withParallel) "" else
+        "# ПАРАЛЛЕЛЬНЫЙ СЛОЙ ИЗ ЭТОЙ ВЫГРУЗКИ ИСКЛЮЧЁН по просьбе владельца:\n" +
+            "# строк домена таймшит-параллель в файле нет, parallel_of везде\n" +
+            "# пустой. Это выбор, а не потеря данных.\n#\n"
+    ) + """
+        # ВСЯ ЖИЗНЬ ОДНИМ ФАЙЛОМ — таймшит, еда, тренировки, силовые, зарядка,
+        # комментарии. Строка на событие, по времени. Как это читать.
+        #
+        # ГЛАВНОЕ: СКЛАДЫВАТЬ МОЖНО ТОЛЬКО minutes ПРИ budget=1.
+        # Сумма за сутки даст 1440 минут (у сегодняшнего дня — сколько его
+        # прошло: идущая прямо сейчас запись в файл не попадает). Остальное —
+        # пометки на том же
+        # времени, а не время сверх него, и суммирование их подряд даёт
+        # тридцатичасовые сутки. Файл раньше этого не говорил, и модель,
+        # которой его дали, честно насчитала 1805 минут в дне.
+        #
+        # ПОЧЕМУ ТАК. Занимает сутки ровно один слой — основной трек таймшита.
+        #   таймшит   — чем человек занят. Непрерывен, без пересечений, ровно
+        #               24 часа в дне. budget=1.
+        #   таймшит∥  — параллель: то, что шло ПОВЕРХ дела. Ютуб за готовкой,
+        #               звонок посреди работы, книга за рулём. Пересекается с
+        #               чем угодно, в сутки НЕ входит. budget=0, а parallel_of
+        #               называет дело-носитель по id.
+        #   тренировка, силовая, зарядка — подробности о том же времени,
+        #               которое таймшит уже посчитал. budget=0.
+        #   еда, комментарий — события без длительности. budget=0.
+        #
+        # КОЛОНКИ
+        #   date, time    дата и местное время начала. Записи таймшита не
+        #                 пересекают полночь: то, что шло через неё, разрезано.
+        #   domain        см. выше.
+        #   id            номер строки, уникальный в файле. t — таймшит,
+        #                 w — тренировка, s — силовая, g — зарядка, f — еда,
+        #                 c — комментарий.
+        #   parallel_of   id дела-НОСИТЕЛЯ для строки таймшит∥. Пусто у всех
+        #                 остальных. Именно это отличает параллельное дело от
+        #                 случайного совпадения времени: одинаковый старт и
+        #                 одинаковая надиктовка — догадка, а номер — связь.
+        #   source        manual — сказал или отметил сам; auto — нашёл телефон
+        #                 (ютуб, телеграм, звонки, сон) или часы. Автоматику
+        #                 можно отключить одним фильтром source=manual.
+        #   budget        1 — минуты строки занимают сутки. Такая строка одна
+        #                 на каждый отрезок времени.
+        #   minutes       длительность. У budget=1 это разность минут суток,
+        #                 поэтому соседние строки телескопируются и день
+        #                 сходится ровно в полночь.
+        #   name          название словами владельца.
+        #   detail        всё остальное строкой: категория, клиент, километры,
+        #                 пульс, подходы, калории.
+        #   note          что было надиктовано. У параллели и её носителя
+        #                 надиктовка одна и та же — это одна фраза про два
+        #                 дела, а не две записи об одном.
+        #
+    """.trimIndent() + "\n"
 
     /** Сводка файлом — тем же путём, что CSV Засечки и дневника еды. */
     suspend fun shareIntent(text: String, name: String): android.content.Intent =

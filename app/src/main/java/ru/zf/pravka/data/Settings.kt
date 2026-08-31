@@ -89,6 +89,7 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_SEEN = stringPreferencesKey("auto_seen_ssids")
         private val KEY_AUTO_VISIBLE = stringPreferencesKey("auto_visible_ssids")
         private val KEY_NFC_TAGS = stringPreferencesKey("nfc_tags")
+        private val KEY_CSV_PARALLEL = booleanPreferencesKey("csv_with_parallel")
         private val KEY_AUTO_CAR_BT = stringPreferencesKey("auto_car_bt")
         private val KEY_AUTO_ARRIVE = booleanPreferencesKey("auto_arrive_close")
         private val KEY_AUTO_LEAVE_ASK = booleanPreferencesKey("auto_leave_ask")
@@ -465,6 +466,17 @@ class Settings(private val context: Context) {
             if (on) cur.add(ssid) else cur.remove(ssid)
             prefs[KEY_AUTO_VISIBLE] = org.json.JSONArray(cur.toList()).toString()
         }
+    }
+
+    /**
+     * Класть ли в выгрузки параллельный трек. Включено: второй слой — часть
+     * прожитого, и модель, которой объяснили формат, читает его правильно.
+     * Выключить стоит, когда файл уходит туда, где объяснять некому: в
+     * таблицу, в чужой скрипт, в разбор, где важен только бюджет суток.
+     */
+    val csvParallelFlow = context.dataStore.data.map { it[KEY_CSV_PARALLEL] ?: true }
+    suspend fun setCsvParallel(value: Boolean) {
+        context.dataStore.edit { it[KEY_CSV_PARALLEL] = value }
     }
 
     // ---- Метки NFC: наклейка = засечка ----

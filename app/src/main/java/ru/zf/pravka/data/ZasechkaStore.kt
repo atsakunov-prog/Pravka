@@ -71,6 +71,14 @@ class ZasechkaStore(private val context: Context) {
         // Sub-half-minute closed leftovers are splice artifacts, not facts:
         // they showed up in the owner's export as 0-minute rows.
         private const val CRUMB_MS = 30_000L
+        // Написания одного и того же приложения. Владелец говорит «в Ютубе»,
+        // система отдаёт «YouTube» - без этой таблицы ленте это два разных дела.
+        private val APP_ALIASES = mapOf(
+            "ютьюб" to "youtube", "ю-туб" to "youtube", "ютуб" to "youtube",
+            "телеграм" to "telegram", "телега" to "telegram",
+            "клауд" to "claude", "клод" to "claude",
+            "слушалк" to "slushalka",
+        )
         val DEFAULT_CATEGORIES = listOf(
             Category("Сон", "", baseMin = 480, value = 0),
             Category("Спорт: силовая", "тренажёрка, железо, ОФП", baseMin = 75, value = 9),
@@ -855,15 +863,27 @@ class ZasechkaStore(private val context: Context) {
      * ютуб из статистики использования). Короткие названия по вхождению не
      * сравниваем: «еда» нашлась бы в половине ленты.
      */
+    /**
+     * Одно приложение — два написания, и из-за этого один и тот же ютуб
+     * попадал в ленту дважды: владелец сказал «сижу выбираю в Ютубе наушники»
+     * (Быт, 135 минут), а статистика привезла «YouTube» (Потери, 3 минуты)
+     * внутрь этого же куска. Проверка «он уже назвал это сам» сравнивала
+     * строки как есть и кириллицы в упор не видела.
+     */
+    private fun appNormal(s: String): String {
+        var t = s.trim().lowercase()
+        for ((ru, en) in APP_ALIASES) t = t.replace(ru, en)
+        return t
+    }
+
     private fun sameThing(mine: Entry, title: String, category: String): Boolean {
-        val a = mine.title.trim()
-        val b = title.trim()
+        val a = appNormal(mine.title)
+        val b = appNormal(title)
         if (mine.category.isNotBlank() &&
             mine.category.trim().equals(category.trim(), ignoreCase = true)
         ) return true
-        if (a.equals(b, ignoreCase = true)) return true
-        return a.length >= 4 && b.length >= 4 &&
-            (a.contains(b, ignoreCase = true) || b.contains(a, ignoreCase = true))
+        if (a == b) return true
+        return a.length >= 4 && b.length >= 4 && (a.contains(b) || b.contains(a))
     }
 
     /**
@@ -1348,8 +1368,11 @@ class ZasechkaStore(private val context: Context) {
 
     // ---- CSV export (same share pattern as the transcription metrics) ----
 
-    suspend fun shareCsvIntent(): Intent {
-        val list = all()
+    suspend fun shareCsvIntent(withParallel: Boolean = true): Intent {
+        val all = all()
+        // Тумблер владельца: файл уходит и туда, где формат объяснять некому
+        // (таблица, чужой скрипт) - там второй слой только мешает.
+        val list = if (withParallel) all else all.filter { !it.parallel }
         // Worth per hour and typical length live on the category; carried into
         // every row so a spreadsheet can add the day up on its own.
         val cats = categories().associateBy { it.name.trim().lowercase() }
@@ -1358,9 +1381,9 @@ class ZasechkaStore(private val context: Context) {
         val now = System.currentTimeMillis()
         var previousRaw = ""
         val csv = buildString {
-            append(csvLegend())
+            append(csvLegend(withParallel))
             append(
-                "date,start,end,track,minutes_day,minutes_parallel,over," +
+                "date,start,end,id,track,parallel_of,minutes_day,minutes_parallel,over," +
                     "title,category,client,useful,source,is_open," +
                     "value,points,base_min,raw\n"
             )
@@ -1369,7 +1392,13 @@ class ZasechkaStore(private val context: Context) {
                 append(dateFormat.format(Date(e.start))).append(',')
                 append(timeFormat.format(Date(e.start))).append(',')
                 append(timeFormat.format(Date(end))).append(',')
+                // id и parallel_of — по замечанию читателя файла, и он прав:
+                // «одинаковый старт плюс одинаковая заметка» это догадка, а
+                // не связь. Теперь связь названа номером.
+                append(e.id.toString()).append(',')
                 append(if (e.parallel) "параллельно" else "основной").append(',')
+                val host = if (e.parallel) hostOf(e, all, now) else null
+                append(host?.id?.toString().orEmpty()).append(',')
                 // Минуты основного трека - РАЗНОСТЬ МИНУТ СУТОК, а не округление
                 // собственной длительности. Разница не косметическая: округляя
                 // каждую строку отдельно, день из двадцати записей приезжал в
@@ -1383,7 +1412,7 @@ class ZasechkaStore(private val context: Context) {
                 append(if (e.parallel) e.durationMin(now).toString() else "").append(',')
                 // Поверх чего шла параллель - иначе строка «YouTube 20 минут»
                 // в отрыве от «Приготовление еды» ничего не объясняет.
-                append(csvEscape(if (e.parallel) overTitle(e, list, now) else "")).append(',')
+                append(csvEscape(if (e.parallel) overTitle(e, all, now) else "")).append(',')
                 append(csvEscape(e.title)).append(',')
                 append(csvEscape(e.category)).append(',')
                 append(csvEscape(e.client)).append(',')
@@ -1434,7 +1463,11 @@ class ZasechkaStore(private val context: Context) {
      * сразу знает, что колонок времени две и почему. Импорт Правки такие
      * строки пропускает; таблицы покажут их первыми ячейками - удалить.
      */
-    private fun csvLegend(): String = """
+    private fun csvLegend(withParallel: Boolean): String = (if (withParallel) "" else
+        "# ПАРАЛЛЕЛЬНЫЙ СЛОЙ ИЗ ЭТОЙ ВЫГРУЗКИ ИСКЛЮЧЁН по просьбе владельца:\n" +
+            "# в файле только основной трек. Колонки track, parallel_of,\n" +
+            "# minutes_parallel и over поэтому пустые, а не потерянные.\n#\n"
+    ) + """
         # ЗАСЕЧКА — таймшит владельца. Как это читать.
         #
         # В ленте ДВА СЛОЯ, и это главное, что нужно понять про файл:
@@ -1451,7 +1484,13 @@ class ZasechkaStore(private val context: Context) {
         #                     полночь: то, что шло через неё, разрезано на две.
         #   start, end        местное время ЧЧ:ММ. Идущая сейчас запись закрыта
         #                     временем выгрузки и помечена is_open.
+        #   id                номер записи, уникальный в ленте. На него ссылается
+        #                     parallel_of.
         #   track             «основной» или «параллельно».
+        #   parallel_of       id ДЕЛА-НОСИТЕЛЯ для параллельной строки. Пусто у
+        #                     основной. Именно это отличает параллельное дело от
+        #                     случайного совпадения времени: одинаковый старт и
+        #                     одинаковая надиктовка — догадка, номер — связь.
         #   minutes_day       минуты, занятые в сутках. У параллельной строки пусто.
         #                     СУММА ЗА ДЕНЬ = 1440. У сегодняшнего дня — сколько его
         #                     прошло; у любого дня может не хватать свежей дыры,
@@ -1486,7 +1525,13 @@ class ZasechkaStore(private val context: Context) {
     """.trimIndent() + "\n"
 
     /** Название дела основного трека, поверх которого шла эта параллель. */
-    private fun overTitle(e: Entry, all: List<Entry>, now: Long): String =
+    /**
+     * Дело, поверх которого шла параллель: то, с которым она пересекается
+     * дольше всего. Наружу — потому что «вся жизнь» одним файлом собирается
+     * в другом месте, а ссылка на носителя нужна и там: без неё две строки
+     * с одинаковым временем связывает только догадка.
+     */
+    fun hostOf(e: Entry, all: List<Entry>, now: Long): Entry? =
         all.asSequence()
             .filter { !it.parallel && it.source != GAP_SOURCE }
             .map { m ->
@@ -1497,7 +1542,22 @@ class ZasechkaStore(private val context: Context) {
             }
             .filter { it.second > 0 }
             .maxByOrNull { it.second }
-            ?.first?.title.orEmpty()
+            ?.first
+
+    private fun overTitle(e: Entry, all: List<Entry>, now: Long): String =
+        hostOf(e, all, now)?.title.orEmpty()
+
+    /**
+     * Минуты, которыми строка занимает СУТКИ. У параллели их ноль — она ни у
+     * кого ничего не отнимает, — и именно поэтому складывать эту колонку
+     * безопасно: сумма за день выходит ровно 1440.
+     */
+    fun budgetMinutes(e: Entry, now: Long): Long =
+        if (e.parallel) 0L else dayMinutes(e.start, if (e.open) now else e.end)
+
+    /** Ручная запись или находка робота — одним словом, для фильтра. */
+    fun sourceKind(e: Entry): String =
+        if (e.source == "auto" || e.source == GAP_SOURCE) "auto" else "manual"
 
     private fun csvEscape(s: String): String {
         if (s.none { it == ',' || it == '"' || it == '\n' || it == '\r' }) return s
