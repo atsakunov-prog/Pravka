@@ -43,6 +43,12 @@
     <!-- Самообновление: приложение тянет APK из ветки apk-builds и открывает
          системный установщик. Подпись у всех сборок одна, поэтому обновление
          ставится поверх и данные остаются на месте. -->
+    <!-- Метки NFC: наклейка в туалете, на велике, в машине - касание ставит
+         засечку без телефона в руках. Не required: без NFC работает всё
+         остальное. -->
+    <uses-permission android:name="android.permission.NFC" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
+
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
@@ -154,6 +160,25 @@
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:exported="false" />
+
+        <!-- Касание метки. exported=true обязательно: intent приносит система
+             NFC. Свой MIME-тип плюс AAR внутри сообщения - открывает только
+             Правка, чужие метки нас не касаются. taskAffinity пустой, чтобы
+             трамплин не подменял собой главное окно в списке задач. -->
+        <activity
+            android:name=".trigger.NfcTapActivity"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.nfc.action.NDEF_DISCOVERED" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/vnd.pravka" />
+            </intent-filter>
+        </activity>
 
         <service
             android:name=".trigger.DictationService"

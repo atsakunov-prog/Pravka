@@ -88,6 +88,7 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_PLACES = stringPreferencesKey("auto_places")
         private val KEY_AUTO_SEEN = stringPreferencesKey("auto_seen_ssids")
         private val KEY_AUTO_VISIBLE = stringPreferencesKey("auto_visible_ssids")
+        private val KEY_NFC_TAGS = stringPreferencesKey("nfc_tags")
         private val KEY_AUTO_CAR_BT = stringPreferencesKey("auto_car_bt")
         private val KEY_AUTO_ARRIVE = booleanPreferencesKey("auto_arrive_close")
         private val KEY_AUTO_LEAVE_ASK = booleanPreferencesKey("auto_leave_ask")
@@ -463,6 +464,33 @@ class Settings(private val context: Context) {
             }.getOrDefault(emptyList()).toMutableSet()
             if (on) cur.add(ssid) else cur.remove(ssid)
             prefs[KEY_AUTO_VISIBLE] = org.json.JSONArray(cur.toList()).toString()
+        }
+    }
+
+    // ---- Метки NFC: наклейка = засечка ----
+
+    /**
+     * Метки владельца. На самой наклейке лежит только идентификатор — что
+     * она делает, живёт здесь и правится без перезаписи метки.
+     */
+    val nfcTagsFlow = context.dataStore.data.map { prefs ->
+        NfcTag.listFromJson(prefs[KEY_NFC_TAGS].orEmpty())
+    }
+
+    /** Добавить или заменить метку по её идентификатору. */
+    suspend fun saveNfcTag(tag: NfcTag) {
+        context.dataStore.edit { prefs ->
+            val cur = NfcTag.listFromJson(prefs[KEY_NFC_TAGS].orEmpty()).toMutableList()
+            val i = cur.indexOfFirst { it.id == tag.id }
+            if (i >= 0) cur[i] = tag else cur.add(tag)
+            prefs[KEY_NFC_TAGS] = NfcTag.listToJson(cur)
+        }
+    }
+
+    suspend fun removeNfcTag(id: String) {
+        context.dataStore.edit { prefs ->
+            val cur = NfcTag.listFromJson(prefs[KEY_NFC_TAGS].orEmpty()).filter { it.id != id }
+            prefs[KEY_NFC_TAGS] = NfcTag.listToJson(cur)
         }
     }
 

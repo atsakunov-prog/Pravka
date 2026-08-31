@@ -1531,6 +1531,9 @@ internal fun ZasechkaSettings(app: PravkaApp) {
 
         Spacer(Modifier.height(18.dp))
         AutoPilotSection(app)
+
+        Spacer(Modifier.height(18.dp))
+        NfcTagsSection(app)
     }
 }
 
