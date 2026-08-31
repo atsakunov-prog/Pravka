@@ -35,6 +35,9 @@ class ZasechkaEngine(
     companion object {
         // Сколько прошлых дней показывать разборщику как «вот его словарь дел».
         private const val RECENT_DAYS = 4L
+        // Сколько надиктовок отдавать разбору за раз. Больше - дороже и
+        // мутнее: закономерность видна и на сотне.
+        private const val BATCH = 120
     }
 
     data class Outcome(
@@ -464,34 +467,78 @@ class ZasechkaEngine(
     }
 
     /**
-     * «Обучить»: поправки владельца → предложенные правила. Ничего не
-     * включает само — правило начинает работать после его «да».
+     * «Обучить»: сопоставить то, что владелец НАДИКТОВАЛ, с тем, что в итоге
+     * оказалось в ленте, и превратить расхождения в правила.
+     *
+     * Сначала я построил это на его ручных правках — и это была ошибка,
+     * которую он сам и назвал. Правка руками ловит только те промахи, которые
+     * он заметил и полез исправлять. А самый частый промах он не правит, он к
+     * нему привыкает: сказал «с 18:30 до 18:50», а записалось только начало.
+     * Такое видно ровно из пары «фраза → запись», и Опус это поймёт сам.
+     * Поэтому материал теперь — ВСЯ история надиктовок, а поправки идут
+     * дополнительным, более сильным сигналом: там владелец сказал прямо.
      *
      * Возвращает, сколько предложений появилось; −1 — разбор не дошёл.
-     * Журнал поправок чистится только при успехе: не дошло — материал цел.
+     * Водяной знак двигается только при успехе: не дошло — материал цел.
      */
-    suspend fun learn(): Int {
-        val list = corrections.all()
-        if (list.isEmpty()) return 0
-        val lines = list.takeLast(60).map { c ->
-            "- сказал: «${c.raw}» → робот записал: «${c.wasTitle}» [${
-                c.wasCategory.ifBlank { "без категории" }
-            }${if (c.wasParallel) ", параллельно" else ""}] → владелец поправил на: «${c.nowTitle}» [${
-                c.nowCategory.ifBlank { "без категории" }
-            }${if (c.nowParallel) ", параллельно" else ""}] (поправил ${c.what})"
+    suspend fun learn(all: Boolean = false): Int {
+        val since = if (all) 0L else corrections.lastSeenDictation()
+        val spoken = store.all()
+            .filter { it.raw.isNotBlank() && it.createdAt > since }
+            .sortedBy { it.createdAt }
+            .takeLast(BATCH)
+        val fixes = corrections.all()
+        if (spoken.isEmpty() && fixes.isEmpty()) return 0
+
+        // «Сказал → записалось». Время в паре обязательно: половина промахов
+        // именно в нём, а без границ их не увидеть.
+        val ribbon = store.all()
+        val lines = spoken.map { e ->
+            val end = if (e.open) "…" else timeFormat.format(Date(e.end))
+            // Параллель, рождённая той же фразой, — вторая половина картины:
+            // без неё «и заодно смотрел ютуб» выглядит потерянным.
+            val alongside = ribbon.firstOrNull {
+                it.parallel && it.id != e.id && kotlin.math.abs(it.createdAt - e.createdAt) < 2_000
+            }
+            buildString {
+                append("- сказал: «").append(e.raw.take(300)).append("»\n")
+                append("  записалось: «").append(e.title).append("» [")
+                append(e.category.ifBlank { "без категории" }).append("] ")
+                append(timeFormat.format(Date(e.start))).append('–').append(end)
+                append(" (").append(e.durationMin()).append(" мин)")
+                if (e.parallel) append(", параллельным треком")
+                if (e.client.isNotBlank()) append(", клиент «").append(e.client).append('»')
+                if (alongside != null) {
+                    append("\n  и параллельно: «").append(alongside.title)
+                        .append("» [").append(alongside.category).append(']')
+                }
+                if (e.source == "edit") append("\n  (эту запись он потом правил руками)")
+            }
         }
+        val fixLines = fixes.takeLast(40).map { c ->
+            "- сказал: «${c.raw}» → робот записал «${c.wasTitle}» [${
+                c.wasCategory.ifBlank { "без категории" }
+            }] → владелец поправил на «${c.nowTitle}» [${
+                c.nowCategory.ifBlank { "без категории" }
+            }] (поправил ${c.what})"
+        }
+
         val existing = rules.all().filter { !it.pending }.map { it.text }
         val result = claude.zasechkaRules(
-            corrections = lines,
+            spoken = lines,
+            corrections = fixLines,
             categories = store.categories().map { it.name },
             existingRules = existing,
         )
         return result.fold(
             onSuccess = { proposed ->
                 for (r in proposed) rules.addPending(r)
+                spoken.lastOrNull()?.let { corrections.setLastSeenDictation(it.createdAt) }
                 corrections.clear()
+                corrections.setLastLearnAt(System.currentTimeMillis())
                 eventLog.add(
-                    "засечка-обучение: ${list.size} поправок → ${proposed.size} предложений"
+                    "засечка-обучение: ${lines.size} надиктовок и ${fixLines.size} поправок " +
+                        "→ ${proposed.size} предложений"
                 )
                 proposed.size
             },
@@ -500,6 +547,13 @@ class ZasechkaEngine(
                 -1
             },
         )
+    }
+
+    /** Сколько материала ждёт разбора — для кнопки и для значка. */
+    suspend fun learnBacklog(): Int {
+        val since = corrections.lastSeenDictation()
+        return store.all().count { it.raw.isNotBlank() && it.createdAt > since } +
+            corrections.all().size
     }
 
     /** Название категории буква в букву, как в списке владельца. */

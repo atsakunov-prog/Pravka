@@ -2476,7 +2476,10 @@ private fun ZasechkaLearning(app: PravkaApp) {
 
     LaunchedEffect(reload) {
         rules = runCatching { app.zasechkaRules.all() }.getOrDefault(emptyList())
-        pendingCount = runCatching { app.zasechkaCorrections.all().size }.getOrDefault(0)
+        // Материал — это все НАДИКТОВКИ, которых разбор ещё не видел, а не
+        // только правки руками: самый частый промах владелец не правит, он к
+        // нему привыкает.
+        pendingCount = runCatching { app.zasechkaEngine.learnBacklog() }.getOrDefault(0)
     }
 
     val proposed = rules.filter { it.pending }
@@ -2485,9 +2488,12 @@ private fun ZasechkaLearning(app: PravkaApp) {
     Spacer(Modifier.height(12.dp))
     Text("Самообучение", style = MaterialTheme.typography.titleSmall)
     Text(
-        "Каждая твоя правка записи — сигнал: робот назвал или разложил не так. " +
-            "Накопится десяток — нажми «Обучить», и Опус поищет в них " +
-            "закономерность. Правило заработает только после твоего «да».",
+        "Каждую ночь Опус сверяет, что ты наговорил, с тем, что из этого вышло " +
+            "в ленте: где сказал «с 18:30 до 18:50», а записалось только " +
+            "начало; куда раз за разом уезжает категория; какими словами ты " +
+            "говоришь про параллельность. Найдёт закономерность — предложит " +
+            "правило, и над кнопкой «З» загорится ⭐. Правило заработает " +
+            "только после твоего «да».",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -2514,12 +2520,32 @@ private fun ZasechkaLearning(app: PravkaApp) {
         ) { Text(if (busy) "Думаю…" else "Обучить") }
         Spacer(Modifier.width(10.dp))
         Text(
-            if (pendingCount > 0) "накоплено поправок: $pendingCount"
-            else "поправок пока нет",
+            if (pendingCount > 0) "ждёт разбора: $pendingCount"
+            else "нового материала нет",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+    // Первый раз: в ленте лежат месяцы надиктовок, которых разбор не видел.
+    TextButton(
+        enabled = !busy,
+        onClick = {
+            busy = true
+            scope.launch {
+                val n = runCatching { app.zasechkaEngine.learn(all = true) }.getOrDefault(-1)
+                Feedback.toast(
+                    app,
+                    when {
+                        n > 0 -> "Предложено правил: $n"
+                        n == 0 -> "Закономерностей не нашлось — это тоже ответ"
+                        else -> "Разбор не дошёл, материал цел"
+                    },
+                )
+                busy = false
+                reload++
+            }
+        },
+    ) { Text("Прогнать всю историю") }
 
     if (proposed.isNotEmpty()) {
         Spacer(Modifier.height(10.dp))

@@ -72,6 +72,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         private const val KEY_Z_BEAT_AT = "z_beat_at"
         private const val KEY_Z_ASK_AT = "z_ask_at"
         private const val KEY_Z_ASK_ID = "z_ask_entry"
+        private const val KEY_Z_LEARN_DAY = "z_learn_day"
 
         // Pomodoro survives a service restart: the deadline is on disk.
         private const val KEY_Z_POMO_ENDS = "z_pomo_ends"
@@ -1227,6 +1228,44 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
             } finally {
                 learnBatchRunning = false
+            }
+        }
+    }
+
+    /**
+     * Ночной разбор Засечки: раз в сутки, глубокой ночью, сопоставить
+     * надиктовки с тем, что из них получилось. Ночью — потому что это Опус на
+     * сотне пар: дорого и небыстро, а под руку владельцу лезть незачем.
+     * Если новых надиктовок нет, до сети дело не доходит вовсе.
+     */
+    private suspend fun zasechkaLearnTick() {
+        val prefs = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
+        val cal = java.util.Calendar.getInstance()
+        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        val today = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
+            .format(java.util.Date())
+        if (hour in 3..5 && prefs.getString(KEY_Z_LEARN_DAY, "") != today) {
+            prefs.edit().putString(KEY_Z_LEARN_DAY, today).apply()
+            if (app.zasechkaEngine.learnBacklog() > 0) {
+                val n = app.zasechkaEngine.learn()
+                if (n > 0) app.eventLog.add("засечка-обучение: ночью предложено правил — $n")
+            }
+        }
+        refreshZasechkaBadge()
+    }
+
+    /** ⭐ над «З», пока предложенные правила ждут суда. Тап — в Засечку. */
+    private suspend fun refreshZasechkaBadge() {
+        val pending = runCatching { app.zasechkaRules.all().count { it.pending } }.getOrDefault(0)
+        if (pending == 0) {
+            zButton?.hideLearnBadge()
+        } else {
+            zButton?.showLearnBadge("⭐") {
+                startActivity(
+                    android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                        .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
             }
         }
     }
@@ -2470,6 +2509,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             // Обновления: сам решает, прошли ли сутки, сам тянет и сам говорит.
             scope.launch { runCatching { app.updates.tick() } }
+            // Ночной разбор Засечки и значок над «З».
+            scope.launch { runCatching { zasechkaLearnTick() } }
             zasechkaReminderCheck()
             zReminderHandler.postDelayed(this, 5 * 60_000L)
         }

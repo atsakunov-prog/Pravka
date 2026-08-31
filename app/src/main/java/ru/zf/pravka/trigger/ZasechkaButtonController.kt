@@ -236,6 +236,53 @@ class ZasechkaButtonController(
             .start()
     }
 
+    // ---- Значок обучения: ⭐ над кнопкой, пока предложенные правила ждут
+    // суда владельца. Тот же приём, что у «П» (FloatingButtonController):
+    // приложение не дёргает уведомлением, а просто показывает, что ей есть
+    // что сказать, — и тап ведёт туда, где судят. ----
+
+    private var learnBadge: android.widget.TextView? = null
+    private var learnBadgeParams: WindowManager.LayoutParams? = null
+
+    fun showLearnBadge(emoji: String, onTap: () -> Unit) {
+        if (learnBadge == null) {
+            val pill = android.widget.TextView(service).apply {
+                textSize = 16f
+                gravity = Gravity.CENTER
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+            }
+            val p = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT,
+            ).apply { gravity = Gravity.TOP or Gravity.START }
+            learnBadgeParams = p
+            learnBadge = pill
+            runCatching { windowManager.addView(pill, p) }
+        }
+        learnBadge?.text = emoji
+        learnBadge?.setOnClickListener { onTap() }
+        repositionLearnBadge()
+    }
+
+    fun hideLearnBadge() {
+        learnBadge?.let { runCatching { windowManager.removeView(it) } }
+        learnBadge = null
+        learnBadgeParams = null
+    }
+
+    /** Садится на правый верхний угол кнопки, не вылезая за экран. */
+    private fun repositionLearnBadge() {
+        val bp = params ?: return
+        val p = learnBadgeParams ?: return
+        val (w, _) = screenSize()
+        p.x = (bp.x + buttonSize - dp(14)).coerceIn(0, (w - dp(30)).coerceAtLeast(0))
+        p.y = (bp.y - dp(26)).coerceAtLeast(0)
+        learnBadge?.let { runCatching { windowManager.updateViewLayout(it, p) } }
+    }
+
     fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
     fun buttonSizePx(): Int = buttonSize

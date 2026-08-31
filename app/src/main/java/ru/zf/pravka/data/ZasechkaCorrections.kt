@@ -25,6 +25,25 @@ class ZasechkaCorrections(private val context: Context) {
     companion object {
         private const val MAX = 200
         private const val FILE = "zasechka-corrections.json"
+        private const val PREFS = "pravka_internal"
+        private const val KEY_LAST_LEARN = "z_learn_at"
+        private const val KEY_LAST_SEEN = "z_learn_seen"
+    }
+
+    private fun prefs() = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** Докуда ночной разбор уже дошёл; 0 — не ходил ни разу. */
+    fun lastLearnAt(): Long = prefs().getLong(KEY_LAST_LEARN, 0L)
+
+    fun setLastLearnAt(ts: Long) {
+        prefs().edit().putLong(KEY_LAST_LEARN, ts).apply()
+    }
+
+    /** Самая свежая разобранная надиктовка: с неё начнётся следующий проход. */
+    fun lastSeenDictation(): Long = prefs().getLong(KEY_LAST_SEEN, 0L)
+
+    fun setLastSeenDictation(ts: Long) {
+        prefs().edit().putLong(KEY_LAST_SEEN, ts).apply()
     }
 
     /**
