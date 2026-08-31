@@ -75,18 +75,27 @@ class Updates(
         val branch: String,
         val builtAt: String,
         val apkName: String,
-    ) {
-        /**
-         * Своя линия работы? Сборка соседней ветки имеет номер больше, но она
-         * не «новее»: в ней нет коммитов этой. Пустая ветка с любой стороны -
-         * старый формат или локальная сборка, тогда не придираемся.
-         */
-        val sameLine: Boolean
-            get() = branch.isBlank() || BuildConfig.BUILD_BRANCH.isBlank() ||
-                branch.equals(BuildConfig.BUILD_BRANCH, ignoreCase = true)
+    )
 
-        val newer: Boolean get() = versionCode > BuildConfig.VERSION_CODE && sameLine
-    }
+    /**
+     * Своя линия работы? Сборка соседней ветки имеет номер больше, но она не
+     * «новее»: в ней нет коммитов этой. Пустая ветка с любой стороны - старый
+     * формат или локальная сборка, тогда не придираемся.
+     */
+    fun sameLine(build: Build): Boolean =
+        build.branch.isBlank() || line.isBlank() || build.branch.equals(line, ignoreCase = true)
+
+    fun isNewer(build: Build): Boolean =
+        build.versionCode > BuildConfig.VERSION_CODE && sameLine(build)
+
+    /**
+     * Ветка, из которой принимаем обновления: своя, если владелец не назвал
+     * другую. Обновляется на каждой проверке и на каждом тике - настройку
+     * читать синхронно нельзя, а показывать карточку надо сразу.
+     */
+    @Volatile
+    var line: String = BuildConfig.BUILD_BRANCH
+        private set
 
     data class State(
         val latest: Build? = null,      // null = ещё не смотрели или не дошло
@@ -126,6 +135,7 @@ class Updates(
         if (!checking.compareAndSet(false, true)) return _state.value.latest
         _state.value = _state.value.copy(checking = true, error = "")
         try {
+            line = settings.updBranchFlow.first().trim().ifBlank { BuildConfig.BUILD_BRANCH }
             val url = settings.updUrlFlow.first().trim().ifBlank { DEFAULT_INFO_URL }
             val now = System.currentTimeMillis()
             val body = withContext(Dispatchers.IO) {
@@ -152,12 +162,12 @@ class Updates(
                 ready = resolveReady(build),
                 error = "",
             )
-            if (build.newer) {
+            if (isNewer(build)) {
                 eventLog.add("обновление: есть ${build.versionName} (у нас ${BuildConfig.VERSION_NAME})")
-            } else if (build.versionCode > BuildConfig.VERSION_CODE && !build.sameLine) {
+            } else if (build.versionCode > BuildConfig.VERSION_CODE) {
                 eventLog.add(
                     "обновление пропущено: в ветке лежит сборка из «${build.branch}», " +
-                        "а мы из «${BuildConfig.BUILD_BRANCH}»"
+                        "а ждём из «$line»"
                 )
             }
             return build
@@ -285,7 +295,7 @@ class Updates(
     }
 
     private fun readyFile(build: Build): File? {
-        if (!build.newer) return null
+        if (!isNewer(build)) return null
         val f = File(dir(), "pravka-${build.versionCode}.apk")
         return if (verify(f, build)) f else null
     }
@@ -334,10 +344,11 @@ class Updates(
      */
     suspend fun tick() {
         if (!settings.updAutoFlow.first()) return
+        line = settings.updBranchFlow.first().trim().ifBlank { BuildConfig.BUILD_BRANCH }
         val now = System.currentTimeMillis()
         if (now - prefs().getLong(KEY_LAST_CHECK, 0L) >= CHECK_PERIOD_MS) check(force = true)
         val build = _state.value.latest ?: return
-        if (!build.newer) {
+        if (!isNewer(build)) {
             // Обновились - APK в кэше больше не нужен, это десятки мегабайт.
             withContext(Dispatchers.IO) { dir().listFiles()?.forEach { it.delete() } }
             return

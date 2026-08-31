@@ -82,6 +82,7 @@ class Settings(private val context: Context) {
         private val KEY_UPD_AUTO = booleanPreferencesKey("upd_auto")
         private val KEY_UPD_MOBILE = booleanPreferencesKey("upd_mobile")
         private val KEY_UPD_URL = stringPreferencesKey("upd_url")
+        private val KEY_UPD_BRANCH = stringPreferencesKey("upd_branch")
         private val KEY_ANALYSIS_NIGHTLY = booleanPreferencesKey("analysis_nightly")
         private val KEY_ANALYSIS_CONTEXT = stringPreferencesKey("analysis_context")
         private val KEY_AUTO_PLACES = stringPreferencesKey("auto_places")
@@ -625,5 +626,18 @@ class Settings(private val context: Context) {
     val updUrlFlow = context.dataStore.data.map { it[KEY_UPD_URL].orEmpty() }
     suspend fun setUpdUrl(value: String) {
         context.dataStore.edit { it[KEY_UPD_URL] = value.trim() }
+    }
+
+    /**
+     * Из какой ВЕТКИ принимать обновления. Пусто = из своей, той, из которой
+     * собрана стоящая сборка (BuildConfig.BUILD_BRANCH).
+     *
+     * Поле обязано быть: работа переезжает между ветками, и после слияния в
+     * основную линию имя ветки перестанет совпадать — обновления молча
+     * прекратились бы. Здесь их возвращают одной строкой, без новой сборки.
+     */
+    val updBranchFlow = context.dataStore.data.map { it[KEY_UPD_BRANCH].orEmpty() }
+    suspend fun setUpdBranch(value: String) {
+        context.dataStore.edit { it[KEY_UPD_BRANCH] = value.trim() }
     }
 }

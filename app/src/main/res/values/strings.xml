@@ -226,4 +226,6 @@
     <string name="upd_never">Ещё не проверяли</string>
     <string name="upd_checked">Проверено %1$s</string>
     <string name="upd_error">Не дошло: %1$s</string>
+    <string name="upd_branch_label">Обновляться из ветки (пусто = из своей)</string>
+    <string name="upd_branch_hint">Сейчас ждём сборки из «%1$s». Ветка apk-builds одна на весь репозиторий, и её перезаписывает КАЖДАЯ ветка: номер там — номер запуска сборки, а не место в истории. Поэтому чужую линию Правка показывает, но не ставит. После слияния работы в другую ветку впиши её имя сюда.</string>
 </resources>

@@ -264,9 +264,11 @@ private fun UpdatesCard(app: PravkaApp) {
         java.text.SimpleDateFormat("d MMMM, HH:mm", Locale.forLanguageTag("ru"))
     }
     val latest = state.latest
-    val fresh = latest != null && latest.newer
+    val fresh = latest != null && updates.isNewer(latest)
     // Сборка соседней ветки: номер больше, но это другая работа, не «новее».
-    val otherLine = latest != null && latest.versionCode > BuildConfig.VERSION_CODE && !latest.sameLine
+    val otherLine = latest != null && latest.versionCode > BuildConfig.VERSION_CODE && !fresh
+    val branchPref by app.settings.updBranchFlow.collectAsState(initial = "")
+    var branchDraft by remember(branchPref) { mutableStateOf(branchPref) }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
@@ -345,6 +347,28 @@ private fun UpdatesCard(app: PravkaApp) {
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(stringResource(R.string.upd_mobile), style = MaterialTheme.typography.bodySmall)
+            }
+            // Линия обновления. Работа переезжает между ветками, и после
+            // слияния в основную имя перестанет совпадать — обновления молча
+            // прекратились бы. Здесь их возвращают одной строкой.
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = branchDraft,
+                onValueChange = { branchDraft = it },
+                label = { Text(stringResource(R.string.upd_branch_label)) },
+                placeholder = { Text(BuildConfig.BUILD_BRANCH.ifBlank { "своя ветка" }) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(4.dp))
+            HintText(stringResource(R.string.upd_branch_hint, updates.line.ifBlank { "—" }))
+            if (branchDraft.trim() != branchPref) {
+                TextButton(onClick = {
+                    scope.launch {
+                        app.settings.setUpdBranch(branchDraft)
+                        updates.check(force = true)
+                    }
+                }) { Text(stringResource(R.string.settings_save)) }
             }
         }
     }
