@@ -1562,6 +1562,7 @@ private fun AutoPilotSection(app: PravkaApp) {
     ) { permTick++ }
 
     val places by settings.autoPlacesFlow.collectAsState(initial = emptyMap<String, String>())
+    val visibleSsids by settings.autoVisibleFlow.collectAsState(initial = emptySet<String>())
     val carBt by settings.autoCarBtFlow.collectAsState(initial = "")
 
     // ---- Места по Wi-Fi ----
@@ -1576,103 +1577,156 @@ private fun AutoPilotSection(app: PravkaApp) {
     )
     Spacer(Modifier.height(8.dp))
 
-    val hasLocation = remember(permTick) {
-        context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ==
-            android.content.pm.PackageManager.PERMISSION_GRANTED
-    }
-    if (!hasLocation) {
-        OutlinedButton(onClick = {
-            askPermission.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
-        }) { Text("Дать доступ к имени Wi-Fi") }
+    // Почему молчит — словами и с кнопкой. Раньше на это место приходила
+    // одна кнопка «дать доступ», и она врала: доступ был выдан «только при
+    // использовании», а служба всё равно не видела ни одной сети.
+    val blockers = remember(permTick) { ru.zf.pravka.trigger.AutoPilot.blockers(context) }
+    for (b in blockers) {
         Text(
-            "Android отдаёт имя сети только с разрешением «Местоположение»; " +
-                "GPS при этом не включается, в сеть ничего не уезжает.",
+            "⚠ " + b.text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        OutlinedButton(onClick = {
+            when (b.fix) {
+                ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION ->
+                    askPermission.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                ru.zf.pravka.trigger.AutoPilot.FIX_BACKGROUND -> {
+                    // На Android 11+ системного диалога для фонового
+                    // местоположения нет вовсе: только экран приложения,
+                    // руками. Поэтому ведём прямо туда.
+                    if (android.os.Build.VERSION.SDK_INT == 29) {
+                        askPermission.launch("android.permission.ACCESS_BACKGROUND_LOCATION")
+                    } else {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                android.net.Uri.fromParts("package", context.packageName, null),
+                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                        Feedback.toast(app, "Разрешения → Местоположение → «Разрешать всегда»")
+                    }
+                }
+                ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION_SYS ->
+                    context.startActivity(
+                        android.content.Intent(
+                            android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS
+                        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                else -> context.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }) {
+            Text(
+                when (b.fix) {
+                    ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION -> "Дать доступ к имени Wi-Fi"
+                    ru.zf.pravka.trigger.AutoPilot.FIX_BACKGROUND -> "Открыть разрешения Правки"
+                    ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION_SYS -> "Включить геолокацию"
+                    else -> "Включить Wi-Fi"
+                }
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+    }
+    if (blockers.isNotEmpty()) {
+        TextButton(onClick = { permTick++ }) { Text("Проверить ещё раз") }
+    }
+
+    // Сети, которые служба уже видела: владелец называет каждую местом
+    // («это дача») — ровно то, что он просил, вместо угадывания SSID.
+    val seen by settings.autoSeenFlow.collectAsState(initial = emptyMap<String, Long>())
+    var namingSsid by remember { mutableStateOf<String?>(null) }
+    var placeName by remember { mutableStateOf("") }
+    val unnamed = seen.keys.filter { !places.containsKey(it) }
+        .sortedByDescending { seen[it] ?: 0L }
+
+    if (places.isNotEmpty()) {
+        Text("Мои места", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            "Кнопка справа выбирает, что считать приездом. «подключился» — " +
+                "точнее, так ловится дом. «вижу сеть» — для мест вроде Летово, " +
+                "к чьему Wi-Fi ты не подключаешься: приезд засчитывается, как " +
+                "только сеть появилась в эфире.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        for ((ssid, name) in places) {
+            val byAir = visibleSsids.contains(ssid)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "$name — $ssid",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = {
+                    scope.launch { settings.setAutoVisible(ssid, !byAir) }
+                }) { Text(if (byAir) "вижу сеть" else "подключился") }
+                TextButton(onClick = { scope.launch { settings.removeAutoPlace(ssid) } }) {
+                    Text("✕")
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+    }
+
+    if (unnamed.isEmpty()) {
+        Text(
+            if (places.isEmpty()) {
+                "Новых сетей пока не видел. Подключись к домашнему Wi-Fi — " +
+                    "он появится здесь (и придёт пуш «что это за место?»). Сети, " +
+                    "которые просто слышно рядом, подтягиваются сами раз в полчаса."
+            } else "Все увиденные сети названы.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     } else {
-        // Сети, которые служба уже видела: владелец называет каждую местом
-        // («это дача») — ровно то, что он просил, вместо угадывания SSID.
-        val seen by settings.autoSeenFlow.collectAsState(initial = emptyMap<String, Long>())
-        var namingSsid by remember { mutableStateOf<String?>(null) }
-        var placeName by remember { mutableStateOf("") }
-        val unnamed = seen.keys.filter { !places.containsKey(it) }
-            .sortedByDescending { seen[it] ?: 0L }
-
-        if (places.isNotEmpty()) {
-            Text("Мои места", style = MaterialTheme.typography.bodyMedium)
-            for ((ssid, name) in places) {
+        Text("Что это за сети?", style = MaterialTheme.typography.bodyMedium)
+        for (ssid in unnamed) {
+            if (namingSsid == ssid) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "$name — $ssid",
-                        style = MaterialTheme.typography.bodySmall,
+                    OutlinedTextField(
+                        value = placeName,
+                        onValueChange = { placeName = it },
                         modifier = Modifier.weight(1f),
+                        label = { Text("«$ssid» — это…") },
+                        singleLine = true,
                     )
-                    TextButton(onClick = { scope.launch { settings.removeAutoPlace(ssid) } }) {
-                        Text("✕")
-                    }
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-        }
-
-        if (unnamed.isEmpty()) {
-            Text(
-                if (places.isEmpty()) {
-                    "Новых сетей пока не видел. Подключись к домашнему Wi-Fi — " +
-                        "он появится здесь (и придёт пуш «что это за место?»)."
-                } else "Все увиденные сети названы.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Text("Что это за сети?", style = MaterialTheme.typography.bodyMedium)
-            for (ssid in unnamed) {
-                if (namingSsid == ssid) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = placeName,
-                            onValueChange = { placeName = it },
-                            modifier = Modifier.weight(1f),
-                            label = { Text("«$ssid» — это…") },
-                            singleLine = true,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = {
-                            val name = placeName.trim()
-                            if (name.isNotBlank()) {
-                                scope.launch {
-                                    settings.addAutoPlace(ssid, name)
-                                    settings.removeAutoSeen(ssid)
-                                }
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = {
+                        val name = placeName.trim()
+                        if (name.isNotBlank()) {
+                            scope.launch {
+                                settings.addAutoPlace(ssid, name)
+                                settings.removeAutoSeen(ssid)
                             }
-                            namingSsid = null
-                            placeName = ""
-                        }) { Text("Готово") }
+                        }
+                        namingSsid = null
+                        placeName = ""
+                    }) { Text("Готово") }
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(ssid, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "видел " + SimpleDateFormat("dd.MM HH:mm", Locale.US)
+                                .format(Date(seen[ssid] ?: 0L)),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                } else {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(ssid, style = MaterialTheme.typography.bodySmall)
-                            Text(
-                                "видел " + SimpleDateFormat("dd.MM HH:mm", Locale.US)
-                                    .format(Date(seen[ssid] ?: 0L)),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        TextButton(onClick = { namingSsid = ssid; placeName = "" }) {
-                            Text("Это место…")
-                        }
-                        TextButton(onClick = { scope.launch { settings.removeAutoSeen(ssid) } }) {
-                            Text("Не место")
-                        }
+                    TextButton(onClick = { namingSsid = ssid; placeName = "" }) {
+                        Text("Это место…")
+                    }
+                    TextButton(onClick = { scope.launch { settings.removeAutoSeen(ssid) } }) {
+                        Text("Не место")
                     }
                 }
             }
         }
     }
-
 
     // ---- Машина по Bluetooth ----
     Spacer(Modifier.height(12.dp))

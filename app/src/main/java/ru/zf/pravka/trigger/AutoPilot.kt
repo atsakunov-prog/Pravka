@@ -1,5 +1,6 @@
 package ru.zf.pravka.trigger
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
@@ -10,10 +11,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.hardware.TriggerEvent
 import android.hardware.TriggerEventListener
+import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -49,6 +52,23 @@ import ru.zf.pravka.ui.Feedback
 // 3. Ничего не было видно снаружи. Теперь [statusLine] показывает в
 //    настройках, какую сеть служба видит прямо сейчас, сколько мест
 //    заведено и когда автопилот срабатывал последний раз.
+// 4. И всё равно молчало — потому что разрешение «Местоположение» было
+//    выдано «только при использовании приложения». Ловит-то приезд СЛУЖБА,
+//    из фона: система отдавала ей «<unknown ssid>», и автопилот честно не
+//    видел ни одной сети. Снаружи это выглядит ровно как поломка. Теперь
+//    [blockers] называет причину словами и даёт кнопку, которая её чинит.
+//
+// И ещё одно, из жизни: к сети в Летово владелец не подключается — пароля
+// нет и не надо. Но она появляется в эфире ровно тогда, когда он приехал.
+// Поэтому у места есть два режима: «по подключению» (дом — точнее) и «по
+// видимости» (Летово — ловится сканом эфира на тике).
+/**
+ * Причина, по которой автопилот слеп, и код кнопки, которая её чинит.
+ * Отдельный тип верхнего уровня, чтобы настройки могли спросить причину и
+ * при выключенной службе.
+ */
+data class AutoBlocker(val text: String, val fix: String)
+
 class AutoPilot(
     private val service: PravkaAccessibilityService,
     private val app: PravkaApp,
@@ -67,6 +87,77 @@ class AutoPilot(
         private const val ARRIVE_DEBOUNCE_MS = 10 * 60_000L
         // Про одну и ту же незнакомую сеть спрашиваем раз в сутки.
         private const val UNKNOWN_ASK_MS = 24 * 3_600_000L
+        // Сеть слышно, но еле-еле — это «школа где-то за забором», а не
+        // приезд. Приездом считаем только уверенный сигнал.
+        private const val NEAR_DBM = -75
+        // Фоновому приложению система разрешает один скан в полчаса. Ровно
+        // столько и просим: чаще всё равно откажут, реже — приезд заметим
+        // с опозданием.
+        private const val SCAN_EVERY_MS = 30 * 60_000L
+
+        const val FIX_WIFI = "wifi"
+        const val FIX_LOCATION = "loc_perm"
+        const val FIX_BACKGROUND = "loc_bg"
+        const val FIX_LOCATION_SYS = "loc_sys"
+
+        /**
+         * ПОЧЕМУ НЕ РАБОТАЕТ — прямым текстом. Автопилот замолкает по
+         * полудюжине системных причин, и снаружи все они выглядят одинаково:
+         * «ничего не происходит». Владелец так и сказал — «вайфаи что-то
+         * совсем не работают», — и узнать, что именно мешает, было неоткуда.
+         *
+         * Пустой список — с разрешениями всё в порядке, дело не в них.
+         * Функция статическая: настройки должны уметь показать причину и
+         * тогда, когда служба вовсе не запущена.
+         */
+        fun blockers(ctx: Context): List<AutoBlocker> = buildList {
+            val wifiOn = runCatching {
+                (ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
+                    .isWifiEnabled
+            }.getOrDefault(true)
+            if (!wifiOn) {
+                add(AutoBlocker("Wi-Fi выключен — сетей не видно вообще.", FIX_WIFI))
+            }
+            val fine = ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+            if (!fine) {
+                add(
+                    AutoBlocker(
+                        "Нет разрешения «Местоположение» — Android прячет имя сети " +
+                            "и отдаёт «<unknown ssid>».",
+                        FIX_LOCATION,
+                    )
+                )
+            } else if (Build.VERSION.SDK_INT >= 29 &&
+                ctx.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                // Самая частая причина молчания. «Разрешить при использовании
+                // приложения» даёт имя сети, только пока Правка открыта. А
+                // приезд ловит служба, из фона — и получает пустоту.
+                add(
+                    AutoBlocker(
+                        "Местоположение разрешено только при открытой Правке. Приезд " +
+                            "ловит служба из фона — ей имя сети не отдают. Нужно " +
+                            "«Разрешать всегда».",
+                        FIX_BACKGROUND,
+                    )
+                )
+            }
+            if (Build.VERSION.SDK_INT >= 28) {
+                val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                val on = runCatching { lm?.isLocationEnabled ?: true }.getOrDefault(true)
+                if (!on) {
+                    add(
+                        AutoBlocker(
+                            "В системе выключена геолокация — имя сети закрыто даже " +
+                                "с разрешением.",
+                            FIX_LOCATION_SYS,
+                        )
+                    )
+                }
+            }
+        }
 
         const val WHAT_MOVE_CAR = "move_car"
         const val WHAT_MOVE_WALK = "move_walk"
@@ -90,6 +181,8 @@ class AutoPilot(
     private val jobs = mutableListOf<Job>()
 
     @Volatile private var places: Map<String, String> = emptyMap()
+    /** Подмножество [places], которое ловится сканом эфира, а не подключением. */
+    @Volatile private var visible: Set<String> = emptySet()
     @Volatile private var carBt: String = ""
     @Volatile private var autoArrive = true
     @Volatile private var askLeave = true
@@ -109,6 +202,11 @@ class AutoPilot(
     private var lastStillAsk = 0L
     private val unknownAsked = HashMap<String, Long>()
     private var motionArmed = false
+    /** Сети «по видимости», которые слышно прямо сейчас. */
+    private val around = HashSet<String>()
+    private val goneSince = HashMap<String, Long>()
+    private val pushedSeen = HashSet<String>()
+    private var lastScanAt = 0L
     private var connectivity: ConnectivityManager? = null
     private var netCallback: ConnectivityManager.NetworkCallback? = null
     private var btReceiver: BroadcastReceiver? = null
@@ -117,12 +215,14 @@ class AutoPilot(
     fun statusLine(): String = buildString {
         append(if (seenSsid.isBlank()) "Сеть не вижу" else "Вижу сеть «$seenSsid»")
         append(" · мест: ${places.size}")
+        if (visible.isNotEmpty()) append(" (по видимости: ${visible.size})")
         if (carBt.isNotBlank()) append(" · машина: $carBt")
         if (lastFire.isNotBlank()) append(" · последнее: $lastFire")
     }
 
     fun start() {
         jobs += scope.launch { app.settings.autoPlacesFlow.collect { places = it } }
+        jobs += scope.launch { app.settings.autoVisibleFlow.collect { visible = it } }
         jobs += scope.launch { app.settings.autoCarBtFlow.collect { carBt = it } }
         jobs += scope.launch { app.settings.autoArriveFlow.collect { autoArrive = it } }
         jobs += scope.launch { app.settings.autoLeaveAskFlow.collect { askLeave = it } }
@@ -220,6 +320,14 @@ class AutoPilot(
             askAboutUnknown(ssid)
             return
         }
+        reachedPlace(place, "Wi-Fi «$ssid»")
+    }
+
+    /**
+     * Приезд, общий вход: и по подключению, и по видимости в эфире. Дальше
+     * они неразличимы — место есть место.
+     */
+    private fun reachedPlace(place: String, how: String) {
         // Вернулись в известное место — «уехал?» отменяется.
         pendingLeave?.let { handler.removeCallbacks(it) }
         pendingLeave = null
@@ -227,9 +335,67 @@ class AutoPilot(
         if (place == lastPlace && now - lastArriveAt < ARRIVE_DEBOUNCE_MS) return
         lastPlace = place
         lastArriveAt = now
-        app.eventLog.add("автопилот: Wi-Fi «$ssid» — место «$place»")
+        app.eventLog.add("автопилот: $how — место «$place»")
         if (!autoArrive) return
         scope.launch { onArrived(place, now) }
+    }
+
+    /**
+     * Места «по видимости»: сеть в эфире = приехал. Скан отдаёт система —
+     * своих просим не чаще раза в полчаса, столько фоновому приложению и
+     * положено. Слабый сигнал не считаем: услышать школьный Wi-Fi можно и
+     * с соседней улицы.
+     */
+    @SuppressLint("MissingPermission")
+    private fun pollVisible() {
+        // Сканируем и когда мест «по видимости» ещё нет: иначе сеть, к которой
+        // не подключаешься, неоткуда взять в списке — и назвать её местом
+        // нечем. Один скан в полчаса того стоит.
+        val ctx = service.applicationContext
+        val mayScan = ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            (Build.VERSION.SDK_INT >= 33 &&
+                ctx.checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) ==
+                PackageManager.PERMISSION_GRANTED)
+        if (!mayScan) return
+        // На Android 13+ вместо местоположения годится «Устройства
+        // поблизости» — сканировать разрешает любое из двух.
+        val wm = runCatching { ctx.getSystemService(Context.WIFI_SERVICE) as WifiManager }
+            .getOrNull() ?: return
+        val now = System.currentTimeMillis()
+        if (now - lastScanAt >= SCAN_EVERY_MS) {
+            lastScanAt = now
+            @Suppress("DEPRECATION")
+            runCatching { wm.startScan() }
+        }
+        val results = runCatching { wm.scanResults }.getOrNull().orEmpty()
+        if (results.isEmpty()) return
+        @Suppress("DEPRECATION")
+        val strong = results.filter { it.level >= NEAR_DBM }
+            .map { cleanSsid(it.SSID) }
+            .filter { it.isNotBlank() }
+            .toSet()
+        // Всё, что слышно уверенно, попадает в список настроек — иначе сеть,
+        // к которой не подключаешься, назвать местом просто негде.
+        val fresh = strong.filter { !places.containsKey(it) && pushedSeen.add(it) }
+        if (fresh.isNotEmpty()) {
+            scope.launch { runCatching { app.settings.addAutoSeenAll(fresh.take(6), now) } }
+        }
+        for (ssid in visible) {
+            val place = places[ssid] ?: continue
+            if (strong.contains(ssid)) {
+                goneSince.remove(ssid)
+                // Приезд — только на ПОЯВЛЕНИЕ сети: висит она в эфире часами.
+                if (around.add(ssid)) reachedPlace(place, "вижу сеть «$ssid»")
+            } else if (around.contains(ssid)) {
+                val since = goneSince.getOrPut(ssid) { now }
+                if (now - since >= LEAVE_DELAY_MS) {
+                    around.remove(ssid)
+                    goneSince.remove(ssid)
+                    onLeftPlace(place, since)
+                }
+            }
+        }
     }
 
     /** Приехал в место: дорогу закрываем сами, тренировку предлагаем закрыть. */
@@ -291,9 +457,15 @@ class AutoPilot(
     private fun onWifiLost() {
         val fromPlace = places[seenSsid]
         seenSsid = ""
-        if (fromPlace == null || !askLeave) return
+        if (fromPlace == null) return
+        onLeftPlace(fromPlace, System.currentTimeMillis())
+    }
+
+    /** Уехал: сеть пропала — из-под ног (отключились) или из эфира. */
+    private fun onLeftPlace(fromPlace: String, atMs: Long) {
+        if (!askLeave) return
         leftPlace = fromPlace
-        leftAtMs = System.currentTimeMillis()
+        leftAtMs = atMs
         pendingLeave?.let { handler.removeCallbacks(it) }
         val ask = Runnable {
             pendingLeave = null
@@ -375,6 +547,7 @@ class AutoPilot(
     /** Тик службы (раз в ~5 минут): опрос сети и взвод датчика движения. */
     fun tick() {
         pollWifi()
+        pollVisible()
         if (!askStill) return
         scope.launch {
             val open = app.zasechkaStore.all().lastOrNull { it.open } ?: return@launch

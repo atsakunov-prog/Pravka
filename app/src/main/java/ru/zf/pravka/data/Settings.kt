@@ -87,6 +87,7 @@ class Settings(private val context: Context) {
         private val KEY_ANALYSIS_CONTEXT = stringPreferencesKey("analysis_context")
         private val KEY_AUTO_PLACES = stringPreferencesKey("auto_places")
         private val KEY_AUTO_SEEN = stringPreferencesKey("auto_seen_ssids")
+        private val KEY_AUTO_VISIBLE = stringPreferencesKey("auto_visible_ssids")
         private val KEY_AUTO_CAR_BT = stringPreferencesKey("auto_car_bt")
         private val KEY_AUTO_ARRIVE = booleanPreferencesKey("auto_arrive_close")
         private val KEY_AUTO_LEAVE_ASK = booleanPreferencesKey("auto_leave_ask")
@@ -409,12 +410,59 @@ class Settings(private val context: Context) {
         }
     }
 
+    /**
+     * То же, но пачкой: скан эфира отдаёт сразу десяток сетей, и делать по
+     * записи в хранилище на каждую — лишняя работа диску.
+     */
+    suspend fun addAutoSeenAll(ssids: List<String>, at: Long) {
+        val clean = ssids.filter { it.isNotBlank() }.distinct()
+        if (clean.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val o = runCatching { org.json.JSONObject(prefs[KEY_AUTO_SEEN].orEmpty()) }
+                .getOrDefault(org.json.JSONObject())
+            clean.forEach { o.put(it, at) }
+            while (o.length() > 20) {
+                val oldest = o.keys().asSequence().minByOrNull { o.optLong(it) } ?: break
+                o.remove(oldest)
+            }
+            prefs[KEY_AUTO_SEEN] = o.toString()
+        }
+    }
+
     suspend fun removeAutoSeen(ssid: String) {
         context.dataStore.edit { prefs ->
             val o = runCatching { org.json.JSONObject(prefs[KEY_AUTO_SEEN].orEmpty()) }
                 .getOrDefault(org.json.JSONObject())
             o.remove(ssid)
             prefs[KEY_AUTO_SEEN] = o.toString()
+        }
+    }
+
+    /**
+     * Места, которые ловятся ПО ВИДИМОСТИ, а не по подключению. Владелец:
+     * «или с летово: приехал, когда телефон ВИДИТ сеть». К школьной сети он
+     * не подключается — пароля нет и не надо, — но она появляется в эфире
+     * ровно тогда, когда он приехал. Всё остальное (дом) ловится по
+     * подключению: это точнее и не зависит от радиуса.
+     */
+    val autoVisibleFlow = context.dataStore.data.map { prefs ->
+        val raw = prefs[KEY_AUTO_VISIBLE].orEmpty()
+        if (raw.isBlank()) emptySet()
+        else runCatching {
+            val a = org.json.JSONArray(raw)
+            (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }.toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    suspend fun setAutoVisible(ssid: String, on: Boolean) {
+        if (ssid.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val cur = runCatching {
+                val a = org.json.JSONArray(prefs[KEY_AUTO_VISIBLE].orEmpty())
+                (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }
+            }.getOrDefault(emptyList()).toMutableSet()
+            if (on) cur.add(ssid) else cur.remove(ssid)
+            prefs[KEY_AUTO_VISIBLE] = org.json.JSONArray(cur.toList()).toString()
         }
     }
 

@@ -22,7 +22,15 @@
          местоположением (GPS при этом не включается), имя BT-устройства
          на Android 12+ — только с «устройствами поблизости». -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Приезд ловит служба доступности, из фона. С разрешением «только при
+         использовании приложения» система отдаёт ей «<unknown ssid>», и
+         автопилот молчит - выглядит как поломка. Нужно «Разрешать всегда». -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- Места «по видимости» (сеть в Летово, к которой не подключаются):
+         скан эфира на Android 13+ требует «Устройства поблизости». -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <!-- Android 11+ package visibility hides other apps' names from us; the
