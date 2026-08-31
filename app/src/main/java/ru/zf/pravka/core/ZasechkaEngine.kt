@@ -481,14 +481,21 @@ class ZasechkaEngine(
      * Возвращает, сколько предложений появилось; −1 — разбор не дошёл.
      * Водяной знак двигается только при успехе: не дошло — материал цел.
      */
-    suspend fun learn(all: Boolean = false): Int {
+    private data class Material(
+        val spoken: List<String>,
+        val fixes: List<String>,
+        val upTo: Long,
+    ) {
+        val empty: Boolean get() = spoken.isEmpty() && fixes.isEmpty()
+    }
+
+    private suspend fun material(all: Boolean): Material {
         val since = if (all) 0L else corrections.lastSeenDictation()
         val spoken = store.all()
             .filter { it.raw.isNotBlank() && it.createdAt > since }
             .sortedBy { it.createdAt }
             .takeLast(BATCH)
         val fixes = corrections.all()
-        if (spoken.isEmpty() && fixes.isEmpty()) return 0
 
         // «Сказал → записалось». Время в паре обязательно: половина промахов
         // именно в нём, а без границ их не увидеть.
@@ -523,27 +530,89 @@ class ZasechkaEngine(
             }] (поправил ${c.what})"
         }
 
+        return Material(lines, fixLines, spoken.lastOrNull()?.createdAt ?: 0L)
+    }
+
+    /** Что вешать на предложения и куда двигать водяной знак — общий хвост. */
+    private suspend fun applyProposed(proposed: List<String>, upTo: Long, how: String): Int {
+        for (r in proposed) rules.addPending(r)
+        if (upTo > 0) corrections.setLastSeenDictation(upTo)
+        corrections.clear()
+        corrections.setLastLearnAt(System.currentTimeMillis())
+        eventLog.add("засечка-обучение ($how): предложений — ${proposed.size}")
+        return proposed.size
+    }
+
+    /**
+     * Разбор ПО КНОПКЕ: владелец стоит над экраном и ждёт. Обычным вызовом,
+     * не батчем — батч отвечает через час, и это не то, чего ждут от кнопки.
+     */
+    suspend fun learn(all: Boolean = false): Int {
+        val m = material(all)
+        if (m.empty) return 0
         val existing = rules.all().filter { !it.pending }.map { it.text }
-        val result = claude.zasechkaRules(
-            spoken = lines,
-            corrections = fixLines,
+        return claude.zasechkaRules(
+            spoken = m.spoken,
+            corrections = m.fixes,
             categories = store.categories().map { it.name },
             existingRules = existing,
-        )
-        return result.fold(
-            onSuccess = { proposed ->
-                for (r in proposed) rules.addPending(r)
-                spoken.lastOrNull()?.let { corrections.setLastSeenDictation(it.createdAt) }
-                corrections.clear()
-                corrections.setLastLearnAt(System.currentTimeMillis())
-                eventLog.add(
-                    "засечка-обучение: ${lines.size} надиктовок и ${fixLines.size} поправок " +
-                        "→ ${proposed.size} предложений"
-                )
-                proposed.size
-            },
+        ).fold(
+            onSuccess = { applyProposed(it, m.upTo, "кнопкой") },
             onFailure = { e ->
                 eventLog.add("засечка-обучение: не вышло — ${e.message}")
+                -1
+            },
+        )
+    }
+
+    /**
+     * НОЧЬЮ — батчем: ответа никто не ждёт, а батч стоит половину. Заявка
+     * уходит и забывается; ответ заберёт [learnCollect] на одном из
+     * следующих тиков. Водяной знак не двигается до ответа: батч может не
+     * дойти, и материал должен остаться целым.
+     */
+    suspend fun learnSubmit(): Boolean {
+        if (corrections.pendingBatch() != null) return false
+        val m = material(all = false)
+        if (m.empty) return false
+        val existing = rules.all().filter { !it.pending }.map { it.text }
+        return claude.zasechkaRulesSubmit(
+            spoken = m.spoken,
+            corrections = m.fixes,
+            categories = store.categories().map { it.name },
+            existingRules = existing,
+        ).fold(
+            onSuccess = { id ->
+                corrections.setPendingBatch(id, m.upTo)
+                eventLog.add(
+                    "засечка-обучение: заявка в батч — ${m.spoken.size} надиктовок, " +
+                        "${m.fixes.size} поправок"
+                )
+                true
+            },
+            onFailure = { e ->
+                eventLog.add("засечка-обучение: заявка не ушла — ${e.message}")
+                false
+            },
+        )
+    }
+
+    /** Забрать ночной ответ, если он готов. −1 — ещё считается или нечего. */
+    suspend fun learnCollect(): Int {
+        val (id, upTo) = corrections.pendingBatch() ?: return -1
+        return claude.zasechkaRulesCollect(id).fold(
+            onSuccess = { pair ->
+                if (pair == null) return -1   // ещё в работе, спросим позже
+                val (proposed, answer) = pair
+                stats.recordAux(answer.costUsd, answer.tokensIn, answer.tokensOut)
+                corrections.clearPendingBatch()
+                applyProposed(proposed, upTo, "ночью батчем")
+            },
+            onFailure = { e ->
+                // Заявка сгорела (сутки истекли, ошибка) — забываем её, чтобы
+                // следующая ночь могла отправить новую. Материал цел.
+                corrections.clearPendingBatch()
+                eventLog.add("засечка-обучение: батч не забрался — ${e.message}")
                 -1
             },
         )

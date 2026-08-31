@@ -1234,9 +1234,14 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /**
      * Ночной разбор Засечки: раз в сутки, глубокой ночью, сопоставить
-     * надиктовки с тем, что из них получилось. Ночью — потому что это Опус на
-     * сотне пар: дорого и небыстро, а под руку владельцу лезть незачем.
-     * Если новых надиктовок нет, до сети дело не доходит вовсе.
+     * надиктовки с тем, что из них получилось.
+     *
+     * БАТЧЕМ — и это не мелочь: разбор идёт Опусом на сотне пар, а батч стоит
+     * ровно половину. Ночью ответа никто не ждёт, так что единственная цена
+     * батча (он отвечает в течение часа, а обещает сутки) здесь не цена
+     * вовсе. Заявка уходит в окно 3–5 утра, ответ забирается на любом
+     * последующем тике одним дешёвым GET. Нет нового материала — до сети
+     * дело не доходит вовсе.
      */
     private suspend fun zasechkaLearnTick() {
         val prefs = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
@@ -1244,13 +1249,14 @@ class PravkaAccessibilityService : AccessibilityService() {
         val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
         val today = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
             .format(java.util.Date())
+        // Заявка уходит ночью, ответ забирается на любом тике: батч отвечает
+        // обычно в течение часа, но обещаны сутки. Опрос — один дешёвый GET.
         if (hour in 3..5 && prefs.getString(KEY_Z_LEARN_DAY, "") != today) {
             prefs.edit().putString(KEY_Z_LEARN_DAY, today).apply()
-            if (app.zasechkaEngine.learnBacklog() > 0) {
-                val n = app.zasechkaEngine.learn()
-                if (n > 0) app.eventLog.add("засечка-обучение: ночью предложено правил — $n")
-            }
+            app.zasechkaEngine.learnSubmit()
         }
+        val got = app.zasechkaEngine.learnCollect()
+        if (got > 0) app.eventLog.add("засечка-обучение: ночью предложено правил — $got")
         refreshZasechkaBadge()
     }
 

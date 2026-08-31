@@ -622,27 +622,14 @@ $raw
      * механика. Возвращает предложения; в промпт они попадут только после
      * «да» владельца.
      */
-    suspend fun zasechkaRules(
-        // «сказал → записалось»: вся история надиктовок владельца.
-        spoken: List<String>,
-        // «сказал → записалось → поправил на»: где он вмешался руками.
-        corrections: List<String>,
-        categories: List<String>,
-        existingRules: List<String>,
-    ): Result<List<String>> = withContext(Dispatchers.IO) {
-        runCatchingApi {
-            val apiKey = settings.apiKey()
-            if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
-            if (spoken.isEmpty() && corrections.isEmpty()) return@runCatchingApi emptyList()
-            val existingBlock =
-                if (existingRules.isEmpty()) "(правил пока нет)"
-                else existingRules.joinToString("\n") { "- $it" }
-            val spokenBlock =
-                if (spoken.isEmpty()) "(новых надиктовок нет)" else spoken.joinToString("\n")
-            val fixesBlock =
-                if (corrections.isEmpty()) "(руками ничего не правил)"
-                else corrections.joinToString("\n")
-            val prompt = """
+    /**
+     * Свод правил для разбора поправок — стабильная часть, одна на все заходы.
+     */
+    private fun zasechkaRulesSystem(categories: List<String>, existingRules: List<String>): String {
+        val existingBlock =
+            if (existingRules.isEmpty()) "(правил пока нет)"
+            else existingRules.joinToString("\n") { "- $it" }
+        return """
 Ты разбираешь, где секретарь тайм-трекера расходится с владельцем, и
 превращаешь расхождения в правила.
 
@@ -651,14 +638,6 @@ ${categories.joinToString("\n") { "- $it" }}
 
 Уже действующие правила (не повторяй их и не противоречь им):
 $existingBlock
-
-ЧТО ВЛАДЕЛЕЦ ГОВОРИЛ И ЧТО ИЗ ЭТОГО ПОЛУЧИЛОСЬ.
-Это главный материал. Читай пару целиком: во фразе может быть сказано
-больше, чем попало в запись, — и вот это и есть промах.
-$spokenBlock
-
-ГДЕ ОН ВМЕШАЛСЯ РУКАМИ (сигнал сильнее: тут он сказал прямо):
-$fixesBlock
 
 Твоя работа — найти ЗАКОНОМЕРНОСТИ. Смотри на всё сразу:
 - ВРЕМЯ. Сказал «с 18:30 до 18:50», а записалось только начало и дело
@@ -678,30 +657,98 @@ $fixesBlock
 - Повелительно, коротко, одной фразой: «Если названы и начало, и конец —
   ставь обе границы, не только начало», «Созвон и планёрку клади в
   «Работа: звонки», а не в «Звонки»».
-- Ничего не выдумывай: только то, что видно в материале выше.
+- Ничего не выдумывай: только то, что видно в материале.
 - Закономерностей не нашлось — верни пустой список. Это нормальный ответ,
   он лучше, чем правило из ничего.
 
 Ответ — СТРОГО JSON: {"rules": ["...", "..."]}
 Не больше пяти правил за раз.
 """.trimIndent()
+    }
+
+    /** Сам материал: что говорил и что из этого вышло. */
+    private fun zasechkaRulesUser(spoken: List<String>, corrections: List<String>): String {
+        val spokenBlock =
+            if (spoken.isEmpty()) "(новых надиктовок нет)" else spoken.joinToString("\n")
+        val fixesBlock =
+            if (corrections.isEmpty()) "(руками ничего не правил)"
+            else corrections.joinToString("\n")
+        return """
+ЧТО ВЛАДЕЛЕЦ ГОВОРИЛ И ЧТО ИЗ ЭТОГО ПОЛУЧИЛОСЬ.
+Это главный материал. Читай пару целиком: во фразе может быть сказано
+больше, чем попало в запись, — и вот это и есть промах.
+$spokenBlock
+
+ГДЕ ОН ВМЕШАЛСЯ РУКАМИ (сигнал сильнее: тут он сказал прямо):
+$fixesBlock
+""".trimIndent()
+    }
+
+    private fun parseRulesJson(raw: String): List<String> {
+        var text = raw.trim()
+        if (text.startsWith("```")) {
+            text = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        }
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start < 0 || end <= start) return emptyList()
+        val o = runCatching { JSONObject(text.substring(start, end + 1)) }.getOrNull()
+            ?: return emptyList()
+        val array = o.optJSONArray("rules") ?: return emptyList()
+        return (0 until array.length())
+            .mapNotNull { array.optString(it).trim().takeIf { r -> r.isNotEmpty() } }
+            .take(5)
+    }
+
+    /**
+     * Разбор поправок Засечки в правила — синхронно, по кнопке: владелец
+     * стоит над экраном и ждёт ответа. Ночью то же самое уходит батчем
+     * (вдвое дешевле, см. [zasechkaRulesSubmit]).
+     *
+     * Опус, а не Сонет: обобщать поправки в правило — суждение, а не
+     * механика. Возвращает предложения; в промпт они попадут только после
+     * «да» владельца.
+     */
+    suspend fun zasechkaRules(
+        spoken: List<String>,
+        corrections: List<String>,
+        categories: List<String>,
+        existingRules: List<String>,
+    ): Result<List<String>> = withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+            if (spoken.isEmpty() && corrections.isEmpty()) return@runCatchingApi emptyList()
+            val prompt = zasechkaRulesSystem(categories, existingRules) + "\n\n" +
+                zasechkaRulesUser(spoken, corrections)
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
             val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
-            var text = reply.text.trim()
-            if (text.startsWith("```")) {
-                text = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-            }
-            val start = text.indexOf('{')
-            val end = text.lastIndexOf('}')
-            if (start < 0 || end <= start) return@runCatchingApi emptyList()
-            val o = runCatching { JSONObject(text.substring(start, end + 1)) }.getOrNull()
-                ?: return@runCatchingApi emptyList()
-            val array = o.optJSONArray("rules") ?: return@runCatchingApi emptyList()
-            (0 until array.length())
-                .mapNotNull { array.optString(it).trim().takeIf { r -> r.isNotEmpty() } }
-                .take(5)
+            parseRulesJson(reply.text)
         }
     }
+
+    /**
+     * То же самое, но БАТЧЕМ: ночью никто не ждёт ответа, а батч стоит
+     * половину. Возвращает id заявки — ответ забирается позже
+     * [zasechkaRulesCollect].
+     */
+    suspend fun zasechkaRulesSubmit(
+        spoken: List<String>,
+        corrections: List<String>,
+        categories: List<String>,
+        existingRules: List<String>,
+    ): Result<String> = submitBatch(
+        system = zasechkaRulesSystem(categories, existingRules),
+        user = zasechkaRulesUser(spoken, corrections),
+        model = Settings.MODEL_OPUS,
+        maxTokens = 2000,
+    )
+
+    /** Ответ ночного батча; null — ещё считается, спросим на следующем тике. */
+    suspend fun zasechkaRulesCollect(batchId: String): Result<Pair<List<String>, BatchAnswer>?> =
+        batchAnswer(batchId, Settings.MODEL_OPUS).map { answer ->
+            if (answer == null) null else parseRulesJson(answer.text) to answer
+        }
 
     private fun parseZasechka(raw: String): ZasechkaParse {
         var text = raw.trim()

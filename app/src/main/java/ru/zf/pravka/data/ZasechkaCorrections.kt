@@ -28,6 +28,8 @@ class ZasechkaCorrections(private val context: Context) {
         private const val PREFS = "pravka_internal"
         private const val KEY_LAST_LEARN = "z_learn_at"
         private const val KEY_LAST_SEEN = "z_learn_seen"
+        private const val KEY_BATCH_ID = "z_learn_batch"
+        private const val KEY_BATCH_UPTO = "z_learn_batch_upto"
     }
 
     private fun prefs() = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -37,6 +39,24 @@ class ZasechkaCorrections(private val context: Context) {
 
     fun setLastLearnAt(ts: Long) {
         prefs().edit().putLong(KEY_LAST_LEARN, ts).apply()
+    }
+
+    /**
+     * Заявка ночного батча: id и надиктовка, до которой он дочитал. Водяной
+     * знак двигается ТОЛЬКО когда ответ забран, — батч может не дойти, и
+     * материал должен остаться целым.
+     */
+    fun pendingBatch(): Pair<String, Long>? {
+        val id = prefs().getString(KEY_BATCH_ID, "").orEmpty()
+        return if (id.isBlank()) null else id to prefs().getLong(KEY_BATCH_UPTO, 0L)
+    }
+
+    fun setPendingBatch(id: String, upTo: Long) {
+        prefs().edit().putString(KEY_BATCH_ID, id).putLong(KEY_BATCH_UPTO, upTo).apply()
+    }
+
+    fun clearPendingBatch() {
+        prefs().edit().remove(KEY_BATCH_ID).remove(KEY_BATCH_UPTO).apply()
     }
 
     /** Самая свежая разобранная надиктовка: с неё начнётся следующий проход. */
