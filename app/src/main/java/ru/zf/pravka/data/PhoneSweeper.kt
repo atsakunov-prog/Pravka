@@ -54,6 +54,9 @@ class PhoneSweeper(
         // sweep time gets its log row only after it ends, with a start in the
         // past. The insert dedup makes the re-scan idempotent.
         private const val CALL_RESCAN_MS = 2L * 3600 * 1000
+        // Ретро-скан: ключ строки «все звонки» и нижний порог сессии.
+        const val CALLS_KEY = "\u0000calls"
+        private const val RETRO_MIN_SESSION_MS = 2 * 60_000L
 
         /** The special "Доступ к статистике использования" toggle. */
         fun hasUsageAccess(context: Context): Boolean {
@@ -422,4 +425,208 @@ class PhoneSweeper(
         val pm = context.packageManager
         pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
     }.getOrNull()
+
+    // ---- разметка задним числом ----
+    //
+    // Врезки были выключены месяцами: ютуб, звонки и Клод нигде не
+    // записывались, хотя система их помнит. Теперь для них есть второй трек,
+    // который ни у кого ничего не отнимает, и прошлое можно поднять.
+    //
+    // Насколько назад - честно говорит сам скан, а не обещание:
+    //   · ЖУРНАЛ ЗВОНКОВ телефон держит долго, месяцами;
+    //   · СТАТИСТИКА ИСПОЛЬЗОВАНИЯ отдаёт поимённые события примерно за
+    //     неделю. Глубже система хранит только СУММЫ за день по приложению -
+    //     без границ сессий, а значит и без места на шкале времени. Такое в
+    //     ленту класть нельзя: это было бы выдумывание часов.
+
+    /** Один источник (приложение или все звонки) за окно скана. */
+    data class RetroSource(
+        val key: String,            // имя пакета, или CALLS_KEY
+        val label: String,
+        val suggested: String,      // категория, если она уже назначена
+        val totalMs: Long,
+        val facts: List<ZasechkaStore.AutoFact>,
+    ) {
+        val count: Int get() = facts.size
+        val isApp: Boolean get() = key != CALLS_KEY
+    }
+
+    /** Что нашлось и как далеко назад данные вообще есть. */
+    data class RetroScan(
+        val sources: List<RetroSource>,
+        val appsFrom: Long,         // самое старое событие приложений, 0 - нет
+        val callsFrom: Long,        // самый старый звонок, 0 - нет
+        val noUsageAccess: Boolean,
+        val noCallAccess: Boolean,
+    )
+
+    /**
+     * Смотрит память телефона за [days] суток и группирует находки по
+     * источникам. Ничего не пишет: решение - за владельцем, он же выбирает
+     * категорию каждому. Своих водяных знаков свипа не двигает.
+     */
+    suspend fun scanRetro(days: Int): RetroScan = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val from = now - days * 86_400_000L
+        val sources = ArrayList<RetroSource>()
+        val immersive = runCatching { phoneStore.immersiveMap() }.getOrDefault(emptyMap())
+        var appsFrom = 0L
+        var callsFrom = 0L
+
+        val usm = context.getSystemService(UsageStatsManager::class.java)
+        if (hasUsageAccess(context) && usm != null) {
+            val excluded = excludedPackages()
+            // Порог сессии его же, из настроек, но не мельче двух минут:
+            // ретро-скан поднимает недели, и минутные заглядывания в ленту
+            // превратились бы в кашу.
+            val minMs = max(settings.zImmersiveMinFlow.first() * 60_000L, RETRO_MIN_SESSION_MS)
+            val spans = HashMap<String, MutableList<Pair<Long, Long>>>()
+            var currentPkg: String? = null
+            var startedAt = 0L
+            fun close(pkg: String, at: Long) {
+                if (isExcluded(pkg, excluded)) return
+                if (at - startedAt >= minMs) {
+                    spans.getOrPut(pkg) { ArrayList() }.add(startedAt to at)
+                }
+            }
+            val events = usm.queryEvents(from, now)
+            val event = UsageEvents.Event()
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                val ts = event.timeStamp
+                if (appsFrom == 0L || ts < appsFrom) appsFrom = ts
+                when (event.eventType) {
+                    UsageEvents.Event.ACTIVITY_RESUMED -> {
+                        val pkg = event.packageName ?: continue
+                        if (pkg != currentPkg) {
+                            currentPkg?.let { close(it, ts) }
+                            currentPkg = pkg
+                            startedAt = ts
+                        }
+                    }
+                    UsageEvents.Event.ACTIVITY_PAUSED -> {
+                        if (event.packageName == currentPkg) {
+                            currentPkg?.let { close(it, ts) }
+                            currentPkg = null
+                        }
+                    }
+                    // Экран погас - смотреть больше нечего, сессия кончилась.
+                    UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
+                        currentPkg?.let { close(it, ts) }
+                        currentPkg = null
+                    }
+                }
+            }
+            val known = phoneStore.labelsFlow.value
+            for ((pkg, list) in spans) {
+                val label = known[pkg] ?: appLabel(pkg) ?: pkg.substringAfterLast('.')
+                sources.add(
+                    RetroSource(
+                        key = pkg,
+                        label = label,
+                        suggested = immersive[pkg].orEmpty(),
+                        totalMs = list.sumOf { it.second - it.first },
+                        facts = list.map { (s, e) ->
+                            ZasechkaStore.AutoFact(s, e, label, immersive[pkg].orEmpty())
+                        },
+                    )
+                )
+            }
+        }
+
+        if (hasCallLogAccess(context)) {
+            val callFacts = ArrayList<ZasechkaStore.AutoFact>()
+            runCatching {
+                context.contentResolver.query(
+                    CallLog.Calls.CONTENT_URI,
+                    arrayOf(
+                        CallLog.Calls.DATE, CallLog.Calls.DURATION,
+                        CallLog.Calls.TYPE, CallLog.Calls.CACHED_NAME,
+                    ),
+                    "${CallLog.Calls.DATE} > ?",
+                    arrayOf(from.toString()),
+                    "${CallLog.Calls.DATE} ASC",
+                )?.use { cursor ->
+                    val dateCol = cursor.getColumnIndex(CallLog.Calls.DATE)
+                    val durCol = cursor.getColumnIndex(CallLog.Calls.DURATION)
+                    val typeCol = cursor.getColumnIndex(CallLog.Calls.TYPE)
+                    val nameCol = cursor.getColumnIndex(CallLog.Calls.CACHED_NAME)
+                    while (cursor.moveToNext()) {
+                        val date = cursor.getLong(dateCol)
+                        if (callsFrom == 0L || date < callsFrom) callsFrom = date
+                        val durationSec = cursor.getLong(durCol)
+                        val type = cursor.getInt(typeCol)
+                        if (type != CallLog.Calls.INCOMING_TYPE &&
+                            type != CallLog.Calls.OUTGOING_TYPE
+                        ) continue
+                        if (durationSec < MIN_CALL_SEC) continue
+                        val end = min(date + durationSec * 1000, now)
+                        if (end <= date) continue
+                        val name = (if (nameCol >= 0) cursor.getString(nameCol) else null)
+                            ?.takeIf { it.isNotBlank() }
+                        callFacts.add(
+                            ZasechkaStore.AutoFact(
+                                start = date,
+                                end = end,
+                                title = "звонок" + (name?.let { " · $it" } ?: ""),
+                                category = "",
+                                client = name.orEmpty(),
+                            )
+                        )
+                    }
+                }
+            }.onFailure { eventLog.add("ретро: журнал звонков не прочитался: ${it.message}") }
+            if (callFacts.isNotEmpty()) {
+                sources.add(
+                    RetroSource(
+                        key = CALLS_KEY,
+                        label = "Звонки",
+                        suggested = settings.zCallCategoryFlow.first(),
+                        totalMs = callFacts.sumOf { it.end - it.start },
+                        facts = callFacts,
+                    )
+                )
+            }
+        }
+
+        RetroScan(
+            sources = sources.sortedByDescending { it.totalMs },
+            appsFrom = appsFrom,
+            callsFrom = callsFrom,
+            noUsageAccess = !hasUsageAccess(context),
+            noCallAccess = !hasCallLogAccess(context),
+        )
+    }
+
+    /**
+     * Кладёт выбранные источники во второй трек. [picked] - источник и
+     * категория, которую владелец ему назначил. С [remember] приложения
+     * заодно попадают в список тех, что пишутся дальше сами: разметить Клод
+     * задним числом и тут же забыть его на будущее было бы половиной дела.
+     */
+    suspend fun applyRetro(
+        picked: List<Pair<RetroSource, String>>,
+        remember: Boolean,
+    ): Int {
+        val facts = picked.flatMap { (source, category) ->
+            source.facts.map { it.copy(category = category) }
+        }
+        if (facts.isEmpty()) return 0
+        val added = zasechkaStore.backfillParallel(facts)
+        if (remember) {
+            for ((source, category) in picked) {
+                if (source.isApp && category.isNotBlank()) {
+                    runCatching { phoneStore.setImmersive(source.key, category) }
+                }
+            }
+        }
+        if (added > 0) {
+            eventLog.add(
+                "ретро: во второй трек легло $added записей из " +
+                    picked.joinToString(", ") { it.first.label }
+            )
+            sync.kickSoon(scope)
+        }
+        return added
+    }
 }

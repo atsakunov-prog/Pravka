@@ -817,11 +817,21 @@ class ZasechkaStore(private val context: Context) {
         return entries.any { e ->
             e.source == "auto" && !e.open && (
                 (e.title == cleanTitle && kotlin.math.abs(e.start - start) < 60_000) ||
-                    (kotlin.math.min(e.end, end) - kotlin.math.max(e.start, start))
-                        .coerceAtLeast(0L) * 2 >= newSpan
+                    // Правило пересечения - ТОЛЬКО между звонками, и вот почему.
+                    // Оно ловит грязь журнала: один разговор бывает записан
+                    // несколькими строками (VoIP-приложения пишут свои копии),
+                    // и названия у них разные - «звонок» и «звонок · Мама».
+                    // Сессии приложений не пересекаются по построению (передний
+                    // план один), а вот звонок ПОВЕРХ ютуба - законная пара из
+                    // двух треков, и глушить её нельзя.
+                    (isCallTitle(e.title) && isCallTitle(cleanTitle) &&
+                        (kotlin.math.min(e.end, end) - kotlin.math.max(e.start, start))
+                            .coerceAtLeast(0L) * 2 >= newSpan)
                 )
         }
     }
+
+    private fun isCallTitle(t: String): Boolean = t.trimStart().startsWith("звонок", ignoreCase = true)
 
     // ---- второй трек: то, что шло одновременно с делом ----
 
@@ -966,6 +976,75 @@ class ZasechkaStore(private val context: Context) {
         entries.sortBy { it.start }
         persist()
         entry
+    }
+
+    /** Один факт из памяти телефона для разметки задним числом. */
+    data class AutoFact(
+        val start: Long,
+        val end: Long,
+        val title: String,
+        val category: String,
+        val client: String = "",
+    )
+
+    /**
+     * Разметка ЗАДНИМ ЧИСЛОМ: телефон помнит больше, чем лента. Врезки были
+     * выключены месяцами, и всё это время ютуб, звонки и Клод нигде не
+     * записывались - хотя система их помнит (журнал звонков долго, статистика
+     * использования около недели).
+     *
+     * Всё уходит ТОЛЬКО во второй трек, и это не лень, а осторожность:
+     * прошлые дни уже сложились в свои 24 часа, и класть туда строки основной
+     * ленты значило бы переписывать прожитое. Вдобавок нормализация не
+     * заглядывает дальше пяти суток (NORMALIZE_WINDOW_MS), так что дыры и
+     * наложения в старом дне просто некому починить - а параллельному треку
+     * чинить нечего: он ни у кого ничего не отнимает и в сутки не входит.
+     *
+     * Идемпотентно: повторный проход по тому же окну ничего не задваивает.
+     * Одна блокировка, одна нормализация, одна запись на диск - иначе сотня
+     * звонков за месяц означала бы сотню перезаписей файла ленты.
+     *
+     * Возвращает, сколько записей реально легло.
+     */
+    suspend fun backfillParallel(facts: List<AutoFact>): Int = mutex.withLock {
+        ensureLoaded()
+        val wanted = facts
+            .filter { it.end > it.start && it.title.isNotBlank() }
+            .sortedBy { it.start }
+        // Сначала прикидка без изменений: если всё это уже есть, снимок
+        // отмены тратить незачем - в стопке всего пять шагов.
+        if (wanted.none { !autoDuplicateLocked(it.start, it.end, it.title) }) return@withLock 0
+        snapshotLocked("разметку задним числом")
+        val nowMs = System.currentTimeMillis()
+        var added = 0
+        for (f in wanted) {
+            // Проверяем ещё раз: дубль мог приехать в этом же заходе.
+            if (autoDuplicateLocked(f.start, f.end, f.title)) continue
+            entries.add(
+                Entry(
+                    id = nextId(),
+                    start = f.start,
+                    end = f.end,
+                    raw = "",
+                    title = f.title.trim(),
+                    category = f.category.trim(),
+                    client = f.client.trim(),
+                    useful = 0,
+                    source = "auto",
+                    synced = false,
+                    createdAt = nowMs,
+                    track = 1,
+                )
+            )
+            added++
+        }
+        if (added == 0) return@withLock 0
+        entries.sortBy { it.start }
+        normalizeLocked()
+        entries.sortBy { it.start }
+        persist()
+        logger?.invoke("лента: разметка задним числом — легло $added записей во второй трек")
+        added
     }
 
     /**

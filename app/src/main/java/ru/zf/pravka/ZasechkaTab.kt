@@ -4,6 +4,7 @@ import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -2262,6 +2265,23 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         }
     }
 
+    // Разметка задним числом: врезки были выключены месяцами, и всё это время
+    // ютуб, звонки и Клод нигде не записывались — а телефон их помнит.
+    var retro by remember { mutableStateOf(false) }
+    Spacer(Modifier.height(8.dp))
+    OutlinedButton(onClick = { retro = true }) { Text("Разметить задним числом") }
+    Text(
+        "Поднимает из памяти телефона то, чего в ленте нет: сессии приложений " +
+            "(система помнит около недели) и звонки (месяцами). Ложится вторым " +
+            "треком — прошлые дни уже сложились в свои 24 часа, и переписывать " +
+            "их нельзя.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (retro) {
+        RetroDialog(app = app, categories = categories, onDismiss = { retro = false })
+    }
+
     editingApp?.let { pkg ->
         ImmersiveAppDialog(
             label = appLabelOf(labels, pkg),
@@ -2274,6 +2294,190 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
             },
         )
     }
+}
+
+/**
+ * Разметка задним числом. Показывает, что телефон помнит и чего в ленте нет,
+ * даёт каждому источнику категорию и кладёт выбранное во второй трек.
+ *
+ * Категории не угадываются: «Клод» у владельца может быть и работой, и
+ * систематизацией, и это знает только он. Поэтому список с выбором, а не
+ * кнопка «сделай хорошо».
+ */
+@Composable
+private fun RetroDialog(app: PravkaApp, categories: List<String>, onDismiss: () -> Unit) {
+    var days by remember { mutableStateOf(7) }
+    var scan by remember { mutableStateOf<ru.zf.pravka.data.PhoneSweeper.RetroScan?>(null) }
+    var scanning by remember { mutableStateOf(true) }
+    var picked by remember { mutableStateOf(emptySet<String>()) }
+    var cats by remember { mutableStateOf(emptyMap<String, String>()) }
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    var keep by remember { mutableStateOf(true) }
+    var busy by remember { mutableStateOf(false) }
+    val stamp = remember { SimpleDateFormat("d MMMM", Locale("ru")) }
+
+    LaunchedEffect(days) {
+        scanning = true
+        val found = runCatching { app.phoneSweeper.scanRetro(days) }.getOrNull()
+        scan = found
+        // По умолчанию отмечено то, чему категория уже назначена: звонки и
+        // приложения, которые он сам когда-то отметил тапом.
+        picked = found?.sources.orEmpty()
+            .filter { it.suggested.isNotBlank() }
+            .map { it.key }
+            .toSet()
+        cats = found?.sources.orEmpty()
+            .associate { it.key to it.suggested.ifBlank { "Отдых" } }
+        scanning = false
+    }
+
+    val sources = scan?.sources.orEmpty()
+    val chosen = sources.filter { it.key in picked }
+    val total = chosen.sumOf { it.count }
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Разметить задним числом") },
+        text = {
+            Column(
+                Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (d in listOf(7, 30, 90)) {
+                        FilterChip(
+                            selected = days == d,
+                            onClick = { if (!busy) days = d },
+                            label = { Text("$d дней") },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                when {
+                    scanning -> Text(
+                        "Смотрю память телефона…",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    sources.isEmpty() -> Text(
+                        "За это окно ничего не нашлось.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    else -> for (src in sources) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        ) {
+                            Checkbox(
+                                checked = src.key in picked,
+                                onCheckedChange = { on ->
+                                    picked = if (on) picked + src.key else picked - src.key
+                                },
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    src.label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    "${src.count} раз · ${fmtDur(src.totalMs / 60_000)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Box {
+                                TextButton(onClick = { menuFor = src.key }) {
+                                    Text(
+                                        cats[src.key].orEmpty().ifBlank { "категория" },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = menuFor == src.key,
+                                    onDismissRequest = { menuFor = null },
+                                ) {
+                                    for (c in categories) {
+                                        DropdownMenuItem(
+                                            text = { Text(c) },
+                                            onClick = {
+                                                cats = cats + (src.key to c)
+                                                picked = picked + src.key
+                                                menuFor = null
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                val info = scan
+                if (info != null && !scanning) {
+                    Spacer(Modifier.height(8.dp))
+                    // Честно про глубину: обещать «за три месяца» нельзя —
+                    // поимённые события система держит около недели, дальше
+                    // остаются только суммы за день, без места на шкале.
+                    val lines = buildList {
+                        when {
+                            info.noUsageAccess ->
+                                add("Нет доступа к статистике использования — приложений не будет.")
+                            info.appsFrom > 0 ->
+                                add("Приложения: данные с ${stamp.format(Date(info.appsFrom))}.")
+                            else ->
+                                add("Приложения: система не отдала событий за это окно.")
+                        }
+                        when {
+                            info.noCallAccess -> add("Нет доступа к журналу звонков.")
+                            info.callsFrom > 0 -> add("Звонки: с ${stamp.format(Date(info.callsFrom))}.")
+                        }
+                    }
+                    Text(
+                        lines.joinToString("\n"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = keep, onCheckedChange = { keep = it })
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "И записывать эти приложения дальше самому",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !busy && !scanning && chosen.isNotEmpty(),
+                onClick = {
+                    busy = true
+                    app.appScope.launch {
+                        val added = runCatching {
+                            app.phoneSweeper.applyRetro(
+                                picked = chosen
+                                    .map { it to cats[it.key].orEmpty() }
+                                    .filter { it.second.isNotBlank() },
+                                remember = keep,
+                            )
+                        }.getOrDefault(0)
+                        Feedback.toast(
+                            app,
+                            if (added > 0) "∥ Легло записей: $added"
+                            else "Новых записей не нашлось",
+                        )
+                        busy = false
+                        onDismiss()
+                    }
+                },
+            ) { Text(if (busy) "Пишу…" else "Разметить ($total)") }
+        },
+        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Отмена") } },
+    )
 }
 
 @Composable
