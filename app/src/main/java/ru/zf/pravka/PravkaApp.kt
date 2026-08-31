@@ -79,16 +79,28 @@ class PravkaApp : Application() {
     val recordings by lazy { Recordings(this) }
 
     // Засечка (timesheet): store, the Sheets mirror, phrase -> entry pipeline.
+    // Самообучение Засечки: поправки владельца копятся, разбор превращает их
+    // в правила, правила он одобряет — и они едут в промпт. Ровно как в
+    // Правке, но про смысл, а не про текст.
+    val zasechkaCorrections by lazy { ru.zf.pravka.data.ZasechkaCorrections(this) }
+    val zasechkaRules by lazy { ru.zf.pravka.data.RulesStore(this, "zasechka-rules.json") }
+
     val zasechkaStore by lazy {
         ru.zf.pravka.data.ZasechkaStore(this).also { store ->
             store.logger = { line -> eventLog.add(line) }
+            store.correctionLogger = { before, after ->
+                appScope.launch { runCatching { zasechkaCorrections.record(before, after) } }
+            }
         }
     }
     val zasechkaSync by lazy {
         ru.zf.pravka.data.ZasechkaSync(settings, zasechkaStore, httpClient, eventLog)
     }
     val zasechkaEngine by lazy {
-        ru.zf.pravka.core.ZasechkaEngine(claudeProvider, zasechkaStore, stats, eventLog, zasechkaSync, appScope)
+        ru.zf.pravka.core.ZasechkaEngine(
+            claudeProvider, zasechkaStore, stats, eventLog, zasechkaSync, appScope,
+            zasechkaRules, zasechkaCorrections,
+        )
     }
 
     // Todoist: список дел владельца и обратная запись времени в задачу.

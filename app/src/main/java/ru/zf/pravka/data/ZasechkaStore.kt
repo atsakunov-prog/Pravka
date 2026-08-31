@@ -172,6 +172,13 @@ class ZasechkaStore(private val context: Context) {
     /** Wired by PravkaApp: incidents and recoveries land in the event log. */
     var logger: ((String) -> Unit)? = null
 
+    /**
+     * Wired by PravkaApp: правка записи уходит в журнал самообучения. Крючок
+     * висит именно на [update] — это единственная точка, через которую
+     * проходят ВСЕ правки: и руками из диалога, и цепочкой, и голосом.
+     */
+    var correctionLogger: ((before: Entry, after: Entry) -> Unit)? = null
+
     private val mutex = Mutex()
     private var loaded = false
     private var entries = mutableListOf<Entry>()
@@ -910,6 +917,42 @@ class ZasechkaStore(private val context: Context) {
         entry
     }
 
+    /**
+     * Открывает параллель для сессии, которая ИДЁТ ПРЯМО СЕЙЧАС: владелец
+     * сидит в Клоде, и это должно быть видно в ленте, а не через пять минут
+     * после выхода. Закроет её тот же свип, когда увидит конец сессии.
+     *
+     * Отличий от [startParallel] два, и оба намеренные. Шага отмены НЕ
+     * ставит: живая строка робота - не поступок владельца, а засорять ею
+     * стопку из пяти шагов значит лишить его настоящей отмены. И чужую
+     * открытую параллель не трогает: сказанное голосом сильнее найденного
+     * телефоном, слот занят - значит занят.
+     */
+    suspend fun openAutoParallel(start: Long, title: String, category: String): Entry? =
+        mutex.withLock {
+            ensureLoaded()
+            if (entries.any { it.open && it.parallel }) return@withLock null
+            val entry = Entry(
+                id = nextId(),
+                start = start,
+                end = 0L,
+                raw = "",
+                title = title.trim(),
+                category = category.trim(),
+                client = "",
+                useful = 0,
+                source = "auto",
+                synced = false,
+                createdAt = System.currentTimeMillis(),
+                track = 1,
+            )
+            entries.add(entry)
+            normalizeLocked()
+            entries.sortBy { it.start }
+            persist()
+            entry
+        }
+
     /** Закрывает идущую параллельную запись; null - её и не было. */
     suspend fun closeParallel(at: Long): Entry? = mutex.withLock {
         ensureLoaded()
@@ -960,6 +1003,17 @@ class ZasechkaStore(private val context: Context) {
         if (parallel && covering.any { (e, _) -> sameThing(e, title, category) }) {
             return@withLock null
         }
+        // И то же самое на ВТОРОМ треке. «Готовлю завтрак и параллельно смотрю
+        // ютуб» кладёт ютуб параллелью сразу, голосом; через десять минут тот
+        // же ютуб находит статистика использования. covering выше смотрит
+        // только основную ленту и этой пары не видит - без проверки здесь у
+        // владельца выходило бы два ютуба поверх одного завтрака.
+        if (entries.any { e ->
+                e.parallel && sameThing(e, title, category) &&
+                    (kotlin.math.min(if (e.open) nowMs else e.end, end) -
+                        kotlin.math.max(e.start, start)).coerceAtLeast(0L) * 2 >= end - start
+            }
+        ) return@withLock null
         val entry = Entry(
             id = nextId(),
             start = start,
@@ -1136,6 +1190,8 @@ class ZasechkaStore(private val context: Context) {
         val index = entries.indexOfFirst { it.id == entry.id }
         if (index >= 0) {
             snapshotLocked("правку «${entries[index].title.ifBlank { "без названия" }}»")
+            // Чем он поправил робота — материал для правил Засечки.
+            runCatching { correctionLogger?.invoke(entries[index], entry) }
             entries[index] = entry.copy(synced = false, notionSynced = false)
             normalizeLocked()
             entries.sortBy { it.start }

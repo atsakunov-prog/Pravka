@@ -1512,6 +1512,8 @@ internal fun ZasechkaSettings(app: PravkaApp) {
         Spacer(Modifier.height(12.dp))
         BackupsSection(app)
 
+        ZasechkaLearning(app)
+
         Spacer(Modifier.height(12.dp))
         OutlinedButton(onClick = {
             app.appScope.launch {
@@ -2456,6 +2458,126 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
  * систематизацией, и это знает только он. Поэтому список с выбором, а не
  * кнопка «сделай хорошо».
  */
+/**
+ * Самообучение Засечки: поправки владельца → предложенные правила → его «да»
+ * → правила едут в каждый разбор. То же, что «Обучить» в Правке, но предмет
+ * другой: не как он пишет, а что у него значат слова про время.
+ *
+ * Ничего не включается само. Правило, которое владелец не судил, в промпт не
+ * идёт — иначе робот однажды начал бы учить сам себя на своих же промахах.
+ */
+@Composable
+private fun ZasechkaLearning(app: PravkaApp) {
+    val scope = app.appScope
+    var rules by remember { mutableStateOf(emptyList<ru.zf.pravka.data.RulesStore.Rule>()) }
+    var pendingCount by remember { mutableStateOf(0) }
+    var reload by remember { mutableStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+
+    LaunchedEffect(reload) {
+        rules = runCatching { app.zasechkaRules.all() }.getOrDefault(emptyList())
+        pendingCount = runCatching { app.zasechkaCorrections.all().size }.getOrDefault(0)
+    }
+
+    val proposed = rules.filter { it.pending }
+    val active = rules.filter { !it.pending }
+
+    Spacer(Modifier.height(12.dp))
+    Text("Самообучение", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "Каждая твоя правка записи — сигнал: робот назвал или разложил не так. " +
+            "Накопится десяток — нажми «Обучить», и Опус поищет в них " +
+            "закономерность. Правило заработает только после твоего «да».",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Button(
+            enabled = !busy && pendingCount > 0,
+            onClick = {
+                busy = true
+                scope.launch {
+                    val n = runCatching { app.zasechkaEngine.learn() }.getOrDefault(-1)
+                    Feedback.toast(
+                        app,
+                        when {
+                            n > 0 -> "Предложено правил: $n"
+                            n == 0 -> "Закономерностей не нашлось — это тоже ответ"
+                            else -> "Разбор не дошёл, поправки целы"
+                        },
+                    )
+                    busy = false
+                    reload++
+                }
+            },
+        ) { Text(if (busy) "Думаю…" else "Обучить") }
+        Spacer(Modifier.width(10.dp))
+        Text(
+            if (pendingCount > 0) "накоплено поправок: $pendingCount"
+            else "поправок пока нет",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    if (proposed.isNotEmpty()) {
+        Spacer(Modifier.height(10.dp))
+        Text("Предлагаю — суди", style = MaterialTheme.typography.bodyMedium)
+        for (r in proposed) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            ) {
+                Text(r.text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                TextButton(onClick = {
+                    scope.launch { app.zasechkaRules.approve(r.id); reload++ }
+                }) { Text("Да") }
+                TextButton(onClick = {
+                    scope.launch { app.zasechkaRules.delete(r.id); reload++ }
+                }) { Text("Нет", color = MaterialTheme.colorScheme.error) }
+            }
+        }
+    }
+
+    if (active.isNotEmpty()) {
+        Spacer(Modifier.height(10.dp))
+        Text("Действующие правила", style = MaterialTheme.typography.bodyMedium)
+        for (r in active) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            ) {
+                Switch(
+                    checked = r.enabled,
+                    onCheckedChange = { v ->
+                        scope.launch { app.zasechkaRules.setEnabled(r.id, v); reload++ }
+                    },
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    r.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (r.enabled) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                    onClick = { scope.launch { app.zasechkaRules.delete(r.id); reload++ } },
+                    modifier = Modifier.size(30.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Clear,
+                        contentDescription = "удалить правило",
+                        modifier = Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun RetroDialog(app: PravkaApp, categories: List<String>, onDismiss: () -> Unit) {
     var days by remember { mutableStateOf(7) }

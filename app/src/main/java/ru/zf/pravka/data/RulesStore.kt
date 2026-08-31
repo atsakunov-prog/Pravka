@@ -13,7 +13,12 @@ import org.json.JSONObject
 // "Обучить" round (his edits vs our output, analyzed by Opus). Enabled rules
 // ride into every CLEAN request as a permanent block in the uncached slot -
 // this is how the model "remembers" the owner's systematic preferences.
-class RulesStore(private val context: Context) {
+class RulesStore(
+    private val context: Context,
+    // Своё хранилище на каждый режим: у Правки правила про текст, у Засечки -
+    // про то, как владелец говорит о своём времени. Смешивать их нельзя.
+    private val fileName: String = "pravka-rules.json",
+) {
 
     data class Rule(
         val id: Long,
@@ -24,13 +29,16 @@ class RulesStore(private val context: Context) {
         // model, and lets the owner judge what the rule really does.
         val exampleBefore: String = "",
         val exampleAfter: String = "",
+        // Предложено разбором, но владелец ещё не судил. В промпт не идёт:
+        // правило работает только после его «да».
+        val pending: Boolean = false,
     )
 
     private val mutex = Mutex()
     private var loaded = false
     private val rules = mutableListOf<Rule>()
 
-    private fun file() = File(context.filesDir, "pravka-rules.json")
+    private fun file() = File(context.filesDir, fileName)
 
     private fun ensureLoaded() {
         if (loaded) return
@@ -52,6 +60,7 @@ class RulesStore(private val context: Context) {
                         createdTs = o.optLong("created"),
                         exampleBefore = o.optString("before"),
                         exampleAfter = o.optString("after"),
+                        pending = o.optBoolean("pending", false),
                     )
                 )
             }
@@ -72,6 +81,7 @@ class RulesStore(private val context: Context) {
                         put("created", r.createdTs)
                         put("before", r.exampleBefore)
                         put("after", r.exampleAfter)
+                        if (r.pending) put("pending", true)
                     }
                 )
             }
@@ -118,6 +128,36 @@ class RulesStore(private val context: Context) {
         }
     }
 
+    /** Предложение разбора: лежит и ждёт суда владельца. */
+    suspend fun addPending(text: String, exampleBefore: String = "", exampleAfter: String = "") =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                ensureLoaded()
+                val t = text.trim()
+                if (t.isNotEmpty() && rules.none { it.text.equals(t, ignoreCase = true) }) {
+                    val id = (rules.maxOfOrNull { it.id } ?: 0L) + 1
+                    rules.add(
+                        Rule(
+                            id, t, enabled = false, createdTs = System.currentTimeMillis(),
+                            exampleBefore = exampleBefore.take(160),
+                            exampleAfter = exampleAfter.take(160),
+                            pending = true,
+                        )
+                    )
+                    persist()
+                }
+            }
+        }
+
+    /** «Да» владельца: предложение становится действующим правилом. */
+    suspend fun approve(id: Long) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            ensureLoaded()
+            val i = rules.indexOfFirst { it.id == id }
+            if (i >= 0) { rules[i] = rules[i].copy(pending = false, enabled = true); persist() }
+        }
+    }
+
     suspend fun setEnabled(id: Long, on: Boolean) = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureLoaded()
@@ -140,7 +180,9 @@ class RulesStore(private val context: Context) {
     suspend fun enabledBlock(): String = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureLoaded()
-            val active = rules.filter { it.enabled }
+            // Непросуженное в промпт не идёт: правило начинает работать
+            // только после того, как владелец его одобрил.
+            val active = rules.filter { it.enabled && !it.pending }
             if (active.isEmpty()) return@withLock ""
             val sb = StringBuilder("Постоянные правила владельца (соблюдай):\n")
             var used = 0

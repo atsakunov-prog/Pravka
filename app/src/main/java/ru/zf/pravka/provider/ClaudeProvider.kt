@@ -376,6 +376,9 @@ $listing
         // must come back under the same name and category, otherwise the week
         // never adds up.
         recentEntries: List<String> = emptyList(),
+        // Одобренные владельцем правила Засечки: как он говорит о своём
+        // времени. Едут в переменный хвост, а не под кэш: список живой.
+        ownerRules: String = "",
     ): Result<ZasechkaParse> = withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
@@ -564,8 +567,12 @@ delete: {"action": "delete", "entry": 7}
 stop:   {"action": "stop", "end_time": "", "start_offset_min": 0}
 none:   {"action": "none", "say": "..."}
 """.trimIndent() + "\n\n"
+            val rulesBlock =
+                if (ownerRules.isBlank()) ""
+                else "\n" + ownerRules + "\n"
             val varTail = """
 Сейчас: $nowLocal.
+$rulesBlock
 $previousBlock
 Записи сегодня (№ · время · категория · название):
 $todayBlock
@@ -595,6 +602,78 @@ $raw
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
             )
+        }
+    }
+
+    /**
+     * Разбор поправок Засечки в правила — то же самое, что «Обучить» в
+     * Правке, только предмет другой: не как владелец пишет, а что у него
+     * значат слова про время. «Созвон» — это «Работа: звонки», а не «Звонки».
+     * «Разбор почты» он кладёт в «Операционку». «Заодно» у него значит
+     * параллельный трек.
+     *
+     * Опус, а не Сонет: обобщать поправки в правило — суждение, а не
+     * механика. Возвращает предложения; в промпт они попадут только после
+     * «да» владельца.
+     */
+    suspend fun zasechkaRules(
+        // «сказал → записалось → поправил на»
+        corrections: List<String>,
+        categories: List<String>,
+        existingRules: List<String>,
+    ): Result<List<String>> = withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+            if (corrections.isEmpty()) return@runCatchingApi emptyList()
+            val existingBlock =
+                if (existingRules.isEmpty()) "(правил пока нет)"
+                else existingRules.joinToString("\n") { "- $it" }
+            val prompt = """
+Ты разбираешь, где секретарь тайм-трекера ошибается, и превращаешь это в
+правила. Ниже — поправки владельца: что он сказал, что робот записал и на
+что владелец это исправил своей рукой. Исправил — значит робот был неправ.
+
+Категории владельца:
+${categories.joinToString("\n") { "- $it" }}
+
+Уже действующие правила (не повторяй их и не противоречь им):
+$existingBlock
+
+Поправки:
+${corrections.joinToString("\n")}
+
+Твоя работа — найти ЗАКОНОМЕРНОСТИ, а не переписать поправки списком.
+- Правило имеет смысл, только если сработает СНОВА: за ним стоит привычка
+  речи или устойчивый выбор категории, а не один случай.
+- Одна поправка — не закономерность. Два-три похожих случая — уже да.
+- Пиши повелительно, коротко, одной фразой: «Созвон и планёрку клади в
+  «Работа: звонки», а не в «Звонки»», «Слова «заодно» и «под это дело»
+  значат параллельный трек».
+- Про НАЗВАНИЯ дел правила тоже нужны: если владелец раз за разом
+  переименовывает по одному образцу, опиши образец.
+- Ничего не выдумывай: только то, что видно в поправках.
+- Закономерностей не нашлось — верни пустой список. Это нормальный ответ,
+  он лучше, чем правило из ничего.
+
+Ответ — СТРОГО JSON: {"rules": ["...", "..."]}
+Не больше пяти правил за раз.
+""".trimIndent()
+            val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+            val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+            var text = reply.text.trim()
+            if (text.startsWith("```")) {
+                text = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            }
+            val start = text.indexOf('{')
+            val end = text.lastIndexOf('}')
+            if (start < 0 || end <= start) return@runCatchingApi emptyList()
+            val o = runCatching { JSONObject(text.substring(start, end + 1)) }.getOrNull()
+                ?: return@runCatchingApi emptyList()
+            val array = o.optJSONArray("rules") ?: return@runCatchingApi emptyList()
+            (0 until array.length())
+                .mapNotNull { array.optString(it).trim().takeIf { r -> r.isNotEmpty() } }
+                .take(5)
         }
     }
 

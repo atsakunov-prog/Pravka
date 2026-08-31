@@ -304,6 +304,30 @@ class PhoneSweeper(
         val insertsOn = settings.zParallelAutoFlow.first()
         val allLabels = knownLabels + newLabels
         candidates.sortBy { it.start }
+
+        // ---- живая параллель: то, что идёт ПРЯМО СЕЙЧАС ----
+        //
+        // Сессия попадала в ленту только КОГДА КОНЧАЛАСЬ, плюс до пяти минут
+        // на тик: владелец сидел в Клоде и не видел этого в ленте вовсе, и был
+        // прав, что спросил. Теперь идущая сессия открывает параллель сразу, а
+        // закрывается она тем же свипом, который увидит её конец.
+        val liveNow = if (!insertsOn) null else runCatching { zasechkaStore.openParallel() }
+            .getOrNull()?.takeIf { it.source == "auto" }
+        if (liveNow != null) {
+            // Её сессия уже кончилась и лежит среди кандидатов - закрываем
+            // живую настоящим концом, а кандидата убираем: это одна запись.
+            val done = candidates.firstOrNull { c ->
+                (allLabels[c.pkg] ?: c.pkg.substringAfterLast('.')) == liveNow.title &&
+                    kotlin.math.abs(c.start - liveNow.start) < 60_000
+            }
+            if (done != null) {
+                zasechkaStore.closeParallel(done.end)
+                candidates.remove(done)
+                insertedAny = true
+                eventLog.add("телефон: ${liveNow.title} закончилось, параллель закрыта")
+            }
+        }
+
         for (c in candidates) {
             if (!insertsOn) break
             val label = allLabels[c.pkg] ?: c.pkg.substringAfterLast('.')
@@ -324,6 +348,40 @@ class PhoneSweeper(
 
         if (insertsOn && settings.zCallsFlow.first() && hasCallLogAccess(context)) {
             if (sweepCalls(now, st.lastCallSweep)) insertedAny = true
+        }
+
+        // Что идёт прямо сейчас: слушающая служба важнее переднего плана -
+        // книга в наушниках честнее, чем приложение, открытое на экране.
+        val runningPkg = audioPkg
+            ?: currentPkg?.takeIf { immersive.containsKey(it) && it !in audioApps }
+        val runningSince = if (audioPkg != null) audioAt else currentStartedAt
+        val stillLive = runCatching { zasechkaStore.openParallel() }.getOrNull()
+        when {
+            !insertsOn -> Unit
+            // Порог тот же, что у закрытых сессий: заглянул на минуту - не дело.
+            runningPkg != null && runningSince > 0 && now - runningSince >= immersiveMinMs -> {
+                val label = allLabels[runningPkg] ?: runningPkg.substringAfterLast('.')
+                if (stillLive == null) {
+                    val opened = zasechkaStore.openAutoParallel(
+                        start = runningSince,
+                        title = label,
+                        category = immersive[runningPkg].orEmpty(),
+                    )
+                    if (opened != null) {
+                        insertedAny = true
+                        eventLog.add("телефон: $label идёт сейчас → параллель открыта")
+                    }
+                }
+                // Живая уже стоит - пусть тикает. Чужую (сказанную голосом)
+                // не трогаем вовсе: слово владельца сильнее.
+            }
+            // Ничего не идёт, а живая осталась - её сессия кончилась незаметно
+            // (перезагрузка, убитый процесс). Закрываем сейчас, чтобы она не
+            // тикала до полуночи.
+            stillLive != null && stillLive.source == "auto" -> {
+                zasechkaStore.closeParallel(now)
+                insertedAny = true
+            }
         }
 
         if (insertedAny) sync.kickSoon(scope)

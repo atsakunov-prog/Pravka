@@ -26,6 +26,10 @@ class ZasechkaEngine(
     private val eventLog: EventLog,
     private val sync: ZasechkaSync,
     private val scope: CoroutineScope,
+    // Самообучение: одобренные правила едут в каждый разбор, поправки копятся
+    // до следующего «Обучить».
+    private val rules: ru.zf.pravka.data.RulesStore,
+    private val corrections: ru.zf.pravka.data.ZasechkaCorrections,
 ) {
 
     companion object {
@@ -90,6 +94,7 @@ class ZasechkaEngine(
             previousTitle = previousTitle,
             todayEntries = todayLines,
             recentEntries = recentLines,
+            ownerRules = runCatching { rules.enabledBlock() }.getOrDefault(""),
         )
 
         return parsed.fold(
@@ -456,6 +461,45 @@ class ZasechkaEngine(
             sync.kickSoon(scope)
         }
         return closed
+    }
+
+    /**
+     * «Обучить»: поправки владельца → предложенные правила. Ничего не
+     * включает само — правило начинает работать после его «да».
+     *
+     * Возвращает, сколько предложений появилось; −1 — разбор не дошёл.
+     * Журнал поправок чистится только при успехе: не дошло — материал цел.
+     */
+    suspend fun learn(): Int {
+        val list = corrections.all()
+        if (list.isEmpty()) return 0
+        val lines = list.takeLast(60).map { c ->
+            "- сказал: «${c.raw}» → робот записал: «${c.wasTitle}» [${
+                c.wasCategory.ifBlank { "без категории" }
+            }${if (c.wasParallel) ", параллельно" else ""}] → владелец поправил на: «${c.nowTitle}» [${
+                c.nowCategory.ifBlank { "без категории" }
+            }${if (c.nowParallel) ", параллельно" else ""}] (поправил ${c.what})"
+        }
+        val existing = rules.all().filter { !it.pending }.map { it.text }
+        val result = claude.zasechkaRules(
+            corrections = lines,
+            categories = store.categories().map { it.name },
+            existingRules = existing,
+        )
+        return result.fold(
+            onSuccess = { proposed ->
+                for (r in proposed) rules.addPending(r)
+                corrections.clear()
+                eventLog.add(
+                    "засечка-обучение: ${list.size} поправок → ${proposed.size} предложений"
+                )
+                proposed.size
+            },
+            onFailure = { e ->
+                eventLog.add("засечка-обучение: не вышло — ${e.message}")
+                -1
+            },
+        )
     }
 
     /** Название категории буква в букву, как в списке владельца. */
