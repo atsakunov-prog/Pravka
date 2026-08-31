@@ -435,6 +435,10 @@ private fun MainScreen(
     // Одноразовый автозапуск камеры/сканера в Теле (Е) — из меню кнопки еды.
     var foodActionPending by remember { mutableStateOf(foodAction.ifBlank { null }) }
 
+    // Открытие приложения — тоже повод посмотреть, нет ли сборки свежее:
+    // служба доступности может быть выключена, а суточный тик живёт в ней.
+    LaunchedEffect(Unit) { runCatching { app.updates.tick() } }
+
     // Просьба извне при живом приложении: переключаемся и сообщаем, что
     // услышали, — иначе следующая перерисовка увела бы вкладку обратно.
     LaunchedEffect(tabRequest) {

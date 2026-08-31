@@ -49,6 +49,16 @@ val buildNumber: Int = overrideBuildNumber ?: run {
     n
 }
 val appVersionName = "2.0.$buildNumber"
+// CI передаёт своё имя ветки; локально спрашиваем git, а если и его нет -
+// пусто, и тогда самообновление просто не проверяет ветку.
+val buildBranch: String = (project.findProperty("buildBranch") as? String)?.takeIf { it.isNotBlank() }
+    ?: runCatching {
+        val p = ProcessBuilder("git", "rev-parse", "--abbrev-ref", "HEAD")
+            .directory(rootProject.projectDir).redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().readText().trim()
+        p.waitFor()
+        if (p.exitValue() == 0) out else ""
+    }.getOrDefault("")
 val buildTimestamp: String = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(ZonedDateTime.now())
 
 android {
@@ -62,6 +72,11 @@ android {
         versionCode = buildNumber
         versionName = appVersionName
         buildConfigField("String", "BUILD_TIME", "\"$buildTimestamp\"")
+        // Из какой ветки собрано. Ветка `apk-builds` одна на весь репозиторий
+        // и форс-пушится КАЖДОЙ веткой, поэтому самообновление обязано знать
+        // свою линию: сборка соседней ветки имеет номер больше, но это не
+        // «новее», это другая работа. См. data/Updates.kt.
+        buildConfigField("String", "BUILD_BRANCH", "\"$buildBranch\"")
         // whisper.cpp is built only for the Pixel's arm64 - keeps the APK
         // and the CI native build small (no x86/armv7 the owner never uses).
         ndk {

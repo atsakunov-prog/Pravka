@@ -23,10 +23,12 @@ import kotlinx.coroutines.withContext
 // call log - and turns it into:
 //   1. day aggregates in PhoneStore (screen time, pickups, glances=отвлечения,
 //      per-app minutes) - the SEPARATE layer that never touches the ribbon;
-//   2. ribbon entries for the crossover cases: an attention-eater session
-//      (YouTube-класс, конфигурируемый список) interrupts the open entry and
-//      claims the time; a call >= 1 min interrupts AND resumes the entry it
-//      cut (a conversation pauses work, it does not end it).
+//   2. ribbon entries for the crossover cases: пожиратель внимания
+//      (YouTube-класс, конфигурируемый список) и звонок >= 1 мин. Ни тот, ни
+//      другой НИЧЕГО НЕ ВЫЧИТАЮТ: если в это время шло настоящее дело, факт
+//      ложится ПАРАЛЛЕЛЬНЫМ треком поверх него (готовил еду и смотрел про
+//      часы - готовка осталась готовкой), а если время было ничьё - обычной
+//      строкой в ленту.
 // Runs retrospectively every few minutes, so nothing is lost while Правка's
 // process was dead - the system kept the history for us.
 class PhoneSweeper(
@@ -245,29 +247,29 @@ class PhoneSweeper(
 
         var insertedAny = false
         if (detectSleep(now, usm)) insertedAny = true
-        // Врезки пожирателей владелец выключил («засоряет ленту, YouTube за
-        // готовкой — не потеря»): суммы остаются в экранном времени ниже,
-        // а лента не режется. Сон выше — отдельно, он не врезка.
-        val insertsOn = settings.zAutoInsertsFlow.first()
+        // Пожиратели и звонки больше не режут ленту: они ложатся ПАРАЛЛЕЛЬНЫМ
+        // треком поверх того дела, которое шло, - «YouTube за готовкой не
+        // потеря» перестало быть проблемой, потому что готовка остаётся
+        // готовкой. Если время было ничьё, факт идёт обычной строкой.
+        // Сон выше - отдельно, он занимает время по-настоящему.
+        val insertsOn = settings.zParallelAutoFlow.first()
         val allLabels = knownLabels + newLabels
         candidates.sortBy { it.start }
         for (c in candidates) {
             if (!insertsOn) break
-            if (zasechkaStore.coveredByOwner(c.start, c.end)) continue
             val label = allLabels[c.pkg] ?: c.pkg.substringAfterLast('.')
-            // Owner's rule: an attention eater is an interruption exactly like
-            // a call - the active дело resumes after it. With nothing open it
-            // simply lands as its own row (its category, e.g. «Отдых»).
-            val inserted = zasechkaStore.insertInterruption(
+            // Занятое владельцем время больше не повод промолчать: наоборот,
+            // именно там пожиратель и становится параллелью. Решает store.
+            val inserted = zasechkaStore.insertAutoFact(
                 start = c.start,
                 end = c.end,
                 title = label,
                 category = immersive[c.pkg].orEmpty(),
-                resumePrevious = true,
             )
             if (inserted != null) {
                 insertedAny = true
-                eventLog.add("телефон: $label ${(c.end - c.start) / 60_000} мин → в ленту")
+                val where = if (inserted.parallel) "параллельно" else "в ленту"
+                eventLog.add("телефон: $label ${(c.end - c.start) / 60_000} мин → $where")
             }
         }
 
@@ -320,6 +322,9 @@ class PhoneSweeper(
         }
         prefs.edit().putString("z_sleep_day", todayKey).apply()
         if (zasechkaStore.coveredByOwner(bestStart, bestEnd)) return false
+        // Спящий человек ничего не слушает: забытая с вечера параллель
+        // («слушаю книгу») закрывается вместе с вечерним делом.
+        zasechkaStore.closeParallel(bestStart)
         val entry = zasechkaStore.insertInterruption(
             start = bestStart,
             end = bestEnd,
@@ -360,23 +365,22 @@ class PhoneSweeper(
                     if (durationSec < MIN_CALL_SEC) continue
                     val end = min(date + durationSec * 1000, now)
                     if (end <= date) continue
-                    if (runCatching { zasechkaStore.coveredByOwner(date, end) }.getOrDefault(false)) continue
                     val title = "звонок" + (name?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
-                    val entry = zasechkaStore.insertInterruption(
+                    // Разговор идёт ПОВЕРХ дела, а не вместо него: два звонка
+                    // посреди работы больше не режут работу на четыре куска.
+                    val entry = zasechkaStore.insertAutoFact(
                         start = date,
                         end = end,
                         title = title,
                         category = callCategory,
-                        // A call pauses the current activity; afterwards the
-                        // same activity keeps running in the ribbon.
-                        resumePrevious = true,
                         // The recognized contact is the counterparty: with it in
                         // its own column a call row is already a CRM log line.
                         client = name?.takeIf { it.isNotBlank() }.orEmpty(),
                     )
                     if (entry != null) {
                         inserted = true
-                        eventLog.add("телефон: $title ${durationSec / 60} мин → в ленту (с продолжением)")
+                        val where = if (entry.parallel) "параллельно" else "в ленту"
+                        eventLog.add("телефон: $title ${durationSec / 60} мин → $where")
                     }
                 }
             }

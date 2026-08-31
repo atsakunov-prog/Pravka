@@ -245,8 +245,12 @@ private fun parseTimeOfDay(dayStart: Long, text: String): Long? {
 private data class DayUnit(
     val fragments: List<ZasechkaStore.Entry>,
     val interruptions: List<ZasechkaStore.Entry>,
+    // Второй трек: то, что шло ПОВЕРХ этого дела и ничего у него не отняло.
+    // Рисуется правее, со знаком «∥», Σ дела не уменьшает.
+    val parallels: List<ZasechkaStore.Entry> = emptyList(),
 ) {
-    val chain: Boolean get() = fragments.size > 1 || interruptions.isNotEmpty()
+    val chain: Boolean get() =
+        fragments.size > 1 || interruptions.isNotEmpty() || parallels.isNotEmpty()
     val start: Long get() = fragments.first().start
     val open: Boolean get() = fragments.last().open
     fun endMs(now: Long): Long = fragments.last().let { if (it.open) now else it.end }
@@ -263,7 +267,9 @@ private fun entrySig(e: ZasechkaStore.Entry): String =
  * means the owner really switched, and that breaks the chain. Buffered autos
  * that are never followed by a resume stay ordinary standalone rows.
  */
-private fun buildDayUnits(asc: List<ZasechkaStore.Entry>): List<DayUnit> {
+private fun buildDayUnits(all: List<ZasechkaStore.Entry>): List<DayUnit> {
+    val asc = all.filter { !it.parallel }
+    val parallels = all.filter { it.parallel }
     val units = ArrayList<DayUnit>()
     var fragments = ArrayList<ZasechkaStore.Entry>()
     var interruptions = ArrayList<ZasechkaStore.Entry>()
@@ -307,7 +313,39 @@ private fun buildDayUnits(asc: List<ZasechkaStore.Entry>): List<DayUnit> {
         }
     }
     flush()
-    return units
+    return attachParallels(units, parallels)
+}
+
+/**
+ * Каждая параллельная запись прицепляется к тому делу, поверх которого она
+ * реально шла (наибольшее пересечение). Если пересечения нет вовсе — к
+ * ближайшему по времени; если дел нет совсем, параллели становятся строками
+ * сами по себе, иначе они просто исчезли бы с экрана.
+ */
+private fun attachParallels(
+    units: List<DayUnit>,
+    parallels: List<ZasechkaStore.Entry>,
+): List<DayUnit> {
+    if (parallels.isEmpty()) return units
+    if (units.isEmpty()) return parallels.map { DayUnit(listOf(it), emptyList()) }
+    val now = System.currentTimeMillis()
+    val buckets = HashMap<Int, MutableList<ZasechkaStore.Entry>>()
+    for (p in parallels) {
+        val pEnd = if (p.open) now else p.end
+        fun overlapWith(i: Int): Long {
+            val u = units[i]
+            return (minOf(u.endMs(now), pEnd) - maxOf(u.start, p.start)).coerceAtLeast(0L)
+        }
+        val best = units.indices.maxByOrNull { overlapWith(it) } ?: continue
+        val target = if (overlapWith(best) > 0) best else {
+            units.indices.minByOrNull { kotlin.math.abs(units[it].start - p.start) } ?: best
+        }
+        buckets.getOrPut(target) { ArrayList() }.add(p)
+    }
+    return units.mapIndexed { i, u ->
+        val mine = buckets[i] ?: return@mapIndexed u
+        u.copy(parallels = mine.sortedBy { it.start })
+    }
 }
 
 @Composable
@@ -375,9 +413,14 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     Feedback.toast(app, "✏️ «${outcome.previousTitle}» → «${outcome.entry.title}»")
                 outcome.action == "delete" ->
                     Feedback.toast(app, "🗑 «${outcome.entry.title}» удалена")
+                outcome.action == "parallel" ->
+                    Feedback.toast(app, "∥ ${outcome.entry.title}")
                 !outcome.categorized ->
                     Feedback.toast(app, app.getString(R.string.z_saved_raw, outcome.error ?: ""))
-                else -> Feedback.toast(app, "⏱ ${outcome.entry.title}")
+                else -> Feedback.toast(
+                    app,
+                    "⏱ ${outcome.entry.title}" + (outcome.parallel?.let { " ∥ ${it.title}" } ?: "")
+                )
             }
         }
     }
@@ -493,6 +536,9 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                             app.appScope.launch { unit.fragments.forEach { store.delete(it.id) } }
                         },
                         onEditInterruption = { editing = it },
+                        onStopParallel = {
+                            app.appScope.launch { app.zasechkaEngine.closeParallel() }
+                        },
                     )
                 } else {
                     EntryRow(
@@ -544,13 +590,23 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             // Summed in MILLISECONDS and rounded once: adding up per-entry
             // whole minutes is how the day used to come out short of the clock.
             val rangeTo = minOf(now, dayEnd)
+            // В сутки складывается ТОЛЬКО основной трек — это и есть железное
+            // правило. Параллель считается своим итогом, отдельной строкой.
+            val mainEntries = rangeEntries.filter { !it.parallel }
+            val parEntries = rangeEntries.filter { it.parallel }
             val msByCat = HashMap<String, Long>()
-            for (e in rangeEntries) {
+            for (e in mainEntries) {
                 val k = e.category.trim().lowercase()
                 msByCat[k] = (msByCat[k] ?: 0L) + e.durationMsIn(rangeStart, rangeTo, now)
             }
+            val parMsByCat = HashMap<String, Long>()
+            for (e in parEntries) {
+                val k = e.category.trim().lowercase()
+                parMsByCat[k] = (parMsByCat[k] ?: 0L) + e.durationMsIn(rangeStart, rangeTo, now)
+            }
+            val parTotal = msToMin(parMsByCat.values.sum())
             val minutesByCat = msByCat.mapValues { msToMin(it.value) }
-            val names = (categoryNames + rangeEntries.map { it.category.trim() }.filter { it.isNotBlank() })
+            val names = (categoryNames + mainEntries.map { it.category.trim() }.filter { it.isNotBlank() })
                 .distinctBy { it.lowercase() }
                 .sortedBy { categoryHue(it) }
             val rows = names.map { it to (minutesByCat[it.lowercase()] ?: 0L) } +
@@ -571,7 +627,8 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             val elapsedMs = (rangeTo - rangeStart).coerceAtLeast(0L)
             val uncoveredMin = msToMin((elapsedMs - msByCat.values.sum()).coerceAtLeast(0L))
             Text(
-                (if (weekMode) "За неделю" else "За день") + ": ${fmtDur(total)} · записей: ${rangeEntries.size}" +
+                (if (weekMode) "За неделю" else "За день") + ": ${fmtDur(total)} · записей: ${mainEntries.size}" +
+                    (if (parTotal > 0) " · ∥ ${fmtDur(parTotal)}" else "") +
                     (if (pomoCount > 0) " · 🍅 $pomoCount" else "") +
                     (if (uncoveredMin >= 2) " · не покрыто ${fmtDur(uncoveredMin)}" else ""),
                 style = MaterialTheme.typography.titleSmall,
@@ -581,14 +638,22 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             // час потерь по −10 съедает час работы по +10, и это видно.
             var plus = 0.0
             var minus = 0.0
-            for (e in rangeEntries) {
+            for (e in mainEntries) {
                 val v = worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now) / 3_600_000.0
                 if (v >= 0) plus += v else minus += v
             }
-            val net = kotlin.math.round(plus + minus).toInt()
+            // Баллы второго трека идут в общий балл целиком (час за рулём с
+            // Акуниным честно лучше часа просто за рулём), но видны своим
+            // числом — иначе непонятно, откуда взялся плюс поверх суток.
+            val parPoints = parEntries.sumOf { e ->
+                worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now).toDouble() / 3_600_000.0
+            }
+            val parNet = kotlin.math.round(parPoints).toInt()
+            val net = kotlin.math.round(plus + minus + parPoints).toInt()
             Text(
                 "Баланс ${if (net >= 0) "+$net" else "$net"} = " +
-                    "+${kotlin.math.round(plus).toInt()} и ${kotlin.math.round(minus).toInt()}",
+                    "+${kotlin.math.round(plus).toInt()} и ${kotlin.math.round(minus).toInt()}" +
+                    (if (parNet != 0) ", и ещё ${if (parNet >= 0) "+$parNet" else "$parNet"} параллельно" else ""),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 6.dp),
@@ -648,6 +713,44 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            // Второй трек своим списком: это время НЕ входит в сутки, поэтому
+            // и стоит отдельно, а не строчками среди категорий дня.
+            if (parTotal > 0) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "∥ Параллельно · ${fmtDur(parTotal)}",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                val parNames = parEntries.map { it.category.trim() }
+                    .distinctBy { it.lowercase() }
+                    .sortedBy { categoryHue(it) }
+                for (category in parNames) {
+                    val ms = parMsByCat[category.lowercase()] ?: 0L
+                    if (ms <= 0) continue
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(vertical = 2.dp),
+                    ) {
+                        Text(
+                            category.ifBlank { "без категории" },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = categoryColor(category),
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.width(130.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            fmtDur(msToMin(ms)),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 8.dp).width(64.dp),
+                        )
+                        val pts = pointsOf(worthOf(category), ms)
+                        if (pts != 0) PointsChip(pts, bold = true)
+                    }
+                }
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -730,6 +833,9 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                             client = updated.client,
                             useful = updated.useful,
                             source = "edit",
+                            // Тумблер «Параллельно» в диалоге цепочки уводит
+                            // на второй трек всё дело, а не первый кусок.
+                            track = updated.track,
                         )
                         if (f.id == first.id) {
                             // An open fragment has end=0 - never clamp against it.
@@ -970,6 +1076,7 @@ private fun ChainBlock(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onEditInterruption: (ZasechkaStore.Entry) -> Unit,
+    onStopParallel: (ZasechkaStore.Entry) -> Unit,
 ) {
     val head = unit.fragments.first()
     val last = unit.fragments.last()
@@ -1067,9 +1174,67 @@ private fun ChainBlock(
                     )
                 }
             }
-            // Врезки (звонки, YouTube) в ленте больше не рисуются — владелец:
+            // Врезки, которые РЕЗАЛИ дело, в ленте не рисуются — владелец:
             // «очень сильно засоряет». Их минуты живут в экранном времени, а
             // старые записи остаются в данных и в выгрузках.
+            //
+            // А вот второй трек рисуется — потому что он ничего не отнял.
+            // Строка идёт правее и со знаком «∥»: это шло ОДНОВРЕМЕННО с
+            // делом, и Σ дела выше от неё не уменьшилась.
+            for (pr in unit.parallels) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEditInterruption(pr) }
+                        .padding(start = 8.dp, top = 2.dp, bottom = 2.dp),
+                ) {
+                    Text(
+                        "∥",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.width(14.dp),
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            capFirst(pr.title.ifBlank { pr.raw.take(60) }) +
+                                (if (pr.client.isNotBlank()) " · ${pr.client}" else ""),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CategoryTag(pr.category)
+                            DotSep()
+                            Text(
+                                fmtDur(pr.durationMin(now)) + (if (pr.open) " …" else ""),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                            val pts = pointsOf(worthOf(pr.category), pr.durationMs(now))
+                            if (pts != 0) {
+                                DotSep()
+                                PointsChip(pts)
+                            }
+                        }
+                    }
+                    if (pr.open) {
+                        IconButton(
+                            onClick = { onStopParallel(pr) },
+                            modifier = Modifier.size(30.dp),
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(11.dp)
+                                    .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp)),
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1267,6 +1432,14 @@ internal fun ZasechkaSettings(app: PravkaApp) {
                 context.startActivity(app.zasechkaStore.shareCsvIntent())
             }
         }) { Text("Выгрузить CSV") }
+        Text(
+            "Время разнесено по двум колонкам: minutes_day складывается в сутки " +
+                "(за день всегда 1440), minutes_parallel — то, что шло поверх дела. " +
+                "У строки заполнена ровно одна, поэтому сумма любой из них честная " +
+                "и модель не насчитает тридцатичасовые сутки.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         Spacer(Modifier.height(18.dp))
         AutoPilotSection(app)
@@ -2010,21 +2183,23 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    // Врезки роботов в ленту — по умолчанию ВЫКЛ (владелец: «засоряет ленту,
-    // и не всегда это потеря»). Суммы выше остаются, сон-вставка живёт всегда.
-    val zInserts by app.settings.zAutoInsertsFlow.collectAsState(initial = false)
+    // Прежние врезки резали дело и отнимали у него минуты — их владелец
+    // выключил по делу. Эти не режут: они ложатся ВТОРЫМ треком поверх.
+    val zInserts by app.settings.zParallelAutoFlow.collectAsState(initial = true)
     Spacer(Modifier.height(6.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
         Switch(
             checked = zInserts,
-            onCheckedChange = { on -> app.appScope.launch { app.settings.setZAutoInserts(on) } },
+            onCheckedChange = { on -> app.appScope.launch { app.settings.setZParallelAuto(on) } },
         )
         Spacer(Modifier.width(8.dp))
-        Text("Врезки в ленту: звонки и пожиратели", style = MaterialTheme.typography.bodyMedium)
+        Text("Звонки и пожиратели — параллельным треком", style = MaterialTheme.typography.bodyMedium)
     }
     Text(
-        "Выключено: лента не режется на куски, суммы экранного времени выше " +
-            "остаются — по ним и следим за YouTube. Сон приезжает как раньше.",
+        "Ложатся ПОВЕРХ идущего дела, со знаком «∥», и ничего у него не " +
+            "отнимают: готовил еду и смотрел про часы — готовка осталась " +
+            "готовкой. Если время было ничьё, факт идёт обычной строкой. " +
+            "В сутки второй трек не складывается. Сон приезжает как раньше.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -2165,6 +2340,7 @@ private fun EditEntryDialog(
     var startText by remember { mutableStateOf(fmtTime(entry.start)) }
     var endText by remember { mutableStateOf(if (entry.open) "" else fmtTime(entry.end)) }
     var categoryMenu by remember { mutableStateOf(false) }
+    var parallel by remember { mutableStateOf(entry.parallel) }
 
     val entryDayStart = remember(entry.id) {
         val cal = Calendar.getInstance()
@@ -2229,6 +2405,17 @@ private fun EditEntryDialog(
                     )
                 }
                 Spacer(Modifier.height(8.dp))
+                // Перекинуть запись между треками руками: робот угадал не то,
+                // или наоборот — дело на самом деле шло поверх другого.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = parallel, onCheckedChange = { parallel = it })
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "Параллельно (поверх дела, в сутки не входит)",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
                 if (entry.raw.isNotBlank() && entry.raw != entry.title) {
                     Text(
                         "Надиктовано: «${entry.raw.take(200)}»",
@@ -2263,6 +2450,7 @@ private fun EditEntryDialog(
                         // living inside its block and keeps blocking its own
                         // re-sweep duplicate.
                         source = if (entry.source == "auto") "auto" else "edit",
+                        track = if (parallel) 1 else 0,
                     )
                 )
             }) { Text("Сохранить") }

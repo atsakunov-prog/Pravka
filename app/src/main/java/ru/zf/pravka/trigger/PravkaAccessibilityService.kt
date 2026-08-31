@@ -1898,13 +1898,23 @@ class PravkaAccessibilityService : AccessibilityService() {
                             "${zTime(entry.start)}–${zTime(entry.end)}, ${entry.durationMin()} мин"
                     )
                 }
+                // «Параллельно слушаю Акунина»: текущее дело не тронуто,
+                // запись легла вторым треком поверх него.
+                outcome.action == "parallel" -> {
+                    Haptics.success(this@PravkaAccessibilityService)
+                    zButton?.showNote(
+                        "∥ ${entry.title}\nпараллельно, с ${zTime(entry.start)}" +
+                            (if (tail.isBlank()) "" else " · $tail")
+                    )
+                }
                 outcome.action == "insert" && outcome.error == null -> {
                     Haptics.success(this@PravkaAccessibilityService)
                     zButton?.showNote(
                         "⤵ Вставлено «${entry.title}»\n" +
                             "${zTime(entry.start)}–${zTime(entry.end)}" +
                             (if (tail.isBlank()) "" else " · $tail") +
-                            "\nобрамляющее дело продолжено"
+                            "\nобрамляющее дело продолжено" +
+                            (outcome.parallel?.let { "\n∥ ${it.title}" } ?: "")
                     )
                 }
                 outcome.action == "edit" -> {
@@ -1923,7 +1933,10 @@ class PravkaAccessibilityService : AccessibilityService() {
                     Haptics.success(this@PravkaAccessibilityService)
                     zButton?.showNote(
                         "⏱ ${entry.title}\nс ${zTime(entry.start)}" +
-                            (if (tail.isBlank()) "" else " · $tail")
+                            (if (tail.isBlank()) "" else " · $tail") +
+                            // «Готовил еду и параллельно смотрел ютуб» — одна
+                            // фраза, две записи, и вторая тоже должна быть видна.
+                            (outcome.parallel?.let { "\n∥ ${it.title}" } ?: "")
                     )
                 }
                 else -> {
@@ -2084,10 +2097,16 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch {
             val now = System.currentTimeMillis()
             val open = runCatching { app.zasechkaStore.openEntry() }.getOrNull()
+            val alongside = runCatching { app.zasechkaStore.openParallel() }.getOrNull()
             val header = ZasechkaButtonController.MenuItem(
-                if (open != null) {
-                    "⏱ ${open.title.ifBlank { "без названия" }} — с ${zTime(open.start)}, ${zDur(now - open.start)}"
-                } else "— сейчас ничего не идёт",
+                when {
+                    open != null ->
+                        "⏱ ${open.title.ifBlank { "без названия" }} — с ${zTime(open.start)}, " +
+                            zDur(now - open.start) + (alongside?.let { " ∥ ${it.title}" } ?: "")
+                    alongside != null ->
+                        "∥ ${alongside.title.ifBlank { "без названия" }} — с ${zTime(alongside.start)}"
+                    else -> "— сейчас ничего не идёт"
+                },
                 goTab,
             )
             // Владелец: «допом использую только 25 минут, 5 минут перерыв».
@@ -2449,6 +2468,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             ru.zf.pravka.data.Backups.tick(this@PravkaAccessibilityService) { line ->
                 app.eventLog.add(line)
             }
+            // Обновления: сам решает, прошли ли сутки, сам тянет и сам говорит.
+            scope.launch { runCatching { app.updates.tick() } }
             zasechkaReminderCheck()
             zReminderHandler.postDelayed(this, 5 * 60_000L)
         }

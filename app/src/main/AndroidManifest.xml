@@ -32,6 +32,12 @@
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
+    <!-- Самообновление: приложение тянет APK из ветки apk-builds и открывает
+         системный установщик. Подпись у всех сборок одна, поэтому обновление
+         ставится поверх и данные остаются на месте. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Needed to see (and bind) the system speech recognition service on
          Android 11+; without it SpeechRecognizer reports "unavailable". -->
     <queries>
@@ -107,6 +113,14 @@
 
         <activity
             android:name=".trigger.MicPermissionActivity"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false" />
+
+        <!-- Трамплин за уведомлением об обновлении. -->
+        <activity
+            android:name=".trigger.UpdateActivity"
             android:theme="@style/Theme.Transparent"
             android:excludeFromRecents="true"
             android:noHistory="true"

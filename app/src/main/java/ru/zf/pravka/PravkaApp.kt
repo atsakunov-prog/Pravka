@@ -289,6 +289,12 @@ class PravkaApp : Application() {
         ru.zf.pravka.data.PhoneSweeper(this, phoneStore, zasechkaStore, settings, eventLog, zasechkaSync, appScope)
     }
 
+    // Самообновление: раз в сутки смотрит ветку apk-builds, тянет APK и
+    // предлагает поставить. Живёт на тике службы (см. zReminderTick).
+    val updates by lazy {
+        ru.zf.pravka.data.Updates(this, httpClient, settings, eventLog)
+    }
+
     // intervals.icu: workouts land in the ribbon, Garmin sleep annotates it.
     val icuSweeper by lazy {
         ru.zf.pravka.data.IcuSweeper(settings, zasechkaStore, httpClient, eventLog, zasechkaSync, appScope)

@@ -136,8 +136,15 @@ class ZasechkaStore(private val context: Context) {
         val createdAt: Long,
         val pomodoros: Int = 0,   // 🍅 completed while this entry ran
         val notionSynced: Boolean = false,  // delivered to the Notion mirror
+        // 0 - основная лента: непрерывная, без пересечений, ровно 24 часа.
+        // 1 - параллельный трек: то, что шло ОДНОВРЕМЕННО с основным делом
+        // (книга за рулём, ютуб за готовкой, звонок поверх работы). Пересекаться
+        // ему можно с чем угодно, в сутки он не складывается и ни у кого ничего
+        // не отнимает - потому пожиратели и звонки снова пускаются в ленту.
+        val track: Int = 0,
     ) {
         val open: Boolean get() = end == 0L
+        val parallel: Boolean get() = track > 0
         /** Exact span in ms - the only honest unit for adding a day up. */
         fun durationMs(now: Long = System.currentTimeMillis()): Long =
             ((if (open) now else end) - start).coerceAtLeast(0L)
@@ -262,10 +269,16 @@ class ZasechkaStore(private val context: Context) {
         persist()
     }
 
-    /** The entry currently running, if any. */
+    /** The MAIN-track entry currently running, if any. */
     suspend fun openEntry(): Entry? = mutex.withLock {
         ensureLoaded()
-        entries.lastOrNull { it.open }
+        entries.lastOrNull { it.open && !it.parallel }
+    }
+
+    /** Что идёт вторым треком прямо сейчас (книга, ютуб, разговор). */
+    suspend fun openParallel(): Entry? = mutex.withLock {
+        ensureLoaded()
+        entries.lastOrNull { it.open && it.parallel }
     }
 
     /**
@@ -299,7 +312,7 @@ class ZasechkaStore(private val context: Context) {
         val nowMs = System.currentTimeMillis()
         for (i in entries.indices) {
             val e = entries[i]
-            if (e.source == "auto" && !e.open && e.start < start && e.end > start) {
+            if (e.source == "auto" && !e.parallel && !e.open && e.start < start && e.end > start) {
                 entries[i] = e.copy(end = start, synced = false, notionSynced = false)
             }
         }
@@ -422,7 +435,10 @@ class ZasechkaStore(private val context: Context) {
         val nowMs = System.currentTimeMillis()
         val cutoff = nowMs - NORMALIZE_WINDOW_MS
         val real = entries.filter {
-            it.source != GAP_SOURCE && (if (it.open) nowMs else it.end) > cutoff
+            // Параллельный трек не отнимает у заполнителя: он идёт ПОВЕРХ
+            // времени, а не вместо него. Иначе ютуб в фоне «размечал» бы дыру,
+            // которую на самом деле никто не занял.
+            it.source != GAP_SOURCE && !it.parallel && (if (it.open) nowMs else it.end) > cutoff
         }
         var changed = false
         val out = ArrayList<Entry>(entries.size)
@@ -514,7 +530,9 @@ class ZasechkaStore(private val context: Context) {
         val cutoff = nowMs - GAP_FILL_QUARANTINE_MS
         val windowStart = nowMs - NORMALIZE_WINDOW_MS
         var changed = false
-        val asc = entries.sortedBy { it.start }
+        // Дыры считаются только по основному треку: параллельная запись не
+        // делает время занятым (и наоборот - не создаёт дыру, когда кончается).
+        val asc = entries.filter { !it.parallel }.sortedBy { it.start }
         var prevEnd = -1L
         for (e in asc) {
             if (prevEnd > 0 && e.start - prevEnd >= GAP_FILL_MIN_MS &&
@@ -530,7 +548,9 @@ class ZasechkaStore(private val context: Context) {
         // for 5 minutes - losses start counting from the last entry's end,
         // openly, right in the ribbon. A retro claim later takes the span
         // back through closeOpenLocked + the trim above.
-        if (entries.none { it.open } && prevEnd > 0 && nowMs - prevEnd >= GAP_FILL_MIN_MS) {
+        if (entries.none { it.open && !it.parallel } && prevEnd > 0 &&
+            nowMs - prevEnd >= GAP_FILL_MIN_MS
+        ) {
             entries.add(gapEntry(prevEnd, 0L, nowMs))
             changed = true
         }
@@ -587,7 +607,7 @@ class ZasechkaStore(private val context: Context) {
         val nowMs = System.currentTimeMillis()
         val cutoff = nowMs - NORMALIZE_WINDOW_MS
         val autosAsc = entries
-            .filter { it.source == "auto" && !it.open && it.end > cutoff }
+            .filter { it.source == "auto" && !it.parallel && !it.open && it.end > cutoff }
             .sortedBy { it.start }
         if (autosAsc.isEmpty()) return false
         val rebuilt = ArrayList<Entry>(entries.size)
@@ -596,7 +616,7 @@ class ZasechkaStore(private val context: Context) {
             // Auto facts are the things spliced AROUND; gap fillers are never
             // hosts either - they die to overlaps instead (clear-and-refill).
             // Settled history is skipped with them (see NORMALIZE_WINDOW_MS).
-            if (m.source == "auto" || m.source == GAP_SOURCE ||
+            if (m.source == "auto" || m.source == GAP_SOURCE || m.parallel ||
                 (!m.open && m.end <= cutoff)
             ) {
                 rebuilt.add(m)
@@ -662,8 +682,8 @@ class ZasechkaStore(private val context: Context) {
         closed
     }
 
-    private fun closeOpenLocked(at: Long): Entry? {
-        val index = entries.indexOfLast { it.open }
+    private fun closeOpenLocked(at: Long, parallel: Boolean = false): Entry? {
+        val index = entries.indexOfLast { it.open && it.parallel == parallel }
         if (index < 0) return null
         val open = entries[index]
         val closed = open.copy(end = at.coerceAtLeast(open.start), synced = false, notionSynced = false)
@@ -699,7 +719,7 @@ class ZasechkaStore(private val context: Context) {
         if (e0 <= s0) return@withLock null
         // Ручные записи целиком внутри вставки — им дорогу: вставка ужимается.
         for (b in entries) {
-            if (b.source == "auto" || b.source == GAP_SOURCE || b.open) continue
+            if (b.source == "auto" || b.source == GAP_SOURCE || b.open || b.parallel) continue
             if (b.start >= s0 && b.end <= e0) {
                 if (b.start - s0 >= e0 - b.end) e0 = b.start else s0 = b.end
             }
@@ -712,7 +732,8 @@ class ZasechkaStore(private val context: Context) {
         val nowMs = System.currentTimeMillis()
         val out = ArrayList<Entry>(entries.size + 3)
         for (e in entries) {
-            if (e.source == "auto" || e.source == GAP_SOURCE) {
+            // Параллель вставка не режет: она шла поверх, а не вместо.
+            if (e.source == "auto" || e.source == GAP_SOURCE || e.parallel) {
                 out.add(e)
                 continue
             }
@@ -765,6 +786,189 @@ class ZasechkaStore(private val context: Context) {
     }
 
     /**
+     * Уже записанное владельцем дело и авто-факт - одно и то же? Совпала
+     * категория (созвон поверх созвона) или название (его «смотрю ютуб» и
+     * ютуб из статистики использования). Короткие названия по вхождению не
+     * сравниваем: «еда» нашлась бы в половине ленты.
+     */
+    private fun sameThing(mine: Entry, title: String, category: String): Boolean {
+        val a = mine.title.trim()
+        val b = title.trim()
+        if (mine.category.isNotBlank() &&
+            mine.category.trim().equals(category.trim(), ignoreCase = true)
+        ) return true
+        if (a.equals(b, ignoreCase = true)) return true
+        return a.length >= 4 && b.length >= 4 &&
+            (a.contains(b, ignoreCase = true) || b.contains(a, ignoreCase = true))
+    }
+
+    /**
+     * Iron dedup, two rules. Same-title near-same-start catches a re-scan of
+     * the same source row. The overlap rule catches messier realities (the
+     * call log can hold SEVERAL rows for one call - VoIP apps write their own
+     * copies): auto entries never legitimately overlap EACH OTHER, so a
+     * newcomer covering an existing auto entry by half its span is a
+     * duplicate, not a fact. Треки сравниваются вместе: один и тот же ютуб не
+     * должен приехать сначала строкой ленты, а потом параллелью.
+     */
+    private fun autoDuplicateLocked(start: Long, end: Long, title: String): Boolean {
+        val cleanTitle = title.trim()
+        val newSpan = end - start
+        return entries.any { e ->
+            e.source == "auto" && !e.open && (
+                (e.title == cleanTitle && kotlin.math.abs(e.start - start) < 60_000) ||
+                    (kotlin.math.min(e.end, end) - kotlin.math.max(e.start, start))
+                        .coerceAtLeast(0L) * 2 >= newSpan
+                )
+        }
+    }
+
+    // ---- второй трек: то, что шло одновременно с делом ----
+
+    /**
+     * Открывает параллельную запись. Основного дела НЕ трогает: оно как шло,
+     * так и идёт, и время у него не отнимается - в этом вся затея. Открытая
+     * параллельная может быть только одна: новая закрывает предыдущую, иначе
+     * второй трек превратился бы в свалку забытых «слушаю».
+     */
+    suspend fun startParallel(
+        start: Long,
+        raw: String,
+        title: String,
+        category: String,
+        client: String,
+        source: String,
+    ): Entry = mutex.withLock {
+        ensureLoaded()
+        snapshotLocked("параллель «${title.trim().ifBlank { "без названия" }}»")
+        closeOpenLocked(start, parallel = true)
+        val opened = Entry(
+            id = nextId(),
+            start = start,
+            end = 0L,
+            raw = raw.trim(),
+            title = title.trim(),
+            category = category.trim(),
+            client = client.trim(),
+            useful = 0,
+            source = source,
+            synced = false,
+            createdAt = System.currentTimeMillis(),
+            track = 1,
+        )
+        entries.add(opened)
+        normalizeLocked()
+        entries.sortBy { it.start }
+        persist()
+        entries.lastOrNull { it.open && it.parallel } ?: opened
+    }
+
+    /** Завершённая параллель задним числом: «пока готовил, слушал книгу». */
+    suspend fun insertParallel(
+        start: Long,
+        end: Long,
+        raw: String,
+        title: String,
+        category: String,
+        client: String,
+        source: String,
+    ): Entry? = mutex.withLock {
+        ensureLoaded()
+        if (end <= start) return@withLock null
+        snapshotLocked("параллель «${title.trim().ifBlank { "без названия" }}»")
+        val entry = Entry(
+            id = nextId(),
+            start = start,
+            end = end,
+            raw = raw.trim(),
+            title = title.trim(),
+            category = category.trim(),
+            client = client.trim(),
+            useful = 0,
+            source = source,
+            synced = false,
+            createdAt = System.currentTimeMillis(),
+            track = 1,
+        )
+        entries.add(entry)
+        normalizeLocked()
+        entries.sortBy { it.start }
+        persist()
+        entry
+    }
+
+    /** Закрывает идущую параллельную запись; null - её и не было. */
+    suspend fun closeParallel(at: Long): Entry? = mutex.withLock {
+        ensureLoaded()
+        val closed = closeOpenLocked(at, parallel = true)
+        if (closed != null) {
+            normalizeLocked()
+            persist()
+        }
+        closed
+    }
+
+    /**
+     * Авто-факт из телефона: пожиратель внимания или звонок. Правило владельца
+     * - НИЧЕГО НЕ ВЫЧИТАТЬ, и поэтому врезки можно снова включить: если в это
+     * время шло настоящее дело, факт ложится вторым треком ПОВЕРХ него
+     * (готовил еду и смотрел ютуб - еда осталась едой); если время было ничьё,
+     * он ложится обычной строкой и честно закрывает неразмеченное.
+     *
+     * Возвращает null, когда такой факт уже записан (повторный свип) или
+     * когда владелец сам назвал это время ровно тем же самым.
+     */
+    suspend fun insertAutoFact(
+        start: Long,
+        end: Long,
+        title: String,
+        category: String,
+        client: String = "",
+    ): Entry? = mutex.withLock {
+        ensureLoaded()
+        if (end <= start) return@withLock null
+        if (autoDuplicateLocked(start, end, title)) return@withLock null
+        // Второй трек - только там, где владелец сам занял это время. «Занял»
+        // считается по половине промежутка: короткий звонок в конце дела не
+        // должен вываливаться в ленту отдельной строкой.
+        val nowMs = System.currentTimeMillis()
+        val covering = entries
+            .filter { !it.parallel && it.source != GAP_SOURCE && it.source != "auto" }
+            .map { e ->
+                val eEnd = if (e.open) nowMs else e.end
+                e to (kotlin.math.min(eEnd, end) - kotlin.math.max(e.start, start)).coerceAtLeast(0L)
+            }
+            .filter { it.second > 0 }
+        val claimed = covering.sumOf { it.second }
+        val parallel = claimed * 2 >= end - start
+        // Он мог назвать это время ровно тем же самым: «смотрю ютуб» - и тут
+        // же ютуб приезжает из статистики. Второй строкой поверх первой это
+        // было бы враньём, поэтому такой факт молча пропускаем.
+        if (parallel && covering.any { (e, _) -> sameThing(e, title, category) }) {
+            return@withLock null
+        }
+        val entry = Entry(
+            id = nextId(),
+            start = start,
+            end = end,
+            raw = "",
+            title = title.trim(),
+            category = category.trim(),
+            client = client.trim(),
+            useful = 0,
+            source = "auto",
+            synced = false,
+            createdAt = nowMs,
+            track = if (parallel) 1 else 0,
+        )
+        entries.add(entry)
+        normalizeLocked()
+        entries.sortBy { it.start }
+        persist()
+        entry
+    }
+
+    /**
      * A phone-detected interruption (attention-eater session, a call) lands
      * in the ribbon retroactively. If an open entry covers [start], it is cut
      * at [start]; with [resumePrevious] (calls) a copy of it reopens at [end]
@@ -785,25 +989,10 @@ class ZasechkaStore(private val context: Context) {
     ): Entry? = mutex.withLock {
         ensureLoaded()
         if (end <= start) return@withLock null
-        // Iron dedup, two rules. Same-title near-same-start catches a re-scan
-        // of the same source row. The overlap rule catches messier realities
-        // (the call log can hold SEVERAL rows for one call - VoIP apps write
-        // their own copies): auto entries never legitimately overlap, the
-        // ribbon is continuous by construction, so a newcomer covering an
-        // existing auto entry by half its span is a duplicate, not a fact.
-        val cleanTitle = title.trim()
-        val newSpan = end - start
-        if (entries.any { e ->
-                e.source == "auto" && !e.open && (
-                    (e.title == cleanTitle && kotlin.math.abs(e.start - start) < 60_000) ||
-                        (kotlin.math.min(e.end, end) - kotlin.math.max(e.start, start))
-                            .coerceAtLeast(0L) * 2 >= newSpan
-                    )
-            }
-        ) return@withLock null
+        if (autoDuplicateLocked(start, end, title)) return@withLock null
         var actualEnd = end
         var resumeTemplate: Entry? = null
-        val openIndex = entries.indexOfLast { it.open }
+        val openIndex = entries.indexOfLast { it.open && !it.parallel }
         if (openIndex >= 0) {
             val open = entries[openIndex]
             if (open.start <= start) {
@@ -929,7 +1118,7 @@ class ZasechkaStore(private val context: Context) {
         val manualMs = forRange(from, to)
             // Gap fillers are NOT the owner's claim - a night filled with
             // «Потери» must not block the сон insert that explains it.
-            .filter { !it.open && it.source != "auto" && it.source != GAP_SOURCE }
+            .filter { !it.open && !it.parallel && it.source != "auto" && it.source != GAP_SOURCE }
             .sumOf {
                 (kotlin.math.min(it.end, to) - kotlin.math.max(it.start, from)).coerceAtLeast(0L)
             }
@@ -963,20 +1152,34 @@ class ZasechkaStore(private val context: Context) {
         val now = System.currentTimeMillis()
         var previousRaw = ""
         val csv = buildString {
-            // end/minutes are never blank now (a running entry is closed at
-            // "now" and flagged is_open), source tells a dictated row from one
-            // the app filled in, and raw is printed once per act of speaking -
+            // end is never blank (a running entry is closed at "now" and
+            // flagged is_open), source tells a dictated row from one the app
+            // filled in, and raw is printed once per act of speaking -
             // continuation fragments leave it empty instead of repeating it.
+            //
+            // Колонки «minutes» здесь нет НАМЕРЕННО: модель, которой скормили
+            // файл, складывает всё, что похоже на минуты, и с параллельным
+            // треком получила бы тридцатичасовые сутки. Вместо неё две:
+            // minutes_day (сколько это заняло в сутках - у параллельной строки
+            // пусто, сумма за день всегда 1440) и minutes_parallel (наложения).
+            // Сумма ЛЮБОЙ из них - честное число, перепутать нечем.
             append(
-                "date,start,end,minutes,title,category,client,useful,source,is_open," +
+                "date,start,end,track,minutes_day,minutes_parallel,over," +
+                    "title,category,client,useful,source,is_open," +
                     "value,points,base_min,raw\n"
             )
             for (e in list) {
                 val end = if (e.open) now else e.end
+                val minutes = e.durationMin(now)
                 append(dateFormat.format(Date(e.start))).append(',')
                 append(timeFormat.format(Date(e.start))).append(',')
                 append(timeFormat.format(Date(end))).append(',')
-                append(e.durationMin(now).toString()).append(',')
+                append(if (e.parallel) "параллельно" else "основной").append(',')
+                append(if (e.parallel) "" else minutes.toString()).append(',')
+                append(if (e.parallel) minutes.toString() else "").append(',')
+                // Поверх чего шла параллель - иначе строка «YouTube 20 минут»
+                // в отрыве от «Приготовление еды» ничего не объясняет.
+                append(csvEscape(if (e.parallel) overTitle(e, list, now) else "")).append(',')
                 append(csvEscape(e.title)).append(',')
                 append(csvEscape(e.category)).append(',')
                 append(csvEscape(e.client)).append(',')
@@ -1001,6 +1204,20 @@ class ZasechkaStore(private val context: Context) {
         withContext(Dispatchers.IO) { out.writeText(csv) }
         return shareFileIntent(context, out, "text/csv")
     }
+
+    /** Название дела основного трека, поверх которого шла эта параллель. */
+    private fun overTitle(e: Entry, all: List<Entry>, now: Long): String =
+        all.asSequence()
+            .filter { !it.parallel && it.source != GAP_SOURCE }
+            .map { m ->
+                val mEnd = if (m.open) now else m.end
+                val eEnd = if (e.open) now else e.end
+                m to (kotlin.math.min(mEnd, eEnd) - kotlin.math.max(m.start, e.start))
+                    .coerceAtLeast(0L)
+            }
+            .filter { it.second > 0 }
+            .maxByOrNull { it.second }
+            ?.first?.title.orEmpty()
 
     private fun csvEscape(s: String): String {
         if (s.none { it == ',' || it == '"' || it == '\n' || it == '\r' }) return s
@@ -1064,7 +1281,21 @@ class ZasechkaStore(private val context: Context) {
             val key = "${start / 60_000}|${title.lowercase()}"
             if (!seen.add(key)) continue
             val endText = cell("end")
-            val minutes = cell("minutes").toLongOrNull() ?: 0L
+            // «minutes» из прежних выгрузок; в нынешней время разнесено по
+            // двум колонкам, и заполнена ровно одна из них.
+            val minutes = cell("minutes").toLongOrNull()
+                ?: cell("minutes_day").toLongOrNull()
+                ?: cell("minutes_parallel").toLongOrNull()
+                ?: 0L
+            // Трек: словом («параллельно») в нынешней выгрузке, числом - если
+            // файл делали руками. Заполненная minutes_parallel решает сама.
+            val trackCell = cell("track").lowercase()
+            val track = when {
+                trackCell.startsWith("парал") || trackCell == "1" -> 1
+                cell("minutes_parallel").toLongOrNull() != null &&
+                    cell("minutes_day").isBlank() -> 1
+                else -> 0
+            }
             val wasOpen = cell("is_open").equals("true", ignoreCase = true)
             var end = 0L
             if (!wasOpen && endText.length >= 4) {
@@ -1122,6 +1353,7 @@ class ZasechkaStore(private val context: Context) {
                     // насыпал бы в таблицу дубли всей истории.
                     synced = true,
                     createdAt = start,
+                    track = track,
                 )
             )
         }
@@ -1139,12 +1371,16 @@ class ZasechkaStore(private val context: Context) {
 
     /** Открытым может быть только последнее дело: остальные закрываем встык. */
     private fun closeStaleOpenLocked() {
-        val open = entries.filter { it.open }
-        if (open.size <= 1) return
-        for (e in open) {
-            val next = entries.filter { it.start > e.start }.minByOrNull { it.start } ?: continue
-            val at = entries.indexOfFirst { it.id == e.id }
-            if (at >= 0) entries[at] = e.copy(end = next.start)
+        for (track in listOf(false, true)) {
+            val open = entries.filter { it.open && it.parallel == track }
+            if (open.size <= 1) continue
+            for (e in open) {
+                val next = entries
+                    .filter { it.start > e.start && it.parallel == track }
+                    .minByOrNull { it.start } ?: continue
+                val at = entries.indexOfFirst { it.id == e.id }
+                if (at >= 0) entries[at] = e.copy(end = next.start)
+            }
         }
     }
 
@@ -1401,6 +1637,7 @@ class ZasechkaStore(private val context: Context) {
                     createdAt = o.optLong("createdAt", start),
                     pomodoros = o.optInt("pomodoros", 0),
                     notionSynced = o.optBoolean("notionSynced", false),
+                    track = o.optInt("track", 0),
                 )
             )
         }
@@ -1594,6 +1831,7 @@ class ZasechkaStore(private val context: Context) {
                             put("synced", e.synced)
                             put("createdAt", e.createdAt)
                             if (e.pomodoros > 0) put("pomodoros", e.pomodoros)
+                            if (e.track != 0) put("track", e.track)
                             put("notionSynced", e.notionSynced)
                         }
                     )

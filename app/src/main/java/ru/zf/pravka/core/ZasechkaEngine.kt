@@ -37,9 +37,11 @@ class ZasechkaEngine(
         val entry: ZasechkaStore.Entry,
         val categorized: Boolean,
         val error: String?,
-        val action: String = "new",       // new | insert | edit | delete | stop | none
+        val action: String = "new",       // new | insert | parallel | edit | delete | stop | none
         val previousTitle: String = "",   // edit: what the entry used to say
         val say: String = "",             // none: почему ничего не записано
+        // Вторая половина фразы, если она была: «…и параллельно смотрел ютуб».
+        val parallel: ZasechkaStore.Entry? = null,
     )
 
     // "четверг, 21 августа, 14:32" - the model needs the weekday and clock to
@@ -59,7 +61,7 @@ class ZasechkaEngine(
         val today = store.forRange(dayStartMs(now), now + 1).sortedBy { it.start }
         val todayLines = today.mapIndexed { i, e ->
             val end = if (e.open) "…" else timeFormat.format(Date(e.end))
-            "${i + 1}. ${timeFormat.format(Date(e.start))}–$end · " +
+            "${i + 1}. ${if (e.parallel) "∥ " else ""}${timeFormat.format(Date(e.start))}–$end · " +
                 "${e.category.ifBlank { "без категории" }} · ${e.title.ifBlank { "(без названия)" }}"
         }
 
@@ -137,6 +139,35 @@ class ZasechkaEngine(
                             say = p.say.ifBlank { "это не про ленту" },
                         )
                     }
+                    // «Параллельно слушаю Акунина» — только второй трек:
+                    // основное дело как шло, так и идёт, и минут не теряет.
+                    p.action == "parallel" -> {
+                        val span = said.closedPast(now)
+                        val title = p.title.ifBlank { fallbackTitle(text) }
+                        val category = canonicalCategory(p.category, categoryNames)
+                        val client = canonicalClient(p.client, clients)
+                        val entry = if (span != null) {
+                            store.insertParallel(
+                                start = span.first, end = span.second, raw = text,
+                                title = title, category = category, client = client, source = source,
+                            )
+                        } else {
+                            store.startParallel(
+                                start = said.start ?: now, raw = text,
+                                title = title, category = category, client = client, source = source,
+                            )
+                        }
+                        if (entry == null) {
+                            Outcome(
+                                fakeEntry(now, text), categorized = false,
+                                error = "Параллель не записалась", action = "none",
+                            )
+                        } else {
+                            eventLog.add("засечка ∥ «${entry.title}» [${entry.category.ifBlank { "без категории" }}]")
+                            sync.kickSoon(scope)
+                            Outcome(entry, categorized = true, error = null, action = "parallel")
+                        }
+                    }
                     insertSpan != null -> {
                         val (insStart, insEnd) = insertSpan
                         val entry = store.insertClosed(
@@ -160,13 +191,25 @@ class ZasechkaEngine(
                                 action = "insert",
                             )
                         }
+                        // «С 18:00 до 19:00 готовил еду и слушал книгу»:
+                        // параллель берёт границы у первого дела.
+                        val alongside = if (!p.hasParallel) null else store.insertParallel(
+                            start = insStart,
+                            end = insEnd,
+                            raw = text,
+                            title = p.parallelTitle,
+                            category = canonicalCategory(p.parallelCategory, categoryNames),
+                            client = canonicalClient(p.parallelClient, clients),
+                            source = source,
+                        )
                         eventLog.add(
                             "засечка-вставка: «${entry.title}» " +
                                 "[${entry.category.ifBlank { "без категории" }}] " +
-                                "${(insEnd - insStart) / 60_000} мин задним числом, обрамление продолжено"
+                                "${(insEnd - insStart) / 60_000} мин задним числом, обрамление продолжено" +
+                                (alongside?.let { " ∥ «${it.title}»" } ?: "")
                         )
                         sync.kickSoon(scope)
-                        Outcome(entry, categorized = true, error = null, action = "insert")
+                        Outcome(entry, categorized = true, error = null, action = "insert", parallel = alongside)
                     }
                     // Edit: touch only the fields the owner asked to change.
                     // The numbered line may be one FRAGMENT of a sliced-up дело
@@ -242,14 +285,25 @@ class ZasechkaEngine(
                             useful = p.useful,
                             source = source,
                         )
+                        // «Готовлю еду и параллельно смотрю ютуб»: первое дело
+                        // в ленту, второе поверх него — и еда остаётся едой.
+                        val alongside = if (!p.hasParallel) null else store.startParallel(
+                            start = start,
+                            raw = text,
+                            title = p.parallelTitle,
+                            category = canonicalCategory(p.parallelCategory, categoryNames),
+                            client = canonicalClient(p.parallelClient, clients),
+                            source = source,
+                        )
                         eventLog.add(
                             "засечка: «${entry.title}» [${entry.category.ifBlank { "без категории" }}]" +
                                 (if (start < now - 60_000L)
                                     " задним числом с " + timeFormat.format(Date(start))
-                                else "")
+                                else "") +
+                                (alongside?.let { " ∥ «${it.title}» [${it.category}]" } ?: "")
                         )
                         sync.kickSoon(scope)
-                        Outcome(entry, categorized = true, error = null)
+                        Outcome(entry, categorized = true, error = null, parallel = alongside)
                     }
                 }
             },
@@ -363,13 +417,38 @@ class ZasechkaEngine(
 
     /** Closes the running entry ("перерыв"/"конец дня"). Null if none was open. */
     suspend fun closeOpen(): ZasechkaStore.Entry? {
-        val closed = store.closeOpen(System.currentTimeMillis())
+        val now = System.currentTimeMillis()
+        val closed = store.closeOpen(now)
+        // Конец дня — конец обоих треков: забытое «слушаю книгу» иначе тикало
+        // бы до полуночи и накручивало баллы. Закрыть ТОЛЬКО параллель можно
+        // её собственным ✕ в ленте.
+        val closedParallel = store.closeParallel(now)
         if (closed != null) {
             eventLog.add("засечка: закрыто «${closed.title}» (${closed.durationMin()} мин)")
+        }
+        if (closedParallel != null) {
+            eventLog.add("засечка ∥ закрыто «${closedParallel.title}» (${closedParallel.durationMin()} мин)")
+        }
+        if (closed != null || closedParallel != null) sync.kickSoon(scope)
+        return closed
+    }
+
+    /** Закрывает идущую параллель, не трогая основное дело. */
+    suspend fun closeParallel(): ZasechkaStore.Entry? {
+        val closed = store.closeParallel(System.currentTimeMillis())
+        if (closed != null) {
+            eventLog.add("засечка ∥ закрыто «${closed.title}» (${closed.durationMin()} мин)")
             sync.kickSoon(scope)
         }
         return closed
     }
+
+    /** Название категории буква в букву, как в списке владельца. */
+    private fun canonicalCategory(named: String, known: List<String>): String =
+        known.firstOrNull { it.equals(named, ignoreCase = true) } ?: named
+
+    private fun canonicalClient(named: String, known: List<String>): String =
+        known.firstOrNull { it.equals(named, ignoreCase = true) } ?: named
 
     /** Запись-пустышка для Outcome, когда в ленту ничего не легло. */
     private fun fakeEntry(now: Long, raw: String) = ZasechkaStore.Entry(
@@ -402,8 +481,14 @@ class ZasechkaEngine(
      */
     private fun expandChain(
         target: ZasechkaStore.Entry,
-        todayAsc: List<ZasechkaStore.Entry>,
+        today: List<ZasechkaStore.Entry>,
     ): List<ZasechkaStore.Entry> {
+        // Параллельная запись ни во что не сращивается: её никто не резал, и
+        // соседние куски основного дела к ней отношения не имеют. Второй трек
+        // из рассмотрения тоже убираем — иначе «ютуб поверх еды» сошёл бы за
+        // прерывание, которое разорвало еду на два куска.
+        if (target.parallel) return listOf(target)
+        val todayAsc = today.filter { !it.parallel }
         val sig = entrySigOf(target)
         val chain = ArrayList<ZasechkaStore.Entry>()
         chain.add(target)

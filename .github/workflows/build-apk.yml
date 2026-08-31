@@ -33,7 +33,11 @@ jobs:
           cache: gradle
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug -PbuildNumber=${{ github.run_number }} --no-daemon
+        run: >-
+          ./gradlew assembleDebug
+          -PbuildNumber=${{ github.run_number }}
+          -PbuildBranch=${{ github.ref_name }}
+          --no-daemon
 
       - name: Publish APK to apk-builds branch
         run: |
@@ -42,7 +46,9 @@ jobs:
           mkdir /tmp/apkpub
           cp "$APK" /tmp/apkpub/pravka-debug.apk
           {
+            echo "pravka=2.0.${{ github.run_number }}"
             echo "versionName=2.0.${{ github.run_number }}"
+            echo "apk=pravka-debug.apk"
             echo "versionCode=${{ github.run_number }}"
             echo "commit=${GITHUB_SHA}"
             echo "branch=${GITHUB_REF_NAME}"

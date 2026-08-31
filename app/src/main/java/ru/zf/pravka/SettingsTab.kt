@@ -17,6 +17,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -31,12 +32,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Locale
 import kotlinx.coroutines.launch
 
 // Все настройки в одном месте, разложенные по режимам.
@@ -104,6 +107,10 @@ internal fun SettingsTab(
         // Служба — вне групп: без неё не работает ни одна кнопка, и это
         // единственное, что должно быть видно, не открывая ничего.
         ServiceCard(serviceEnabled, onOpenAccessibilitySettings)
+
+        // Обновления — тоже вне групп: «есть свежая сборка» должно быть видно,
+        // не открывая ничего, ровно как состояние службы.
+        UpdatesCard(app)
 
         for (group in Group.entries) {
             SettingsGroup(
@@ -235,6 +242,109 @@ private fun ServiceCard(serviceEnabled: Boolean, onOpenAccessibilitySettings: ()
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onErrorContainer,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Обновления: приложение само ходит в ветку `apk-builds`. Здесь видно, что
+ * стоит сейчас, что лежит в ветке, и есть ручная кнопка — на случай «я только
+ * что запушил, хочу прямо сейчас».
+ */
+@Composable
+private fun UpdatesCard(app: PravkaApp) {
+    val context = LocalContext.current
+    val updates = app.updates
+    val scope = app.appScope
+    val state by updates.state.collectAsState()
+    val auto by app.settings.updAutoFlow.collectAsState(initial = true)
+    val mobile by app.settings.updMobileFlow.collectAsState(initial = false)
+    val stamp = remember {
+        java.text.SimpleDateFormat("d MMMM, HH:mm", Locale.forLanguageTag("ru"))
+    }
+    val latest = state.latest
+    val fresh = latest != null && latest.newer
+    // Сборка соседней ветки: номер больше, но это другая работа, не «новее».
+    val otherLine = latest != null && latest.versionCode > BuildConfig.VERSION_CODE && !latest.sameLine
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(stringResource(R.string.upd_title), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                when {
+                    latest == null -> stringResource(R.string.upd_never)
+                    fresh -> stringResource(R.string.upd_found, latest.versionName, latest.builtAt)
+                    otherLine -> stringResource(
+                        R.string.upd_other_branch, latest.versionName, latest.branch,
+                    )
+                    else -> stringResource(R.string.upd_latest, BuildConfig.VERSION_NAME)
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (state.lastCheck > 0) {
+                Spacer(Modifier.height(4.dp))
+                HintText(
+                    stringResource(R.string.upd_checked, stamp.format(java.util.Date(state.lastCheck)))
+                )
+            }
+            if (state.error.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    stringResource(R.string.upd_error, state.error),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val ready = state.ready?.takeIf { it.exists() }
+                when {
+                    state.progress >= 0 -> Button(onClick = {}, enabled = false) {
+                        Text(stringResource(R.string.upd_downloading, state.progress))
+                    }
+                    ready != null && latest != null -> Button(onClick = {
+                        if (updates.canInstall()) {
+                            runCatching { context.startActivity(updates.installIntent(ready)) }
+                        } else {
+                            runCatching { context.startActivity(updates.allowInstallIntent()) }
+                        }
+                    }) { Text(stringResource(R.string.upd_install, latest.versionName)) }
+                    fresh && latest != null -> Button(onClick = {
+                        scope.launch { updates.download(latest) }
+                    }) { Text(stringResource(R.string.upd_download, latest.versionName)) }
+                }
+                if (state.progress < 0) {
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = { scope.launch { updates.check(force = true) } },
+                        enabled = !state.checking,
+                    ) {
+                        Text(
+                            stringResource(
+                                if (state.checking) R.string.upd_checking else R.string.upd_check
+                            )
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = auto,
+                    onCheckedChange = { scope.launch { app.settings.setUpdAuto(it) } },
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(stringResource(R.string.upd_auto), style = MaterialTheme.typography.bodySmall)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = mobile,
+                    onCheckedChange = { scope.launch { app.settings.setUpdMobile(it) } },
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(stringResource(R.string.upd_mobile), style = MaterialTheme.typography.bodySmall)
             }
         }
     }

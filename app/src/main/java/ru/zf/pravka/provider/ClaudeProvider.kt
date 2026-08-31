@@ -329,7 +329,7 @@ $listing
     // ---- Засечка: one dictated phrase -> a structured timesheet entry ----
 
     data class ZasechkaParse(
-        val action: String,        // "new" | "edit" | "delete"
+        val action: String,        // "new" | "insert" | "parallel" | "edit" | "delete" | "stop" | "none"
         val entryIndex: Int,       // 1-based index into today's list (edit/delete)
         val title: String,
         val category: String,      // "" when the model failed to pick one
@@ -340,10 +340,17 @@ $listing
         val endTime: String,       // edit/insert: "HH:MM" new end, "" = keep
         val durationMin: Int,      // insert: длительность куска, 0 = не названа
         val say: String = "",      // none: почему ничего не записано
+        // Вторая половина фразы: то, что шло ОДНОВРЕМЕННО с первым делом
+        // («готовил еду и параллельно смотрел ютуб»). Пусто - параллели нет.
+        val parallelTitle: String = "",
+        val parallelCategory: String = "",
+        val parallelClient: String = "",
         val costUsd: Double,
         val tokensIn: Int,
         val tokensOut: Int,
-    )
+    ) {
+        val hasParallel: Boolean get() = parallelTitle.isNotBlank()
+    }
 
     /**
      * Опус превращает «созвон с Ивановым по отчёту, последние полчаса» в
@@ -435,6 +442,9 @@ $listing
 7. НЕ ПРО ЛЕНТУ → "none": о будущем («через пять минут пойду бегать» —
    запишется, когда начнёт и скажет), случайный мусор распознавания,
    вопрос без намерения. В "say" — одной строкой почему не записал.
+8. ТОЛЬКО ФОН, поверх уже идущего дела → "parallel": «параллельно слушаю
+   Акунина», «фоном подкаст», «под это дело музыка». Текущее дело при
+   этом НЕ закрывается и минут не теряет. Поля те же, что у "new".
 
 Ещё случаи, которые владелец говорит:
 - «вернулся к программированию», «продолжаю уборку» → "new" с ТЕМ ЖЕ
@@ -446,8 +456,34 @@ $listing
   "end_time" = её старт из списка «Сегодня» плюс пять минут — посчитай
   сам и верни «ЧЧ:ММ».
 
+ПАРАЛЛЕЛЬНЫЙ ТРЕК. Владелец делает много дел одновременно, и лента это
+держит двумя слоями: основной (сутки складываются ровно в 24 часа) и
+параллельный — то, что шло ПОВЕРХ и время у основного дела не отнимает.
+Если во фразе ДВА дела и второе шло ОДНОВРЕМЕННО с первым — маркеры «и
+параллельно», «в это время», «в то же время», «одновременно», «заодно»,
+«фоном», «при этом», «под это», а также «и слушал…», «и разговаривал по
+телефону» — то ПЕРВОЕ дело идёт как обычно (new или insert, по временам),
+а ВТОРОЕ возвращается в объекте "parallel": те же title/category/client,
+без собственного времени — оно берёт границы первого.
+  «готовил еду детям и параллельно смотрел ютуб» →
+    title «Приготовление еды детям» [Еда],
+    parallel: {"title": "YouTube", "category": "Потери"}
+  «готовил еду и разговаривал с мамой по телефону» →
+    title «Приготовление еды» [Еда],
+    parallel: {"title": "Разговор с мамой", "category": "Семья"}
+  «готовил еду себе и в это же время разговаривал с Марианной» →
+    title «Приготовление еды» [Еда],
+    parallel: {"title": "Разговор с Марианной", "category": "Семья"}
+  «еду за рулём и слушаю книгу Акунина» →
+    title «Поездка на машине» [Передвижение: транспорт],
+    parallel: {"title": "Книга Акунина", "category": "Чтение"}
+Параллели во фразе нет — объект "parallel" не возвращай вовсе. Что главное,
+а что фон: главное — то, чем заняты руки и тело, фон — то, что слушают,
+смотрят или с кем говорят по телефону, не отрываясь от первого.
+
 Сомневаешься между new и edit — new: данные важнее.
-Одна фраза — одно намерение: разбирай главное.
+Одна фраза — одно намерение: разбирай главное. Исключение ровно одно —
+параллель: там намерений два, и второе едет в "parallel".
 
 ПРАВИЛА ПОЛЕЙ:
 - "title": КОНКРЕТНОЕ название дела, 3–8 слов, именной группой, с большой
@@ -511,6 +547,8 @@ $listing
 
 Ответ — СТРОГО JSON без пояснений, по форме намерения:
 new:    {"action": "new", "title": "...", "category": "...", "client": "...", "useful": 0, "start_offset_min": 0, "start_time": "", "end_time": ""}
+new/insert с фоном: то же самое плюс "parallel": {"title": "...", "category": "...", "client": ""}
+parallel: {"action": "parallel", "title": "...", "category": "...", "client": "...", "start_offset_min": 0, "start_time": "", "end_time": ""}
 insert: {"action": "insert", "title": "...", "category": "...", "client": "...", "useful": 0, "start_time": "18:30", "end_time": "18:50", "start_offset_min": 0, "duration_min": 0}
 edit:   {"action": "edit", "entry": 7, "title": "...", "category": "...", "client": "...", "useful": 0, "start_time": "", "end_time": ""}
 delete: {"action": "delete", "entry": 7}
@@ -561,9 +599,11 @@ $raw
         if (start < 0 || end <= start) throw ApiException("Модель вернула не тот формат.")
         val o = runCatching { JSONObject(text.substring(start, end + 1)) }
             .getOrElse { throw ApiException("Модель вернула не тот формат.") }
+        val par = o.optJSONObject("parallel")
         return ZasechkaParse(
             action = o.optString("action", "new").trim().lowercase(java.util.Locale.US)
-                .takeIf { it in listOf("new", "insert", "edit", "delete", "stop", "none") } ?: "new",
+                .takeIf { it in listOf("new", "insert", "parallel", "edit", "delete", "stop", "none") }
+                ?: "new",
             entryIndex = o.optInt("entry", 0),
             title = o.optString("title").trim(),
             // The prompt shows categories as «Название» - strip the quotes if
@@ -576,6 +616,9 @@ $raw
             startOffsetMin = o.optInt("start_offset_min", 0).coerceIn(0, 12 * 60),
             durationMin = o.optInt("duration_min", 0).coerceIn(0, 12 * 60),
             say = o.optString("say").trim(),
+            parallelTitle = par?.optString("title").orEmpty().trim(),
+            parallelCategory = par?.optString("category").orEmpty().trim().trim('«', '»').trim(),
+            parallelClient = par?.optString("client").orEmpty().trim(),
             startTime = clockField(o, "start_time"),
             endTime = clockField(o, "end_time"),
             costUsd = 0.0,

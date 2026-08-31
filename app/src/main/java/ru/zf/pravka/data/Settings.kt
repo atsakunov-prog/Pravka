@@ -74,7 +74,14 @@ class Settings(private val context: Context) {
         private val KEY_SPORT_NOTIFY = booleanPreferencesKey("sport_notify_arrived")
         private val KEY_MODE_ICONS = booleanPreferencesKey("mode_icons_on_buttons")
         private val KEY_PHONE_MIC_ONLY = booleanPreferencesKey("phone_mic_only")
-        private val KEY_Z_AUTO_INSERTS = booleanPreferencesKey("z_auto_inserts")
+        // z_auto_inserts - мёртвый ключ прежних врезок, которые резали ленту.
+        // Поведения, которым он управлял, больше нет, поэтому и читать его
+        // нельзя: выключенный тумблер прошлой механики молча погасил бы новую.
+        private val KEY_Z_PARALLEL_AUTO = booleanPreferencesKey("z_parallel_auto")
+        // Самообновление из ветки apk-builds.
+        private val KEY_UPD_AUTO = booleanPreferencesKey("upd_auto")
+        private val KEY_UPD_MOBILE = booleanPreferencesKey("upd_mobile")
+        private val KEY_UPD_URL = stringPreferencesKey("upd_url")
         private val KEY_ANALYSIS_NIGHTLY = booleanPreferencesKey("analysis_nightly")
         private val KEY_ANALYSIS_CONTEXT = stringPreferencesKey("analysis_context")
         private val KEY_AUTO_PLACES = stringPreferencesKey("auto_places")
@@ -330,14 +337,16 @@ class Settings(private val context: Context) {
     }
 
     /**
-     * Врезки роботов в ленту (звонки, пожиратели внимания). Владелец их
-     * выключил: «очень сильно засоряет ленту, и не всегда это потеря — я
-     * готовил еду и смотрел про часы». Суммы остаются в экранном времени,
-     * лента не режется. Сон-вставка живёт отдельно и не выключается.
+     * Звонки и пожиратели внимания — ПАРАЛЛЕЛЬНЫМ треком. Прежние врезки
+     * владелец выключил по делу: «очень сильно засоряет ленту, и не всегда это
+     * потеря — я готовил еду и смотрел про часы». Они резали дело и отнимали у
+     * него минуты. Теперь не режут и не отнимают: ложатся поверх, вторым
+     * треком, и еда остаётся едой — поэтому включено по умолчанию. Сон-вставка
+     * живёт отдельно и не выключается.
      */
-    val zAutoInsertsFlow = context.dataStore.data.map { it[KEY_Z_AUTO_INSERTS] ?: false }
-    suspend fun setZAutoInserts(value: Boolean) {
-        context.dataStore.edit { it[KEY_Z_AUTO_INSERTS] = value }
+    val zParallelAutoFlow = context.dataStore.data.map { it[KEY_Z_PARALLEL_AUTO] ?: true }
+    suspend fun setZParallelAuto(value: Boolean) {
+        context.dataStore.edit { it[KEY_Z_PARALLEL_AUTO] = value }
     }
 
     // ---- Автопилот Засечки: места по Wi-Fi, машина по Bluetooth ----
@@ -593,5 +602,28 @@ class Settings(private val context: Context) {
             it[floatPreferencesKey("efab_x_$screenKey")] = xFraction
             it[floatPreferencesKey("efab_y_$screenKey")] = yFraction
         }
+    }
+
+    // ---- Обновления ----
+
+    // Проверять раз в сутки и тянуть новую сборку самому. Включено: смысл
+    // затеи в том, чтобы владелец не ходил за APK руками.
+    val updAutoFlow = context.dataStore.data.map { it[KEY_UPD_AUTO] ?: true }
+    suspend fun setUpdAuto(value: Boolean) {
+        context.dataStore.edit { it[KEY_UPD_AUTO] = value }
+    }
+
+    // Сборка весит десятки мегабайт - по умолчанию качаем только по Wi-Fi,
+    // а на мобильной сети показываем уведомление и ждём тапа.
+    val updMobileFlow = context.dataStore.data.map { it[KEY_UPD_MOBILE] ?: false }
+    suspend fun setUpdMobile(value: Boolean) {
+        context.dataStore.edit { it[KEY_UPD_MOBILE] = value }
+    }
+
+    // Откуда брать build-info.txt. Пусто = адрес по умолчанию (ветка
+    // apk-builds этого репозитория); поле нужно на случай переезда.
+    val updUrlFlow = context.dataStore.data.map { it[KEY_UPD_URL].orEmpty() }
+    suspend fun setUpdUrl(value: String) {
+        context.dataStore.edit { it[KEY_UPD_URL] = value.trim() }
     }
 }

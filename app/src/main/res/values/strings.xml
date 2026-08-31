@@ -201,4 +201,29 @@
     <string name="z_notify_evening_text">«%1$s» всё ещё идёт. Закрой день или надиктуй последнее дело.</string>
     <string name="z_notify_gap_title">Что ты делал с %1$s?</string>
     <string name="z_notify_gap_text">Уже %1$d мин без записи. Нажми «Надиктовать» и скажи.</string>
+    <!-- Обновления: приложение само смотрит ветку apk-builds -->
+    <string name="upd_channel">Обновления</string>
+    <string name="upd_notif_found_title">Есть сборка %1$s</string>
+    <string name="upd_notif_found_text">Мобильная сеть — нажми, чтобы скачать и поставить.</string>
+    <string name="upd_notif_ready_title">Обновление %1$s готово</string>
+    <string name="upd_notif_ready_text">Нажми, чтобы поставить.</string>
+    <string name="upd_toast_downloading">Качаю обновление…</string>
+    <string name="upd_toast_unknown">Сначала проверь обновления в настройках</string>
+    <string name="upd_toast_gone">Файл обновления пропал — проверь ещё раз</string>
+    <string name="upd_toast_allow">Разреши Правке ставить обновления и нажми ещё раз</string>
+    <string name="upd_toast_failed">Установщик не открылся: %1$s</string>
+    <string name="upd_title">Обновления</string>
+    <string name="upd_auto">Проверять раз в сутки и качать самому</string>
+    <string name="upd_mobile">Качать и по мобильной сети</string>
+    <string name="upd_check">Проверить</string>
+    <string name="upd_checking">Смотрю…</string>
+    <string name="upd_download">Скачать %1$s</string>
+    <string name="upd_downloading">Качаю… %1$d%%</string>
+    <string name="upd_install">Поставить %1$s</string>
+    <string name="upd_latest">Свежее нет: стоит %1$s</string>
+    <string name="upd_found">Есть %1$s от %2$s</string>
+    <string name="upd_other_branch">В ветке лежит %1$s из «%2$s» — это не наша линия, не предлагаю</string>
+    <string name="upd_never">Ещё не проверяли</string>
+    <string name="upd_checked">Проверено %1$s</string>
+    <string name="upd_error">Не дошло: %1$s</string>
 </resources>
