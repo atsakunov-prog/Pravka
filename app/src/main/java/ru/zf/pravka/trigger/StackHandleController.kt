@@ -138,6 +138,13 @@ class StackHandleController(
         v.invalidate()
     }
 
+    /**
+     * Перепись окон для журнала складывания: каждое наше оверлейное окно
+     * складывание Fold пересчитывает и ждёт, и ручки тут не исключение.
+     */
+    fun windowCount(): Int = if (glyph != null) 1 else 0
+
+    /** Именно removeView, а не GONE: скрытое окно стоит столько же, сколько видимое. */
     fun hide() {
         glyph?.let { runCatching { windowManager.removeView(it) } }
         glyph = null

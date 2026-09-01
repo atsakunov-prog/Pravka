@@ -62,6 +62,8 @@ class FloatingButtonController(
     private var params: WindowManager.LayoutParams? = null
     /** Убрана в ручку: сильнее любых других причин показать кнопку. */
     private var stashed = false
+    /** Окно кнопки реально висит в WindowManager. */
+    private var attached = false
     private var busy = false
     private var recording = false
     private var visible = false
@@ -109,8 +111,9 @@ class FloatingButtonController(
                     button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
                 }
             }
-            applyStash()
+            // Флаг ПЕРЕД applyStash: она решает по нему, вешать окно или нет.
             visible = true
+            applyStash()
         }
         if (badgeWanted) {
             repositionLearnBadge()
@@ -151,17 +154,40 @@ class FloatingButtonController(
             v.animate().alpha(0f).scaleX(0.5f).scaleY(0.5f).setDuration(140).start()
             v.postDelayed({ if (stashed) applyStash() }, 150)
         } else {
+            // Окно вешаем ПЕРВЫМ, и только потом ставим стартовые значения:
+            // иначе гашение альфы уехало бы и на путь «включили тумблером»,
+            // где никто её обратно не поднимает, — кнопка вернулась бы
+            // прозрачной.
             v.animate().cancel()
+            applyStash()
             v.alpha = 0f
             v.scaleX = 0.5f
             v.scaleY = 0.5f
-            applyStash()
             v.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start()
         }
     }
 
+    /**
+     * Спрятанная кнопка УХОДИТ ИЗ WindowManager, а не остаётся невидимым
+     * окном, и это не оптимизация, а правило проекта, оплаченное трижды:
+     * складывание Fold пересчитывает и ЖДЁТ каждое наше оверлейное окно, и
+     * чернота на пять секунд приходила ровно отсюда. Первая версия скрытия
+     * ставила View.GONE — окно при этом остаётся, а с ним и цена.
+     *
+     * Позиция живёт в params и переживает открепление, поэтому кнопка
+     * возвращается ровно туда, где была.
+     */
     private fun applyStash() {
-        button?.visibility = if (stashed || !visible) View.GONE else View.VISIBLE
+        val v = button ?: return
+        val p = params ?: return
+        val want = !stashed && visible
+        if (want == attached) return
+        attached = want
+        if (want) {
+            runCatching { windowManager.addView(v, p) }
+        } else {
+            runCatching { windowManager.removeView(v) }
+        }
     }
 
     fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
@@ -236,8 +262,8 @@ class FloatingButtonController(
         // While recording the stop button must stay up in every app.
         if (recording) return
         if (visible && !busy) {
-            applyStash()
             visible = false
+            applyStash()
             hideLearnBadge()
         }
     }
@@ -604,7 +630,10 @@ class FloatingButtonController(
 
     /** How many overlay windows this controller currently holds. */
     fun windowCount(): Int =
-        (if (button != null) 1 else 0) + (if (ticker != null) 1 else 0) +
+        // Именно attached, а не «button != null»: спрятанная кнопка держит
+        // свой View, но окна в WindowManager у неё нет — и в перепись,
+        // которой меряют цену складывания, она входить не должна.
+        (if (attached) 1 else 0) + (if (ticker != null) 1 else 0) +
             (if (learnBadge != null) 1 else 0) + (if (cancelBubble != null) 1 else 0) +
             (if (menu != null) 1 else 0)
 
@@ -614,6 +643,7 @@ class FloatingButtonController(
         hideCancelBubble()
         hideMenu()
         button?.let { runCatching { windowManager.removeView(it) } }
+        attached = false
         button = null
         ticker?.let { runCatching { windowManager.removeView(it) } }
         ticker = null
@@ -677,6 +707,7 @@ class FloatingButtonController(
         params = p
         button = container
         windowManager.addView(container, p)
+        attached = true
         container.visibility = View.GONE
 
         scope.launch {

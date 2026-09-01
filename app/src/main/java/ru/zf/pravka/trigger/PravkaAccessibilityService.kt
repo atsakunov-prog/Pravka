@@ -2229,6 +2229,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * хуже, чем её отсутствие.
      */
     private fun refreshHandles() {
+        if (folding) return
         val (x, y) = floatingButton?.currentPosition() ?: return
         val size = floatingButton?.buttonSizePx() ?: return
         val gap = (8 * resources.displayMetrics.density).toInt()
@@ -3978,6 +3979,14 @@ class PravkaAccessibilityService : AccessibilityService() {
         rButton?.hidePlate()
         eButton?.hideInput()
         eButton?.hidePlate()
+        // И обе серые ручки — с ними же. Это два лишних оверлейных окна, а
+        // складывание пересчитывает и ЖДЁТ каждое наше окно: ровно из-за
+        // лишних окон чернота на пять секунд приходила все три прошлых раза.
+        // Ручки снимаются мгновенно и возвращаются через configSettled, когда
+        // складывание уже прошло; полсекунды без ручки никто не заметит.
+        folding = true
+        tailHandle?.hide()
+        topHandle?.hide()
         // Repositioning ADDS work to the transition the system is running right
         // now: updateViewLayout on our overlays makes WindowManager wait for
         // them to redraw mid-fold. Do it once the fold has settled instead -
@@ -3990,13 +3999,22 @@ class PravkaAccessibilityService : AccessibilityService() {
         // back with a big number here, the leak is ours; a small one clears us.
         runCatching {
             val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0) +
-                (rButton?.windowCount() ?: 0) + (eButton?.windowCount() ?: 0)
+                (rButton?.windowCount() ?: 0) + (eButton?.windowCount() ?: 0) +
+                (tailHandle?.windowCount() ?: 0) + (topHandle?.windowCount() ?: 0)
             app.eventLog.add("смена конфигурации: наших окон $n")
         }
     }
 
+    /**
+     * Складывание идёт прямо сейчас. Пока флаг поднят, окон в WindowManager
+     * не прибавляется: тик, случайно попавший в середину складывания, вернул
+     * бы ручки обратно ровно тогда, когда система их и ждать не должна.
+     */
+    private var folding = false
+
     private val configHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val configSettled = Runnable {
+        folding = false
         floatingButton?.onConfigurationChanged()
         zButton?.onConfigurationChanged()
         rButton?.onConfigurationChanged()
