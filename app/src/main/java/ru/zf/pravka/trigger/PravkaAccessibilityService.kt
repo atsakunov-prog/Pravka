@@ -470,7 +470,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Short tap: stop the active session if any, else start per the engine. */
     private fun onDictateTap() {
-        if (expandButtons()) return
+        touched()
         if (isLockedIdle()) return
         // One microphone, one take at a time: a Засечка recording must be
         // stopped from its own button, not silently hijacked by this one.
@@ -1109,7 +1109,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * раз он читает десять, чтобы выбрать одну.
      */
     private fun showFabMenu() {
-        if (expandButtons()) return
+        touched()
         val red = FloatingButtonController.REC_RED
         val accent = FloatingButtonController.ACCENT
         // Первой строкой — что с кнопкой прямо сейчас. Владелец: «на каждой
@@ -1727,7 +1727,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     fun onZasechkaTap() {
-        if (expandButtons()) return
+        touched()
         if (isLockedIdle()) {
             if (!lockedDoubleTapArmed(System.currentTimeMillis())) {
                 // Первый тап только взводит — и показывает это, иначе жест
@@ -2029,10 +2029,10 @@ class PravkaAccessibilityService : AccessibilityService() {
         val screenLocked = runCatching { keyguardManager?.isKeyguardLocked == true }
             .getOrDefault(false)
 
-        // На локскрине стопки быть не должно: двойной тап целится в «З», а из
-        // сложенной стопки торчит «П». Разворачиваем молча — вибрация от
-        // того, что телефон просто заблокировали, была бы бессмыслицей.
-        if (screenLocked && stacked) expandButtons(silent = true)
+        // Раньше здесь стопку на локскрине разворачивало: двойной тап целится
+        // в «З», а из сложенной стопки торчала «П». Теперь «З» из стопки не
+        // уезжает никогда и на локскрине работает как есть — разворачивать
+        // нечего, и незачем разбрасывать кнопки по экрану блокировки.
 
         // Потолок записи, начатой с заблокированного экрана.
         if (lockedTakeCapAt > 0) {
@@ -2069,25 +2069,36 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Кнопки в стопку. Владелец: «чтобы кнопки собирались стопкой (но было
-     * видно, что это стопка), и если я нажимаю, то они раскрываются».
+     * Кнопки в стопку — до ДВУХ. Владелец: «сворачивание пускай будет до двух
+     * кнопок: правки и засечки, я их больше всего использую. а остальные две
+     * пускай прячутся в них. если я кликаю чуть ниже засечки, где стопка, то
+     * они раскрываются. а сами правка и засечка работают всегда».
      *
-     * Поэтому не «спрятать», а именно сложить: три нижние уезжают под
-     * верхнюю с небольшим сдвигом и приглушённые — из-под края видно, что
-     * там ещё что-то есть, и понятно, что тап их вернёт. Спрятанная кнопка
-     * выглядела бы как пропавшая, а это худшее, что можно сделать с
-     * инструментом, которым размечают день.
+     * Отсюда две вещи. «П» и «З» не складываются вовсе и не съедают первый
+     * тап: раньше по сложенной стопке первое нажатие означало «покажи
+     * кнопки», и до диктовки надо было тапнуть дважды — на двух самых частых
+     * кнопках это налог на каждое использование. «Д» и «Е» уезжают под «З»
+     * со сдвигом и приглушённые: не «спрятать», а именно сложить — из-под
+     * края видно, что там ещё что-то есть, и тап по этому краю их вернёт.
+     * Спрятанная кнопка выглядела бы как пропавшая, а это худшее, что можно
+     * сделать с инструментом, которым размечают день.
      */
     private fun collapseButtons() {
         if (stacked) return
         val (x, y) = floatingButton?.currentPosition() ?: return
+        val size = floatingButton?.buttonSizePx() ?: 0
+        val gap = (8 * resources.displayMetrics.density).toInt()
         val step = (5 * resources.displayMetrics.density).toInt()
         stacked = true
-        zButton?.followTo(x + step, y + step, true)
-        rButton?.followTo(x + 2 * step, y + 2 * step, true)
-        eButton?.followTo(x + 3 * step, y + 3 * step, true)
-        floatingButton?.setStacked(true)
-        zButton?.setStacked(true)
+        // «П» и «З» остаются на своих местах в цепочке и работают как обычно.
+        val underZ = y + size + gap
+        zButton?.followTo(x, underZ, true)
+        // Под «З» уезжают «Д» и «Е» — со сдвигом, чтобы из-под края было
+        // видно: там ещё что-то есть, и тап по этому краю их вернёт.
+        rButton?.followTo(x + step, underZ + step, true)
+        eButton?.followTo(x + 2 * step, underZ + 2 * step, true)
+        floatingButton?.setStacked(false)
+        zButton?.setStacked(false)
         rButton?.setStacked(true)
         eButton?.setStacked(true)
     }
@@ -2128,7 +2139,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     private fun showZasechkaMenu() {
-        if (expandButtons()) return
+        touched()
         val goTab: () -> Unit = {
             startActivity(
                 android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)

@@ -1515,41 +1515,36 @@ internal fun ZasechkaSettings(app: PravkaApp) {
         ZasechkaLearning(app)
 
         Spacer(Modifier.height(12.dp))
-        val csvParallel by app.settings.csvParallelFlow.collectAsState(initial = true)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(
-                checked = csvParallel,
-                onCheckedChange = { on -> app.appScope.launch { app.settings.setCsvParallel(on) } },
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "Выгружать параллельный трек",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+        Text("Выгрузить CSV", style = MaterialTheme.typography.titleSmall)
+        // Две кнопки, а не тумблер: тумблер надо помнить, а кнопка называет
+        // то, что отдаёт, в момент нажатия. Файлы и называются по-разному —
+        // два одинаковых имени в мессенджере не различить, а перепутать слои
+        // значит потерять полдня разбора.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                app.appScope.launch {
+                    context.startActivity(app.zasechkaStore.shareCsvIntent(true))
+                }
+            }) { Text("С параллельными") }
+            OutlinedButton(onClick = {
+                app.appScope.launch {
+                    context.startActivity(app.zasechkaStore.shareCsvIntent(false))
+                }
+            }) { Text("Без") }
         }
         Text(
-            if (csvParallel) {
-                "В файле оба слоя. Время разнесено по двум колонкам: minutes_day " +
-                    "складывается в сутки (за день всегда 1440), minutes_parallel — " +
-                    "то, что шло поверх дела. У строки заполнена ровно одна, поэтому " +
-                    "сумма любой из них честная и модель не насчитает тридцатичасовые " +
-                    "сутки. Колонки id и parallel_of связывают параллель с её делом " +
-                    "номером, а не догадкой по совпадению времени."
-            } else {
-                "В файле только основной трек: ютуб, звонки и Телеграм поверх дел " +
-                    "не поедут. Так стоит выгружать туда, где формат объяснять " +
-                    "некому — в таблицу или чужой скрипт. Тумблер действует и на " +
-                    "«CSV всей жизни»."
-            },
+            "С параллельными — оба слоя. Время разнесено по двум колонкам: " +
+                "minutes_day складывается в сутки (за день ровно 1440), " +
+                "minutes_parallel — то, что шло поверх дела; у строки заполнена " +
+                "ровно одна, поэтому сумма любой из них честная и модель не " +
+                "насчитает тридцатичасовые сутки. Колонки id и parallel_of " +
+                "связывают параллель с её делом номером, а не догадкой по " +
+                "совпадению времени.\n\nБез — только основной трек: ютуб, звонки " +
+                "и Телеграм поверх дел не поедут. Так стоит отдавать туда, где " +
+                "формат объяснять некому: в таблицу или чужой скрипт.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(6.dp))
-        OutlinedButton(onClick = {
-            app.appScope.launch {
-                context.startActivity(app.zasechkaStore.shareCsvIntent(csvParallel))
-            }
-        }) { Text("Выгрузить CSV") }
 
         Spacer(Modifier.height(18.dp))
         AutoPilotSection(app)

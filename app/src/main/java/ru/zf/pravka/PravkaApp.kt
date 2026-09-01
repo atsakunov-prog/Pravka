@@ -290,7 +290,6 @@ class PravkaApp : Application() {
             strength = strengthStore,
             food = foodStore,
             plan = planStore,
-            settings = settings,
         )
     }
 

@@ -314,29 +314,40 @@ private fun ExportTab(app: PravkaApp) {
                 "легендой: что складывать можно только minutes при budget=1 " +
                 "(и это ровно сутки), что параллель ссылается на своё дело " +
                 "через parallel_of, а тренировки и еда — пометки на том же " +
-                "времени, а не время сверх него. Тумблер «выгружать " +
-                "параллельный трек» — в настройках Засечки."
+                "времени, а не время сверх него. «Без параллельных» отдаёт " +
+                "только основной трек — для таблицы или чужого скрипта, где " +
+                "формат объяснять некому."
         )
         Spacer(Modifier.height(14.dp))
-        Button(
-            onClick = {
-                busy = true
-                app.appScope.launch {
-                    val intent = runCatching { app.digestBuilder.lifeCsvIntent() }.getOrNull()
-                    busy = false
-                    if (intent == null) {
-                        Feedback.toast(app, "Не собрался — посмотри Логи")
-                    } else {
-                        runCatching {
-                            context.startActivity(
-                                android.content.Intent.createChooser(intent, "CSV всей жизни")
-                            )
+        // Две кнопки, а не тумблер: кнопка называет то, что отдаёт, в момент
+        // нажатия, и файлы называются по-разному — перепутать слои нельзя.
+        @Composable
+        fun lifeCsvButton(label: String, withParallel: Boolean) {
+            Button(
+                onClick = {
+                    busy = true
+                    app.appScope.launch {
+                        val intent = runCatching { app.digestBuilder.lifeCsvIntent(withParallel) }
+                            .getOrNull()
+                        busy = false
+                        if (intent == null) {
+                            Feedback.toast(app, "Не собрался — посмотри Логи")
+                        } else {
+                            runCatching {
+                                context.startActivity(
+                                    android.content.Intent.createChooser(intent, "CSV всей жизни")
+                                )
+                            }
                         }
                     }
-                }
-            },
-            enabled = !busy,
-        ) { Text(if (busy) "Собираю…" else "CSV всей жизни") }
+                },
+                enabled = !busy,
+            ) { Text(label) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            lifeCsvButton(if (busy) "Собираю…" else "CSV всей жизни", true)
+            lifeCsvButton("Без параллельных", false)
+        }
         Spacer(Modifier.height(16.dp))
         // Разбор владелец делает в чате, а не здесь. Единственное, чего у
         // чата нет и быть не может, — накопленные паттерны с ЕГО вердиктами:

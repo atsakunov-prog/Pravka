@@ -1519,7 +1519,10 @@ class ZasechkaStore(private val context: Context) {
                 append(csvEscape(raw)).append('\n')
             }
         }
-        val out = File(context.cacheDir, "pravka-zasechka.csv")
+        val out = File(
+            context.cacheDir,
+            if (withParallel) "pravka-zasechka.csv" else "pravka-zasechka-bez-parallelej.csv",
+        )
         withContext(Dispatchers.IO) { out.writeText(csv) }
         return shareFileIntent(context, out, "text/csv")
     }

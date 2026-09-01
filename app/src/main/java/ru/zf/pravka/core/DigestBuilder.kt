@@ -5,11 +5,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.data.FoodStore
 import ru.zf.pravka.data.PlanStore
-import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.SportStore
 import ru.zf.pravka.data.StrengthStore
 import ru.zf.pravka.data.ZasechkaStore
@@ -35,7 +33,6 @@ class DigestBuilder(
     private val strength: StrengthStore,
     private val food: FoodStore,
     private val plan: PlanStore,
-    private val settings: Settings,
 ) {
 
     private val isoFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -350,11 +347,9 @@ class DigestBuilder(
      * parallel_of, source и budget. Складывать можно ровно одну колонку —
      * minutes при budget=1, — и она даёт сутки.
      */
-    suspend fun lifeCsvIntent(): android.content.Intent = withContext(Dispatchers.IO) {
+    suspend fun lifeCsvIntent(withParallel: Boolean = true): android.content.Intent =
+        withContext(Dispatchers.IO) {
         loadAll()
-        // Тот же тумблер, что у выгрузки Засечки: файл уходит и туда, где
-        // объяснять формат некому.
-        val withParallel = settings.csvParallelFlow.first()
         val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
         fun cell(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
         data class Row(
@@ -500,7 +495,12 @@ class DigestBuilder(
                 .append(cell(r.detail)).append(',')
                 .append(cell(r.note)).append('\n')
         }
-        val out = java.io.File(context.cacheDir, "pravka-zhizn.csv")
+        // Имя разное намеренно: два файла с одним именем в мессенджере
+        // различить нельзя, а перепутать слои — потерять полдня разбора.
+        val out = java.io.File(
+            context.cacheDir,
+            if (withParallel) "pravka-zhizn.csv" else "pravka-zhizn-bez-parallelej.csv",
+        )
         out.writeText(sb.toString())
         shareFileIntent(context, out, "text/csv")
     }
