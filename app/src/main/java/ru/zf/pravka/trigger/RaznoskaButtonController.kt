@@ -161,17 +161,24 @@ class RaznoskaButtonController(
 
 
     /**
-     * Кнопка в стопке: приглушена и чуть меньше. Не скрыта — из-под верхней
-     * должен торчать край, иначе стопка читается как «кнопки пропали».
+     * Кнопка убрана в стопку — то есть спрятана по-настоящему.
+     *
+     * Раньше она оставалась приглушённой и торчала краем из-под «З»: считалось,
+     * что край это подсказка «тут ещё что-то есть». На деле край наезжал на
+     * саму «З» и целиться приходилось в полоску. Теперь у стопки есть своя
+     * ручка — стрелка-галочка под ней (StackChevronController), и прятать
+     * можно честно. Схлопывается к точке под «З», оттуда же и выезжает.
      */
     fun setStacked(value: Boolean) {
         val v = button ?: return
-        v.animate()
-            .alpha(if (value) 0.55f else 1f)
-            .scaleX(if (value) 0.9f else 1f)
-            .scaleY(if (value) 0.9f else 1f)
-            .setDuration(180)
-            .start()
+        if (value) {
+            v.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(150)
+                .withEndAction { v.visibility = View.GONE }
+                .start()
+        } else {
+            v.visibility = View.VISIBLE
+            v.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start()
+        }
     }
 
     fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
