@@ -74,6 +74,8 @@ class RaznoskaButtonController(
     private var stashed = false
     /** Окно кнопки реально висит в WindowManager. */
     private var attached = false
+    /** Идёт складывание: окно снято на время перехода. */
+    private var folded = false
     private var busy = false
     private var recording = false
     private var enabled = false
@@ -184,17 +186,40 @@ class RaznoskaButtonController(
             v.animate().alpha(0f).scaleX(0.5f).scaleY(0.5f).setDuration(140).start()
             v.postDelayed({ if (stashed) applyStash() }, 150)
         } else {
-            // Окно вешаем ПЕРВЫМ, и только потом ставим стартовые значения:
-            // иначе гашение альфы уехало бы и на путь «включили тумблером»,
-            // где никто её обратно не поднимает, — кнопка вернулась бы
-            // прозрачной.
+            // НИКАКОЙ анимации проявления. Только что прикреплённое окно ещё
+            // не прошло ни одного прохода компоновки, и ViewPropertyAnimator
+            // на нём попросту не стартует — альфа так и остаётся нулевой.
+            // Владелец увидел это буквально: «кнопка правки пропала,
+            // остальные есть». Остальные-то сразу двигает followTo, а «П» —
+            // якорь цепочки, её не двигает никто, и проход компоновки ей
+            // взяться неоткуда. Поэтому конечные значения ставятся напрямую.
             v.animate().cancel()
             applyStash()
-            v.alpha = 0f
-            v.scaleX = 0.5f
-            v.scaleY = 0.5f
-            v.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start()
+            v.scaleX = 1f
+            v.scaleY = 1f
+            v.alpha = if (busy || recording) 1f else idleAlpha
         }
+    }
+
+    /**
+     * Складывание идёт — окно кнопки снимается на время перехода.
+     *
+     * Владелец сам показал, где ответ: «если все кнопки сложить в три точки,
+     * то никаких проблем нет, складывается всё отлично». В журнале при этом
+     * «наших окон 0», а с кнопками на экране — четыре, и чернота на пять
+     * секунд. Складывание Fold пересчитывает и ЖДЁТ каждое наше оверлейное
+     * окно, и четыре — это уже дорого, независимо от того, чьи они.
+     *
+     * Поэтому на время перехода их нет вовсе, а через полсекунды они
+     * возвращаются на свои места. Пользоваться ими всё равно нельзя: экран в
+     * этот момент чёрный.
+     *
+     * Исключение — идущая запись: кнопку «стоп» отнимать нельзя даже на
+     * полсекунды, иначе останавливать наговор будет нечем.
+     */
+    fun setFolded(value: Boolean) {
+        folded = value && !recording
+        applyStash()
     }
 
     /**
@@ -210,10 +235,18 @@ class RaznoskaButtonController(
     private fun applyStash() {
         val v = button ?: return
         val p = params ?: return
-        val want = !stashed && enabled
+        val want = !stashed && !folded && enabled
         if (want == attached) return
         attached = want
         if (want) {
+            // Возвращать окно — значит возвращать и вид. Ставим прямо здесь,
+            // в ЕДИНСТВЕННОЙ точке прикрепления: иначе любой путь, забывший
+            // поднять альфу после гашения, даёт прикреплённое окно с
+            // невидимой кнопкой — ровно то, что владелец увидел как
+            // «кнопка правки пропала, остальные есть».
+            v.scaleX = 1f
+            v.scaleY = 1f
+            v.alpha = if (busy || recording) 1f else idleAlpha
             runCatching { windowManager.addView(v, p) }
         } else {
             runCatching { windowManager.removeView(v) }

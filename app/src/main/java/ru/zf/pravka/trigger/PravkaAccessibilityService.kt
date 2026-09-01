@@ -2130,7 +2130,10 @@ class PravkaAccessibilityService : AccessibilityService() {
             collapseButtons()
         } else {
             // Самолечение: при старте службы позиции кнопок могло ещё не
-            // быть, и стрелка тогда не нарисовалась. Тик её донесёт.
+            // быть, и стрелка тогда не нарисовалась. Тик её донесёт. Он же
+            // вернёт кнопки, если складывание почему-то не доиграло свой
+            // configSettled: остаться без кнопок насовсем нельзя.
+            if (!folding) setFolded(false)
             refreshHandles()
         }
     }
@@ -3987,6 +3990,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         folding = true
         tailHandle?.hide()
         topHandle?.hide()
+        // И сами кнопки. Владелец показал, где ответ: «если все кнопки
+        // сложить в три точки, то никаких проблем нет, складывается всё
+        // отлично» — в журнале при этом «наших окон 0». Значит дело не в том,
+        // ЧЬИ окна, а в том, сколько их: четыре — уже дорого. На полсекунды
+        // перехода они не нужны никому, экран в этот момент чёрный.
+        setFolded(true)
         // Repositioning ADDS work to the transition the system is running right
         // now: updateViewLayout on our overlays makes WindowManager wait for
         // them to redraw mid-fold. Do it once the fold has settled instead -
@@ -4012,9 +4021,18 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     private var folding = false
 
+    /** Снять или вернуть окна всех четырёх кнопок на время складывания. */
+    private fun setFolded(value: Boolean) {
+        floatingButton?.setFolded(value)
+        zButton?.setFolded(value)
+        rButton?.setFolded(value)
+        eButton?.setFolded(value)
+    }
+
     private val configHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val configSettled = Runnable {
         folding = false
+        setFolded(false)
         floatingButton?.onConfigurationChanged()
         zButton?.onConfigurationChanged()
         rButton?.onConfigurationChanged()
