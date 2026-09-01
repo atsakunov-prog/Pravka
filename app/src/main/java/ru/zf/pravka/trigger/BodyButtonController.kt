@@ -83,6 +83,8 @@ class BodyButtonController(
     private var countdown: TextView? = null
     private var progress: ProgressBar? = null
     private var params: WindowManager.LayoutParams? = null
+    /** Убрана в ручку: сильнее любых других причин показать кнопку. */
+    private var stashed = false
     private var busy = false
     private var recording = false
     private var enabled = false
@@ -112,7 +114,7 @@ class BodyButtonController(
         enabled = value
         if (value) {
             if (button == null) create()
-            button?.visibility = View.VISIBLE
+            applyStash()
         } else {
             hideTicker()
             hidePlate()
@@ -210,24 +212,35 @@ class BodyButtonController(
 
 
     /**
-     * Кнопка убрана в стопку — то есть спрятана по-настоящему.
+     * Кнопка убрана в ручку. Прятать надо НАДЁЖНО, и две прежние попытки
+     * этого не сделали: первая только приглушала (кнопка оставалась на
+     * экране), вторая гасила из withEndAction — а он не выполняется, если
+     * анимацию кто-то перебил, и applyFace, который дёргается на каждом
+     * изменении состояния, тут же ставит альфу обратно своим числом.
      *
-     * Раньше она оставалась приглушённой и торчала краем из-под «З»: считалось,
-     * что край это подсказка «тут ещё что-то есть». На деле край наезжал на
-     * саму «З» и целиться приходилось в полоску. Теперь у стопки есть своя
-     * ручка — стрелка-галочка под ней (StackChevronController), и прятать
-     * можно честно. Схлопывается к точке под «З», оттуда же и выезжает.
+     * Поэтому теперь у скрытия свой флаг, гашение по таймеру (а не по концу
+     * анимации), и ЕДИНСТВЕННОЕ место, которое пишет видимость кнопки, —
+     * [applyStash]. Пока несколько мест пишут одно поле, побеждает
+     * последнее, и это всегда не то, которого ждёшь.
      */
     fun setStacked(value: Boolean) {
+        stashed = value
         val v = button ?: return
         if (value) {
-            v.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(150)
-                .withEndAction { v.visibility = View.GONE }
-                .start()
+            v.animate().alpha(0f).scaleX(0.5f).scaleY(0.5f).setDuration(140).start()
+            v.postDelayed({ if (stashed) applyStash() }, 150)
         } else {
-            v.visibility = View.VISIBLE
+            v.animate().cancel()
+            v.alpha = 0f
+            v.scaleX = 0.5f
+            v.scaleY = 0.5f
+            applyStash()
             v.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start()
         }
+    }
+
+    private fun applyStash() {
+        button?.visibility = if (stashed || !enabled) View.GONE else View.VISIBLE
     }
 
     fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }

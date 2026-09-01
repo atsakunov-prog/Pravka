@@ -1,13 +1,17 @@
 package ru.zf.pravka.trigger
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
+import kotlin.math.abs
 
 /**
  * Серая ручка от ящика: маленький кружок, из которого выпадают кнопки.
@@ -48,6 +52,19 @@ class StackHandleController(
 
     var onTap: (() -> Unit)? = null
 
+    /**
+     * Ручку можно таскать, как кнопку. Владелец: «надо сделать так, чтобы это
+     * многоточие можно было двигать точно так же, как правку». По-другому и
+     * нельзя: когда все кнопки убраны, ручка — единственное, что на экране, и
+     * если она приросла к месту, то место уже не поменять.
+     */
+    var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
+
+    private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
+
+    fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
+
+    @SuppressLint("ClickableViewAccessibility")
     fun show(collapsed: Boolean) {
         if (glyph == null) {
             val v = HandleGlyph(service, dots).apply {
@@ -57,7 +74,46 @@ class StackHandleController(
                     shape = GradientDrawable.OVAL
                     setColor(GREY)
                 }
-                setOnClickListener { onTap?.invoke() }
+            }
+            var downX = 0f
+            var downY = 0f
+            var startX = 0
+            var startY = 0
+            var dragging = false
+            v.setOnTouchListener { _, event ->
+                val p = params ?: return@setOnTouchListener false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = event.rawX
+                        downY = event.rawY
+                        startX = p.x
+                        startY = p.y
+                        dragging = false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.rawX - downX
+                        val dy = event.rawY - downY
+                        if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) dragging = true
+                        if (dragging) {
+                            val bounds = runCatching { windowManager.currentWindowMetrics.bounds }
+                                .getOrNull()
+                            val w = bounds?.width() ?: 0
+                            val h = bounds?.height() ?: 0
+                            p.x = (startX + dx.toInt()).coerceIn(0, (w - sizePx).coerceAtLeast(0))
+                            p.y = (startY + dy.toInt()).coerceIn(0, (h - sizePx).coerceAtLeast(0))
+                            runCatching { windowManager.updateViewLayout(v, p) }
+                            onDragged?.invoke(p.x, p.y, false)
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        if (dragging) {
+                            onDragged?.invoke(p.x, p.y, true)
+                        } else if (event.actionMasked == MotionEvent.ACTION_UP) {
+                            onTap?.invoke()
+                        }
+                    }
+                }
+                true
             }
             val p = WindowManager.LayoutParams(
                 sizePx,

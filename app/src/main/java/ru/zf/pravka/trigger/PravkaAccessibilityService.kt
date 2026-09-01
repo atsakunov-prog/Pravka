@@ -262,29 +262,58 @@ class PravkaAccessibilityService : AccessibilityService() {
                 touched()
                 setAllHidden(!allHidden)
             }
+            // Ручку таскают, как кнопку, и за ней едет вся цепочка. Иначе,
+            // когда всё убрано, она единственная на экране — и приросла бы
+            // к месту навсегда.
+            h.onDragged = { hx, hy, dropped ->
+                touched()
+                val size = floatingButton?.buttonSizePx() ?: 0
+                val gap = (8 * resources.displayMetrics.density).toInt()
+                val lift = h.sizePx + (5 * resources.displayMetrics.density).toInt()
+                // Ровно обратное тому, что делает moveTo(above = true): так
+                // ручка после броска остаётся там же, где палец её отпустил,
+                // без доводки и прыжка.
+                val px = hx - (size - h.sizePx) / 2
+                val py = hy + lift
+                floatingButton?.followTo(px, py, dropped)
+                zButton?.followTo(px, py + (size + gap), dropped)
+                // Спрятанные ставим под «З»: оттуда они и выезжают.
+                rButton?.followTo(px, py + (if (stacked) 1 else 2) * (size + gap), dropped)
+                eButton?.followTo(px, py + (if (stacked) 1 else 3) * (size + gap), dropped)
+                val slot = when {
+                    stacked -> 1
+                    cachedEEnabled -> 3
+                    else -> 2
+                }
+                tailHandle?.moveTo(px, py + slot * (size + gap), size, above = false)
+            }
         }
 
         // The linked chain (owner's design): drag any bubble and the others
         // trail behind on a rubber band, in order "П" - "З" - "Д" - "Т".
         val pairGap = (8 * resources.displayMetrics.density).toInt()
+        // Перетаскивание больше НЕ разворачивает стопку: спрятанное должно
+        // оставаться спрятанным, куда бы связку ни увезли. Раньше здесь
+        // стоял expandButtons(), и «Д» с «Е» выскакивали от любого сдвига
+        // пальцем — то есть спрятать их надолго было попросту нельзя.
         floatingButton?.onDragged = { x, y, dropped ->
-            expandButtons()
+            touched()
             val size = floatingButton?.buttonSizePx() ?: 0
             zButton?.followTo(x, y + size + pairGap, dropped)
-            rButton?.followTo(x, y + 2 * (size + pairGap), dropped)
-            eButton?.followTo(x, y + 3 * (size + pairGap), dropped)
+            rButton?.followTo(x, y + (if (stacked) 1 else 2) * (size + pairGap), dropped)
+            eButton?.followTo(x, y + (if (stacked) 1 else 3) * (size + pairGap), dropped)
             refreshHandles()
         }
         zButton?.onDragged = { x, y, dropped ->
-            expandButtons()
+            touched()
             val size = floatingButton?.buttonSizePx() ?: 0
             floatingButton?.followTo(x, y - size - pairGap, dropped)
-            rButton?.followTo(x, y + size + pairGap, dropped)
-            eButton?.followTo(x, y + 2 * (size + pairGap), dropped)
+            rButton?.followTo(x, y + (if (stacked) 0 else 1) * (size + pairGap), dropped)
+            eButton?.followTo(x, y + (if (stacked) 0 else 2) * (size + pairGap), dropped)
             refreshHandles()
         }
         rButton?.onDragged = { x, y, dropped ->
-            expandButtons()
+            touched()
             val size = floatingButton?.buttonSizePx() ?: 0
             zButton?.followTo(x, y - size - pairGap, dropped)
             floatingButton?.followTo(x, y - 2 * (size + pairGap), dropped)
@@ -292,7 +321,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             refreshHandles()
         }
         eButton?.onDragged = { x, y, dropped ->
-            expandButtons()
+            touched()
             val size = floatingButton?.buttonSizePx() ?: 0
             rButton?.followTo(x, y - size - pairGap, dropped)
             zButton?.followTo(x, y - 2 * (size + pairGap), dropped)
@@ -1315,22 +1344,20 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** 💡/⭐ over the button while suggestions await review; gone when done. */
+    /**
+     * ЗВЁЗДОЧКИ НАД «П» БОЛЬШЕ НЕТ. Владелец: «уберём вот эту
+     * звёздочку-напоминание, потому что она чуть меня раздражает».
+     *
+     * И он прав по сути, а не только по вкусу: предложенные правила не
+     * срочны — они ждут суда неделями и ничего не портят, пока их не
+     * одобрили. Значок же висел на кнопке, которую он трогает десятки раз в
+     * день, и требовал внимания ровно так же, как настоящая тревога. Правила
+     * никуда не делись: они на вкладке Правки, и там их видно, когда он сам
+     * туда пришёл. Функция осталась — её зовут из полудюжины мест, и она
+     * теперь просто снимает значок, если он откуда-то взялся.
+     */
     fun refreshLearnBadge() {
-        scope.launch {
-            val pending = app.learnStore.all()
-            if (pending.isEmpty()) {
-                floatingButton?.hideLearnBadge()
-            } else {
-                val emoji = if (pending.any { it.kind == "rule" }) "⭐" else "💡"
-                floatingButton?.showLearnBadge(emoji) {
-                    startActivity(
-                        android.content.Intent(this@PravkaAccessibilityService, ru.zf.pravka.MainActivity::class.java)
-                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                }
-            }
-        }
+        floatingButton?.hideLearnBadge()
     }
 
     // Weekly housekeeping (owner's request): when the rule set has grown,
