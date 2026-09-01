@@ -284,7 +284,16 @@ class FloatingButtonController(
         val (w, h) = screenSize()
         followTargetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
         followTargetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
-        if (!visible) {
+        // ОТКРЕПЛЁННОЕ окно догонять нечем: view.post у view без окна не
+        // выполняется вовсе — он ждёт следующего прикрепления. Владелец
+        // увидел это так: убрал всё в три точки, оттащил их, и через пару
+        // секунд точки вернулись к правому краю. Точки-то стоят НАД «П», а
+        // «П» с откреплённым окном никуда не уехала — её параметры остались
+        // старыми, и первый же пересчёт вернул ручку к ним.
+        //
+        // Поэтому спрятанная кнопка встаёт на место сразу, без резинки:
+        // догонять всё равно некому, а координаты обязаны быть настоящими.
+        if (!attached) {
             following = false
             view.removeCallbacks(followStep)
             p.x = followTargetX
