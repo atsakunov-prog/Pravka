@@ -133,8 +133,10 @@ class PravkaAccessibilityService : AccessibilityService() {
     // поля, ни ленты этот путь не касается (в ленту еда только ПРИПИСЫВАЕТСЯ,
     // и то из движка).
     private var eButton: BodyButtonController? = null
-    /** Ручка от ящика: под стопкой, «⌄» разворачивает «Д» и «Е». */
-    private var chevron: StackChevronController? = null
+    /** Ручка под хвостом: галочка, выпускает и убирает «Д» и «Е». */
+    private var tailHandle: StackHandleController? = null
+    /** Ручка над «П»: многоточие, убирает и возвращает ВСЕ четыре кнопки. */
+    private var topHandle: StackHandleController? = null
     private var eSession: GoogleSpeechSession? = null
     @Volatile private var eWhisperRecording = false
     @Volatile private var eTypeInstead = false
@@ -245,14 +247,20 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
         eButton?.onTickerTap = ::onFoodTickerTap
 
-        // Стрелка под стопкой. Владелец предложил её сам, взамен торчащих
-        // из-под «З» краёв: «сделать стрелочку, как галочка, вниз, на
-        // которую нажимаешь, и выпадают эти две кнопки». Края наезжали на
-        // саму «З», и целиться приходилось в полоску; у стрелки своя площадь.
-        chevron = StackChevronController(this).also { ch ->
-            ch.onTap = {
+        // Две серые ручки. Нижняя, с галочкой, выпускает «Д» и «Е»; верхняя,
+        // с многоточием, убирает и возвращает всё разом — владелец: «наверху
+        // над плашкой ещё одну серую штучку маленькую, куда я буду нажимать,
+        // и все кнопки будут в неё убираться».
+        tailHandle = StackHandleController(this, dots = false).also { h ->
+            h.onTap = {
                 touched()
                 if (stacked) expandButtons() else collapseButtons()
+            }
+        }
+        topHandle = StackHandleController(this, dots = true).also { h ->
+            h.onTap = {
+                touched()
+                setAllHidden(!allHidden)
             }
         }
 
@@ -265,7 +273,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             zButton?.followTo(x, y + size + pairGap, dropped)
             rButton?.followTo(x, y + 2 * (size + pairGap), dropped)
             eButton?.followTo(x, y + 3 * (size + pairGap), dropped)
-            refreshChevron()
+            refreshHandles()
         }
         zButton?.onDragged = { x, y, dropped ->
             expandButtons()
@@ -273,7 +281,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             floatingButton?.followTo(x, y - size - pairGap, dropped)
             rButton?.followTo(x, y + size + pairGap, dropped)
             eButton?.followTo(x, y + 2 * (size + pairGap), dropped)
-            refreshChevron()
+            refreshHandles()
         }
         rButton?.onDragged = { x, y, dropped ->
             expandButtons()
@@ -281,7 +289,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             zButton?.followTo(x, y - size - pairGap, dropped)
             floatingButton?.followTo(x, y - 2 * (size + pairGap), dropped)
             eButton?.followTo(x, y + size + pairGap, dropped)
-            refreshChevron()
+            refreshHandles()
         }
         eButton?.onDragged = { x, y, dropped ->
             expandButtons()
@@ -289,7 +297,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             rButton?.followTo(x, y - size - pairGap, dropped)
             zButton?.followTo(x, y - 2 * (size + pairGap), dropped)
             floatingButton?.followTo(x, y - 3 * (size + pairGap), dropped)
-            refreshChevron()
+            refreshHandles()
         }
         floatingButton?.pairAnchor = anchor@{
             if (!cachedZEnabled) return@anchor null
@@ -307,29 +315,40 @@ class PravkaAccessibilityService : AccessibilityService() {
             app.settings.zEnabledFlow.collect {
                 cachedZEnabled = it
                 zButton?.setEnabled(it)
-                refreshChevron()
+                // setEnabled показывает кнопку — а набор мог быть убран в
+                // верхнюю ручку: возвращаем её обратно в ручку.
+                if (allHidden) zButton?.setStacked(true)
+                refreshHandles()
             }
         }
         scope.launch {
             app.settings.rEnabledFlow.collect {
                 cachedREnabled = it
                 rButton?.setEnabled(it)
-                refreshChevron()
+                // setEnabled показывает кнопку — а набор мог быть убран в
+                // верхнюю ручку: возвращаем её обратно в ручку.
+                if (allHidden) rButton?.setStacked(true)
+                refreshHandles()
             }
         }
         scope.launch {
             app.settings.tEnabledFlow.collect {
                 cachedEEnabled = it
                 eButton?.setEnabled(it)
-                refreshChevron()
+                // setEnabled показывает кнопку — а набор мог быть убран в
+                // верхнюю ручку: возвращаем её обратно в ручку.
+                if (allHidden) eButton?.setStacked(true)
+                refreshHandles()
             }
         }
         scope.launch {
             app.settings.stackIdleFlow.collect {
                 cachedStackIdle = it
                 // Выключили при сложенных кнопках — разложить сейчас же,
-                // иначе тумблер выглядит сломанным.
-                if (!it && stacked) expandButtons()
+                // иначе тумблер выглядит сломанным. Убранный в верхнюю ручку
+                // набор это не касается: его убрали руками и вернуть должны
+                // тоже руками.
+                if (!it && stacked && !allHidden) expandButtons()
             }
         }
         scope.launch { app.settings.restSecFlow.collect { cachedRestSec = it } }
@@ -2036,6 +2055,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     private var lockedTakeCapAt = 0L
     private var lastTouchAt = System.currentTimeMillis()
     private var stacked = false
+    /** Все четыре убраны в верхнюю ручку. */
+    private var allHidden = false
     private val chromeHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val chromeTicker = object : Runnable {
         override fun run() {
@@ -2083,7 +2104,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         } else {
             // Самолечение: при старте службы позиции кнопок могло ещё не
             // быть, и стрелка тогда не нарисовалась. Тик её донесёт.
-            refreshChevron()
+            refreshHandles()
         }
     }
 
@@ -2131,31 +2152,77 @@ class PravkaAccessibilityService : AccessibilityService() {
         zButton?.setStacked(false)
         rButton?.setStacked(true)
         eButton?.setStacked(true)
-        refreshChevron()
+        refreshHandles()
     }
 
     /**
-     * Стрелка садится под ХВОСТОМ стопки: сложена — под «З», разложена — под
-     * последней включённой кнопкой. Нечего прятать (обе выключены) или нет
-     * самой «З» — стрелки тоже нет: ручка от ящика, которого не существует,
+     * Убрать или вернуть ВСЁ. Верхняя ручка — единственный способ снять с
+     * экрана и «П», и «З»: до неё убрать их можно было только тумблерами в
+     * настройках, а иногда экран просто нужен целиком.
+     *
+     * Возвращается всегда полный набор из четырёх, как владелец и просил:
+     * «если буду на неё нажимать, то будут выпадать все четыре, и потом
+     * точно так же скрываться две». Прятать по одной — работа нижней ручки.
+     */
+    private fun setAllHidden(hidden: Boolean) {
+        if (allHidden == hidden) return
+        allHidden = hidden
+        if (hidden) {
+            floatingButton?.setStacked(true)
+            zButton?.setStacked(true)
+            rButton?.setStacked(true)
+            eButton?.setStacked(true)
+            // Значки и плашки привязаны к кнопкам: без них они висели бы
+            // посреди экрана сами по себе. Убрать — значит убрать всё.
+            floatingButton?.hideLearnBadge()
+            zButton?.hideLearnBadge()
+            zButton?.hideTicker()
+            rButton?.hideTicker()
+            rButton?.hidePlate()
+            eButton?.hideTicker()
+            eButton?.hidePlate()
+            stacked = true
+        } else {
+            stacked = true      // чтобы expandButtons развёз все четыре
+            expandButtons(silent = true)
+            refreshLearnBadge()
+            scope.launch { refreshZasechkaBadge() }
+        }
+        refreshHandles()
+        Haptics.start(this)
+    }
+
+    /**
+     * Ручки на местах. Нижняя — под ХВОСТОМ: сложено, значит под «З»,
+     * разложено — под последней включённой кнопкой. Верхняя — над «П», и
+     * когда всё убрано, она остаётся единственным, что видно на экране:
+     * иначе кнопки было бы не вернуть.
+     *
+     * Нечего прятать — ручки нет: ручка от ящика, которого не существует,
      * хуже, чем её отсутствие.
      */
-    private fun refreshChevron() {
-        val ch = chevron ?: return
-        if (!cachedZEnabled || (!cachedREnabled && !cachedEEnabled)) {
-            ch.hide()
-            return
-        }
+    private fun refreshHandles() {
         val (x, y) = floatingButton?.currentPosition() ?: return
         val size = floatingButton?.buttonSizePx() ?: return
         val gap = (8 * resources.displayMetrics.density).toInt()
+
+        topHandle?.let { h ->
+            h.show(allHidden)
+            h.moveTo(x, y, size, above = true)
+        }
+
+        val tail = tailHandle ?: return
+        if (allHidden || !cachedZEnabled || (!cachedREnabled && !cachedEEnabled)) {
+            tail.hide()
+            return
+        }
         val slot = when {
             stacked -> 1
             cachedEEnabled -> 3
             else -> 2
         }
-        ch.show(stacked)
-        ch.moveTo(x, y + slot * (size + gap), size)
+        tail.show(stacked)
+        tail.moveTo(x, y + slot * (size + gap), size, above = false)
     }
 
     /**
@@ -2179,7 +2246,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         zButton?.followTo(x, y + size + gap, true)
         rButton?.followTo(x, y + 2 * (size + gap), true)
         eButton?.followTo(x, y + 3 * (size + gap), true)
-        refreshChevron()
+        refreshHandles()
         if (!silent) Haptics.start(this)
         return true
     }
@@ -3907,7 +3974,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         zButton?.onConfigurationChanged()
         rButton?.onConfigurationChanged()
         eButton?.onConfigurationChanged()
-        refreshChevron()
+        refreshHandles()
     }
 
     override fun onInterrupt() = Unit
@@ -3939,8 +4006,10 @@ class PravkaAccessibilityService : AccessibilityService() {
         restHandler.removeCallbacks(restTick)
         eButton?.destroy()
         eButton = null
-        chevron?.hide()
-        chevron = null
+        tailHandle?.hide()
+        tailHandle = null
+        topHandle?.hide()
+        topHandle = null
         scope.cancel()
         super.onDestroy()
     }
