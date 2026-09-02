@@ -35,7 +35,9 @@ import ru.zf.pravka.R
 //   1. ветка. Обновляемся только на сборку из СВОЕЙ линии (BUILD_BRANCH);
 //   2. имя файла. Берётся из build-info («apk=…»), а не угадывается;
 //   3. сам APK. Перед установкой проверяется, что это ru.zf.pravka с тем самым
-//      versionCode - пока качали, в ветку мог приехать следующий билд.
+//      versionCode - пока качали, в ветку мог приехать следующий билд. Если
+//      приехал именно следующий из нашей же линии (свежий build-info это
+//      подтверждает) - берём его, а не выбрасываем 17 мегабайт с ошибкой.
 //
 // Подпись у всех сборок одна (keystore/pravka.jks), поэтому APK ставится
 // поверх, не стирая данные. Это же и защита: чужой APK система не примет.
@@ -229,7 +231,12 @@ class Updates(
                 val part = File(dir(), "pravka-${build.versionCode}.apk.part")
                 part.delete()
                 _state.value = _state.value.copy(progress = 0, error = "")
-                val request = Request.Builder().url(url).header("Cache-Control", "no-cache").build()
+                // Тот же ?t=, что у build-info: иначе Fastly пять минут отдаёт
+                // прошлый APK к свежему build-info, и проверка кода его отбросит.
+                val request = Request.Builder()
+                    .url(if (url.contains('?')) "$url&t=${System.currentTimeMillis()}" else "$url?t=${System.currentTimeMillis()}")
+                    .header("Cache-Control", "no-cache")
+                    .build()
                 http.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) throw java.io.IOException("HTTP ${response.code}")
                     val body = response.body ?: throw java.io.IOException("пустой ответ")
@@ -257,15 +264,37 @@ class Updates(
                 }
                 target.delete()
                 if (!part.renameTo(target)) throw java.io.IOException("не переименовался")
-                if (!verify(target, build)) {
-                    target.delete()
-                    throw java.io.IOException("скачался не тот APK")
+                var file = target
+                var got = build
+                val code = archiveCode(file)
+                if (code != build.versionCode) {
+                    // Ветку перезаписали, пока качали: build-info обещал одну
+                    // сборку, а приехала следующая (владелец: «говорит, что
+                    // скачался не тот APK» - ровно через пять минут после
+                    // пуша в ту же линию). Если свежий build-info подтверждает
+                    // приехавшую и она из нашей линии - это и есть обновление,
+                    // качать те же мегабайты второй раз незачем.
+                    val fresh = if (code != null && code > build.versionCode) check(force = true) else null
+                    if (fresh != null && fresh.versionCode == code && sameLine(fresh)) {
+                        val renamed = File(dir(), "pravka-$code.apk")
+                        renamed.delete()
+                        if (!file.renameTo(renamed)) throw java.io.IOException("не переименовался")
+                        file = renamed
+                        got = fresh
+                        eventLog.add("обновление: пока качали, в ветку приехала ${fresh.versionName} - берём её")
+                    } else {
+                        file.delete()
+                        throw java.io.IOException(
+                            if (code == null) "скачался не тот APK"
+                            else "в ветке уже сборка $code, а ждали ${build.versionCode} - нажми «Проверить» ещё раз"
+                        )
+                    }
                 }
                 // В кэше держим только свежий: APK весит десятки мегабайт.
-                dir().listFiles()?.forEach { if (it != target) it.delete() }
-                eventLog.add("обновление: скачано ${build.versionName} (${target.length() / 1_048_576} МБ)")
-                _state.value = _state.value.copy(ready = target, progress = -1)
-                target
+                dir().listFiles()?.forEach { if (it != file) it.delete() }
+                eventLog.add("обновление: скачано ${got.versionName} (${file.length() / 1_048_576} МБ)")
+                _state.value = _state.value.copy(ready = file, progress = -1)
+                file
             }
         } catch (e: kotlin.coroutines.cancellation.CancellationException) {
             throw e
@@ -279,19 +308,18 @@ class Updates(
     }
 
     /** Файл на диске годится, только если это Правка с ожидаемым кодом. */
-    private fun verify(file: File, build: Build): Boolean {
-        if (!file.exists() || file.length() < 1_000_000L) return false
+    private fun verify(file: File, build: Build): Boolean = archiveCode(file) == build.versionCode
+
+    /** versionCode Правки внутри APK; null - файла нет, он битый или это не наш пакет. */
+    private fun archiveCode(file: File): Int? {
+        if (!file.exists() || file.length() < 1_000_000L) return null
         val info = runCatching {
             context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
-        }.getOrNull() ?: return false
-        if (info.packageName != BuildConfig.APPLICATION_ID) return false
+        }.getOrNull() ?: return null
+        if (info.packageName != BuildConfig.APPLICATION_ID) return null
         @Suppress("DEPRECATION")
-        val code = if (android.os.Build.VERSION.SDK_INT >= 28) {
-            info.longVersionCode.toInt()
-        } else {
-            info.versionCode
-        }
-        return code == build.versionCode
+        val code = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode.toInt() else info.versionCode
+        return code
     }
 
     private fun readyFile(build: Build): File? {
@@ -360,10 +388,13 @@ class Updates(
             prefs().edit().putLong(KEY_TRY_AT, now).apply()
             ready = download(build)
         }
+        // Качалка могла взять следующую сборку вместо обещанной - уведомление
+        // должно называть ту, что лежит в кэше, а не ту, с которой начинали.
+        val got = _state.value.latest ?: build
         if (ready != null) {
-            tell("${build.versionCode}:ready") {
+            tell("${got.versionCode}:ready") {
                 notify(
-                    context.getString(R.string.upd_notif_ready_title, build.versionName),
+                    context.getString(R.string.upd_notif_ready_title, got.versionName),
                     context.getString(R.string.upd_notif_ready_text),
                     ru.zf.pravka.trigger.UpdateActivity.W_INSTALL,
                 )

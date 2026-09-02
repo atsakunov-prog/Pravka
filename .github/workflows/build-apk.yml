@@ -10,7 +10,7 @@ name: build-apk
 on:
   push:
     branches: ["**"]
-    paths-ignore: ["README.md"]
+    paths-ignore: ["README.md", "docs/**"]
   workflow_dispatch:
 
 permissions:
