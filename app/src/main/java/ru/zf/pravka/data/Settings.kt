@@ -17,6 +17,10 @@ class Settings(private val context: Context) {
     companion object {
         const val MODEL_SONNET = "claude-sonnet-5"
         const val MODEL_OPUS = "claude-opus-5"   // redo chips + разбор Засечки
+        // Сверка формулировок паттернов: раз в сутки, батчем (половина цены).
+        // Ошибка склейки дороже её стоимости — паттерн с вердиктом владельца
+        // не должен слиться с чужим, поэтому здесь самая сильная модель.
+        const val MODEL_FABLE = "claude-fable-5-1"
 
         // Dictation engines.
         const val SPEECH_GOOGLE = "google"          // live streaming, Gboard's engine

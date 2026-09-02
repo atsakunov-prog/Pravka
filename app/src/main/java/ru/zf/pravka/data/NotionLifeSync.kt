@@ -103,12 +103,12 @@ class NotionLifeSync(
             "Подтверждения" to "c5fc6ee8258e433a990812dc8f1c1427",
         )
 
-        /** Ниже этого пересечения слов кандидата даже не показываем модели. */
-        private const val SOFT_MATCH = 0.10
-        /** Выше этого — дубль очевиден и без модели. */
+        /** Выше этого пересечения слов дубль очевиден и без модели. */
         private const val HARD_MATCH = 0.45
-        /** Сколько вопросов модели за один обход: остальные подождут час. */
-        private const val ASK_LIMIT = 6
+        /** Сверка формулировок — раз в сутки, не чаще: новое приносит ночной поиск. */
+        private const val DUPE_MS = 20 * 3_600_000L
+        /** Батч не ответил и за это время — считаем потерянным и спросим заново. */
+        private const val DUPE_GIVEUP_MS = 30 * 3_600_000L
 
         private val WEEKDAYS = listOf("вс", "пн", "вт", "ср", "чт", "пт", "сб")
         private val MEAL_KINDS = setOf("завтрак", "обед", "ужин", "перекус")
@@ -132,6 +132,11 @@ class NotionLifeSync(
          * той же формулировке каждый час незачем.
          */
         val dupes = HashMap<String, String>()
+        /** Батч сверки в работе: его id, что отправили и когда. */
+        var dupeBatch = ""
+        var dupeAt = 0L
+        val dupeKeys = ArrayList<String>()
+        val dupeIds = ArrayList<String>()
         var lastScan = 0L
     }
 
@@ -182,7 +187,7 @@ class NotionLifeSync(
                 val due = force || state.lastScan == 0L || now - state.lastScan >= SCAN_MS
                 if (due) {
                     if (!ensureMaps(token)) return@withContext false
-                    resolveDupes(token)
+                    dupeStep(token)
                     scan()
                     state.lastScan = now
                     saveState()
@@ -299,59 +304,134 @@ class NotionLifeSync(
      * это один механизм, но в базе две строки, и вердикт владельца стоит на
      * обеих. Считать точки после такого нельзя.
      *
-     * Сначала дешёвый отбор по словам, и только на спорных — один вопрос
-     * модели. Решение принимается ОДИН раз и живёт в файле состояния: платить
-     * за одну и ту же формулировку каждый час незачем.
+     * Спрашивать об этом каждый час незачем: новые формулировки приносит
+     * ночной поиск, то есть раз в сутки. Поэтому шаг сверки — суточный и
+     * батчем: пачка стоит половину обычной цены, ответ приходит за минуты,
+     * а ждать его не жалко, потому что паттерн не срочная запись. Пока ответа
+     * нет, находка в Notion не заводится — иначе двойник успел бы появиться
+     * до того, как мы узнали, что он двойник.
+     *
+     * Явные повторы ловятся пересечением слов даром, до всякой модели.
      */
-    private suspend fun resolveDupes(token: String) {
+    private suspend fun dupeStep(token: String) {
         val ask = provider
         val pDb = state.dbs["Паттерны"] ?: return
+        val now = System.currentTimeMillis()
+
+        // 1. Ответ на прошлый вопрос, если он готов.
+        if (state.dupeBatch.isNotBlank()) {
+            val answer = ask?.batchAnswer(state.dupeBatch, Settings.MODEL_FABLE)?.getOrNull()
+            if (answer != null) {
+                applyDupeAnswer(answer.text)
+                state.dupeBatch = ""
+                state.dupeKeys.clear()
+                state.dupeIds.clear()
+                saveState()
+            } else if (now - state.dupeAt > DUPE_GIVEUP_MS) {
+                eventLog.add("паттерны: сверка не ответила за сутки — спрошу заново")
+                state.dupeBatch = ""
+                state.dupeKeys.clear()
+                state.dupeIds.clear()
+                saveState()
+            }
+            return
+        }
+
+        if (now - state.dupeAt < DUPE_MS) return
         val fresh = analysis.patternsFlow.value
             .filter { ("pat:" + patternKey(it.text)) !in state.dupes }
-        if (fresh.isEmpty()) return
+        if (fresh.isEmpty()) {
+            state.dupeAt = now
+            return
+        }
         val library = runCatching { readPatternLibrary(token, pDb) }.getOrElse { e ->
             lastError = e.message ?: "сеть"
             return
         }
-        var asked = 0
+        state.dupeAt = now
+
+        // 2. Явные повторы — сразу, даром.
+        val doubtful = ArrayList<AnalysisStore.Pattern>()
         var glued = 0
         for (pt in fresh) {
             val pKey = "pat:" + patternKey(pt.text)
             val mine = state.pages[pKey]
-            // Собственная страница находки в кандидаты не идёт.
-            val ranked = library
+            val best = library
                 .filter { it.first != mine }
-                .map { it to overlap(pt.text, it.second) }
-                .filter { it.second >= SOFT_MATCH }
-                .sortedByDescending { it.second }
-                .take(5)
-            val best = ranked.firstOrNull()
+                .maxByOrNull { overlap(pt.text, it.second) }
+            val score = best?.let { overlap(pt.text, it.second) } ?: 0.0
             when {
                 best == null -> state.dupes[pKey] = ""
-                best.second >= HARD_MATCH -> {
-                    state.dupes[pKey] = best.first.first
-                    glued++
-                }
-                ask == null -> state.dupes[pKey] = ""
-                // Лимит вопросов исчерпан: решения не пишем, вернёмся через час.
-                asked >= ASK_LIMIT -> continue
-                else -> {
-                    asked++
-                    val at = ask.matchPattern(pt.text, ranked.map { it.first.second })
-                        .getOrNull() ?: -1
-                    if (at in ranked.indices) {
-                        state.dupes[pKey] = ranked[at].first.first
-                        glued++
-                    } else {
-                        state.dupes[pKey] = ""
-                    }
-                }
+                score >= HARD_MATCH -> { state.dupes[pKey] = best.first; glued++ }
+                else -> doubtful.add(pt)
             }
         }
-        if (glued > 0) {
-            eventLog.add("паттерны → Notion: склеено дублей $glued (строкой не заводятся, идут точкой в свой паттерн)")
+        if (glued > 0) eventLog.add("паттерны: склеено по словам $glued")
+
+        // 3. Спорное — одним вопросом на всю пачку.
+        if (doubtful.isEmpty() || ask == null) {
+            if (ask == null) doubtful.forEach { state.dupes["pat:" + patternKey(it.text)] = "" }
+            saveState()
+            return
         }
+        val pool = library
+        val system = "Ты сверяешь формулировки паттернов поведения одного человека. " +
+            "Отвечаешь только JSON, без пояснений."
+        val user = buildString {
+            append("Библиотека уже заведённых паттернов:\n")
+            pool.forEachIndexed { i, (_, text) -> append(i).append(". ").append(text.take(300)).append('\n') }
+            append("\nНовые формулировки ночного поиска:\n")
+            doubtful.forEachIndexed { i, pt -> append(i).append(". ").append(pt.text.take(300)).append('\n') }
+            append(
+                "\nДля каждой новой формулировки реши, описывает ли она ТОТ ЖЕ механизм, " +
+                    "что одна из заведённых, — даже если слова совсем другие. Тот же механизм — " +
+                    "это когда совпадают и условие запуска, и то, что происходит. Разные механизмы " +
+                    "в одной области жизни (работа, сон, еда) — РАЗНЫЕ паттерны, как бы похоже они " +
+                    "ни звучали. Слить два разных паттерна хуже, чем оставить два похожих: " +
+                    "сомневаешься — отвечай -1.\n\n" +
+                    "Ответь ТОЛЬКО JSON вида {\"same\": [n0, n1, ...]}, где n — номер из библиотеки " +
+                    "или -1, по одному числу на каждую новую формулировку, в том же порядке."
+            )
+        }
+        val id = ask.submitBatch(system, user, Settings.MODEL_FABLE, maxTokens = 2000, effort = "medium")
+            .getOrElse { e ->
+                lastError = e.message ?: "сверка не отправилась"
+                eventLog.add("паттерны: сверка не отправилась — $lastError")
+                saveState()
+                return
+            }
+        state.dupeBatch = id
+        state.dupeKeys.clear()
+        state.dupeKeys.addAll(doubtful.map { "pat:" + patternKey(it.text) })
+        state.dupeIds.clear()
+        state.dupeIds.addAll(pool.map { it.first })
+        eventLog.add("паттерны: спросил про ${doubtful.size} формулировок, жду батч")
         saveState()
+    }
+
+    /** Разбор ответа батча: по числу на каждую отправленную формулировку. */
+    private fun applyDupeAnswer(text: String) {
+        val body = text.substringAfter('{', "").let { "{" + it.substringBeforeLast('}', "") + "}" }
+        val same = runCatching { JSONObject(body).optJSONArray("same") }.getOrNull()
+        if (same == null) {
+            eventLog.add("паттерны: сверка вернула не JSON — оставляю как есть")
+            state.dupeKeys.forEach { state.dupes[it] = "" }
+            return
+        }
+        var glued = 0
+        for (i in state.dupeKeys.indices) {
+            val at = if (i < same.length()) same.optInt(i, -1) else -1
+            val key = state.dupeKeys[i]
+            // Сама с собой находка склеиться не может: её собственная
+            // страница тоже лежит в библиотеке.
+            val pid = state.dupeIds.getOrNull(at)?.takeIf { it != state.pages[key] } ?: ""
+            state.dupes[key] = pid
+            if (pid.isNotBlank()) glued++
+        }
+        eventLog.add(
+            "паттерны: сверка ответила, склеено $glued из ${state.dupeKeys.size}" +
+                " (дубли идут точкой в свой паттерн, строкой не заводятся)"
+        )
     }
 
     /** Вся библиотека паттернов Notion: id страницы и формулировка. */
@@ -1011,6 +1091,10 @@ class NotionLifeSync(
             o.optJSONObject("dbs")?.let { d -> d.keys().forEach { k -> state.dbs[k] = d.optString(k) } }
             o.optJSONArray("mapped")?.let { a -> for (i in 0 until a.length()) state.mapped.add(a.optString(i)) }
             o.optJSONObject("dupes")?.let { d -> d.keys().forEach { k -> state.dupes[k] = d.optString(k) } }
+            state.dupeBatch = o.optString("dupeBatch")
+            state.dupeAt = o.optLong("dupeAt")
+            o.optJSONArray("dupeKeys")?.let { a -> for (i in 0 until a.length()) state.dupeKeys.add(a.optString(i)) }
+            o.optJSONArray("dupeIds")?.let { a -> for (i in 0 until a.length()) state.dupeIds.add(a.optString(i)) }
             state.lastScan = o.optLong("lastScan")
         }
     }
@@ -1022,6 +1106,10 @@ class NotionLifeSync(
             .put("dbs", JSONObject(state.dbs as Map<*, *>))
             .put("mapped", JSONArray(state.mapped.toList()))
             .put("dupes", JSONObject(state.dupes as Map<*, *>))
+            .put("dupeBatch", state.dupeBatch)
+            .put("dupeAt", state.dupeAt)
+            .put("dupeKeys", JSONArray(state.dupeKeys as List<*>))
+            .put("dupeIds", JSONArray(state.dupeIds as List<*>))
             .put("lastScan", state.lastScan)
         runCatching {
             val tmp = File(stateFile.parentFile, "$STATE_FILE.tmp")
@@ -1036,6 +1124,7 @@ class NotionLifeSync(
     /** Забыть карту страниц — на случай, если базу пересоздали. */
     fun resetMaps() {
         state.pages.clear(); state.hashes.clear(); state.mapped.clear(); state.dbs.clear(); state.dupes.clear()
+        state.dupeBatch = ""; state.dupeAt = 0L; state.dupeKeys.clear(); state.dupeIds.clear()
         state.lastScan = 0L
         queue.clear()
         blockedConfig = null

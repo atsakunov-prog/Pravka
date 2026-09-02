@@ -1310,49 +1310,6 @@ $fixesBlock
      * Вынимает числа из страницы блока в Notion: потолок пульса, каденс, серую
      * зону, лимит пробежек. Раз в сутки — страница меняется раз в месяц.
      */
-    /**
-     * Один и тот же паттерн разными словами. Ночной поиск не знает
-     * формулировок разбора и заводит «работа появляется только там, где
-     * встречу поставил кто-то другой» рядом с «работа появляется только из
-     * чужого запроса» — это одна находка, но в библиотеке две строки, и у
-     * каждой свой вердикт владельца. Считать точки после этого нельзя.
-     *
-     * Отвечает индексом совпавшего кандидата или -1. Спрашивают об этом
-     * редко (только когда ночной поиск принёс формулировку, которой в
-     * библиотеке ещё нет), поэтому берётся Sonnet и короткий ответ.
-     */
-    suspend fun matchPattern(fresh: String, candidates: List<String>): Result<Int> =
-        withContext(Dispatchers.IO) {
-            runCatchingApi {
-                val apiKey = settings.apiKey()
-                if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
-                require(candidates.isNotEmpty()) { "Не с чем сравнивать." }
-                val list = candidates.mapIndexed { i, c -> "$i. ${c.take(300)}" }.joinToString("\n")
-                val prompt = """
-                    Библиотека паттернов поведения одного человека. Нужно понять,
-                    описывает ли новая формулировка ТОТ ЖЕ механизм, что одна из
-                    уже заведённых, — даже если слова совсем другие.
-
-                    Тот же механизм — это когда совпадают и условие запуска, и то,
-                    что происходит. Разные механизмы в одной области жизни (работа,
-                    сон, еда) — это РАЗНЫЕ паттерны, как бы похоже они ни звучали.
-
-                    Новая формулировка:
-                    ${fresh.take(300)}
-
-                    Заведённые:
-                    $list
-
-                    Ответь ТОЛЬКО JSON: {"same": <номер из списка или -1>}
-                """.trimIndent()
-                val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
-                val reply = requestWithOneRetry(apiKey, Settings.MODEL_SONNET, parts, "", null, maxTokensOverride = 200)
-                val o = jsonObjectOf(reply.text, "Сверка паттернов вернула не JSON.")
-                val at = o.optInt("same", -1)
-                if (at in candidates.indices) at else -1
-            }
-        }
-
     suspend fun extractRules(pageText: String): Result<RulesParse> = withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
