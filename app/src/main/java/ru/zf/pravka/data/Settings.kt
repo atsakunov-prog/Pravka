@@ -95,6 +95,8 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_CAR_ASK = booleanPreferencesKey("auto_car_ask")
         private val KEY_AUTO_STILL_ASK = booleanPreferencesKey("auto_still_ask")
         private val KEY_NOTION_DIARY = booleanPreferencesKey("notion_diary_push")
+        private val KEY_NOTION_LIFE = booleanPreferencesKey("notion_life_push")
+        private val KEY_NOTION_LIFE_HUB = stringPreferencesKey("notion_life_hub")
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
@@ -548,6 +550,25 @@ class Settings(private val context: Context) {
     suspend fun notionDiary(): Boolean = notionDiaryFlow.first()
     suspend fun setNotionDiary(value: Boolean) {
         context.dataStore.edit { it[KEY_NOTION_DIARY] = value }
+    }
+
+    /**
+     * Вся жизнь в Notion раз в час: лента, еда, тренировки, силовые, зарядка,
+     * дни, паттерны с подтверждениями. Владелец: «чтобы я не выгружал csv».
+     */
+    val notionLifeFlow = context.dataStore.data.map { it[KEY_NOTION_LIFE] ?: true }
+    suspend fun notionLife(): Boolean = notionLifeFlow.first()
+    suspend fun setNotionLife(value: Boolean) {
+        context.dataStore.edit { it[KEY_NOTION_LIFE] = value }
+    }
+
+    /** Хаб «Правка: разборы» — под ним приложение ищет свои базы по названиям. */
+    val notionLifeHubFlow = context.dataStore.data.map {
+        it[KEY_NOTION_LIFE_HUB]?.ifBlank { null } ?: NotionLifeSync.HUB_DEFAULT
+    }
+    suspend fun notionLifeHub(): String = notionLifeHubFlow.first()
+    suspend fun setNotionLifeHub(value: String) {
+        context.dataStore.edit { it[KEY_NOTION_LIFE_HUB] = value.trim() }
     }
 
     // ---- Спорт (вкладка на кэше intervals.icu) ----

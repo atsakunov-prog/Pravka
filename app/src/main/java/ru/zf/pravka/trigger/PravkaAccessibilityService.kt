@@ -2666,6 +2666,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Дневник в Notion: галочки, feel, колено и вес уезжают сами.
             // Свой дроссель на полчаса и свой «ничего не изменилось» внутри.
             scope.launch { runCatching { app.notionDiarySync.sync() } }
+            // Вся жизнь в Notion: полный обход раз в час, очередь разгребается
+            // каждый тик пачкой — Notion пускает три запроса в секунду.
+            scope.launch { runCatching { app.notionLifeSync.sync() } }
             // План: календарь раз в час, правила блока раз в сутки — оба
             // звонка дросселируются сами.
             scope.launch { runCatching { app.planSync.refresh() } }

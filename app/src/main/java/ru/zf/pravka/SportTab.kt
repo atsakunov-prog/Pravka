@@ -2930,6 +2930,84 @@ internal fun BodySportSettings(app: PravkaApp) {
                 PaperHint(diaryStatus)
             }
         }
+
+        // ---- Вся жизнь в Notion: лента, еда, спорт, дни, паттерны ----
+        Spacer(Modifier.height(14.dp))
+        val life by app.settings.notionLifeFlow.collectAsState(initial = true)
+        val lifeHub by app.settings.notionLifeHubFlow.collectAsState(
+            initial = ru.zf.pravka.data.NotionLifeSync.HUB_DEFAULT
+        )
+        var lifeHubDraft by remember(lifeHub) { mutableStateOf(lifeHub) }
+        var pushingLife by remember { mutableStateOf(false) }
+        val lifeStatus by app.notionLifeSync.statusFlow.collectAsState()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Вся жизнь — в «Правка: разборы»", style = MaterialTheme.typography.bodyMedium)
+                PaperHint(
+                    "Раз в час лента Засечки, еда, тренировки, силовые и зарядка " +
+                        "уезжают строками в базу «Засечка», сутки — строкой в «Дни», " +
+                        "паттерны ночного поиска и твои вердикты по ним — в " +
+                        "«Паттерны» и «Подтверждения». CSV больше не нужен: разбор " +
+                        "читает Notion. Чужие колонки («Дети дома», «Якорь утра», " +
+                        "статусы паттернов) не трогаются."
+                )
+            }
+            Switch(checked = life, onCheckedChange = { v ->
+                app.appScope.launch { app.settings.setNotionLife(v) }
+            })
+        }
+        if (life) {
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = lifeHubDraft,
+                onValueChange = { lifeHubDraft = it },
+                label = { Text("Хаб «Правка: разборы»: ссылка или id") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            PaperHint(
+                "Интеграции (тот же токен, что выше) нужен доступ к этой странице: " +
+                    "… → Connections. Базы под ней находятся по названиям сами."
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    app.appScope.launch {
+                        app.settings.setNotionLifeHub(lifeHubDraft.trim())
+                        Feedback.toast(app, "Сохранено")
+                    }
+                }) { Text("Сохранить") }
+                OutlinedButton(
+                    onClick = {
+                        if (!pushingLife) {
+                            pushingLife = true
+                            app.appScope.launch {
+                                runCatching { app.notionLifeSync.sync(force = true) }
+                                pushingLife = false
+                                val err = app.notionLifeSync.lastError()
+                                if (err.isNotBlank()) Feedback.toast(app, err, long = true)
+                            }
+                        }
+                    },
+                    enabled = !pushingLife,
+                ) { Text(if (pushingLife) "Отправляю…" else "Синхронизировать сейчас") }
+            }
+            if (lifeStatus.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                PaperHint(lifeStatus)
+            }
+            TextButton(onClick = {
+                app.appScope.launch {
+                    app.notionLifeSync.resetMaps()
+                    Feedback.toast(app, "Карта страниц сброшена — следующий синк сверится с базами заново")
+                }
+            }) { Text("Сбросить карту страниц") }
+            PaperHint(
+                "Первый заезд — вся история, шесть сотен строк: Notion пускает три " +
+                    "запроса в секунду, поэтому займёт около часа и пойдёт пачками на " +
+                    "каждом тике. Дальше — по паре десятков правок в час."
+            )
+        }
     }
 
     Spacer(Modifier.height(14.dp))

@@ -239,6 +239,22 @@ class PravkaApp : Application() {
             eventLog = eventLog,
         )
     }
+    // Вся жизнь в Notion раз в час — лента, еда, спорт, дни, паттерны и
+    // подтверждения — в базы под хабом «Правка: разборы», которые построил
+    // его аналитик. Владелец: «чтобы я не выгружал csv с жизнью».
+    val notionLifeSync by lazy {
+        ru.zf.pravka.data.NotionLifeSync(
+            context = this,
+            settings = settings,
+            zasechka = zasechkaStore,
+            food = foodStore,
+            sport = sportStore,
+            strength = strengthStore,
+            analysis = analysisStore,
+            client = httpClient,
+            eventLog = eventLog,
+        )
+    }
     val planSync by lazy {
         ru.zf.pravka.core.PlanSync(
             icu = icuSportSync,
