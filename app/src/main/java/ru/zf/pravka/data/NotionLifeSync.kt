@@ -444,6 +444,10 @@ class NotionLifeSync(
         val p = JSONObject()
         p.put("Дело", title(e.title.ifBlank { e.category.ifBlank { "без названия" } }))
         p.put("Дата", dateRange(e.start, e.end))
+        // Сутки владельца отдельным полем без времени. SQL-слой Notion отдаёт
+        // «Дату» в UTC и режет день в 03:00 по Москве: сложенные по нему сутки
+        // выходили 1376 и 1506 вместо 1440 - на ровном месте, из-за пояса.
+        p.put("День", dateDay(dayKey(e.start)))
         p.put("EntryId", rich("t${e.id}"))
         p.put("Домен", select(if (e.parallel) "таймшит∥" else "таймшит"))
         p.put("Бюджет", JSONObject().put("checkbox", !e.parallel))
@@ -480,6 +484,7 @@ class NotionLifeSync(
     private fun mealProps(m: FoodStore.Meal): JSONObject = JSONObject().apply {
         put("Дело", title(m.kind.ifBlank { "приём" }))
         put("Дата", dateSingle(m.ts))
+        put("День", dateDay(dayKey(m.ts)))
         put("EntryId", rich("f${m.id}"))
         put("Домен", select("еда"))
         put("Бюджет", JSONObject().put("checkbox", false))
@@ -498,6 +503,7 @@ class NotionLifeSync(
             (if (w.name.isNotBlank() && !w.name.equals(w.type, true)) " · ${w.name}" else "")
         put("Дело", title(name))
         put("Дата", dateSingle(w.start))
+        put("День", dateDay(dayKey(w.start)))
         put("EntryId", rich("w${w.id.ifBlank { w.start.toString() }}"))
         put("Домен", select("тренировка"))
         put("Бюджет", JSONObject().put("checkbox", false))
@@ -524,6 +530,7 @@ class NotionLifeSync(
     private fun sessionProps(s: StrengthStore.Session): JSONObject = JSONObject().apply {
         put("Дело", title(s.title.ifBlank { s.block.ifBlank { "силовая" } }))
         put("Дата", dateDay(s.date))
+        put("День", dateDay(s.date))
         put("EntryId", rich("s${s.date}"))
         put("Домен", select("силовая"))
         put("Бюджет", JSONObject().put("checkbox", false))
@@ -537,6 +544,7 @@ class NotionLifeSync(
     private fun gtgProps(g: StrengthStore.GtgDay): JSONObject = JSONObject().apply {
         put("Дело", title(g.status()))
         put("Дата", dateDay(g.date))
+        put("День", dateDay(g.date))
         put("EntryId", rich("g${g.date}"))
         put("Домен", select("зарядка"))
         put("Бюджет", JSONObject().put("checkbox", false))
@@ -548,6 +556,7 @@ class NotionLifeSync(
     private fun commentProps(r: StrengthStore.RawTake): JSONObject = JSONObject().apply {
         put("Дело", title("к тренировке"))
         put("Дата", dateSingle(r.ts))
+        put("День", dateDay(dayKey(r.ts)))
         put("EntryId", rich("c${r.ts}"))
         put("Домен", select("комментарий"))
         put("Бюджет", JSONObject().put("checkbox", false))
