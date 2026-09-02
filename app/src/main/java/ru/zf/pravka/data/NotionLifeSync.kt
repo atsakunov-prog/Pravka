@@ -619,7 +619,7 @@ class NotionLifeSync(
             .filter { !it.parallel && it.category.equals("Сон", ignoreCase = true) && it.end in start until end && it.end - start < 14 * 3_600_000L }
             .maxByOrNull { it.end }
         if (wake != null) {
-            var head = wake
+            var head: ZasechkaStore.Entry = wake
             var total = 0L
             var guard = 0
             while (guard++ < 6) {
@@ -717,7 +717,7 @@ class NotionLifeSync(
         }
     }
 
-    /** Тот же ключ, что у AnalysisStore.Pattern.key(): формулировки плавают. */
+    /** Ключ карты паттернов: пять самых длинных слов, потому что формулировки плавают. */
     private fun patternKey(text: String): String = text.lowercase()
         .replace(Regex("[^а-яёa-z0-9 ]"), " ")
         .split(' ').filter { it.length > 3 }.take(5).sorted().joinToString(" ")
