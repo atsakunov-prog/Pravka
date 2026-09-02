@@ -356,8 +356,11 @@ class NotionLifeSync(
         if (queue.isEmpty()) return false
         var sent = 0
         var pageIdWaits = 0
+        var rejected = 0
         val iter = queue.iterator()
-        while (iter.hasNext() && sent < BUDGET) {
+        // Отвергнутые тоже стоят запроса, поэтому считаются в бюджет тика:
+        // иначе пачка кривых строк выгребла бы всю очередь за один заход.
+        while (iter.hasNext() && sent + rejected < BUDGET) {
             val job = iter.next()
             val result = runCatching { push(token, job) }
             if (result.isFailure) {
@@ -369,10 +372,23 @@ class NotionLifeSync(
                     blockedConfig = cfg
                     eventLog.add("жизнь → Notion: $message — синк на паузе до смены токена или доступа")
                     _statusFlow.value = "${timeNow()} · $message"
-                } else {
-                    eventLog.add("жизнь → Notion: не удалось ($message), в очереди ${queue.size}")
-                    _statusFlow.value = "${timeNow()} · не удалось: $message"
+                    return sent > 0
                 }
+                // 400 — Notion не принял ИМЕННО ЭТУ строку: неизвестная опция
+                // select, слишком длинное поле. Очередь из-за неё встать не
+                // должна: одна кривая запись держала бы всю жизнь владельца
+                // за дверью, а он бы видел только «не удалось». Строка
+                // откладывается до следующего обхода (хеш ей не записан),
+                // остальные едут дальше.
+                if (message.contains("HTTP 400")) {
+                    iter.remove()
+                    if (rejected == 0) eventLog.add("жизнь → Notion: строка «${job.key}» не принята ($message) — пропускаю")
+                    rejected++
+                    sleep()
+                    continue
+                }
+                eventLog.add("жизнь → Notion: не удалось ($message), в очереди ${queue.size}")
+                _statusFlow.value = "${timeNow()} · не удалось: $message"
                 return sent > 0
             }
             iter.remove()
@@ -382,10 +398,12 @@ class NotionLifeSync(
         }
         lastError = ""
         _statusFlow.value = "${timeNow()} · отправлено $sent" +
+            (if (rejected > 0) ", не принято $rejected" else "") +
             (if (queue.isNotEmpty()) ", в очереди ${queue.size}" else " ✓")
         eventLog.add(
             "жизнь → Notion: отправлено $sent" +
                 (if (pageIdWaits > 0) ", убрано призраков $pageIdWaits" else "") +
+                (if (rejected > 0) ", не принято $rejected" else "") +
                 (if (queue.isNotEmpty()) ", осталось ${queue.size}" else "")
         )
         return sent > 0
@@ -403,7 +421,7 @@ class NotionLifeSync(
         }
         // Связь с носителем ставится в момент отправки: страница носителя
         // могла появиться только что, в этой же пачке.
-        val props = withRelations(job)
+        val (props, whole) = withRelations(job)
         if (existing != null) {
             patch("$API/pages/$existing", token, JSONObject().put("properties", props))
         } else {
@@ -416,25 +434,38 @@ class NotionLifeSync(
             val id = reply.optString("id")
             if (id.isNotBlank()) state.pages[job.key] = id
         }
-        state.hashes[job.key] = job.hash
+        // Хеш значит «отправлено ЦЕЛИКОМ», иначе строка больше никогда не
+        // вернётся в очередь. Носителя могло не быть в карте: дело ещё идёт
+        // (открытые в Notion не уезжают), и параллель поверх него осталась бы
+        // навсегда без связи — с «Носитель ID», но с пустой клеткой рядом.
+        // Такой строке хеш не пишем: следующий обход поставит её снова и
+        // доставит связь, как только дело закроется.
+        if (whole) state.hashes[job.key] = job.hash else state.hashes.remove(job.key)
     }
 
-    /** Служебные поля «__host» и «__pattern» превращаются в relation по карте. */
-    private fun withRelations(job: Job): JSONObject {
+    /**
+     * Служебные поля «__host» и «__pattern» превращаются в relation по карте.
+     * Второе значение — доставлена ли строка ЦЕЛИКОМ: ложь, если связь ждала
+     * страницы, которой в карте ещё нет.
+     */
+    private fun withRelations(job: Job): Pair<JSONObject, Boolean> {
         val props = JSONObject(job.properties!!.toString())
-        props.optString("__host").takeIf { it.isNotBlank() }?.let { hostKey ->
-            state.pages[hostKey]?.let { pid ->
-                props.put("Носитель", JSONObject().put("relation", JSONArray().put(JSONObject().put("id", pid))))
+        var whole = true
+        fun link(placeholder: String, field: String) {
+            val key = props.optString(placeholder)
+            if (key.isBlank()) return
+            val pid = state.pages[key]
+            if (pid == null) {
+                whole = false
+                return
             }
+            props.put(field, JSONObject().put("relation", JSONArray().put(JSONObject().put("id", pid))))
         }
-        props.optString("__pattern").takeIf { it.isNotBlank() }?.let { patKey ->
-            state.pages[patKey]?.let { pid ->
-                props.put("Паттерн", JSONObject().put("relation", JSONArray().put(JSONObject().put("id", pid))))
-            }
-        }
+        link("__host", "Носитель")
+        link("__pattern", "Паттерн")
         props.remove("__host")
         props.remove("__pattern")
-        return props
+        return props to whole
     }
 
     // ---- Снимки полей: Засечка ----
