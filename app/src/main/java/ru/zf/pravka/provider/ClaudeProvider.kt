@@ -1327,8 +1327,7 @@ $fixesBlock
                 val apiKey = settings.apiKey()
                 if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
                 require(candidates.isNotEmpty()) { "Не с чем сравнивать." }
-                val list = candidates.mapIndexed { i, c -> "$i. ${c.take(300)}" }.joinToString("
-")
+                val list = candidates.mapIndexed { i, c -> "$i. ${c.take(300)}" }.joinToString("\n")
                 val prompt = """
                     Библиотека паттернов поведения одного человека. Нужно понять,
                     описывает ли новая формулировка ТОТ ЖЕ механизм, что одна из
