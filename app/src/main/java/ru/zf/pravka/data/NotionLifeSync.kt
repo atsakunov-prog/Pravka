@@ -518,6 +518,7 @@ class NotionLifeSync(
         put("День", dateDay(dayKey(m.ts)))
         put("EntryId", rich("f${m.id}"))
         put("Домен", select("еда"))
+        put("Категория", select("Еда"))
         put("Бюджет", JSONObject().put("checkbox", false))
         put("Источник", select("manual"))
         put("Детали", rich(m.shortList))
@@ -537,6 +538,7 @@ class NotionLifeSync(
         put("День", dateDay(dayKey(w.start)))
         put("EntryId", rich("w${w.id.ifBlank { w.start.toString() }}"))
         put("Домен", select("тренировка"))
+        put("Категория", select(sportCategory(w.type)))
         put("Бюджет", JSONObject().put("checkbox", false))
         put("Источник", select("auto"))
         put("Минуты", number(w.minutes))
@@ -564,6 +566,7 @@ class NotionLifeSync(
         put("День", dateDay(s.date))
         put("EntryId", rich("s${s.date}"))
         put("Домен", select("силовая"))
+        put("Категория", select("Спорт: силовая"))
         put("Бюджет", JSONObject().put("checkbox", false))
         put("Источник", select("manual"))
         if (s.minutes > 0) put("Минуты", number(s.minutes))
@@ -578,6 +581,7 @@ class NotionLifeSync(
         put("День", dateDay(g.date))
         put("EntryId", rich("g${g.date}"))
         put("Домен", select("зарядка"))
+        put("Категория", select("Спорт: прочее"))
         put("Бюджет", JSONObject().put("checkbox", false))
         put("Источник", select("manual"))
         put("Детали", rich(g.line(withNote = false).removePrefix("Зарядка: ")))
@@ -590,9 +594,23 @@ class NotionLifeSync(
         put("День", dateDay(dayKey(r.ts)))
         put("EntryId", rich("c${r.ts}"))
         put("Домен", select("комментарий"))
+        put("Категория", select("Комментарий"))
         put("Бюджет", JSONObject().put("checkbox", false))
         put("Источник", select("manual"))
         put("Надиктовано", rich(r.text))
+    }
+
+    /**
+     * Категория ленты для тренировки из часов. Без неё сто с лишним строк
+     * (вся еда, весь Garmin, зарядка) оставались без категории, и фильтр
+     * «Спорт: *» их не видел — нашёл разбор, а не я.
+     */
+    private fun sportCategory(type: String): String = when (type) {
+        "Run", "TrailRun", "VirtualRun" -> "Спорт: бег"
+        "Ride", "VirtualRide", "GravelRide", "MountainBikeRide" -> "Спорт: вело"
+        "WeightTraining" -> "Спорт: силовая"
+        "Walk", "Hike" -> "Передвижение: пешком"
+        else -> "Спорт: прочее"
     }
 
     // ---- Снимок полей: Дни ----
@@ -603,11 +621,16 @@ class NotionLifeSync(
      * здесь строго по категории «Работа: *» (клиентские встречи из
      * «Социального» — суждение аналитика, приложение его не подменяет).
      */
-    private fun dayProps(date: String, closed: List<ZasechkaStore.Entry>, now: Long): JSONObject {
+    private fun dayProps(date: String, closed: List<ZasechkaStore.Entry>, now: Long): JSONObject? {
         val start = dayStartOf(date)
         val end = start + 86_400_000L
         val main = closed.filter { !it.parallel && it.start >= start && it.start < end }
         val par = closed.filter { it.parallel && it.start >= start && it.start < end }
+        val meals = food.mealsFlow.value.filter { it.confirmed && dayKey(it.ts) == date }
+        // День до начала ведения ленты: ни минуты покрытия, ни одного приёма
+        // еды. Строка из одних нулей — мусор в базе разбора (нашёл разбор:
+        // «мусорная строка 19 августа»), цифры часов её не оправдывают.
+        if (main.isEmpty() && meals.isEmpty()) return null
         fun mins(pred: (ZasechkaStore.Entry) -> Boolean): Long =
             main.filter(pred).sumOf { zasechka.budgetMinutes(it, now) }
         fun cat(prefix: String) = mins { it.category.startsWith(prefix, ignoreCase = true) }
@@ -694,7 +717,6 @@ class NotionLifeSync(
             if (h.sleepHours > 0) p.put("Сон Garmin ч", number(Math.round(h.sleepHours * 10.0) / 10.0))
             if (h.sleepScore > 0) p.put("Сон счёт", number(h.sleepScore))
         }
-        val meals = food.mealsFlow.value.filter { it.confirmed && dayKey(it.ts) == date }
         if (meals.isNotEmpty()) {
             p.put("Ккал", number(meals.sumOf { it.kcal }))
             p.put("Белок", number(meals.sumOf { it.protein }))
