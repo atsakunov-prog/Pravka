@@ -70,6 +70,8 @@ class NotionLifeSync(
     private val analysis: AnalysisStore,
     private val client: OkHttpClient,
     private val eventLog: EventLog,
+    /** Сверка формулировок при склейке дублей паттернов; без ключа — только по словам. */
+    private val provider: ru.zf.pravka.provider.ClaudeProvider? = null,
 ) {
 
     companion object {
@@ -101,6 +103,13 @@ class NotionLifeSync(
             "Подтверждения" to "c5fc6ee8258e433a990812dc8f1c1427",
         )
 
+        /** Ниже этого пересечения слов кандидата даже не показываем модели. */
+        private const val SOFT_MATCH = 0.10
+        /** Выше этого — дубль очевиден и без модели. */
+        private const val HARD_MATCH = 0.45
+        /** Сколько вопросов модели за один обход: остальные подождут час. */
+        private const val ASK_LIMIT = 6
+
         private val WEEKDAYS = listOf("вс", "пн", "вт", "ср", "чт", "пт", "сб")
         private val MEAL_KINDS = setOf("завтрак", "обед", "ужин", "перекус")
     }
@@ -116,6 +125,13 @@ class NotionLifeSync(
         val dbs = HashMap<String, String>()
         /** имя базы → карта страниц уже восстановлена из Notion */
         val mapped = HashSet<String>()
+        /**
+         * Решения о дублях паттернов: ключ находки → id страницы того
+         * паттерна, который она повторяет («» = не дубль, свой). Решение
+         * принимается один раз и живёт вечно: спрашивать модель об одной и
+         * той же формулировке каждый час незачем.
+         */
+        val dupes = HashMap<String, String>()
         var lastScan = 0L
     }
 
@@ -166,6 +182,7 @@ class NotionLifeSync(
                 val due = force || state.lastScan == 0L || now - state.lastScan >= SCAN_MS
                 if (due) {
                     if (!ensureMaps(token)) return@withContext false
+                    resolveDupes(token)
                     scan()
                     state.lastScan = now
                     saveState()
@@ -273,6 +290,110 @@ class NotionLifeSync(
         props.optJSONObject(name)?.optJSONArray("title")?.optJSONObject(0)
             ?.optString("plain_text").orEmpty()
 
+    // ---- Склейка дублей паттернов ----
+
+    /**
+     * Одна находка — один паттерн. Ночной поиск формулирует своими словами и
+     * не знает библиотеки разбора: «работа появляется только там, где встречу
+     * поставил кто-то другой» и «работа появляется только из чужого запроса» —
+     * это один механизм, но в базе две строки, и вердикт владельца стоит на
+     * обеих. Считать точки после такого нельзя.
+     *
+     * Сначала дешёвый отбор по словам, и только на спорных — один вопрос
+     * модели. Решение принимается ОДИН раз и живёт в файле состояния: платить
+     * за одну и ту же формулировку каждый час незачем.
+     */
+    private suspend fun resolveDupes(token: String) {
+        val ask = provider
+        val pDb = state.dbs["Паттерны"] ?: return
+        val fresh = analysis.patternsFlow.value
+            .filter { ("pat:" + patternKey(it.text)) !in state.dupes }
+        if (fresh.isEmpty()) return
+        val library = runCatching { readPatternLibrary(token, pDb) }.getOrElse { e ->
+            lastError = e.message ?: "сеть"
+            return
+        }
+        var asked = 0
+        var glued = 0
+        for (pt in fresh) {
+            val pKey = "pat:" + patternKey(pt.text)
+            val mine = state.pages[pKey]
+            // Собственная страница находки в кандидаты не идёт.
+            val ranked = library
+                .filter { it.first != mine }
+                .map { it to overlap(pt.text, it.second) }
+                .filter { it.second >= SOFT_MATCH }
+                .sortedByDescending { it.second }
+                .take(5)
+            val best = ranked.firstOrNull()
+            when {
+                best == null -> state.dupes[pKey] = ""
+                best.second >= HARD_MATCH -> {
+                    state.dupes[pKey] = best.first.first
+                    glued++
+                }
+                ask == null -> state.dupes[pKey] = ""
+                // Лимит вопросов исчерпан: решения не пишем, вернёмся через час.
+                asked >= ASK_LIMIT -> continue
+                else -> {
+                    asked++
+                    val at = ask.matchPattern(pt.text, ranked.map { it.first.second })
+                        .getOrNull() ?: -1
+                    if (at in ranked.indices) {
+                        state.dupes[pKey] = ranked[at].first.first
+                        glued++
+                    } else {
+                        state.dupes[pKey] = ""
+                    }
+                }
+            }
+        }
+        if (glued > 0) {
+            eventLog.add("паттерны → Notion: склеено дублей $glued (строкой не заводятся, идут точкой в свой паттерн)")
+        }
+        saveState()
+    }
+
+    /** Вся библиотека паттернов Notion: id страницы и формулировка. */
+    private fun readPatternLibrary(token: String, db: String): List<Pair<String, String>> {
+        val out = ArrayList<Pair<String, String>>()
+        var cursor: String? = null
+        do {
+            val body = JSONObject().put("page_size", 100)
+            if (cursor != null) body.put("start_cursor", cursor)
+            val reply = post("$API/databases/$db/query", token, body)
+            val results = reply.optJSONArray("results") ?: JSONArray()
+            for (i in 0 until results.length()) {
+                val page = results.optJSONObject(i) ?: continue
+                val props = page.optJSONObject("properties") ?: continue
+                val text = titleText(props, "Паттерн")
+                val id = page.optString("id")
+                if (text.isNotBlank() && id.isNotBlank()) out.add(id to text)
+            }
+            cursor = reply.optString("next_cursor").takeIf { reply.optBoolean("has_more") && it.isNotBlank() }
+        } while (cursor != null)
+        return out
+    }
+
+    /**
+     * Насколько две формулировки об одном. Слова длиннее трёх букв, обрезанные
+     * до корня в пять букв (падежи и род иначе делают «встречу» и «встреча»
+     * разными словами), и доля общих среди всех.
+     */
+    private fun overlap(a: String, b: String): Double {
+        fun bag(t: String): Set<String> = t.lowercase()
+            .replace(Regex("[^а-яёa-z0-9 ]"), " ")
+            .split(' ')
+            .filter { it.length > 3 }
+            .map { it.take(5) }
+            .toSet()
+        val x = bag(a)
+        val y = bag(b)
+        if (x.isEmpty() || y.isEmpty()) return 0.0
+        val common = x.count { it in y }
+        return common.toDouble() / (x.size + y.size - common)
+    }
+
     // ---- Обход: что должно лежать в Notion ----
 
     private suspend fun scan() {
@@ -327,7 +448,19 @@ class NotionLifeSync(
         if (pDb != null) {
             for (pt in analysis.patternsFlow.value) {
                 val pKey = "pat:" + patternKey(pt.text)
-                enqueue(pKey, pDb, patternProps(pt, isNew = state.pages[pKey] == null))
+                val twin = state.dupes[pKey].orEmpty()
+                // Находка, повторяющая заведённый паттерн, строкой не
+                // становится — она становится точкой в нём. Иначе через
+                // месяц ночного поиска библиотека это сорок строк, и сколько
+                // точек у паттерна на самом деле, посчитать уже нельзя.
+                if (twin.isBlank()) {
+                    enqueue(pKey, pDb, patternProps(pt, isNew = state.pages[pKey] == null))
+                } else if (state.pages[pKey] != null) {
+                    // Двойник уже заведён (до того, как появилась сверка):
+                    // сами не сливаем — это библиотека разбора, — но связь
+                    // «Дубль чего» ставим, чтобы слияние было одним движением.
+                    enqueue(pKey, pDb, patternProps(pt, isNew = false).put("__dupe", twin))
+                }
                 if (cDb == null) continue
                 if (pt.judged && pt.verdictAt.isNotBlank()) {
                     val k = "conf:$pKey:v:${pt.verdictAt}:${pt.verdict}"
@@ -454,7 +587,9 @@ class NotionLifeSync(
         fun link(placeholder: String, field: String) {
             val key = props.optString(placeholder)
             if (key.isBlank()) return
-            val pid = state.pages[key]
+            // Дубль ссылается на тот паттерн, который повторяет: точка должна
+            // лечь под каноническую формулировку, а не под её двойника.
+            val pid = state.dupes[key]?.takeIf { it.isNotBlank() } ?: state.pages[key]
             if (pid == null) {
                 whole = false
                 return
@@ -463,8 +598,13 @@ class NotionLifeSync(
         }
         link("__host", "Носитель")
         link("__pattern", "Паттерн")
+        // «__dupe» — уже готовый id страницы, а не ключ в карте.
+        props.optString("__dupe").takeIf { it.isNotBlank() }?.let { pid ->
+            props.put("Дубль чего", JSONObject().put("relation", JSONArray().put(JSONObject().put("id", pid))))
+        }
         props.remove("__host")
         props.remove("__pattern")
+        props.remove("__dupe")
         return props to whole
     }
 
@@ -870,6 +1010,7 @@ class NotionLifeSync(
             o.optJSONObject("hashes")?.let { h -> h.keys().forEach { k -> state.hashes[k] = h.optInt(k) } }
             o.optJSONObject("dbs")?.let { d -> d.keys().forEach { k -> state.dbs[k] = d.optString(k) } }
             o.optJSONArray("mapped")?.let { a -> for (i in 0 until a.length()) state.mapped.add(a.optString(i)) }
+            o.optJSONObject("dupes")?.let { d -> d.keys().forEach { k -> state.dupes[k] = d.optString(k) } }
             state.lastScan = o.optLong("lastScan")
         }
     }
@@ -880,6 +1021,7 @@ class NotionLifeSync(
             .put("hashes", JSONObject(state.hashes as Map<*, *>))
             .put("dbs", JSONObject(state.dbs as Map<*, *>))
             .put("mapped", JSONArray(state.mapped.toList()))
+            .put("dupes", JSONObject(state.dupes as Map<*, *>))
             .put("lastScan", state.lastScan)
         runCatching {
             val tmp = File(stateFile.parentFile, "$STATE_FILE.tmp")
@@ -893,7 +1035,7 @@ class NotionLifeSync(
 
     /** Забыть карту страниц — на случай, если базу пересоздали. */
     fun resetMaps() {
-        state.pages.clear(); state.hashes.clear(); state.mapped.clear(); state.dbs.clear()
+        state.pages.clear(); state.hashes.clear(); state.mapped.clear(); state.dbs.clear(); state.dupes.clear()
         state.lastScan = 0L
         queue.clear()
         blockedConfig = null

@@ -253,6 +253,7 @@ class PravkaApp : Application() {
             analysis = analysisStore,
             client = httpClient,
             eventLog = eventLog,
+            provider = claudeProvider,
         )
     }
     val planSync by lazy {
