@@ -152,6 +152,12 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.core)
+
+    // JVM-тесты разбора строк плана (app/src/test). Настоящий org.json нужен
+    // потому, что заглушки android.jar бросают «not mocked», а тесты читают
+    // exercises.json тем же кодом, что приложение.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
 
 // ---------------------------------------------------------------------------

@@ -462,6 +462,12 @@ class IcuSportSync(
                 val date = local.substringBefore('T').ifBlank { continue }
                 val seconds = e.optLong("moving_time", 0).takeIf { it > 0 }
                     ?: e.optLong("duration", 0)
+                // Время события — чтобы гиря шла перед турником, а зарядка
+                // перед обоими; «00:00» у intervals значит «без времени».
+                val time = local.substringAfter('T', "").take(5).let { if (it == "00:00") "" else it }
+                val tags = e.optJSONArray("tags")?.let { a ->
+                    (0 until a.length()).mapNotNull { a.optString(it).takeIf { s -> s.isNotBlank() } }
+                }.orEmpty()
                 out.add(
                     PlanStore.PlanDay(
                         eventId = e.optString("id"),
@@ -473,6 +479,8 @@ class IcuSportSync(
                             ?: e.optInt("load_target", 0),
                         description = text(e, "description"),
                         carbsPerHour = e.optInt("carbs_per_hour", 0),
+                        time = time,
+                        tags = tags,
                     )
                 )
             }

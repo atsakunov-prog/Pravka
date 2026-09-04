@@ -512,17 +512,13 @@ class StrengthEngine(
      */
     private fun zaryadkaPlanRows(date: String): List<StrengthStore.PlanRow> {
         val charger = runCatching { planStore.chargerOf(date) }.getOrNull() ?: return emptyList()
-        return charger.plannedLines().mapIndexed { i, line ->
-            val parts = line.split(" — ")
-            val raw = parts.firstOrNull().orEmpty().trim().ifBlank { line.trim() }
-            val dose = if (parts.size >= 2) parts[1].trim() else ""
-            val exercise = book.match(raw)
-            val id = exercise?.id
-                ?: ("task-$i-" + ExerciseBook.normalize(line).replace(' ', '-').take(30) + "-z")
-            // Имя — каноническое из справочника (он собран из Notion), а не
-            // сокращение из строки события: владелец просил имена «как в
-            // ноушене». Не узнали движение — остаётся его же текст.
-            StrengthStore.PlanRow(id = id, name = exercise?.name ?: raw, dose = dose)
+        // Тот же разбор строки, что у чек-листа во вкладке (PlanLine): иначе
+        // id и дозы разошлись бы, и галочки не находили бы своих строк.
+        // Имя — каноническое из справочника (он собран из Notion), а не
+        // сокращение из строки события: владелец просил имена «как в
+        // ноушене». Не узнали движение — остаётся его же текст.
+        return PlanLine.parseAll(charger.plannedLines(), book, suffix = "-z").map { line ->
+            StrengthStore.PlanRow(id = line.id, name = line.canonical, dose = line.dose)
         }
     }
 

@@ -2,6 +2,7 @@ package ru.zf.pravka.core
 
 import ru.zf.pravka.data.EventLog
 import ru.zf.pravka.data.IcuSportSync
+import ru.zf.pravka.data.NotionExerciseSync
 import ru.zf.pravka.data.NotionPlanSync
 import ru.zf.pravka.data.PlanStore
 import ru.zf.pravka.data.Stats
@@ -19,12 +20,17 @@ import ru.zf.pravka.provider.ClaudeProvider
 //   они прозой — поэтому страница читается раз в сутки, а числа из неё вынимает
 //   Сонет одним вызовом.
 //
-// Оба источника необязательные и независимые: календарь без Notion даёт
-// карточку дня без порогов, Notion без календаря — правила без сессии. Падение
-// любого из них оставляет кэш как был.
+//   СПРАВОЧНИК упражнений — из базы Notion «Упражнения» под тем же хабом:
+//   строки плана матчатся на него, из него берутся техника и схемы. Читается
+//   тем же проходом, без модели — это просто таблица.
+//
+// Все источники необязательные и независимые: календарь без Notion даёт
+// карточку дня без порогов, Notion без календаря — правила без сессии,
+// справочник без Notion — файл сборки. Падение любого оставляет кэш как был.
 class PlanSync(
     private val icu: IcuSportSync,
     private val notion: NotionPlanSync,
+    private val exercises: NotionExerciseSync,
     private val claude: ClaudeProvider,
     private val store: PlanStore,
     private val stats: Stats,
@@ -45,16 +51,23 @@ class PlanSync(
 
     fun lastError(): String = lastError
 
-    data class Outcome(val events: Boolean, val rules: Boolean, val error: String)
+    data class Outcome(
+        val events: Boolean,
+        val rules: Boolean,
+        val error: String,
+        val exercises: Boolean = false,
+    )
 
     /**
      * Только календарь, и только если он старше суток. Владелец сказал прямо:
      * «поменял план в чате — сам и обновлю» (кнопкой), а фоновая суета при
      * каждом открытии вкладки ему не нужна. Правила Notion не трогаем: их
-     * чтение стоит вызова Сонета.
+     * чтение стоит вызова Сонета. Справочник — дешёвая таблица, у него свой
+     * суточный таймер по возрасту кэша: свежий — ни одного запроса.
      */
     suspend fun refreshEventsIfStale(maxAgeMs: Long = 24 * 3_600_000L): Boolean {
         store.load()
+        runCatching { exercises.refresh() }
         val age = System.currentTimeMillis() - store.eventsFetchedAt()
         if (age < maxAgeMs) return false
         val ok = runCatching { icu.refreshPlan(store) }.getOrDefault(false)
@@ -91,8 +104,20 @@ class PlanSync(
             else if (notion.lastError().isNotBlank()) errors.add(notion.lastError())
         }
 
+        // Справочник упражнений — той же кнопкой и тем же суточным ритмом.
+        // Без токена он молчит (справочник тогда из файла сборки), и жалоба
+        // на токен уже есть от правил — вторую не добавляем.
+        val exercisesOk = runCatching { exercises.refresh(force) }.getOrElse { e ->
+            errors.add("справочник: ${e.message ?: e.javaClass.simpleName}")
+            false
+        }
+        if (!exercisesOk && force) {
+            val why = exercises.lastError()
+            if (why.isNotBlank() && !why.startsWith("Токен")) errors.add(why)
+        }
+
         lastError = errors.joinToString("; ")
-        return Outcome(events, rules, lastError)
+        return Outcome(events, rules, lastError, exercisesOk)
     }
 
     /**

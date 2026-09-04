@@ -1,27 +1,38 @@
 package ru.zf.pravka.data
 
 import android.content.Context
+import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
-// Справочник упражнений: 42 движения владельца со схемами, техникой, ошибками,
+// Справочник упражнений: движения владельца со схемами, техникой, ошибками,
 // прогрессией и именем в Garmin Connect.
 //
-// Лежит СТАТИЧЕСКИМ файлом в assets (`exercises.json`, собран из базы Notion
-// «Упражнения» скриптом `tools/gen_reference.py`). Причина простая: карточка
-// тренировки открывается каждый день, в том числе в подвале на даче, где
-// интернета нет, — а справочник меняется раз в месяц. Привязывать ежедневный
-// экран к чужому API ради данных, которые не меняются, незачем.
+// Источник правды — база Notion «Упражнения», и читается она ЖИВОЙ
+// (`NotionExerciseSync`): владелец правит там состав зарядки и дозы, и вкладка
+// должна видеть новые движения («Суставы сверху вниз», «Осанка: …») в тот же
+// день, а не после пересборки APK. Прочитанное лежит на диске
+// (`exercises_live.json`) — карточка тренировки открывается каждый день, в том
+// числе в подвале на даче без сети, и должна открываться из кэша.
+//
+// Статический `assets/exercises.json` (собран из той же базы скриптом
+// `tools/gen_reference.py`) остался СЕМЕНЕМ: с него начинается жизнь после
+// установки, он же — запас без токена Notion, и из него берутся голосовые имена
+// (`aliases`) и единицы подхода — Notion про них не знает.
 //
 // Главное здесь не хранение, а СОПОСТАВЛЕНИЕ. Список движений конечный и
 // известен заранее, поэтому «гоблет четыре по десять шестнадцать» разбирается
 // точно, а не как «гоблин» или «глобально». У каждого упражнения свои
 // голосовые имена (`aliases`) — так, как владелец их правда произносит.
-class ExerciseBook(private val context: Context) {
+class ExerciseBook(private val context: Context?) {
 
     companion object {
         private const val ASSET = "exercises.json"
+        const val LIVE_FILE = "exercises_live.json"
 
         /** Единица подхода: повторы, секунды (вис), метры (переноска), минуты. */
         const val UNIT_REPS = "reps"
@@ -51,6 +62,49 @@ class ExerciseBook(private val context: Context) {
 
         private fun stemmed(text: String): List<String> =
             normalize(text).split(' ').filter { it.isNotBlank() }.map { stem(it) }
+
+        private val TRANSLIT = mapOf(
+            'а' to "a", 'б' to "b", 'в' to "v", 'г' to "g", 'д' to "d", 'е' to "e", 'ё' to "e",
+            'ж' to "zh", 'з' to "z", 'и' to "i", 'й' to "y", 'к' to "k", 'л' to "l", 'м' to "m",
+            'н' to "n", 'о' to "o", 'п' to "p", 'р' to "r", 'с' to "s", 'т' to "t", 'у' to "u",
+            'ф' to "f", 'х' to "h", 'ц' to "c", 'ч' to "ch", 'ш' to "sh", 'щ' to "sch",
+            'ъ' to "", 'ы' to "y", 'ь' to "", 'э' to "e", 'ю' to "yu", 'я' to "ya",
+        )
+
+        /**
+         * Стабильный id из названия — буква в букву как `slug()` в
+         * `tools/gen_reference.py`: id попадает в журнал и в отчёты зарядки,
+         * и живой справочник обязан давать те же id, что файл сборки, иначе
+         * история движения рвётся при первом же чтении Notion.
+         */
+        fun slug(name: String): String {
+            val sb = StringBuilder()
+            for (ch in name.lowercase()) {
+                val t = TRANSLIT[ch]
+                when {
+                    t != null -> sb.append(t)
+                    ch.isLetterOrDigit() -> sb.append(ch)
+                    else -> sb.append('-')
+                }
+            }
+            return sb.toString().replace(Regex("-+"), "-").trim('-').take(48)
+        }
+
+        /**
+         * Голосовые имена для движения, которого в файле сборки ещё нет:
+         * само название без номера, до двоеточия и скобок, содержимое скобок и
+         * кавычек, части через « · » («Осанка: подбородок назад · скольжения
+         * по стене» → «скольжения по стене»). Настоящие псевдонимы владельца
+         * приедут со следующей пересборкой снимка.
+         */
+        fun derivedAliases(name: String): List<String> {
+            val base = name.replace(Regex("^\\d+[.)]\\s*"), "").trim()
+            val out = mutableListOf(base, base.substringBefore(":"), base.substringBefore("("))
+            Regex("\\(([^)]+)\\)").findAll(base).forEach { out.add(it.groupValues[1]) }
+            Regex("«([^»]+)»").findAll(base).forEach { out.add(it.groupValues[1]) }
+            base.substringAfter(":", base).split(" · ", " + ", "/").forEach { out.add(it) }
+            return out.map { it.trim() }.filter { normalize(it).length >= 3 }.distinct()
+        }
     }
 
     /** Одно упражнение из справочника. */
@@ -84,33 +138,106 @@ class ExerciseBook(private val context: Context) {
             get() = video.trim().trim('«', '»').substringBefore(" · ").ifBlank { name }
     }
 
+    private class Snapshot(val items: List<Exercise>, val snapshot: String, val fetchedAt: Long)
+
     @Volatile private var items: List<Exercise> = emptyList()
     @Volatile private var byAlias: Map<String, Exercise> = emptyMap()
     @Volatile private var snapshot = ""
+    /** Файл сборки как прочитан: псевдонимы и единицы для живого справочника. */
+    @Volatile private var seed: List<Exercise> = emptyList()
+
+    /** Когда справочник в последний раз приезжал из Notion; 0 — ещё ни разу. */
+    @Volatile var fetchedAt: Long = 0L
+        private set
+
+    private val _versionFlow = MutableStateFlow(0)
+    /** Растёт при каждой замене справочника — вкладка пересобирает списки. */
+    val versionFlow: StateFlow<Int> = _versionFlow
 
     val all: List<Exercise> get() = items
     val loaded: Boolean get() = items.isNotEmpty()
     fun snapshotDate(): String = snapshot
+    val fromNotion: Boolean get() = fetchedAt > 0L
+
+    /** Кэш живого справочника; null без Android-контекста (JVM-тесты). */
+    private val liveFile: File? get() = context?.let { File(it.filesDir, LIVE_FILE) }
+
+    /**
+     * Справочник из готового JSON (формат `exercises.json`) — без Android и
+     * без диска. Нужен JVM-тестам разбора строк плана: они гоняют настоящие
+     * описания из календаря против настоящего справочника.
+     */
+    fun loadFromJson(text: String) {
+        val parsed = parse(JSONObject(text))
+        seed = parsed.items
+        items = mergeSeed(parsed.items)
+        snapshot = parsed.snapshot
+        fetchedAt = parsed.fetchedAt
+        byAlias = buildIndex(items)
+    }
 
     suspend fun load(): List<Exercise> {
         if (items.isNotEmpty()) return items
-        val parsed = withContext(Dispatchers.IO) {
-            runCatching {
-                val text = context.assets.open(ASSET).bufferedReader().use { it.readText() }
+        val ctx = context ?: return items
+        val file = liveFile ?: return items
+        val (asset, live) = withContext(Dispatchers.IO) {
+            val asset = runCatching {
+                val text = ctx.assets.open(ASSET).bufferedReader().use { it.readText() }
                 parse(JSONObject(text))
             }.getOrNull()
+            val live = StoreFiles.readOrQuarantine(file) { text -> parse(JSONObject(text)) }
+            asset to live
         }
-        if (parsed != null) {
-            items = parsed.first
-            snapshot = parsed.second
-            byAlias = buildIndex(parsed.first)
+        if (asset != null) seed = asset.items
+        // Живой кэш побеждает семя, если он не пуст: пустой ответ Notion сюда
+        // и не пишется (см. NotionExerciseSync), но и пустой файл не должен
+        // оставить вкладку без справочника.
+        val chosen = live?.takeIf { it.items.isNotEmpty() } ?: asset
+        if (chosen != null) {
+            items = mergeSeed(chosen.items)
+            snapshot = chosen.snapshot
+            fetchedAt = chosen.fetchedAt
+            byAlias = buildIndex(items)
         }
         return items
     }
 
-    private fun parse(o: JSONObject): Pair<List<Exercise>, String> {
+    /** Упражнение из файла сборки по id — псевдонимы и единица подхода. */
+    fun seedById(id: String): Exercise? = seed.firstOrNull { it.id == id }
+
+    /**
+     * Заменить справочник тем, что прочиталось из Notion. Пустой список не
+     * принимается — ответ без строк почти всегда значит «сеть или доступ
+     * подвели», а не «упражнений больше нет».
+     */
+    suspend fun replace(list: List<Exercise>, fetchedAt: Long, snapshot: String) {
+        if (list.isEmpty()) return
+        load()
+        val merged = mergeSeed(list)
+        items = merged
+        byAlias = buildIndex(merged)
+        this.fetchedAt = fetchedAt
+        this.snapshot = snapshot
+        val json = serialize(merged, snapshot, fetchedAt).toString()
+        liveFile?.let { file -> DiskWriter.post { StoreFiles.writeAtomic(file, json) } }
+        _versionFlow.value = _versionFlow.value + 1
+    }
+
+    /** Псевдонимы и единица — из семени, если живая запись их не принесла. */
+    private fun mergeSeed(list: List<Exercise>): List<Exercise> {
+        if (seed.isEmpty()) return list
+        return list.map { e ->
+            val s = seed.firstOrNull { it.id == e.id } ?: return@map e
+            e.copy(
+                aliases = if (e.aliases.isNotEmpty()) e.aliases else s.aliases,
+                unit = if (e.unit.isNotBlank() && e.unit != UNIT_REPS) e.unit else s.unit,
+            )
+        }
+    }
+
+    private fun parse(o: JSONObject): Snapshot {
         val out = mutableListOf<Exercise>()
-        val array = o.optJSONArray("items") ?: return emptyList<Exercise>() to ""
+        val array = o.optJSONArray("items") ?: return Snapshot(emptyList(), "", 0L)
         for (i in 0 until array.length()) {
             val e = array.optJSONObject(i) ?: continue
             fun list(key: String): List<String> {
@@ -137,8 +264,39 @@ class ExerciseBook(private val context: Context) {
                 )
             )
         }
-        return out to o.optString("snapshot")
+        return Snapshot(out, o.optString("snapshot"), o.optLong("fetchedAt", 0L))
     }
+
+    private fun serialize(list: List<Exercise>, snapshot: String, fetchedAt: Long): JSONObject =
+        JSONObject().apply {
+            put("source", "notion:Упражнения")
+            put("snapshot", snapshot)
+            put("fetchedAt", fetchedAt)
+            put(
+                "items",
+                JSONArray().apply {
+                    for (e in list) put(
+                        JSONObject().apply {
+                            put("id", e.id)
+                            put("n", e.order)
+                            put("name", e.name)
+                            put("scheme", e.scheme)
+                            put("blocks", JSONArray().apply { e.blocks.forEach { put(it) } })
+                            put("gear", JSONArray().apply { e.gear.forEach { put(it) } })
+                            put("targets", JSONArray().apply { e.targets.forEach { put(it) } })
+                            put("how", e.how)
+                            put("mistakes", e.mistakes)
+                            put("progression", e.progression)
+                            put("video", e.video)
+                            put("garmin", e.garmin)
+                            put("notion", e.notion)
+                            put("unit", e.unit)
+                            put("aliases", JSONArray().apply { e.aliases.forEach { put(it) } })
+                        }
+                    )
+                }
+            )
+        }
 
     /**
      * Индекс на точное совпадение. Длинные псевдонимы кладутся первыми и не

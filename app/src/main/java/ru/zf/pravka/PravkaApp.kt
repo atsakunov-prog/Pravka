@@ -172,11 +172,12 @@ class PravkaApp : Application() {
         )
     }
 
-    // Тело: справочники статическим файлом, журнал силовых, план на день.
+    // Тело: справочники, журнал силовых, план на день.
     //
-    // Справочники в assets намеренно: карточка тренировки открывается каждый
-    // день, в том числе в подвале на даче, а список движений меняется раз в
-    // месяц. Собираются из Notion скриптом tools/gen_reference.py.
+    // Справочник упражнений читается живым из базы Notion (раз в сутки, кэш на
+    // диске), файл в assets — семя и запас без сети: карточка тренировки
+    // открывается каждый день, в том числе в подвале на даче. Рацион — пока
+    // только из assets. Оба собираются из Notion скриптом tools/gen_reference.py.
     // Итоги: ночной разбор жизненного лога батчем (половина цены за то, что
     // ответ не нужен немедленно). Числа считает AnalysisBuilder, модель их
     // только интерпретирует.
@@ -225,6 +226,11 @@ class PravkaApp : Application() {
     val notionPlanSync by lazy {
         ru.zf.pravka.data.NotionPlanSync(settings, planStore, httpClient, eventLog)
     }
+    // Справочник упражнений — живой из базы Notion «Упражнения»; файл сборки
+    // остаётся семенем и запасом без сети или без токена.
+    val notionExerciseSync by lazy {
+        ru.zf.pravka.data.NotionExerciseSync(settings, exerciseBook, httpClient, eventLog)
+    }
     // Единственное место, где приложение ПИШЕТ в Notion: автогалочки в его
     // базу «Дневник» — зарядка, сделано, feel, колено, вес. Он забросил её
     // тикать руками ровно тогда, когда всё это стал наговаривать сюда.
@@ -260,6 +266,7 @@ class PravkaApp : Application() {
         ru.zf.pravka.core.PlanSync(
             icu = icuSportSync,
             notion = notionPlanSync,
+            exercises = notionExerciseSync,
             claude = claudeProvider,
             store = planStore,
             stats = stats,

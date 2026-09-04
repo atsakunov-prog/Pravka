@@ -38,6 +38,11 @@ import org.json.JSONObject
 // если к хабу — нет). Так появление «Блока 4» подхватывается без правки
 // настроек, а «Блок 3 v2» сам вытесняет «Блок 3».
 //
+// С сентября 2026 страница зовётся «План v3 — с 7 сентября: …», а старые блоки
+// уехали в дочернюю страницу «Архив». Поэтому подходит и «План…», а прямой
+// ребёнок хаба всегда сильнее найденного поиском: поиск по слову «Блок» иначе
+// приносил «Блок 3 v2» из архива — и вкладка неделю жила по старым правилам.
+//
 // Раз в сутки — этого достаточно: правила блока меняются раз в месяц, а трафик
 // на даче дорог. Текст страниц кладётся в кэш целиком (проза уезжает в контекст
 // вопроса тренеру), а числа из него вынимает Сонет отдельным вызовом.
@@ -220,10 +225,11 @@ class NotionPlanSync(
                     .append('\n')
             }
 
-            // 3. Поиск — он видит только то, к чему интеграцию пустили.
+            // 3. Страница плана: сперва прямой ребёнок хаба, потом поиск — он
+            // видит только то, к чему интеграцию пустили.
             httpError = ""
-            val found = searchBlockPage(token)
-            out.append("Поиск «Блок»: ")
+            val found = findBlockPage(hub, token)
+            out.append("Страница плана: ")
                 .append(found?.second ?: httpError.ifBlank { "ничего не нашлось" })
                 .append('\n')
             val week = newestChild(hub, token) { isWeekTitle(it) }
@@ -259,7 +265,7 @@ class NotionPlanSync(
      * а к блоку — пустили (или наоборот, если блок вынесли из-под хаба).
      */
     private fun findBlockPage(hubId: String, token: String): Pair<String, String>? =
-        newestBlockChild(hubId, token) ?: searchBlockPage(token)
+        newestBlockChild(hubId, token) ?: searchBlockPage(token, hubId)
 
     /** Самая свежая дочерняя страница хаба, чей заголовок начинается на «Блок». */
     private fun newestBlockChild(hubId: String, token: String): Pair<String, String>? =
@@ -299,34 +305,47 @@ class NotionPlanSync(
         return found
     }
 
+    private class Hit(val id: String, val title: String, val parent: String, val edited: String)
+
     /**
-     * Поиск страницы «Блок …» по всему, к чему пустили интеграцию. Сортировка
-     * по времени правки: свежая версия блока и есть текущая.
+     * Поиск страницы «План …» или «Блок …» по всему, к чему пустили
+     * интеграцию. Прямой ребёнок хаба сильнее любой свежести: страница из
+     * «Архива» под хабом тоже находится поиском, но текущей быть не может.
+     * Среди прочих — самая свежая по времени правки.
      */
-    private fun searchBlockPage(token: String): Pair<String, String>? {
-        val payload = JSONObject().apply {
-            put("query", "Блок")
-            put("filter", JSONObject().apply {
-                put("value", "page")
-                put("property", "object")
-            })
-            put("sort", JSONObject().apply {
-                put("direction", "descending")
-                put("timestamp", "last_edited_time")
-            })
-            put("page_size", 20)
+    private fun searchBlockPage(token: String, hubId: String = ""): Pair<String, String>? {
+        val hits = mutableListOf<Hit>()
+        for (query in listOf("План", "Блок")) {
+            val payload = JSONObject().apply {
+                put("query", query)
+                put("filter", JSONObject().apply {
+                    put("value", "page")
+                    put("property", "object")
+                })
+                put("sort", JSONObject().apply {
+                    put("direction", "descending")
+                    put("timestamp", "last_edited_time")
+                })
+                put("page_size", 20)
+            }
+            val body = post("$API/search", token, payload.toString()) ?: continue
+            val results = runCatching { JSONObject(body).optJSONArray("results") }.getOrNull()
+                ?: continue
+            for (i in 0 until results.length()) {
+                val p = results.optJSONObject(i) ?: continue
+                if (p.optString("object") != "page") continue
+                if (p.optBoolean("archived") || p.optBoolean("in_trash")) continue
+                val title = pageTitleOf(p)
+                if (!isBlockTitle(title)) continue
+                val parent = p.optJSONObject("parent")?.optString("page_id").orEmpty()
+                    .replace("-", "").lowercase()
+                hits.add(Hit(pageId(p.optString("id")), title, parent, p.optString("last_edited_time")))
+            }
         }
-        val body = post("$API/search", token, payload.toString()) ?: return null
-        val results = runCatching { JSONObject(body).optJSONArray("results") }.getOrNull()
-            ?: return null
-        for (i in 0 until results.length()) {
-            val p = results.optJSONObject(i) ?: continue
-            if (p.optString("object") != "page") continue
-            val title = pageTitleOf(p)
-            if (!isBlockTitle(title)) continue
-            return pageId(p.optString("id")) to title
-        }
-        return null
+        if (hits.isEmpty()) return null
+        val best = hits.filter { hubId.isNotBlank() && it.parent == hubId }.maxByOrNull { it.edited }
+            ?: hits.maxByOrNull { it.edited }!!
+        return best.id to best.title
     }
 
     /**
@@ -344,14 +363,18 @@ class NotionPlanSync(
     }
 
     /**
-     * «Это страница блока?» Заголовок бывает с эмодзи, неразрывным пробелом
-     * или «№» впереди — отрезаем всё, что не буква, и только потом сравниваем.
+     * «Это страница плана?» — «Блок 3 v2», «План v3 — с 7 сентября». Заголовок
+     * бывает с эмодзи, неразрывным пробелом или «№» впереди — отрезаем всё,
+     * что не буква, и только потом сравниваем. Слово должно быть целым:
+     * «Планка» и «Блокнот» — не план. Страницы со словом «архив» не берём.
      */
     private fun isBlockTitle(title: String): Boolean {
         val cleaned = title.dropWhile { !it.isLetter() }
-        return cleaned.startsWith("Блок", ignoreCase = true) ||
-            cleaned.startsWith("Block", ignoreCase = true)
+        if (cleaned.contains("архив", ignoreCase = true)) return false
+        return PLAN_TITLE.containsMatchIn(cleaned)
     }
+
+    private val PLAN_TITLE = Regex("^(?:Блок|Block|План|Plan)(?![\\p{L}])", RegexOption.IGNORE_CASE)
 
     /** «Неделя 24–30.08 — спина-протокол» и любые будущие недельные страницы. */
     private fun isWeekTitle(title: String): Boolean {

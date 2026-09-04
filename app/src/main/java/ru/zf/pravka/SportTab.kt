@@ -60,6 +60,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
+import ru.zf.pravka.core.PlanLine
 import ru.zf.pravka.core.SportCoach
 import ru.zf.pravka.core.TrafficLight
 import ru.zf.pravka.data.ExerciseBook
@@ -91,6 +92,7 @@ import ru.zf.pravka.ui.PaperLabel
 private val talkTimeFormat = SimpleDateFormat("d MMM, HH:mm", Locale("ru"))
 private val workoutDayFormat = SimpleDateFormat("EEEE, d MMMM", Locale("ru"))
 private val workoutTimeFormat = SimpleDateFormat("HH:mm", Locale.US)
+private val bookStampFormat = SimpleDateFormat("d.MM HH:mm", Locale("ru"))
 
 /** Цвет тона сводки: та же радуга, что у балла дня в Засечке. */
 @Composable
@@ -160,39 +162,53 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     // RDL» на спина-протоколе). Статический блок справочника — только запасной
     // вариант, когда события без списка: показать по блоку RDL, который на
     // этой неделе запрещён, значило бы спорить с его же планом.
-    val dayTasks = remember(planDays, sessions, today) {
-        // Чек-лист упражнений — ТОЛЬКО у силовых. У Zwift и бега нумерованные
-        // строки — это подсказки по посадке и пульсу («руки на верх руля»,
-        // «каждые 15 мин из седла»): галочки на них не нужны, а стемминг на
-        // такой прозе матчил суперсет рук. Они показываются в карточке дня.
-        val lines = if (mainPlan?.strength == true) mainPlan.plannedLines() else emptyList()
-        if (lines.isNotEmpty()) {
-            lines.mapIndexed { i, line ->
-                val (name, dose, note) = planLineParts(line)
-                val exercise = app.exerciseBook.match(name)
-                DayTask(
-                    id = exercise?.id ?: taskId(i, line),
-                    title = if (dose.isBlank()) name else "$name — $dose",
-                    exercise = exercise,
-                    lastTime = exercise?.let { app.strengthStore.lastTime(it.id, today)?.second },
-                    history = exercise?.let { app.strengthStore.history(it.id, 10) }.orEmpty(),
-                    hint = note,
-                )
+    //
+    // Силовых в день бывает ДВЕ — гиря и сразу за ней турник с прессом (план
+    // v3), и у каждой свой список. Раньше чек-лист строился только по главной,
+    // а вторая жила строкой «Ещё сегодня» без единой галочки: владелец видел
+    // половину своих задач. Теперь группа на сессию, главная первой.
+    //
+    // Чек-лист упражнений — ТОЛЬКО у силовых. У Zwift и бега нумерованные
+    // строки — это подсказки по посадке и пульсу («руки на верх руля»,
+    // «каждые 15 мин из седла»): галочки на них не нужны, а стемминг на
+    // такой прозе матчил суперсет рук. Они показываются в карточке дня.
+    val bookVersion by app.exerciseBook.versionFlow.collectAsState()
+    val dayGroups = remember(planDays, sessions, today, bookVersion) {
+        app.planStore.strengthOf(today).map { session ->
+            val lines = session.plannedLines()
+            val tasks = if (lines.isNotEmpty()) {
+                PlanLine.parseAll(lines, app.exerciseBook).map { line ->
+                    DayTask(
+                        id = line.id,
+                        name = line.canonical,
+                        dose = line.dose,
+                        title = line.title,
+                        exercise = line.exercise,
+                        lastTime = line.exercise?.let { app.strengthStore.lastTime(it.id, today)?.second },
+                        history = line.exercise?.let { app.strengthStore.history(it.id, 10) }.orEmpty(),
+                        hint = line.note,
+                    )
+                }
+            } else {
+                val block = session.block
+                if (block.isBlank()) emptyList()
+                else app.strengthEngine.lastTimeFor(block, today).map { (exercise, last) ->
+                    DayTask(
+                        id = exercise.id,
+                        name = exercise.name,
+                        dose = exercise.scheme,
+                        title = exercise.name + (if (exercise.scheme.isBlank()) "" else " — ${exercise.scheme}"),
+                        exercise = exercise,
+                        lastTime = last,
+                        history = app.strengthStore.history(exercise.id, 10),
+                    )
+                }
             }
-        } else {
-            val block = mainPlan?.block.orEmpty()
-            if (mainPlan?.strength != true || block.isBlank()) emptyList()
-            else app.strengthEngine.lastTimeFor(block, today).map { (exercise, last) ->
-                DayTask(
-                    id = exercise.id,
-                    title = exercise.name + (if (exercise.scheme.isBlank()) "" else " — ${exercise.scheme}"),
-                    exercise = exercise,
-                    lastTime = last,
-                    history = app.strengthStore.history(exercise.id, 10),
-                )
-            }
-        }
+            session to tasks
+        }.filter { it.second.isNotEmpty() }
     }
+    // Все задачи дня одним списком: по нему считается «всё отмечено → сделано».
+    val dayTasks = remember(dayGroups) { dayGroups.flatMap { it.second } }
     val streak = remember(gtgDays) { app.strengthStore.streak(today) }
     val gtgToday = remember(gtgDays, today) { app.strengthStore.gtgOn(today) }
     val shownWorkouts = remember(workouts, days) {
@@ -283,10 +299,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     // Комментарий владельца к сессии — первый абзац описания
                     // до нумерованного списка. Он там про смысл дня, и это
                     // ровно то, что стоит прочитать перед началом.
-                    val comment = mainPlan.description.lines()
-                        .takeWhile { !Regex("^\\d+[.)]\\s+\\S").containsMatchIn(it.trim()) }
-                        .joinToString(" ")
-                        .trim()
+                    val comment = mainPlan.noteBefore()
                     if (comment.isNotBlank()) {
                         Spacer(Modifier.height(8.dp))
                         Text(
@@ -302,15 +315,16 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                         val cues = mainPlan.plannedLines()
                         if (cues.isNotEmpty()) {
                             Spacer(Modifier.height(8.dp))
-                            for (cue in cues) {
-                                val (name, dose, note) = planLineParts(cue)
+                            // Подсказки кардио — его же слова, не имена из
+                            // справочника: матчить «нагрудный ремень» незачем.
+                            for (cue in PlanLine.parseAll(cues, app.exerciseBook)) {
                                 Text(
-                                    "· " + (if (dose.isBlank()) name else "$name — $dose"),
+                                    "· " + (if (cue.dose.isBlank()) cue.name else "${cue.name} — ${cue.dose}"),
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
-                                if (note.isNotBlank()) {
+                                if (cue.note.isNotBlank()) {
                                     Text(
-                                        "   " + note,
+                                        "   " + cue.note,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -318,14 +332,28 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                             }
                         }
                     }
-                    // Второстепенное дня — одной строкой: прокрутка, заметка.
+                    // Его текст ПОСЛЕ списка — «Отдых минута. Задача дня — не
+                    // устать, а понять, как гиря лежит в руках». Раньше терялся.
+                    val afterNote = mainPlan.noteAfter()
+                    if (afterNote.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            afterNote.take(400),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    // Второстепенное дня — одной строкой, по часам: турник
+                    // после гири, Zwift днём. Зарядка — в своей карточке.
                     val extras = app.planStore.dayOf(today)
                         .filterNot { it.eventId == mainPlan.eventId || it.charger }
+                        .sortedBy { it.time.ifBlank { "99:99" } }
                     if (extras.isNotEmpty()) {
                         Spacer(Modifier.height(6.dp))
                         PaperHint(
                             "Ещё сегодня: " + extras.joinToString("; ") { e ->
-                                e.name + (if (e.minutes > 0) " · ${e.minutes} мин" else "")
+                                (if (e.time.isNotBlank()) e.time + " " else "") +
+                                    e.name + (if (e.minutes > 0) " · ${e.minutes} мин" else "")
                             }
                         )
                     }
@@ -388,14 +416,25 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             ZaryadkaChecklist(app, gtgToday, chargerPlan)
         }
 
-        // ---- Упражнения дня с прошлым разом ----
-        if (dayTasks.isNotEmpty()) {
-            item {
-                val checkedCount = dayTasks.count { todaySession?.isChecked(it.id) == true }
-                PaperLabel("упражнения · $checkedCount из ${dayTasks.size}")
+        // ---- Упражнения дня с прошлым разом: группа на каждую силовую ----
+        for ((session, tasks) in dayGroups) {
+            item(key = "pl" + session.eventId) {
+                val checkedCount = tasks.count { todaySession?.isChecked(it.id) == true }
+                val label = if (dayGroups.size == 1) "упражнения" else {
+                    (if (session.time.isNotBlank()) session.time + " · " else "") +
+                        session.shortName.lowercase()
+                }
+                PaperLabel("$label · $checkedCount из ${tasks.size}")
+                // У второй сессии дня комментарий владельца иначе не виден:
+                // карточка «сегодня» показывает только главную.
+                if (session.eventId != mainPlan?.eventId) {
+                    val note = listOf(session.noteBefore(), session.noteAfter())
+                        .filter { it.isNotBlank() }.joinToString(" ")
+                    if (note.isNotBlank()) PaperHint(note.take(300))
+                }
             }
-            items(dayTasks.size, key = { i -> "px" + dayTasks[i].id }) { i ->
-                val task = dayTasks[i]
+            items(tasks.size, key = { i -> "px" + session.eventId + "-" + tasks[i].id }) { i ->
+                val task = tasks[i]
                 val doneToday = todaySession?.exercises?.firstOrNull { it.exerciseId == task.id }
                 PlannedExerciseCard(
                     title = task.title,
@@ -1487,38 +1526,24 @@ private fun LegendValue(label: String, value: String, color: Color) {
 
 private val rawDayFormat = SimpleDateFormat("d MMMM, HH:mm", Locale("ru"))
 
-/** Одна задача дня: строка плана + узнанное по ней упражнение справочника. */
+/**
+ * Одна задача дня: строка плана + узнанное по ней упражнение справочника.
+ * Разбор строки («Название доза: пояснение», « — », скобки) — в
+ * `core/PlanLine.kt`, один на вкладку и на досыл в intervals.
+ */
 private data class DayTask(
     val id: String,
     val title: String,
     val exercise: ExerciseBook.Exercise?,
     val lastTime: StrengthStore.ExerciseLog?,
     val history: List<Pair<String, StrengthStore.ExerciseLog>>,
-    /** Его пояснение из третьего сегмента строки: зачем движение. */
+    /** Его пояснение из строки плана: зачем движение, как пошло. */
     val hint: String = "",
+    /** Имя как в Notion (или как в плане, если движение не узнано). */
+    val name: String = "",
+    /** Доза из строки плана: «2×6», «×2 до предела», «~3 мин». */
+    val dose: String = "",
 )
-
-/**
- * Его строка плана: «Название — доза — пояснение». Сегменты через « — »;
- * матчить на справочник можно ТОЛЬКО название — стемминг по пояснению
- * превращал «руки на верх руля» в суперсет рук.
- */
-private fun planLineParts(line: String): Triple<String, String, String> {
-    val parts = line.split(" — ")
-    return when {
-        parts.size >= 3 -> Triple(
-            parts[0].trim(),
-            parts[1].trim(),
-            parts.drop(2).joinToString(" — ").trim(),
-        )
-        parts.size == 2 -> Triple(parts[0].trim(), parts[1].trim(), "")
-        else -> Triple(line.trim(), "", "")
-    }
-}
-
-/** Устойчивый id свободной строки плана: позиция + начало текста. */
-private fun taskId(index: Int, line: String): String =
-    "task-$index-" + ExerciseBook.normalize(line).replace(' ', '-').take(30)
 
 private val CTL_COLOR = Color(0xFF0E7490)
 private val ATL_COLOR = Color(0xFFEA580C)
@@ -1580,31 +1605,34 @@ private fun ZaryadkaChecklist(
     // правит дозы и состав неделя к неделе («9 пунктов, дозы конечные»), и
     // показывать вместо этого статический блок из 15 позиций значило бы
     // спорить с его же планом. Справочник — запасной вариант и источник
-    // техники для узнанных строк.
+    // техники для узнанных строк. Список в одну строку («Дача. 1. Суставы.
+    // 2. Осанка…») — тоже список: см. PlanDay.plannedLines().
+    val bookVersion by app.exerciseBook.versionFlow.collectAsState()
     val planLines = remember(chargerPlan) { chargerPlan?.plannedLines().orEmpty() }
-    val items = remember(planLines, loaded) {
+    val items = remember(planLines, loaded, bookVersion) {
         if (!loaded) emptyList()
         else if (planLines.isNotEmpty()) {
-            planLines.mapIndexed { i, line ->
-                val (raw, dose, note) = planLineParts(line)
-                val exercise = app.exerciseBook.match(raw)
-                // Имя — каноническое из справочника (как в Notion): так же
-                // подпишется строка в комментарии intervals, глазам и чату
-                // не приходится сводить два названия одного движения.
-                val name = exercise?.name ?: raw
+            // Имя — каноническое из справочника (как в Notion): так же
+            // подпишется строка в комментарии intervals, глазам и чату
+            // не приходится сводить два названия одного движения.
+            PlanLine.parseAll(planLines, app.exerciseBook, suffix = "-z").map { line ->
                 DayTask(
-                    id = exercise?.id ?: taskId(i, line) + "-z",
-                    title = if (dose.isBlank()) name else "$name — $dose",
-                    exercise = exercise,
+                    id = line.id,
+                    name = line.canonical,
+                    dose = line.dose,
+                    title = line.title,
+                    exercise = line.exercise,
                     lastTime = null,
                     history = emptyList(),
-                    hint = note,
+                    hint = line.note,
                 )
             }
         } else {
             app.exerciseBook.ofBlock("Зарядка").map { exercise ->
                 DayTask(
                     id = exercise.id,
+                    name = exercise.name,
+                    dose = exercise.scheme,
                     title = exercise.name,
                     exercise = exercise,
                     lastTime = null,
@@ -1635,12 +1663,7 @@ private fun ZaryadkaChecklist(
         // её из чата вместе с планом, и меняется она чаще справочника.
         // Нумерованный список из заметки не показываем: он и есть чек-лист
         // ниже, дублировать его текстом сверху — читать одно дважды.
-        val dayNote = chargerPlan?.description.orEmpty()
-            .substringBefore("Warmup")
-            .lines()
-            .takeWhile { !Regex("^\\d+[.)]\\s+\\S").containsMatchIn(it.trim()) }
-            .joinToString("\n")
-            .trim()
+        val dayNote = chargerPlan?.noteBefore().orEmpty()
         if (dayNote.isNotBlank()) {
             Text(dayNote.take(400), style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(10.dp))
@@ -1678,19 +1701,23 @@ private fun ZaryadkaChecklist(
                         .weight(1f)
                         .clickable { openId = if (openId == task.id) null else task.id }
                 ) {
+                    // Сверху — имя как в Notion, под ним доза и его пояснение:
+                    // «Осанка: подбородок назад · скольжения по стене · грудь в
+                    // проёме» с дозой в той же строке не читалось бы вовсе.
                     Text(
-                        task.title,
+                        task.name.ifBlank { task.title },
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (ticked) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.onSurface,
                     )
                     val exercise = task.exercise
-                    // Его пояснение («разбудить шейный отдел») — мелкой строкой;
-                    // запасному списку без строк плана — схема из справочника.
+                    // Доза («2×6», «×2 до предела») и его пояснение («секунды в
+                    // заметку») — мелкой строкой; запасному списку без строк
+                    // плана — схема из справочника.
+                    val detail = listOf(task.dose, task.hint).filter { it.isNotBlank() }.joinToString(" · ")
                     when {
-                        task.hint.isNotBlank() -> PaperHint(task.hint)
-                        planLines.isEmpty() && exercise != null && exercise.scheme.isNotBlank() ->
-                            PaperHint(exercise.scheme)
+                        detail.isNotBlank() -> PaperHint(detail)
+                        exercise != null && exercise.scheme.isNotBlank() -> PaperHint(exercise.scheme)
                     }
                     if (report != null &&
                         (report.fact.isNotBlank() || report.note.isNotBlank() || report.status != "ok")
@@ -1748,6 +1775,17 @@ private fun ZaryadkaChecklist(
                     )
                 }
             }
+        }
+        // Его текст ПОСЛЕ списка: «Минимум на плохое утро: 1 + 3 + шесть
+        // отжиманий», «Затем прогулка с семьёй». Раньше не показывался вовсе.
+        val afterNote = chargerPlan?.noteAfter().orEmpty()
+        if (afterNote.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                afterNote.take(400),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         // Самочувствие — в нативное поле feel зарядки-активности: intervals
         // сам рисует по нему кривую, из слова «ужас» её не построишь.
@@ -1827,8 +1865,8 @@ private fun ZaryadkaReportDialog(
     allIds: List<String>,
     onClose: () -> Unit,
 ) {
-    val name = task.title.substringBefore(" — ")
-    val plan = task.title.substringAfter(" — ", "")
+    val name = task.name.ifBlank { task.title.substringBefore(" — ") }
+    val plan = task.dose.ifBlank { task.title.substringAfter(" — ", "") }
     var status by remember { mutableStateOf(existing?.status ?: "ok") }
     var fact by remember { mutableStateOf(existing?.fact.orEmpty()) }
     var note by remember { mutableStateOf(existing?.note.orEmpty()) }
@@ -1989,8 +2027,10 @@ private fun WeekPlanCard(app: PravkaApp, planDays: List<PlanStore.PlanDay>) {
     var openDate by remember { mutableStateOf<String?>(null) }
     PaperCard(label = "план недели") {
         for ((date, events) in upcoming) {
-            val main = events.filterNot { it.charger }
-            val charger = events.firstOrNull { it.charger }
+            // По часам: зарядка утром, гиря, турник, Zwift днём. Турник — не
+            // зарядка (см. PlanDay.charger), поэтому он здесь, среди сессий.
+            val main = events.filterNot { it.charger }.sortedBy { it.time.ifBlank { "99:99" } }
+            val charger = events.filter { it.charger }.minByOrNull { it.time.ifBlank { "99:99" } }
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -2020,17 +2060,15 @@ private fun WeekPlanCard(app: PravkaApp, planDays: List<PlanStore.PlanDay>) {
                 }
                 if (openDate == date) {
                     for (e in main) {
-                        // Его комментарий — первый абзац описания, до
-                        // нумерованного списка и структурных Warmup-строк.
-                        val comment = e.description
-                            .substringBefore("Warmup").trim()
-                            .lines()
-                            .takeWhile { !Regex("^\\d+[.)]\\s+\\S").containsMatchIn(it.trim()) }
-                            .joinToString("\n").trim()
+                        // Его комментарий — текст описания вокруг нумерованного
+                        // списка, без структурных Warmup-строк для Garmin.
+                        val comment = listOf(e.noteBefore(), e.noteAfter())
+                            .filter { it.isNotBlank() }
+                            .joinToString("\n")
                         if (comment.isNotBlank()) {
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                e.name,
+                                (if (e.time.isNotBlank()) e.time + " · " else "") + e.name,
                                 style = MaterialTheme.typography.labelMedium,
                             )
                             Text(
@@ -2743,6 +2781,70 @@ internal fun BodySportSettings(app: PravkaApp) {
     var notionError by remember { mutableStateOf(app.notionPlanSync.lastError()) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
+    // Справочник упражнений: живой из базы Notion «Упражнения», файл сборки —
+    // семя и запас без сети. Отсюда видно, ЧЕМ сейчас матчатся строки плана —
+    // и почему «Суставы сверху вниз» вдруг без техники.
+    val bookVersion by app.exerciseBook.versionFlow.collectAsState()
+    var syncingBook by remember { mutableStateOf(false) }
+    var bookError by remember { mutableStateOf(app.notionExerciseSync.lastError()) }
+    PaperCard(label = "справочник упражнений") {
+        val book = app.exerciseBook
+        val zaryadka = remember(bookVersion) { book.ofBlock("Зарядка") }
+        Text(
+            if (book.fromNotion) "Из Notion, прочитан " + bookStampFormat.format(Date(book.fetchedAt))
+            else "Файл сборки от ${book.snapshotDate().ifBlank { "—" }} — Notion ещё не читался",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Spacer(Modifier.height(4.dp))
+        PaperHint("Движений: ${book.all.size} · в блоке «Зарядка»: ${zaryadka.size}")
+        if (zaryadka.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                zaryadka.joinToString(" · ") { it.name.substringBefore(":") },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = {
+                if (!syncingBook) {
+                    syncingBook = true
+                    app.appScope.launch {
+                        app.settings.setNotionToken(tokenDraft.trim())
+                        app.settings.setNotionHub(hubDraft.trim())
+                        val ok = runCatching { app.notionExerciseSync.refresh(force = true) }
+                            .getOrDefault(false)
+                        syncingBook = false
+                        bookError = if (ok) "" else app.notionExerciseSync.lastError()
+                        Feedback.toast(
+                            app,
+                            if (ok) "Справочник обновлён: ${app.exerciseBook.all.size} движений"
+                            else bookError.ifBlank { "Справочник не обновился" },
+                            long = !ok,
+                        )
+                    }
+                }
+            },
+            enabled = !syncingBook,
+        ) { Text(if (syncingBook) "Читаю…" else "Перечитать из Notion") }
+        if (bookError.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                bookError,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        PaperHint(
+            "Читается раз в сутки вместе с планом и по кнопке «Обновить» во " +
+                "вкладке. Без сети — последнее прочитанное, без токена — файл сборки. " +
+                "Голосовые имена движений — из файла сборки (tools/gen_reference.py)."
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+
     PaperCard(label = "правила блока из notion") {
         if (rules.known) {
             Text(rules.blockTitle.ifBlank { "Блок" }, style = MaterialTheme.typography.titleMedium)
@@ -2827,14 +2929,18 @@ internal fun BodySportSettings(app: PravkaApp) {
                             val outcome = app.planSync.refresh(force = true)
                             syncingPlan = false
                             notionError = app.notionPlanSync.lastError()
+                            bookError = app.notionExerciseSync.lastError()
+                            val fresh = listOfNotNull(
+                                if (outcome.events) "календарь" else null,
+                                if (outcome.rules) "правила" else null,
+                                if (outcome.exercises) "справочник" else null,
+                            )
                             Feedback.toast(
                                 app,
                                 when {
                                     outcome.error.isNotBlank() -> outcome.error
-                                    outcome.events && outcome.rules -> "План и правила обновлены"
-                                    outcome.events -> "Календарь обновлён, правила — нет"
-                                    outcome.rules -> "Правила обновлены, календарь — нет"
-                                    else -> "Ничего не обновилось"
+                                    fresh.isEmpty() -> "Ничего не обновилось"
+                                    else -> "Обновлено: " + fresh.joinToString(", ")
                                 },
                                 long = true,
                             )
@@ -2859,6 +2965,8 @@ internal fun BodySportSettings(app: PravkaApp) {
                         app.settings.setNotionHub(hubDraft.trim())
                         report = runCatching { app.notionPlanSync.diagnose() }
                             .getOrElse { e -> "Сорвалось: ${e.message ?: e.javaClass.simpleName}" }
+                        report += "\n" + runCatching { app.notionExerciseSync.diagnose() }
+                            .getOrElse { e -> "Справочник: сорвалось — ${e.message ?: e.javaClass.simpleName}" }
                         checking = false
                     }
                 }

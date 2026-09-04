@@ -44,6 +44,10 @@ class PlanStore(private val context: Context) {
         val load: Int,
         val description: String,     // включая нумерованный список упражнений
         val carbsPerHour: Int = 0,
+        /** «07:30» из start_date_local; пусто — событие без времени. */
+        val time: String = "",
+        /** Теги события в intervals («v3», «зарядка», «гиря», «турник»). */
+        val tags: List<String> = emptyList(),
     ) {
         val strength: Boolean get() = type.equals("WeightTraining", ignoreCase = true)
 
@@ -52,11 +56,25 @@ class PlanStore(private val context: Context) {
          * (так владелец её пушит), но главной сессией дня быть не может: днём
          * правят Zwift, бег и силовые, а зарядка — ежедневный фон со своей
          * карточкой.
+         *
+         * Узнаётся по тегу «зарядка» или по слову в названии. Раньше сюда же
+         * попадало всё со словом «турник» — и «Турник + пресс №1» плана v3
+         * считался зарядкой: пропадал из карточки дня, из плана недели и из
+         * чек-листа, а владелец видел половину своих сессий. Турник — это
+         * силовая со своим блоком в справочнике, а не утренний фон.
          */
         val charger: Boolean
-            get() = strength && name.lowercase().let {
-                it.contains("зарядка") || it.contains("турник")
-            }
+            get() = strength && (
+                tags.any { it.trim().equals("зарядка", ignoreCase = true) } ||
+                    CHARGER_NAME.containsMatchIn(name.lowercase())
+                )
+
+        /**
+         * Короткое имя сессии для подписей: «Гиря №0 — знакомство: гоблет…» →
+         * «Гиря №0», «Зарядка · 6 пунктов» → «Зарядка».
+         */
+        val shortName: String
+            get() = name.split(" — ", ": ", " · ").first().trim().take(40).ifBlank { name.take(40) }
 
         /**
          * Блок силовой по названию сессии: «Силовая A — ноги…» → «A · дом».
@@ -80,12 +98,106 @@ class PlanStore(private val context: Context) {
          * Упражнения, выписанные в описании нумерованным списком:
          * «1. Гоблет-присед 3х8 (легко)» → «Гоблет-присед 3х8 (легко)».
          * Это план на сегодня буква в букву — по нему и строится карточка.
+         *
+         * Список бывает и В ОДНУ СТРОКУ — «Дача. 1. Суставы. 2. Осанка: …
+         * 5. Скручивания ×15 с паузой. Потом прогулка.» — так владелец пишет
+         * дачные зарядки. Раньше такая строка не считалась списком вовсе, и
+         * вместо его пяти пунктов вкладка показывала пятнадцать из старого
+         * справочника. Пункты в одной строке принимаются, когда их номера идут
+         * подряд: «сравни с пятницей 4.09» списком не становится.
          */
-        fun plannedLines(): List<String> =
-            description.lines()
-                .map { it.trim() }
-                .filter { Regex("^\\d+[.)]\\s+\\S").containsMatchIn(it) }
-                .map { it.replace(Regex("^\\d+[.)]\\s+"), "") }
+        fun plannedLines(): List<String> = parsed.items.map { it.second }
+
+        /** Текст описания ДО списка: комментарий владельца к сессии. */
+        fun noteBefore(): String = parsed.before
+
+        /**
+         * Текст ПОСЛЕ списка: «Минимум на плохое утро: 1 + 3 + шесть
+         * отжиманий», «Отдых минута. Задача дня — не устать…». Раньше он не
+         * показывался вообще — а это ровно то, что стоит прочитать перед
+         * началом. Структура для Garmin (Warmup, intensity=) сюда не попадает.
+         */
+        fun noteAfter(): String = parsed.after
+
+        private class Parsed(val before: String, val items: List<Pair<Int, String>>, val after: String)
+
+        private val parsed: Parsed by lazy { parseDescription() }
+
+        private fun parseDescription(): Parsed {
+            val before = StringBuilder()
+            val after = StringBuilder()
+            val items = mutableListOf<Pair<Int, String>>()
+            fun noteTo(text: String) {
+                if (text.isBlank()) return
+                (if (items.isEmpty()) before else after).append(text.trim()).append('\n')
+            }
+            for (raw in description.lines()) {
+                val line = raw.trim()
+                if (line.isEmpty() || isStructure(line)) continue
+                val ms = ITEM.findAll(line).toList()
+                val nums = ms.map { it.groupValues[1].toInt() }
+                val startsLine = ms.isNotEmpty() && ms.first().range.first == 0
+                val consecutive = ms.size >= 2 && nums.zipWithNext().all { (a, b) -> b == a + 1 }
+                val expected = (items.lastOrNull()?.first ?: 0) + 1
+                when {
+                    consecutive -> {
+                        // Список в одну строку. Текст до первого номера —
+                        // заметка («Дача.»), хвост абзаца после последнего
+                        // пункта — тоже заметка, не доза.
+                        noteTo(line.substring(0, ms.first().range.first))
+                        for ((i, m) in ms.withIndex()) {
+                            val end = if (i + 1 < ms.size) ms[i + 1].range.first else line.length
+                            var text = line.substring(m.range.last + 1, end).trim()
+                            if (i == ms.size - 1) {
+                                val cut = lastSentenceCut(text)
+                                if (cut > 0) {
+                                    items.add(nums[i] to tidy(text.substring(0, cut)))
+                                    noteTo(text.substring(cut))
+                                    text = ""
+                                }
+                            }
+                            if (text.isNotEmpty()) items.add(nums[i] to tidy(text))
+                        }
+                    }
+                    startsLine -> items.add(nums[0] to tidy(line.substring(ms[0].range.last + 1)))
+                    // «Дача. 1. Суставы» и дальше пункты по строкам: единичный
+                    // номер не в начале строки принимается, только если он
+                    // продолжает счёт — иначе это дата или число в тексте.
+                    ms.size == 1 && nums[0] == expected -> {
+                        noteTo(line.substring(0, ms[0].range.first))
+                        items.add(nums[0] to tidy(line.substring(ms[0].range.last + 1)))
+                    }
+                    else -> noteTo(line)
+                }
+            }
+            return Parsed(before.toString().trim(), items, after.toString().trim())
+        }
+
+        /** Где обрезать хвост-заметку у последнего пункта строки-списка. */
+        private fun lastSentenceCut(text: String): Int {
+            val idx = text.lastIndexOf(". ")
+            if (idx <= 0) return 0
+            val rest = text.substring(idx + 2).trim()
+            if (rest.isBlank() || DOSE_LIKE.containsMatchIn(rest)) return 0
+            return idx + 1
+        }
+
+        private fun tidy(text: String): String {
+            val t = text.trim().trimEnd(';', ',')
+            return (if (t.contains(". ")) t else t.removeSuffix(".")).trim()
+        }
+
+        companion object {
+            /** Слово «зарядка» в названии — с любого окончания, но целым словом. */
+            private val CHARGER_NAME = Regex("(?:^|[^\\p{L}])зарядк")
+            /** Номер пункта: «1. », «2) » — в начале строки или после пробела. */
+            private val ITEM = Regex("(?:^|(?<=\\s))(\\d{1,2})[.)]\\s+(?=[\\p{L}\\d~×])")
+            /** Машинная структура тренировки для Garmin — не текст плана. */
+            private val STRUCTURE = Regex("^(?:Warmup|Main Set|Cooldown|Rest|Recovery)\\b|intensity=")
+            private val DOSE_LIKE = Regex("[×x]\\s*\\d|\\d\\s*[×xх]\\s*\\d|\\d\\s*(?:сек|мин)(?![\\p{L}])")
+
+            fun isStructure(line: String): Boolean = STRUCTURE.containsMatchIn(line)
+        }
     }
 
     /**
@@ -179,7 +291,22 @@ class PlanStore(private val context: Context) {
     }
 
     /** Зарядка-событие дня, если владелец поставил его в календарь. */
-    fun chargerOf(date: String): PlanDay? = dayOf(date).firstOrNull { it.charger }
+    fun chargerOf(date: String): PlanDay? =
+        dayOf(date).filter { it.charger }.minByOrNull { it.time.ifBlank { "99:99" } }
+
+    /**
+     * ВСЕ силовые сессии дня кроме зарядки, главная первой, дальше по часам:
+     * в плане v3 утро — это гиря, а сразу за ней турник и пресс, и у каждой
+     * свой список упражнений. Карточка дня раньше показывала список только
+     * главной, а вторая жила строкой «Ещё сегодня» без единой галочки.
+     */
+    fun strengthOf(date: String): List<PlanDay> {
+        val main = mainOf(date)?.takeIf { it.strength && !it.charger }
+        val rest = dayOf(date)
+            .filter { it.strength && !it.charger && it.eventId != main?.eventId }
+            .sortedBy { it.time.ifBlank { "99:99" } }
+        return listOfNotNull(main) + rest
+    }
 
     fun upcoming(days: Int): List<PlanDay> {
         val today = dayKey(System.currentTimeMillis())
@@ -228,6 +355,8 @@ class PlanStore(private val context: Context) {
                         put("load", d.load)
                         put("desc", d.description)
                         put("carbs", d.carbsPerHour)
+                        put("time", d.time)
+                        put("tags", JSONArray().apply { d.tags.forEach { put(it) } })
                     }
                 )
             }
@@ -283,6 +412,10 @@ class PlanStore(private val context: Context) {
                         load = d.optInt("load"),
                         description = d.optString("desc"),
                         carbsPerHour = d.optInt("carbs"),
+                        time = d.optString("time"),
+                        tags = d.optJSONArray("tags")?.let { a ->
+                            (0 until a.length()).mapNotNull { a.optString(it).takeIf { s -> s.isNotBlank() } }
+                        }.orEmpty(),
                     )
                 )
             }
