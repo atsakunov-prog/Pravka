@@ -7,6 +7,7 @@ import ru.zf.pravka.data.NotionPlanSync
 import ru.zf.pravka.data.PlanStore
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.provider.extractRules
 
 // Сборка плана из двух источников — ровно так, как владелец их разделил сам:
 // «Notion — оперативка и знания, intervals.icu — календарь и факт».

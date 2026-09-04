@@ -11,6 +11,10 @@ import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.data.ZasechkaSync
 import ru.zf.pravka.data.dayStartMs
 import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.provider.zasechka
+import ru.zf.pravka.provider.zasechkaRules
+import ru.zf.pravka.provider.zasechkaRulesSubmit
+import ru.zf.pravka.provider.zasechkaRulesCollect
 
 // Засечка's counterpart to ProofreadEngine: one dictated (or typed) phrase in,
 // one timesheet ACTION out. Usually that's a new entry (closes the previous

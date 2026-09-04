@@ -8,6 +8,9 @@ import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.dayKey
 import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.provider.analyzeNow
+import ru.zf.pravka.provider.submitBatch
+import ru.zf.pravka.provider.batchAnswer
 
 /**
  * Ночная охота за паттернами.

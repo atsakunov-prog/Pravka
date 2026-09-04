@@ -43,6 +43,7 @@ import ru.zf.pravka.data.RaznoskaStore
 import ru.zf.pravka.data.TodoistStore
 import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.trigger.onRaznoskaTap
 
 // Разноска внутри вкладки «Дела»: разобранные наговоры, которые ещё не уехали
 // в Todoist. Здесь их правят руками - тап по делу открывает его целиком, с

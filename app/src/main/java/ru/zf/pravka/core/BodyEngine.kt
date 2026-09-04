@@ -10,6 +10,7 @@ import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.StrengthStore
 import ru.zf.pravka.data.dayKey
 import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.provider.parseBody
 
 // Один микрофон на всё тело: подходы, зарядка, еда, самочувствие, вопрос.
 //

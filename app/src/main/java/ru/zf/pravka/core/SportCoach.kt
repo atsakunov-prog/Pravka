@@ -13,6 +13,8 @@ import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.data.dayKey
 import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.provider.coach
+import ru.zf.pravka.provider.trainer
 
 // Спорт: разбор своих тренировок и ответ на вопрос о них.
 //

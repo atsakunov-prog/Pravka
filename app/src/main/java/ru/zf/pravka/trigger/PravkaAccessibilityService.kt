@@ -35,29 +35,28 @@ import ru.zf.pravka.ui.Haptics
 // the service does NOT request the system accessibility button (the two
 // buttons duplicated each other; the owner chose the floating one).
 class PravkaAccessibilityService : AccessibilityService() {
-
     companion object {
         var instance: PravkaAccessibilityService? = null
             private set
 
         // A reply chain: entries closer than this are one conversation.
-        private const val CONVO_GAP_MS = 10L * 60 * 1000
+        internal const val CONVO_GAP_MS = 10L * 60 * 1000
 
         /** Окно двойного тапа по «З» на локскрине. */
-        private const val LOCK_DOUBLE_TAP_MS = 1_500L
+        internal const val LOCK_DOUBLE_TAP_MS = 1_500L
 
         /**
          * Потолок записи, начатой с заблокированного экрана. Владелец: «через
          * 40 секунд вообще, потому что я больше и не говорю». Разблокировал —
          * потолок снимается: он тут, и говорит сколько нужно.
          */
-        private const val LOCKED_TAKE_CAP_MS = 40_000L
+        internal const val LOCKED_TAKE_CAP_MS = 40_000L
 
         /**
          * Через столько без касаний кнопки собираются в стопку. Полминуты —
          * не мгновение (успеть додумать, куда жать) и не вечность.
          */
-        private const val STACK_IDLE_MS = 30_000L
+        internal const val STACK_IDLE_MS = 30_000L
 
         // Internal bookkeeping prefs, read by the Learning tab too.
         const val PREFS_INTERNAL = "pravka_internal"
@@ -66,18 +65,18 @@ class PravkaAccessibilityService : AccessibilityService() {
 
         // Засечка reminder anti-spam: one morning/evening nudge per day, one
         // gap nudge per distinct gap.
-        private const val KEY_Z_MORNING_DAY = "z_morning_day"
-        private const val KEY_Z_EVENING_DAY = "z_evening_day"
-        private const val KEY_Z_GAP_NOTIFIED = "z_gap_notified_end"
-        private const val KEY_Z_BEAT_AT = "z_beat_at"
-        private const val KEY_Z_ASK_AT = "z_ask_at"
-        private const val KEY_Z_ASK_ID = "z_ask_entry"
-        private const val KEY_Z_LEARN_DAY = "z_learn_day"
+        internal const val KEY_Z_MORNING_DAY = "z_morning_day"
+        internal const val KEY_Z_EVENING_DAY = "z_evening_day"
+        internal const val KEY_Z_GAP_NOTIFIED = "z_gap_notified_end"
+        internal const val KEY_Z_BEAT_AT = "z_beat_at"
+        internal const val KEY_Z_ASK_AT = "z_ask_at"
+        internal const val KEY_Z_ASK_ID = "z_ask_entry"
+        internal const val KEY_Z_LEARN_DAY = "z_learn_day"
 
         // Pomodoro survives a service restart: the deadline is on disk.
-        private const val KEY_Z_POMO_ENDS = "z_pomo_ends"
-        private const val KEY_Z_POMO_BREAK = "z_pomo_break"
-        private const val KEY_Z_POMO_DAY_PREFIX = "z_pomo_n_"
+        internal const val KEY_Z_POMO_ENDS = "z_pomo_ends"
+        internal const val KEY_Z_POMO_BREAK = "z_pomo_break"
+        internal const val KEY_Z_POMO_DAY_PREFIX = "z_pomo_n_"
 
         // Chrome flavors whose url bar the per-site watcher reads.
 
@@ -93,83 +92,83 @@ class PravkaAccessibilityService : AccessibilityService() {
     // An uncaught exception in any launched job used to kill the whole app
     // process SILENTLY (screen-off mid-take -> dead window -> node call threw ->
     // the take vanished with no journal line). Log it instead and stay alive.
-    private val crashLogger = kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+    internal val crashLogger = kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
         runCatching {
             app.eventLog.add("CRASH ${e.javaClass.simpleName}: ${e.message} @ ${e.stackTrace.firstOrNull()}")
         }
     }
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + crashLogger)
-    private var floatingButton: FloatingButtonController? = null
-    private var busy = false
+    internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + crashLogger)
+    internal var floatingButton: FloatingButtonController? = null
+    internal var busy = false
 
     // Засечка (timesheet): its own button, its own capture session. A take
     // here never touches the focused field - the transcript goes to the
     // categorizer and the timesheet store instead.
-    private var zButton: ZasechkaButtonController? = null
-    private var zSession: GoogleSpeechSession? = null
-    @Volatile private var zWhisperRecording = false
+    internal var zButton: ZasechkaButtonController? = null
+    internal var zSession: GoogleSpeechSession? = null
+    @Volatile internal var zWhisperRecording = false
     // Tap on the live plate: kill the mic, type instead (confidential takes).
-    @Volatile private var zTypeInstead = false
-    @Volatile private var cachedZEnabled = true
-    @Volatile private var cachedStackIdle = true
-    @Volatile private var cachedZGapMin = 45
-    @Volatile private var cachedZCheckins = true
-    @Volatile private var cachedZDayStart = 9
-    @Volatile private var cachedZDayEnd = 23
-    @Volatile private var zCategoriesCached: List<String> = emptyList()
-    @Volatile private var zClientsCached: List<String> = emptyList()
+    @Volatile internal var zTypeInstead = false
+    @Volatile internal var cachedZEnabled = true
+    @Volatile internal var cachedStackIdle = true
+    @Volatile internal var cachedZGapMin = 45
+    @Volatile internal var cachedZCheckins = true
+    @Volatile internal var cachedZDayStart = 9
+    @Volatile internal var cachedZDayEnd = 23
+    @Volatile internal var zCategoriesCached: List<String> = emptyList()
+    @Volatile internal var zClientsCached: List<String> = emptyList()
 
     // Разноска: третья кнопка и свой захват. Наговор не касается ни поля, ни
     // ленты - он уезжает Опусу на разбор и оттуда делами в Todoist.
-    private var rButton: RaznoskaButtonController? = null
-    private var rSession: GoogleSpeechSession? = null
-    @Volatile private var rWhisperRecording = false
-    @Volatile private var rTypeInstead = false
-    @Volatile private var cachedREnabled = true
-    private var micRequestForRaznoska = false
+    internal var rButton: RaznoskaButtonController? = null
+    internal var rSession: GoogleSpeechSession? = null
+    @Volatile internal var rWhisperRecording = false
+    @Volatile internal var rTypeInstead = false
+    @Volatile internal var cachedREnabled = true
+    internal var micRequestForRaznoska = false
 
     // Тело: четвёртая кнопка и свой захват. Одна на подходы, еду, зарядку и
     // вопросы - намерение определяет модель тем же вызовом, что и разбор. Ни
     // поля, ни ленты этот путь не касается (в ленту еда только ПРИПИСЫВАЕТСЯ,
     // и то из движка).
-    private var eButton: BodyButtonController? = null
+    internal var eButton: BodyButtonController? = null
     /** Ручка под хвостом: галочка, выпускает и убирает «Д» и «Е». */
-    private var tailHandle: StackHandleController? = null
+    internal var tailHandle: StackHandleController? = null
     /** Ручка над «П»: многоточие, убирает и возвращает ВСЕ четыре кнопки. */
-    private var topHandle: StackHandleController? = null
-    private var eSession: GoogleSpeechSession? = null
-    @Volatile private var eWhisperRecording = false
-    @Volatile private var eTypeInstead = false
-    @Volatile private var cachedEEnabled = true
-    private var micRequestForFood = false
+    internal var topHandle: StackHandleController? = null
+    internal var eSession: GoogleSpeechSession? = null
+    @Volatile internal var eWhisperRecording = false
+    @Volatile internal var eTypeInstead = false
+    @Volatile internal var cachedEEnabled = true
+    internal var micRequestForFood = false
     // Отдых между подходами: дедлайн на диске не нужен - это минуты, а не
     // помидор, и переживать перезапуск службы ему незачем.
-    @Volatile private var restUntil = 0L
-    @Volatile private var cachedRestSec = 90
+    @Volatile internal var restUntil = 0L
+    @Volatile internal var cachedRestSec = 90
 
     // Weak cache of the last focused editable node and its text, updated on
     // TYPE_VIEW_FOCUSED / TYPE_VIEW_TEXT_CHANGED (spec 5.4: activities steal
     // focus, so triggers launched via Activity read from this cache).
-    private var cachedFocus: WeakReference<AccessibilityNodeInfo>? = null
+    internal var cachedFocus: WeakReference<AccessibilityNodeInfo>? = null
     // The field to receive dictated text, captured when recording starts -
     // the owner may switch apps while dictating, so we can't rely on focus
     // at stop time.
-    private var dictationTarget: WeakReference<AccessibilityNodeInfo>? = null
+    internal var dictationTarget: WeakReference<AccessibilityNodeInfo>? = null
 
     // Live streaming dictation session.
-    private var googleSession: GoogleSpeechSession? = null
-    private var googleStartedAt = 0L
+    internal var googleSession: GoogleSpeechSession? = null
+    internal var googleStartedAt = 0L
     // Precomputed vocabulary bias and engine choice, so starting a take is
     // instant: no DataStore read and no dictionary load on the tap -> speak
     // path, which was clipping the first words.
-    @Volatile private var cachedBiasing: List<String> = emptyList()
-    @Volatile private var cachedEngine: String = Settings.SPEECH_GOOGLE
+    @Volatile internal var cachedBiasing: List<String> = emptyList()
+    @Volatile internal var cachedEngine: String = Settings.SPEECH_GOOGLE
     // Recognition mode knobs (defaults = build 55), cached like the engine so
     // the tap -> listening path touches no storage.
-    @Volatile private var cachedSegmented: Boolean = true
-    @Volatile private var cachedFormatting: Boolean = false
+    @Volatile internal var cachedSegmented: Boolean = true
+    @Volatile internal var cachedFormatting: Boolean = false
 
-    private val app: PravkaApp by lazy { application as PravkaApp }
+    internal val app: PravkaApp by lazy { application as PravkaApp }
 
     /** Автопилот Засечки: Wi-Fi-места, BT машины, «точно ещё …?». */
     val autoPilot by lazy { AutoPilot(this, app, scope) }
@@ -422,9 +421,9 @@ class PravkaAccessibilityService : AccessibilityService() {
     // stays fast, so the per-event watchdog is silent while the QUEUE lags
     // behind whatever hogged the thread. A timestamped no-op every 2s makes
     // the hog visible: it runs late, and the lag lands in the log.
-    private val lagHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var lagExpectedAt = 0L
-    private val lagTick = object : Runnable {
+    internal val lagHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    internal var lagExpectedAt = 0L
+    internal val lagTick = object : Runnable {
         override fun run() {
             val now = SystemClock.uptimeMillis()
             if (lagExpectedAt > 0) {
@@ -524,7 +523,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * running keeps its button alive: locking the screen mid-dictation is
      * normal walking usage, and the stop-tap must still land.
      */
-    private val keyguardManager by lazy {
+    internal val keyguardManager by lazy {
         getSystemService(android.app.KeyguardManager::class.java)
     }
 
@@ -568,7 +567,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         startForEngine()
     }
 
-    private fun startForEngine() {
+    internal fun startForEngine() {
         if (!hasMicPermission()) { requestMicPermission(); return }
         // Whisper records to a file; Google is the live streaming engine.
         if (cachedEngine.startsWith("whisper")) {
@@ -578,13 +577,13 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun hasMicPermission(): Boolean =
+    internal fun hasMicPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
 
     // Only an Activity can request a runtime permission; it calls back into
     // onMicPermissionGranted(), which re-dispatches by the current engine.
-    private fun requestMicPermission() {
+    internal fun requestMicPermission() {
         startActivity(
             android.content.Intent(this, MicPermissionActivity::class.java)
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -593,7 +592,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // The permission dialog serves two buttons; remember whose tap asked for
     // it, or a Засечка tap would grant the mic and then start a Правка take.
-    private var micRequestForZasechka = false
+    internal var micRequestForZasechka = false
 
     /** Called by MicPermissionActivity after the permission is granted. */
     fun onMicPermissionGranted() {
@@ -689,7 +688,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         app.warmClaudeConnection()
     }
 
-    private var lastDraftAt = 0L
+    internal var lastDraftAt = 0L
     private fun saveDraftThrottled(text: String) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastDraftAt < 1200) return
@@ -700,15 +699,15 @@ class PravkaAccessibilityService : AccessibilityService() {
     // ---- Conversation memory (owner's request): my recent takes in the SAME
     // app form a chain; a new dictation carries the chain as read-only context
     // so replies keep the thread's tone and referents. In-memory only.
-    private data class ConvoEntry(val pkg: String, val at: Long, val text: String)
-    private val convo = ArrayDeque<ConvoEntry>()
-    @Volatile private var cachedConvoContext: Boolean = true
-    @Volatile private var cachedLearnPeriodH: Int = 3
-    @Volatile private var cachedLearnAuto: Boolean = false
+    internal data class ConvoEntry(val pkg: String, val at: Long, val text: String)
+    internal val convo = ArrayDeque<ConvoEntry>()
+    @Volatile internal var cachedConvoContext: Boolean = true
+    @Volatile internal var cachedLearnPeriodH: Int = 3
+    @Volatile internal var cachedLearnAuto: Boolean = false
 
     // The service's own event appetite, flipped with the auto-capture toggle:
     // with capture off the system stops delivering text-change events at all.
-    private fun applyEventSubscription(autoCapture: Boolean) {
+    internal fun applyEventSubscription(autoCapture: Boolean) {
         runCatching {
             val info = serviceInfo ?: return
             val wanted =
@@ -776,11 +775,11 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // Edit-watch throttling: probing the field on every keystroke would be
     // wasteful, and irrelevant once no delivery is recent.
-    @Volatile private var lastWatchProbeAt = 0L
-    @Volatile private var lastDeliveryAt = 0L
+    @Volatile internal var lastWatchProbeAt = 0L
+    @Volatile internal var lastDeliveryAt = 0L
 
     // The gray "отмена" bubble beside the ticker: throw the take away.
-    @Volatile private var discardTake = false
+    @Volatile internal var discardTake = false
 
     fun cancelLiveDictation() {
         if (googleSession == null) return
@@ -1176,7 +1175,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * которых нужны четыре, стоит дороже, чем отсутствующая строка: каждый
      * раз он читает десять, чтобы выбрать одну.
      */
-    private fun showFabMenu() {
+    internal fun showFabMenu() {
         touched()
         val red = FloatingButtonController.REC_RED
         val accent = FloatingButtonController.ACCENT
@@ -1231,13 +1230,13 @@ class PravkaAccessibilityService : AccessibilityService() {
     // the batch does not have to wait for the next dictation.
     @Volatile var learnBatchRunning = false
         private set
-    private val ripenessCheck = Runnable { maybeRunLearnBatch() }
+    internal val ripenessCheck = Runnable { maybeRunLearnBatch() }
     // ONE handler instance: removeCallbacks matches by handler, so a fresh
     // Handler per call never actually debounced, and onDestroy could not
     // clear the pending posts (they pinned the dead service for 11 minutes).
-    private val ripenessHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    internal val ripenessHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    private fun scheduleRipenessCheck() {
+    internal fun scheduleRipenessCheck() {
         ripenessHandler.removeCallbacks(ripenessCheck)
         ripenessHandler.postDelayed(ripenessCheck, 11L * 60 * 1000)
     }
@@ -1538,7 +1537,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     /** Jaccard word overlap in [0..1] - enough to match an edited output. */
-    private fun wordOverlap(a: String, b: String): Double {
+    internal fun wordOverlap(a: String, b: String): Double {
         val wa = a.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 2 }.toSet()
         val wb = b.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 2 }.toSet()
         if (wa.isEmpty() || wb.isEmpty()) return 0.0
@@ -1547,7 +1546,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // ---- AI actions: selection > field > clipboard; result to the clipboard ----
 
-    private suspend fun assistContent(): String {
+    internal suspend fun assistContent(): String {
         focusedEditableNode()?.let { node ->
             val text = runCatching { node.effectiveText() }.getOrDefault("")
             val start = node.textSelectionStart
@@ -1614,7 +1613,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // The active API round trip - cancellable by the "Сброс" menu item when
     // a dead-zone network leaves the button spinning.
-    private var activeJob: kotlinx.coroutines.Job? = null
+    internal var activeJob: kotlinx.coroutines.Job? = null
 
     /** Menu "Сброс": cancel whatever is in flight and unfreeze the button. */
     fun resetStuck() {
@@ -1784,284 +1783,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     // Компромисс — двойной тап: в кармане он практически невозможен, а
     // намеренно делается за полсекунды. Только по «З»: остальным кнопкам
     // диктовать с локскрина незачем.
-    private var lockArmedAt = 0L
-
-    private fun lockedDoubleTapArmed(now: Long): Boolean {
-        val armed = now - lockArmedAt in 1..LOCK_DOUBLE_TAP_MS
-        lockArmedAt = if (armed) 0L else now
-        return armed
-    }
-
-    fun onZasechkaTap() {
-        touched()
-        if (isLockedIdle()) {
-            if (!lockedDoubleTapArmed(System.currentTimeMillis())) {
-                // Первый тап только взводит — и показывает это, иначе жест
-                // неотличим от «кнопка сломалась».
-                Haptics.start(this)
-                zButton?.showNote("Ещё раз — и пишу", holdMs = LOCK_DOUBLE_TAP_MS)
-                return
-            }
-            zButton?.hideNote()
-            // Запись с локскрина живёт 40 секунд. Владелец: «через 40 секунд
-            // вообще, потому что я больше и не говорю». Разблокировал —
-            // потолок снимается, значит он тут и говорит сколько нужно.
-            lockedTakeCapAt = System.currentTimeMillis() + LOCKED_TAKE_CAP_MS
-        }
-        if (zSession != null) { stopZasechkaLive(); return }
-        if (zWhisperRecording && DictationService.recording) {
-            zButton?.setBusy(true)
-            stopDictation()  // -> onRecordingSaved, routed by the flag
-            return
-        }
-        // One microphone: while a Правка, Разноска or Еда take runs, the "З"
-        // tap only nags.
-        if (rSession != null || rWhisperRecording) {
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.r_busy_pravka))
-            return
-        }
-        if (eSession != null || eWhisperRecording) {
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.e_busy_pravka))
-            return
-        }
-        if (googleSession != null || DictationService.recording) {
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.z_busy_zasechka))
-            return
-        }
-        if (!hasMicPermission()) {
-            micRequestForZasechka = true
-            requestMicPermission()
-            return
-        }
-        startZasechkaCapture()
-    }
-
-    private fun startZasechkaCapture() {
-        zButton?.hideInput()
-        zButton?.hideAsk()
-        if (cachedEngine.startsWith("whisper")) {
-            zWhisperRecording = true
-            zButton?.setRecording(true)
-            // Whisper has no live words - the plate still shows, because it
-            // is also the "type instead" tap target (confidential takes).
-            zButton?.showTicker()
-            zButton?.updateTicker("🎙 говори… (тап сюда — набрать текстом)")
-            Haptics.start(this)
-            startDictation()
-        } else {
-            startZasechkaGoogle()
-        }
-        // The categorizer call comes right after stop - skip its handshake.
-        app.warmClaudeConnection()
-    }
-
-    private fun startZasechkaGoogle() {
-        if (zSession != null) return
-        if (!GoogleSpeechSession.isAvailable(this)) {
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.google_unavailable))
-            return
-        }
-        val session = GoogleSpeechSession(
-            this,
-            // Client and category names are exactly the words these takes are
-            // full of - bias the recognizer toward them, same as the dictionary.
-            biasing = (cachedBiasing + zClientsCached + zCategoriesCached).distinct(),
-            formatting = cachedFormatting,
-            segmentedSession = cachedSegmented,
-        )
-        zSession = session
-        session.start(
-            onReady = { Haptics.success(this) },
-            onPartial = { live -> zButton?.updateTicker(live) },
-            // No recovery draft here: a lost 5-second take is re-spoken in
-            // seconds, unlike a lost dictation paragraph.
-            onCheckpoint = { },
-            onDone = { text -> onZasechkaLiveDone(text) },
-            onError = { msg -> onZasechkaLiveError(msg) },
-            onLog = { line -> app.eventLog.add("засечка: $line") },
-        )
-        zButton?.setRecording(true)
-        zButton?.showTicker()
-        zButton?.updateTicker("🎙 говори… (тап сюда — набрать текстом)")
-        Haptics.start(this)
-        runCatching { startMicHold() }
-    }
-
-    private fun stopZasechkaLive() {
-        val session = zSession ?: return
-        zButton?.setRecording(false)
-        zButton?.setBusy(true)
-        session.stop()  // -> onZasechkaLiveDone
-    }
-
-    /**
-     * Tap on the live plate (owner's request): the dictation stops and the
-     * plate becomes a text box - some takes are typed, not said out loud.
-     * Whatever the recognizer already heard prefills the box (Google live);
-     * a Whisper take is discarded unheard - its audio never gets transcribed.
-     */
-    private fun onZasechkaPlateTap() {
-        when {
-            zSession != null -> {
-                zTypeInstead = true
-                stopZasechkaLive()   // -> onZasechkaLiveDone routes to the box
-            }
-            zWhisperRecording && DictationService.recording -> {
-                zTypeInstead = true
-                zButton?.setBusy(true)
-                stopDictation()      // -> onRecordingSaved routes to the box
-            }
-        }
-    }
-
-    // Confidential type-in: same engine, source "text" - the ribbon and the
-    // toasts behave exactly like after a voice take.
-    private fun openZasechkaTypeIn(prefill: String) {
-        zButton?.showInput(prefill) { typed ->
-            val text = typed.trim()
-            if (text.isNotEmpty()) onZasechkaText(text, source = "text")
-        }
-    }
-
-    /** The mic-hold notification's Stop: finalize whichever live take runs. */
-    fun stopAnyLive() {
-        when {
-            zSession != null -> stopZasechkaLive()
-            rSession != null -> stopRaznoskaLive()
-            else -> stopLiveDictation()
-        }
-    }
-
-    private fun onZasechkaLiveDone(text: String) {
-        zSession = null
-        runCatching { stopMicHold() }
-        runCatching { zButton?.hideTicker() }
-        zButton?.setRecording(false)
-        if (zTypeInstead) {
-            zTypeInstead = false
-            zButton?.setBusy(false)
-            openZasechkaTypeIn(text.trim())
-            return
-        }
-        onZasechkaText(text)
-    }
-
-    private fun onZasechkaLiveError(msg: String) {
-        zSession = null
-        runCatching { stopMicHold() }
-        zButton?.hideTicker()
-        zButton?.setRecording(false)
-        zButton?.setBusy(false)
-        Haptics.error(this)
-        Feedback.toast(this, msg)
-    }
-
-    /** Transcript in hand (either engine, or typed): categorize, store, confirm. */
-    private fun onZasechkaText(raw: String, source: String = "voice") {
-        val text = raw.trim()
-        if (text.isBlank()) {
-            zButton?.setBusy(false)
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.dictation_empty))
-            return
-        }
-        if (!scope.isActive) return
-        zButton?.setBusy(true)
-        scope.launch {
-            val outcome = runCatching { app.zasechkaEngine.record(text, source) }
-                .getOrElse { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    app.eventLog.add("засечка: record threw ${e.javaClass.simpleName}: ${e.message}")
-                    null
-                }
-            zButton?.setBusy(false)
-            if (outcome == null) {
-                Haptics.error(this@PravkaAccessibilityService)
-                Feedback.toast(this@PravkaAccessibilityService, getString(R.string.z_record_failed))
-                return@launch
-            }
-            zButton?.setRemind(false)
-            val entry = outcome.entry
-            // Записка на две секунды вместо тоста — владелец просил показывать
-            // «что за дело записано и что за дело исправлено и как». Главное
-            // здесь — ЧТО ИМЕННО и КУДА: без времени и категории строка «⏱
-            // Работа» не говорит ничего, а по ней и надо ловить промахи
-            // разбора, пока они свежие.
-            val tail = listOf(entry.category, entry.client)
-                .filter { it.isNotBlank() }
-                .joinToString(" · ")
-            when {
-                outcome.action == "none" -> {
-                    Haptics.success(this@PravkaAccessibilityService)
-                    zButton?.showNote(
-                        "🤷 Не записал: ${outcome.say.ifBlank { "это не про ленту" }}",
-                        ok = false,
-                    )
-                }
-                outcome.action == "stop" -> {
-                    Haptics.success(this@PravkaAccessibilityService)
-                    zButton?.showNote(
-                        "⏹ «${entry.title}» закрыто\n" +
-                            "${zTime(entry.start)}–${zTime(entry.end)}, ${entry.durationMin()} мин"
-                    )
-                }
-                // «Параллельно слушаю Акунина»: текущее дело не тронуто,
-                // запись легла вторым треком поверх него.
-                outcome.action == "parallel" -> {
-                    Haptics.success(this@PravkaAccessibilityService)
-                    zButton?.showNote(
-                        "∥ ${entry.title}\nпараллельно, с ${zTime(entry.start)}" +
-                            (if (tail.isBlank()) "" else " · $tail")
-                    )
-                }
-                outcome.action == "insert" && outcome.error == null -> {
-                    Haptics.success(this@PravkaAccessibilityService)
-                    zButton?.showNote(
-                        "⤵ Вставлено «${entry.title}»\n" +
-                            "${zTime(entry.start)}–${zTime(entry.end)}" +
-                            (if (tail.isBlank()) "" else " · $tail") +
-                            "\nобрамляющее дело продолжено" +
-                            (outcome.parallel?.let { "\n∥ ${it.title}" } ?: "")
-                    )
-                }
-                outcome.action == "edit" -> {
-                    Haptics.success(this@PravkaAccessibilityService)
-                    zButton?.showNote(
-                        "✏️ Исправлено ${zTime(entry.start)}–${zTime(entry.end)}\n" +
-                            "«${outcome.previousTitle}» → «${entry.title}»" +
-                            (if (tail.isBlank()) "" else "\n$tail")
-                    )
-                }
-                outcome.action == "delete" -> {
-                    Haptics.success(this@PravkaAccessibilityService)
-                    zButton?.showNote("🗑 Удалено «${entry.title}» ${zTime(entry.start)}")
-                }
-                outcome.categorized -> {
-                    Haptics.success(this@PravkaAccessibilityService)
-                    zButton?.showNote(
-                        "⏱ ${entry.title}\nс ${zTime(entry.start)}" +
-                            (if (tail.isBlank()) "" else " · $tail") +
-                            // «Готовил еду и параллельно смотрел ютуб» — одна
-                            // фраза, две записи, и вторая тоже должна быть видна.
-                            (outcome.parallel?.let { "\n∥ ${it.title}" } ?: "")
-                    )
-                }
-                else -> {
-                    // Saved raw: quieter success, the owner sorts it in the tab.
-                    Haptics.error(this@PravkaAccessibilityService)
-                    zButton?.showNote(
-                        getString(R.string.z_saved_raw, outcome.error ?: ""),
-                        ok = false,
-                        holdMs = 4_000,
-                    )
-                }
-            }
-        }
-    }
+    internal var lockArmedAt = 0L
 
     // ---- Chrome per-site time: REMOVED (owner's call) ----
     //
@@ -2079,13 +1801,13 @@ class PravkaAccessibilityService : AccessibilityService() {
     // работа с окнами, ей место на главном потоке, и снимается она одной
     // строкой в onDestroy.
 
-    private var lockedTakeCapAt = 0L
-    private var lastTouchAt = System.currentTimeMillis()
-    private var stacked = false
+    internal var lockedTakeCapAt = 0L
+    internal var lastTouchAt = System.currentTimeMillis()
+    internal var stacked = false
     /** Все четыре убраны в верхнюю ручку. */
     private var allHidden = false
-    private val chromeHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val chromeTicker = object : Runnable {
+    internal val chromeHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    internal val chromeTicker = object : Runnable {
         override fun run() {
             tickChrome()
             chromeHandler.postDelayed(this, 2_000)
@@ -2139,7 +1861,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     /** Любое касание любой кнопки — отсчёт до стопки начинается заново. */
-    private fun touched() {
+    internal fun touched() {
         lastTouchAt = System.currentTimeMillis()
     }
 
@@ -2165,7 +1887,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * пропавшая — а это худшее, что можно сделать с инструментом, которым
      * размечают день; ручка и есть стрелка.
      */
-    private fun collapseButtons() {
+    internal fun collapseButtons() {
         if (stacked) return
         val (x, y) = floatingButton?.currentPosition() ?: return
         val size = floatingButton?.buttonSizePx() ?: 0
@@ -2231,7 +1953,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * Нечего прятать — ручки нет: ручка от ящика, которого не существует,
      * хуже, чем её отсутствие.
      */
-    private fun refreshHandles() {
+    internal fun refreshHandles() {
         if (folding) return
         val (x, y) = floatingButton?.currentPosition() ?: return
         val size = floatingButton?.buttonSizePx() ?: return
@@ -2261,7 +1983,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * действием — тогда сам тап не должен ничего запускать: первое нажатие по
      * стопке это «покажи кнопки», а не «пиши».
      */
-    private fun expandButtons(silent: Boolean = false): Boolean {
+    internal fun expandButtons(silent: Boolean = false): Boolean {
         if (!silent) touched()
         if (!stacked) return false
         val (x, y) = floatingButton?.currentPosition() ?: return false
@@ -2284,362 +2006,20 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     // ---- Помидоры: the "З" button doubles as a pomodoro timer ----
 
-    private var pomodoroEndsAt = 0L
-    private var pomodoroIsBreak = false
-    private val pomodoroHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val pomodoroTicker = object : Runnable {
+    internal var pomodoroEndsAt = 0L
+    internal var pomodoroIsBreak = false
+    internal val pomodoroHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    internal val pomodoroTicker = object : Runnable {
         override fun run() {
             tickPomodoro()
             if (pomodoroEndsAt > 0) pomodoroHandler.postDelayed(this, 15_000)
         }
     }
 
-    private fun showZasechkaMenu() {
-        touched()
-        val goTab: () -> Unit = {
-            startActivity(
-                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                    .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }
-        val openTab = ZasechkaButtonController.MenuItem("Открыть Засечку", goTab)
-        // The top pill answers "что сейчас считается?" without opening the
-        // app: current дело and since when (owner's request). Tap -> the tab.
-        scope.launch {
-            val now = System.currentTimeMillis()
-            val open = runCatching { app.zasechkaStore.openEntry() }.getOrNull()
-            val alongside = runCatching { app.zasechkaStore.openParallel() }.getOrNull()
-            val header = ZasechkaButtonController.MenuItem(
-                when {
-                    open != null ->
-                        "⏱ ${open.title.ifBlank { "без названия" }} — с ${zTime(open.start)}, " +
-                            zDur(now - open.start) + (alongside?.let { " ∥ ${it.title}" } ?: "")
-                    alongside != null ->
-                        "∥ ${alongside.title.ifBlank { "без названия" }} — с ${zTime(alongside.start)}"
-                    else -> "— сейчас ничего не идёт"
-                },
-                goTab,
-            )
-            // Владелец: «допом использую только 25 минут, 5 минут перерыв».
-            // «50 минут» и «Отменить» убраны: отмена живёт в ленте, где видно,
-            // что именно откатываешь, а полсотни минут он не ставил ни разу.
-            val close = ZasechkaButtonController.MenuItem("Закрыть") { zButton?.hideMenu() }
-            val items = if (pomodoroEndsAt > 0) {
-                listOfNotNull(
-                    header,
-                    ZasechkaButtonController.MenuItem(
-                        if (pomodoroIsBreak) "Стоп: перерыв" else "Стоп: помидор"
-                    ) { stopPomodoro(byUser = true) },
-                    openTab,
-                    close,
-                )
-            } else {
-                listOfNotNull(
-                    header,
-                    ZasechkaButtonController.MenuItem("🍅 25 минут") { startPomodoro(25, isBreak = false) },
-                    ZasechkaButtonController.MenuItem("Перерыв 5") { startPomodoro(5, isBreak = true) },
-                    openTab,
-                    close,
-                )
-            }
-            zButton?.showMenu(items)
-        }
-    }
-
-    fun startPomodoro(minutes: Int, isBreak: Boolean) {
-        pomodoroEndsAt = System.currentTimeMillis() + minutes * 60_000L
-        pomodoroIsBreak = isBreak
-        getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE).edit()
-            .putLong(KEY_Z_POMO_ENDS, pomodoroEndsAt)
-            .putBoolean(KEY_Z_POMO_BREAK, isBreak)
-            .apply()
-        Haptics.start(this)
-        Feedback.toast(this, if (isBreak) "Перерыв $minutes мин" else "🍅 $minutes мин — поехали")
-        pomodoroHandler.removeCallbacks(pomodoroTicker)
-        pomodoroTicker.run()
-    }
-
-    fun stopPomodoro(byUser: Boolean) {
-        clearPomodoro()
-        if (byUser) Feedback.toast(this, "Таймер остановлен")
-    }
-
-    private fun clearPomodoro() {
-        pomodoroEndsAt = 0
-        pomodoroHandler.removeCallbacks(pomodoroTicker)
-        getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE).edit()
-            .remove(KEY_Z_POMO_ENDS).remove(KEY_Z_POMO_BREAK).apply()
-        zButton?.setPomodoro(null, null)
-    }
-
-    private fun tickPomodoro() {
-        if (pomodoroEndsAt <= 0) return
-        val left = pomodoroEndsAt - System.currentTimeMillis()
-        if (left <= 0) {
-            completePomodoro()
-            return
-        }
-        val minutesLeft = (left + 59_999) / 60_000
-        zButton?.setPomodoro(
-            minutesLeft.toString(),
-            if (pomodoroIsBreak) ZasechkaButtonController.POMO_BREAK
-            else ZasechkaButtonController.POMO_FOCUS,
-        )
-    }
-
-    private fun completePomodoro() {
-        val wasBreak = pomodoroIsBreak
-        clearPomodoro()
-        Haptics.success(this)
-        if (wasBreak) {
-            zPomodoroNotify("Перерыв кончился", "Ещё помидор?")
-            return
-        }
-        scope.launch {
-            val open = app.zasechkaStore.openEntry()
-            if (open != null) app.zasechkaStore.incrementPomodoro(open.id)
-            val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
-            val dayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
-                .format(java.util.Date(System.currentTimeMillis()))
-            val n = internal.getInt(KEY_Z_POMO_DAY_PREFIX + dayKey, 0) + 1
-            internal.edit().putInt(KEY_Z_POMO_DAY_PREFIX + dayKey, n).apply()
-            app.eventLog.add("помидор №$n готов" + (open?.let { " («${it.title}»)" } ?: ""))
-            zPomodoroNotify(
-                "Помидор №$n готов 🍅",
-                open?.let { "«${it.title}» — сделано. Перерыв?" } ?: "Перерыв?",
-            )
-        }
-    }
-
-    /**
-     * The deadline lives on disk, so a running pomodoro rides through app
-     * updates and service restarts: still ticking -> resume the countdown;
-     * finished while we were dead -> credit it (entry + day counter) and,
-     * if the finish was recent, still fire the "готов" notification - the
-     * owner should not lose a pomodoro to an APK install.
-     */
-    private fun restorePomodoro() {
-        val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
-        val ends = internal.getLong(KEY_Z_POMO_ENDS, 0L)
-        if (ends <= 0) return
-        pomodoroIsBreak = internal.getBoolean(KEY_Z_POMO_BREAK, false)
-        val now = System.currentTimeMillis()
-        if (ends > now) {
-            pomodoroEndsAt = ends
-            pomodoroHandler.removeCallbacks(pomodoroTicker)
-            pomodoroTicker.run()
-        } else {
-            val wasBreak = pomodoroIsBreak
-            val endedAgo = now - ends
-            clearPomodoro()
-            if (wasBreak) {
-                if (endedAgo < 10 * 60_000L) zPomodoroNotify("Перерыв кончился", "Ещё помидор?")
-                return
-            }
-            scope.launch {
-                // The entry that was running when the bell should have rung.
-                if (endedAgo < 30 * 60_000L) {
-                    app.zasechkaStore.openEntry()?.let { app.zasechkaStore.incrementPomodoro(it.id) }
-                }
-                val dayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
-                    .format(java.util.Date(ends))
-                val n = internal.getInt(KEY_Z_POMO_DAY_PREFIX + dayKey, 0) + 1
-                internal.edit().putInt(KEY_Z_POMO_DAY_PREFIX + dayKey, n).apply()
-                app.eventLog.add("помидор №$n дозасчитан после перезапуска")
-                if (endedAgo < 10 * 60_000L) {
-                    zPomodoroNotify("Помидор №$n готов 🍅", "Досчитал за время обновления. Перерыв?")
-                }
-            }
-        }
-    }
-
-    /**
-     * «Пробежка приехала: 5,2 км, пульс 152 против потолка 150» — как только
-     * выгрузка увидела новую тренировку с часов. Кнопки 2/3/4 пишут feel прямо
-     * в активность intervals; крайние 1 и 5 редки, за ними — во вкладку.
-     */
-    private suspend fun notifyArrivedWorkouts() {
-        val arrived = app.icuSportSync.takeArrived()
-        if (arrived.isEmpty()) return
-        if (!runCatching { app.settings.sportNotify() }.getOrDefault(true)) return
-        val rules = app.planStore.rulesFlow.value
-        for (w in arrived.take(2)) {
-            val name = ru.zf.pravka.core.SportCoach.sportName(w.type)
-            val bits = mutableListOf<String>()
-            if (w.km >= 0.1) bits.add(String.format(java.util.Locale.US, "%.1f км", w.km))
-            if (w.minutes > 0) bits.add("${w.minutes} мин")
-            if (w.avgHr > 0) bits.add("пульс ${w.avgHr}")
-            val verdict = when {
-                !w.type.equals("Run", true) || w.avgHr <= 0 || rules.runHrCeiling <= 0 -> ""
-                w.avgHr <= rules.runHrCeiling -> "Под потолком ${rules.runHrCeiling} ✓."
-                rules.greyZoneLow in 1..w.avgHr && w.avgHr <= rules.greyZoneHigh ->
-                    "Серая зона ${rules.greyZoneLow}–${rules.greyZoneHigh} — твоё же правило."
-                else -> "Выше потолка ${rules.runHrCeiling}."
-            }
-            sportNotify(
-                workoutId = w.id,
-                title = "$name приехал${if (name.endsWith("а")) "а" else ""}: " + bits.joinToString(", "),
-                text = (verdict + " Как самочувствие? 1 отлично … 5 развалина").trim(),
-            )
-        }
-    }
-
-    /**
-     * Итоги: забрать готовый батч и, если ночь пришла, отправить новый.
-     * Разбор приезжает уведомлением — иначе он тихо лежал бы во вкладке,
-     * которую владелец открывает раз в неделю.
-     */
-    private suspend fun analysisTick() {
-        val ready = app.analysisEngine.tick() ?: return
-        runCatching {
-            val nm = getSystemService(android.app.NotificationManager::class.java)
-            val channelId = "pravka-itogi"
-            if (nm.getNotificationChannel(channelId) == null) {
-                nm.createNotificationChannel(
-                    android.app.NotificationChannel(
-                        channelId, "Итоги: разбор готов",
-                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
-                    )
-                )
-            }
-            val open = android.app.PendingIntent.getActivity(
-                this, 73,
-                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                    .putExtra(
-                        ru.zf.pravka.MainActivity.EXTRA_TAB,
-                        ru.zf.pravka.MainActivity.TAB_ITOGI,
-                    )
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                android.app.PendingIntent.FLAG_IMMUTABLE or
-                    android.app.PendingIntent.FLAG_UPDATE_CURRENT,
-            )
-            val preview = ready.text.lineSequence()
-                .map { it.trim() }
-                .firstOrNull { it.isNotBlank() }
-                .orEmpty()
-                .take(200)
-            val notif = android.app.Notification.Builder(this, channelId)
-                .setContentTitle("Разбор готов: " + ready.title())
-                .setContentText(preview)
-                .setStyle(android.app.Notification.BigTextStyle().bigText(preview))
-                .setSmallIcon(R.drawable.ic_tile)
-                .setContentIntent(open)
-                .setAutoCancel(true)
-                .build()
-            nm.notify(("itogi" + ready.id).hashCode(), notif)
-        }
-    }
-
-    private fun sportNotify(workoutId: String, title: String, text: String) {
-        runCatching {
-            val nm = getSystemService(android.app.NotificationManager::class.java)
-            val channelId = "pravka-sport"
-            if (nm.getNotificationChannel(channelId) == null) {
-                nm.createNotificationChannel(
-                    android.app.NotificationChannel(
-                        channelId, "Спорт: тренировка приехала",
-                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
-                    )
-                )
-            }
-            fun feelAction(feel: Int): android.app.Notification.Action {
-                val intent = android.content.Intent(this, SportQuickActivity::class.java)
-                    .putExtra(SportQuickActivity.EXTRA_ACTIVITY_ID, workoutId)
-                    .putExtra(SportQuickActivity.EXTRA_FEEL, feel)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                val pending = android.app.PendingIntent.getActivity(
-                    this, 60 + feel + workoutId.hashCode() % 1000,
-                    intent,
-                    android.app.PendingIntent.FLAG_IMMUTABLE or
-                        android.app.PendingIntent.FLAG_UPDATE_CURRENT,
-                )
-                val label = when (feel) {
-                    2 -> "2 · хорошо"
-                    3 -> "3 · норм"
-                    else -> "4 · тяжело"
-                }
-                return android.app.Notification.Action.Builder(
-                    null as android.graphics.drawable.Icon?, label, pending,
-                ).build()
-            }
-            val open = android.app.PendingIntent.getActivity(
-                this, 59,
-                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                    .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_SPORT)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                android.app.PendingIntent.FLAG_IMMUTABLE or
-                    android.app.PendingIntent.FLAG_UPDATE_CURRENT,
-            )
-            val notif = android.app.Notification.Builder(this, channelId)
-                .setContentTitle(title)
-                .setContentText(text)
-                .setSmallIcon(R.drawable.ic_tile)
-                .setContentIntent(open)
-                .addAction(feelAction(2))
-                .addAction(feelAction(3))
-                .addAction(feelAction(4))
-                .setAutoCancel(true)
-                .build()
-            // Id от тренировки: две приехавшие не съедают друг друга.
-            nm.notify(4600 + kotlin.math.abs(workoutId.hashCode() % 100), notif)
-        }
-    }
-
-    private fun zPomodoroNotify(title: String, text: String) {
-        runCatching {
-            val nm = getSystemService(android.app.NotificationManager::class.java)
-            val channelId = "pravka-zasechka"
-            if (nm.getNotificationChannel(channelId) == null) {
-                nm.createNotificationChannel(
-                    android.app.NotificationChannel(
-                        channelId, getString(R.string.z_channel),
-                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
-                    )
-                )
-            }
-            fun quick(what: String, code: Int): android.app.PendingIntent =
-                android.app.PendingIntent.getActivity(
-                    this, code,
-                    android.content.Intent(this, ZasechkaQuickActivity::class.java)
-                        .putExtra(ZasechkaQuickActivity.EXTRA_WHAT, what)
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                    android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
-                )
-            val notif = android.app.Notification.Builder(this, channelId)
-                .setContentTitle(title)
-                .setContentText(text)
-                .setSmallIcon(R.drawable.ic_tile)
-                .addAction(
-                    android.app.Notification.Action.Builder(
-                        null as android.graphics.drawable.Icon?, "Перерыв 5",
-                        quick(ZasechkaQuickActivity.W_BREAK5, 7),
-                    ).build()
-                )
-                .addAction(
-                    android.app.Notification.Action.Builder(
-                        null as android.graphics.drawable.Icon?, "🍅 25",
-                        quick(ZasechkaQuickActivity.W_POMO25, 8),
-                    ).build()
-                )
-                .setAutoCancel(true)
-                .build()
-            nm.notify(45, notif)
-        }
-    }
-
-    private fun zTime(ms: Long): String =
-        java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))
-
-    private fun zDur(ms: Long): String {
-        val min = ms / 60_000
-        return if (min >= 60) "${min / 60} ч ${min % 60} м" else "$min м"
-    }
-
     // ---- Засечка reminders: the button itself nags about the gaps ----
 
-    private val zReminderHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val zReminderTick = object : Runnable {
+    internal val zReminderHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    internal val zReminderTick = object : Runnable {
         override fun run() {
             // Midnight housekeeping first: a дело running across 00:00 splits
             // into yesterday's closed head and today's open tail, so the new
@@ -2692,1008 +2072,15 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun zasechkaReminderCheck() {
-        val gapMin = cachedZGapMin
-        scope.launch {
-            // Reminders die with the toggle or with a zero interval.
-            if (!cachedZEnabled || gapMin <= 0) {
-                zButton?.setRemind(false)
-                return@launch
-            }
-            val now = System.currentTimeMillis()
-            val cal = java.util.Calendar.getInstance()
-            cal.timeInMillis = now
-            val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-            // Running LOSSES are not "busy": the amber pulse keeps nagging,
-            // the evening nudge and the hourly wink stay for real дела only.
-            val open = app.zasechkaStore.openEntry()?.takeIf { it.source != "gap" }
-            val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
-            val todayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
-                .format(java.util.Date(now))
-
-            // Outside the active day the button never pulses; the one evening
-            // nudge asks to close a still-running entry.
-            if (hour >= cachedZDayEnd || hour < cachedZDayStart) {
-                zButton?.setRemind(false)
-                if (open != null && hour >= cachedZDayEnd &&
-                    internal.getString(KEY_Z_EVENING_DAY, "") != todayKey
-                ) {
-                    internal.edit().putString(KEY_Z_EVENING_DAY, todayKey).apply()
-                    // The evening nudge doubles as the day's phone summary.
-                    val phoneDay = app.phoneStore.daysFlow.value[ru.zf.pravka.data.phoneDayKey(now)]
-                    val phoneLine = phoneDay?.let {
-                        "\nЭкран: ${zDur(it.screenMs)} · подъёмов ${it.pickups} · отвлечений ${it.glances}"
-                    }.orEmpty()
-                    zNotify(
-                        getString(R.string.z_notify_evening_title),
-                        getString(R.string.z_notify_evening_text, open.title) + phoneLine,
-                    )
-                }
-                return@launch
-            }
-            if (open != null) {
-                zButton?.setRemind(false)
-                checkInOnOpenEntry(open, now, internal)
-                // Hourly heartbeat (owner's request): the button winks once an
-                // hour and says out loud what is being counted right now -
-                // trust in the robot comes from glanceability, not silence.
-                // A freshly started дело (<10 мин) doesn't need it: he just
-                // dictated it himself.
-                if (now - internal.getLong(KEY_Z_BEAT_AT, 0L) >= 60 * 60_000L) {
-                    internal.edit().putLong(KEY_Z_BEAT_AT, now).apply()
-                    if (now - open.start >= 10 * 60_000L) {
-                        zButton?.blinkOnce()
-                        Feedback.toast(
-                            this@PravkaAccessibilityService,
-                            "⏱ «${open.title.ifBlank { "без названия" }}» — идёт ${zDur(now - open.start)} (с ${zTime(open.start)})",
-                        )
-                    }
-                }
-                return@launch
-            }
-            val todays = app.zasechkaStore.forRange(ru.zf.pravka.data.dayStartMs(now), now)
-            if (todays.isEmpty()) {
-                zButton?.setRemind(true)
-                if (internal.getString(KEY_Z_MORNING_DAY, "") != todayKey) {
-                    internal.edit().putString(KEY_Z_MORNING_DAY, todayKey).apply()
-                    zNotify(
-                        getString(R.string.z_notify_morning_title),
-                        getString(R.string.z_notify_morning_text),
-                    )
-                }
-                return@launch
-            }
-            val lastEnd = todays.maxOf { it.end }
-            val gapMs = now - lastEnd
-            if (gapMs >= gapMin * 60_000L) {
-                zButton?.setRemind(true)
-                // One notification per distinct gap; the pulse keeps nagging.
-                if (internal.getLong(KEY_Z_GAP_NOTIFIED, 0L) != lastEnd) {
-                    internal.edit().putLong(KEY_Z_GAP_NOTIFIED, lastEnd).apply()
-                    zNotify(
-                        getString(R.string.z_notify_gap_title, zTime(lastEnd)),
-                        getString(R.string.z_notify_gap_text, gapMs / 60_000L),
-                    )
-                }
-            } else {
-                zButton?.setRemind(false)
-            }
-        }
-    }
-
-    /**
-     * «Всё ещё «Обед»?» - every category carries the owner's typical length
-     * for it; when the running дело outlives that, the button winks and asks.
-     * «Да» resets the clock (ask again after another base period), «Нет»
-     * starts a new take on the spot. Never on a locked screen (the bubble
-     * would sit unseen above the keyguard) and never for the auto-filled
-     * «Потери» - losses are not a дело to confirm.
-     */
-    private suspend fun checkInOnOpenEntry(
-        open: ru.zf.pravka.data.ZasechkaStore.Entry,
-        now: Long,
-        prefs: android.content.SharedPreferences,
-    ) {
-        if (!cachedZCheckins || open.source == "gap") return
-        if (googleSession != null || zSession != null || DictationService.recording) return
-        if (runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)) return
-        val baseMin = app.zasechkaStore.categories()
-            .firstOrNull { it.name.equals(open.category, ignoreCase = true) }
-            ?.baseMin ?: 0
-        if (baseMin <= 0) return
-        val baseMs = baseMin * 60_000L
-        // The clock runs from the last answer for THIS entry, or from its start.
-        val since = if (prefs.getLong(KEY_Z_ASK_ID, 0L) == open.id) {
-            prefs.getLong(KEY_Z_ASK_AT, open.start)
-        } else open.start
-        if (now - since < baseMs) return
-        prefs.edit()
-            .putLong(KEY_Z_ASK_ID, open.id)
-            .putLong(KEY_Z_ASK_AT, now)
-            .apply()
-        val name = open.title.ifBlank { open.category.ifBlank { "дело" } }
-        Haptics.start(this)
-        zButton?.showAsk(
-            question = "Всё ещё «$name»? Идёт ${zDur(now - open.start)}",
-            onYes = {
-                getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE).edit()
-                    .putLong(KEY_Z_ASK_ID, open.id)
-                    .putLong(KEY_Z_ASK_AT, System.currentTimeMillis())
-                    .apply()
-                Feedback.toast(this, "Ок, считаем дальше")
-            },
-            // Straight into a new take: the mic starts, and a tap on the live
-            // plate switches to typing if the answer is private.
-            onNo = { onZasechkaTap() },
-        )
-        app.eventLog.add("засечка: спросил «всё ещё $name?» (база $baseMin мин)")
-    }
-
-    private fun zNotify(title: String, text: String) {
-        runCatching {
-            val nm = getSystemService(android.app.NotificationManager::class.java)
-            val channelId = "pravka-zasechka"
-            if (nm.getNotificationChannel(channelId) == null) {
-                nm.createNotificationChannel(
-                    android.app.NotificationChannel(
-                        channelId, getString(R.string.z_channel),
-                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
-                    )
-                )
-            }
-            val open = android.app.PendingIntent.getActivity(
-                this, 5,
-                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                    .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
-            )
-            val record = android.app.PendingIntent.getActivity(
-                this, 6,
-                android.content.Intent(this, ZasechkaQuickActivity::class.java)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                android.app.PendingIntent.FLAG_IMMUTABLE,
-            )
-            val notif = android.app.Notification.Builder(this, channelId)
-                .setContentTitle(title)
-                .setContentText(text)
-                // Evening summaries run to several lines.
-                .setStyle(android.app.Notification.BigTextStyle().bigText(text))
-                .setSmallIcon(R.drawable.ic_tile)
-                .setContentIntent(open)
-                .addAction(
-                    android.app.Notification.Action.Builder(
-                        null as android.graphics.drawable.Icon?,
-                        getString(R.string.z_record_action),
-                        record,
-                    ).build()
-                )
-                .setAutoCancel(true)
-                .build()
-            nm.notify(44, notif)
-        }
-    }
-
-    // ---- Разноска: тап -> наговор -> дела в Todoist (ни поля, ни ленты) ----
-
-    /** Кнопка «Д» (и вкладка «Дела»): старт наговора, второй тап — разбор. */
-    fun onRaznoskaTap() {
-        if (expandButtons()) return
-        if (isLockedIdle()) return
-        if (rSession != null) { stopRaznoskaLive(); return }
-        if (rWhisperRecording && DictationService.recording) {
-            rButton?.setBusy(true)
-            stopDictation()  // -> onRecordingSaved, routed by the flag
-            return
-        }
-        // Один микрофон на все три кнопки: чужую запись эта не перехватывает.
-        if (googleSession != null || zSession != null || zWhisperRecording ||
-            eSession != null || eWhisperRecording || DictationService.recording
-        ) {
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.r_busy))
-            return
-        }
-        if (!hasMicPermission()) {
-            micRequestForRaznoska = true
-            requestMicPermission()
-            return
-        }
-        startRaznoskaCapture()
-    }
-
-    private fun startRaznoskaCapture() {
-        rButton?.hideInput()
-        rButton?.hidePlate()
-        if (cachedEngine.startsWith("whisper")) {
-            rWhisperRecording = true
-            rButton?.setRecording(true)
-            // У Whisper живых слов нет, но плашка нужна: это ещё и цель тапа
-            // «набрать текстом».
-            rButton?.showTicker()
-            rButton?.updateTicker("🎙 наговори дела… (тап сюда — набрать текстом)")
-            Haptics.start(this)
-            startDictation()
-        } else {
-            startRaznoskaGoogle()
-        }
-        // Пока владелец говорит: греем сокет к API и подтягиваем каталог
-        // проектов, чтобы к моменту «стоп» всё было под рукой.
-        app.warmClaudeConnection()
-        scope.launch { runCatching { app.raznoskaEngine.warmCatalog() } }
-    }
-
-    // Имена проектов и меток Todoist: распознаватель должен слышать «Стеллар»
-    // и «Мармакс», а не «стеллаж» и «Марк Макс».
-    private fun raznBiasing(): List<String> = runCatching {
-        app.todoistStore.projectsFlow.value.map { it.name } + app.todoistStore.labelsFlow.value
-    }.getOrDefault(emptyList())
-
-    private fun startRaznoskaGoogle() {
-        if (rSession != null) return
-        if (!GoogleSpeechSession.isAvailable(this)) {
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.google_unavailable))
-            return
-        }
-        val session = GoogleSpeechSession(
-            this,
-            biasing = (cachedBiasing + zClientsCached + raznBiasing()).distinct(),
-            formatting = cachedFormatting,
-            segmentedSession = cachedSegmented,
-        )
-        rSession = session
-        session.start(
-            onReady = { Haptics.success(this) },
-            onPartial = { live -> rButton?.updateTicker(live) },
-            // Наговор длиннее засечки, но короче диктовки главы: черновик на
-            // диск не пишем, повторить его дешевле, чем чинить.
-            onCheckpoint = { },
-            onDone = { text -> onRaznoskaLiveDone(text) },
-            onError = { msg -> onRaznoskaLiveError(msg) },
-            onLog = { line -> app.eventLog.add("разноска: $line") },
-        )
-        rButton?.setRecording(true)
-        rButton?.showTicker()
-        rButton?.updateTicker("🎙 наговори дела… (тап сюда — набрать текстом)")
-        Haptics.start(this)
-        runCatching { startMicHold() }
-    }
-
-    private fun stopRaznoskaLive() {
-        val session = rSession ?: return
-        rButton?.setRecording(false)
-        rButton?.setBusy(true)
-        session.stop()  // -> onRaznoskaLiveDone
-    }
-
-    /** Тап по живой плашке: микрофон замолчал, дальше набираем текстом. */
-    private fun onRaznoskaTickerTap() {
-        when {
-            rSession != null -> {
-                rTypeInstead = true
-                stopRaznoskaLive()
-            }
-            rWhisperRecording && DictationService.recording -> {
-                rTypeInstead = true
-                rButton?.setBusy(true)
-                stopDictation()
-            }
-        }
-    }
-
-    private fun openRaznoskaTypeIn(prefill: String) {
-        rButton?.showInput(prefill = prefill, hint = "Дела текстом") { typed ->
-            val text = typed.trim()
-            if (text.isNotEmpty()) onRaznoskaText(text)
-        }
-    }
-
-    private fun onRaznoskaLiveDone(text: String) {
-        rSession = null
-        runCatching { stopMicHold() }
-        runCatching { rButton?.hideTicker() }
-        rButton?.setRecording(false)
-        if (rTypeInstead) {
-            rTypeInstead = false
-            rButton?.setBusy(false)
-            openRaznoskaTypeIn(text.trim())
-            return
-        }
-        onRaznoskaText(text)
-    }
-
-    private fun onRaznoskaLiveError(msg: String) {
-        rSession = null
-        runCatching { stopMicHold() }
-        rButton?.hideTicker()
-        rButton?.setRecording(false)
-        rButton?.setBusy(false)
-        Haptics.error(this)
-        Feedback.toast(this, msg)
-    }
-
-    /** Текст наговора в руках: Опус разбирает, плашка показывает результат. */
-    private fun onRaznoskaText(raw: String) {
-        val text = raw.trim()
-        if (text.isBlank()) {
-            rButton?.setBusy(false)
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.dictation_empty))
-            return
-        }
-        if (!scope.isActive) return
-        rButton?.setBusy(true)
-        scope.launch {
-            val result = runCatching { app.raznoskaEngine.split(text) }
-                .getOrElse { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    app.eventLog.add("разноска: split бросил ${e.javaClass.simpleName}: ${e.message}")
-                    Result.failure(e)
-                }
-            rButton?.setBusy(false)
-            val draft = result.getOrElse { e ->
-                Haptics.error(this@PravkaAccessibilityService)
-                Feedback.toast(
-                    this@PravkaAccessibilityService,
-                    e.message ?: getString(R.string.r_split_failed),
-                    long = true,
-                )
-                return@launch
-            }
-            Haptics.success(this@PravkaAccessibilityService)
-            if (draft.tasks.isEmpty()) {
-                // Дел не нашлось - наговор всё равно записан: заметки видно
-                // во вкладке «Дела», ничего не пропало.
-                Feedback.toast(
-                    this@PravkaAccessibilityService,
-                    if (draft.notes.isBlank()) "Дел в наговоре не нашлось"
-                    else "Дел нет — записал в заметки",
-                )
-                return@launch
-            }
-            showRaznoskaPlate(draft.id)
-        }
-    }
-
-    /**
-     * Плашка разбора: кружок у дела - отметка (по умолчанию отмечено всё),
-     * «✎» - правка формулировки на месте, тап по строке - дело целиком в
-     * «Делах», «ОК» - добавить отмеченные. Ничего не уезжает до «ОК».
-     */
-    private fun showRaznoskaPlate(draftId: Long) {
-        val draft = app.raznoskaStore.byId(draftId) ?: return
-        val tasks = draft.live
-        val waiting = tasks.count { !it.sent }
-        if (waiting == 0) return
-        val rows = tasks.map { task ->
-            val meta = mutableListOf<String>()
-            if (task.projectName.isNotBlank()) meta.add("#" + task.projectName)
-            if (task.labels.isNotEmpty()) meta.add(task.labels.joinToString(" ") { "@" + it })
-            if (task.repeat.isNotBlank()) meta.add(task.repeat)
-            else if (task.due.isNotBlank()) meta.add(raznDate(task.due))
-            if (task.priority != ru.zf.pravka.core.ParsedTask.P4) meta.add(task.priorityLabel)
-            if (task.projectName.isBlank()) meta.add("проект не выбран")
-            RaznoskaButtonController.PlateRow(
-                id = task.id,
-                title = task.content,
-                meta = meta.joinToString(" · "),
-                warn = if (task.duplicateOf.isBlank()) "" else "⚠ похоже: " + task.duplicateOf,
-                sent = task.sent,
-            )
-        }
-        rButton?.showTasks(
-            header = "РАЗНОСКА · " + raznCount(waiting),
-            rows = rows,
-            onEdit = { id -> editRaznoskaTask(draftId, id) },
-            onOpen = { openTodoistTab() },
-            onSend = { ids -> sendRaznoskaTasks(draftId, ids) },
-        )
-    }
-
-    /** «ОК» на плашке: одной отправкой уезжают все отмеченные дела. */
-    private fun sendRaznoskaTasks(draftId: Long, taskIds: List<Long>) {
-        if (taskIds.isEmpty()) return
-        rButton?.setBusy(true)
-        scope.launch {
-            val outcome = runCatching { app.raznoskaEngine.sendOnly(draftId, taskIds) }
-                .getOrElse { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    ru.zf.pravka.core.RaznoskaEngine.SendOutcome(
-                        0, taskIds.size, e.message ?: "не отправилось",
-                    )
-                }
-            rButton?.setBusy(false)
-            reportRaznoskaSend(outcome.created, outcome.failed, outcome.error)
-        }
-    }
-
-    /** ✎ на плашке: правка формулировки на месте. Пусто = вычеркнуть дело. */
-    private fun editRaznoskaTask(draftId: Long, taskId: Long) {
-        val task = app.raznoskaStore.byId(draftId)?.tasks?.firstOrNull { it.id == taskId } ?: return
-        rButton?.hidePlate()
-        rButton?.showInput(
-            prefill = task.content,
-            hint = "Кто: что сделать",
-            // Отмена не должна съедать разбор - плашка возвращается как была.
-            onCancel = { showRaznoskaPlate(draftId) },
-        ) { typed ->
-            scope.launch {
-                app.raznoskaEngine.editText(draftId, taskId, typed)
-                showRaznoskaPlate(draftId)
-            }
-        }
-    }
-
-    /** «3 дела» / «1 дело» — плашка и тосты говорят по-русски. */
-    private fun raznCount(n: Int): String {
-        val word = when {
-            n % 10 == 1 && n % 100 != 11 -> "дело"
-            n % 10 in 2..4 && n % 100 !in 12..14 -> "дела"
-            else -> "дел"
-        }
-        return "$n $word"
-    }
-
-    /** «2026-08-25» → «25 авг». */
-    private fun raznDate(iso: String): String = runCatching {
-        val parsed = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).parse(iso)
-        if (parsed == null) iso
-        else java.text.SimpleDateFormat("d MMM", java.util.Locale("ru")).format(parsed)
-    }.getOrDefault(iso)
-
-    private fun openTodoistTab() {
-        startActivity(
-            android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_TODOIST)
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    }
-
-    /**
-     * Отправка в Todoist. Уже созданные дела пропускаются внутри движка, так
-     * что повторное «ОК» после потери сети ничего не удваивает.
-     */
-    private fun sendRaznoska(draftIds: List<Long>) {
-        if (draftIds.isEmpty()) return
-        rButton?.setBusy(true)
-        scope.launch {
-            var created = 0
-            var failed = 0
-            var error = ""
-            for (id in draftIds) {
-                val outcome = runCatching { app.raznoskaEngine.send(id) }
-                    .getOrElse { e ->
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        ru.zf.pravka.core.RaznoskaEngine.SendOutcome(
-                            0, 1, e.message ?: "не отправилось",
-                        )
-                    }
-                created += outcome.created
-                failed += outcome.failed
-                if (error.isBlank() && outcome.error.isNotBlank()) error = outcome.error
-            }
-            rButton?.setBusy(false)
-            reportRaznoskaSend(created, failed, error)
-        }
-    }
-
-    /**
-     * Итог отправки одним местом: успех - записка с ручкой отмены, частичный
-     * успех и провал - тост, из которого понятно, где остались дела.
-     */
-    private fun reportRaznoskaSend(created: Int, failed: Int, error: String) {
-        when {
-            failed == 0 && created > 0 -> {
-                Haptics.success(this)
-                // Тост, а не записка. Владелец: «после того, как дело записано,
-                // оно почему-то висит рядом баблом — то бесполезно и не нужно».
-                // Он дело только что одобрил сам, подтверждать ему нечего.
-                // Отмена не потеряна: она живёт во вкладке «Дела», где видно,
-                // что именно откатываешь.
-                Feedback.toast(this, "✓ " + raznCount(created) + " в Todoist")
-            }
-            created > 0 -> {
-                Haptics.error(this)
-                Feedback.toast(
-                    this,
-                    "Отправлено $created, осталось $failed: $error",
-                    long = true,
-                )
-            }
-            else -> {
-                Haptics.error(this)
-                Feedback.toast(
-                    this,
-                    "Не отправилось ($error). Дела ждут во вкладке «Дела».",
-                    long = true,
-                )
-            }
-        }
-    }
-
-    private fun resplitRaznoska(draftId: Long) {
-        rButton?.setBusy(true)
-        scope.launch {
-            val result = runCatching { app.raznoskaEngine.resplit(draftId) }
-                .getOrElse { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    Result.failure(e)
-                }
-            rButton?.setBusy(false)
-            result.onSuccess { draft ->
-                Haptics.success(this@PravkaAccessibilityService)
-                if (draft.tasks.isEmpty()) {
-                    Feedback.toast(this@PravkaAccessibilityService, "Дел так и не нашлось")
-                } else {
-                    showRaznoskaPlate(draft.id)
-                }
-            }.onFailure { e ->
-                Haptics.error(this@PravkaAccessibilityService)
-                Feedback.toast(
-                    this@PravkaAccessibilityService,
-                    e.message ?: "Не вышло разобрать заново",
-                    long = true,
-                )
-            }
-        }
-    }
-
-    /**
-     * Разноска чужого текста: дайджест из чата, расшифровка встречи, письмо.
-     * Тот же разбор, только наговор пришёл не голосом. Длинную стену режем -
-     * иначе один разбор стоил бы как день работы.
-     */
-    fun raznoskaFromText(raw: String) {
-        val limit = 60_000
-        val text = raw.trim().take(limit)
-        if (text.isBlank()) {
-            Haptics.error(this)
-            Feedback.toast(this, "Нечего разбирать — текста нет")
-            return
-        }
-        if (raw.trim().length > limit) {
-            Feedback.toast(this, "Текст длинный: взял первые ${limit / 1000} тыс. знаков")
-        }
-        onRaznoskaText(text)
-    }
-
-    /** «Разобрать текст» в меню «Д»: выделение → поле → буфер обмена. */
-    private fun raznoskaFromSelection() {
-        scope.launch {
-            val text = runCatching { assistContent() }.getOrDefault("")
-            raznoskaFromText(text)
-        }
-    }
-
-    /** «↩︎ Отменить отправку»: только что созданные дела уходят из Todoist. */
-    private fun undoRaznoska() {
-        rButton?.setBusy(true)
-        scope.launch {
-            val outcome = runCatching { app.raznoskaEngine.undoLast() }
-                .getOrElse { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    ru.zf.pravka.core.RaznoskaEngine.UndoOutcome(0, 1, 0L)
-                }
-            rButton?.setBusy(false)
-            when {
-                outcome.deleted == 0 -> {
-                    Haptics.error(this@PravkaAccessibilityService)
-                    Feedback.toast(this@PravkaAccessibilityService, "Отменять нечего")
-                }
-                outcome.failed == 0 -> {
-                    Haptics.success(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "↩︎ " + raznCount(outcome.deleted) + " убрано из Todoist",
-                    )
-                    // Дела снова ждут - показываем разбор, чтобы поправить и
-                    // отправить заново.
-                    if (outcome.draftId != 0L) showRaznoskaPlate(outcome.draftId)
-                }
-                else -> {
-                    Haptics.error(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "Убрал ${outcome.deleted}, ${outcome.failed} не поддались — глянь в Todoist",
-                        long = true,
-                    )
-                }
-            }
-        }
-    }
-
-    /**
-     * Меню кнопки «Д». Владелец: «убери целиком все меню, ничего не
-     * использую… там должно быть: открыть Дело, закрыть».
-     *
-     * Всё, что здесь было — отправить, показать разбор, разобрать заново,
-     * отменить отправку, разобрать текст, набрать текстом, — живёт на плашке
-     * разбора и во вкладке «Дела». Дублировать это в меню незачем: он
-     * подтверждает дела на плашке, а меню держит только чтобы попасть внутрь.
-     */
-    private fun showRaznoskaMenu() {
-        if (expandButtons()) return
-        scope.launch {
-            runCatching { app.raznoskaStore.load() }
-            val waiting = app.raznoskaStore.pending().sumOf { it.pendingCount }
-            // Первой строкой — что сейчас: сколько дел разобрано и ждёт
-            // отправки. Тап по ней открывает плашку, где их и подтверждают.
-            val head = if (waiting > 0) "✓ Ждут отправки: " + raznCount(waiting)
-            else "— неотправленных дел нет"
-            rButton?.showMenu(
-                listOf(
-                    RaznoskaButtonController.MenuItem(head) {
-                        val newest = app.raznoskaStore.pending().firstOrNull()
-                        if (newest != null) showRaznoskaPlate(newest.id) else openTodoistTab()
-                    },
-                    RaznoskaButtonController.MenuItem("Открыть Дело") { openTodoistTab() },
-                    RaznoskaButtonController.MenuItem("Закрыть") { rButton?.hideMenu() },
-                )
-            )
-        }
-    }
-
-    // ---- Еда: тап -> сказал, что съел -> КБЖУ -> дневник ----
-
-    /** Кнопка «Е»: старт наговора, второй тап — разбор по КБЖУ. */
-    fun onFoodTap() {
-        if (expandButtons()) return
-        if (isLockedIdle()) return
-        if (eSession != null) { stopFoodLive(); return }
-        if (eWhisperRecording && DictationService.recording) {
-            eButton?.setBusy(true)
-            stopDictation()  // -> onRecordingSaved, routed by the flag
-            return
-        }
-        // Один микрофон на все четыре кнопки: чужую запись эта не перехватывает.
-        if (googleSession != null || zSession != null || zWhisperRecording ||
-            rSession != null || rWhisperRecording || DictationService.recording
-        ) {
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.e_busy))
-            return
-        }
-        if (!hasMicPermission()) {
-            micRequestForFood = true
-            requestMicPermission()
-            return
-        }
-        startFoodCapture()
-    }
-
-    private fun startFoodCapture() {
-        eButton?.hideInput()
-        eButton?.hidePlate()
-        if (cachedEngine.startsWith("whisper")) {
-            eWhisperRecording = true
-            eButton?.setRecording(true)
-            eButton?.showTicker()
-            eButton?.updateTicker("🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)")
-            Haptics.start(this)
-            startDictation()
-        } else {
-            startFoodGoogle()
-        }
-        // Пока владелец говорит: греем сокет к API и подтягиваем всё, что
-        // уезжает в промпт — справочники, план на сегодня, прошлый раз.
-        app.warmClaudeConnection()
-        scope.launch { runCatching { app.sportStore.load() } }
-        scope.launch { runCatching { app.foodStore.load() } }
-        scope.launch { runCatching { app.strengthStore.load() } }
-        scope.launch { runCatching { app.planStore.load() } }
-        scope.launch { runCatching { app.exerciseBook.load() } }
-    }
-
-    private fun startFoodGoogle() {
-        if (eSession != null) return
-        if (!GoogleSpeechSession.isAvailable(this)) {
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.google_unavailable))
-            return
-        }
-        val session = GoogleSpeechSession(
-            this,
-            // Гоблет, сплит, РДЛ, свинги, паллоф, лопаточные, творог, кускус —
-            // распознаватель должен слышать ИХ, а не «гоблин» и «кус-кус».
-            biasing = (cachedBiasing + bodyBiasing()).distinct(),
-            formatting = cachedFormatting,
-            segmentedSession = cachedSegmented,
-        )
-        eSession = session
-        session.start(
-            onReady = { Haptics.success(this) },
-            onPartial = { live -> eButton?.updateTicker(live) },
-            // Приём пищи — две фразы: черновик на диск не пишем, повторить
-            // дешевле, чем чинить (то же решение, что у Разноски).
-            onCheckpoint = { },
-            onDone = { text -> onFoodLiveDone(text) },
-            onError = { msg -> onFoodLiveError(msg) },
-            onLog = { line -> app.eventLog.add("еда: $line") },
-        )
-        eButton?.setRecording(true)
-        eButton?.showTicker()
-        eButton?.updateTicker("🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)")
-        Haptics.start(this)
-        runCatching { startMicHold() }
-    }
-
-    private fun stopFoodLive() {
-        val session = eSession ?: return
-        eButton?.setRecording(false)
-        eButton?.setBusy(true)
-        session.stop()  // -> onFoodLiveDone
-    }
-
-    /** Тап по живой плашке: микрофон замолчал, дальше набираем текстом. */
-    private fun onFoodTickerTap() {
-        when {
-            eSession != null -> {
-                eTypeInstead = true
-                stopFoodLive()
-            }
-            eWhisperRecording && DictationService.recording -> {
-                eTypeInstead = true
-                eButton?.setBusy(true)
-                stopDictation()
-            }
-        }
-    }
-
-    private fun openFoodTypeIn(prefill: String) {
-        eButton?.showInput(prefill = prefill, hint = "Подходы, еда, зарядка") { typed ->
-            val text = typed.trim()
-            if (text.isNotEmpty()) onFoodText(text)
-        }
-    }
-
-    private fun onFoodLiveDone(text: String) {
-        eSession = null
-        runCatching { stopMicHold() }
-        runCatching { eButton?.hideTicker() }
-        eButton?.setRecording(false)
-        if (eTypeInstead) {
-            eTypeInstead = false
-            eButton?.setBusy(false)
-            openFoodTypeIn(text.trim())
-            return
-        }
-        onFoodText(text)
-    }
-
-    private fun onFoodLiveError(msg: String) {
-        eSession = null
-        runCatching { stopMicHold() }
-        eButton?.hideTicker()
-        eButton?.setRecording(false)
-        eButton?.setBusy(false)
-        Haptics.error(this)
-        Feedback.toast(this, msg)
-    }
-
     // Следующая диктовка кнопки идёт через СТАРЫЙ роутер Тела (подходы,
     // зарядка, вопрос) — взводится пунктом меню «Тело голосом». По умолчанию
     // кнопка теперь ЕДА напрямую: владелец спорт наговаривает во вкладке.
-    @Volatile private var eRouteNext = false
-
-    /**
-     * Сказанное в руках. Кнопка — теперь ЕДА напрямую: без роутера намерений,
-     * дешевле и однозначно; рацион в промпте имеет жёсткий приоритет — «мой
-     * обычный завтрак» разворачивается в весь набор сам. Спорт и зарядка
-     * голосом — пункт меню «Тело голосом» (прежний роутер).
-     *
-     * Неудача разбора не стоит владельцу его слов: фраза ложится
-     * неразобранной (addRaw) и переигрывается из вкладки.
-     */
-    private fun onFoodText(raw: String) {
-        val text = raw.trim()
-        if (text.isBlank()) {
-            eButton?.setBusy(false)
-            Haptics.error(this)
-            Feedback.toast(this, getString(R.string.dictation_empty))
-            return
-        }
-        if (!scope.isActive) return
-        eButton?.setBusy(true)
-        if (eRouteNext) {
-            eRouteNext = false
-            scope.launch {
-                val result = runCatching { app.bodyEngine.hear(text, "voice") }
-                    .getOrElse { e ->
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        app.eventLog.add("тело: hear бросил ${e.javaClass.simpleName}: ${e.message}")
-                        Result.failure(e)
-                    }
-                eButton?.setBusy(false)
-                val outcome = result.getOrElse { e ->
-                    Haptics.error(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        (e.message ?: getString(R.string.e_parse_failed)) +
-                            " Сказанное сохранено — можно разобрать заново.",
-                        long = true,
-                    )
-                    return@launch
-                }
-                Haptics.success(this@PravkaAccessibilityService)
-                showBodyPlate(outcome)
-            }
-            return
-        }
-        scope.launch {
-            val result = runCatching { app.foodEngine.parse(text, source = "voice") }
-                .getOrElse { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    Result.failure(e)
-                }
-            eButton?.setBusy(false)
-            result.fold(
-                onSuccess = { parsed ->
-                    Haptics.success(this@PravkaAccessibilityService)
-                    showFoodPlate(parsed.meal.id)
-                },
-                onFailure = { e ->
-                    // Слова не теряем: неразобранное ждёт во вкладке Спорта.
-                    runCatching { app.strengthStore.addRaw(text, "food") }
-                    Haptics.error(this@PravkaAccessibilityService)
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        (e.message ?: "Еду не разобрал") +
-                            " — сохранено; спорт голосом теперь в меню кнопки.",
-                        long = true,
-                    )
-                },
-            )
-        }
-    }
-
-    /** Плашка по разобранному: у каждого вида свой вид, кнопка одна. */
-    private fun showBodyPlate(outcome: ru.zf.pravka.core.BodyEngine.Outcome) {
-        when {
-            outcome.strength != null -> showStrengthPlate(outcome.strength.session.id, outcome.strength)
-            outcome.meal != null -> showFoodPlate(outcome.meal.id)
-            outcome.gtg != null -> {
-                val streak = app.strengthStore.streak(
-                    ru.zf.pravka.data.dayKey(System.currentTimeMillis())
-                )
-                eButton?.showNote(
-                    "✓ " + outcome.headline() + " · цепочка " + streak + " дн.",
-                    "Спорт",
-                    onAction = { openSportTab() },
-                )
-            }
-            outcome.feel > 0 || outcome.knee.isNotBlank() ->
-                eButton?.showNote("✓ " + outcome.headline(), null, onAction = null)
-            outcome.question.isNotBlank() -> askCoach(outcome.question)
-            else -> {
-                Feedback.toast(
-                    this,
-                    (outcome.note.ifBlank { "Не понял, что это" }) +
-                        " — сказанное сохранено, посмотри во «Спорте»",
-                    long = true,
-                )
-            }
-        }
-    }
-
-    /**
-     * Подходы на плашке: у каждого упражнения дельта к прошлому разу — это и
-     * есть весь смысл журнала. Подтверждать нечего: записано уже, «ОК» тут был
-     * бы шансом потерять данные. Вместо него чипы отдыха.
-     */
-    private fun showStrengthPlate(
-        sessionId: Long,
-        logged: ru.zf.pravka.core.StrengthEngine.Logged?,
-    ) {
-        val session = app.strengthStore.sessionById(sessionId) ?: return
-        if (session.exercises.isEmpty()) return
-        val deltas = logged?.deltas?.associateBy { it.name }.orEmpty()
-        val rows = session.exercises.mapIndexed { index, e ->
-            val delta = deltas[e.name]
-            BodyButtonController.PlateRow(
-                index = index,
-                title = e.name,
-                meta = e.compact() + (if (e.note.isBlank()) "" else " · " + e.note),
-                delta = delta?.let {
-                    if (it.previous.isBlank()) "первый раз"
-                    else it.text + " (было " + it.previous + ")"
-                }.orEmpty(),
-                deltaUp = delta?.up,
-            )
-        }
-        val rest = cachedRestSec
-        eButton?.showBody(
-            header = session.title.uppercase(java.util.Locale("ru")),
-            rows = rows,
-            footer = "подходов ${session.setCount}",
-            note = logged?.unknown?.takeIf { it.isNotEmpty() }
-                ?.let { "не узнал: " + it.joinToString(", ") }.orEmpty(),
-            onEditItem = { index -> editStrengthRow(sessionId, index) },
-            onDropItem = { index -> dropStrengthRow(sessionId, index) },
-            onOpen = { openSportTab() },
-            onConfirm = null,
-            chips = listOf(60, rest, 120).distinct().map { seconds ->
-                BodyButtonController.Chip("⏱ $seconds") { startRest(seconds) }
-            },
-        )
-    }
-
-    /** «✎» у упражнения: поправить вес — КБЖУ подходов от него не зависит. */
-    private fun editStrengthRow(sessionId: Long, index: Int) {
-        val session = app.strengthStore.sessionById(sessionId) ?: return
-        val exercise = session.exercises.getOrNull(index) ?: return
-        eButton?.showInput(
-            prefill = exercise.compact(),
-            hint = exercise.name + " — подходы",
-            onCancel = { showStrengthPlate(sessionId, null) },
-        ) { typed ->
-            scope.launch {
-                val rows = parseSetsByHand(typed, exercise)
-                if (rows == null) {
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "Не понял. Пиши как «4x10 16» или «10, 9, 8 @16»",
-                        long = true,
-                    )
-                } else {
-                    app.strengthEngine.editRows(sessionId, exercise.exerciseId, rows)
-                }
-                showStrengthPlate(sessionId, null)
-            }
-        }
-    }
-
-    /**
-     * Руками подходы пишутся коротко: «4x10 16», «10, 9, 8 @16», «40».
-     * Разбирается на телефоне — за правку веса платить моделью незачем.
-     */
-    private fun parseSetsByHand(
-        typed: String,
-        exercise: ru.zf.pravka.data.StrengthStore.ExerciseLog,
-    ): List<ru.zf.pravka.data.StrengthStore.SetRow>? {
-        val text = typed.trim().lowercase().replace(',', ' ')
-        if (text.isBlank()) return emptyList()   // пусто = убрать упражнение
-        // Вес — то, что после «@» или последнее число, если есть «х»/«x».
-        val weight = Regex("@\\s*(\\d+(?:[.,]\\d+)?)").find(text)
-            ?.groupValues?.get(1)?.replace(',', '.')?.toDoubleOrNull() ?: 0.0
-        val body = text.substringBefore('@').trim()
-        val cross = Regex("^(\\d+)\\s*[xх*]\\s*(\\d+)(?:\\s+(\\d+(?:[.,]\\d+)?))?$").find(body)
-        if (cross != null) {
-            val sets = cross.groupValues[1].toIntOrNull() ?: return null
-            val amount = cross.groupValues[2].toIntOrNull() ?: return null
-            val inline = cross.groupValues[3].replace(',', '.').toDoubleOrNull() ?: 0.0
-            val kg = if (weight > 0) weight else inline
-            if (sets !in 1..30 || amount !in 1..3000) return null
-            return List(sets) {
-                ru.zf.pravka.data.StrengthStore.SetRow(amount, kg, "")
-            }
-        }
-        val numbers = Regex("\\d+").findAll(body).mapNotNull { it.value.toIntOrNull() }.toList()
-        if (numbers.isEmpty()) return null
-        return numbers.filter { it in 1..3000 }.map {
-            ru.zf.pravka.data.StrengthStore.SetRow(it, weight, "")
-        }.ifEmpty { null }
-    }
-
-    private fun dropStrengthRow(sessionId: Long, index: Int) {
-        val session = app.strengthStore.sessionById(sessionId) ?: return
-        val exercise = session.exercises.getOrNull(index) ?: return
-        scope.launch {
-            app.strengthStore.dropExercise(sessionId, exercise.exerciseId)
-            val left = app.strengthStore.sessionById(sessionId)
-            if (left == null || left.exercises.isEmpty()) {
-                eButton?.hidePlate()
-                Feedback.toast(this@PravkaAccessibilityService, "Упражнений не осталось")
-            } else {
-                showStrengthPlate(sessionId, null)
-            }
-        }
-    }
+    @Volatile internal var eRouteNext = false
 
     // ---- Отдых между подходами ----
 
-    private val restHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val restTick = object : Runnable {
+    internal val restHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    internal val restTick = object : Runnable {
         override fun run() {
             val left = ((restUntil - System.currentTimeMillis()) / 1000L).toInt()
             if (left <= 0) {
@@ -3705,273 +2092,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             eButton?.setRest(left)
             restHandler.postDelayed(this, 1000)
-        }
-    }
-
-    /** Отдых из карточки дня во вкладке: считает всё равно кнопка. */
-    fun startRestFromTab(seconds: Int) = startRest(seconds)
-
-    private fun startRest(seconds: Int) {
-        restHandler.removeCallbacks(restTick)
-        restUntil = System.currentTimeMillis() + seconds * 1000L
-        Haptics.start(this)
-        restHandler.post(restTick)
-    }
-
-    private fun stopRest() {
-        restHandler.removeCallbacks(restTick)
-        restUntil = 0L
-        eButton?.setRest(0)
-    }
-
-    /** Вопрос голосом: Опус отвечает, ответ ложится запиской у кнопки. */
-    private fun askCoach(question: String) {
-        eButton?.setBusy(true)
-        scope.launch {
-            val answer = runCatching { app.sportCoach.ask(question) }
-                .getOrElse { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    ru.zf.pravka.core.SportCoach.Answer("", 0.0, e.message ?: "не вышло")
-                }
-            eButton?.setBusy(false)
-            if (answer.error.isNotBlank()) {
-                Haptics.error(this@PravkaAccessibilityService)
-                Feedback.toast(this@PravkaAccessibilityService, answer.error, long = true)
-                return@launch
-            }
-            // Ответ бывает в несколько абзацев — на плашке он не поместится, и
-            // растягивать её на пол-экрана незачем: первые строки здесь,
-            // целиком во вкладке «Спорт».
-            eButton?.showNote(
-                answer.text.replace('\n', ' ').take(180),
-                "Целиком",
-                holdMs = 30_000,
-                onAction = { openSportTab() },
-            )
-        }
-    }
-
-    /** Голосовые имена упражнений и продуктов для смещения распознавателя. */
-    private fun bodyBiasing(): List<String> =
-        runCatching { app.bodyEngine.biasing() }.getOrDefault(emptyList())
-
-    /**
-     * Тарелка на плашке: позиции с граммами и КБЖУ, «✎» правит вес на месте,
-     * «✕» убирает позицию, «✓ В дневник» записывает приём. До подтверждения
-     * приём в сумму дня не идёт и наружу не уезжает — но на диске он уже есть.
-     */
-    private fun showFoodPlate(mealId: Long) {
-        val meal = app.foodStore.byId(mealId) ?: return
-        if (meal.items.isEmpty()) return
-        val rows = meal.items.mapIndexed { index, item ->
-            BodyButtonController.PlateRow(
-                index = index,
-                title = item.name,
-                meta = listOfNotNull(
-                    if (item.grams > 0) "${item.grams} г" else null,
-                    "${item.kcal} ккал",
-                    "Б${item.protein} Ж${item.fat} У${item.carbs}",
-                    item.sureness.takeIf { it.isNotBlank() && it != "точно" },
-                ).joinToString(" · "),
-            )
-        }
-        eButton?.showBody(
-            header = meal.kind.uppercase(java.util.Locale("ru")) +
-                (if (meal.source == "barcode") " · ШТРИХКОД" else ""),
-            rows = rows,
-            footer = "${meal.kcal} ккал · Б${meal.protein} Ж${meal.fat} У${meal.carbs}",
-            note = meal.note,
-            onEditItem = { index -> editFoodItem(mealId, index) },
-            onDropItem = { index -> dropFoodItem(mealId, index) },
-            onOpen = { openFoodTab() },
-            onConfirm = { confirmFood(mealId) },
-            confirmLabel = "✓ В дневник",
-        )
-    }
-
-    /** «✎» у позиции: правим вес, КБЖУ пересчитывается пропорционально. */
-    private fun editFoodItem(mealId: Long, index: Int) {
-        val meal = app.foodStore.byId(mealId) ?: return
-        val item = meal.items.getOrNull(index) ?: return
-        eButton?.showInput(
-            prefill = if (item.grams > 0) item.grams.toString() else "",
-            hint = "${item.name} — сколько граммов",
-            onCancel = { showFoodPlate(mealId) },
-        ) { typed ->
-            val grams = typed.filter { it.isDigit() }.toIntOrNull()
-            scope.launch {
-                if (grams != null && grams > 0) {
-                    app.foodEngine.rescaleItem(mealId, index, grams)
-                } else {
-                    Feedback.toast(
-                        this@PravkaAccessibilityService,
-                        "Не понял вес — оставил как было",
-                    )
-                }
-                showFoodPlate(mealId)
-            }
-        }
-    }
-
-    private fun dropFoodItem(mealId: Long, index: Int) {
-        scope.launch {
-            app.foodEngine.dropItem(mealId, index)
-            if (app.foodStore.byId(mealId) == null) {
-                Haptics.success(this@PravkaAccessibilityService)
-                Feedback.toast(this@PravkaAccessibilityService, "Приём убран целиком")
-                eButton?.hidePlate()
-            } else {
-                showFoodPlate(mealId)
-            }
-        }
-    }
-
-    /** «✓ В дневник»: приём в день, а оттуда в ленту и в intervals.icu. */
-    private fun confirmFood(mealId: Long) {
-        eButton?.setBusy(true)
-        scope.launch {
-            val outcome = runCatching { app.foodEngine.confirm(mealId) }
-                .getOrElse { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    ru.zf.pravka.core.FoodEngine.ConfirmOutcome(null, "", e.message ?: "не вышло")
-                }
-            eButton?.setBusy(false)
-            val meal = outcome.meal
-            if (meal == null) {
-                Haptics.error(this@PravkaAccessibilityService)
-                Feedback.toast(this@PravkaAccessibilityService, "Приём не нашёлся")
-                return@launch
-            }
-            Haptics.success(this@PravkaAccessibilityService)
-            val day = app.foodStore.dayTotal(ru.zf.pravka.data.dayKey(meal.ts))
-            val targets = runCatching { app.settings.foodTargets() }.getOrNull()
-            val target = targets?.kcal ?: 0
-            val tail = buildString {
-                append(
-                    when {
-                        target > 0 && day.kcal <= target -> "за день ${day.kcal} из $target ккал"
-                        target > 0 -> "за день ${day.kcal} ккал, цель $target"
-                        else -> "за день ${day.kcal} ккал"
-                    }
-                )
-                // Белок — его настоящий рычаг («накачаться впервые в жизни»),
-                // и добирают его сознательно: остаток полезнее суммы.
-                val proteinTarget = targets?.protein ?: 0
-                if (proteinTarget > 0 && day.protein < proteinTarget) {
-                    append(" · Б ещё ").append(proteinTarget - day.protein)
-                }
-            }
-            eButton?.showNote(
-                "✓ ${meal.kcal} ккал · $tail",
-                "↩︎",
-                onAction = { undoFood(mealId) },
-            )
-            if (outcome.icuError.isNotBlank()) {
-                app.eventLog.add("еда: в intervals.icu не уехало — ${outcome.icuError}")
-            }
-        }
-    }
-
-    /**
-     * «↩︎» на записке: приём выходит из дня, а разбор остаётся ждать — плашка
-     * возвращается, чтобы поправить и записать заново. Совсем убрать приём
-     * можно во вкладке «Еда».
-     */
-    private fun undoFood(mealId: Long) {
-        scope.launch {
-            val meal = app.foodEngine.unconfirm(mealId)
-            Haptics.success(this@PravkaAccessibilityService)
-            if (meal == null) {
-                Feedback.toast(this@PravkaAccessibilityService, "Приём не нашёлся")
-                return@launch
-            }
-            Feedback.toast(this@PravkaAccessibilityService, "↩︎ Из дня убран, разбор ждёт")
-            showFoodPlate(mealId)
-        }
-    }
-
-    private fun openFoodTab(action: String = "") {
-        startActivity(
-            android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_FOOD)
-                .apply {
-                    if (action.isNotBlank()) {
-                        putExtra(ru.zf.pravka.MainActivity.EXTRA_FOOD_ACTION, action)
-                    }
-                }
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    }
-
-    private fun openSportTab() {
-        startActivity(
-            android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_SPORT)
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    }
-
-    /**
-     * Меню кнопки «Е». Владелец: «куча всего, но на самом деле нужно только
-     * записать еду и закрыть».
-     *
-     * План на сегодня, отдых, зарядка, подходы, фото тарелки, штрихкод и обе
-     * дороги «Открыть» отсюда убраны — всё это есть во вкладках Тело (С) и
-     * Тело (Е), где ещё и видно, что происходит. Меню на десять строк перед
-     * одним действием — это налог на каждое нажатие.
-     */
-    private fun showFoodMenu() {
-        if (expandButtons()) return
-        scope.launch {
-            runCatching { app.foodStore.load() }
-            val today = ru.zf.pravka.data.dayKey(System.currentTimeMillis())
-            val food = app.foodStore.dayTotal(today)
-            val target = runCatching { app.settings.foodTargets().kcal }.getOrDefault(0)
-            // Первой строкой — что сейчас: сколько съедено за день. Это
-            // единственная цифра, ради которой он вообще держит кнопку.
-            val head = if (food.empty) "— еды сегодня не записано"
-            else "Сегодня: ${food.kcal}" + (if (target > 0) " из $target" else "") +
-                " ккал · Б${food.protein}"
-            eButton?.showMenu(
-                listOf(
-                    BodyButtonController.MenuItem(head) { openFoodTab() },
-                    BodyButtonController.MenuItem("Записать еду") { onFoodTap() },
-                    BodyButtonController.MenuItem("Закрыть") { eButton?.hideMenu() },
-                )
-            )
-        }
-    }
-
-    /** «Зарядка сделана»: одна отметка, ноль токенов, цепочка не рвётся. */
-    private fun markCharged() {
-        scope.launch {
-            val day = app.bodyEngine.chargedToday()
-            val streak = app.strengthStore.streak(day.date)
-            Haptics.success(this@PravkaAccessibilityService)
-            eButton?.showNote("✓ Зарядка сделана · цепочка $streak дн.", null, onAction = null)
-        }
-    }
-
-    private fun reparseFood(mealId: Long) {
-        eButton?.setBusy(true)
-        scope.launch {
-            val result = runCatching { app.foodEngine.reparse(mealId) }
-                .getOrElse { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    Result.failure(e)
-                }
-            eButton?.setBusy(false)
-            result.onSuccess { parsed ->
-                Haptics.success(this@PravkaAccessibilityService)
-                showFoodPlate(parsed.meal.id)
-            }.onFailure { e ->
-                Haptics.error(this@PravkaAccessibilityService)
-                Feedback.toast(
-                    this@PravkaAccessibilityService,
-                    e.message ?: "Разобрать заново не вышло",
-                    long = true,
-                )
-            }
         }
     }
 
@@ -4022,7 +2142,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * не прибавляется: тик, случайно попавший в середину складывания, вернул
      * бы ручки обратно ровно тогда, когда система их и ждать не должна.
      */
-    private var folding = false
+    internal var folding = false
 
     /** Снять или вернуть окна всех четырёх кнопок на время складывания. */
     private fun setFolded(value: Boolean) {
@@ -4032,8 +2152,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         eButton?.setFolded(value)
     }
 
-    private val configHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val configSettled = Runnable {
+    internal val configHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    internal val configSettled = Runnable {
         folding = false
         setFolded(false)
         floatingButton?.onConfigurationChanged()

@@ -79,6 +79,7 @@ import ru.zf.pravka.data.PhoneSweeper
 import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.data.phoneDayKey
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.trigger.onZasechkaTap
 
 // Вкладка «Засечка»: the owner's day as a ribbon of entries, the numbers he
 // loves, and the knobs. Everything the buttons capture lands here for review

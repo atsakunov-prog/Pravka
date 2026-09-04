@@ -72,6 +72,7 @@ import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.PaperLabel
+import ru.zf.pravka.trigger.startRestFromTab
 
 // Вкладка «Спорт»: сегодня, светофор, подходы, форма, разбор.
 //

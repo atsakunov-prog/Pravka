@@ -8,6 +8,7 @@ import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.TodoistStore
 import ru.zf.pravka.data.TodoistSync
 import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.provider.splitTasks
 
 // Разноска: наговор → дела в Todoist. Третий движок рядом с ProofreadEngine
 // (текст в поле) и ZasechkaEngine (время в ленте).

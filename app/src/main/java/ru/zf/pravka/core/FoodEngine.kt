@@ -12,6 +12,7 @@ import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.data.dayKey
 import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.provider.parseFood
 
 // Еда: сказанное → КБЖУ. Четвёртый движок рядом с ProofreadEngine (текст в
 // поле), ZasechkaEngine (время в ленте) и RaznoskaEngine (дела в Todoist).
