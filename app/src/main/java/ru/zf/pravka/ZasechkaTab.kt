@@ -1601,7 +1601,12 @@ private fun AutoPilotSection(app: PravkaApp) {
     // Почему молчит — словами и с кнопкой. Раньше на это место приходила
     // одна кнопка «дать доступ», и она врала: доступ был выдан «только при
     // использовании», а служба всё равно не видела ни одной сети.
-    val blockers = remember(permTick) { ru.zf.pravka.trigger.AutoPilot.blockers(context) }
+    val blockers = remember(permTick, carBt) {
+        ru.zf.pravka.trigger.AutoPilot.blockers(context, carBt)
+    }
+    // Разрешение на уведомления просим один раз; если система его уже не
+    // покажет (отказано дважды) — вторая кнопка ведёт в настройки Правки.
+    var notifAsked by remember { mutableStateOf(false) }
     for (b in blockers) {
         Text(
             "⚠ " + b.text,
@@ -1634,6 +1639,34 @@ private fun AutoPilotSection(app: PravkaApp) {
                             android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS
                         ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                     )
+                ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF -> {
+                    if (android.os.Build.VERSION.SDK_INT >= 33 && !notifAsked) {
+                        notifAsked = true
+                        askPermission.launch("android.permission.POST_NOTIFICATIONS")
+                    } else {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                            )
+                                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                }
+                ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF_CHANNEL ->
+                    context.startActivity(
+                        android.content.Intent(
+                            android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS
+                        )
+                            .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                            .putExtra(
+                                android.provider.Settings.EXTRA_CHANNEL_ID,
+                                ru.zf.pravka.trigger.AutoPilot.CHANNEL,
+                            )
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                ru.zf.pravka.trigger.AutoPilot.FIX_BT ->
+                    askPermission.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
                 else -> context.startActivity(
                     android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
                         .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1645,6 +1678,9 @@ private fun AutoPilotSection(app: PravkaApp) {
                     ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION -> "Дать доступ к имени Wi-Fi"
                     ru.zf.pravka.trigger.AutoPilot.FIX_BACKGROUND -> "Открыть разрешения Правки"
                     ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION_SYS -> "Включить геолокацию"
+                    ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF -> "Разрешить уведомления"
+                    ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF_CHANNEL -> "Открыть канал уведомлений"
+                    ru.zf.pravka.trigger.AutoPilot.FIX_BT -> "Дать доступ к Bluetooth-устройствам"
                     else -> "Включить Wi-Fi"
                 }
             )
@@ -1756,14 +1792,23 @@ private fun AutoPilotSection(app: PravkaApp) {
         android.content.pm.PackageManager.PERMISSION_GRANTED
     // permTick пересчитывает и это условие тоже.
     val btPermTick = remember(permTick) { needBtPerm }
+    val carBtAddr by settings.autoCarBtAddrFlow.collectAsState(initial = "")
     when {
         carBt.isNotBlank() -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Машина: $carBt",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
+                Column(Modifier.weight(1f)) {
+                    Text("Машина: $carBt", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (carBtAddr.isBlank()) {
+                            // Машина заведена старой сборкой — только по имени. Имя
+                            // система отдаёт не всегда; переустановить один раз
+                            // стоит, чтобы узнавать и по адресу.
+                            "узнаю только по имени — убери и выбери заново, будет и адрес"
+                        } else "узнаю по имени и адресу $carBtAddr",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 TextButton(onClick = { scope.launch { settings.setAutoCarBt("") } }) {
                     Text("Убрать")
                 }
@@ -1775,11 +1820,15 @@ private fun AutoPilotSection(app: PravkaApp) {
             }) { Text("Дать доступ к Bluetooth-устройствам") }
         }
         else -> {
+            // Имя → адрес: адрес едет в настройки вместе с именем, по нему
+            // машина узнаётся и тогда, когда система имени не отдаёт.
             val bonded = remember(permTick) {
                 runCatching {
                     (context.getSystemService(android.content.Context.BLUETOOTH_SERVICE)
                         as android.bluetooth.BluetoothManager)
-                        .adapter?.bondedDevices?.mapNotNull { it.name }?.sorted()
+                        .adapter?.bondedDevices
+                        ?.mapNotNull { d -> d.name?.let { it to d.address.orEmpty() } }
+                        ?.sortedBy { it.first }
                 }.getOrNull().orEmpty()
             }
             if (bonded.isEmpty()) {
@@ -1794,10 +1843,10 @@ private fun AutoPilotSection(app: PravkaApp) {
                     Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    for (name in bonded) {
+                    for ((name, addr) in bonded) {
                         FilterChip(
                             selected = false,
-                            onClick = { scope.launch { settings.setAutoCarBt(name) } },
+                            onClick = { scope.launch { settings.setAutoCarBt(name, addr) } },
                             label = { Text(name) },
                         )
                     }
@@ -1811,6 +1860,7 @@ private fun AutoPilotSection(app: PravkaApp) {
     val autoArrive by settings.autoArriveFlow.collectAsState(initial = true)
     val leaveAsk by settings.autoLeaveAskFlow.collectAsState(initial = true)
     val carAsk by settings.autoCarAskFlow.collectAsState(initial = true)
+    val carStart by settings.autoCarStartFlow.collectAsState(initial = true)
     val stillAsk by settings.autoStillAskFlow.collectAsState(initial = true)
     @Composable
     fun toggle(checked: Boolean, label: String, onChange: (Boolean) -> Unit) {
@@ -1826,9 +1876,21 @@ private fun AutoPilotSection(app: PravkaApp) {
     toggle(leaveAsk, "Спрашивать при отъезде из места") { on ->
         scope.launch { settings.setAutoLeaveAsk(on) }
     }
-    toggle(carAsk, "Спрашивать, когда подключилась машина") { on ->
-        scope.launch { settings.setAutoCarAsk(on) }
+    toggle(carStart, "Машина подключилась — сразу начать «Поездку на машине»") { on ->
+        scope.launch { settings.setAutoCarStart(on) }
     }
+    if (!carStart) {
+        toggle(carAsk, "…или хотя бы спросить «сел в машину?»") { on ->
+            scope.launch { settings.setAutoCarAsk(on) }
+        }
+    }
+    Text(
+        "Поездка стартует с момента подключения и закрывает текущее дело; в пуше " +
+            "есть «Отменить». Отключилась машина — через две минуты вопрос «приехал?». " +
+            "Приезд в место с открытой дорогой закрывает её и спрашивает, что теперь.",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     toggle(stillAsk, "«Точно ещё …?», когда телефон задвигался") { on ->
         scope.launch { settings.setAutoStillAsk(on) }
     }

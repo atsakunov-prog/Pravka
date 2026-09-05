@@ -109,7 +109,14 @@ class NfcTapActivity : Activity() {
         val store = app.zasechkaStore
         val all = store.all()
         val open = all.lastOrNull { it.open && !it.parallel }
-        if (open == null || !open.title.equals(title, ignoreCase = true)) {
+        // «Своё» дело узнаём по названию ИЛИ по имени метки: владелец
+        // переименовал метку в настройках, пока дело шло, — второе касание
+        // всё равно должно закрыть его, а не открыть второе такое же.
+        val mine = open != null && (
+            open.title.equals(title, ignoreCase = true) ||
+                open.title.equals(tag.name.trim(), ignoreCase = true)
+            )
+        if (open == null || !mine) {
             store.startEntry(now, "", title, tag.category, "", 0, "voice")
             Feedback.toast(app, "⏱ $title — с ${hm(now)}")
             app.eventLog.add("метка «${tag.name}»: начато «$title»")

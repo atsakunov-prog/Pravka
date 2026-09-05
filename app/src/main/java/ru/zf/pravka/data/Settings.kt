@@ -94,6 +94,8 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_VISIBLE = stringPreferencesKey("auto_visible_ssids")
         private val KEY_NFC_TAGS = stringPreferencesKey("nfc_tags")
         private val KEY_AUTO_CAR_BT = stringPreferencesKey("auto_car_bt")
+        private val KEY_AUTO_CAR_BT_ADDR = stringPreferencesKey("auto_car_bt_addr")
+        private val KEY_AUTO_CAR_START = booleanPreferencesKey("auto_car_start")
         private val KEY_AUTO_ARRIVE = booleanPreferencesKey("auto_arrive_close")
         private val KEY_AUTO_LEAVE_ASK = booleanPreferencesKey("auto_leave_ask")
         private val KEY_AUTO_CAR_ASK = booleanPreferencesKey("auto_car_ask")
@@ -500,10 +502,28 @@ class Settings(private val context: Context) {
         }
     }
 
-    /** Имя Bluetooth-устройства машины: подключился — «сел в машину?». */
+    /**
+     * Bluetooth-устройство машины: имя для глаз и адрес для узнавания.
+     * Имя система отдаёт не всегда (нет кэша, нет BLUETOOTH_CONNECT), адрес
+     * приходит с каждым ACL-событием — по нему машина узнаётся надёжно.
+     */
     val autoCarBtFlow = context.dataStore.data.map { it[KEY_AUTO_CAR_BT] ?: "" }
-    suspend fun setAutoCarBt(value: String) {
-        context.dataStore.edit { it[KEY_AUTO_CAR_BT] = value.trim() }
+    val autoCarBtAddrFlow = context.dataStore.data.map { it[KEY_AUTO_CAR_BT_ADDR] ?: "" }
+    suspend fun setAutoCarBt(value: String, address: String = "") {
+        context.dataStore.edit {
+            it[KEY_AUTO_CAR_BT] = value.trim()
+            it[KEY_AUTO_CAR_BT_ADDR] = address.trim()
+        }
+    }
+
+    /**
+     * Машина подключилась — начать «Поездку на машине» сразу, без вопроса.
+     * Владелец: «просто всегда переключать текущее дело на передвижение на
+     * машине». Выключено — остаётся старый вопрос «сел в машину?».
+     */
+    val autoCarStartFlow = context.dataStore.data.map { it[KEY_AUTO_CAR_START] ?: true }
+    suspend fun setAutoCarStart(value: Boolean) {
+        context.dataStore.edit { it[KEY_AUTO_CAR_START] = value }
     }
 
     /** Приезд в известную сеть закрывает открытое «Передвижение» сам. */

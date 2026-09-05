@@ -26,16 +26,19 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.R
+import ru.zf.pravka.core.AutoPilotRules
 import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.ui.Feedback
 
 // Автопилот Засечки: телефон сам замечает швы дня и либо чинит ленту, либо
 // спрашивает одним пушем. Три сигнала, все дешёвые по батарее и без GPS.
+// Что решать по сигналу — в `core/AutoPilotRules.kt`, там же тесты.
 //
 // ПЕРВАЯ ВЕРСИЯ МОЛЧАЛА, и вот почему — это стоит помнить:
 // 1. Имя сети в настройках читалось устаревшим WifiManager.connectionInfo,
@@ -58,10 +61,35 @@ import ru.zf.pravka.ui.Feedback
 //    видел ни одной сети. Снаружи это выглядит ровно как поломка. Теперь
 //    [blockers] называет причину словами и даёт кнопку, которая её чинит.
 //
+// ВТОРАЯ ВЕРСИЯ ЗАКРЫВАЛА, НО НЕ ГОВОРИЛА (сентябрь 2026). Владелец: «приехал
+// домой, он остановил передвижение, но не спросил „что ты делаешь?“; ушёл из
+// сети Летово — не спросил „точно ещё встречаешь Серёжу?“; подключился к
+// машине — почему-то не переключил на поездку». Причины, по одной на сигнал:
+// 5. Приезд с НЕ-дорогой в ленте молчал всегда — «роутер мигнул, не повод».
+//    Но так же молча проходил и переезд Летово → дом с открытой «Встречей».
+//    Теперь мигание и переезд различаются по зафиксированному ОТЪЕЗДУ:
+//    сеть прошлого места пропала раньше, чем началось дело, и место
+//    сменилось (или пропадала дольше получаса) — значит, он перемещался, и
+//    дело в ленте устарело. Спрашиваем. Нет отъезда — молчим, как раньше.
+// 6. Места «по видимости» (Летово) смотрели на wm.scanResults только по
+//    своему скану раз в полчаса, а система отдаёт КЭШ: сеть, услышанная два
+//    часа назад, «висела в эфире» бесконечно, и отъезд не наступал никогда.
+//    Теперь результаты фильтруются по возрасту, и автопилот подписан на
+//    SCAN_RESULTS_AVAILABLE — сканы, которые система делает сама, тоже идут
+//    в дело. Слабый сигнал — это «ещё здесь», но не «приехал».
+// 7. Машина узнавалась по имени, а имя система отдаёт не всегда (нет кэша,
+//    отозвано BLUETOOTH_CONNECT) — теперь ещё и по адресу. И вместо вопроса
+//    «сел в машину?» поездка НАЧИНАЕТСЯ САМА: владелец — «всегда переключать
+//    текущее дело на передвижение на машине». Кнопка «Отменить» есть.
+// 8. Пуши шли каналом IMPORTANCE_DEFAULT — на Samsung это тихая строка в
+//    шторке, которую никто не видит. Вопрос, требующий ответа, — HIGH. И
+//    разрешение на уведомления никто не запрашивал: если его нет, теперь об
+//    этом говорит [blockers].
+//
 // И ещё одно, из жизни: к сети в Летово владелец не подключается — пароля
 // нет и не надо. Но она появляется в эфире ровно тогда, когда он приехал.
 // Поэтому у места есть два режима: «по подключению» (дом — точнее) и «по
-// видимости» (Летово — ловится сканом эфира на тике).
+// видимости» (Летово — ловится сканом эфира).
 /**
  * Причина, по которой автопилот слеп, и код кнопки, которая её чинит.
  * Отдельный тип верхнего уровня, чтобы настройки могли спросить причину и
@@ -76,9 +104,22 @@ class AutoPilot(
 ) {
 
     companion object {
-        private const val CHANNEL = "pravka-auto"
+        /**
+         * Канал с IMPORTANCE_HIGH. Прежний «pravka-auto» был DEFAULT, а
+         * важность канала после создания менять нельзя — только завести новый
+         * и снести старый.
+         */
+        const val CHANNEL = "pravka-auto-hi"
+        private const val OLD_CHANNEL = "pravka-auto"
         // Три минуты после потери сети: роутер мигнул — не отъезд.
         private const val LEAVE_DELAY_MS = 3 * 60_000L
+        // Место «по видимости» считается покинутым, когда его нет в СВЕЖИХ
+        // сканах пять минут. Свой дребезг у эфира больше, чем у подключения.
+        private const val VISIBLE_LEAVE_MS = 5 * 60_000L
+        // Скан старше десяти минут — кэш, а не эфир: по нему ничего не решаем.
+        private const val SCAN_FRESH_MS = 10 * 60_000L
+        // Машина отключилась: две минуты на «заглушил у магазина и поехал».
+        private const val CAR_OFF_DELAY_MS = 2 * 60_000L
         // «Точно ещё …?» — только по делам длиннее получаса.
         private const val SEDENTARY_MIN_MS = 30 * 60_000L
         // И не чаще раза в двадцать минут: взял телефон — не допрос же.
@@ -92,13 +133,17 @@ class AutoPilot(
         private const val NEAR_DBM = -75
         // Фоновому приложению система разрешает один скан в полчаса. Ровно
         // столько и просим: чаще всё равно откажут, реже — приезд заметим
-        // с опозданием.
+        // с опозданием. Системные сканы приходят сверх этого — через
+        // SCAN_RESULTS_AVAILABLE.
         private const val SCAN_EVERY_MS = 30 * 60_000L
 
         const val FIX_WIFI = "wifi"
         const val FIX_LOCATION = "loc_perm"
         const val FIX_BACKGROUND = "loc_bg"
         const val FIX_LOCATION_SYS = "loc_sys"
+        const val FIX_NOTIF = "notif"
+        const val FIX_NOTIF_CHANNEL = "notif_channel"
+        const val FIX_BT = "bt_perm"
 
         /**
          * ПОЧЕМУ НЕ РАБОТАЕТ — прямым текстом. Автопилот замолкает по
@@ -108,9 +153,10 @@ class AutoPilot(
          *
          * Пустой список — с разрешениями всё в порядке, дело не в них.
          * Функция статическая: настройки должны уметь показать причину и
-         * тогда, когда служба вовсе не запущена.
+         * тогда, когда служба вовсе не запущена. [carBt] — имя машины из
+         * настроек: без него проверка Bluetooth не нужна.
          */
-        fun blockers(ctx: Context): List<AutoBlocker> = buildList {
+        fun blockers(ctx: Context, carBt: String = ""): List<AutoBlocker> = buildList {
             val wifiOn = runCatching {
                 (ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
                     .isWifiEnabled
@@ -157,24 +203,64 @@ class AutoPilot(
                     )
                 }
             }
+            // Автопилот разговаривает пушами. Без разрешения на уведомления
+            // (Android 13+ его надо запросить, а никто не запрашивал) он всё
+            // делает — закрывает дорогу, спрашивает — и всё это в пустоту.
+            // Владелец так и описал: «останавливает передвижение, но не говорит».
+            val nm = ctx.getSystemService(NotificationManager::class.java)
+            if (nm != null) {
+                if (!nm.areNotificationsEnabled()) {
+                    add(
+                        AutoBlocker(
+                            "Уведомления Правки выключены — автопилот спрашивает " +
+                                "пушем, и его никто не увидит.",
+                            FIX_NOTIF,
+                        )
+                    )
+                } else {
+                    val ch = nm.getNotificationChannel(CHANNEL)
+                    if (ch != null && ch.importance == NotificationManager.IMPORTANCE_NONE) {
+                        add(
+                            AutoBlocker(
+                                "Канал «Автопилот Засечки» заглушен в системе — " +
+                                    "вопросы приходят молча.",
+                                FIX_NOTIF_CHANNEL,
+                            )
+                        )
+                    }
+                }
+            }
+            if (carBt.isNotBlank() && Build.VERSION.SDK_INT >= 31 &&
+                ctx.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                add(
+                    AutoBlocker(
+                        "Нет доступа к Bluetooth-устройствам — подключение машины " +
+                            "служба не увидит.",
+                        FIX_BT,
+                    )
+                )
+            }
         }
 
         const val WHAT_MOVE_CAR = "move_car"
         const val WHAT_MOVE_WALK = "move_walk"
         const val WHAT_STILL_DONE = "still_done"
         const val WHAT_CLOSE_OPEN = "close_open"
+        /** Дорога задним числом: с момента отъезда до сейчас, закрытая. */
+        const val WHAT_TRIP_BETWEEN = "trip_between"
+        /** Поездка началась сама по Bluetooth, а владелец не в машине. */
+        const val WHAT_CAR_UNDO = "car_undo"
+
+        const val CAR_TITLE = "Поездка на машине"
+        const val CAR_CATEGORY = "Передвижение: транспорт"
 
         /** Дорога узнаётся по категории ИЛИ по названию: «Поездка домой». */
-        fun travelish(e: ZasechkaStore.Entry): Boolean {
-            if (e.category.startsWith("Передвижение", ignoreCase = true)) return true
-            val t = e.title.lowercase()
-            return listOf("поездка", "поехал", "дорога", "едем", "еду ", "в пути", "такси")
-                .any { t.contains(it) }
-        }
+        fun travelish(e: ZasechkaStore.Entry): Boolean = AutoPilotRules.travelish(e.title, e.category)
 
         /** Тренировка: приехал домой — скорее всего закончил, но спросим. */
-        fun sporty(e: ZasechkaStore.Entry): Boolean =
-            e.category.startsWith("Спорт", ignoreCase = true)
+        fun sporty(e: ZasechkaStore.Entry): Boolean = AutoPilotRules.sporty(e.category)
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -184,9 +270,11 @@ class AutoPilot(
     /** Подмножество [places], которое ловится сканом эфира, а не подключением. */
     @Volatile private var visible: Set<String> = emptySet()
     @Volatile private var carBt: String = ""
+    @Volatile private var carBtAddr: String = ""
     @Volatile private var autoArrive = true
     @Volatile private var askLeave = true
     @Volatile private var askCar = true
+    @Volatile private var autoCarStart = true
     @Volatile private var askStill = true
 
     /** Что служба видит прямо сейчас — для строки состояния в настройках. */
@@ -197,6 +285,11 @@ class AutoPilot(
     private var lastPlace = ""
     private var lastArriveAt = 0L
     private var pendingLeave: Runnable? = null
+    /**
+     * Последний зафиксированный отъезд: откуда и когда пропала сеть. Это
+     * доказательство перемещения для правил приезда — пишется всегда, даже
+     * когда вопрос про отъезд выключен.
+     */
     private var leftPlace = ""
     private var leftAtMs = 0L
     private var lastStillAsk = 0L
@@ -204,18 +297,25 @@ class AutoPilot(
     private var motionArmed = false
     /** Сети «по видимости», которые слышно прямо сейчас. */
     private val around = HashSet<String>()
-    private val goneSince = HashMap<String, Long>()
+    /** Когда каждую сеть «по видимости» слышали последний раз (свежим сканом). */
+    private val lastHeard = HashMap<String, Long>()
     private val pushedSeen = HashSet<String>()
     private var lastScanAt = 0L
+    private var pendingCarOff: Runnable? = null
     private var connectivity: ConnectivityManager? = null
     private var netCallback: ConnectivityManager.NetworkCallback? = null
     private var btReceiver: BroadcastReceiver? = null
+    private var scanReceiver: BroadcastReceiver? = null
 
     /** Одной строкой для настроек: видно, живой автопилот или спит впустую. */
     fun statusLine(): String = buildString {
         append(if (seenSsid.isBlank()) "Сеть не вижу" else "Вижу сеть «$seenSsid»")
         append(" · мест: ${places.size}")
         if (visible.isNotEmpty()) append(" (по видимости: ${visible.size})")
+        if (around.isNotEmpty()) {
+            append(" · в эфире: ")
+            append(around.mapNotNull { places[it] }.joinToString(", "))
+        }
         if (carBt.isNotBlank()) append(" · машина: $carBt")
         if (lastFire.isNotBlank()) append(" · последнее: $lastFire")
     }
@@ -224,11 +324,14 @@ class AutoPilot(
         jobs += scope.launch { app.settings.autoPlacesFlow.collect { places = it } }
         jobs += scope.launch { app.settings.autoVisibleFlow.collect { visible = it } }
         jobs += scope.launch { app.settings.autoCarBtFlow.collect { carBt = it } }
+        jobs += scope.launch { app.settings.autoCarBtAddrFlow.collect { carBtAddr = it } }
         jobs += scope.launch { app.settings.autoArriveFlow.collect { autoArrive = it } }
         jobs += scope.launch { app.settings.autoLeaveAskFlow.collect { askLeave = it } }
         jobs += scope.launch { app.settings.autoCarAskFlow.collect { askCar = it } }
+        jobs += scope.launch { app.settings.autoCarStartFlow.collect { autoCarStart = it } }
         jobs += scope.launch { app.settings.autoStillAskFlow.collect { askStill = it } }
         startWifiWatch()
+        startScanWatch()
         startBtWatch()
         // Сеть могла подключиться до старта службы — колбэка по ней не будет.
         handler.postDelayed({ pollWifi() }, 3_000)
@@ -239,10 +342,14 @@ class AutoPilot(
         jobs.clear()
         pendingLeave?.let { handler.removeCallbacks(it) }
         pendingLeave = null
+        pendingCarOff?.let { handler.removeCallbacks(it) }
+        pendingCarOff = null
         runCatching { netCallback?.let { connectivity?.unregisterNetworkCallback(it) } }
         runCatching { btReceiver?.let { service.unregisterReceiver(it) } }
+        runCatching { scanReceiver?.let { service.unregisterReceiver(it) } }
         netCallback = null
         btReceiver = null
+        scanReceiver = null
     }
 
     // ---- Wi-Fi: приезд и отъезд ----
@@ -340,99 +447,210 @@ class AutoPilot(
         scope.launch { onArrived(place, now) }
     }
 
+    // ---- Места «по видимости»: эфир ----
+
     /**
-     * Места «по видимости»: сеть в эфире = приехал. Скан отдаёт система —
-     * своих просим не чаще раза в полчаса, столько фоновому приложению и
-     * положено. Слабый сигнал не считаем: услышать школьный Wi-Fi можно и
-     * с соседней улицы.
+     * Система сканирует эфир сама — ища сети, по своим часам, чаще при
+     * включённом экране. Раньше мы смотрели только результаты своего скана
+     * раз в полчаса, и приезд в Летово замечался с получасовым опозданием,
+     * а отъезд — никогда (см. пункт 6 в шапке). Теперь каждый скан — наш.
      */
-    @SuppressLint("MissingPermission")
-    private fun pollVisible() {
-        // Сканируем и когда мест «по видимости» ещё нет: иначе сеть, к которой
-        // не подключаешься, неоткуда взять в списке — и назвать её местом
-        // нечем. Один скан в полчаса того стоит.
+    private fun startScanWatch() {
+        val rec = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == WifiManager.SCAN_RESULTS_AVAILABLE_ACTION) readScan()
+            }
+        }
+        scanReceiver = rec
+        runCatching {
+            val filter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+            if (Build.VERSION.SDK_INT >= 33) {
+                service.registerReceiver(rec, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                service.registerReceiver(rec, filter)
+            }
+        }
+    }
+
+    private fun mayScan(): Boolean {
         val ctx = service.applicationContext
-        val mayScan = ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+        // На Android 13+ вместо местоположения годится «Устройства
+        // поблизости» — сканировать разрешает любое из двух.
+        return ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED ||
             (Build.VERSION.SDK_INT >= 33 &&
                 ctx.checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) ==
                 PackageManager.PERMISSION_GRANTED)
-        if (!mayScan) return
-        // На Android 13+ вместо местоположения годится «Устройства
-        // поблизости» — сканировать разрешает любое из двух.
-        val wm = runCatching { ctx.getSystemService(Context.WIFI_SERVICE) as WifiManager }
-            .getOrNull() ?: return
+    }
+
+    /**
+     * Свой скан — не чаще раза в полчаса, столько фоновому приложению и
+     * положено. Сканируем и когда мест «по видимости» ещё нет: иначе сеть,
+     * к которой не подключаешься, неоткуда взять в списке — и назвать её
+     * местом нечем. Результаты читаем и без своего скана: кэш мог обновить
+     * системный.
+     */
+    @SuppressLint("MissingPermission")
+    private fun pollVisible() {
+        if (!mayScan()) return
+        val wm = runCatching {
+            service.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        }.getOrNull() ?: return
         val now = System.currentTimeMillis()
         if (now - lastScanAt >= SCAN_EVERY_MS) {
             lastScanAt = now
             @Suppress("DEPRECATION")
             runCatching { wm.startScan() }
         }
+        readScan()
+    }
+
+    /**
+     * Разбор результатов скана. Система отдаёт КЭШ — всё, что слышала когда
+     * бы то ни было с последней очистки, — поэтому каждая запись проверяется
+     * на возраст: старше десяти минут — не эфир, а воспоминание, и по нему
+     * ничего не решаем. Ни приезда, ни отъезда: отъезд — это когда СВЕЖИЙ скан
+     * сети не содержит, а не когда скана не было.
+     */
+    @SuppressLint("MissingPermission")
+    private fun readScan() {
+        if (!mayScan()) return
+        val wm = runCatching {
+            service.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        }.getOrNull() ?: return
         val results = runCatching { wm.scanResults }.getOrNull().orEmpty()
         if (results.isEmpty()) return
-        @Suppress("DEPRECATION")
-        val strong = results.filter { it.level >= NEAR_DBM }
-            .map { cleanSsid(it.SSID) }
-            .filter { it.isNotBlank() }
-            .toSet()
+        val nowEl = SystemClock.elapsedRealtime()
+        // timestamp у ScanResult — микросекунды с загрузки.
+        val fresh = results.filter { nowEl - it.timestamp / 1000 <= SCAN_FRESH_MS }
+        if (fresh.isEmpty()) return
+        val now = System.currentTimeMillis()
+        // SSID → лучший уровень среди свежих точек этой сети.
+        val heard = HashMap<String, Int>()
+        for (r in fresh) {
+            @Suppress("DEPRECATION")
+            val ssid = cleanSsid(r.SSID)
+            if (ssid.isBlank()) continue
+            val prev = heard[ssid]
+            if (prev == null || r.level > prev) heard[ssid] = r.level
+        }
+        val strong = heard.filterValues { it >= NEAR_DBM }.keys
         // Всё, что слышно уверенно, попадает в список настроек — иначе сеть,
         // к которой не подключаешься, назвать местом просто негде.
-        val fresh = strong.filter { !places.containsKey(it) && pushedSeen.add(it) }
-        if (fresh.isNotEmpty()) {
-            scope.launch { runCatching { app.settings.addAutoSeenAll(fresh.take(6), now) } }
+        val newcomers = strong.filter { !places.containsKey(it) && pushedSeen.add(it) }
+        if (newcomers.isNotEmpty()) {
+            scope.launch { runCatching { app.settings.addAutoSeenAll(newcomers.take(6), now) } }
         }
         for (ssid in visible) {
             val place = places[ssid] ?: continue
-            if (strong.contains(ssid)) {
-                goneSince.remove(ssid)
-                // Приезд — только на ПОЯВЛЕНИЕ сети: висит она в эфире часами.
-                if (around.add(ssid)) reachedPlace(place, "вижу сеть «$ssid»")
+            if (heard.containsKey(ssid)) {
+                // Слышно — значит, ещё здесь, даже если слабо. Но ПРИЕЗД —
+                // только на уверенное появление: услышать школьный Wi-Fi можно
+                // и с соседней улицы.
+                lastHeard[ssid] = now
+                if (strong.contains(ssid) && around.add(ssid)) {
+                    reachedPlace(place, "вижу сеть «$ssid»")
+                }
             } else if (around.contains(ssid)) {
-                val since = goneSince.getOrPut(ssid) { now }
-                if (now - since >= LEAVE_DELAY_MS) {
+                val since = lastHeard[ssid] ?: now
+                if (now - since >= VISIBLE_LEAVE_MS) {
                     around.remove(ssid)
-                    goneSince.remove(ssid)
-                    onLeftPlace(place, since)
+                    lastHeard.remove(ssid)
+                    // Пять минут без сети в свежих сканах — дребезг уже отсеян,
+                    // ждать ещё три минуты незачем.
+                    onLeftPlace(place, since, delayMs = 0L)
                 }
             }
         }
     }
 
-    /** Приехал в место: дорогу закрываем сами, тренировку предлагаем закрыть. */
+    // ---- Приезд ----
+
+    /**
+     * Приехал в место. Решает [AutoPilotRules.arrival]; здесь — только
+     * действия и слова. Смотрим ТОЛЬКО основной трек: открытая параллель
+     * («слушаю Акунина») — не дело, и закрывать её приездом нельзя.
+     */
     private suspend fun onArrived(place: String, now: Long) {
-        val open = app.zasechkaStore.all().lastOrNull { it.open }
-        if (open == null) {
-            lastFire = "приехал «$place», нечего закрывать"
-            app.eventLog.add("автопилот: приехал «$place», открытых дел нет")
-            return
-        }
-        when {
-            travelish(open) -> {
+        val open = app.zasechkaStore.openEntry()
+        val verdict = AutoPilotRules.arrival(
+            openTitle = open?.title,
+            openCategory = open?.category,
+            openStart = open?.start ?: 0L,
+            place = place,
+            leftPlace = leftPlace,
+            leftAtMs = leftAtMs,
+            now = now,
+        )
+        when (verdict) {
+            AutoPilotRules.Arrival.CLOSE_TRAVEL -> {
                 val closed = app.zasechkaEngine.closeOpen() ?: return
                 lastFire = "приехал «$place» ${timeHm(now)}"
                 notify(
                     "✓ Приехал: $place",
-                    "«${closed.title}» закрыто, ${closed.durationMin()} мин.",
-                    emptyList(),
+                    "«${closed.title}» закрыта, ${closed.durationMin()} мин. Что теперь? " +
+                        "Открытого дела нет.",
+                    listOf(sayAction()),
                 )
                 app.eventLog.add("автопилот: приехал «$place» — закрыл «${closed.title}»")
             }
-            sporty(open) -> {
+            AutoPilotRules.Arrival.ASK_SPORT -> {
+                val o = open ?: return
                 // Молча закрывать тренировку нельзя: он мог заехать домой за
                 // водой и поехать дальше. Но и висеть она не должна.
-                lastFire = "спросил про «${open.title}»"
+                lastFire = "спросил про «${o.title}»"
                 notify(
                     "Приехал: $place",
-                    "«${open.title}» ещё идёт, ${open.durationMin(now)} мин. Закончил?",
-                    listOf(action("Закрыть «${open.title.take(18)}»", WHAT_CLOSE_OPEN, now, "")),
+                    "«${o.title}» ещё идёт, ${o.durationMin(now)} мин. Закончил?",
+                    listOf(
+                        action("Закрыть «${o.title.take(18)}»", WHAT_CLOSE_OPEN, now, ""),
+                        sayAction(),
+                    ),
                 )
-                app.eventLog.add("автопилот: приехал «$place» — спросил про «${open.title}»")
+                app.eventLog.add("автопилот: приехал «$place» — спросил про «${o.title}»")
             }
-            else -> {
-                // Работал дома и роутер мигнул — не повод дёргать владельца.
+            AutoPilotRules.Arrival.ASK_STILL -> {
+                val o = open ?: return
+                lastFire = "приехал «$place», спросил про «${o.title}»"
+                val moved = leftPlace != place
+                notify(
+                    "Приехал: $place",
+                    "В ленте всё ещё «${o.title}» с ${timeHm(o.start)} " +
+                        "(${o.durationMin(now)} мин). " +
+                        if (moved) {
+                            "Сеть «$leftPlace» пропала в ${timeHm(leftAtMs)} — " +
+                                "«Ехал» закроет дело там и запишет дорогу до сейчас."
+                        } else {
+                            "Сети не было с ${timeHm(leftAtMs)}. Всё ещё оно?"
+                        },
+                    listOf(
+                        if (moved) action("Ехал с ${timeHm(leftAtMs)}", WHAT_TRIP_BETWEEN, leftAtMs, leftPlace)
+                        else action("Закончил в ${timeHm(leftAtMs)}", WHAT_CLOSE_OPEN, leftAtMs, ""),
+                        sayAction(),
+                    ),
+                )
                 app.eventLog.add(
-                    "автопилот: приехал «$place», но открыто «${open.title}» " +
-                        "[${open.category}] — не дорога, промолчал"
+                    "автопилот: приехал «$place» из «$leftPlace», открыто «${o.title}» — спросил"
+                )
+            }
+            AutoPilotRules.Arrival.ASK_WHAT -> {
+                lastFire = "приехал «$place», спросил, что делает"
+                notify(
+                    "Приехал: $place",
+                    "Открытого дела нет. Сеть «$leftPlace» пропала в ${timeHm(leftAtMs)} — " +
+                        "дорога не записана. Что делаешь?",
+                    listOf(
+                        action("Ехал с ${timeHm(leftAtMs)}", WHAT_TRIP_BETWEEN, leftAtMs, leftPlace),
+                        sayAction(),
+                    ),
+                )
+                app.eventLog.add("автопилот: приехал «$place» из «$leftPlace», открытых дел нет — спросил")
+            }
+            AutoPilotRules.Arrival.SILENT -> {
+                app.eventLog.add(
+                    if (open == null) "автопилот: приехал «$place», открытых дел нет, отъезда не было — промолчал"
+                    else "автопилот: приехал «$place», открыто «${open.title}» [${open.category}] — " +
+                        "не дорога, перемещения не видно, промолчал"
                 )
             }
         }
@@ -458,34 +676,49 @@ class AutoPilot(
         val fromPlace = places[seenSsid]
         seenSsid = ""
         if (fromPlace == null) return
-        onLeftPlace(fromPlace, System.currentTimeMillis())
+        onLeftPlace(fromPlace, System.currentTimeMillis(), LEAVE_DELAY_MS)
     }
 
-    /** Уехал: сеть пропала — из-под ног (отключились) или из эфира. */
-    private fun onLeftPlace(fromPlace: String, atMs: Long) {
-        if (!askLeave) return
+    /**
+     * Уехал: сеть пропала — из-под ног (отключились) или из эфира. Факт
+     * отъезда запоминается СРАЗУ и всегда — им потом доказывается
+     * перемещение при приезде. Вопрос — через [delayMs], если не вернёмся.
+     */
+    private fun onLeftPlace(fromPlace: String, atMs: Long, delayMs: Long) {
         leftPlace = fromPlace
         leftAtMs = atMs
+        app.eventLog.add("автопилот: потерял «$fromPlace» в ${timeHm(atMs)}")
+        if (!askLeave) return
         pendingLeave?.let { handler.removeCallbacks(it) }
         val ask = Runnable {
             pendingLeave = null
             scope.launch {
-                val open = app.zasechkaStore.all().lastOrNull { it.open }
-                if (open != null && travelish(open)) return@launch
-                lastFire = "спросил про отъезд из «$leftPlace»"
+                val open = app.zasechkaStore.openEntry()
+                if (open != null && travelish(open)) {
+                    app.eventLog.add("автопилот: потерял «$fromPlace», дорога уже идёт — молчу")
+                    return@launch
+                }
+                lastFire = "спросил про отъезд из «$fromPlace»"
                 notify(
-                    "Уехал из «$leftPlace»?",
-                    "Начну с момента потери сети, ${timeHm(leftAtMs)}. Нет — просто смахни.",
+                    "Уехал из «$fromPlace»?",
+                    (if (open != null) {
+                        "В ленте всё ещё «${open.title}», ${open.durationMin()} мин. " +
+                            "Дорога закроет его в ${timeHm(atMs)} и пойдёт с этого момента. "
+                    } else "Начну с момента потери сети, ${timeHm(atMs)}. ") +
+                        "Нет — просто смахни.",
                     listOf(
-                        action("Транспорт", WHAT_MOVE_CAR, leftAtMs, leftPlace),
-                        action("Пешком", WHAT_MOVE_WALK, leftAtMs, leftPlace),
+                        action("Транспорт", WHAT_MOVE_CAR, atMs, fromPlace),
+                        action("Пешком", WHAT_MOVE_WALK, atMs, fromPlace),
                     ),
                 )
-                app.eventLog.add("автопилот: потерял «$leftPlace» — спросил про передвижение")
+                app.eventLog.add(
+                    "автопилот: потерял «$fromPlace» — спросил про передвижение" +
+                        (open?.let { ", открыто «${it.title}»" } ?: "")
+                )
             }
         }
         pendingLeave = ask
-        handler.postDelayed(ask, LEAVE_DELAY_MS)
+        if (delayMs <= 0L) ask.run() else handler.postDelayed(ask, delayMs)
     }
 
     // ---- Bluetooth машины ----
@@ -497,16 +730,26 @@ class AutoPilot(
         }
         val rec = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                if (carBt.isBlank() && carBtAddr.isBlank()) return
                 val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= 33) {
                     intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
                 } else {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                 }
-                // Без BLUETOOTH_CONNECT имя не отдаётся — просто молчим.
+                // Без BLUETOOTH_CONNECT имя не отдаётся — тогда выручает адрес.
                 val name = runCatching { device?.name }.getOrNull().orEmpty()
-                if (name.isBlank() || carBt.isBlank() || !name.equals(carBt, ignoreCase = true)) return
-                if (intent.action == BluetoothDevice.ACTION_ACL_CONNECTED) onCarConnected()
+                val addr = runCatching { device?.address }.getOrNull().orEmpty()
+                if (!AutoPilotRules.isCar(name, addr, carBt, carBtAddr)) {
+                    if (name.isNotBlank() || addr.isNotBlank()) {
+                        app.eventLog.add("автопилот: BT «${name.ifBlank { addr }}» — не машина")
+                    }
+                    return
+                }
+                when (intent.action) {
+                    BluetoothDevice.ACTION_ACL_CONNECTED -> onCarConnected()
+                    BluetoothDevice.ACTION_ACL_DISCONNECTED -> onCarDisconnected()
+                }
             }
         }
         btReceiver = rec
@@ -519,20 +762,90 @@ class AutoPilot(
         }
     }
 
+    /**
+     * Машина подключилась. Владелец: «просто всегда переключать текущее дело
+     * на передвижение на машине». Так и делаем — с кнопкой «Отменить» в пуше:
+     * магнитола ловит телефон и с балкона, если машина под окном. Если
+     * дорога уже идёт (сказал голосом, вышел из Летово кнопкой) — не трогаем.
+     */
     private fun onCarConnected() {
-        if (!askCar) return
+        pendingCarOff?.let { handler.removeCallbacks(it) }
+        pendingCarOff = null
         val at = System.currentTimeMillis()
         scope.launch {
-            val open = app.zasechkaStore.all().lastOrNull { it.open }
-            if (open != null && travelish(open)) return@launch
-            lastFire = "машина в ${timeHm(at)}"
-            notify(
-                "Сел в машину?",
-                "«$carBt» подключилась в ${timeHm(at)}. Нет — просто смахни.",
-                listOf(action("Поехали", WHAT_MOVE_CAR, at, "")),
-            )
-            app.eventLog.add("автопилот: BT «$carBt» подключился — спросил про поездку")
+            val open = app.zasechkaStore.openEntry()
+            if (open != null && travelish(open)) {
+                app.eventLog.add("автопилот: BT «$carBt» подключился, «${open.title}» уже идёт")
+                return@launch
+            }
+            if (autoCarStart) {
+                val entry = app.zasechkaStore.startEntry(
+                    start = at,
+                    raw = "",
+                    title = CAR_TITLE,
+                    category = CAR_CATEGORY,
+                    client = "",
+                    useful = 0,
+                    // Источник — как у кнопки «Поехали», не "auto". Иначе книга
+                    // за рулём из Слушалки (insertAutoFact) не найдёт «занятого
+                    // владельцем» времени и лягет в ОСНОВНОЙ трек поверх
+                    // поездки — два авто-факта внахлёст, чего лента не терпит.
+                    // Ложное срабатывание чинит кнопка «Отменить» в пуше.
+                    source = "voice",
+                )
+                app.zasechkaSync.kickSoon(scope)
+                lastFire = "машина в ${timeHm(at)}, поездка начата"
+                notify(
+                    "🚗 Поехали: $CAR_TITLE",
+                    "С ${timeHm(at)}, по Bluetooth «$carBt»." +
+                        (open?.let { " «${it.title}» закрыто, ${it.durationMin(at)} мин." } ?: "") +
+                        " Не в машине — отмени.",
+                    listOf(action("Отменить", WHAT_CAR_UNDO, at, "", id = entry.id, prevId = open?.id ?: 0L)),
+                )
+                app.eventLog.add(
+                    "автопилот: BT «$carBt» подключился — начата «$CAR_TITLE»" +
+                        (open?.let { ", закрыто «${it.title}»" } ?: "")
+                )
+            } else if (askCar) {
+                lastFire = "машина в ${timeHm(at)}"
+                notify(
+                    "Сел в машину?",
+                    "«$carBt» подключилась в ${timeHm(at)}. Нет — просто смахни.",
+                    listOf(action("Поехали", WHAT_MOVE_CAR, at, "")),
+                )
+                app.eventLog.add("автопилот: BT «$carBt» подключился — спросил про поездку")
+            }
         }
+    }
+
+    /**
+     * Машина отключилась — двигатель заглушен. Дорогу НЕ закрываем сами:
+     * приезд домой и в Летово закроет её Wi-Fi, а «заглушил у магазина» —
+     * не приезд. Через две минуты без переподключения — вопрос с кнопкой.
+     */
+    private fun onCarDisconnected() {
+        val at = System.currentTimeMillis()
+        pendingCarOff?.let { handler.removeCallbacks(it) }
+        val ask = Runnable {
+            pendingCarOff = null
+            scope.launch {
+                val open = app.zasechkaStore.openEntry() ?: return@launch
+                if (!travelish(open)) return@launch
+                lastFire = "машина отключилась в ${timeHm(at)}"
+                notify(
+                    "Машина отключилась",
+                    "«${open.title}» идёт ${open.durationMin()} мин, «$carBt» отвалилась в " +
+                        "${timeHm(at)}. Приехал?",
+                    listOf(
+                        action("Приехал в ${timeHm(at)}", WHAT_CLOSE_OPEN, at, ""),
+                        sayAction(),
+                    ),
+                )
+                app.eventLog.add("автопилот: BT «$carBt» отключился при «${open.title}» — спросил")
+            }
+        }
+        pendingCarOff = ask
+        handler.postDelayed(ask, CAR_OFF_DELAY_MS)
     }
 
     // ---- «Точно ещё …?» по датчику значимого движения ----
@@ -550,15 +863,11 @@ class AutoPilot(
         pollVisible()
         if (!askStill) return
         scope.launch {
-            val open = app.zasechkaStore.all().lastOrNull { it.open } ?: return@launch
-            if (!sedentary(open.category)) return@launch
+            val open = app.zasechkaStore.openEntry() ?: return@launch
+            if (!AutoPilotRules.sedentary(open.category)) return@launch
             if (System.currentTimeMillis() - open.start < SEDENTARY_MIN_MS) return@launch
             armMotion()
         }
-    }
-
-    private fun sedentary(category: String): Boolean = category.lowercase().let {
-        it.startsWith("работа") || it == "систематизация" || it == "чтение"
     }
 
     private fun armMotion() {
@@ -572,8 +881,8 @@ class AutoPilot(
         val now = System.currentTimeMillis()
         if (!askStill || now - lastStillAsk < STILL_THROTTLE_MS) return
         scope.launch {
-            val open = app.zasechkaStore.all().lastOrNull { it.open } ?: return@launch
-            if (!sedentary(open.category)) return@launch
+            val open = app.zasechkaStore.openEntry() ?: return@launch
+            if (!AutoPilotRules.sedentary(open.category)) return@launch
             if (now - open.start < SEDENTARY_MIN_MS) return@launch
             lastStillAsk = now
             lastFire = "движение при «${open.title}»"
@@ -588,40 +897,85 @@ class AutoPilot(
 
     // ---- Кнопки уведомлений (через AutoPilotActivity) ----
 
-    fun onAction(what: String, atMs: Long, fromPlace: String) {
+    fun onAction(what: String, atMs: Long, fromPlace: String, id: Long = 0L, prevId: Long = 0L) {
         scope.launch {
+            val now = System.currentTimeMillis()
             when (what) {
                 WHAT_MOVE_CAR, WHAT_MOVE_WALK -> {
                     val walk = what == WHAT_MOVE_WALK
                     val entry = app.zasechkaStore.startEntry(
-                        start = atMs.coerceIn(1L, System.currentTimeMillis()),
+                        start = atMs.coerceIn(1L, now),
                         raw = "",
                         title = when {
                             fromPlace.isBlank() && walk -> "Дорога пешком"
-                            fromPlace.isBlank() -> "Поездка на машине"
+                            fromPlace.isBlank() -> CAR_TITLE
                             walk -> "Дорога из «$fromPlace» пешком"
                             else -> "Поездка из «$fromPlace»"
                         },
-                        category = if (walk) "Передвижение: пешком" else "Передвижение: транспорт",
+                        category = if (walk) "Передвижение: пешком" else CAR_CATEGORY,
                         client = "",
                         useful = 0,
                         // Кнопку нажал владелец — это его клейм, не робота:
                         // не гибнет в clear-and-refill и не режется сплайсом.
                         source = "voice",
                     )
+                    app.zasechkaSync.kickSoon(scope)
                     Feedback.toast(app, "⏱ ${entry.title} — с ${timeHm(entry.start)}")
                     app.eventLog.add("автопилот: начато «${entry.title}»")
                 }
+                WHAT_TRIP_BETWEEN -> {
+                    // Дорога, которую не записали: от потери сети прошлого
+                    // места до приезда сюда. Закрытая — мы уже здесь; открытое
+                    // дело закрывается её началом, дальше лента пуста и ждёт
+                    // слова владельца.
+                    val start = atMs.coerceIn(1L, now - 60_000L)
+                    val entry = app.zasechkaStore.startEntry(
+                        start = start,
+                        raw = "",
+                        title = if (fromPlace.isBlank()) CAR_TITLE else "Поездка из «$fromPlace»",
+                        category = CAR_CATEGORY,
+                        client = "",
+                        useful = 0,
+                        source = "voice",
+                    )
+                    val closed = app.zasechkaStore.closeOpen(now)
+                    app.zasechkaSync.kickSoon(scope)
+                    Feedback.toast(
+                        app,
+                        "⏱ ${entry.title}: ${timeHm(start)}–${timeHm(now)}. Что теперь — скажи «З»",
+                        long = true,
+                    )
+                    app.eventLog.add(
+                        "автопилот: дорога задним числом «${entry.title}» " +
+                            "${timeHm(start)}–${timeHm(now)}" +
+                            (closed?.let { "" } ?: ", закрыть не вышло")
+                    )
+                }
                 WHAT_STILL_DONE, WHAT_CLOSE_OPEN -> {
-                    val closed = app.zasechkaStore.closeOpen(atMs)
+                    val at = atMs.coerceIn(1L, now)
+                    val closed = app.zasechkaStore.closeOpen(at)
+                    if (closed != null) app.zasechkaSync.kickSoon(scope)
                     Feedback.toast(
                         app,
                         if (closed == null) "Открытого дела уже нет"
-                        else "⏹ «${closed.title}» закрыто на ${timeHm(atMs)}",
+                        else "⏹ «${closed.title}» закрыто на ${timeHm(at)}",
                     )
                     if (closed != null) {
                         app.eventLog.add("автопилот: «${closed.title}» закрыто кнопкой уведомления")
                     }
+                }
+                WHAT_CAR_UNDO -> {
+                    val back = app.zasechkaStore.revertAutoStart(id, prevId)
+                    app.zasechkaSync.kickSoon(scope)
+                    Feedback.toast(
+                        app,
+                        if (back != null) "↩︎ Поездка убрана, снова «${back.title}»"
+                        else "↩︎ Поездка убрана",
+                    )
+                    app.eventLog.add(
+                        "автопилот: «$CAR_TITLE» отменена кнопкой" +
+                            (back?.let { ", вернулся к «${it.title}»" } ?: "")
+                    )
                 }
             }
         }
@@ -629,11 +983,20 @@ class AutoPilot(
 
     // ---- Обвязка ----
 
-    private fun action(label: String, what: String, at: Long, place: String): Notification.Action {
+    private fun action(
+        label: String,
+        what: String,
+        at: Long,
+        place: String,
+        id: Long = 0L,
+        prevId: Long = 0L,
+    ): Notification.Action {
         val intent = Intent(service, AutoPilotActivity::class.java)
             .putExtra(AutoPilotActivity.EXTRA_WHAT, what)
             .putExtra(AutoPilotActivity.EXTRA_AT, at)
             .putExtra(AutoPilotActivity.EXTRA_PLACE, place)
+            .putExtra(AutoPilotActivity.EXTRA_ID, id)
+            .putExtra(AutoPilotActivity.EXTRA_PREV, prevId)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val pending = PendingIntent.getActivity(
             service, (what + at).hashCode(),
@@ -642,6 +1005,23 @@ class AutoPilot(
         )
         return Notification.Action.Builder(
             null as android.graphics.drawable.Icon?, label, pending,
+        ).build()
+    }
+
+    /**
+     * «Сказать»: тот же путь, что тап по «З» — микрофон и разбор Сонетом.
+     * Ответ на «что теперь делаешь?» — это всегда диктовка, не кнопка.
+     */
+    private fun sayAction(): Notification.Action {
+        val intent = Intent(service, ZasechkaQuickActivity::class.java)
+            .putExtra(ZasechkaQuickActivity.EXTRA_WHAT, ZasechkaQuickActivity.W_RECORD)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val pending = PendingIntent.getActivity(
+            service, 72, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return Notification.Action.Builder(
+            null as android.graphics.drawable.Icon?, "Сказать", pending,
         ).build()
     }
 
@@ -654,12 +1034,16 @@ class AutoPilot(
         runCatching {
             val nm = service.getSystemService(NotificationManager::class.java)
             if (nm.getNotificationChannel(CHANNEL) == null) {
+                // Вопрос, на который ждут ответа, — HIGH: всплывает поверх
+                // экрана. DEFAULT на Samsung — тихая строка в шторке, и
+                // владелец её не видел («останавливает, но не говорит»).
                 nm.createNotificationChannel(
                     NotificationChannel(
                         CHANNEL, "Автопилот Засечки",
-                        NotificationManager.IMPORTANCE_DEFAULT,
+                        NotificationManager.IMPORTANCE_HIGH,
                     )
                 )
+                runCatching { nm.deleteNotificationChannel(OLD_CHANNEL) }
             }
             val b = Notification.Builder(service, CHANNEL)
                 .setContentTitle(title)
@@ -683,7 +1067,7 @@ class AutoPilot(
             }
             actions.forEach { b.addAction(it) }
             nm.notify((title + text).hashCode(), b.build())
-        }
+        }.onFailure { app.eventLog.add("автопилот: уведомление не показалось — ${it.message}") }
     }
 
     private fun timeHm(ms: Long): String =

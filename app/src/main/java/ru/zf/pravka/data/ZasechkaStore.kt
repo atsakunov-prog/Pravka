@@ -1381,6 +1381,31 @@ class ZasechkaStore(private val context: Context) {
     }
 
     /**
+     * Откат записи, которую завёл робот (поездка по Bluetooth машины), когда
+     * владелец нажал «Отменить»: запись убирается, а дело, которое она
+     * закрыла, снова открывается — ОДНИМ шагом под замком. Двумя вызовами
+     * (delete, потом update) нельзя: между ними нормализация увидит пустой
+     * хвост и подложит заполнитель, а потом сплайсит его об открытое дело.
+     * Возвращённое дело открывается только если ничего другого в основном
+     * треке не идёт — владелец мог уже сказать следующее.
+     */
+    suspend fun revertAutoStart(startedId: Long, reopenId: Long): Entry? = mutex.withLock {
+        ensureLoaded()
+        val started = entries.firstOrNull { it.id == startedId } ?: return@withLock null
+        snapshotLocked("отмену «${started.title.ifBlank { "без названия" }}»")
+        entries.removeAll { it.id == startedId }
+        var reopened: Entry? = null
+        val i = entries.indexOfFirst { it.id == reopenId && !it.parallel }
+        if (i >= 0 && entries.none { it.open && !it.parallel }) {
+            reopened = entries[i].copy(end = 0L, synced = false, notionSynced = false)
+            entries[i] = reopened
+        }
+        normalizeLocked()
+        persist()
+        reopened
+    }
+
+    /**
      * Дописать примечание к записи, не двигая её во времени.
      *
      * Отдельно от [update] нарочно, и по двум причинам. Во-первых, `raw` не

@@ -164,7 +164,10 @@
         <!-- Касание метки. exported=true обязательно: intent приносит система
              NFC. Свой MIME-тип плюс AAR внутри сообщения - открывает только
              Правка, чужие метки нас не касаются. taskAffinity пустой, чтобы
-             трамплин не подменял собой главное окно в списке задач. -->
+             трамплин не подменял собой главное окно в списке задач.
+             showWhenLocked - вся суть метки: приложил на заблокированном
+             телефоне и пошёл. Без него система держит intent до разблокировки
+             (а на части прошивок молча бросает), и касание «не срабатывает». -->
         <activity
             android:name=".trigger.NfcTapActivity"
             android:theme="@style/Theme.Transparent"
@@ -172,6 +175,7 @@
             android:noHistory="true"
             android:launchMode="singleTop"
             android:taskAffinity=""
+            android:showWhenLocked="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.nfc.action.NDEF_DISCOVERED" />
