@@ -255,23 +255,13 @@ internal fun PravkaAccessibilityService.onZasechkaText(raw: String, source: Stri
                         "${zTime(entry.start)}–${zTime(entry.end)}, ${entry.durationMin()} мин"
                 )
             }
-            // «Параллельно слушаю Акунина»: текущее дело не тронуто,
-            // запись легла вторым треком поверх него.
-            outcome.action == "parallel" -> {
-                Haptics.success(this@onZasechkaText)
-                zButton?.showNote(
-                    "∥ ${entry.title}\nпараллельно, с ${zTime(entry.start)}" +
-                        (if (tail.isBlank()) "" else " · $tail")
-                )
-            }
             outcome.action == "insert" && outcome.error == null -> {
                 Haptics.success(this@onZasechkaText)
                 zButton?.showNote(
                     "⤵ Вставлено «${entry.title}»\n" +
                         "${zTime(entry.start)}–${zTime(entry.end)}" +
                         (if (tail.isBlank()) "" else " · $tail") +
-                        "\nобрамляющее дело продолжено" +
-                        (outcome.parallel?.let { "\n∥ ${it.title}" } ?: "")
+                        "\nобрамляющее дело продолжено"
                 )
             }
             outcome.action == "edit" -> {
@@ -290,10 +280,7 @@ internal fun PravkaAccessibilityService.onZasechkaText(raw: String, source: Stri
                 Haptics.success(this@onZasechkaText)
                 zButton?.showNote(
                     "⏱ ${entry.title}\nс ${zTime(entry.start)}" +
-                        (if (tail.isBlank()) "" else " · $tail") +
-                        // «Готовил еду и параллельно смотрел ютуб» — одна
-                        // фраза, две записи, и вторая тоже должна быть видна.
-                        (outcome.parallel?.let { "\n∥ ${it.title}" } ?: "")
+                        (if (tail.isBlank()) "" else " · $tail")
                 )
             }
             else -> {
@@ -324,14 +311,11 @@ internal fun PravkaAccessibilityService.showZasechkaMenu() {
     scope.launch {
         val now = System.currentTimeMillis()
         val open = runCatching { app.zasechkaStore.openEntry() }.getOrNull()
-        val alongside = runCatching { app.zasechkaStore.openParallel() }.getOrNull()
         val header = ZasechkaButtonController.MenuItem(
             when {
                 open != null ->
                     "⏱ ${open.title.ifBlank { "без названия" }} — с ${zTime(open.start)}, " +
-                        zDur(now - open.start) + (alongside?.let { " ∥ ${it.title}" } ?: "")
-                alongside != null ->
-                    "∥ ${alongside.title.ifBlank { "без названия" }} — с ${zTime(alongside.start)}"
+                        zDur(now - open.start)
                 else -> "— сейчас ничего не идёт"
             },
             goTab,

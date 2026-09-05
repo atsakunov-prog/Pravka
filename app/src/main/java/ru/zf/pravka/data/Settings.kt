@@ -81,7 +81,6 @@ class Settings(private val context: Context) {
         // z_auto_inserts - мёртвый ключ прежних врезок, которые резали ленту.
         // Поведения, которым он управлял, больше нет, поэтому и читать его
         // нельзя: выключенный тумблер прошлой механики молча погасил бы новую.
-        private val KEY_Z_PARALLEL_AUTO = booleanPreferencesKey("z_parallel_auto")
         // Самообновление из ветки apk-builds.
         private val KEY_UPD_AUTO = booleanPreferencesKey("upd_auto")
         private val KEY_UPD_MOBILE = booleanPreferencesKey("upd_mobile")
@@ -345,19 +344,6 @@ class Settings(private val context: Context) {
     suspend fun analysisContext(): String = analysisContextFlow.first()
     suspend fun setAnalysisContext(value: String) {
         context.dataStore.edit { it[KEY_ANALYSIS_CONTEXT] = value.trim() }
-    }
-
-    /**
-     * Звонки и пожиратели внимания — ПАРАЛЛЕЛЬНЫМ треком. Прежние врезки
-     * владелец выключил по делу: «очень сильно засоряет ленту, и не всегда это
-     * потеря — я готовил еду и смотрел про часы». Они резали дело и отнимали у
-     * него минуты. Теперь не режут и не отнимают: ложатся поверх, вторым
-     * треком, и еда остаётся едой — поэтому включено по умолчанию. Сон-вставка
-     * живёт отдельно и не выключается.
-     */
-    val zParallelAutoFlow = context.dataStore.data.map { it[KEY_Z_PARALLEL_AUTO] ?: true }
-    suspend fun setZParallelAuto(value: Boolean) {
-        context.dataStore.edit { it[KEY_Z_PARALLEL_AUTO] = value }
     }
 
     // ---- Автопилот Засечки: места по Wi-Fi, машина по Bluetooth ----

@@ -2689,14 +2689,11 @@ private fun DigestSection(app: PravkaApp) {
         // «Фактически вся моя жизнь, всеобъемлющий файл» — его словами.
         // Таймшит, еда, тренировки, силовые, зарядка и комментарии, строка на
         // событие, хронологически, за всю глубину хранения.
-        // Две кнопки, а не тумблер: кнопка называет то, что отдаёт, в момент
-        // нажатия. Файлы называются по-разному, чтобы слои нельзя было
-        // перепутать в мессенджере.
         @Composable
-        fun lifeCsvButton(label: String, withParallel: Boolean) {
+        fun lifeCsvButton(label: String) {
             OutlinedButton(onClick = {
                 app.appScope.launch {
-                    val intent = runCatching { app.digestBuilder.lifeCsvIntent(withParallel) }
+                    val intent = runCatching { app.digestBuilder.lifeCsvIntent() }
                         .getOrNull()
                     if (intent == null) {
                         Feedback.toast(app, "Не собрался — посмотри Логи")
@@ -2711,10 +2708,7 @@ private fun DigestSection(app: PravkaApp) {
             }) { Text(label) }
         }
         Text("CSV всей жизни", style = MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            lifeCsvButton("С параллельными", true)
-            lifeCsvButton("Без", false)
-        }
+        lifeCsvButton("Выгрузить CSV")
         if (preview.isNotBlank()) {
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -78,18 +78,6 @@ class NfcTapActivity : Activity() {
                 )
                 app.eventLog.add("метка «${tag.name}»: закрыто «${closed?.title ?: "—"}»")
             }
-            NfcTag.ACT_PARALLEL -> {
-                val open = store.openParallel()
-                if (open != null && open.title.equals(title, ignoreCase = true)) {
-                    val closed = store.closeParallel(now)
-                    Feedback.toast(app, "∥ «$title» — ${closed?.durationMin(now) ?: 0} м")
-                    app.eventLog.add("метка «${tag.name}»: параллель закрыта")
-                } else {
-                    store.startParallel(now, "", title, tag.category, "", "voice")
-                    Feedback.toast(app, "∥ $title — с ${hm(now)}")
-                    app.eventLog.add("метка «${tag.name}»: параллель «$title»")
-                }
-            }
             NfcTag.ACT_START -> {
                 store.startEntry(now, "", title, tag.category, "", 0, "voice")
                 Feedback.toast(app, "⏱ $title — с ${hm(now)}")
@@ -108,7 +96,7 @@ class NfcTapActivity : Activity() {
     private suspend fun toggle(app: PravkaApp, tag: NfcTag, title: String, now: Long) {
         val store = app.zasechkaStore
         val all = store.all()
-        val open = all.lastOrNull { it.open && !it.parallel }
+        val open = all.lastOrNull { it.open }
         // «Своё» дело узнаём по названию ИЛИ по имени метки: владелец
         // переименовал метку в настройках, пока дело шло, — второе касание
         // всё равно должно закрыть его, а не открыть второе такое же.
@@ -124,7 +112,7 @@ class NfcTapActivity : Activity() {
         }
         // Дело, которое эта же метка и прервала: оно кончилось ровно там,
         // где началось наше.
-        val before = all.filter { !it.parallel && !it.open && it.end <= open.start + 60_000L }
+        val before = all.filter { !it.open && it.end <= open.start + 60_000L }
             .maxByOrNull { it.end }
         val closed = store.closeOpen(now)
         val back = before?.takeIf {

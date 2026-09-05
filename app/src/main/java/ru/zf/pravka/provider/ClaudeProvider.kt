@@ -336,7 +336,7 @@ $listing
     // ---- Засечка: one dictated phrase -> a structured timesheet entry ----
 
     data class ZasechkaParse(
-        val action: String,        // "new" | "insert" | "parallel" | "edit" | "delete" | "stop" | "none"
+        val action: String,        // "new" | "insert" | "edit" | "delete" | "stop" | "none"
         val entryIndex: Int,       // 1-based index into today's list (edit/delete)
         val title: String,
         val category: String,      // "" when the model failed to pick one
@@ -347,17 +347,10 @@ $listing
         val endTime: String,       // edit/insert: "HH:MM" new end, "" = keep
         val durationMin: Int,      // insert: длительность куска, 0 = не названа
         val say: String = "",      // none: почему ничего не записано
-        // Вторая половина фразы: то, что шло ОДНОВРЕМЕННО с первым делом
-        // («готовил еду и параллельно смотрел ютуб»). Пусто - параллели нет.
-        val parallelTitle: String = "",
-        val parallelCategory: String = "",
-        val parallelClient: String = "",
         val costUsd: Double,
         val tokensIn: Int,
         val tokensOut: Int,
-    ) {
-        val hasParallel: Boolean get() = parallelTitle.isNotBlank()
-    }
+    )
 
     // ---- Разноска: наговор -> дела в Todoist (Опус) ----
 

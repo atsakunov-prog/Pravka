@@ -15,8 +15,7 @@ import org.json.JSONObject
 //
 // Тот же приём, что у Правки с её правилами, но предмет другой. У Правки
 // учатся на тексте: как он пишет. Здесь - на смысле: что у него значит
-// «созвон», куда он кладёт «разбор почты» и какими словами говорит про
-// параллельность.
+// «созвон», куда он кладёт «разбор почты» и как называет время.
 //
 // Пишется на каждой правке записи, поэтому кольцо: последние MAX штук, и
 // хватит. Данные не незаменимые - потеряются, накопятся заново.
@@ -75,17 +74,14 @@ class ZasechkaCorrections(private val context: Context) {
         val raw: String,
         val wasTitle: String,
         val wasCategory: String,
-        val wasParallel: Boolean,
         val nowTitle: String,
         val nowCategory: String,
-        val nowParallel: Boolean,
     ) {
         /** Что именно он поправил - одной строкой, для промпта. */
         val what: String
             get() = buildList {
                 if (!wasTitle.equals(nowTitle, ignoreCase = true)) add("название")
                 if (!wasCategory.equals(nowCategory, ignoreCase = true)) add("категорию")
-                if (wasParallel != nowParallel) add("трек")
             }.joinToString(" и ")
     }
 
@@ -111,10 +107,8 @@ class ZasechkaCorrections(private val context: Context) {
                         raw = raw,
                         wasTitle = o.optString("wasTitle"),
                         wasCategory = o.optString("wasCat"),
-                        wasParallel = o.optBoolean("wasPar", false),
                         nowTitle = o.optString("nowTitle"),
                         nowCategory = o.optString("nowCat"),
-                        nowParallel = o.optBoolean("nowPar", false),
                     )
                 )
             }
@@ -133,8 +127,7 @@ class ZasechkaCorrections(private val context: Context) {
             val raw = before.raw.trim().ifBlank { after.raw.trim() }
             if (raw.isEmpty()) return@withContext
             val changed = !before.title.equals(after.title, ignoreCase = true) ||
-                !before.category.equals(after.category, ignoreCase = true) ||
-                before.parallel != after.parallel
+                !before.category.equals(after.category, ignoreCase = true)
             if (!changed) return@withContext
             mutex.withLock {
                 ensureLoaded()
@@ -144,10 +137,8 @@ class ZasechkaCorrections(private val context: Context) {
                         raw = raw.take(400),
                         wasTitle = before.title,
                         wasCategory = before.category,
-                        wasParallel = before.parallel,
                         nowTitle = after.title,
                         nowCategory = after.category,
-                        nowParallel = after.parallel,
                     )
                 )
                 while (items.size > MAX) items.removeAt(0)
@@ -177,10 +168,8 @@ class ZasechkaCorrections(private val context: Context) {
                         put("raw", c.raw)
                         put("wasTitle", c.wasTitle)
                         put("wasCat", c.wasCategory)
-                        put("wasPar", c.wasParallel)
                         put("nowTitle", c.nowTitle)
                         put("nowCat", c.nowCategory)
-                        put("nowPar", c.nowParallel)
                     }
                 )
             }

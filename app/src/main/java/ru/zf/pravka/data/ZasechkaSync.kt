@@ -102,12 +102,7 @@ class ZasechkaSync(
                                     put("date", dateFormat.format(Date(e.start)))
                                     put("start", timeFormat.format(Date(e.start)))
                                     put("end", timeFormat.format(Date(e.end)))
-                                    // Как и в CSV: время разнесено по двум
-                                    // колонкам, чтобы сумма любой из них была
-                                    // честной. Параллель в сутки не входит.
-                                    put("track", if (e.parallel) "параллельно" else "основной")
-                                    put("minutes", if (e.parallel) 0L else e.durationMin())
-                                    put("minutes_parallel", if (e.parallel) e.durationMin() else 0L)
+                                    put("minutes", e.durationMin())
                                     put("title", e.title)
                                     put("category", e.category)
                                     put("client", e.client)

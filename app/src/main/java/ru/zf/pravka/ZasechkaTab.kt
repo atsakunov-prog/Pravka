@@ -74,6 +74,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import ru.zf.pravka.core.PhoneDaySummary
 import ru.zf.pravka.data.PhoneStore
 import ru.zf.pravka.data.PhoneSweeper
 import ru.zf.pravka.data.ZasechkaStore
@@ -249,56 +250,14 @@ private fun parseTimeOfDay(dayStart: Long, text: String): Long? {
 private data class DayUnit(
     val fragments: List<ZasechkaStore.Entry>,
     val interruptions: List<ZasechkaStore.Entry>,
-    // Второй трек: то, что шло ПОВЕРХ этого дела и ничего у него не отняло.
-    // Рисуется правее, со знаком «∥», Σ дела не уменьшает.
-    val parallels: List<ZasechkaStore.Entry> = emptyList(),
 ) {
-    val chain: Boolean get() =
-        fragments.size > 1 || interruptions.isNotEmpty() || parallels.isNotEmpty()
+    val chain: Boolean get() = fragments.size > 1 || interruptions.isNotEmpty()
     val start: Long get() = fragments.first().start
     val open: Boolean get() = fragments.last().open
     fun endMs(now: Long): Long = fragments.last().let { if (it.open) now else it.end }
     /** Minutes of the activity's own fragments - interruptions not counted. */
     fun totalMin(now: Long): Long = msToMin(fragments.sumOf { it.durationMs(now) })
 }
-
-/**
- * Один источник параллели внутри дела: все звонки одной строкой, весь ютуб
- * одной, весь Клод одной. Иначе час готовки с ютубом и тремя звонками даёт в
- * ленте пять строк мелочи — владелец назвал это мусором, и он прав: важно
- * «сколько всего», а не каждый заход.
- */
-private data class ParallelGroup(
-    val key: String,
-    val title: String,
-    val category: String,
-    val entries: List<ZasechkaStore.Entry>,
-) {
-    val open: Boolean get() = entries.any { it.open }
-    fun ms(now: Long): Long = entries.sumOf { it.durationMs(now) }
-    /** Собеседники у звонков, приписка к названию: «Звонки ×3 · Мама, Петя». */
-    val clients: String
-        get() = entries.mapNotNull { it.client.takeIf { c -> c.isNotBlank() } }
-            .distinct().take(3).joinToString(", ")
-}
-
-/** Звонки сворачиваются все вместе — собеседник уходит в приписку. */
-private fun parallelKey(e: ZasechkaStore.Entry): String =
-    if (e.title.trimStart().startsWith("звонок", ignoreCase = true)) "звонок"
-    else e.title.trim().lowercase() + "|" + e.category.trim().lowercase()
-
-private fun groupParallels(list: List<ZasechkaStore.Entry>): List<ParallelGroup> =
-    list.groupBy { parallelKey(it) }
-        .map { (key, group) ->
-            val head = group.first()
-            ParallelGroup(
-                key = key,
-                title = if (key == "звонок") "Звонки" else capFirst(head.title.ifBlank { "без названия" }),
-                category = head.category,
-                entries = group.sortedBy { it.start },
-            )
-        }
-        .sortedByDescending { g -> g.entries.sumOf { it.durationMs() } }
 
 private fun entrySig(e: ZasechkaStore.Entry): String =
     "${e.title.trim().lowercase()}|${e.category.trim().lowercase()}|${e.client.trim().lowercase()}"
@@ -310,8 +269,7 @@ private fun entrySig(e: ZasechkaStore.Entry): String =
  * that are never followed by a resume stay ordinary standalone rows.
  */
 private fun buildDayUnits(all: List<ZasechkaStore.Entry>): List<DayUnit> {
-    val asc = all.filter { !it.parallel }
-    val parallels = all.filter { it.parallel }
+    val asc = all
     val units = ArrayList<DayUnit>()
     var fragments = ArrayList<ZasechkaStore.Entry>()
     var interruptions = ArrayList<ZasechkaStore.Entry>()
@@ -355,39 +313,7 @@ private fun buildDayUnits(all: List<ZasechkaStore.Entry>): List<DayUnit> {
         }
     }
     flush()
-    return attachParallels(units, parallels)
-}
-
-/**
- * Каждая параллельная запись прицепляется к тому делу, поверх которого она
- * реально шла (наибольшее пересечение). Если пересечения нет вовсе — к
- * ближайшему по времени; если дел нет совсем, параллели становятся строками
- * сами по себе, иначе они просто исчезли бы с экрана.
- */
-private fun attachParallels(
-    units: List<DayUnit>,
-    parallels: List<ZasechkaStore.Entry>,
-): List<DayUnit> {
-    if (parallels.isEmpty()) return units
-    if (units.isEmpty()) return parallels.map { DayUnit(listOf(it), emptyList()) }
-    val now = System.currentTimeMillis()
-    val buckets = HashMap<Int, MutableList<ZasechkaStore.Entry>>()
-    for (p in parallels) {
-        val pEnd = if (p.open) now else p.end
-        fun overlapWith(i: Int): Long {
-            val u = units[i]
-            return (minOf(u.endMs(now), pEnd) - maxOf(u.start, p.start)).coerceAtLeast(0L)
-        }
-        val best = units.indices.maxByOrNull { overlapWith(it) } ?: continue
-        val target = if (overlapWith(best) > 0) best else {
-            units.indices.minByOrNull { kotlin.math.abs(units[it].start - p.start) } ?: best
-        }
-        buckets.getOrPut(target) { ArrayList() }.add(p)
-    }
-    return units.mapIndexed { i, u ->
-        val mine = buckets[i] ?: return@mapIndexed u
-        u.copy(parallels = mine.sortedBy { it.start })
-    }
+    return units
 }
 
 @Composable
@@ -455,14 +381,11 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     Feedback.toast(app, "✏️ «${outcome.previousTitle}» → «${outcome.entry.title}»")
                 outcome.action == "delete" ->
                     Feedback.toast(app, "🗑 «${outcome.entry.title}» удалена")
-                outcome.action == "parallel" ->
-                    Feedback.toast(app, "∥ ${outcome.entry.title}")
+                outcome.action == "none" ->
+                    Feedback.toast(app, "🤷 ${outcome.say.ifBlank { "не про ленту" }}")
                 !outcome.categorized ->
                     Feedback.toast(app, app.getString(R.string.z_saved_raw, outcome.error ?: ""))
-                else -> Feedback.toast(
-                    app,
-                    "⏱ ${outcome.entry.title}" + (outcome.parallel?.let { " ∥ ${it.title}" } ?: "")
-                )
+                else -> Feedback.toast(app, "⏱ ${outcome.entry.title}")
             }
         }
     }
@@ -559,8 +482,8 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
 
         // ---- the day's history first (owner's layout), newest on top. An
         // uninterrupted entry is one dense table line; a sliced-up activity is
-        // ONE block: a tall line for the whole span, the net Σ beside it, the
-        // interruptions as parallel indented rows (owner: "а то кусками") ----
+        // ONE block: a tall line for the whole span, the net Σ beside it
+        // (owner: "а то кусками") ----
         if (!weekMode) {
             itemsIndexed(dayUnits, key = { _, u -> u.fragments.first().id }) { index, unit ->
                 val head = unit.fragments.first()
@@ -578,9 +501,6 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                             app.appScope.launch { unit.fragments.forEach { store.delete(it.id) } }
                         },
                         onEditInterruption = { editing = it },
-                        onStopParallel = {
-                            app.appScope.launch { app.zasechkaEngine.closeParallel() }
-                        },
                     )
                 } else {
                     EntryRow(
@@ -632,21 +552,12 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             // Summed in MILLISECONDS and rounded once: adding up per-entry
             // whole minutes is how the day used to come out short of the clock.
             val rangeTo = minOf(now, dayEnd)
-            // В сутки складывается ТОЛЬКО основной трек — это и есть железное
-            // правило. Параллель считается своим итогом, отдельной строкой.
-            val mainEntries = rangeEntries.filter { !it.parallel }
-            val parEntries = rangeEntries.filter { it.parallel }
+            val mainEntries = rangeEntries
             val msByCat = HashMap<String, Long>()
             for (e in mainEntries) {
                 val k = e.category.trim().lowercase()
                 msByCat[k] = (msByCat[k] ?: 0L) + e.durationMsIn(rangeStart, rangeTo, now)
             }
-            val parMsByCat = HashMap<String, Long>()
-            for (e in parEntries) {
-                val k = e.category.trim().lowercase()
-                parMsByCat[k] = (parMsByCat[k] ?: 0L) + e.durationMsIn(rangeStart, rangeTo, now)
-            }
-            val parTotal = msToMin(parMsByCat.values.sum())
             val minutesByCat = msByCat.mapValues { msToMin(it.value) }
             val names = (categoryNames + mainEntries.map { it.category.trim() }.filter { it.isNotBlank() })
                 .distinctBy { it.lowercase() }
@@ -670,7 +581,6 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             val uncoveredMin = msToMin((elapsedMs - msByCat.values.sum()).coerceAtLeast(0L))
             Text(
                 (if (weekMode) "За неделю" else "За день") + ": ${fmtDur(total)} · записей: ${mainEntries.size}" +
-                    (if (parTotal > 0) " · ∥ ${fmtDur(parTotal)}" else "") +
                     (if (pomoCount > 0) " · 🍅 $pomoCount" else "") +
                     (if (uncoveredMin >= 2) " · не покрыто ${fmtDur(uncoveredMin)}" else ""),
                 style = MaterialTheme.typography.titleSmall,
@@ -684,22 +594,38 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                 val v = worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now) / 3_600_000.0
                 if (v >= 0) plus += v else minus += v
             }
-            // Баллы второго трека идут в общий балл целиком (час за рулём с
-            // Акуниным честно лучше часа просто за рулём), но видны своим
-            // числом — иначе непонятно, откуда взялся плюс поверх суток.
-            val parPoints = parEntries.sumOf { e ->
-                worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now).toDouble() / 3_600_000.0
-            }
-            val parNet = kotlin.math.round(parPoints).toInt()
-            val net = kotlin.math.round(plus + minus + parPoints).toInt()
+            val net = kotlin.math.round(plus + minus).toInt()
             Text(
                 "Баланс ${if (net >= 0) "+$net" else "$net"} = " +
-                    "+${kotlin.math.round(plus).toInt()} и ${kotlin.math.round(minus).toInt()}" +
-                    (if (parNet != 0) ", и ещё ${if (parNet >= 0) "+$parNet" else "$parNet"} параллельно" else ""),
+                    "+${kotlin.math.round(plus).toInt()} и ${kotlin.math.round(minus).toInt()}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 6.dp),
             )
+            // Телефон за день — то, что пришло на смену параллельному треку.
+            // Владелец: «просто давай считать каждый день, сколько на Клод,
+            // телеграм, звонки, сколько на ютуб». Одной строкой, здесь же, у
+            // итогов дня; подробности — в разделе «Телефон» ниже.
+            val phoneDays by app.phoneStore.daysFlow.collectAsState()
+            val phoneTracked by app.phoneStore.immersiveFlow.collectAsState()
+            val phoneOff by app.phoneStore.offFlow.collectAsState()
+            val phoneLabels by app.phoneStore.labelsFlow.collectAsState()
+            val phoneLine = remember(phoneDays, phoneTracked, phoneOff, phoneLabels, dayStart, weekMode) {
+                val keys =
+                    if (weekMode) (0..6).map { phoneDayKey(dayStart - it * 86_400_000L) }
+                    else listOf(phoneDayKey(dayStart))
+                val agg = aggregatePhoneDays(phoneDays, keys)
+                PhoneDaySummary.line(
+                    PhoneDaySummary.of(agg, phoneTracked.filterKeys { it !in phoneOff }, phoneLabels)
+                )
+            }
+            if (phoneLine.isNotBlank()) {
+                Text(
+                    "Телефон: $phoneLine",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
             val max = rows.maxOfOrNull { it.second } ?: 0L
             for ((category, minutes) in rows) {
                 val rowAlpha = if (minutes > 0) 1f else 0.4f
@@ -755,44 +681,6 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            // Второй трек своим списком: это время НЕ входит в сутки, поэтому
-            // и стоит отдельно, а не строчками среди категорий дня.
-            if (parTotal > 0) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "∥ Параллельно · ${fmtDur(parTotal)}",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                val parNames = parEntries.map { it.category.trim() }
-                    .distinctBy { it.lowercase() }
-                    .sortedBy { categoryHue(it) }
-                for (category in parNames) {
-                    val ms = parMsByCat[category.lowercase()] ?: 0L
-                    if (ms <= 0) continue
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(vertical = 2.dp),
-                    ) {
-                        Text(
-                            category.ifBlank { "без категории" },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = categoryColor(category),
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.width(130.dp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            fmtDur(msToMin(ms)),
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(start = 8.dp).width(64.dp),
-                        )
-                        val pts = pointsOf(worthOf(category), ms)
-                        if (pts != 0) PointsChip(pts, bold = true)
-                    }
-                }
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -875,9 +763,6 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                             client = updated.client,
                             useful = updated.useful,
                             source = "edit",
-                            // Тумблер «Параллельно» в диалоге цепочки уводит
-                            // на второй трек всё дело, а не первый кусок.
-                            track = updated.track,
                         )
                         if (f.id == first.id) {
                             // An open fragment has end=0 - never clamp against it.
@@ -1107,8 +992,7 @@ private fun EntryRow(
 
 // The whole interrupted activity as one block: the time column shows the full
 // span, one tall line runs beside it, the header line carries the NET Σ
-// (interruptions excluded), and each interruption is its own small parallel
-// row inside - tappable for its own edit. Header edit/✕ act on ALL fragments.
+// (interruptions excluded). Header edit/✕ act on ALL fragments.
 @Composable
 private fun ChainBlock(
     unit: DayUnit,
@@ -1118,7 +1002,6 @@ private fun ChainBlock(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onEditInterruption: (ZasechkaStore.Entry) -> Unit,
-    onStopParallel: (ZasechkaStore.Entry) -> Unit,
 ) {
     val head = unit.fragments.first()
     val last = unit.fragments.last()
@@ -1216,112 +1099,11 @@ private fun ChainBlock(
                     )
                 }
             }
-            // Врезки, которые РЕЗАЛИ дело, в ленте не рисуются — владелец:
-            // «очень сильно засоряет». Их минуты живут в экранном времени, а
-            // старые записи остаются в данных и в выгрузках.
-            //
-            // А вот второй трек рисуется — потому что он ничего не отнял.
-            // Одной строкой на источник: все звонки вместе, весь ютуб вместе,
-            // весь Клод вместе. Иначе час готовки с ютубом и тремя звонками
-            // давал бы пять строк мелочи. Тап разворачивает свёртку в
-            // отдельные заходы — если понадобилось, кто именно звонил и когда.
-            var opened by remember(head.id) { mutableStateOf(emptySet<String>()) }
-            for (g in groupParallels(unit.parallels)) {
-                val ms = g.ms(now)
-                val many = g.entries.size > 1
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            if (many) {
-                                opened = if (g.key in opened) opened - g.key else opened + g.key
-                            } else {
-                                onEditInterruption(g.entries.first())
-                            }
-                        }
-                        .padding(start = 8.dp, top = 2.dp, bottom = 2.dp),
-                ) {
-                    Text(
-                        "∥",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        modifier = Modifier.width(14.dp),
-                    )
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            g.title + (if (many) " ×${g.entries.size}" else "") +
-                                (if (g.clients.isNotBlank()) " · ${g.clients}" else ""),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CategoryTag(g.category)
-                            DotSep()
-                            Text(
-                                fmtDur(msToMin(ms)) + (if (g.open) " …" else ""),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                            )
-                            val pts = pointsOf(worthOf(g.category), ms)
-                            if (pts != 0) {
-                                DotSep()
-                                PointsChip(pts)
-                            }
-                        }
-                    }
-                    if (g.open) {
-                        IconButton(
-                            onClick = { onStopParallel(g.entries.last { it.open }) },
-                            modifier = Modifier.size(30.dp),
-                        ) {
-                            Box(
-                                Modifier
-                                    .size(11.dp)
-                                    .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp)),
-                            )
-                        }
-                    }
-                }
-                // Развёрнутая свёртка: заходы по одному, каждый правится сам.
-                if (g.key in opened) {
-                    for (pr in g.entries) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onEditInterruption(pr) }
-                                .padding(start = 30.dp, top = 1.dp, bottom = 1.dp),
-                        ) {
-                            Text(
-                                fmtTime(pr.start) + "–" + (if (pr.open) "…" else fmtTime(pr.end)),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.width(92.dp),
-                            )
-                            Text(
-                                fmtDur(pr.durationMin(now)),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.width(56.dp),
-                            )
-                            Text(
-                                capFirst(pr.title.ifBlank { "—" }) +
-                                    (if (pr.client.isNotBlank()) " · ${pr.client}" else ""),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
-                }
-            }
+            // Врезки внутри дела (сон, тренировка с часов, разрезавшие его) в
+            // ленте отдельными строками не рисуются — владелец: «очень сильно
+            // засоряет». Они остаются в данных и в выгрузках; тап по блоку
+            // правит дело целиком. Параллельного трека больше нет: телефон
+            // считается по дням и виден строкой у итогов дня.
         }
     }
 }
@@ -1517,32 +1299,15 @@ internal fun ZasechkaSettings(app: PravkaApp) {
 
         Spacer(Modifier.height(12.dp))
         Text("Выгрузить CSV", style = MaterialTheme.typography.titleSmall)
-        // Две кнопки, а не тумблер: тумблер надо помнить, а кнопка называет
-        // то, что отдаёт, в момент нажатия. Файлы и называются по-разному —
-        // два одинаковых имени в мессенджере не различить, а перепутать слои
-        // значит потерять полдня разбора.
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
-                app.appScope.launch {
-                    context.startActivity(app.zasechkaStore.shareCsvIntent(true))
-                }
-            }) { Text("С параллельными") }
-            OutlinedButton(onClick = {
-                app.appScope.launch {
-                    context.startActivity(app.zasechkaStore.shareCsvIntent(false))
-                }
-            }) { Text("Без") }
-        }
+        OutlinedButton(onClick = {
+            app.appScope.launch {
+                context.startActivity(app.zasechkaStore.shareCsvIntent())
+            }
+        }) { Text("Выгрузить ленту") }
         Text(
-            "С параллельными — оба слоя. Время разнесено по двум колонкам: " +
-                "minutes_day складывается в сутки (за день ровно 1440), " +
-                "minutes_parallel — то, что шло поверх дела; у строки заполнена " +
-                "ровно одна, поэтому сумма любой из них честная и модель не " +
-                "насчитает тридцатичасовые сутки. Колонки id и parallel_of " +
-                "связывают параллель с её делом номером, а не догадкой по " +
-                "совпадению времени.\n\nБез — только основной трек: ютуб, звонки " +
-                "и Телеграм поверх дел не поедут. Так стоит отдавать туда, где " +
-                "формат объяснять некому: в таблицу или чужой скрипт.",
+            "Строка на дело, сумма minutes за день — ровно 1440. Файл начинается " +
+                "легендой для того, кому его отдают. Обычно не нужен: лента раз в " +
+                "час сама уезжает в Notion, в «Правка: разборы».",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -2262,11 +2027,17 @@ private fun aggregatePhoneDays(
     val appSessions = HashMap<String, Int>()
     val glanceApps = HashMap<String, Int>()
     val sites = HashMap<String, Long>()
+    var callsMs = 0L
+    var calls = 0
+    val callers = HashMap<String, Long>()
     for (key in keys) {
         val d = days[key] ?: continue
         screenMs += d.screenMs
         pickups += d.pickups
         glances += d.glances
+        callsMs += d.callsMs
+        calls += d.calls
+        for ((n, v) in d.callers) callers[n] = (callers[n] ?: 0L) + v
         for ((raw, v) in d.apps) {
             val p = PKG_ALIAS[raw] ?: raw
             apps[p] = (apps[p] ?: 0L) + v
@@ -2281,7 +2052,10 @@ private fun aggregatePhoneDays(
         }
         for ((s, v) in d.sites) sites[s] = (sites[s] ?: 0L) + v
     }
-    return PhoneStore.Day(screenMs, pickups, glances, apps, appSessions, glanceApps, sites)
+    return PhoneStore.Day(
+        screenMs, pickups, glances, apps, appSessions, glanceApps, sites,
+        callsMs = callsMs, calls = calls, callers = callers,
+    )
 }
 
 @Composable
@@ -2329,8 +2103,8 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
     if (!usageGranted) {
         Text(
             "Дай Правке доступ к статистике использования — появятся время в приложениях, " +
-                "подъёмы телефона и счётчик отвлечений. Пожиратели внимания (YouTube) и звонки " +
-                "будут сами вставать в ленту.",
+                "подъёмы телефона и счётчик отвлечений, а у итогов дня — строка «Телефон»: " +
+                "сколько на YouTube, Telegram, Claude и звонки.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -2405,28 +2179,18 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         )
     } else {
         Text(
-            "Тап по приложению — сделать «пожирателем внимания» (авто-запись в ленту).",
+            "Тап по приложению — считать его по дням (строка «Телефон» у итогов и «Дни» в Notion).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    // Прежние врезки резали дело и отнимали у него минуты — их владелец
-    // выключил по делу. Эти не режут: они ложатся ВТОРЫМ треком поверх.
-    val zInserts by app.settings.zParallelAutoFlow.collectAsState(initial = true)
+    // Телефон в ленту не пишет ничего, кроме сна. Врезки резали дело,
+    // параллельный трек засорял ленту — оба опыта владелец закрыл. Теперь
+    // телефон считается по дням: строка «Телефон» у итогов и «Дни» в Notion.
     Spacer(Modifier.height(6.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Switch(
-            checked = zInserts,
-            onCheckedChange = { on -> app.appScope.launch { app.settings.setZParallelAuto(on) } },
-        )
-        Spacer(Modifier.width(8.dp))
-        Text("Звонки и пожиратели — параллельным треком", style = MaterialTheme.typography.bodyMedium)
-    }
     Text(
-        "Ложатся ПОВЕРХ идущего дела, со знаком «∥», и ничего у него не " +
-            "отнимают: готовил еду и смотрел про часы — готовка осталась " +
-            "готовкой. Если время было ничьё, факт идёт обычной строкой. " +
-            "В сутки второй трек не складывается. Сон приезжает как раньше.",
+        "В ленту телефон не пишет ничего, кроме сна по экрану. YouTube, Telegram, " +
+            "Claude и звонки считаются по дням — строкой у итогов дня и в «Днях» Notion.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -2449,17 +2213,16 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         )
     }
 
-    // ---- calls: interruption entries that resume the paused activity ----
+    // ---- calls: counted per day from the call log ----
     val callsOn by app.settings.zCallsFlow.collectAsState(initial = true)
-    val callCategory by app.settings.zCallCategoryFlow.collectAsState(initial = "Звонки")
     val callPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> callGranted = granted }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
         Column(Modifier.weight(1f)) {
-            Text("Звонки в ленту", style = MaterialTheme.typography.bodyMedium)
+            Text("Считать звонки", style = MaterialTheme.typography.bodyMedium)
             Text(
-                "Разговор ≥1 мин прерывает дело и продолжает его после",
+                "Разговоры ≥1 мин по журналу: минуты, число и с кем — за день",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -2474,29 +2237,15 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
             })
         }
     }
-    if (callGranted && callsOn) {
-        var callCatMenu by remember { mutableStateOf(false) }
-        Box {
-            TextButton(onClick = { callCatMenu = true }) { Text("Категория звонков: $callCategory") }
-            DropdownMenu(expanded = callCatMenu, onDismissRequest = { callCatMenu = false }) {
-                for (c in (listOf("Звонки") + categories).distinct()) {
-                    DropdownMenuItem(text = { Text(c) }, onClick = {
-                        callCatMenu = false
-                        app.appScope.launch { app.settings.setZCallCategory(c) }
-                    })
-                }
-            }
-        }
-    }
 
-    // Список того, что пишется в ленту, — тумблерами, а не догадками по
+    // Список того, что считается по дням, — тумблерами, а не догадками по
     // серому списку экранного времени. Выключенное приложение остаётся в
-    // списке со своей категорией: тумблер обратно — и оно снова пишется.
+    // списке со своей категорией: тумблер обратно — и оно снова считается.
     Spacer(Modifier.height(12.dp))
-    Text("Приложения в ленте", style = MaterialTheme.typography.titleSmall)
+    Text("Приложения по дням", style = MaterialTheme.typography.titleSmall)
     Text(
-        "Их сессии ложатся параллельным треком поверх текущего дела. Тап по " +
-            "строке — категория и «звук в фоне».",
+        "Их минуты за день — в строке «Телефон» у итогов и в «Днях» Notion. Тап по " +
+            "строке — категория-подсказка и «звук в фоне».",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -2552,21 +2301,21 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         }
     }
 
-    // Разметка задним числом: врезки были выключены месяцами, и всё это время
-    // ютуб, звонки и Клод нигде не записывались — а телефон их помнит.
-    var retro by remember { mutableStateOf(false) }
+    // Досчёт прошлых дней: телефон помнит суточные суммы по приложениям и
+    // журнал звонков дольше, чем живёт приложение. Дни до установки можно
+    // досчитать — без сессий, но с честными минутами за день.
+    var backfill by remember { mutableStateOf(false) }
     Spacer(Modifier.height(8.dp))
-    OutlinedButton(onClick = { retro = true }) { Text("Разметить задним числом") }
+    OutlinedButton(onClick = { backfill = true }) { Text("Досчитать прошлые дни") }
     Text(
-        "Поднимает из памяти телефона то, чего в ленте нет: сессии приложений " +
-            "(система помнит около недели) и звонки (месяцами). Ложится вторым " +
-            "треком — прошлые дни уже сложились в свои 24 часа, и переписывать " +
-            "их нельзя.",
+        "Поднимает из памяти телефона суточные суммы по приложениям и звонки за " +
+            "дни, которых Правка не видела сама. В ленту ничего не пишет — только в " +
+            "счётчики телефона и в «Дни» Notion.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    if (retro) {
-        RetroDialog(app = app, categories = categories, onDismiss = { retro = false })
+    if (backfill) {
+        BackfillDialog(app = app, onDismiss = { backfill = false })
     }
 
     editingApp?.let { pkg ->
@@ -2627,8 +2376,8 @@ private fun ZasechkaLearning(app: PravkaApp) {
     Text(
         "Каждую ночь Опус сверяет, что ты наговорил, с тем, что из этого вышло " +
             "в ленте: где сказал «с 18:30 до 18:50», а записалось только " +
-            "начало; куда раз за разом уезжает категория; какими словами ты " +
-            "говоришь про параллельность. Найдёт закономерность — предложит " +
+            "начало; куда раз за разом уезжает категория; какие слова у тебя " +
+            "значат время. Найдёт закономерность — предложит " +
             "правило, и над кнопкой «З» загорится ⭐. Правило заработает " +
             "только после твоего «да».\n\nНочью это уходит батчем — вдвое " +
             "дешевле, ответ приходит в течение часа. Кнопки ниже считают " +
@@ -2744,39 +2493,25 @@ private fun ZasechkaLearning(app: PravkaApp) {
 }
 
 @Composable
-private fun RetroDialog(app: PravkaApp, categories: List<String>, onDismiss: () -> Unit) {
-    var days by remember { mutableStateOf(7) }
-    var scan by remember { mutableStateOf<ru.zf.pravka.data.PhoneSweeper.RetroScan?>(null) }
+private fun BackfillDialog(app: PravkaApp, onDismiss: () -> Unit) {
+    var days by remember { mutableStateOf(30) }
+    var scan by remember { mutableStateOf<ru.zf.pravka.data.PhoneSweeper.BackfillScan?>(null) }
     var scanning by remember { mutableStateOf(true) }
-    var picked by remember { mutableStateOf(emptySet<String>()) }
-    var cats by remember { mutableStateOf(emptyMap<String, String>()) }
-    var menuFor by remember { mutableStateOf<String?>(null) }
-    var keep by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
     val stamp = remember { SimpleDateFormat("d MMMM", Locale("ru")) }
+    val labels by app.phoneStore.labelsFlow.collectAsState()
+    val tracked by app.phoneStore.immersiveFlow.collectAsState()
 
     LaunchedEffect(days) {
         scanning = true
-        val found = runCatching { app.phoneSweeper.scanRetro(days) }.getOrNull()
-        scan = found
-        // По умолчанию отмечено то, чему категория уже назначена: звонки и
-        // приложения, которые он сам когда-то отметил тапом.
-        picked = found?.sources.orEmpty()
-            .filter { it.suggested.isNotBlank() }
-            .map { it.key }
-            .toSet()
-        cats = found?.sources.orEmpty()
-            .associate { it.key to it.suggested.ifBlank { "Отдых" } }
+        scan = runCatching { app.phoneSweeper.scanBackfill(days) }.getOrNull()
         scanning = false
     }
 
-    val sources = scan?.sources.orEmpty()
-    val chosen = sources.filter { it.key in picked }
-    val total = chosen.sumOf { it.count }
-
+    val found = scan
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text("Разметить задним числом") },
+        title = { Text("Досчитать прошлые дни") },
         text = {
             Column(
                 Modifier
@@ -2794,84 +2529,43 @@ private fun RetroDialog(app: PravkaApp, categories: List<String>, onDismiss: () 
                 }
                 Spacer(Modifier.height(8.dp))
                 when {
-                    scanning -> Text(
-                        "Смотрю память телефона…",
+                    scanning -> Text("Смотрю память телефона…", style = MaterialTheme.typography.bodySmall)
+                    found == null || found.days.isEmpty() -> Text(
+                        "Досчитывать нечего: все дни за это окно Правка видела сама.",
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    sources.isEmpty() -> Text(
-                        "За это окно ничего не нашлось.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    else -> for (src in sources) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        ) {
-                            Checkbox(
-                                checked = src.key in picked,
-                                onCheckedChange = { on ->
-                                    picked = if (on) picked + src.key else picked - src.key
-                                },
-                            )
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    src.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    "${src.count} раз · ${fmtDur(src.totalMs / 60_000)}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Box {
-                                TextButton(onClick = { menuFor = src.key }) {
-                                    Text(
-                                        cats[src.key].orEmpty().ifBlank { "категория" },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                    )
-                                }
-                                DropdownMenu(
-                                    expanded = menuFor == src.key,
-                                    onDismissRequest = { menuFor = null },
-                                ) {
-                                    for (c in categories) {
-                                        DropdownMenuItem(
-                                            text = { Text(c) },
-                                            onClick = {
-                                                cats = cats + (src.key to c)
-                                                picked = picked + src.key
-                                                menuFor = null
-                                            },
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                    else -> {
+                        Text(
+                            "Дней без данных: ${found.count}. Что в них нашлось:",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        // Итог по окну — теми же словами, что строка «Телефон».
+                        val total = aggregatePhoneDays(found.days, found.days.keys.sorted())
+                        val line = PhoneDaySummary.line(PhoneDaySummary.of(total, tracked, labels))
+                        Text(
+                            line.ifBlank { "только экранное время без отмеченных приложений" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
                     }
                 }
-                val info = scan
-                if (info != null && !scanning) {
+                if (found != null && !scanning) {
                     Spacer(Modifier.height(8.dp))
-                    // Честно про глубину: обещать «за три месяца» нельзя —
-                    // поимённые события система держит около недели, дальше
-                    // остаются только суммы за день, без места на шкале.
+                    // Честно про глубину: суточные суммы система держит дольше
+                    // поимённых событий, звонки — месяцами.
                     val lines = buildList {
                         when {
-                            info.noUsageAccess ->
+                            found.noUsageAccess ->
                                 add("Нет доступа к статистике использования — приложений не будет.")
-                            info.appsFrom > 0 ->
-                                add("Приложения: данные с ${stamp.format(Date(info.appsFrom))}.")
-                            else ->
-                                add("Приложения: система не отдала событий за это окно.")
+                            found.appsFrom > 0 ->
+                                add("Приложения: суммы с ${stamp.format(Date(found.appsFrom))}.")
+                            else -> add("Приложения: система не отдала сумм за это окно.")
                         }
                         when {
-                            info.noCallAccess -> add("Нет доступа к журналу звонков.")
-                            info.callsFrom > 0 -> add("Звонки: с ${stamp.format(Date(info.callsFrom))}.")
+                            found.noCallAccess -> add("Нет доступа к журналу звонков.")
+                            found.callsFrom > 0 -> add("Звонки: с ${stamp.format(Date(found.callsFrom))}.")
                         }
+                        add("Дни, которые Правка считала сама, не трогаются: они точнее.")
                     }
                     Text(
                         lines.joinToString("\n"),
@@ -2879,41 +2573,24 @@ private fun RetroDialog(app: PravkaApp, categories: List<String>, onDismiss: () 
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = keep, onCheckedChange = { keep = it })
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        "И записывать эти приложения дальше самому",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
             }
         },
         confirmButton = {
             Button(
-                enabled = !busy && !scanning && chosen.isNotEmpty(),
+                enabled = !busy && !scanning && found != null && found.days.isNotEmpty(),
                 onClick = {
                     busy = true
                     app.appScope.launch {
-                        val added = runCatching {
-                            app.phoneSweeper.applyRetro(
-                                picked = chosen
-                                    .map { it to cats[it.key].orEmpty() }
-                                    .filter { it.second.isNotBlank() },
-                                remember = keep,
-                            )
-                        }.getOrDefault(0)
+                        val added = runCatching { app.phoneSweeper.applyBackfill(found!!) }.getOrDefault(0)
                         Feedback.toast(
                             app,
-                            if (added > 0) "∥ Легло записей: $added"
-                            else "Новых записей не нашлось",
+                            if (added > 0) "Досчитано дней: $added" else "Новых дней не нашлось",
                         )
                         busy = false
                         onDismiss()
                     }
                 },
-            ) { Text(if (busy) "Пишу…" else "Разметить ($total)") }
+            ) { Text(if (busy) "Пишу…" else "Досчитать") }
         },
         dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Отмена") } },
     )
@@ -2939,10 +2616,10 @@ private fun ImmersiveAppDialog(
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Писать в ленту", style = MaterialTheme.typography.bodyMedium)
+                        Text("Считать по дням", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "Сессия в этом приложении встаёт параллельным треком поверх " +
-                                "текущего дела и ничего у него не отнимает",
+                            "Минуты в этом приложении идут в строку «Телефон» у итогов дня " +
+                                "и в «Дни» Notion; в ленту ничего не пишется",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -3003,7 +2680,6 @@ private fun EditEntryDialog(
     var startText by remember { mutableStateOf(fmtTime(entry.start)) }
     var endText by remember { mutableStateOf(if (entry.open) "" else fmtTime(entry.end)) }
     var categoryMenu by remember { mutableStateOf(false) }
-    var parallel by remember { mutableStateOf(entry.parallel) }
 
     val entryDayStart = remember(entry.id) {
         val cal = Calendar.getInstance()
@@ -3068,17 +2744,6 @@ private fun EditEntryDialog(
                     )
                 }
                 Spacer(Modifier.height(8.dp))
-                // Перекинуть запись между треками руками: робот угадал не то,
-                // или наоборот — дело на самом деле шло поверх другого.
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = parallel, onCheckedChange = { parallel = it })
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        "Параллельно (поверх дела, в сутки не входит)",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
                 if (entry.raw.isNotBlank() && entry.raw != entry.title) {
                     Text(
                         "Надиктовано: «${entry.raw.take(200)}»",
@@ -3113,7 +2778,6 @@ private fun EditEntryDialog(
                         // living inside its block and keeps blocking its own
                         // re-sweep duplicate.
                         source = if (entry.source == "auto") "auto" else "edit",
-                        track = if (parallel) 1 else 0,
                     )
                 )
             }) { Text("Сохранить") }

@@ -218,10 +218,7 @@ private fun TagDialog(
                     Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    for (a in listOf(
-                        NfcTag.ACT_TOGGLE, NfcTag.ACT_START,
-                        NfcTag.ACT_STOP, NfcTag.ACT_PARALLEL,
-                    )) {
+                    for (a in listOf(NfcTag.ACT_TOGGLE, NfcTag.ACT_START, NfcTag.ACT_STOP)) {
                         FilterChip(
                             selected = act == a,
                             onClick = { act = a },

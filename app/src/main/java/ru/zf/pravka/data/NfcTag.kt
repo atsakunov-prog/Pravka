@@ -52,8 +52,6 @@ data class NfcTag(
         const val ACT_START = "start"
         /** Всегда закрывает открытое. */
         const val ACT_STOP = "stop"
-        /** Кладёт параллель поверх текущего дела (и снимает повторным касанием). */
-        const val ACT_PARALLEL = "parallel"
 
         /**
          * Свой MIME-тип: по нему Android и понимает, что метку надо отдать
@@ -79,7 +77,6 @@ data class NfcTag(
         fun actLabel(act: String): String = when (act) {
             ACT_START -> "начать дело"
             ACT_STOP -> "закрыть открытое"
-            ACT_PARALLEL -> "параллельно"
             else -> "начать / закрыть"
         }
 

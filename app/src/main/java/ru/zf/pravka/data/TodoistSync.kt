@@ -185,10 +185,7 @@ class TodoistSync(
         val entries = zasechkaStore.all()
         for (link in links) {
             val mine = entries.filter {
-                // Второй трек — не это дело: время в задачу пишет только
-                // основная лента, иначе одноимённая параллель удвоила бы час.
-                !it.parallel &&
-                    it.title.trim().equals(link.title.trim(), ignoreCase = true) &&
+                it.title.trim().equals(link.title.trim(), ignoreCase = true) &&
                     it.start >= link.startedAt - 60_000
             }
             if (mine.isEmpty()) {

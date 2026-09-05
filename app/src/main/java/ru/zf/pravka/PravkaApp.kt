@@ -231,9 +231,10 @@ class PravkaApp : Application() {
     val notionExerciseSync by lazy {
         ru.zf.pravka.data.NotionExerciseSync(settings, exerciseBook, httpClient, eventLog)
     }
-    // Единственное место, где приложение ПИШЕТ в Notion: автогалочки в его
-    // базу «Дневник» — зарядка, сделано, feel, колено, вес. Он забросил её
-    // тикать руками ровно тогда, когда всё это стал наговаривать сюда.
+    // Автогалочки в его базу «Дневник» под хабом «Тело» — зарядка, сделано,
+    // feel, колено, вес. Он забросил её тикать руками ровно тогда, когда всё
+    // это стал наговаривать сюда. Второе место записи в Notion — базы
+    // «Правка: разборы» (notionLifeSync ниже).
     val notionDiarySync by lazy {
         ru.zf.pravka.data.NotionDiarySync(
             settings = settings,
@@ -245,9 +246,11 @@ class PravkaApp : Application() {
             eventLog = eventLog,
         )
     }
-    // Вся жизнь в Notion раз в час — лента, еда, спорт, дни, паттерны и
-    // подтверждения — в базы под хабом «Правка: разборы», которые построил
-    // его аналитик. Владелец: «чтобы я не выгружал csv с жизнью».
+    // Вся жизнь в Notion раз в час — лента, еда, тренировки, силовые,
+    // зарядка, дни с телефоном, справочник, паттерны и подтверждения — в
+    // базы под хабом «Правка: разборы». Структура баз описана в
+    // core/NotionLifeSchema и достраивается приложением само. Владелец:
+    // «чтобы оттуда можно было всегда взять актуальную структуру жизни».
     val notionLifeSync by lazy {
         ru.zf.pravka.data.NotionLifeSync(
             context = this,
@@ -257,6 +260,7 @@ class PravkaApp : Application() {
             sport = sportStore,
             strength = strengthStore,
             analysis = analysisStore,
+            phone = phoneStore,
             client = httpClient,
             eventLog = eventLog,
             provider = claudeProvider,
@@ -317,8 +321,8 @@ class PravkaApp : Application() {
         )
     }
 
-    // The phone layer: app time, pickups, distractions; attention eaters and
-    // calls cross into the ribbon via the sweeper.
+    // The phone layer: app time, pickups, distractions, calls - counted per
+    // day; only сон crosses into the ribbon via the sweeper.
     val phoneStore by lazy { ru.zf.pravka.data.PhoneStore(this) }
     val phoneSweeper by lazy {
         ru.zf.pravka.data.PhoneSweeper(this, phoneStore, zasechkaStore, settings, eventLog, zasechkaSync, appScope)

@@ -3,7 +3,6 @@ package ru.zf.pravka.data
 import android.content.Context
 import java.io.File
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
@@ -18,49 +17,57 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import ru.zf.pravka.BuildConfig
+import ru.zf.pravka.core.NotionLifeSchema
+import ru.zf.pravka.core.PhoneDaySummary
 import ru.zf.pravka.provider.batchAnswer
 import ru.zf.pravka.provider.submitBatch
 
 /**
  * Вся жизнь — в Notion, раз в час, сама. Владелец: «чтобы засечка уходила в
- * notion, чтобы я не выгружал csv с жизнью (время, еда, спорт и т.п.)».
+ * notion, чтобы я не выгружал csv с жизнью» и потом: «сделай, чтобы оттуда
+ * можно было всегда взять актуальную структуру жизни, чтобы она
+ * синхронизировалась аппом всегда».
  *
- * СТРУКТУРУ ПРИДУМЫВАТЬ НЕ ПРИШЛОСЬ — она уже стояла. Под хабом «Правка:
- * разборы» его аналитик (проект в Клоде) за две недели построил ровно то, что
- * нужно, и даже подписал поля «для синхронизатора»:
+ * СТРУКТУРА — В КОДЕ (`core/NotionLifeSchema`), и это главное отличие от
+ * первой версии. Тогда всё лежало в одной базе «Засечка» с полем «Домен»: и
+ * дела ленты, и параллели, и еда, и тренировки, и зарядка — тридцать колонок,
+ * у каждой строки заполнено пять. Владелец: «захожу, а там какой-то мусор по
+ * времени, а еда и тело — огрызками. ужас». Теперь под хабом «Правка:
+ * разборы» у каждого домена своя база:
  *
- *   Засечка        — журнал событий, строка на событие всех доменов. Схема
- *                    один в один повторяет CSV «всей жизни»: Домен, Бюджет,
- *                    Источник, EntryId, Носитель ID и связь «Носитель».
- *   Дни            — строка на сутки: покрытие, минуты по категориям, сон,
- *                    экран параллелью, еда. Плюс ЕГО поля — «Дети дома»,
- *                    «Марианна дома днём», «Якорь утра», «Заметка дня»: их
- *                    заполняет человек, и мы к ним не прикасаемся.
- *   Паттерны       — библиотека паттернов и гипотез со статусами. Источник
- *                    правды по статусам — аналитик, не приложение.
- *   Подтверждения  — единственное, чего не хватало, и он просил именно это:
- *                    «отдельно паттерны и подтверждения, потому что я хочу
- *                    работать над этим». Одна строка — одна датированная
- *                    улика: слово Саши из приложения, повторная находка
- *                    ночного поиска, проверка аналитика в разборе.
- *   Разборы, Стоп-сигналы — аналитика и владельца; приложение туда не пишет.
+ *   Засечка      — только лента, строка на дело, минуты складываются в 1440.
+ *   Дни          — сутки одной строкой: лента, телефон (YouTube, Telegram,
+ *                  Claude, звонки), сон, еда, тело. Плюс ЕГО поля — «Дети
+ *                  дома», «Марианна дома днём», «Якорь утра», «Заметка дня»,
+ *                  которых нет в схеме и которые мы поэтому не трогаем.
+ *   Еда          — приём с КБЖУ и составом.
+ *   Тренировки   — активность с часов.
+ *   Силовые      — сессия подходов голосом.
+ *   Зарядка      — день GTG.
+ *   Справочник   — структура как она настроена: категории с ценностью часа,
+ *                  приложения по дням, цели питания, состояние синка и что
+ *                  идёт сейчас.
+ *   Паттерны, Подтверждения — библиотека аналитика; приложение приносит туда
+ *                  кандидатов и вердикты владельца, статусы не трогает.
  *
- * Мы — гости в его базах, поэтому правила те же, что у «Дневника»: трогаем
- * только свои колонки, чужие не переписываем, чужие строки не удаляем.
+ * Приложение само находит базы под хабом по названиям, создаёт недостающие и
+ * достраивает недостающие колонки, поэтому структура в Notion всегда ровно
+ * такая, как в коде. Мы гости в его пространстве: трогаем только свои
+ * колонки, чужие строки не удаляем.
  *
  * КАК УСТРОЕНО. Раз в час — полный обход: по каждому событию считается снимок
  * полей и его хеш; изменилось — в очередь. Очередь разгребается на каждом
- * пятиминутном тике, пачкой, с паузой между запросами: Notion пускает три
- * запроса в секунду, и первый заезд — шесть сотен строк ленты — растянется на
- * час, а дальше в час набегает пара десятков правок. Пары «ключ — страница»
- * живут в файле, чтобы не спрашивать Notion «а есть ли уже такая строка» на
- * каждое событие; при пустом файле карта один раз восстанавливается из самой
- * базы, иначе переустановка наплодила бы дублей.
+ * пятиминутном тике пачкой с паузой между запросами: Notion пускает три
+ * запроса в секунду. Пары «ключ — страница» живут в файле; при пустом файле
+ * карта восстанавливается из самих баз, иначе переустановка наплодила бы
+ * дублей. Строка события, которого в приложении больше нет, архивируется —
+ * иначе база зарастёт призраками, а сутки перестанут сходиться.
  *
- * Лента постоянно перенумеровывает куски (полночь, врезки, склейки), и
- * страница исчезнувшей записи должна исчезать вместе с ней — иначе база
- * зарастёт призраками, а сутки перестанут сходиться. Такие страницы
- * архивируются (это наши строки, не его).
+ * ПЕРЕЕЗД со старой раскладки: строки еды, тренировок, силовых и зарядки,
+ * лежавшие в «Засечке», архивируются, их ключи забываются — и те же события
+ * приезжают в свои базы заново. Устаревшие колонки «Засечки» и «Дней»
+ * убираются один раз, когда переезд закончен.
  */
 class NotionLifeSync(
     private val context: Context,
@@ -70,6 +77,7 @@ class NotionLifeSync(
     private val sport: SportStore,
     private val strength: StrengthStore,
     private val analysis: AnalysisStore,
+    private val phone: PhoneStore,
     private val client: OkHttpClient,
     private val eventLog: EventLog,
     /** Сверка формулировок при склейке дублей паттернов; без ключа — только по словам. */
@@ -88,21 +96,25 @@ class NotionLifeSync(
         private const val BUDGET = 120
         /** Пауза между запросами: лимит Notion — три в секунду. */
         private const val PAUSE_MS = 340L
-        /** Сколько последних суток пересчитываем в «Дни». */
-        private const val DAYS_BACK = 14
-        /** Полный день по правилу хаба: покрытие основного трека ≥ 1370 минут. */
-        private const val FULL_DAY_MIN = 1370L
+        /** Сколько последних суток пересчитываем в «Дни»: досчёт телефона уходит на месяц назад. */
+        private const val DAYS_BACK = 45
+        /**
+         * После 401/403 синк не стучится каждые пять минут — это бессмысленно
+         * и шумно, — но и не молчит до смены токена: раз в час пробует снова,
+         * потому что доступ чаще всего возвращают на стороне Notion.
+         */
+        private const val RETRY_BLOCKED_MS = 60 * 60_000L
 
-        /** Хаб «Правка: разборы» — под ним живут все базы. */
-        const val HUB_DEFAULT = "3cdc4ffca2d581568abad6839b74784c"
+        const val HUB_DEFAULT = NotionLifeSchema.HUB_DEFAULT
 
-        // Известные id баз под хабом - страховка, если хаб не открыт
+        // Базы аналитика под тем же хабом: приложение в них пишет, но их
+        // структуру не ведёт. Известные id — страховка, если хаб не открыт
         // интеграции и список его детей не читается.
-        private val KNOWN_DBS = mapOf(
-            "Засечка" to "5b11be1184494f0197b05ffffe357504",
-            "Дни" to "39a031d4ac724ed28d4876e79319e202",
-            "Паттерны" to "92b78780453e4ed1852b01e205022465",
-            "Подтверждения" to "c5fc6ee8258e433a990812dc8f1c1427",
+        private const val PATTERNS = "Паттерны"
+        private const val CONFIRMATIONS = "Подтверждения"
+        private val KNOWN_ANALYST_DBS = mapOf(
+            PATTERNS to "92b78780453e4ed1852b01e205022465",
+            CONFIRMATIONS to "c5fc6ee8258e433a990812dc8f1c1427",
         )
 
         /** Выше этого пересечения слов дубль очевиден и без модели. */
@@ -112,8 +124,19 @@ class NotionLifeSync(
         /** Батч не ответил и за это время — считаем потерянным и спросим заново. */
         private const val DUPE_GIVEUP_MS = 30 * 3_600_000L
 
-        private val WEEKDAYS = listOf("вс", "пн", "вт", "ср", "чт", "пт", "сб")
-        private val MEAL_KINDS = setOf("завтрак", "обед", "ужин", "перекус")
+        /** Ключи событий по базам: по префиксу ключа видно, где живёт страница. */
+        private val EVENT_PREFIXES = listOf("t", "f", "w", "s", "g")
+        private fun dbOfKey(key: String): String? = when {
+            key.startsWith("day:") || key.startsWith("pat:") || key.startsWith("conf:") ||
+                key.startsWith("cat:") || key.startsWith("app:") || key.startsWith("target:") ||
+                key.startsWith("sync:") -> null
+            key.startsWith("t") -> NotionLifeSchema.ZASECHKA.name
+            key.startsWith("f") -> NotionLifeSchema.EDA.name
+            key.startsWith("w") -> NotionLifeSchema.TRENIROVKI.name
+            key.startsWith("s") -> NotionLifeSchema.SILOVYE.name
+            key.startsWith("g") -> NotionLifeSchema.ZARYADKA.name
+            else -> null
+        }
     }
 
     // ---- Состояние ----
@@ -127,6 +150,17 @@ class NotionLifeSync(
         val dbs = HashMap<String, String>()
         /** имя базы → карта страниц уже восстановлена из Notion */
         val mapped = HashSet<String>()
+        /** имя базы → колонки схемы достроены (для текущей версии схемы) */
+        val schemaOk = HashSet<String>()
+        /** имя базы → устаревшие колонки убраны */
+        val retired = HashSet<String>()
+        /** версия схемы, под которую заведено состояние */
+        var schemaVersion = 1
+        /**
+         * Страницы старой раскладки, которые надо заархивировать: id → ключ.
+         * Пока список не пуст, устаревшие колонки не трогаем.
+         */
+        val legacy = HashMap<String, String>()
         /**
          * Решения о дублях паттернов: ключ находки → id страницы того
          * паттерна, который она повторяет («» = не дубль, свой). Решение
@@ -151,20 +185,25 @@ class NotionLifeSync(
         val db: String,
         val properties: JSONObject?,   // null = архивировать
         val hash: Int,
+        /** Архив страницы старой раскладки по её id, а не по карте. */
+        val archivePageId: String? = null,
     )
 
     private val queue = ArrayList<Job>()
+    /** Базы, ответившие 404 в этом заходе: их строки откладываются до следующего обхода. */
+    private val brokenDbs = HashSet<String>()
 
     @Volatile private var lastError = ""
     @Volatile private var blockedConfig: String? = null
+    @Volatile private var blockedAt = 0L
     private val _statusFlow = MutableStateFlow("")
     val statusFlow: StateFlow<String> = _statusFlow
 
     fun lastError(): String = lastError
     fun pending(): Int = queue.size
 
-    private val dateTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
     private val hm = SimpleDateFormat("HH:mm", Locale.US)
+    private val stampFmt = SimpleDateFormat("dd.MM HH:mm", Locale.US)
 
     // ---- Вход ----
 
@@ -179,22 +218,29 @@ class NotionLifeSync(
         if (token.isBlank()) return false
         val hub = NotionPlanSync.pageId(settings.notionLifeHub())
         val cfg = "$token|$hub"
-        if (!force && cfg == blockedConfig) return false
+        val now = System.currentTimeMillis()
+        if (!force && cfg == blockedConfig && now - blockedAt < RETRY_BLOCKED_MS) return false
         if (!running.compareAndSet(false, true)) return false
         try {
             return withContext(Dispatchers.IO) {
                 loadState()
-                val now = System.currentTimeMillis()
+                if (cfg != blockedConfig || force) blockedConfig = null
                 if (!ensureDbs(token, hub)) return@withContext false
                 val due = force || state.lastScan == 0L || now - state.lastScan >= SCAN_MS
                 if (due) {
+                    ensureSchema(token)
                     if (!ensureMaps(token)) return@withContext false
                     dupeStep(token)
                     scan()
                     state.lastScan = now
                     saveState()
                 }
+                brokenDbs.clear()
                 val done = drain(token, cfg)
+                // Состояние синка и «что идёт сейчас» — живые строки
+                // Справочника, обновляются на каждом тике, если изменились.
+                liveRows(token, cfg)
+                if (due) retireColumns(token)
                 saveState()
                 done
             }
@@ -207,19 +253,21 @@ class NotionLifeSync(
 
     /**
      * Базы ищутся по названию среди детей хаба: так они переживут пересоздание
-     * и переезд. Хаб не читается (не открыт интеграции) — берём известные id,
-     * а в журнал пишем, чего не хватает.
+     * и переезд. Нет базы из схемы — создаётся под хабом по описанию из кода.
+     * Хаб не читается (не открыт интеграции) — берём известные id, а в журнал
+     * пишем, чего не хватает и что сделать.
      */
     private fun ensureDbs(token: String, hub: String): Boolean {
-        if (state.dbs.size >= KNOWN_DBS.size) return true
+        val wanted = NotionLifeSchema.ALL.map { it.name } + KNOWN_ANALYST_DBS.keys
+        if (wanted.all { state.dbs.containsKey(it) }) return true
         val found = HashMap<String, String>()
         var cursor: String? = null
-        var ok = true
+        var hubReadable = true
         do {
             val url = "$API/blocks/$hub/children?page_size=100" +
                 (cursor?.let { "&start_cursor=$it" } ?: "")
             val reply = runCatching { get(url, token) }.getOrElse { e ->
-                ok = false
+                hubReadable = false
                 lastError = e.message ?: "сеть"
                 null
             } ?: break
@@ -233,16 +281,143 @@ class NotionLifeSync(
             }
             cursor = reply.optString("next_cursor").takeIf { reply.optBoolean("has_more") && it.isNotBlank() }
         } while (cursor != null)
-        if (!ok) {
+        if (!hubReadable) {
             eventLog.add(
                 "жизнь → Notion: хаб не читается ($lastError) — беру известные id баз. " +
-                    "Открой интеграции страницу «Правка: разборы» (… → Connections)."
+                    "Открой интеграции страницу «Правка: разборы» (… → Connections), " +
+                    "иначе новые базы не создать."
             )
         }
-        for ((name, known) in KNOWN_DBS) {
+        for ((name, known) in KNOWN_ANALYST_DBS) {
             state.dbs[name] = found[name] ?: state.dbs[name] ?: known
         }
-        return true
+        for (db in NotionLifeSchema.ALL) {
+            val id = found[db.name] ?: state.dbs[db.name] ?: db.knownId.ifBlank { null }
+            if (id != null) {
+                state.dbs[db.name] = id
+                continue
+            }
+            if (!hubReadable) {
+                eventLog.add("жизнь → Notion: базы «${db.name}» под хабом нет, а хаб не открыт — создать не могу")
+                continue
+            }
+            // Создаём по описанию из кода: структура живёт в NotionLifeSchema.
+            val reply = runCatching { post("$API/databases", token, NotionLifeSchema.createBody(db, hub)) }
+                .getOrElse { e ->
+                    lastError = e.message ?: "сеть"
+                    eventLog.add("жизнь → Notion: база «${db.name}» не создалась — $lastError")
+                    null
+                } ?: continue
+            val created = reply.optString("id").replace("-", "")
+            if (created.isNotBlank()) {
+                state.dbs[db.name] = created
+                state.schemaOk.add(db.name)
+                state.mapped.add(db.name)
+                eventLog.add("жизнь → Notion: создана база «${db.name}» под хабом")
+            }
+        }
+        saveState()
+        return state.dbs.containsKey(NotionLifeSchema.ZASECHKA.name)
+    }
+
+    /**
+     * Недостающие колонки достраиваются по схеме из кода — так база в Notion
+     * всегда ровно такая, как описано в NotionLifeSchema, и новая колонка в
+     * коде появляется в Notion сама. Существующие колонки не переписываются:
+     * сменить тип живой колонке значит потерять её значения.
+     */
+    private fun ensureSchema(token: String) {
+        if (state.schemaVersion != NotionLifeSchema.VERSION) {
+            state.schemaOk.clear()
+            state.retired.clear()
+        }
+        for (db in NotionLifeSchema.ALL) {
+            if (db.name in state.schemaOk) continue
+            val id = state.dbs[db.name] ?: continue
+            val existing = runCatching { get("$API/databases/$id", token) }.getOrElse { e ->
+                lastError = e.message ?: "сеть"
+                eventLog.add("жизнь → Notion: схема «${db.name}» не читается — $lastError")
+                null
+            } ?: continue
+            val have = existing.optJSONObject("properties")?.keys()?.asSequence()?.toSet() ?: emptySet()
+            val missing = db.columns.filter { it.name !in have && it.type != "title" }
+            if (missing.isNotEmpty()) {
+                val props = JSONObject()
+                missing.forEach { props.put(it.name, NotionLifeSchema.propertyJson(it)) }
+                val ok = runCatching { patch("$API/databases/$id", token, JSONObject().put("properties", props)) }
+                    .onFailure { e ->
+                        lastError = e.message ?: "сеть"
+                        eventLog.add("жизнь → Notion: колонки «${db.name}» не достроились — $lastError")
+                    }.isSuccess
+                if (!ok) continue
+                eventLog.add("жизнь → Notion: «${db.name}» — достроено колонок: ${missing.size} (${missing.joinToString { it.name }})")
+            }
+            state.schemaOk.add(db.name)
+            sleepBlocking()
+        }
+        if (NotionLifeSchema.ALL.all { it.name in state.schemaOk || state.dbs[it.name] == null }) {
+            if (state.schemaVersion != NotionLifeSchema.VERSION) migrateState()
+            state.schemaVersion = NotionLifeSchema.VERSION
+        }
+        saveState()
+    }
+
+    /**
+     * Переезд со старой раскладки: события еды, тренировок, силовых, зарядки
+     * и комментариев лежали строками в «Засечке». Их страницы уходят в архив,
+     * ключи забываются — и те же события приедут в свои базы заново. Параллели
+     * ленты (`t…` с треком) исчезли из приложения сами и уйдут призраками.
+     */
+    private fun migrateState() {
+        var moved = 0
+        for (key in state.pages.keys.toList()) {
+            val legacyPrefix = key.startsWith("f") || key.startsWith("w") || key.startsWith("s") ||
+                key.startsWith("g") || key.startsWith("c")
+            if (!legacyPrefix || key.startsWith("sync:")) continue
+            val pageId = state.pages.remove(key) ?: continue
+            state.hashes.remove(key)
+            state.legacy[pageId] = key
+            moved++
+        }
+        // Карты еды и тела надо снять заново из НОВЫХ баз (там пусто), а не
+        // считать восстановленными по старой «Засечке».
+        state.mapped.removeAll(setOf(NotionLifeSchema.EDA.name, NotionLifeSchema.TRENIROVKI.name,
+            NotionLifeSchema.SILOVYE.name, NotionLifeSchema.ZARYADKA.name, NotionLifeSchema.SPRAVOCHNIK.name))
+        if (moved > 0) {
+            eventLog.add(
+                "жизнь → Notion: переезд на новую структуру — $moved строк еды и тела уйдут из " +
+                    "«Засечки» в архив и приедут в свои базы"
+            )
+        }
+    }
+
+    /**
+     * Устаревшие колонки убираются один раз, когда переезд закончен: строки
+     * старой раскладки заархивированы, новые колонки достроены. Раньше —
+     * нельзя: у старой сборки на телефоне эти колонки ещё в ходу.
+     */
+    private fun retireColumns(token: String) {
+        if (state.schemaVersion != NotionLifeSchema.VERSION || state.legacy.isNotEmpty()) return
+        for (db in NotionLifeSchema.ALL) {
+            if (db.retired.isEmpty() || db.name in state.retired) continue
+            val id = state.dbs[db.name] ?: continue
+            if (db.name !in state.schemaOk) continue
+            val existing = runCatching { get("$API/databases/$id", token) }.getOrNull() ?: continue
+            val have = existing.optJSONObject("properties")?.keys()?.asSequence()?.toSet() ?: emptySet()
+            val gone = db.retired.filter { it in have }
+            if (gone.isNotEmpty()) {
+                val props = JSONObject()
+                gone.forEach { props.put(it, JSONObject.NULL) }
+                val ok = runCatching { patch("$API/databases/$id", token, JSONObject().put("properties", props)) }
+                    .onFailure { e -> eventLog.add("жизнь → Notion: старые колонки «${db.name}» не убрались — ${e.message}") }
+                    .isSuccess
+                if (!ok) continue
+                eventLog.add("жизнь → Notion: «${db.name}» — убраны колонки старой раскладки: ${gone.joinToString()}")
+            }
+            state.retired.add(db.name)
+            sleepBlocking()
+        }
+        saveState()
     }
 
     // ---- Карта страниц ----
@@ -250,14 +425,19 @@ class NotionLifeSync(
     /**
      * Восстановить «ключ → страница» из самих баз. Один раз на базу: дальше
      * карта живёт в файле. Без этого переустановка приложения означала бы
-     * вторую копию всех шестисот строк.
+     * вторую копию всех строк.
      */
     private suspend fun ensureMaps(token: String): Boolean {
-        val plan = listOf(
-            "Засечка" to { p: JSONObject -> richText(p, "EntryId") },
-            "Дни" to { p: JSONObject -> p.optJSONObject("Дата")?.optJSONObject("date")?.optString("start")?.take(10)?.let { "day:$it" }.orEmpty() },
-            "Паттерны" to { p: JSONObject -> titleText(p, "Паттерн").let { if (it.isBlank()) "" else "pat:" + patternKey(it) } },
-            "Подтверждения" to { p: JSONObject -> richText(p, "Ключ") },
+        val plan = listOf<Pair<String, (JSONObject) -> String>>(
+            NotionLifeSchema.ZASECHKA.name to { p -> richText(p, "EntryId") },
+            NotionLifeSchema.EDA.name to { p -> richText(p, "MealId") },
+            NotionLifeSchema.TRENIROVKI.name to { p -> richText(p, "WorkoutId") },
+            NotionLifeSchema.SILOVYE.name to { p -> richText(p, "SessionId") },
+            NotionLifeSchema.ZARYADKA.name to { p -> richText(p, "GtgId") },
+            NotionLifeSchema.SPRAVOCHNIK.name to { p -> richText(p, "Ключ") },
+            NotionLifeSchema.DNI.name to { p -> p.optJSONObject("Дата")?.optJSONObject("date")?.optString("start")?.take(10)?.let { "day:$it" }.orEmpty() },
+            PATTERNS to { p -> titleText(p, "Паттерн").let { if (it.isBlank()) "" else "pat:" + patternKey(it) } },
+            CONFIRMATIONS to { p -> richText(p, "Ключ") },
         )
         for ((name, keyOf) in plan) {
             if (name in state.mapped) continue
@@ -269,7 +449,6 @@ class NotionLifeSync(
                 val reply = runCatching { post("$API/databases/$db/query", token, body) }
                     .getOrElse { e ->
                         lastError = e.message ?: "сеть"
-                        // 404 на базу — это про доступ; остальное — сеть, повторим.
                         eventLog.add("жизнь → Notion: база «$name» не читается — $lastError")
                         return false
                     }
@@ -278,7 +457,15 @@ class NotionLifeSync(
                     val page = results.optJSONObject(i) ?: continue
                     val props = page.optJSONObject("properties") ?: continue
                     val key = keyOf(props)
-                    if (key.isNotBlank()) state.pages[key] = page.optString("id")
+                    if (key.isBlank()) continue
+                    // В «Засечке» старой раскладки лежат и строки еды/тела с
+                    // EntryId вида f…, w…: в карту ленты они не идут — это
+                    // переезжающие страницы.
+                    if (name == NotionLifeSchema.ZASECHKA.name && !key.startsWith("t")) {
+                        if (state.pages[key] == null) state.legacy[page.optString("id")] = key
+                        continue
+                    }
+                    state.pages[key] = page.optString("id")
                 }
                 cursor = reply.optString("next_cursor").takeIf { reply.optBoolean("has_more") && it.isNotBlank() }
                 sleep()
@@ -317,7 +504,7 @@ class NotionLifeSync(
      */
     private suspend fun dupeStep(token: String) {
         val ask = provider
-        val pDb = state.dbs["Паттерны"] ?: return
+        val pDb = state.dbs[PATTERNS] ?: return
         val now = System.currentTimeMillis()
 
         // 1. Ответ на прошлый вопрос, если он готов.
@@ -484,49 +671,104 @@ class NotionLifeSync(
         val now = System.currentTimeMillis()
         val all = zasechka.all()
         val closed = all.filter { !it.open }
+        val categories = zasechka.categories()
+        val worth = categories.associate { it.name.trim().lowercase() to it.value }
+        fun worthOf(cat: String) = worth[cat.trim().lowercase()] ?: 0
         val wanted = HashSet<String>()
 
-        // 1. Лента, основной трек первым: параллели ссылаются на носителей.
-        val zDb = state.dbs["Засечка"] ?: return
-        for (e in closed.sortedWith(compareBy<ZasechkaStore.Entry> { it.parallel }.thenBy { it.start })) {
-            val key = "t${e.id}"
-            wanted.add(key)
-            enqueue(key, zDb, ribbonProps(e, all, now))
+        // 0. Переезд: страницы старой раскладки — в архив.
+        for (pageId in state.legacy.keys) {
+            queue.add(Job("legacy:$pageId", "", null, 0, archivePageId = pageId))
         }
-        // 2. Еда, тренировки, силовые, зарядка, комментарии.
-        for (m in food.mealsFlow.value.filter { it.confirmed }) {
-            val key = "f${m.id}"; wanted.add(key); enqueue(key, zDb, mealProps(m))
+
+        // 1. Лента — только основной трек, другого больше нет.
+        state.dbs[NotionLifeSchema.ZASECHKA.name]?.let { zDb ->
+            for (e in closed.sortedBy { it.start }) {
+                val key = "t${e.id}"
+                wanted.add(key)
+                enqueue(key, zDb, NotionLifeSchema.ribbonRow(e, zasechka.budgetMinutes(e, now), worthOf(e.category), now))
+            }
         }
-        for (w in sport.workoutsFlow.value) {
-            val key = "w${w.id.ifBlank { w.start.toString() }}"; wanted.add(key); enqueue(key, zDb, workoutProps(w))
+        // 2. Еда, тренировки, силовые, зарядка — каждая в свою базу.
+        state.dbs[NotionLifeSchema.EDA.name]?.let { db ->
+            for (m in food.mealsFlow.value.filter { it.confirmed }) {
+                val key = "f${m.id}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.mealRow(m))
+            }
         }
-        for (s in strength.sessionsFlow.value.filter { !it.empty || it.done }) {
-            val key = "s${s.date}"; wanted.add(key); enqueue(key, zDb, sessionProps(s))
+        state.dbs[NotionLifeSchema.TRENIROVKI.name]?.let { db ->
+            for (w in sport.workoutsFlow.value) {
+                val key = "w${w.id.ifBlank { w.start.toString() }}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.workoutRow(w))
+            }
         }
-        for (g in strength.gtgFlow.value.filter { it.any }) {
-            val key = "g${g.date}"; wanted.add(key); enqueue(key, zDb, gtgProps(g))
+        state.dbs[NotionLifeSchema.SILOVYE.name]?.let { db ->
+            for (s in strength.sessionsFlow.value.filter { !it.empty || it.done }) {
+                val key = "s${s.date}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.sessionRow(s))
+            }
         }
-        for (r in strength.rawFlow.value.filter { it.kind == "comment" }) {
-            val key = "c${r.ts}"; wanted.add(key); enqueue(key, zDb, commentProps(r))
+        state.dbs[NotionLifeSchema.ZARYADKA.name]?.let { db ->
+            for (g in strength.gtgFlow.value.filter { it.any }) {
+                val key = "g${g.date}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.gtgRow(g))
+            }
         }
-        // 3. Призраки: страницы событий, которых в приложении больше нет.
+        // 3. Призраки: страницы событий, которых в приложении больше нет
+        // (перенумерованная лента, удалённый приём, старые комментарии).
         for (key in state.pages.keys.toList()) {
-            if (key.startsWith("day:") || key.startsWith("pat:") || key.startsWith("conf:")) continue
-            if (key !in wanted) enqueue(key, zDb, null)
+            val db = dbOfKey(key) ?: if (key.startsWith("c")) "" else continue
+            if (key !in wanted) enqueue(key, db, null)
         }
-        // 4. Дни — последние две недели, сегодняшний пересчитывается каждый час.
-        val dDb = state.dbs["Дни"]
-        if (dDb != null) {
-            val today = dayKey(now)
+        // 4. Дни — полтора месяца назад: досчёт телефона может привезти
+        // прошлые дни, а строка дня дешёвая — считается тут, в Notion едет
+        // только изменившаяся.
+        state.dbs[NotionLifeSchema.DNI.name]?.let { dDb ->
+            val phoneDays = phone.daysFlow.value
+            val labels = phone.labelsFlow.value
+            val today = NotionLifeSchema.dayKey(now)
             var date = today
             repeat(DAYS_BACK + 1) {
-                enqueue("day:$date", dDb, dayProps(date, closed, now))
+                val row = dayRow(date, closed, phoneDays[date], labels, ::worthOf, now)
+                if (row != null) enqueue("day:$date", dDb, row)
                 date = dayBefore(date)
             }
         }
-        // 5. Паттерны приложения и подтверждения к ним.
-        val pDb = state.dbs["Паттерны"]
-        val cDb = state.dbs["Подтверждения"]
+        // 5. Справочник: структура как настроена сейчас.
+        state.dbs[NotionLifeSchema.SPRAVOCHNIK.name]?.let { db ->
+            val liveKeys = HashSet<String>()
+            categories.forEachIndexed { i, c ->
+                val key = "cat:" + c.name.trim().lowercase()
+                liveKeys.add(key)
+                enqueue(key, db, NotionLifeSchema.categoryRow(c, i + 1, now))
+            }
+            val tracked = phone.trackedApps()
+            val labels = phone.labelsFlow.value
+            val todayPhone = phone.daysFlow.value[NotionLifeSchema.dayKey(now)]
+            for ((pkg, category) in phone.immersiveMap()) {
+                val key = "app:$pkg"
+                liveKeys.add(key)
+                val label = labels[pkg] ?: pkg.substringAfterLast('.')
+                val minutes = ((todayPhone?.apps?.get(pkg) ?: 0L) + 30_000L) / 60_000L
+                enqueue(key, db, NotionLifeSchema.appRow(pkg, label, category, pkg in tracked, minutes, now))
+            }
+            val t = settings.foodTargets()
+            listOf(
+                Triple("Калории", "kcal" to t.kcal, "ккал"),
+                Triple("Белок", "protein" to t.protein, "г"),
+                Triple("Жиры", "fat" to t.fat, "г"),
+                Triple("Углеводы", "carbs" to t.carbs, "г"),
+            ).forEachIndexed { i, (name, kv, unit) ->
+                val key = "target:${kv.first}"
+                liveKeys.add(key)
+                enqueue(key, db, NotionLifeSchema.targetRow(name, kv.first, kv.second, unit, i + 1, now))
+            }
+            // Категория переименована или удалена — её строка справочника уходит.
+            for (key in state.pages.keys.toList()) {
+                if ((key.startsWith("cat:") || key.startsWith("app:") || key.startsWith("target:")) && key !in liveKeys) {
+                    enqueue(key, db, null)
+                }
+            }
+        }
+        // 6. Паттерны приложения и подтверждения к ним.
+        val pDb = state.dbs[PATTERNS]
+        val cDb = state.dbs[CONFIRMATIONS]
         if (pDb != null) {
             for (pt in analysis.patternsFlow.value) {
                 val pKey = "pat:" + patternKey(pt.text)
@@ -565,29 +807,132 @@ class NotionLifeSync(
         queue.add(Job(key, db, props, hash))
     }
 
+    /** Сутки одной строкой: лента, телефон, еда, тело — считает схема, здесь только сбор входов. */
+    private fun dayRow(
+        date: String,
+        closed: List<ZasechkaStore.Entry>,
+        phoneDay: PhoneStore.Day?,
+        labels: Map<String, String>,
+        worthOf: (String) -> Int,
+        now: Long,
+    ): JSONObject? {
+        val start = NotionLifeSchema.dayStartOf(date)
+        val end = start + 86_400_000L
+        val main = closed.filter { it.start >= start && it.start < end }
+        val meals = food.mealsFlow.value.filter { it.confirmed && NotionLifeSchema.dayKey(it.ts) == date }
+        val workouts = sport.workoutsFlow.value.filter { NotionLifeSchema.dayKey(it.start) == date }
+        val health = sport.healthFlow.value.firstOrNull { it.date == date }
+        val session = strength.sessionsFlow.value.firstOrNull { it.date == date && (!it.empty || it.done) }
+        val gtg = strength.gtgFlow.value.firstOrNull { it.date == date && it.any }
+        val notes = strength.rawFlow.value
+            .filter { it.kind == "comment" && NotionLifeSchema.dayKey(it.ts) == date }
+            .sortedBy { it.ts }
+            .joinToString("; ") { "${hm.format(Date(it.ts))} ${it.text.trim()}" }
+        // Сон с часов: сперва wellness, иначе приписка Garmin на строке сна.
+        val wake = main.filter { it.category.equals("Сон", ignoreCase = true) }.maxByOrNull { it.end }
+        val garmin = wake?.let { sleepFromNote(it.raw) }
+        val body = NotionLifeSchema.BodyDay(
+            workouts = workouts.size,
+            workoutMin = workouts.sumOf { it.minutes },
+            strength = session != null,
+            gtgStatus = gtg?.status().orEmpty(),
+            notes = notes,
+            weightKg = health?.weightKg ?: 0.0,
+            restingHr = health?.restingHr ?: 0,
+            hrv = health?.hrv ?: 0,
+            steps = health?.steps ?: 0,
+            sleepHours = health?.sleepHours?.takeIf { it > 0 } ?: garmin?.first ?: 0.0,
+            sleepScore = health?.sleepScore?.takeIf { it > 0 } ?: garmin?.second ?: 0,
+        )
+        return NotionLifeSchema.dayRow(
+            date = date,
+            main = main,
+            allClosed = closed,
+            meals = meals,
+            phone = PhoneDaySummary.forNotion(phoneDay, labels),
+            body = body,
+            budgetOf = { zasechka.budgetMinutes(it, now) },
+            worthOf = worthOf,
+            now = now,
+        )
+    }
+
+    // ---- Живые строки Справочника: состояние синка и «сейчас» ----
+
+    private suspend fun liveRows(token: String, cfg: String) {
+        val db = state.dbs[NotionLifeSchema.SPRAVOCHNIK.name] ?: return
+        if (db in brokenDbs) return
+        val now = System.currentTimeMillis()
+        val open = runCatching { zasechka.openEntry() }.getOrNull()
+        val status = buildString {
+            append("обход ${stampFmt.format(Date(state.lastScan))}")
+            append(" · версия ${BuildConfig.VERSION_NAME}")
+            if (queue.isNotEmpty()) append(" · в очереди ${queue.size}")
+            if (state.legacy.isNotEmpty()) append(" · переезд: осталось ${state.legacy.size}")
+            if (lastError.isNotBlank()) append(" · ошибка: $lastError")
+        }
+        // Хеш «сейчас» без секунд, иначе строка ехала бы каждый тик ради
+        // одной и той же минуты начала.
+        val jobs = listOf(
+            Job("sync:status", db, NotionLifeSchema.statusRow(status, now), status.hashCode()),
+            Job("sync:now", db, NotionLifeSchema.nowRow(open, now), (open?.id ?: 0L).hashCode() * 31 + (open?.title.hashCode() ?: 0)),
+        )
+        for (job in jobs) {
+            if (state.hashes[job.key] == job.hash && state.pages[job.key] != null) continue
+            val ok = runCatching { push(token, job) }.onFailure { e ->
+                lastError = e.message ?: "сеть"
+            }.isSuccess
+            if (!ok) return
+            sleep()
+        }
+    }
+
     // ---- Разгребание очереди ----
 
     private suspend fun drain(token: String, cfg: String): Boolean {
         if (queue.isEmpty()) return false
         var sent = 0
-        var pageIdWaits = 0
+        var archived = 0
         var rejected = 0
         val iter = queue.iterator()
         // Отвергнутые тоже стоят запроса, поэтому считаются в бюджет тика:
         // иначе пачка кривых строк выгребла бы всю очередь за один заход.
         while (iter.hasNext() && sent + rejected < BUDGET) {
             val job = iter.next()
+            if (job.db in brokenDbs) continue
             val result = runCatching { push(token, job) }
             if (result.isFailure) {
                 val message = result.exceptionOrNull()?.message ?: "сеть"
                 lastError = message
-                if (message.contains("HTTP 401") || message.contains("HTTP 403") ||
-                    message.contains("HTTP 404")
-                ) {
+                if (message.contains("HTTP 401") || message.contains("HTTP 403")) {
                     blockedConfig = cfg
-                    eventLog.add("жизнь → Notion: $message — синк на паузе до смены токена или доступа")
+                    blockedAt = System.currentTimeMillis()
+                    eventLog.add("жизнь → Notion: $message — синк на паузе, попробую через час или после смены токена")
                     _statusFlow.value = "${timeNow()} · $message"
                     return sent > 0
+                }
+                // 404 на страницу или базу: чаще всего интеграцию не пустили
+                // к ОДНОЙ базе. Остальные не должны стоять из-за неё.
+                if (message.contains("HTTP 404")) {
+                    if (job.properties == null && job.archivePageId == null) {
+                        // Страницы уже нет — карта врала, забываем.
+                        state.pages.remove(job.key); state.hashes.remove(job.key)
+                        iter.remove()
+                        continue
+                    }
+                    if (job.archivePageId != null) {
+                        state.legacy.remove(job.archivePageId)
+                        iter.remove()
+                        continue
+                    }
+                    if (job.db.isNotBlank() && brokenDbs.add(job.db)) {
+                        val name = state.dbs.entries.firstOrNull { it.value == job.db }?.key ?: job.db
+                        eventLog.add(
+                            "жизнь → Notion: база «$name» не отвечает ($message) — открой ей интеграцию " +
+                                "(… → Connections на хабе), остальные едут дальше"
+                        )
+                    }
+                    continue
                 }
                 // 400 — Notion не принял ИМЕННО ЭТУ строку: неизвестная опция
                 // select, слишком длинное поле. Очередь из-за неё встать не
@@ -608,16 +953,19 @@ class NotionLifeSync(
             }
             iter.remove()
             sent++
-            if (job.properties == null) pageIdWaits++
+            if (job.properties == null) archived++
             sleep()
         }
+        // Отложенные строки сломанных баз ждут следующего обхода — из очереди
+        // их убираем, иначе тик за тиком будет упираться в них же.
+        if (brokenDbs.isNotEmpty()) queue.removeAll { it.db in brokenDbs }
         lastError = ""
         _statusFlow.value = "${timeNow()} · отправлено $sent" +
             (if (rejected > 0) ", не принято $rejected" else "") +
             (if (queue.isNotEmpty()) ", в очереди ${queue.size}" else " ✓")
         eventLog.add(
             "жизнь → Notion: отправлено $sent" +
-                (if (pageIdWaits > 0) ", убрано призраков $pageIdWaits" else "") +
+                (if (archived > 0) ", убрано строк $archived" else "") +
                 (if (rejected > 0) ", не принято $rejected" else "") +
                 (if (queue.isNotEmpty()) ", осталось ${queue.size}" else "")
         )
@@ -625,6 +973,11 @@ class NotionLifeSync(
     }
 
     private fun push(token: String, job: Job) {
+        if (job.archivePageId != null) {
+            patch("$API/pages/${job.archivePageId}", token, JSONObject().put("archived", true))
+            state.legacy.remove(job.archivePageId)
+            return
+        }
         val existing = state.pages[job.key]
         if (job.properties == null) {
             if (existing != null) {
@@ -634,8 +987,6 @@ class NotionLifeSync(
             }
             return
         }
-        // Связь с носителем ставится в момент отправки: страница носителя
-        // могла появиться только что, в этой же пачке.
         val (props, whole) = withRelations(job)
         if (existing != null) {
             patch("$API/pages/$existing", token, JSONObject().put("properties", props))
@@ -650,301 +1001,33 @@ class NotionLifeSync(
             if (id.isNotBlank()) state.pages[job.key] = id
         }
         // Хеш значит «отправлено ЦЕЛИКОМ», иначе строка больше никогда не
-        // вернётся в очередь. Носителя могло не быть в карте: дело ещё идёт
-        // (открытые в Notion не уезжают), и параллель поверх него осталась бы
-        // навсегда без связи — с «Носитель ID», но с пустой клеткой рядом.
-        // Такой строке хеш не пишем: следующий обход поставит её снова и
-        // доставит связь, как только дело закроется.
+        // вернётся в очередь: связь могла ждать страницы, которой ещё нет.
         if (whole) state.hashes[job.key] = job.hash else state.hashes.remove(job.key)
     }
 
     /**
-     * Служебные поля «__host» и «__pattern» превращаются в relation по карте.
-     * Второе значение — доставлена ли строка ЦЕЛИКОМ: ложь, если связь ждала
+     * Служебное поле «__pattern» превращается в relation по карте. Второе
+     * значение — доставлена ли строка ЦЕЛИКОМ: ложь, если связь ждала
      * страницы, которой в карте ещё нет.
      */
     private fun withRelations(job: Job): Pair<JSONObject, Boolean> {
         val props = JSONObject(job.properties!!.toString())
         var whole = true
-        fun link(placeholder: String, field: String) {
-            val key = props.optString(placeholder)
-            if (key.isBlank()) return
+        val key = props.optString("__pattern")
+        if (key.isNotBlank()) {
             // Дубль ссылается на тот паттерн, который повторяет: точка должна
             // лечь под каноническую формулировку, а не под её двойника.
             val pid = state.dupes[key]?.takeIf { it.isNotBlank() } ?: state.pages[key]
-            if (pid == null) {
-                whole = false
-                return
-            }
-            props.put(field, JSONObject().put("relation", JSONArray().put(JSONObject().put("id", pid))))
+            if (pid == null) whole = false
+            else props.put("Паттерн", JSONObject().put("relation", JSONArray().put(JSONObject().put("id", pid))))
         }
-        link("__host", "Носитель")
-        link("__pattern", "Паттерн")
         // «__dupe» — уже готовый id страницы, а не ключ в карте.
         props.optString("__dupe").takeIf { it.isNotBlank() }?.let { pid ->
             props.put("Дубль чего", JSONObject().put("relation", JSONArray().put(JSONObject().put("id", pid))))
         }
-        props.remove("__host")
         props.remove("__pattern")
         props.remove("__dupe")
         return props to whole
-    }
-
-    // ---- Снимки полей: Засечка ----
-
-    private fun ribbonProps(e: ZasechkaStore.Entry, all: List<ZasechkaStore.Entry>, now: Long): JSONObject {
-        val host = if (e.parallel) zasechka.hostOf(e, all, now) else null
-        val p = JSONObject()
-        p.put("Дело", title(e.title.ifBlank { e.category.ifBlank { "без названия" } }))
-        p.put("Дата", dateRange(e.start, e.end))
-        // Сутки владельца отдельным полем без времени. SQL-слой Notion отдаёт
-        // «Дату» в UTC и режет день в 03:00 по Москве: сложенные по нему сутки
-        // выходили 1376 и 1506 вместо 1440 - на ровном месте, из-за пояса.
-        p.put("День", dateDay(dayKey(e.start)))
-        p.put("EntryId", rich("t${e.id}"))
-        p.put("Домен", select(if (e.parallel) "таймшит∥" else "таймшит"))
-        p.put("Бюджет", JSONObject().put("checkbox", !e.parallel))
-        p.put("Источник", select(zasechka.sourceKind(e)))
-        if (e.category.isNotBlank()) p.put("Категория", select(e.category))
-        p.put("Клиент", rich(e.client))
-        p.put("Минуты", number(if (e.parallel) e.durationMin() else zasechka.budgetMinutes(e, now)))
-        p.put("Надиктовано", rich(e.raw.substringBefore("\nКБЖУ:").trim()))
-        p.put(
-            "Детали",
-            rich(
-                listOfNotNull(
-                    e.category.takeIf { it.isNotBlank() },
-                    e.client.takeIf { it.isNotBlank() },
-                    host?.let { "поверх «${it.title}»" },
-                ).joinToString(" · ")
-            ),
-        )
-        p.put("Носитель ID", rich(host?.let { "t${it.id}" }.orEmpty()))
-        p.put("Поверх", rich(host?.title.orEmpty()))
-        if (host != null) p.put("__host", "t${host.id}")
-        if (e.useful > 0) p.put("Полезность", number(e.useful))
-        if (e.pomodoros > 0) p.put("Помидоры", number(e.pomodoros))
-        // «Garmin: сон 7.2 ч, счёт 82» — приписка на строке сна.
-        if (e.category.equals("Сон", ignoreCase = true)) {
-            sleepFromNote(e.raw)?.let { (h, score) ->
-                p.put("Сон ч", number(h))
-                if (score > 0) p.put("Сон счёт", number(score))
-            }
-        }
-        return p
-    }
-
-    private fun mealProps(m: FoodStore.Meal): JSONObject = JSONObject().apply {
-        put("Дело", title(m.kind.ifBlank { "приём" }))
-        put("Дата", dateSingle(m.ts))
-        put("День", dateDay(dayKey(m.ts)))
-        put("EntryId", rich("f${m.id}"))
-        put("Домен", select("еда"))
-        put("Категория", select("Еда"))
-        put("Бюджет", JSONObject().put("checkbox", false))
-        put("Источник", select("manual"))
-        put("Детали", rich(m.shortList))
-        put("Надиктовано", rich(m.raw))
-        put("Ккал", number(m.kcal))
-        put("Белок", number(m.protein))
-        put("Жиры", number(m.fat))
-        put("Углеводы", number(m.carbs))
-        if (m.kind.lowercase() in MEAL_KINDS) put("Приём", select(m.kind.lowercase()))
-    }
-
-    private fun workoutProps(w: SportStore.Workout): JSONObject = JSONObject().apply {
-        val name = ru.zf.pravka.core.SportCoach.sportName(w.type) +
-            (if (w.name.isNotBlank() && !w.name.equals(w.type, true)) " · ${w.name}" else "")
-        put("Дело", title(name))
-        put("Дата", dateSingle(w.start))
-        put("День", dateDay(dayKey(w.start)))
-        put("EntryId", rich("w${w.id.ifBlank { w.start.toString() }}"))
-        put("Домен", select("тренировка"))
-        put("Категория", select(sportCategory(w.type)))
-        put("Бюджет", JSONObject().put("checkbox", false))
-        put("Источник", select("auto"))
-        put("Минуты", number(w.minutes))
-        if (w.km >= 0.1) put("Км", number(Math.round(w.km * 10.0) / 10.0))
-        if (w.avgHr > 0) put("Пульс", number(w.avgHr))
-        if (w.avgWatts > 0) put("Ватт", number(w.avgWatts))
-        if (w.load > 0) put("Load", number(w.load))
-        if (w.feel > 0) put("Самочувствие", number(w.feel))
-        put(
-            "Детали",
-            rich(
-                listOfNotNull(
-                    if (w.km >= 0.1) String.format(Locale.US, "%.1f км", w.km) else null,
-                    if (w.avgHr > 0) "пульс ${w.avgHr}" else null,
-                    if (w.avgWatts > 0) "${w.avgWatts} Вт" else null,
-                    if (w.load > 0) "load ${w.load}" else null,
-                ).joinToString(" · ")
-            ),
-        )
-    }
-
-    private fun sessionProps(s: StrengthStore.Session): JSONObject = JSONObject().apply {
-        put("Дело", title(s.title.ifBlank { s.block.ifBlank { "силовая" } }))
-        put("Дата", dateDay(s.date))
-        put("День", dateDay(s.date))
-        put("EntryId", rich("s${s.date}"))
-        put("Домен", select("силовая"))
-        put("Категория", select("Спорт: силовая"))
-        put("Бюджет", JSONObject().put("checkbox", false))
-        put("Источник", select("manual"))
-        if (s.minutes > 0) put("Минуты", number(s.minutes))
-        if (s.feel in 1..5) put("Самочувствие", number(s.feel))
-        put("Детали", rich(s.exercises.joinToString("; ") { "${it.name} ${it.compact()}" }))
-        put("Надиктовано", rich(s.note))
-    }
-
-    private fun gtgProps(g: StrengthStore.GtgDay): JSONObject = JSONObject().apply {
-        put("Дело", title(g.status()))
-        put("Дата", dateDay(g.date))
-        put("День", dateDay(g.date))
-        put("EntryId", rich("g${g.date}"))
-        put("Домен", select("зарядка"))
-        put("Категория", select("Спорт: прочее"))
-        put("Бюджет", JSONObject().put("checkbox", false))
-        put("Источник", select("manual"))
-        put("Детали", rich(g.line(withNote = false).removePrefix("Зарядка: ")))
-        put("Надиктовано", rich(g.note))
-    }
-
-    private fun commentProps(r: StrengthStore.RawTake): JSONObject = JSONObject().apply {
-        put("Дело", title("к тренировке"))
-        put("Дата", dateSingle(r.ts))
-        put("День", dateDay(dayKey(r.ts)))
-        put("EntryId", rich("c${r.ts}"))
-        put("Домен", select("комментарий"))
-        put("Категория", select("Комментарий"))
-        put("Бюджет", JSONObject().put("checkbox", false))
-        put("Источник", select("manual"))
-        put("Надиктовано", rich(r.text))
-    }
-
-    /**
-     * Категория ленты для тренировки из часов. Без неё сто с лишним строк
-     * (вся еда, весь Garmin, зарядка) оставались без категории, и фильтр
-     * «Спорт: *» их не видел — нашёл разбор, а не я.
-     */
-    private fun sportCategory(type: String): String = when (type) {
-        "Run", "TrailRun", "VirtualRun" -> "Спорт: бег"
-        "Ride", "VirtualRide", "GravelRide", "MountainBikeRide" -> "Спорт: вело"
-        "WeightTraining" -> "Спорт: силовая"
-        "Walk", "Hike" -> "Передвижение: пешком"
-        else -> "Спорт: прочее"
-    }
-
-    // ---- Снимок полей: Дни ----
-
-    /**
-     * Сутки одной строкой — то, что аналитик иначе считал бы из ленты сам.
-     * Правила счёта — из хаба: полный день ≥ 1370 минут покрытия; «Работа»
-     * здесь строго по категории «Работа: *» (клиентские встречи из
-     * «Социального» — суждение аналитика, приложение его не подменяет).
-     */
-    private fun dayProps(date: String, closed: List<ZasechkaStore.Entry>, now: Long): JSONObject? {
-        val start = dayStartOf(date)
-        val end = start + 86_400_000L
-        val main = closed.filter { !it.parallel && it.start >= start && it.start < end }
-        val par = closed.filter { it.parallel && it.start >= start && it.start < end }
-        val meals = food.mealsFlow.value.filter { it.confirmed && dayKey(it.ts) == date }
-        // День до начала ведения ленты: ни минуты покрытия, ни одного приёма
-        // еды. Строка из одних нулей — мусор в базе разбора (нашёл разбор:
-        // «мусорная строка 19 августа»), цифры часов её не оправдывают.
-        if (main.isEmpty() && meals.isEmpty()) return null
-        fun mins(pred: (ZasechkaStore.Entry) -> Boolean): Long =
-            main.filter(pred).sumOf { zasechka.budgetMinutes(it, now) }
-        fun cat(prefix: String) = mins { it.category.startsWith(prefix, ignoreCase = true) }
-        fun titled(vararg words: String) = mins { e -> words.any { e.title.contains(it, ignoreCase = true) } }
-        fun parApp(vararg words: String): Long =
-            par.filter { e -> words.any { e.title.contains(it, ignoreCase = true) } }.sumOf { it.durationMin(now) }
-
-        val coverage = main.sumOf { zasechka.budgetMinutes(it, now) }
-        val p = JSONObject()
-        p.put("День", title(humanDay(date)))
-        p.put("Дата", dateDay(date))
-        p.put("День недели", select(weekday(date)))
-        p.put("Покрытие мин", number(coverage))
-        p.put("Полный день", JSONObject().put("checkbox", coverage >= FULL_DAY_MIN))
-        p.put("Работа", number(cat("Работа")))
-        p.put("Систематизация", number(cat("Систематизация")))
-        p.put("Потери", number(cat("Потери")))
-        p.put("Не размечено", number(cat("Не размечено")))
-        p.put("Семья", number(cat("Семья")))
-        p.put("Быт", number(cat("Быт")))
-        p.put("Дорога", number(cat("Передвижение")))
-        p.put("Отдых", number(cat("Отдых")))
-        p.put("Спорт", number(cat("Спорт")))
-        p.put("Еда мин", number(cat("Еда")))
-        p.put("Туалет", number(titled("туалет")))
-        p.put("Диван", number(titled("диван")))
-        p.put("Соло", number(mins { it.category.equals("Секс: соло", ignoreCase = true) }))
-        val yt = parApp("youtube", "ютуб")
-        val cl = parApp("claude", "клод")
-        val tg = parApp("telegram", "телеграм")
-        p.put("YouTube", number(yt))
-        p.put("Claude", number(cl))
-        p.put("Telegram", number(tg))
-        p.put("Экран параллель", number(yt + cl + tg))
-        // Внешних рабочих контактов: рабочие звонки плюс любая работа с
-        // названным клиентом.
-        p.put(
-            "Контактов",
-            number(
-                main.count {
-                    it.category.equals("Работа: звонки", ignoreCase = true) ||
-                        (it.category.startsWith("Работа", ignoreCase = true) && it.client.isNotBlank())
-                }
-            ),
-        )
-        // Ночной сон — тот, что КОНЧИЛСЯ в этот день; цепочка тянется назад
-        // через полночь, потому что лента режет каждую ночь на два куска.
-        val wake = closed
-            .filter { !it.parallel && it.category.equals("Сон", ignoreCase = true) && it.end in start until end && it.end - start < 14 * 3_600_000L }
-            .maxByOrNull { it.end }
-        if (wake != null) {
-            var head: ZasechkaStore.Entry = wake
-            var total = 0L
-            var guard = 0
-            while (guard++ < 6) {
-                total += head.durationMin(now)
-                val prev = closed.firstOrNull {
-                    !it.parallel && it.category.equals("Сон", ignoreCase = true) &&
-                        kotlin.math.abs(it.end - head.start) < 60_000L
-                } ?: break
-                head = prev
-            }
-            p.put("Сон мин", number(total))
-            p.put("Отбой", rich(hm.format(Date(head.start))))
-            p.put("Подъём", rich(hm.format(Date(wake.end))))
-            // Первое целевое действие после подъёма: не сон, не туалет, не
-            // еда, не телефон и не пустота.
-            val first = main
-                .filter { it.start >= wake.end }
-                .sortedBy { it.start }
-                .firstOrNull { e ->
-                    val c = e.category.lowercase()
-                    !(c == "сон" || c == "не размечено" || c == "потери" || c == "еда") &&
-                        !e.title.contains("туалет", ignoreCase = true) &&
-                        !e.title.contains("телефон", ignoreCase = true)
-                }
-            if (first != null) p.put("Первое действие через", number((first.start - wake.end) / 60_000L))
-            sleepFromNote(wake.raw)?.let { (h, score) ->
-                p.put("Сон Garmin ч", number(h))
-                if (score > 0) p.put("Сон счёт", number(score))
-            }
-        }
-        sport.healthFlow.value.firstOrNull { it.date == date }?.let { h ->
-            if (h.sleepHours > 0) p.put("Сон Garmin ч", number(Math.round(h.sleepHours * 10.0) / 10.0))
-            if (h.sleepScore > 0) p.put("Сон счёт", number(h.sleepScore))
-        }
-        if (meals.isNotEmpty()) {
-            p.put("Ккал", number(meals.sumOf { it.kcal }))
-            p.put("Белок", number(meals.sumOf { it.protein }))
-            p.put("Приёмов", number(meals.size))
-        }
-        return p
     }
 
     // ---- Снимок полей: Паттерны и Подтверждения ----
@@ -955,14 +1038,14 @@ class NotionLifeSync(
      * приложением»: сколько точек нашёл ночной поиск.
      */
     private fun patternProps(pt: AnalysisStore.Pattern, isNew: Boolean): JSONObject = JSONObject().apply {
-        put("Заявлено приложением", number(pt.points))
+        put("Заявлено приложением", NotionLifeSchema.number(pt.points))
         if (isNew) {
-            put("Паттерн", title(pt.text))
-            put("Источник", select("Приложение"))
-            put("Тип", select("Паттерн"))
-            put("Статус", select("Кандидат"))
-            if (pt.firstSeen.isNotBlank()) put("Первое появление", dateDay(pt.firstSeen))
-            confidenceOption(pt.confidence)?.let { put("Уверенность", select(it)) }
+            put("Паттерн", NotionLifeSchema.title(pt.text))
+            put("Источник", NotionLifeSchema.select("Приложение"))
+            put("Тип", NotionLifeSchema.select("Паттерн"))
+            put("Статус", NotionLifeSchema.select("Кандидат"))
+            if (pt.firstSeen.isNotBlank()) put("Первое появление", NotionLifeSchema.dateDay(pt.firstSeen))
+            confidenceOption(pt.confidence)?.let { put("Уверенность", NotionLifeSchema.select(it)) }
         }
     }
 
@@ -975,18 +1058,18 @@ class NotionLifeSync(
                 verdict -> "отклоняю"
                 else -> "точка"
             }
-            put("Подтверждение", title("$who: $what · ${humanDay(date)}"))
-            put("Дата", dateDay(date))
-            put("Кто", select(who))
-            put("Вердикт", select(what))
+            put("Подтверждение", NotionLifeSchema.title("$who: $what · ${NotionLifeSchema.humanDay(date)}"))
+            put("Дата", NotionLifeSchema.dateDay(date))
+            put("Кто", NotionLifeSchema.select(who))
+            put("Вердикт", NotionLifeSchema.select(what))
             put(
                 "Улика",
-                rich(
+                NotionLifeSchema.rich(
                     if (verdict) "Вердикт в приложении по паттерну «${pt.text}»."
                     else "Ночной поиск увидел снова: ${pt.points} точек, уверенность ${pt.confidence.ifBlank { "не указана" }}, всего раз ${pt.times}."
                 ),
             )
-            put("Ключ", rich(key))
+            put("Ключ", NotionLifeSchema.rich(key))
             put("__pattern", patternKey)
         }
 
@@ -1006,22 +1089,6 @@ class NotionLifeSync(
         .replace(Regex("[^а-яёa-z0-9 ]"), " ")
         .split(' ').filter { it.length > 3 }.take(5).sorted().joinToString(" ")
 
-    // ---- Кирпичи Notion ----
-
-    private fun title(text: String) = JSONObject().put("title", textArray(text))
-    private fun rich(text: String) = JSONObject().put("rich_text", textArray(text))
-    private fun select(name: String) = JSONObject().put("select", JSONObject().put("name", name.take(100)))
-    private fun number(v: Number) = JSONObject().put("number", v)
-    private fun dateRange(start: Long, end: Long) = JSONObject().put(
-        "date", JSONObject().put("start", dateTime.format(Date(start))).put("end", dateTime.format(Date(end))),
-    )
-    private fun dateSingle(ms: Long) = JSONObject().put("date", JSONObject().put("start", dateTime.format(Date(ms))))
-    private fun dateDay(date: String) = JSONObject().put("date", JSONObject().put("start", date))
-
-    private fun textArray(text: String): JSONArray =
-        if (text.isBlank()) JSONArray()
-        else JSONArray().put(JSONObject().put("text", JSONObject().put("content", text.take(1900))))
-
     /** «Garmin: сон 7.2 ч, счёт 82» → 7.2 и 82. */
     private fun sleepFromNote(raw: String): Pair<Double, Int>? {
         val m = Regex("""сон\s+([\d.,]+)\s*ч""", RegexOption.IGNORE_CASE).find(raw) ?: return null
@@ -1030,25 +1097,10 @@ class NotionLifeSync(
         return hours to score
     }
 
-    private fun dayStartOf(date: String): Long = runCatching {
-        SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(date)?.let { dayStartMs(it.time) }
-    }.getOrNull() ?: dayStartMs(System.currentTimeMillis())
-
-    private fun weekday(date: String): String {
-        val cal = Calendar.getInstance().apply { timeInMillis = dayStartOf(date) }
-        return WEEKDAYS[cal.get(Calendar.DAY_OF_WEEK) - 1]
-    }
-
-    private fun humanDay(date: String): String {
-        val cal = Calendar.getInstance().apply { timeInMillis = dayStartOf(date) }
-        val dd = String.format(Locale.US, "%02d", cal.get(Calendar.DAY_OF_MONTH))
-        val mm = String.format(Locale.US, "%02d", cal.get(Calendar.MONTH) + 1)
-        return "$dd.$mm · ${weekday(date)}"
-    }
-
     private fun timeNow(): String = hm.format(Date(System.currentTimeMillis()))
 
     private suspend fun sleep() = delay(PAUSE_MS)
+    private fun sleepBlocking() = Thread.sleep(PAUSE_MS)
 
     // ---- HTTP ----
 
@@ -1092,6 +1144,10 @@ class NotionLifeSync(
             o.optJSONObject("hashes")?.let { h -> h.keys().forEach { k -> state.hashes[k] = h.optInt(k) } }
             o.optJSONObject("dbs")?.let { d -> d.keys().forEach { k -> state.dbs[k] = d.optString(k) } }
             o.optJSONArray("mapped")?.let { a -> for (i in 0 until a.length()) state.mapped.add(a.optString(i)) }
+            o.optJSONArray("schemaOk")?.let { a -> for (i in 0 until a.length()) state.schemaOk.add(a.optString(i)) }
+            o.optJSONArray("retired")?.let { a -> for (i in 0 until a.length()) state.retired.add(a.optString(i)) }
+            state.schemaVersion = o.optInt("schemaVersion", 1)
+            o.optJSONObject("legacy")?.let { l -> l.keys().forEach { k -> state.legacy[k] = l.optString(k) } }
             o.optJSONObject("dupes")?.let { d -> d.keys().forEach { k -> state.dupes[k] = d.optString(k) } }
             state.dupeBatch = o.optString("dupeBatch")
             state.dupeAt = o.optLong("dupeAt")
@@ -1099,6 +1155,9 @@ class NotionLifeSync(
             o.optJSONArray("dupeIds")?.let { a -> for (i in 0 until a.length()) state.dupeIds.add(a.optString(i)) }
             state.lastScan = o.optLong("lastScan")
         }
+        // Файл прошлой раскладки: обход снова с нуля — схема достроится,
+        // строки еды и тела переедут, карты новых баз снимутся заново.
+        if (state.schemaVersion != NotionLifeSchema.VERSION) state.lastScan = 0L
     }
 
     private fun saveState() {
@@ -1107,6 +1166,10 @@ class NotionLifeSync(
             .put("hashes", JSONObject(state.hashes as Map<*, *>))
             .put("dbs", JSONObject(state.dbs as Map<*, *>))
             .put("mapped", JSONArray(state.mapped.toList()))
+            .put("schemaOk", JSONArray(state.schemaOk.toList()))
+            .put("retired", JSONArray(state.retired.toList()))
+            .put("schemaVersion", state.schemaVersion)
+            .put("legacy", JSONObject(state.legacy as Map<*, *>))
             .put("dupes", JSONObject(state.dupes as Map<*, *>))
             .put("dupeBatch", state.dupeBatch)
             .put("dupeAt", state.dupeAt)
@@ -1126,6 +1189,7 @@ class NotionLifeSync(
     /** Забыть карту страниц — на случай, если базу пересоздали. */
     fun resetMaps() {
         state.pages.clear(); state.hashes.clear(); state.mapped.clear(); state.dbs.clear(); state.dupes.clear()
+        state.schemaOk.clear(); state.retired.clear(); state.legacy.clear()
         state.dupeBatch = ""; state.dupeAt = 0L; state.dupeKeys.clear(); state.dupeIds.clear()
         state.lastScan = 0L
         queue.clear()

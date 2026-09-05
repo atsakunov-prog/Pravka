@@ -43,8 +43,8 @@
 // Засечка -> Google Sheets. Принимает POST c JSON {entries:[...]} и
 // обновляет/добавляет строки по id на листе SHEET_NAME.
 const SHEET_NAME = 'Засечки';
-const HEADER = ['id', 'Дата', 'Начало', 'Конец', 'Трек',
-                'Минуты', 'Параллельно, мин',
+const HEADER = ['id', 'Дата', 'Начало', 'Конец',
+                'Минуты',
                 'Дело', 'Категория', 'Клиент', 'Полезность',
                 'Ценность', 'Баллы', 'Источник', 'Надиктовано'];
 
@@ -73,8 +73,7 @@ function doPost(e) {
     let upserted = 0;
     (body.entries || []).forEach(function (en) {
       const row = [String(en.id), en.date, en.start, en.end,
-                   en.track || 'основной',
-                   en.minutes, en.minutes_parallel || 0,
+                   en.minutes,
                    en.title, en.category, en.client,
                    en.useful == null ? '' : en.useful,
                    en.value == null ? '' : en.value,

@@ -16,18 +16,23 @@ import org.json.JSONObject
 // The phone-usage side of Засечка: how the day looked THROUGH the screen.
 // Deliberately a separate layer from the voice ribbon (owner's design):
 // most app time is tooling inside a bigger activity and must not pollute the
-// timeline - only "attention eaters" (YouTube-класс) and calls cross over
-// into the ribbon, via PhoneSweeper.
+// timeline. Телефон в ленту не пишет ничего, кроме сна: сначала пожиратели и
+// звонки резали дела врезками, потом ложились параллельным треком - оба
+// опыта владелец закрыл («засоряет ленту»). Теперь телефон считается ПО ДНЯМ:
+// сколько на YouTube, Telegram, Claude, сколько звонков - и эти суммы видны
+// строкой во вкладке и в «Днях» Notion.
 //
 // Storage is day-level AGGREGATES, not raw sessions: per day - screen time,
 // pickups, glances (short peeks = отвлечения), per-app foreground
-// minutes/sessions/glances. Bounded forever (≈120 days kept), one small file.
+// minutes/sessions/glances, calls. Bounded forever (≈120 days kept), one
+// small file.
 class PhoneStore(private val context: Context) {
 
     companion object {
         const val FORMAT = "pravka-phone"
         private const val FILE_NAME = "phone.json"
         private const val KEEP_DAYS = 120
+        private const val SEEN_CALLS_MAX = 600
 
         val DAY_KEY_FORMAT = "yyyy-MM-dd"
 
@@ -60,6 +65,15 @@ class PhoneStore(private val context: Context) {
         val appSessions: Map<String, Int> = emptyMap(),  // pkg -> sessions >= 5s
         val glanceApps: Map<String, Int> = emptyMap(),   // pkg -> glances ended on it
         val sites: Map<String, Long> = emptyMap(),       // Chrome: domain -> ms
+        // Звонки ≥ минуты по журналу: сколько минут, сколько раз и с кем
+        // (имя из контактов -> ms). Разговор больше не режет дело и не ложится
+        // параллелью - он просто считается за день.
+        val callsMs: Long = 0,
+        val calls: Int = 0,
+        val callers: Map<String, Long> = emptyMap(),
+        // День досчитан из суточных сумм системы (до установки приложения):
+        // у таких дней нет сессий и отвлечений, только минуты по приложениям.
+        val backfilled: Boolean = false,
     )
 
     /** Additive per-day delta produced by one sweep. */
@@ -70,9 +84,13 @@ class PhoneStore(private val context: Context) {
         val apps = HashMap<String, Long>()
         val appSessions = HashMap<String, Int>()
         val glanceApps = HashMap<String, Int>()
+        var callsMs = 0L
+        var calls = 0
+        val callers = HashMap<String, Long>()
         fun isEmpty(): Boolean =
             screenMs == 0L && pickups == 0 && glances == 0 &&
-                apps.isEmpty() && appSessions.isEmpty() && glanceApps.isEmpty()
+                apps.isEmpty() && appSessions.isEmpty() && glanceApps.isEmpty() &&
+                callsMs == 0L && calls == 0
     }
 
     // Sweep continuity: sessions/screen state open at the end of one sweep
@@ -106,6 +124,11 @@ class PhoneStore(private val context: Context) {
     private var offApps = LinkedHashSet<String>()
     private var labels = HashMap<String, String>()           // pkg -> human name
     private var state = SweepState()
+    // Звонки, которые уже посчитаны, по времени начала. Журнал перечитывается
+    // скользящим окном (строка идущего разговора появляется только после его
+    // конца, с началом в прошлом), и без этого набора один звонок считался бы
+    // на каждом свипе заново. Ограничен последними сотнями - больше не надо.
+    private var seenCalls = LinkedHashSet<Long>()
 
     private val _daysFlow = MutableStateFlow<Map<String, Day>>(emptyMap())
     val daysFlow: StateFlow<Map<String, Day>> = _daysFlow
@@ -206,16 +229,84 @@ class PhoneStore(private val context: Context) {
                 apps = mergeLong(old.apps, d.apps),
                 appSessions = mergeInt(old.appSessions, d.appSessions),
                 glanceApps = mergeInt(old.glanceApps, d.glanceApps),
+                callsMs = old.callsMs + d.callsMs,
+                calls = old.calls + d.calls,
+                callers = mergeLong(old.callers, d.callers),
             )
         }
         labels.putAll(newLabels)
         state = newState
-        // Bound the file: drop the oldest days beyond the keep window.
+        trimLocked()
+        persist()
+    }
+
+    /** Уже посчитан ли звонок с таким временем начала. */
+    suspend fun callSeen(startMs: Long): Boolean = mutex.withLock {
+        ensureLoaded()
+        startMs in seenCalls
+    }
+
+    /**
+     * Звонки одного свипа: минуты и собеседники по дням плюс времена начала,
+     * чтобы повторный проход по тому же окну ничего не удвоил.
+     */
+    suspend fun applyCalls(
+        deltas: Map<String, DayDelta>,
+        starts: Collection<Long>,
+        lastCallSweep: Long,
+    ): Unit = mutex.withLock {
+        ensureLoaded()
+        for ((key, d) in deltas) {
+            if (d.isEmpty()) continue
+            val old = days[key] ?: Day()
+            days[key] = old.copy(
+                callsMs = old.callsMs + d.callsMs,
+                calls = old.calls + d.calls,
+                callers = mergeLong(old.callers, d.callers),
+            )
+        }
+        seenCalls.addAll(starts)
+        while (seenCalls.size > SEEN_CALLS_MAX) seenCalls.remove(seenCalls.first())
+        state = state.copy(lastCallSweep = lastCallSweep)
+        trimLocked()
+        persist()
+    }
+
+    /**
+     * Досчёт прошлых дней из суточных сумм системы. Пишется ТОЛЬКО в дни, о
+     * которых свип ничего не знает (до установки или долгого простоя): день со
+     * свипом точнее сумм, и складывать их значило бы посчитать дважды.
+     * Возвращает, сколько дней легло.
+     */
+    suspend fun backfillDays(filled: Map<String, Day>): Int = mutex.withLock {
+        ensureLoaded()
+        var added = 0
+        for ((key, d) in filled) {
+            val old = days[key]
+            if (old != null && !old.backfilled) continue
+            days[key] = d.copy(backfilled = true)
+            added++
+        }
+        if (added > 0) {
+            days = LinkedHashMap(days.toSortedMap())
+            trimLocked()
+            persist()
+        }
+        added
+    }
+
+    /** Самый старый день, который видел свип (не досчёт), или "" . */
+    suspend fun firstSweptDay(): String = mutex.withLock {
+        ensureLoaded()
+        days.entries.filter { !it.value.backfilled }.minOfOrNull { it.key }.orEmpty()
+    }
+
+    // Bound the file: drop the oldest days beyond the keep window.
+    private fun trimLocked() {
         if (days.size > KEEP_DAYS) {
             val sorted = days.keys.sorted()
             for (key in sorted.take(days.size - KEEP_DAYS)) days.remove(key)
         }
-        persist()
     }
 
     private fun mergeLong(a: Map<String, Long>, b: Map<String, Long>): Map<String, Long> {
@@ -250,8 +341,16 @@ class PhoneStore(private val context: Context) {
                         appSessions = o.optJSONObject("appSessions").toIntMap(),
                         glanceApps = o.optJSONObject("glanceApps").toIntMap(),
                         sites = o.optJSONObject("sites").toLongMap(),
+                        callsMs = o.optLong("callsMs"),
+                        calls = o.optInt("calls"),
+                        callers = o.optJSONObject("callers").toLongMap(),
+                        backfilled = o.optBoolean("backfilled", false),
                     )
                 }
+            }
+            seenCalls = LinkedHashSet()
+            root?.optJSONArray("seenCalls")?.let { arr ->
+                for (i in 0 until arr.length()) arr.optLong(i).takeIf { it > 0 }?.let { seenCalls.add(it) }
             }
             immersive = LinkedHashMap()
             root?.optJSONObject("immersive")?.let { m ->
@@ -335,6 +434,7 @@ class PhoneStore(private val context: Context) {
         put("audio", org.json.JSONArray(audio.toList()))
         put("offApps", org.json.JSONArray(offApps.toList()))
         put("labels", JSONObject(labels.toMap()))
+        put("seenCalls", org.json.JSONArray(seenCalls.toList()))
         put(
             "days",
             JSONObject().apply {
@@ -349,6 +449,10 @@ class PhoneStore(private val context: Context) {
                             put("appSessions", JSONObject(d.appSessions))
                             put("glanceApps", JSONObject(d.glanceApps))
                             put("sites", JSONObject(d.sites))
+                            if (d.callsMs > 0) put("callsMs", d.callsMs)
+                            if (d.calls > 0) put("calls", d.calls)
+                            if (d.callers.isNotEmpty()) put("callers", JSONObject(d.callers))
+                            if (d.backfilled) put("backfilled", true)
                         }
                     )
                 }

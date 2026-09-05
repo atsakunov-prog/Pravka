@@ -31,6 +31,8 @@ class ZasechkaStore(private val context: Context) {
     companion object {
         const val FORMAT = "pravka-zasechka"
         private const val FILE_NAME = "zasechka.json"
+        /** Записи закрытого параллельного трека — не стёрты, а убраны сюда. */
+        private const val PARALLEL_ARCHIVE = "zasechka-parallel-archive.json"
 
         // The owner's taxonomy, with hints the categorizer sees. A hint is
         // the difference between "поговорил с Марианой" landing in Семья and
@@ -76,14 +78,6 @@ class ZasechkaStore(private val context: Context) {
         // Sub-half-minute closed leftovers are splice artifacts, not facts:
         // they showed up in the owner's export as 0-minute rows.
         private const val CRUMB_MS = 30_000L
-        // Написания одного и того же приложения. Владелец говорит «в Ютубе»,
-        // система отдаёт «YouTube» - без этой таблицы ленте это два разных дела.
-        private val APP_ALIASES = mapOf(
-            "ютьюб" to "youtube", "ю-туб" to "youtube", "ютуб" to "youtube",
-            "телеграм" to "telegram", "телега" to "telegram",
-            "клауд" to "claude", "клод" to "claude",
-            "слушалк" to "slushalka",
-        )
         val DEFAULT_CATEGORIES = listOf(
             Category("Сон", "", baseMin = 480, value = 0),
             Category("Спорт: силовая", "тренажёрка, железо, ОФП", baseMin = 75, value = 9),
@@ -152,15 +146,8 @@ class ZasechkaStore(private val context: Context) {
         val createdAt: Long,
         val pomodoros: Int = 0,   // 🍅 completed while this entry ran
         val notionSynced: Boolean = false,  // delivered to the Notion mirror
-        // 0 - основная лента: непрерывная, без пересечений, ровно 24 часа.
-        // 1 - параллельный трек: то, что шло ОДНОВРЕМЕННО с основным делом
-        // (книга за рулём, ютуб за готовкой, звонок поверх работы). Пересекаться
-        // ему можно с чем угодно, в сутки он не складывается и ни у кого ничего
-        // не отнимает - потому пожиратели и звонки снова пускаются в ленту.
-        val track: Int = 0,
     ) {
         val open: Boolean get() = end == 0L
-        val parallel: Boolean get() = track > 0
         /** Exact span in ms - the only honest unit for adding a day up. */
         fun durationMs(now: Long = System.currentTimeMillis()): Long =
             ((if (open) now else end) - start).coerceAtLeast(0L)
@@ -292,16 +279,10 @@ class ZasechkaStore(private val context: Context) {
         persist()
     }
 
-    /** The MAIN-track entry currently running, if any. */
+    /** The entry currently running, if any. */
     suspend fun openEntry(): Entry? = mutex.withLock {
         ensureLoaded()
-        entries.lastOrNull { it.open && !it.parallel }
-    }
-
-    /** Что идёт вторым треком прямо сейчас (книга, ютуб, разговор). */
-    suspend fun openParallel(): Entry? = mutex.withLock {
-        ensureLoaded()
-        entries.lastOrNull { it.open && it.parallel }
+        entries.lastOrNull { it.open }
     }
 
     /**
@@ -311,11 +292,10 @@ class ZasechkaStore(private val context: Context) {
      * entry the owner can delete) rather than going negative.
      *
      * The ribbon never overlaps - the day must sum to 24 hours (owner's audit
-     * rule). A robot fact inside the retroactive window is kept AND deducted:
-     * "обедаю с 16:43", said at 16:53 over a YouTube entry 16:43-16:50,
-     * splits the meal into fragments AROUND the robot's minutes. The chain
-     * view then shows one block with the net time and the interruption as a
-     * parallel row. An auto entry only straddling the start is trimmed to it.
+     * rule). A robot fact inside the retroactive window (сон, тренировка с
+     * часов) is kept AND deducted: the manual entry splits into fragments
+     * AROUND the robot's minutes, and the chain view shows one block with the
+     * net time. An auto entry only straddling the start is trimmed to it.
      * Manual entries are never touched - owner vs owner is the owner's fight.
      *
      * Returns the OPEN tail fragment (the running дело).
@@ -335,7 +315,7 @@ class ZasechkaStore(private val context: Context) {
         val nowMs = System.currentTimeMillis()
         for (i in entries.indices) {
             val e = entries[i]
-            if (e.source == "auto" && !e.parallel && !e.open && e.start < start && e.end > start) {
+            if (e.source == "auto" && !e.open && e.start < start && e.end > start) {
                 entries[i] = e.copy(end = start, synced = false, notionSynced = false)
             }
         }
@@ -458,10 +438,7 @@ class ZasechkaStore(private val context: Context) {
         val nowMs = System.currentTimeMillis()
         val cutoff = nowMs - NORMALIZE_WINDOW_MS
         val real = entries.filter {
-            // Параллельный трек не отнимает у заполнителя: он идёт ПОВЕРХ
-            // времени, а не вместо него. Иначе ютуб в фоне «размечал» бы дыру,
-            // которую на самом деле никто не занял.
-            it.source != GAP_SOURCE && !it.parallel && (if (it.open) nowMs else it.end) > cutoff
+            it.source != GAP_SOURCE && (if (it.open) nowMs else it.end) > cutoff
         }
         var changed = false
         val out = ArrayList<Entry>(entries.size)
@@ -563,7 +540,7 @@ class ZasechkaStore(private val context: Context) {
         // В том же окне, что и остальные инварианты: трогать полгода истории
         // ради секунд значит переписать и разослать заново всё зеркало.
         val windowStart = System.currentTimeMillis() - NORMALIZE_WINDOW_MS
-        val asc = entries.filter { !it.parallel && it.start > windowStart }.sortedBy { it.start }
+        val asc = entries.filter { it.start > windowStart }.sortedBy { it.start }
         var changed = false
         for (i in 0 until asc.size - 1) {
             val a = asc[i]
@@ -583,9 +560,7 @@ class ZasechkaStore(private val context: Context) {
         val cutoff = nowMs - GAP_FILL_QUARANTINE_MS
         val windowStart = nowMs - NORMALIZE_WINDOW_MS
         var changed = false
-        // Дыры считаются только по основному треку: параллельная запись не
-        // делает время занятым (и наоборот - не создаёт дыру, когда кончается).
-        val asc = entries.filter { !it.parallel }.sortedBy { it.start }
+        val asc = entries.sortedBy { it.start }
         var prevEnd = -1L
         for (e in asc) {
             if (prevEnd > 0 && e.start - prevEnd >= GAP_FILL_MIN_MS &&
@@ -601,7 +576,7 @@ class ZasechkaStore(private val context: Context) {
         // for 5 minutes - losses start counting from the last entry's end,
         // openly, right in the ribbon. A retro claim later takes the span
         // back through closeOpenLocked + the trim above.
-        if (entries.none { it.open && !it.parallel } && prevEnd > 0 &&
+        if (entries.none { it.open } && prevEnd > 0 &&
             nowMs - prevEnd >= GAP_FILL_MIN_MS
         ) {
             entries.add(gapEntry(prevEnd, 0L, nowMs))
@@ -623,52 +598,6 @@ class ZasechkaStore(private val context: Context) {
         return true
     }
 
-    /**
-     * Параллель не может тикать дольше дела, поверх которого идёт. Владелец
-     * нашёл это прямо на экране: «параллельное дело должно заканчиваться
-     * вместе с основным делом, этот счётчик не может идти больше конца
-     * основного дела». Он прав и по смыслу второго трека: параллель — это
-     * «что шло ПОВЕРХ вот этого», а поверх кончившегося дела идти нечему.
-     * Без правила счётчик уезжал в бесконечность: «Клод 4 ч» под делом на
-     * двадцать минут.
-     *
-     * Трогается только ОТКРЫТАЯ параллель, то есть тот самый счётчик.
-     * Закрытая — это факт с измеренными границами (книга за рулём из фоновой
-     * службы, разметка задним числом за месяц), и обрезать её концом первого
-     * же дела значило бы стирать прожитое.
-     *
-     * Хозяин ищется ЦЕПОЧКОЙ: дело могло быть разрезано полуночью, врезкой
-     * или вставкой задним числом — это по-прежнему одно дело, и параллель
-     * живёт до конца всей цепочки, а не до первого шва.
-     */
-    private fun capOpenParallelLocked(): Boolean {
-        val mains = entries.filter { !it.parallel }.sortedBy { it.start }
-        if (mains.isEmpty()) return false
-        var changed = false
-        for (i in entries.indices) {
-            val p = entries[i]
-            if (!p.open || !p.parallel) continue
-            var at = mains.indexOfLast { it.start <= p.start }
-            if (at < 0) continue
-            var chainEnd = mains[at].end
-            var running = mains[at].open
-            while (!running && at + 1 < mains.size) {
-                val next = mains[at + 1]
-                if (next.start > chainEnd + 1_000L) break
-                if (!sameDeal(mains[at], next)) break
-                at++
-                chainEnd = next.end
-                running = next.open
-            }
-            // Дело ещё идёт — параллели есть над чем идти.
-            if (running) continue
-            if (chainEnd <= p.start) continue
-            entries[i] = p.copy(end = chainEnd, synced = false, notionSynced = false)
-            changed = true
-        }
-        return changed
-    }
-
     /** Два куска одного дела: полночь и врезки режут запись, но не смысл. */
     private fun sameDeal(a: Entry, b: Entry): Boolean =
         a.title.trim().equals(b.title.trim(), ignoreCase = true) &&
@@ -677,9 +606,6 @@ class ZasechkaStore(private val context: Context) {
     /** All ribbon invariants in one locked pass; true when anything changed. */
     private fun normalizeLocked(): Boolean {
         var changed = splitMidnightLocked()
-        // До dropCrumbs: обрезанная в ноль параллель — мусор, а не факт,
-        // и уходить она должна тем же проходом.
-        if (capOpenParallelLocked()) changed = true
         if (dropCrumbsLocked()) changed = true
         if (trimFillersLocked()) changed = true
         if (spliceOverlapsLocked()) changed = true
@@ -707,8 +633,8 @@ class ZasechkaStore(private val context: Context) {
      * Any manual entry that covers closed auto facts - however the overlap
      * appeared (retroactive start, a time edit in the dialog or by voice,
      * an old build's data) - is spliced into fragments AROUND them: the дело
-     * stays the main block (one chain, net time, interruptions as parallel
-     * rows), the robot's minutes stay the robot's. The head fragment keeps
+     * stays the main block (one chain, net time), the robot's minutes stay
+     * the robot's. The head fragment keeps
      * the id (its Sheets/Notion rows update in place) and is created even at
      * zero length - it anchors the block at the declared start; later
      * fragments get fresh ids, 🍅 stay on the tail.
@@ -717,7 +643,7 @@ class ZasechkaStore(private val context: Context) {
         val nowMs = System.currentTimeMillis()
         val cutoff = nowMs - NORMALIZE_WINDOW_MS
         val autosAsc = entries
-            .filter { it.source == "auto" && !it.parallel && !it.open && it.end > cutoff }
+            .filter { it.source == "auto" && !it.open && it.end > cutoff }
             .sortedBy { it.start }
         if (autosAsc.isEmpty()) return false
         val rebuilt = ArrayList<Entry>(entries.size)
@@ -726,7 +652,7 @@ class ZasechkaStore(private val context: Context) {
             // Auto facts are the things spliced AROUND; gap fillers are never
             // hosts either - they die to overlaps instead (clear-and-refill).
             // Settled history is skipped with them (see NORMALIZE_WINDOW_MS).
-            if (m.source == "auto" || m.source == GAP_SOURCE || m.parallel ||
+            if (m.source == "auto" || m.source == GAP_SOURCE ||
                 (!m.open && m.end <= cutoff)
             ) {
                 rebuilt.add(m)
@@ -792,8 +718,8 @@ class ZasechkaStore(private val context: Context) {
         closed
     }
 
-    private fun closeOpenLocked(at: Long, parallel: Boolean = false): Entry? {
-        val index = entries.indexOfLast { it.open && it.parallel == parallel }
+    private fun closeOpenLocked(at: Long): Entry? {
+        val index = entries.indexOfLast { it.open }
         if (index < 0) return null
         val open = entries[index]
         val closed = open.copy(end = at.coerceAtLeast(open.start), synced = false, notionSynced = false)
@@ -829,7 +755,7 @@ class ZasechkaStore(private val context: Context) {
         if (e0 <= s0) return@withLock null
         // Ручные записи целиком внутри вставки — им дорогу: вставка ужимается.
         for (b in entries) {
-            if (b.source == "auto" || b.source == GAP_SOURCE || b.open || b.parallel) continue
+            if (b.source == "auto" || b.source == GAP_SOURCE || b.open) continue
             if (b.start >= s0 && b.end <= e0) {
                 if (b.start - s0 >= e0 - b.end) e0 = b.start else s0 = b.end
             }
@@ -842,8 +768,7 @@ class ZasechkaStore(private val context: Context) {
         val nowMs = System.currentTimeMillis()
         val out = ArrayList<Entry>(entries.size + 3)
         for (e in entries) {
-            // Параллель вставка не режет: она шла поверх, а не вместо.
-            if (e.source == "auto" || e.source == GAP_SOURCE || e.parallel) {
+            if (e.source == "auto" || e.source == GAP_SOURCE) {
                 out.add(e)
                 continue
             }
@@ -896,42 +821,12 @@ class ZasechkaStore(private val context: Context) {
     }
 
     /**
-     * Уже записанное владельцем дело и авто-факт - одно и то же? Совпала
-     * категория (созвон поверх созвона) или название (его «смотрю ютуб» и
-     * ютуб из статистики использования). Короткие названия по вхождению не
-     * сравниваем: «еда» нашлась бы в половине ленты.
-     */
-    /**
-     * Одно приложение — два написания, и из-за этого один и тот же ютуб
-     * попадал в ленту дважды: владелец сказал «сижу выбираю в Ютубе наушники»
-     * (Быт, 135 минут), а статистика привезла «YouTube» (Потери, 3 минуты)
-     * внутрь этого же куска. Проверка «он уже назвал это сам» сравнивала
-     * строки как есть и кириллицы в упор не видела.
-     */
-    private fun appNormal(s: String): String {
-        var t = s.trim().lowercase()
-        for ((ru, en) in APP_ALIASES) t = t.replace(ru, en)
-        return t
-    }
-
-    private fun sameThing(mine: Entry, title: String, category: String): Boolean {
-        val a = appNormal(mine.title)
-        val b = appNormal(title)
-        if (mine.category.isNotBlank() &&
-            mine.category.trim().equals(category.trim(), ignoreCase = true)
-        ) return true
-        if (a == b) return true
-        return a.length >= 4 && b.length >= 4 && (a.contains(b) || b.contains(a))
-    }
-
-    /**
      * Iron dedup, two rules. Same-title near-same-start catches a re-scan of
      * the same source row. The overlap rule catches messier realities (the
      * call log can hold SEVERAL rows for one call - VoIP apps write their own
      * copies): auto entries never legitimately overlap EACH OTHER, so a
      * newcomer covering an existing auto entry by half its span is a
-     * duplicate, not a fact. Треки сравниваются вместе: один и тот же ютуб не
-     * должен приехать сначала строкой ленты, а потом параллелью.
+     * duplicate, not a fact.
      */
     private fun autoDuplicateLocked(start: Long, end: Long, title: String): Boolean {
         val cleanTitle = title.trim()
@@ -939,13 +834,10 @@ class ZasechkaStore(private val context: Context) {
         return entries.any { e ->
             e.source == "auto" && !e.open && (
                 (e.title == cleanTitle && kotlin.math.abs(e.start - start) < 60_000) ||
-                    // Правило пересечения - ТОЛЬКО между звонками, и вот почему.
-                    // Оно ловит грязь журнала: один разговор бывает записан
-                    // несколькими строками (VoIP-приложения пишут свои копии),
-                    // и названия у них разные - «звонок» и «звонок · Мама».
-                    // Сессии приложений не пересекаются по построению (передний
-                    // план один), а вот звонок ПОВЕРХ ютуба - законная пара из
-                    // двух треков, и глушить её нельзя.
+                    // Правило пересечения - ТОЛЬКО между звонками: оно ловит
+                    // грязь журнала (один разговор несколькими строками с
+                    // разными названиями). Сон и тренировки с часов не
+                    // пересекаются по построению.
                     (isCallTitle(e.title) && isCallTitle(cleanTitle) &&
                         (kotlin.math.min(e.end, end) - kotlin.math.max(e.start, start))
                             .coerceAtLeast(0L) * 2 >= newSpan)
@@ -955,331 +847,8 @@ class ZasechkaStore(private val context: Context) {
 
     private fun isCallTitle(t: String): Boolean = t.trimStart().startsWith("звонок", ignoreCase = true)
 
-    // ---- второй трек: то, что шло одновременно с делом ----
-
     /**
-     * Открывает параллельную запись. Основного дела НЕ трогает: оно как шло,
-     * так и идёт, и время у него не отнимается - в этом вся затея. Открытая
-     * параллельная может быть только одна: новая закрывает предыдущую, иначе
-     * второй трек превратился бы в свалку забытых «слушаю».
-     */
-    suspend fun startParallel(
-        start: Long,
-        raw: String,
-        title: String,
-        category: String,
-        client: String,
-        source: String,
-    ): Entry = mutex.withLock {
-        ensureLoaded()
-        snapshotLocked("параллель «${title.trim().ifBlank { "без названия" }}»")
-        closeOpenLocked(start, parallel = true)
-        val opened = Entry(
-            id = nextId(),
-            start = start,
-            end = 0L,
-            raw = raw.trim(),
-            title = title.trim(),
-            category = category.trim(),
-            client = client.trim(),
-            useful = 0,
-            source = source,
-            synced = false,
-            createdAt = System.currentTimeMillis(),
-            track = 1,
-        )
-        entries.add(opened)
-        normalizeLocked()
-        entries.sortBy { it.start }
-        persist()
-        entries.lastOrNull { it.open && it.parallel } ?: opened
-    }
-
-    /** Завершённая параллель задним числом: «пока готовил, слушал книгу». */
-    suspend fun insertParallel(
-        start: Long,
-        end: Long,
-        raw: String,
-        title: String,
-        category: String,
-        client: String,
-        source: String,
-    ): Entry? = mutex.withLock {
-        ensureLoaded()
-        if (end <= start) return@withLock null
-        snapshotLocked("параллель «${title.trim().ifBlank { "без названия" }}»")
-        val entry = Entry(
-            id = nextId(),
-            start = start,
-            end = end,
-            raw = raw.trim(),
-            title = title.trim(),
-            category = category.trim(),
-            client = client.trim(),
-            useful = 0,
-            source = source,
-            synced = false,
-            createdAt = System.currentTimeMillis(),
-            track = 1,
-        )
-        entries.add(entry)
-        normalizeLocked()
-        entries.sortBy { it.start }
-        persist()
-        entry
-    }
-
-    /**
-     * Открывает параллель для сессии, которая ИДЁТ ПРЯМО СЕЙЧАС: владелец
-     * сидит в Клоде, и это должно быть видно в ленте, а не через пять минут
-     * после выхода. Закроет её тот же свип, когда увидит конец сессии.
-     *
-     * Отличий от [startParallel] два, и оба намеренные. Шага отмены НЕ
-     * ставит: живая строка робота - не поступок владельца, а засорять ею
-     * стопку из пяти шагов значит лишить его настоящей отмены. И чужую
-     * открытую параллель не трогает: сказанное голосом сильнее найденного
-     * телефоном, слот занят - значит занят.
-     */
-    suspend fun openAutoParallel(start: Long, title: String, category: String): Entry? =
-        mutex.withLock {
-            ensureLoaded()
-            if (entries.any { it.open && it.parallel }) return@withLock null
-            // Живая могла только что упереться в конец дела и закрыться
-            // (capOpenParallelLocked), а приложение работает дальше — свип
-            // на следующем тике открывает её снова и снова с начала СЕССИИ.
-            // Без сдвига к шву одно и то же время посчиталось бы дважды.
-            // Сдвигаться надо за ВСЕ уже записанные куски этой же сессии, а
-            // не только за тот, что накрывает начало: за длинную сессию швов
-            // набирается несколько, и шаг «до первого» топтался бы на месте,
-            // плодя одинаковые строки каждый тик.
-            val from = entries
-                .filter {
-                    it.parallel && !it.open && it.end > start &&
-                        it.title.trim().equals(title.trim(), ignoreCase = true)
-                }
-                .maxOfOrNull { it.end } ?: start
-            val entry = Entry(
-                id = nextId(),
-                start = from,
-                end = 0L,
-                raw = "",
-                title = title.trim(),
-                category = category.trim(),
-                client = "",
-                useful = 0,
-                source = "auto",
-                synced = false,
-                createdAt = System.currentTimeMillis(),
-                track = 1,
-            )
-            entries.add(entry)
-            normalizeLocked()
-            entries.sortBy { it.start }
-            persist()
-            entry
-        }
-
-    /** Закрывает идущую параллельную запись; null - её и не было. */
-    suspend fun closeParallel(at: Long): Entry? = mutex.withLock {
-        ensureLoaded()
-        val closed = closeOpenLocked(at, parallel = true)
-        if (closed != null) {
-            normalizeLocked()
-            persist()
-        }
-        closed
-    }
-
-    /**
-     * Авто-факт из телефона: пожиратель внимания или звонок. Правило владельца
-     * - НИЧЕГО НЕ ВЫЧИТАТЬ, и поэтому врезки можно снова включить: если в это
-     * время шло настоящее дело, факт ложится вторым треком ПОВЕРХ него
-     * (готовил еду и смотрел ютуб - еда осталась едой); если время было ничьё,
-     * он ложится обычной строкой и честно закрывает неразмеченное.
-     *
-     * Возвращает null, когда такой факт уже записан (повторный свип) или
-     * когда владелец сам назвал это время ровно тем же самым.
-     */
-    suspend fun insertAutoFact(
-        start: Long,
-        end: Long,
-        title: String,
-        category: String,
-        client: String = "",
-    ): Entry? = mutex.withLock {
-        ensureLoaded()
-        if (end <= start) return@withLock null
-        if (autoDuplicateLocked(start, end, title)) return@withLock null
-        // Второй трек - только там, где владелец сам занял это время. «Занял»
-        // считается по половине промежутка: короткий звонок в конце дела не
-        // должен вываливаться в ленту отдельной строкой.
-        val nowMs = System.currentTimeMillis()
-        val covering = entries
-            .filter { !it.parallel && it.source != GAP_SOURCE && it.source != "auto" }
-            .map { e ->
-                val eEnd = if (e.open) nowMs else e.end
-                e to (kotlin.math.min(eEnd, end) - kotlin.math.max(e.start, start)).coerceAtLeast(0L)
-            }
-            .filter { it.second > 0 }
-        val claimed = covering.sumOf { it.second }
-        val parallel = claimed * 2 >= end - start
-        // Он мог назвать это время ровно тем же самым: «смотрю ютуб» - и тут
-        // же ютуб приезжает из статистики. Второй строкой поверх первой это
-        // было бы враньём, поэтому такой факт молча пропускаем.
-        if (parallel && covering.any { (e, _) -> sameThing(e, title, category) }) {
-            return@withLock null
-        }
-        // И то же самое на ВТОРОМ треке. «Готовлю завтрак и параллельно смотрю
-        // ютуб» кладёт ютуб параллелью сразу, голосом; через десять минут тот
-        // же ютуб находит статистика использования. covering выше смотрит
-        // только основную ленту и этой пары не видит - без проверки здесь у
-        // владельца выходило бы два ютуба поверх одного завтрака.
-        if (entries.any { e ->
-                e.parallel && sameThing(e, title, category) &&
-                    (kotlin.math.min(if (e.open) nowMs else e.end, end) -
-                        kotlin.math.max(e.start, start)).coerceAtLeast(0L) * 2 >= end - start
-            }
-        ) return@withLock null
-        // Параллель режется по границам дел: одна строка - один носитель.
-        // Основной трек не режем - там за стыковку отвечает сплайс.
-        val spans = if (parallel) splitByHostsLocked(start, end) else listOf(start to end)
-        var first: Entry? = null
-        for ((s0, e0) in spans) {
-            val entry = Entry(
-                id = nextId(),
-                start = s0,
-                end = e0,
-                raw = "",
-                title = title.trim(),
-                category = category.trim(),
-                client = client.trim(),
-                useful = 0,
-                source = "auto",
-                synced = false,
-                createdAt = nowMs,
-                track = if (parallel) 1 else 0,
-            )
-            entries.add(entry)
-            if (first == null) first = entry
-        }
-        normalizeLocked()
-        entries.sortBy { it.start }
-        persist()
-        first
-    }
-
-    /**
-     * Разрезать отрезок по границам ДЕЛ основной ленты. Ютуб на 25 минут,
-     * попавший наполовину на «Смену белья» (13 минут) и наполовину на
-     * неразмеченное, лежал одной строкой - и получалось, что параллель длиннее
-     * того, поверх чего она якобы шла. Читатель файла нашёл четырнадцать таких
-     * из двухсот пятидесяти и сказал по делу: тогда «поверх чего» перестаёт
-     * быть ответом на вопрос.
-     *
-     * Куски ОДНОГО дела (разрезанного полуночью или врезкой) швом не считаются:
-     * дело есть дело. Резать пополам на кусочки короче полуминуты тоже не
-     * будем - такие обрезки нормализация всё равно выбросит, и минуты пропали
-     * бы. Ни одной минуты отрезок при этом не теряет: куски стыкуются встык.
-     */
-    private fun splitByHostsLocked(start: Long, end: Long): List<Pair<Long, Long>> {
-        val mains = entries.filter { !it.parallel }.sortedBy { it.start }
-        val cuts = ArrayList<Long>()
-        for (i in mains.indices) {
-            val m = mains[i]
-            if (m.start <= start || m.start >= end) continue
-            val prev = mains.getOrNull(i - 1)
-            if (prev != null && !prev.open && sameDeal(prev, m) &&
-                m.start <= prev.end + 1_000L
-            ) continue
-            cuts.add(m.start)
-        }
-        if (cuts.isEmpty()) return listOf(start to end)
-        val out = ArrayList<Pair<Long, Long>>(cuts.size + 1)
-        var from = start
-        for (c in cuts) {
-            if (c - from < CRUMB_MS || end - c < CRUMB_MS) continue
-            out.add(from to c)
-            from = c
-        }
-        out.add(from to end)
-        return out
-    }
-
-    /** Один факт из памяти телефона для разметки задним числом. */
-    data class AutoFact(
-        val start: Long,
-        val end: Long,
-        val title: String,
-        val category: String,
-        val client: String = "",
-    )
-
-    /**
-     * Разметка ЗАДНИМ ЧИСЛОМ: телефон помнит больше, чем лента. Врезки были
-     * выключены месяцами, и всё это время ютуб, звонки и Клод нигде не
-     * записывались - хотя система их помнит (журнал звонков долго, статистика
-     * использования около недели).
-     *
-     * Всё уходит ТОЛЬКО во второй трек, и это не лень, а осторожность:
-     * прошлые дни уже сложились в свои 24 часа, и класть туда строки основной
-     * ленты значило бы переписывать прожитое. Вдобавок нормализация не
-     * заглядывает дальше десяти суток (NORMALIZE_WINDOW_MS), так что дыры и
-     * наложения в старом дне просто некому починить - а параллельному треку
-     * чинить нечего: он ни у кого ничего не отнимает и в сутки не входит.
-     *
-     * Идемпотентно: повторный проход по тому же окну ничего не задваивает.
-     * Одна блокировка, одна нормализация, одна запись на диск - иначе сотня
-     * звонков за месяц означала бы сотню перезаписей файла ленты.
-     *
-     * Возвращает, сколько записей реально легло.
-     */
-    suspend fun backfillParallel(facts: List<AutoFact>): Int = mutex.withLock {
-        ensureLoaded()
-        val wanted = facts
-            .filter { it.end > it.start && it.title.isNotBlank() }
-            .sortedBy { it.start }
-        // Сначала прикидка без изменений: если всё это уже есть, снимок
-        // отмены тратить незачем - в стопке всего пять шагов.
-        if (wanted.none { !autoDuplicateLocked(it.start, it.end, it.title) }) return@withLock 0
-        snapshotLocked("разметку задним числом")
-        val nowMs = System.currentTimeMillis()
-        var added = 0
-        for (f in wanted) {
-            // Проверяем ещё раз: дубль мог приехать в этом же заходе.
-            if (autoDuplicateLocked(f.start, f.end, f.title)) continue
-            // Так же кусками по делам, как и живая разметка: параллель,
-            // накрывающая два дела, ни на один вопрос не отвечает.
-            for ((s0, e0) in splitByHostsLocked(f.start, f.end)) {
-                entries.add(
-                    Entry(
-                        id = nextId(),
-                        start = s0,
-                        end = e0,
-                        raw = "",
-                        title = f.title.trim(),
-                        category = f.category.trim(),
-                        client = f.client.trim(),
-                        useful = 0,
-                        source = "auto",
-                        synced = false,
-                        createdAt = nowMs,
-                        track = 1,
-                    )
-                )
-            }
-            added++
-        }
-        if (added == 0) return@withLock 0
-        entries.sortBy { it.start }
-        normalizeLocked()
-        entries.sortBy { it.start }
-        persist()
-        logger?.invoke("лента: разметка задним числом — легло $added записей во второй трек")
-        added
-    }
-
-    /**
-     * A phone-detected interruption (attention-eater session, a call) lands
+     * A phone-detected fact that really occupies time (сон по экрану) lands
      * in the ribbon retroactively. If an open entry covers [start], it is cut
      * at [start]; with [resumePrevious] (calls) a copy of it reopens at [end]
      * - the conversation pauses the work, it does not kill it. An open entry
@@ -1302,7 +871,7 @@ class ZasechkaStore(private val context: Context) {
         if (autoDuplicateLocked(start, end, title)) return@withLock null
         var actualEnd = end
         var resumeTemplate: Entry? = null
-        val openIndex = entries.indexOfLast { it.open && !it.parallel }
+        val openIndex = entries.indexOfLast { it.open }
         if (openIndex >= 0) {
             val open = entries[openIndex]
             if (open.start <= start) {
@@ -1395,8 +964,8 @@ class ZasechkaStore(private val context: Context) {
         snapshotLocked("отмену «${started.title.ifBlank { "без названия" }}»")
         entries.removeAll { it.id == startedId }
         var reopened: Entry? = null
-        val i = entries.indexOfFirst { it.id == reopenId && !it.parallel }
-        if (i >= 0 && entries.none { it.open && !it.parallel }) {
+        val i = entries.indexOfFirst { it.id == reopenId }
+        if (i >= 0 && entries.none { it.open }) {
             reopened = entries[i].copy(end = 0L, synced = false, notionSynced = false)
             entries[i] = reopened
         }
@@ -1455,7 +1024,7 @@ class ZasechkaStore(private val context: Context) {
         val manualMs = forRange(from, to)
             // Gap fillers are NOT the owner's claim - a night filled with
             // «Потери» must not block the сон insert that explains it.
-            .filter { !it.open && !it.parallel && it.source != "auto" && it.source != GAP_SOURCE }
+            .filter { !it.open && it.source != "auto" && it.source != GAP_SOURCE }
             .sumOf {
                 (kotlin.math.min(it.end, to) - kotlin.math.max(it.start, from)).coerceAtLeast(0L)
             }
@@ -1479,11 +1048,8 @@ class ZasechkaStore(private val context: Context) {
 
     // ---- CSV export (same share pattern as the transcription metrics) ----
 
-    suspend fun shareCsvIntent(withParallel: Boolean = true): Intent {
-        val all = all()
-        // Тумблер владельца: файл уходит и туда, где формат объяснять некому
-        // (таблица, чужой скрипт) - там второй слой только мешает.
-        val list = if (withParallel) all else all.filter { !it.parallel }
+    suspend fun shareCsvIntent(): Intent {
+        val list = all()
         // Worth per hour and typical length live on the category; carried into
         // every row so a spreadsheet can add the day up on its own.
         val cats = categories().associateBy { it.name.trim().lowercase() }
@@ -1492,38 +1058,20 @@ class ZasechkaStore(private val context: Context) {
         val now = System.currentTimeMillis()
         var previousRaw = ""
         val csv = buildString {
-            append(csvLegend(withParallel))
-            append(
-                "date,start,end,id,track,parallel_of,minutes_day,minutes_parallel,over," +
-                    "title,category,client,useful,source,is_open," +
-                    "value,points,base_min,raw\n"
-            )
+            append(csvLegend())
+            append("date,start,end,id,minutes,title,category,client,useful,source,is_open,value,points,base_min,raw\n")
             for (e in list) {
                 val end = if (e.open) now else e.end
                 append(dateFormat.format(Date(e.start))).append(',')
                 append(hm(timeFormat, e.start)).append(',')
                 append(hm(timeFormat, end)).append(',')
-                // id и parallel_of — по замечанию читателя файла, и он прав:
-                // «одинаковый старт плюс одинаковая заметка» это догадка, а
-                // не связь. Теперь связь названа номером.
                 append(e.id.toString()).append(',')
-                append(if (e.parallel) "параллельно" else "основной").append(',')
-                val host = if (e.parallel) hostOf(e, all, now) else null
-                append(host?.id?.toString().orEmpty()).append(',')
-                // Минуты основного трека - РАЗНОСТЬ МИНУТ СУТОК, а не округление
-                // собственной длительности. Разница не косметическая: округляя
-                // каждую строку отдельно, день из двадцати записей приезжал в
-                // сумме на 1436 или 1443 минуты вместо 1440 - до четырёх минут
-                // мимо, и колонка, которую я обещал складывать в сутки, не
-                // складывалась. Разность соседних минут суток телескопируется:
-                // сумма за день - ровно минута полуночи минус минута начала.
-                append(if (e.parallel) "" else dayMinutes(e.start, end).toString()).append(',')
-                // У параллели такого инварианта нет и быть не может: она ни с
-                // чем не стыкуется встык. Здесь честное округление своей длины.
-                append(if (e.parallel) e.durationMin(now).toString() else "").append(',')
-                // Поверх чего шла параллель - иначе строка «YouTube 20 минут»
-                // в отрыве от «Приготовление еды» ничего не объясняет.
-                append(csvEscape(if (e.parallel) overTitle(e, all, now) else "")).append(',')
+                // Минуты - РАЗНОСТЬ МИНУТ СУТОК, а не округление собственной
+                // длительности. Разница не косметическая: округляя каждую
+                // строку отдельно, день из двадцати записей приезжал в сумме на
+                // 1436 или 1443 минуты вместо 1440. Разность соседних минут
+                // суток телескопируется: сумма за день - ровно 1440.
+                append(dayMinutes(e.start, end).toString()).append(',')
                 append(csvEscape(e.title)).append(',')
                 append(csvEscape(e.category)).append(',')
                 append(csvEscape(e.client)).append(',')
@@ -1544,26 +1092,11 @@ class ZasechkaStore(private val context: Context) {
                 append(csvEscape(raw)).append('\n')
             }
         }
-        val out = File(
-            context.cacheDir,
-            if (withParallel) "pravka-zasechka.csv" else "pravka-zasechka-bez-parallelej.csv",
-        )
+        val out = File(context.cacheDir, "pravka-zasechka.csv")
         withContext(Dispatchers.IO) { out.writeText(csv) }
         return shareFileIntent(context, out, "text/csv")
     }
 
-    /**
-     * Длина строки основного трека в минутах - как РАЗНОСТЬ МИНУТ СУТОК, а не
-     * округление собственной длительности. Разница не косметическая: округляя
-     * каждую строку отдельно, день из двадцати записей приезжал в сумме на
-     * 1436 или 1443 минуты вместо 1440. Разность соседних минут суток
-     * телескопируется, и сумма за день выходит ровно в полночь.
-     *
-     * Обе минуты считаются от дня НАЧАЛА записи. Это не педантизм: дело,
-     * кончающееся ровно в полночь (а лента режет по полуночи каждое такое),
-     * при отсчёте конца от его собственных суток давало минуту 0 и строку
-     * длиной −1380 минут.
-     */
     /**
      * Время строки печатается ОКРУГЛЁННЫМ до ближайшей минуты — до той самой,
      * которую считает [dayMinutes]. Иначе выходило вот что: минуты брались
@@ -1576,6 +1109,12 @@ class ZasechkaStore(private val context: Context) {
      */
     private fun hm(fmt: SimpleDateFormat, ms: Long): String = fmt.format(Date(ms + 30_000L))
 
+    /**
+     * Длина строки в минутах - как РАЗНОСТЬ МИНУТ СУТОК. Обе минуты считаются
+     * от дня НАЧАЛА записи: дело, кончающееся ровно в полночь (а лента режет по
+     * полуночи каждое такое), при отсчёте конца от его собственных суток давало
+     * минуту 0 и строку длиной −1380 минут.
+     */
     private fun dayMinutes(start: Long, end: Long): Long {
         val base = dayStartMs(start)
         return (end - base + 30_000L) / 60_000L - (start - base + 30_000L) / 60_000L
@@ -1583,123 +1122,54 @@ class ZasechkaStore(private val context: Context) {
 
     /**
      * Шапка-легенда для того, кто будет это читать, - и человека, и модели.
-     *
      * Строки с «#» в начале: так помечают комментарии почти все инструменты
-     * (в pandas это `comment='#'`), а модель просто читает их как текст и
-     * сразу знает, что колонок времени две и почему. Импорт Правки такие
-     * строки пропускает; таблицы покажут их первыми ячейками - удалить.
+     * (в pandas это `comment='#'`). Импорт Правки такие строки пропускает.
      */
-    private fun csvLegend(withParallel: Boolean): String = (if (withParallel) "" else
-        "# ПАРАЛЛЕЛЬНЫЙ СЛОЙ ИЗ ЭТОЙ ВЫГРУЗКИ ИСКЛЮЧЁН по просьбе владельца:\n" +
-            "# в файле только основной трек. Колонки track, parallel_of,\n" +
-            "# minutes_parallel и over поэтому пустые, а не потерянные.\n#\n"
-    ) + """
+    private fun csvLegend(): String = """
         # ЗАСЕЧКА — таймшит владельца. Как это читать.
         #
-        # В ленте ДВА СЛОЯ, и это главное, что нужно понять про файл:
-        #   основной трек   — то, чем человек занят. Непрерывен, без пересечений,
-        #                     складывается ровно в 24 часа.
-        #   параллельный    — то, что шло ПОВЕРХ: книга за рулём, ютуб за готовкой,
-        #                     звонок посреди работы. Пересекается с чем угодно и в
-        #                     сутки НЕ входит.
-        # Поэтому колонки «minutes» здесь нет: сложив её, вы получили бы
-        # тридцатичасовые сутки. Вместо неё две, и у строки заполнена ровно одна.
+        # Лента непрерывна и не пересекается: одна строка на каждый отрезок
+        # времени, сумма minutes за день — ровно 1440 (у сегодняшнего — сколько
+        # его прошло). Ничто не идёт «поверх»: телефон (ютуб, звонки, Клод)
+        # считается отдельно по дням и в этом файле не лежит.
         #
         # КОЛОНКИ
         #   date              дата строки, YYYY-MM-DD. Ни одна запись не пересекает
         #                     полночь: то, что шло через неё, разрезано на две.
         #   start, end        местное время ЧЧ:ММ. Идущая сейчас запись закрыта
         #                     временем выгрузки и помечена is_open.
-        #   id                номер записи, уникальный в ленте. На него ссылается
-        #                     parallel_of.
-        #   track             «основной» или «параллельно».
-        #   parallel_of       id ДЕЛА-НОСИТЕЛЯ для параллельной строки. Пусто у
-        #                     основной. Именно это отличает параллельное дело от
-        #                     случайного совпадения времени: одинаковый старт и
-        #                     одинаковая надиктовка — догадка, номер — связь.
-        #   minutes_day       минуты, занятые в сутках. У параллельной строки пусто.
-        #                     СУММА ЗА ДЕНЬ = 1440. У сегодняшнего дня — сколько его
-        #                     прошло; у любого дня может не хватать свежей дыры,
-        #                     которую заполнитель ещё не закрыл (он ждёт 45 минут).
-        #                     Это и есть честный ответ на «сколько времени заняло».
-        #   minutes_parallel  минуты наложения. У основной строки пусто. Сумма — это
-        #                     «сколько шло вторым слоем», к суткам не прибавляется.
-        #   over              для параллельной строки: дело, поверх которого шла.
-        #                     Параллель режется по границам дел, поэтому лежит
-        #                     внутри своего носителя. Вылезти она может не
-        #                     больше чем на полминуты: резать мельче нельзя —
-        #                     обрезок короче этого лента считает мусором и
-        #                     выбрасывает, и минуты пропали бы.
+        #   id                номер записи, уникальный в ленте.
+        #   minutes           минуты, занятые в сутках. СУММА ЗА ДЕНЬ = 1440. У
+        #                     любого дня может не хватать свежей дыры, которую
+        #                     заполнитель ещё не закрыл (он ждёт 45 минут).
         #   title             название дела словами владельца.
         #   category          категория из его списка.
-        #   client            клиент/проект или собеседник звонка.
+        #   client            клиент/проект.
         #   useful            старая ручная оценка 1–5, обычно пусто. Не используйте.
         #   source            откуда строка: voice/text — сказал сам, edit — правил
-        #                     руками, todoist — из задачи, auto — нашёл телефон
-        #                     (ютуб, звонки, сон, тренировка), gap — авто-заполнитель
+        #                     руками, todoist — из задачи, auto — нашёл телефон или
+        #                     часы (сон, тренировка), gap — авто-заполнитель
         #                     неразмеченного времени.
         #   is_open           true — запись ещё шла на момент выгрузки.
         #   value             ценность ЧАСА этой категории, от −10 до +10.
         #   points            что строка дала дню: value × часы. Сумма points за
-        #                     день — балл дня, и параллельный слой в него входит.
+        #                     день — балл дня.
         #   base_min          типичная длительность такого дела, 0 — не задана.
         #   raw               что было надиктовано. Печатается один раз на фразу:
         #                     у продолжений дела пусто, это не потеря данных.
         #
-        # ТРИ ЧЕСТНЫЕ СУММЫ
-        #   сколько времени заняло  → SUM(minutes_day)      GROUP BY date, category
-        #   сколько шло параллельно → SUM(minutes_parallel) GROUP BY date, category
-        #   каким был день          → SUM(points)           GROUP BY date
-        # Складывать minutes_day и minutes_parallel вместе НЕЛЬЗЯ: это одно и то же
-        # время, прожитое дважды.
+        # ДВЕ ЧЕСТНЫЕ СУММЫ
+        #   сколько времени заняло  → SUM(minutes)  GROUP BY date, category
+        #   каким был день          → SUM(points)   GROUP BY date
         #
     """.trimIndent() + "\n"
 
-    /** Название дела основного трека, поверх которого шла эта параллель. */
     /**
-     * Дело, поверх которого шла параллель: то, с которым она пересекается
-     * дольше всего. Наружу — потому что «вся жизнь» одним файлом собирается
-     * в другом месте, а ссылка на носителя нужна и там: без неё две строки
-     * с одинаковым временем связывает только догадка.
-     */
-    fun hostOf(e: Entry, all: List<Entry>, now: Long): Entry? {
-        fun best(pool: List<Entry>): Entry? = pool.asSequence()
-            .map { m ->
-                val mEnd = if (m.open) now else m.end
-                val eEnd = if (e.open) now else e.end
-                m to (kotlin.math.min(mEnd, eEnd) - kotlin.math.max(m.start, e.start))
-                    .coerceAtLeast(0L)
-            }
-            .filter { it.second > 0 }
-            .maxByOrNull { it.second }
-            ?.first
-        val mains = all.filter { !it.parallel }
-        val span = (if (e.open) now else e.end) - e.start
-        val real = best(mains.filter { it.source != GAP_SOURCE })
-        // Настоящее дело в приоритете - но только если оно и правда носитель,
-        // то есть накрывает хотя бы половину параллели. Иначе «поверх чего»
-        // отвечало бы делом, задевшим её краем на секунду, а на деле она шла
-        // поверх неразмеченного - и честный ответ именно такой, а не пустая
-        // клетка и не первое подвернувшееся название.
-        if (real != null) {
-            val realEnd = if (real.open) now else real.end
-            val cover = (kotlin.math.min(realEnd, if (e.open) now else e.end) -
-                kotlin.math.max(real.start, e.start)).coerceAtLeast(0L)
-            if (cover * 2 >= span) return real
-        }
-        return best(mains) ?: real
-    }
-
-    private fun overTitle(e: Entry, all: List<Entry>, now: Long): String =
-        hostOf(e, all, now)?.title.orEmpty()
-
-    /**
-     * Минуты, которыми строка занимает СУТКИ. У параллели их ноль — она ни у
-     * кого ничего не отнимает, — и именно поэтому складывать эту колонку
-     * безопасно: сумма за день выходит ровно 1440.
+     * Минуты, которыми строка занимает СУТКИ — разностью минут суток, поэтому
+     * складывать эту колонку безопасно: сумма за день выходит ровно 1440.
      */
     fun budgetMinutes(e: Entry, now: Long): Long =
-        if (e.parallel) 0L else dayMinutes(e.start, if (e.open) now else e.end)
+        dayMinutes(e.start, if (e.open) now else e.end)
 
     /** Ручная запись или находка робота — одним словом, для фильтра. */
     fun sourceKind(e: Entry): String =
@@ -1771,21 +1241,18 @@ class ZasechkaStore(private val context: Context) {
             val key = "${start / 60_000}|${title.lowercase()}"
             if (!seen.add(key)) continue
             val endText = cell("end")
-            // «minutes» из прежних выгрузок; в нынешней время разнесено по
-            // двум колонкам, и заполнена ровно одна из них.
+            // Выгрузки времён параллельного трека несли второй слой строками
+            // «параллельно». В ленту им дороги нет: они шли ПОВЕРХ дел, и
+            // основной лентой они сломали бы 1440 минут суток.
+            val trackCell = cell("track").lowercase()
+            if (trackCell.startsWith("парал") || trackCell == "1" ||
+                (cell("minutes_parallel").toLongOrNull() != null && cell("minutes_day").isBlank())
+            ) continue
+            // «minutes» из прежних и нынешней выгрузок, «minutes_day» - из
+            // выгрузок с двумя колонками времени.
             val minutes = cell("minutes").toLongOrNull()
                 ?: cell("minutes_day").toLongOrNull()
-                ?: cell("minutes_parallel").toLongOrNull()
                 ?: 0L
-            // Трек: словом («параллельно») в нынешней выгрузке, числом - если
-            // файл делали руками. Заполненная minutes_parallel решает сама.
-            val trackCell = cell("track").lowercase()
-            val track = when {
-                trackCell.startsWith("парал") || trackCell == "1" -> 1
-                cell("minutes_parallel").toLongOrNull() != null &&
-                    cell("minutes_day").isBlank() -> 1
-                else -> 0
-            }
             val wasOpen = cell("is_open").equals("true", ignoreCase = true)
             var end = 0L
             if (!wasOpen && endText.length >= 4) {
@@ -1843,7 +1310,6 @@ class ZasechkaStore(private val context: Context) {
                     // насыпал бы в таблицу дубли всей истории.
                     synced = true,
                     createdAt = start,
-                    track = track,
                 )
             )
         }
@@ -1861,16 +1327,14 @@ class ZasechkaStore(private val context: Context) {
 
     /** Открытым может быть только последнее дело: остальные закрываем встык. */
     private fun closeStaleOpenLocked() {
-        for (track in listOf(false, true)) {
-            val open = entries.filter { it.open && it.parallel == track }
-            if (open.size <= 1) continue
-            for (e in open) {
-                val next = entries
-                    .filter { it.start > e.start && it.parallel == track }
-                    .minByOrNull { it.start } ?: continue
-                val at = entries.indexOfFirst { it.id == e.id }
-                if (at >= 0) entries[at] = e.copy(end = next.start)
-            }
+        val open = entries.filter { it.open }
+        if (open.size <= 1) return
+        for (e in open) {
+            val next = entries
+                .filter { it.start > e.start }
+                .minByOrNull { it.start } ?: continue
+            val at = entries.indexOfFirst { it.id == e.id }
+            if (at >= 0) entries[at] = e.copy(end = next.start)
         }
     }
 
@@ -2038,6 +1502,8 @@ class ZasechkaStore(private val context: Context) {
                 }
             }
             entries.sortBy { it.start }
+            // Второй трек из файла прошлой сборки — в архив, не в ленту.
+            val parallelsArchived = archiveParkedLocked() > 0
             // Старые авто-дыры назывались «потери» и делили категорию с
             // осознанными потерями — переводим их под «Не размечено».
             // Свежая неделя пересинкается в зеркала, осевшая история в
@@ -2079,7 +1545,7 @@ class ZasechkaStore(private val context: Context) {
             if (normalizeLocked()) persistQueued()
             // Поднятое из копии надо тут же положить в файл - иначе следующая
             // загрузка снова поднимала бы то же самое из копии.
-            if (root == null || rescued || seedMigrated || fillersMigrated) persistQueued()
+            if (root == null || rescued || seedMigrated || fillersMigrated || parallelsArchived) persistQueued()
         }
         loaded = true
         publish()
@@ -2104,6 +1570,15 @@ class ZasechkaStore(private val context: Context) {
     /** Почасовые копии ленты, свежие сверху (см. Backups). */
     private fun hourlyCopies(): List<File> = Backups.snapshotsOf(context, FILE_NAME)
 
+    /**
+     * Записи второго трека из файла старой сборки. В ленту они не идут:
+     * параллельный трек закрыт («эксперимент оказался неудачным, засоряет
+     * ленту»), а их место занял телефонный счёт по дням. Но и стирать прожитое
+     * молча нельзя — они откладываются сюда и после загрузки уезжают в архив
+     * `zasechka-parallel-archive.json`, откуда их при желании можно поднять.
+     */
+    private val parkedParallels = ArrayList<JSONObject>()
+
     /** Entry rows out of a store JSON - shared by load and restore. */
     private fun parseEntries(root: JSONObject?): List<Entry> {
         val array = root?.optJSONArray("entries") ?: return emptyList()
@@ -2112,6 +1587,10 @@ class ZasechkaStore(private val context: Context) {
             val o = array.optJSONObject(i) ?: continue
             val start = o.optLong("start", 0)
             if (start <= 0) continue
+            if (o.optInt("track", 0) > 0) {
+                parkedParallels.add(o)
+                continue
+            }
             out.add(
                 Entry(
                     id = o.optLong("id", 0),
@@ -2127,11 +1606,32 @@ class ZasechkaStore(private val context: Context) {
                     createdAt = o.optLong("createdAt", start),
                     pomodoros = o.optInt("pomodoros", 0),
                     notionSynced = o.optBoolean("notionSynced", false),
-                    track = o.optInt("track", 0),
                 )
             )
         }
         return out
+    }
+
+    /**
+     * Убрать отложенные параллели в архивный файл. Дописывается к тому, что
+     * там уже лежит; пишется на writer-потоке, как всё остальное. Возвращает,
+     * сколько уехало (0 — нечего).
+     */
+    private fun archiveParkedLocked(): Int {
+        if (parkedParallels.isEmpty()) return 0
+        val parked = ArrayList(parkedParallels)
+        parkedParallels.clear()
+        val archive = File(context.filesDir, PARALLEL_ARCHIVE)
+        DiskWriter.post {
+            val existing = runCatching { JSONArray(archive.readText()) }.getOrNull() ?: JSONArray()
+            for (o in parked) existing.put(o)
+            StoreFiles.writeAtomic(archive, existing.toString())
+        }
+        logger?.invoke(
+            "лента: параллельный трек закрыт — ${parked.size} записей второго трека " +
+                "убраны в архив $PARALLEL_ARCHIVE (в сутки они не входили, лента цела)"
+        )
+        return parked.size
     }
 
     private fun publish() {
@@ -2258,6 +1758,7 @@ class ZasechkaStore(private val context: Context) {
         ).firstOrNull() ?: return@withLock 0
         val root = runCatching { JSONObject(f.readText()) }.getOrNull() ?: return@withLock 0
         val restored = parseEntries(root)
+        archiveParkedLocked()
         if (restored.isEmpty()) return@withLock 0
         snapshotLocked("восстановление из $name")
         // Everything goes out to the mirrors again after a restore.
@@ -2321,7 +1822,6 @@ class ZasechkaStore(private val context: Context) {
                             put("synced", e.synced)
                             put("createdAt", e.createdAt)
                             if (e.pomodoros > 0) put("pomodoros", e.pomodoros)
-                            if (e.track != 0) put("track", e.track)
                             put("notionSynced", e.notionSynced)
                         }
                     )

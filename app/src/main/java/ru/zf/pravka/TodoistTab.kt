@@ -66,7 +66,7 @@ fun TodoistTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         }
     }
 
-    val running = ribbon.firstOrNull { it.open && !it.parallel }
+    val running = ribbon.firstOrNull { it.open }
     val today = remember(tasks) { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) }
     val projectName = remember(projects) { projects.associate { it.id to it.name } }
     val inboxIds = remember(projects) { projects.filter { it.inbox }.map { it.id }.toSet() }

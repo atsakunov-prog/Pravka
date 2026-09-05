@@ -20,15 +20,16 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 // Reads the phone's own memory of the day - UsageStatsManager events and the
-// call log - and turns it into:
-//   1. day aggregates in PhoneStore (screen time, pickups, glances=отвлечения,
-//      per-app minutes) - the SEPARATE layer that never touches the ribbon;
-//   2. ribbon entries for the crossover cases: пожиратель внимания
-//      (YouTube-класс, конфигурируемый список) и звонок >= 1 мин. Ни тот, ни
-//      другой НИЧЕГО НЕ ВЫЧИТАЮТ: если в это время шло настоящее дело, факт
-//      ложится ПАРАЛЛЕЛЬНЫМ треком поверх него (готовил еду и смотрел про
-//      часы - готовка осталась готовкой), а если время было ничьё - обычной
-//      строкой в ленту.
+// call log - and turns it into day aggregates in PhoneStore: screen time,
+// pickups, glances=отвлечения, per-app minutes, calls. Это ОТДЕЛЬНЫЙ слой,
+// и в ленту он не пишет ничего, кроме сна.
+//
+// Так было не всегда. Сначала пожиратели внимания и звонки резали дело
+// врезками («засоряет ленту, и не всегда это потеря»), потом ложились
+// параллельным треком поверх дела - и владелец закрыл оба опыта одним словом:
+// «эксперимент оказался неудачным, засоряет ленту. просто давай считать
+// каждый день, сколько на Клод, телеграм, звонки, сколько на ютуб». Теперь
+// ровно так: телефон считается по дням, лента остаётся лентой.
 // Runs retrospectively every few minutes, so nothing is lost while Правка's
 // process was dead - the system kept the history for us.
 class PhoneSweeper(
@@ -54,9 +55,6 @@ class PhoneSweeper(
         // sweep time gets its log row only after it ends, with a start in the
         // past. The insert dedup makes the re-scan idempotent.
         private const val CALL_RESCAN_MS = 2L * 3600 * 1000
-        // Ретро-скан: ключ строки «все звонки» и нижний порог сессии.
-        const val CALLS_KEY = "\u0000calls"
-        private const val RETRO_MIN_SESSION_MS = 2 * 60_000L
         // Висящий хвост фоновой службы: служба могла умереть без события.
         private const val AUDIO_CARRY_CAP_MS = 24L * 3600 * 1000
         // Пауза короче этого - тот же сеанс слушания.
@@ -139,12 +137,7 @@ class PhoneSweeper(
         }
 
         val excluded = excludedPackages()
-        // Только включённые тумблером: выключенное приложение сохраняет свою
-        // категорию, но в ленту не идёт.
-        val immersive = phoneStore.trackedApps()
         val audioApps = phoneStore.audioApps()
-        val immersiveMinMs = settings.zImmersiveMinFlow.first() * 60_000L
-        val candidates = ArrayList<Candidate>()
         // «Слушающие» приложения (аудиокниги, подкасты, музыка) считаются по
         // ФОНОВОЙ СЛУЖБЕ, а не по переднему плану: книга играет с погасшим
         // экраном, и сессия приложения кончается на первом же гашении - её
@@ -183,11 +176,6 @@ class PhoneSweeper(
             if (span >= MIN_SESSION_MS) {
                 val d = delta(currentStartedAt)
                 d.appSessions[pkg] = (d.appSessions[pkg] ?: 0) + 1
-            }
-            // Слушающее приложение в ленту по переднему плану не идёт: его
-            // время придёт из фоновой службы, и две дороги дали бы дубль.
-            if (immersive.containsKey(pkg) && pkg !in audioApps && span >= immersiveMinMs) {
-                candidates.add(Candidate(pkg, currentStartedAt, at))
             }
         }
 
@@ -262,13 +250,21 @@ class PhoneSweeper(
             if (!isExcluded(pkg, excluded) && now > currentAggFrom) addAppTime(pkg, currentAggFrom, now)
         }
         if (screenOnAt > 0 && now > screenOnAt) addScreenTime(max(begin, screenOnAt), now)
+        // Книга в наушниках считается по фоновой службе - её минуты идут в
+        // суточную сумму приложения, как у всех остальных, просто источник
+        // другой (передний план у книги пуст, экран погашен). Пауза короче
+        // пяти минут - один сеанс слушания, а не два.
+        for (c in mergeSpans(audioSpans)) {
+            val f = max(c.start, begin)
+            val t = min(c.end, now)
+            if (t > f) addAppTime(c.pkg, f, t)
+        }
 
         // Human names for everything new this sweep.
         val knownLabels = phoneStore.labelsFlow.value
         val newLabels = HashMap<String, String>()
         val seenPkgs = HashSet<String>()
         deltas.values.forEach { seenPkgs.addAll(it.apps.keys) }
-        candidates.forEach { seenPkgs.add(it.pkg) }
         for (pkg in seenPkgs) {
             if (pkg in knownLabels) continue
             appLabel(pkg)?.let { newLabels[pkg] = it }
@@ -288,103 +284,13 @@ class PhoneSweeper(
             ),
         )
 
-        // ---- crossover into the ribbon ----
+        // ---- сон и звонки: единственное, что идёт дальше телефонного слоя ----
 
         var insertedAny = false
         if (detectSleep(now, usm)) insertedAny = true
-        // Пожиратели и звонки больше не режут ленту: они ложатся ПАРАЛЛЕЛЬНЫМ
-        // треком поверх того дела, которое шло, - «YouTube за готовкой не
-        // потеря» перестало быть проблемой, потому что готовка остаётся
-        // готовкой. Если время было ничьё, факт идёт обычной строкой.
-        // Сон выше - отдельно, он занимает время по-настоящему.
-        // Пауза и продолжение через минуту - одно слушание, а не два: рвать
-        // книгу на куски по каждому светофору незачем. В ленту идут только
-        // те, кому назначена категория, - как и у пожирателей.
-        candidates.addAll(mergeSpans(audioSpans).filter { immersive.containsKey(it.pkg) })
-        val insertsOn = settings.zParallelAutoFlow.first()
-        val allLabels = knownLabels + newLabels
-        candidates.sortBy { it.start }
 
-        // ---- живая параллель: то, что идёт ПРЯМО СЕЙЧАС ----
-        //
-        // Сессия попадала в ленту только КОГДА КОНЧАЛАСЬ, плюс до пяти минут
-        // на тик: владелец сидел в Клоде и не видел этого в ленте вовсе, и был
-        // прав, что спросил. Теперь идущая сессия открывает параллель сразу, а
-        // закрывается она тем же свипом, который увидит её конец.
-        val liveNow = if (!insertsOn) null else runCatching { zasechkaStore.openParallel() }
-            .getOrNull()?.takeIf { it.source == "auto" }
-        if (liveNow != null) {
-            // Её сессия уже кончилась и лежит среди кандидатов - закрываем
-            // живую настоящим концом, а кандидата убираем: это одна запись.
-            val done = candidates.firstOrNull { c ->
-                (allLabels[c.pkg] ?: c.pkg.substringAfterLast('.')) == liveNow.title &&
-                    // Живая могла начаться ПОЗЖЕ сессии: её обрезал конец
-                    // дела, и свип открыл её заново с этого шва. Совпадением
-                    // считаем и это, иначе сессия приехала бы ещё раз целиком.
-                    c.start <= liveNow.start + 60_000L && c.end >= liveNow.start
-            }
-            if (done != null) {
-                zasechkaStore.closeParallel(done.end)
-                candidates.remove(done)
-                insertedAny = true
-                eventLog.add("телефон: ${liveNow.title} закончилось, параллель закрыта")
-            }
-        }
-
-        for (c in candidates) {
-            if (!insertsOn) break
-            val label = allLabels[c.pkg] ?: c.pkg.substringAfterLast('.')
-            // Занятое владельцем время больше не повод промолчать: наоборот,
-            // именно там пожиратель и становится параллелью. Решает store.
-            val inserted = zasechkaStore.insertAutoFact(
-                start = c.start,
-                end = c.end,
-                title = label,
-                category = immersive[c.pkg].orEmpty(),
-            )
-            if (inserted != null) {
-                insertedAny = true
-                val where = if (inserted.parallel) "параллельно" else "в ленту"
-                eventLog.add("телефон: $label ${(c.end - c.start) / 60_000} мин → $where")
-            }
-        }
-
-        if (insertsOn && settings.zCallsFlow.first() && hasCallLogAccess(context)) {
-            if (sweepCalls(now, st.lastCallSweep)) insertedAny = true
-        }
-
-        // Что идёт прямо сейчас: слушающая служба важнее переднего плана -
-        // книга в наушниках честнее, чем приложение, открытое на экране.
-        val runningPkg = audioPkg
-            ?: currentPkg?.takeIf { immersive.containsKey(it) && it !in audioApps }
-        val runningSince = if (audioPkg != null) audioAt else currentStartedAt
-        val stillLive = runCatching { zasechkaStore.openParallel() }.getOrNull()
-        when {
-            !insertsOn -> Unit
-            // Порог тот же, что у закрытых сессий: заглянул на минуту - не дело.
-            runningPkg != null && runningSince > 0 && now - runningSince >= immersiveMinMs -> {
-                val label = allLabels[runningPkg] ?: runningPkg.substringAfterLast('.')
-                if (stillLive == null) {
-                    val opened = zasechkaStore.openAutoParallel(
-                        start = runningSince,
-                        title = label,
-                        category = immersive[runningPkg].orEmpty(),
-                    )
-                    if (opened != null) {
-                        insertedAny = true
-                        eventLog.add("телефон: $label идёт сейчас → параллель открыта")
-                    }
-                }
-                // Живая уже стоит - пусть тикает. Чужую (сказанную голосом)
-                // не трогаем вовсе: слово владельца сильнее.
-            }
-            // Ничего не идёт, а живая осталась - её сессия кончилась незаметно
-            // (перезагрузка, убитый процесс). Закрываем сейчас, чтобы она не
-            // тикала до полуночи.
-            stillLive != null && stillLive.source == "auto" -> {
-                zasechkaStore.closeParallel(now)
-                insertedAny = true
-            }
+        if (settings.zCallsFlow.first() && hasCallLogAccess(context)) {
+            sweepCalls(now, st.lastCallSweep)
         }
 
         if (insertedAny) sync.kickSoon(scope)
@@ -432,9 +338,6 @@ class PhoneSweeper(
         }
         prefs.edit().putString("z_sleep_day", todayKey).apply()
         if (zasechkaStore.coveredByOwner(bestStart, bestEnd)) return false
-        // Спящий человек ничего не слушает: забытая с вечера параллель
-        // («слушаю книгу») закрывается вместе с вечерним делом.
-        zasechkaStore.closeParallel(bestStart)
         val entry = zasechkaStore.insertInterruption(
             start = bestStart,
             end = bestEnd,
@@ -448,11 +351,18 @@ class PhoneSweeper(
         return entry != null
     }
 
-    private suspend fun sweepCalls(now: Long, lastCallSweep: Long): Boolean {
+    /**
+     * Звонки ≥ минуты из журнала - в суточные счётчики: минуты, число,
+     * собеседники. Окно перечитывается скользящим (строка идущего разговора
+     * появляется только после его конца, с началом в прошлом), поэтому уже
+     * посчитанные звонки узнаются по времени начала в PhoneStore.
+     */
+    private suspend fun sweepCalls(now: Long, lastCallSweep: Long) {
         val from = if (lastCallSweep <= 0) dayStartMs(now) else max(lastCallSweep - CALL_RESCAN_MS, 0L)
-        val callCategory = settings.zCallCategoryFlow.first()
-        var inserted = false
+        val deltas = HashMap<String, PhoneStore.DayDelta>()
+        val starts = ArrayList<Long>()
         var watermark = lastCallSweep
+        var counted = 0
         runCatching {
             context.contentResolver.query(
                 CallLog.Calls.CONTENT_URI,
@@ -475,31 +385,20 @@ class PhoneSweeper(
                     if (durationSec < MIN_CALL_SEC) continue
                     val end = min(date + durationSec * 1000, now)
                     if (end <= date) continue
-                    val title = "звонок" + (name?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
-                    // Разговор идёт ПОВЕРХ дела, а не вместо него: два звонка
-                    // посреди работы больше не режут работу на четыре куска.
-                    val entry = zasechkaStore.insertAutoFact(
-                        start = date,
-                        end = end,
-                        title = title,
-                        category = callCategory,
-                        // The recognized contact is the counterparty: with it in
-                        // its own column a call row is already a CRM log line.
-                        client = name?.takeIf { it.isNotBlank() }.orEmpty(),
-                    )
-                    if (entry != null) {
-                        inserted = true
-                        val where = if (entry.parallel) "параллельно" else "в ленту"
-                        eventLog.add("телефон: $title ${durationSec / 60} мин → $where")
-                    }
+                    if (phoneStore.callSeen(date)) continue
+                    val d = deltas.getOrPut(phoneDayKey(date)) { PhoneStore.DayDelta() }
+                    d.callsMs += end - date
+                    d.calls += 1
+                    name?.trim()?.takeIf { it.isNotBlank() }?.let { d.callers[it] = (d.callers[it] ?: 0L) + (end - date) }
+                    starts.add(date)
+                    counted++
                 }
             }
         }.onFailure { eventLog.add("журнал звонков не прочитался: ${it.message}") }
-        if (watermark > lastCallSweep) {
-            val st = phoneStore.sweepState()
-            phoneStore.applySweep(emptyMap(), emptyMap(), st.copy(lastCallSweep = watermark))
+        if (counted > 0 || watermark > lastCallSweep) {
+            phoneStore.applyCalls(deltas, starts, watermark)
         }
-        return inserted
+        if (counted > 0) eventLog.add("телефон: звонков за свип $counted → в счётчики дня")
     }
 
     private fun excludedPackages(): Set<String> {
@@ -548,142 +447,60 @@ class PhoneSweeper(
         pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
     }.getOrNull()
 
-    // ---- разметка задним числом ----
+    // ---- досчёт прошлых дней ----
     //
-    // Врезки были выключены месяцами: ютуб, звонки и Клод нигде не
-    // записывались, хотя система их помнит. Теперь для них есть второй трек,
-    // который ни у кого ничего не отнимает, и прошлое можно поднять.
-    //
-    // Насколько назад - честно говорит сам скан, а не обещание:
-    //   · ЖУРНАЛ ЗВОНКОВ телефон держит долго, месяцами;
-    //   · СТАТИСТИКА ИСПОЛЬЗОВАНИЯ отдаёт поимённые события примерно за
-    //     неделю. Глубже система хранит только СУММЫ за день по приложению -
-    //     без границ сессий, а значит и без места на шкале времени. Такое в
-    //     ленту класть нельзя: это было бы выдумывание часов.
+    // Телефон помнит больше, чем успел увидеть свип: суточные суммы по
+    // приложениям система держит долго, журнал звонков - месяцами. Дни ДО
+    // установки (или долгого простоя) можно досчитать из них - без границ
+    // сессий, но с честными минутами: для «сколько на ютуб за день» этого
+    // достаточно. День, который свип видел сам, не трогается: он точнее.
 
-    /** Один источник (приложение или все звонки) за окно скана. */
-    data class RetroSource(
-        val key: String,            // имя пакета, или CALLS_KEY
-        val label: String,
-        val suggested: String,      // категория, если она уже назначена
-        val totalMs: Long,
-        val facts: List<ZasechkaStore.AutoFact>,
-    ) {
-        val count: Int get() = facts.size
-        val isApp: Boolean get() = key != CALLS_KEY
-    }
-
-    /** Что нашлось и как далеко назад данные вообще есть. */
-    data class RetroScan(
-        val sources: List<RetroSource>,
-        val appsFrom: Long,         // самое старое событие приложений, 0 - нет
-        val callsFrom: Long,        // самый старый звонок, 0 - нет
+    /** Что нашлось за окно и как далеко назад данные вообще есть. */
+    data class BackfillScan(
+        val days: Map<String, PhoneStore.Day>,
+        val appsFrom: Long,
+        val callsFrom: Long,
         val noUsageAccess: Boolean,
         val noCallAccess: Boolean,
-    )
+    ) {
+        val count: Int get() = days.size
+    }
 
-    /**
-     * Смотрит память телефона за [days] суток и группирует находки по
-     * источникам. Ничего не пишет: решение - за владельцем, он же выбирает
-     * категорию каждому. Своих водяных знаков свипа не двигает.
-     */
-    suspend fun scanRetro(days: Int): RetroScan = withContext(Dispatchers.IO) {
+    /** Смотрит суточные суммы за [daysBack] суток. Ничего не пишет. */
+    suspend fun scanBackfill(daysBack: Int): BackfillScan = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
-        val from = now - days * 86_400_000L
-        val sources = ArrayList<RetroSource>()
-        val immersive = runCatching { phoneStore.trackedApps() }.getOrDefault(emptyMap())
+        val from = dayStartMs(now) - daysBack * 86_400_000L
+        val known = phoneStore.daysFlow.value
+        val filled = HashMap<String, PhoneStore.Day>()
         var appsFrom = 0L
         var callsFrom = 0L
+        val excluded = excludedPackages()
 
         val usm = context.getSystemService(UsageStatsManager::class.java)
         if (hasUsageAccess(context) && usm != null) {
-            val excluded = excludedPackages()
-            val audioApps = phoneStore.audioApps()
-            // Порог сессии его же, из настроек, но не мельче двух минут:
-            // ретро-скан поднимает недели, и минутные заглядывания в ленту
-            // превратились бы в кашу.
-            val minMs = max(settings.zImmersiveMinFlow.first() * 60_000L, RETRO_MIN_SESSION_MS)
-            val spans = HashMap<String, MutableList<Pair<Long, Long>>>()
-            var currentPkg: String? = null
-            var startedAt = 0L
-            fun close(pkg: String, at: Long) {
-                // Слушающее приложение считается по фоновой службе ниже:
-                // передний план у книги почти пуст, экран же погашен.
-                if (isExcluded(pkg, excluded) || pkg in audioApps) return
-                if (at - startedAt >= minMs) {
-                    spans.getOrPut(pkg) { ArrayList() }.add(startedAt to at)
+            val stats = runCatching { usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, from, now) }
+                .getOrNull().orEmpty()
+            for (u in stats) {
+                val pkg = u.packageName ?: continue
+                if (isExcluded(pkg, excluded)) continue
+                val ms = u.totalTimeInForeground
+                if (ms <= 0) continue
+                val key = phoneDayKey(u.firstTimeStamp)
+                // Сегодня и дни, которые свип видел сам, не досчитываются.
+                if (key == phoneDayKey(now)) continue
+                known[key]?.let { if (!it.backfilled) return@let null } ?: run {
+                    if (appsFrom == 0L || u.firstTimeStamp < appsFrom) appsFrom = u.firstTimeStamp
+                    val old = filled[key] ?: PhoneStore.Day()
+                    filled[key] = old.copy(apps = old.apps + (pkg to ((old.apps[pkg] ?: 0L) + ms)))
                 }
-            }
-            // Фоновые службы слушающих приложений: пара «старт — стоп».
-            val audioOpen = HashMap<String, Long>()
-            val audioSpans = ArrayList<Candidate>()
-            val events = usm.queryEvents(from, now)
-            val event = UsageEvents.Event()
-            while (events.hasNextEvent()) {
-                events.getNextEvent(event)
-                val ts = event.timeStamp
-                if (appsFrom == 0L || ts < appsFrom) appsFrom = ts
-                when (event.eventType) {
-                    UsageEvents.Event.ACTIVITY_RESUMED -> {
-                        val pkg = event.packageName ?: continue
-                        if (pkg != currentPkg) {
-                            currentPkg?.let { close(it, ts) }
-                            currentPkg = pkg
-                            startedAt = ts
-                        }
-                    }
-                    UsageEvents.Event.ACTIVITY_PAUSED -> {
-                        if (event.packageName == currentPkg) {
-                            currentPkg?.let { close(it, ts) }
-                            currentPkg = null
-                        }
-                    }
-                    // Экран погас - смотреть больше нечего, сессия кончилась.
-                    // Слушать при этом можно, и это ловится службой ниже.
-                    UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
-                        currentPkg?.let { close(it, ts) }
-                        currentPkg = null
-                    }
-                    UsageEvents.Event.FOREGROUND_SERVICE_START -> {
-                        val pkg = event.packageName ?: continue
-                        if (pkg in audioApps && !audioOpen.containsKey(pkg)) audioOpen[pkg] = ts
-                    }
-                    UsageEvents.Event.FOREGROUND_SERVICE_STOP -> {
-                        val pkg = event.packageName ?: continue
-                        val from = audioOpen.remove(pkg) ?: continue
-                        if (ts - from >= MIN_SESSION_MS) audioSpans.add(Candidate(pkg, from, ts))
-                    }
-                }
-            }
-            for (c in mergeSpans(audioSpans)) {
-                spans.getOrPut(c.pkg) { ArrayList() }.add(c.start to c.end)
-            }
-            val known = phoneStore.labelsFlow.value
-            for ((pkg, list) in spans) {
-                val label = known[pkg] ?: appLabel(pkg) ?: pkg.substringAfterLast('.')
-                sources.add(
-                    RetroSource(
-                        key = pkg,
-                        label = label,
-                        suggested = immersive[pkg].orEmpty(),
-                        totalMs = list.sumOf { it.second - it.first },
-                        facts = list.map { (s, e) ->
-                            ZasechkaStore.AutoFact(s, e, label, immersive[pkg].orEmpty())
-                        },
-                    )
-                )
             }
         }
 
         if (hasCallLogAccess(context)) {
-            val callFacts = ArrayList<ZasechkaStore.AutoFact>()
             runCatching {
                 context.contentResolver.query(
                     CallLog.Calls.CONTENT_URI,
-                    arrayOf(
-                        CallLog.Calls.DATE, CallLog.Calls.DURATION,
-                        CallLog.Calls.TYPE, CallLog.Calls.CACHED_NAME,
-                    ),
+                    arrayOf(CallLog.Calls.DATE, CallLog.Calls.DURATION, CallLog.Calls.TYPE, CallLog.Calls.CACHED_NAME),
                     "${CallLog.Calls.DATE} > ?",
                     arrayOf(from.toString()),
                     "${CallLog.Calls.DATE} ASC",
@@ -697,41 +514,27 @@ class PhoneSweeper(
                         if (callsFrom == 0L || date < callsFrom) callsFrom = date
                         val durationSec = cursor.getLong(durCol)
                         val type = cursor.getInt(typeCol)
-                        if (type != CallLog.Calls.INCOMING_TYPE &&
-                            type != CallLog.Calls.OUTGOING_TYPE
-                        ) continue
+                        if (type != CallLog.Calls.INCOMING_TYPE && type != CallLog.Calls.OUTGOING_TYPE) continue
                         if (durationSec < MIN_CALL_SEC) continue
-                        val end = min(date + durationSec * 1000, now)
-                        if (end <= date) continue
-                        val name = (if (nameCol >= 0) cursor.getString(nameCol) else null)
-                            ?.takeIf { it.isNotBlank() }
-                        callFacts.add(
-                            ZasechkaStore.AutoFact(
-                                start = date,
-                                end = end,
-                                title = "звонок" + (name?.let { " · $it" } ?: ""),
-                                category = "",
-                                client = name.orEmpty(),
-                            )
+                        val key = phoneDayKey(date)
+                        if (key == phoneDayKey(now)) continue
+                        val knownDay = known[key]
+                        if (knownDay != null && !knownDay.backfilled) continue
+                        val name = (if (nameCol >= 0) cursor.getString(nameCol) else null)?.trim().orEmpty()
+                        val old = filled[key] ?: PhoneStore.Day()
+                        val ms = durationSec * 1000
+                        filled[key] = old.copy(
+                            callsMs = old.callsMs + ms,
+                            calls = old.calls + 1,
+                            callers = if (name.isBlank()) old.callers else old.callers + (name to ((old.callers[name] ?: 0L) + ms)),
                         )
                     }
                 }
-            }.onFailure { eventLog.add("ретро: журнал звонков не прочитался: ${it.message}") }
-            if (callFacts.isNotEmpty()) {
-                sources.add(
-                    RetroSource(
-                        key = CALLS_KEY,
-                        label = "Звонки",
-                        suggested = settings.zCallCategoryFlow.first(),
-                        totalMs = callFacts.sumOf { it.end - it.start },
-                        facts = callFacts,
-                    )
-                )
-            }
+            }.onFailure { eventLog.add("досчёт: журнал звонков не прочитался: ${it.message}") }
         }
 
-        RetroScan(
-            sources = sources.sortedByDescending { it.totalMs },
+        BackfillScan(
+            days = filled,
             appsFrom = appsFrom,
             callsFrom = callsFrom,
             noUsageAccess = !hasUsageAccess(context),
@@ -739,35 +542,10 @@ class PhoneSweeper(
         )
     }
 
-    /**
-     * Кладёт выбранные источники во второй трек. [picked] - источник и
-     * категория, которую владелец ему назначил. С [remember] приложения
-     * заодно попадают в список тех, что пишутся дальше сами: разметить Клод
-     * задним числом и тут же забыть его на будущее было бы половиной дела.
-     */
-    suspend fun applyRetro(
-        picked: List<Pair<RetroSource, String>>,
-        remember: Boolean,
-    ): Int {
-        val facts = picked.flatMap { (source, category) ->
-            source.facts.map { it.copy(category = category) }
-        }
-        if (facts.isEmpty()) return 0
-        val added = zasechkaStore.backfillParallel(facts)
-        if (remember) {
-            for ((source, category) in picked) {
-                if (source.isApp && category.isNotBlank()) {
-                    runCatching { phoneStore.setImmersive(source.key, category) }
-                }
-            }
-        }
-        if (added > 0) {
-            eventLog.add(
-                "ретро: во второй трек легло $added записей из " +
-                    picked.joinToString(", ") { it.first.label }
-            )
-            sync.kickSoon(scope)
-        }
+    /** Кладёт досчитанные дни в телефонный слой. Возвращает, сколько дней легло. */
+    suspend fun applyBackfill(scan: BackfillScan): Int {
+        val added = phoneStore.backfillDays(scan.days)
+        if (added > 0) eventLog.add("досчёт: телефон за $added прошлых дней посчитан из суточных сумм")
         return added
     }
 }
