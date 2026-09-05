@@ -2179,18 +2179,18 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
         )
     } else {
         Text(
-            "Тап по приложению — считать его по дням (строка «Телефон» у итогов и «Дни» в Notion).",
+            "Тап по приложению — считать его по дням (строка «Телефон» у итогов и база «Телефон» в Notion).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
     // Телефон в ленту не пишет ничего, кроме сна. Врезки резали дело,
     // параллельный трек засорял ленту — оба опыта владелец закрыл. Теперь
-    // телефон считается по дням: строка «Телефон» у итогов и «Дни» в Notion.
+    // телефон считается по дням: строка «Телефон» у итогов и база «Телефон» в Notion.
     Spacer(Modifier.height(6.dp))
     Text(
         "В ленту телефон не пишет ничего, кроме сна по экрану. YouTube, Telegram, " +
-            "Claude и звонки считаются по дням — строкой у итогов дня и в «Днях» Notion.",
+            "Claude и звонки считаются по дням — строкой у итогов дня и в «Телефоне» Notion.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -2244,7 +2244,7 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
     Spacer(Modifier.height(12.dp))
     Text("Приложения по дням", style = MaterialTheme.typography.titleSmall)
     Text(
-        "Их минуты за день — в строке «Телефон» у итогов и в «Днях» Notion. Тап по " +
+        "Их минуты за день — в строке «Телефон» у итогов и в «Телефоне» Notion. Тап по " +
             "строке — категория-подсказка и «звук в фоне».",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2310,7 +2310,7 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
     Text(
         "Поднимает из памяти телефона суточные суммы по приложениям и звонки за " +
             "дни, которых Правка не видела сама. В ленту ничего не пишет — только в " +
-            "счётчики телефона и в «Дни» Notion.",
+            "счётчики телефона и в «Телефон» Notion.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -2619,7 +2619,7 @@ private fun ImmersiveAppDialog(
                         Text("Считать по дням", style = MaterialTheme.typography.bodyMedium)
                         Text(
                             "Минуты в этом приложении идут в строку «Телефон» у итогов дня " +
-                                "и в «Дни» Notion; в ленту ничего не пишется",
+                                "и в «Телефон» Notion; в ленту ничего не пишется",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

@@ -26,13 +26,17 @@ import ru.zf.pravka.data.ZasechkaStore
  * с полем «Домен». Владелец: «захожу, а там какой-то мусор по времени, а еда и
  * тело — огрызками». Он прав: у еды и у тренировки нет ни одного общего поля с
  * делом ленты, кроме даты, и тридцать колонок, из которых у каждой строки
- * заполнено пять, читаются как свалка. Теперь у каждого домена своя база со
- * своими колонками, а «Дни» связывают их суточными итогами.
+ * заполнено пять, читаются как свалка. Вторая версия добавила «Дни» — сутки
+ * одной строкой на пятьдесят колонок — и «Справочник» со служебными строками
+ * синка. Владелец второй раз: «куча лишних таблиц… давай сделаем там только
+ * raw data из засечки, спорта, тела, но зато настоящие». Поэтому здесь ТОЛЬКО
+ * сырые данные по доменам плюс справочник категорий; итоги по категориям за
+ * неделю и месяц Notion складывает сам — графиками и группировками по полям
+ * «Месяц» и «Неделя», которые ради этого стоят у каждой строки.
  *
  * Правила, которые здесь держатся:
- * - строка «Дней» несёт и Сашины поля («Дети дома», «Марианна дома днём»,
- *   «Якорь утра», «Заметка дня») — их приложение НЕ пишет никогда, поэтому их
- *   и нет в [DNI]: чего нет в схеме, то построитель не тронет;
+ * - никаких агрегатов, которые владелец может получить представлением Notion:
+ *   всё, что здесь лежит, — событие или суточный факт, а не наш пересчёт;
  * - у каждой базы есть служебный ключ (EntryId, MealId, …) — по нему
  *   синхронизатор узнаёт свою строку и не плодит дублей;
  * - «День» везде — сутки владельца датой без времени: SQL-слой Notion отдаёт
@@ -47,10 +51,7 @@ object NotionLifeSchema {
     const val HUB_DEFAULT = "3cdc4ffca2d581568abad6839b74784c"
 
     /** Версия схемы; поднимается, когда меняется раскладка по базам. */
-    const val VERSION = 2
-
-    /** Полный день по правилу хаба: покрытие основного трека ≥ 1370 минут. */
-    const val FULL_DAY_MIN = 1370L
+    const val VERSION = 3
 
     data class Column(
         val name: String,
@@ -82,6 +83,11 @@ object NotionLifeSchema {
     private fun urlCol(name: String, d: String = "") = Column(name, "url", description = d)
 
     private const val DAY_DESC = "сутки Саши (Europe/Moscow) датой без времени: складывать и группировать дни по этому полю"
+    private const val MONTH_DESC = "YYYY-MM — для группировки и итогов по месяцам"
+    private const val WEEK_DESC = "ISO-неделя YYYY-Wnn (понедельник—воскресенье) — для итогов по неделям"
+
+    private fun monthCol() = selCol("Месяц", emptyList(), MONTH_DESC)
+    private fun weekCol() = selCol("Неделя", emptyList(), WEEK_DESC)
 
     /** Как строка попала в ленту — словами владельца, а не кодами. */
     val RECORDED = listOf("голос", "текст", "правка руками", "из Todoist", "метка NFC", "автопилот", "авто: телефон или часы", "заполнитель")
@@ -104,6 +110,8 @@ object NotionLifeSchema {
             selCol("Источник", listOf("manual", "auto"), "manual — сказал или отметил сам; auto — телефон, часы или заполнитель неразмеченного"),
             selCol("Записано", RECORDED, "как именно строка попала в ленту"),
             numCol("Помидоры"),
+            monthCol(),
+            weekCol(),
             textCol("Надиктовано", "голос Саши как есть, с ошибками распознавания"),
             textCol("EntryId", "ключ синхронизатора"),
         ),
@@ -112,69 +120,6 @@ object NotionLifeSchema {
             "Полезность", "Приём", "Ккал", "Белок", "Жиры", "Углеводы", "Км", "Пульс", "Ватт",
             "Load", "Самочувствие", "Сон ч", "Сон счёт",
         ),
-    )
-
-    // ---- Дни: сутки одной строкой ----
-
-    val DNI = Db(
-        name = "Дни",
-        knownId = "39a031d4ac724ed28d4876e79319e202",
-        description = "Строка на сутки: итоги ленты, телефона, сна, еды и тела. Поля «Дети дома», «Марианна дома днём», «Якорь утра», «Заметка дня» — Сашины, приложение их не трогает.",
-        columns = listOf(
-            titleCol("День"),
-            dateCol("Дата"),
-            selCol("День недели", listOf("пн", "вт", "ср", "чт", "пт", "сб", "вс")),
-            numCol("Покрытие мин", "сумма минут ленты за сутки"),
-            checkCol("Полный день", "покрытие ≥ 1370 мин"),
-            numCol("Балл дня", "сумма очков всех дел: часы × ценность часа"),
-            numCol("Записей", "дел в ленте за сутки, без заполнителя"),
-            numCol("Работа", "строго минуты категорий «Работа: *»"),
-            numCol("Систематизация"),
-            numCol("Семья"),
-            numCol("Социальное"),
-            numCol("Быт"),
-            numCol("Еда мин"),
-            numCol("Дорога"),
-            numCol("Спорт"),
-            numCol("Чтение"),
-            numCol("Отдых"),
-            numCol("Потери"),
-            numCol("Не размечено"),
-            numCol("Сон мин", "ночной сон цепочкой через полночь, тот, что кончился в этот день"),
-            textCol("Отбой", "HH:MM начала ночного сна"),
-            textCol("Подъём", "HH:MM конца ночного сна"),
-            numCol("Первое действие через", "минут от подъёма до первого дела, которое не сон, не «не размечено», не потери, не еда и без слов «туалет»/«телефон»"),
-            numCol("Туалет", "минуты дел со словом «туалет»"),
-            numCol("Диван", "минуты дел со словом «диван»"),
-            numCol("Соло", "минуты категории «Секс: соло»"),
-            numCol("Контактов", "рабочих звонков и дел с названным клиентом"),
-            numCol("YouTube", "минуты экрана по статистике телефона"),
-            numCol("Telegram", "минуты экрана по статистике телефона"),
-            numCol("Claude", "минуты экрана по статистике телефона"),
-            numCol("Экран мин", "всё экранное время за сутки"),
-            numCol("Подъёмов", "сколько раз брал телефон"),
-            numCol("Отвлечений", "взял и убрал быстрее двух минут"),
-            numCol("Звонки мин", "разговоры ≥ 1 мин по журналу звонков"),
-            numCol("Звонков"),
-            textCol("Звонки с", "с кем говорил, по журналу звонков"),
-            numCol("Ккал"),
-            numCol("Белок"),
-            numCol("Жиры"),
-            numCol("Углеводы"),
-            numCol("Приёмов"),
-            numCol("Тренировок", "тренировок с часов за сутки"),
-            numCol("Тренировки мин"),
-            checkCol("Силовая", "записана силовая голосом"),
-            selCol("Зарядка", listOf("выполнена", "частично", "пропущена")),
-            textCol("Заметки тела", "надиктованные комментарии к тренировкам за день, со временем"),
-            numCol("Вес кг"),
-            numCol("Пульс покоя"),
-            numCol("HRV"),
-            numCol("Шаги"),
-            numCol("Сон Garmin ч"),
-            numCol("Сон счёт"),
-        ),
-        retired = listOf("Экран параллель"),
     )
 
     // ---- Еда ----
@@ -197,6 +142,7 @@ object NotionLifeSchema {
             numCol("Позиций"),
             textCol("Состав", "позиции с граммами и ккал"),
             selCol("Записано", listOf("голос", "текст", "фото", "штрихкод", "рацион")),
+            monthCol(),
             textCol("Надиктовано"),
             textCol("Заметка модели", "чего не хватило для точного разбора"),
             textCol("MealId", "ключ синхронизатора"),
@@ -215,8 +161,10 @@ object NotionLifeSchema {
             dateCol("День", DAY_DESC),
             selCol("Вид", listOf("бег", "вело", "силовая", "ходьба", "прочее")),
             numCol("Минуты", "elapsed с потолком правдоподобия"),
+            numCol("В движении мин"),
             numCol("Км"),
             textCol("Темп", "мин/км у бега и ходьбы"),
+            textCol("Темп GAP", "темп с поправкой на рельеф"),
             numCol("Пульс"),
             numCol("Пульс макс"),
             numCol("Ватт"),
@@ -226,8 +174,13 @@ object NotionLifeSchema {
             numCol("Load", "icu_training_load"),
             numCol("Интенсивность", "% от порога"),
             numCol("Калории"),
+            numCol("Decoupling %", "Pw:HR, расхождение мощности и пульса"),
+            numCol("Efficiency", "efficiency factor"),
+            textCol("Зоны", "минуты по пульсовым зонам z1…z7"),
             numCol("Самочувствие", "feel 1–5, где 1 отлично"),
             numCol("RPE", "1–10"),
+            monthCol(),
+            weekCol(),
             urlCol("Ссылка"),
             textCol("WorkoutId", "ключ синхронизатора"),
         ),
@@ -249,6 +202,7 @@ object NotionLifeSchema {
             checkCol("Сделано", "владелец закрыл сессию"),
             numCol("Упражнений"),
             textCol("Упражнения", "подходы: «Гоблет 3×12 @16; Свинги 2×15 @16»"),
+            monthCol(),
             textCol("Надиктовано"),
             textCol("SessionId", "ключ синхронизатора"),
         ),
@@ -273,34 +227,86 @@ object NotionLifeSchema {
             selCol("Колено", listOf("зелёный", "жёлтый", "красный")),
             numCol("Самочувствие", "1–5, где 1 отлично"),
             textCol("Пункты", "отчёт по пунктам плана"),
+            monthCol(),
             textCol("Заметка"),
             textCol("GtgId", "ключ синхронизатора"),
         ),
     )
 
-    // ---- Справочник: структура, а не события ----
+    // ---- Категории: единственная справочная таблица ----
 
-    val SPRAVOCHNIK = Db(
-        name = "Справочник",
+    val KATEGORII = Db(
+        name = "Категории",
         knownId = "5efe26af34ed476abb293aa598bb0951",
-        description = "Структура жизни как она настроена в приложении: категории ленты с ценностью часа, приложения, которые считаются по дням, цели питания и состояние синхронизации. Обновляется само.",
+        description = "Категории ленты как они настроены в приложении: подсказка, ценность часа (из неё считаются очки), базовое время.",
         columns = listOf(
-            titleCol("Название"),
-            selCol("Раздел", listOf("Категория ленты", "Приложение", "Цель питания", "Синк")),
-            textCol("Подсказка", "у категории — что сюда относится; у синка — состояние словами"),
-            numCol("Ценность часа", "от −10 до +10"),
+            titleCol("Категория"),
+            textCol("Подсказка", "что владелец относит к этой категории"),
+            numCol("Ценность часа", "от −10 до +10; очки дела = часы × ценность"),
             numCol("Базовое время мин", "типичная длительность дела категории"),
-            numCol("Значение", "у цели — норма в день; у приложения — минуты за сегодня"),
-            textCol("Единица"),
             numCol("Порядок"),
-            checkCol("Включено"),
-            textCol("Пакет", "имя пакета Android у приложения"),
-            dateCol("Обновлено"),
+            textCol("Ключ", "ключ синхронизатора"),
+        ),
+        retired = listOf("Раздел", "Значение", "Единица", "Включено", "Пакет", "Обновлено"),
+    )
+
+    // ---- Телефон: суточные суммы статистики использования ----
+
+    val TELEFON = Db(
+        name = "Телефон",
+        knownId = "b717035255364198bc563854f1dc3834",
+        description = "Телефон по дням из статистики использования и журнала звонков: YouTube, Telegram, Claude, экран, подъёмы, отвлечения, звонки. Это минуты телефона, не записи ленты.",
+        columns = listOf(
+            titleCol("День"),
+            dateCol("Дата"),
+            monthCol(),
+            weekCol(),
+            numCol("YouTube", "минуты экрана"),
+            numCol("Telegram", "минуты экрана"),
+            numCol("Claude", "минуты экрана"),
+            numCol("Слушалка", "минуты фоновой службы: книга в наушниках"),
+            numCol("Экран мин", "всё экранное время за сутки"),
+            numCol("Подъёмов", "сколько раз брал телефон"),
+            numCol("Отвлечений", "взял и убрал быстрее двух минут"),
+            numCol("Звонки мин", "разговоры ≥ 1 мин"),
+            numCol("Звонков"),
+            textCol("Звонки с", "собеседники по журналу"),
+            textCol("Приложения", "все отмеченные приложения с минутами"),
             textCol("Ключ", "ключ синхронизатора"),
         ),
     )
 
-    val ALL: List<Db> = listOf(ZASECHKA, DNI, EDA, TRENIROVKI, SILOVYE, ZARYADKA, SPRAVOCHNIK)
+    // ---- Форма: wellness intervals.icu по дням ----
+
+    val FORMA = Db(
+        name = "Форма",
+        knownId = "e0dad71080344c098ac215fcb6b0eac9",
+        description = "Тренированность и самочувствие по дням из intervals.icu (Garmin): CTL, ATL, TSB, пульс покоя, HRV, сон, вес, шаги.",
+        columns = listOf(
+            titleCol("День"),
+            dateCol("Дата"),
+            monthCol(),
+            weekCol(),
+            numCol("CTL", "тренированность (fitness)"),
+            numCol("ATL", "усталость (fatigue)"),
+            numCol("TSB", "форма = CTL − ATL"),
+            numCol("Пульс покоя"),
+            numCol("HRV"),
+            numCol("Сон ч"),
+            numCol("Сон счёт"),
+            numCol("Качество сна", "1–4"),
+            numCol("Шаги"),
+            numCol("Вес кг"),
+            numCol("VO2max"),
+            numCol("Готовность"),
+            numCol("Ккал съедено", "из дневника еды, если уехало в wellness"),
+            numCol("Белок съедено"),
+            textCol("Комментарий", "заметка дня в intervals"),
+            textCol("Ключ", "ключ синхронизатора"),
+        ),
+    )
+
+    val ALL: List<Db> = listOf(ZASECHKA, EDA, TRENIROVKI, SILOVYE, ZARYADKA, TELEFON, FORMA, KATEGORII)
 
     fun byName(name: String): Db? = ALL.firstOrNull { it.name == name }
 
@@ -359,6 +365,21 @@ object NotionLifeSchema {
 
     /** «2026-09-05» для момента времени — сутки владельца. */
     fun dayKey(ms: Long): String = iso.format(Date(ms))
+
+    /** «2026-09» — месяц суток, для группировок Notion. */
+    fun monthKey(date: String): String = date.take(7)
+
+    /** «2026-W36» — ISO-неделя (понедельник первый, ≥4 дня в году). */
+    fun weekKey(date: String): String {
+        val cal = Calendar.getInstance(Locale.GERMANY).apply { timeInMillis = dayStartOf(date) }
+        cal.firstDayOfWeek = Calendar.MONDAY
+        cal.minimalDaysInFirstWeek = 4
+        val week = cal.get(Calendar.WEEK_OF_YEAR)
+        // Неделя 1 в конце декабря и неделя 52/53 в начале января — год берётся у недели.
+        val month = cal.get(Calendar.MONTH)
+        val year = cal.get(Calendar.YEAR) + (if (week == 1 && month == Calendar.DECEMBER) 1 else if (week >= 52 && month == Calendar.JANUARY) -1 else 0)
+        return String.format(Locale.US, "%d-W%02d", year, week)
+    }
 
     fun dayStartOf(date: String): Long = runCatching {
         iso.parse(date)?.let { midnight(it.time) }
@@ -454,6 +475,9 @@ object NotionLifeSchema {
         put("Источник", select(sourceKind(e.source)))
         put("Записано", select(recorded(e.source)))
         put("Помидоры", number(e.pomodoros))
+        val day = dayKey(e.start)
+        put("Месяц", select(monthKey(day)))
+        put("Неделя", select(weekKey(day)))
         put("Надиктовано", rich(e.raw.substringBefore("\nКБЖУ:").trim()))
         put("EntryId", rich("t${e.id}"))
     }
@@ -473,9 +497,15 @@ object NotionLifeSchema {
         put("Позиций", number(m.items.size))
         put(
             "Состав",
-            rich(m.items.joinToString("; ") { i -> "${i.name} ${i.grams} г · ${i.kcal} ккал" }),
+            rich(
+                m.items.joinToString("; ") { i ->
+                    "${i.name} ${i.grams} г · ${i.kcal} ккал" +
+                        (if (i.sureness.isNotBlank()) " (${i.sureness})" else "")
+                },
+            ),
         )
         put("Записано", select(mealRecorded(m.source)))
+        put("Месяц", select(monthKey(dayKey(m.ts))))
         put("Надиктовано", rich(m.raw))
         put("Заметка модели", rich(m.note))
         put("MealId", rich("f${m.id}"))
@@ -489,8 +519,10 @@ object NotionLifeSchema {
         put("День", dateDay(dayKey(w.start)))
         put("Вид", select(sportKind(w.type)))
         put("Минуты", number(w.minutes))
+        if (w.movingSeconds > 0) put("В движении мин", number((w.movingSeconds + 30) / 60))
         if (w.km >= 0.1) put("Км", number(Math.round(w.km * 10.0) / 10.0))
         if (w.paceSecPerKm > 0) put("Темп", rich(pace(w.paceSecPerKm)))
+        if (w.gapSecPerKm > 0) put("Темп GAP", rich(pace(w.gapSecPerKm)))
         if (w.avgHr > 0) put("Пульс", number(w.avgHr))
         if (w.maxHr > 0) put("Пульс макс", number(w.maxHr))
         if (w.avgWatts > 0) put("Ватт", number(w.avgWatts))
@@ -500,8 +532,16 @@ object NotionLifeSchema {
         if (w.load > 0) put("Load", number(w.load))
         if (w.intensity > 0) put("Интенсивность", number(w.intensity))
         if (w.calories > 0) put("Калории", number(w.calories))
+        if (w.decoupling != 0.0) put("Decoupling %", number(Math.round(w.decoupling * 10.0) / 10.0))
+        if (w.efficiency > 0) put("Efficiency", number(Math.round(w.efficiency * 100.0) / 100.0))
+        if (w.zoneMinutes.any { it > 0 }) {
+            put("Зоны", rich(w.zoneMinutes.mapIndexed { i, m -> "z${i + 1} $m" }.filter { !it.endsWith(" 0") }.joinToString(" · ")))
+        }
         if (w.feel > 0) put("Самочувствие", number(w.feel))
         if (w.rpe > 0) put("RPE", number(w.rpe))
+        val day = dayKey(w.start)
+        put("Месяц", select(monthKey(day)))
+        put("Неделя", select(weekKey(day)))
         if (w.icuUrl.isNotBlank()) put("Ссылка", link(w.icuUrl))
         put("WorkoutId", rich("w${w.id.ifBlank { w.start.toString() }}"))
     }
@@ -516,6 +556,7 @@ object NotionLifeSchema {
         put("Сделано", checkbox(s.done))
         put("Упражнений", number(s.exercises.size))
         put("Упражнения", rich(s.exercises.joinToString("; ") { "${it.name} ${it.compact()}" }))
+        put("Месяц", select(monthKey(s.date)))
         put("Надиктовано", rich(s.note))
         put("SessionId", rich("s${s.date}"))
     }
@@ -533,73 +574,20 @@ object NotionLifeSchema {
         if (g.knee.isNotBlank()) put("Колено", select(g.knee.trim().lowercase()))
         if (g.feel in 1..5) put("Самочувствие", number(g.feel))
         put("Пункты", rich(g.items.joinToString("; ") { it.brief() }))
+        put("Месяц", select(monthKey(g.date)))
         put("Заметка", rich(g.note))
         put("GtgId", rich("g${g.date}"))
     }
 
-    /** Строка категории ленты в «Справочнике». */
-    fun categoryRow(c: ZasechkaStore.Category, order: Int, now: Long): JSONObject = JSONObject().apply {
-        put("Название", title(c.name))
-        put("Раздел", select("Категория ленты"))
+    /** Строка категории ленты в «Категориях». */
+    fun categoryRow(c: ZasechkaStore.Category, order: Int): JSONObject = JSONObject().apply {
+        put("Категория", title(c.name))
         put("Подсказка", rich(c.hint))
         put("Ценность часа", number(c.value))
         put("Базовое время мин", number(c.baseMin))
         put("Порядок", number(order))
-        put("Включено", checkbox(true))
-        put("Обновлено", dateSingle(now))
         put("Ключ", rich("cat:" + c.name.trim().lowercase()))
     }
-
-    /** Приложение, которое считается по дням: пакет, категория-подсказка, минуты сегодня. */
-    fun appRow(pkg: String, label: String, category: String, tracked: Boolean, todayMin: Long, now: Long): JSONObject =
-        JSONObject().apply {
-            put("Название", title(label.ifBlank { pkg.substringAfterLast('.') }))
-            put("Раздел", select("Приложение"))
-            put("Подсказка", rich(if (category.isBlank()) "" else "категория: $category"))
-            put("Значение", number(todayMin))
-            put("Единица", rich("мин сегодня"))
-            put("Включено", checkbox(tracked))
-            put("Пакет", rich(pkg))
-            put("Обновлено", dateSingle(now))
-            put("Ключ", rich("app:$pkg"))
-        }
-
-    fun targetRow(name: String, key: String, value: Int, unit: String, order: Int, now: Long): JSONObject = JSONObject().apply {
-        put("Название", title(name))
-        put("Раздел", select("Цель питания"))
-        put("Значение", number(value))
-        put("Единица", rich(unit))
-        put("Порядок", number(order))
-        put("Включено", checkbox(true))
-        put("Обновлено", dateSingle(now))
-        put("Ключ", rich("target:$key"))
-    }
-
-    /** Состояние синка словами — чтобы молчаливая механика не читалась как поломка. */
-    fun statusRow(state: String, now: Long): JSONObject = JSONObject().apply {
-        put("Название", title("Синк Правки"))
-        put("Раздел", select("Синк"))
-        put("Подсказка", rich(state))
-        put("Обновлено", dateSingle(now))
-        put("Ключ", rich("sync:status"))
-    }
-
-    /** Что идёт прямо сейчас — единственная «живая» строка Notion. */
-    fun nowRow(open: ZasechkaStore.Entry?, now: Long): JSONObject = JSONObject().apply {
-        put("Название", title(if (open == null) "Сейчас: ничего не идёт" else "Сейчас: ${open.title.ifBlank { "без названия" }}"))
-        put("Раздел", select("Синк"))
-        put(
-            "Подсказка",
-            rich(
-                if (open == null) ""
-                else listOfNotNull(open.category.takeIf { it.isNotBlank() }, "с ${clock(open.start)}").joinToString(" · "),
-            ),
-        )
-        put("Обновлено", dateSingle(now))
-        put("Ключ", rich("sync:now"))
-    }
-
-    // ---- Дни ----
 
     /** Телефон за сутки — то, что считается по дням вместо параллельного трека. */
     data class PhoneDay(
@@ -609,151 +597,65 @@ object NotionLifeSchema {
         val youtubeMin: Long = 0,
         val telegramMin: Long = 0,
         val claudeMin: Long = 0,
+        val slushalkaMin: Long = 0,
         val callsMin: Long = 0,
         val calls: Int = 0,
         val callers: String = "",
+        /** «Claude 70 м · YouTube 47 м · …» — все отмеченные приложения. */
+        val apps: String = "",
     ) {
-        val any: Boolean get() = screenMin > 0 || pickups > 0 || callsMin > 0 || calls > 0
+        val any: Boolean get() = screenMin > 0 || pickups > 0 || callsMin > 0 || calls > 0 || apps.isNotBlank()
     }
 
-    /** Тело за сутки: что приехало с часов, что надиктовано. */
-    data class BodyDay(
-        val workouts: Int = 0,
-        val workoutMin: Long = 0,
-        val strength: Boolean = false,
-        val gtgStatus: String = "",
-        val notes: String = "",
-        val weightKg: Double = 0.0,
-        val restingHr: Int = 0,
-        val hrv: Int = 0,
-        val steps: Int = 0,
-        val sleepHours: Double = 0.0,
-        val sleepScore: Int = 0,
-    )
-
-    /**
-     * Сутки одной строкой. Возвращает null, когда за день нет ничего — ни
-     * минуты ленты, ни приёма еды, ни телефона: строка из одних нулей — мусор
-     * в базе разбора (нашёл разбор: «мусорная строка 19 августа»).
-     *
-     * [budgetOf] — минуты записи разностью минут суток (как в ленте), [worthOf]
-     * — ценность часа категории. Всё остальное считается здесь, без Android.
-     */
-    fun dayRow(
-        date: String,
-        main: List<ZasechkaStore.Entry>,
-        allClosed: List<ZasechkaStore.Entry>,
-        meals: List<FoodStore.Meal>,
-        phone: PhoneDay,
-        body: BodyDay,
-        budgetOf: (ZasechkaStore.Entry) -> Long,
-        worthOf: (String) -> Int,
-        now: Long,
-    ): JSONObject? {
-        if (main.isEmpty() && meals.isEmpty() && !phone.any && body.workouts == 0) return null
-        val start = dayStartOf(date)
-        val end = start + 86_400_000L
-        fun mins(pred: (ZasechkaStore.Entry) -> Boolean): Long = main.filter(pred).sumOf(budgetOf)
-        fun cat(prefix: String) = mins { it.category.startsWith(prefix, ignoreCase = true) }
-        fun titled(vararg words: String) = mins { e -> words.any { e.title.contains(it, ignoreCase = true) } }
-
-        val coverage = main.sumOf(budgetOf)
-        val p = JSONObject()
-        p.put("День", title(humanDay(date)))
-        p.put("Дата", dateDay(date))
-        p.put("День недели", select(weekday(date)))
-        p.put("Покрытие мин", number(coverage))
-        p.put("Полный день", checkbox(coverage >= FULL_DAY_MIN))
-        val points = main.sumOf { worthOf(it.category) * it.durationMs(now) / 3_600_000.0 }
-        p.put("Балл дня", number(Math.round(points)))
-        p.put("Записей", number(main.count { it.source != "gap" }))
-        p.put("Работа", number(cat("Работа")))
-        p.put("Систематизация", number(cat("Систематизация")))
-        p.put("Семья", number(cat("Семья")))
-        p.put("Социальное", number(cat("Социальное")))
-        p.put("Быт", number(cat("Быт")))
-        p.put("Еда мин", number(cat("Еда")))
-        p.put("Дорога", number(cat("Передвижение")))
-        p.put("Спорт", number(cat("Спорт")))
-        p.put("Чтение", number(cat("Чтение")))
-        p.put("Отдых", number(cat("Отдых")))
-        p.put("Потери", number(cat("Потери")))
-        p.put("Не размечено", number(cat("Не размечено")))
-        p.put("Туалет", number(titled("туалет")))
-        p.put("Диван", number(titled("диван")))
-        p.put("Соло", number(mins { it.category.equals("Секс: соло", ignoreCase = true) }))
-        p.put(
-            "Контактов",
-            number(
-                main.count {
-                    it.category.equals("Работа: звонки", ignoreCase = true) ||
-                        (it.category.startsWith("Работа", ignoreCase = true) && it.client.isNotBlank())
-                },
-            ),
-        )
-
-        // Ночной сон — тот, что КОНЧИЛСЯ в этот день; цепочка тянется назад
-        // через полночь, потому что лента режет каждую ночь на два куска.
-        val wake = allClosed
-            .filter { it.category.equals("Сон", ignoreCase = true) && it.end in start until end && it.end - start < 14 * 3_600_000L }
-            .maxByOrNull { it.end }
-        if (wake != null) {
-            var head: ZasechkaStore.Entry = wake
-            var total = 0L
-            var guard = 0
-            while (guard++ < 6) {
-                total += head.durationMin(now)
-                val prev = allClosed.firstOrNull {
-                    it.category.equals("Сон", ignoreCase = true) && kotlin.math.abs(it.end - head.start) < 60_000L
-                } ?: break
-                head = prev
-            }
-            p.put("Сон мин", number(total))
-            p.put("Отбой", rich(clock(head.start)))
-            p.put("Подъём", rich(clock(wake.end)))
-            val first = main
-                .filter { it.start >= wake.end }
-                .sortedBy { it.start }
-                .firstOrNull { e ->
-                    val c = e.category.lowercase()
-                    !(c == "сон" || c == "не размечено" || c == "потери" || c == "еда") &&
-                        !e.title.contains("туалет", ignoreCase = true) &&
-                        !e.title.contains("телефон", ignoreCase = true)
-                }
-            if (first != null) p.put("Первое действие через", number((first.start - wake.end) / 60_000L))
+    /** Строка «Телефона»: сутки телефона. null — за день телефон ничего не видел. */
+    fun phoneRow(date: String, p: PhoneDay): JSONObject? {
+        if (!p.any) return null
+        return JSONObject().apply {
+            put("День", title(humanDay(date)))
+            put("Дата", dateDay(date))
+            put("Месяц", select(monthKey(date)))
+            put("Неделя", select(weekKey(date)))
+            put("YouTube", number(p.youtubeMin))
+            put("Telegram", number(p.telegramMin))
+            put("Claude", number(p.claudeMin))
+            put("Слушалка", number(p.slushalkaMin))
+            put("Экран мин", number(p.screenMin))
+            put("Подъёмов", number(p.pickups))
+            put("Отвлечений", number(p.glances))
+            put("Звонки мин", number(p.callsMin))
+            put("Звонков", number(p.calls))
+            put("Звонки с", rich(p.callers))
+            put("Приложения", rich(p.apps))
+            put("Ключ", rich("p$date"))
         }
+    }
 
-        // Телефон по дням — то, ради чего убран параллельный трек: «просто
-        // давай считать каждый день, сколько на Клод, телеграм, звонки, ютуб».
-        p.put("YouTube", number(phone.youtubeMin))
-        p.put("Telegram", number(phone.telegramMin))
-        p.put("Claude", number(phone.claudeMin))
-        p.put("Экран мин", number(phone.screenMin))
-        p.put("Подъёмов", number(phone.pickups))
-        p.put("Отвлечений", number(phone.glances))
-        p.put("Звонки мин", number(phone.callsMin))
-        p.put("Звонков", number(phone.calls))
-        p.put("Звонки с", rich(phone.callers))
-
-        if (meals.isNotEmpty()) {
-            p.put("Ккал", number(meals.sumOf { it.kcal }))
-            p.put("Белок", number(meals.sumOf { it.protein }))
-            p.put("Жиры", number(meals.sumOf { it.fat }))
-            p.put("Углеводы", number(meals.sumOf { it.carbs }))
-            p.put("Приёмов", number(meals.size))
+    /** Строка «Формы»: wellness intervals за сутки. null — пустой день. */
+    fun healthRow(h: SportStore.Health): JSONObject? {
+        val any = h.ctl > 0 || h.atl > 0 || h.restingHr > 0 || h.hrv > 0 || h.sleepHours > 0 ||
+            h.steps > 0 || h.weightKg > 0 || h.vo2max > 0 || h.readiness > 0
+        if (!any) return null
+        return JSONObject().apply {
+            put("День", title(humanDay(h.date)))
+            put("Дата", dateDay(h.date))
+            put("Месяц", select(monthKey(h.date)))
+            put("Неделя", select(weekKey(h.date)))
+            if (h.ctl > 0) put("CTL", number(Math.round(h.ctl * 10.0) / 10.0))
+            if (h.atl > 0) put("ATL", number(Math.round(h.atl * 10.0) / 10.0))
+            if (h.ctl > 0 || h.atl > 0) put("TSB", number(Math.round(h.tsb * 10.0) / 10.0))
+            if (h.restingHr > 0) put("Пульс покоя", number(h.restingHr))
+            if (h.hrv > 0) put("HRV", number(h.hrv))
+            if (h.sleepHours > 0) put("Сон ч", number(Math.round(h.sleepHours * 10.0) / 10.0))
+            if (h.sleepScore > 0) put("Сон счёт", number(h.sleepScore))
+            if (h.sleepQuality > 0) put("Качество сна", number(h.sleepQuality))
+            if (h.steps > 0) put("Шаги", number(h.steps))
+            if (h.weightKg > 0) put("Вес кг", number(Math.round(h.weightKg * 10.0) / 10.0))
+            if (h.vo2max > 0) put("VO2max", number(Math.round(h.vo2max * 10.0) / 10.0))
+            if (h.readiness > 0) put("Готовность", number(h.readiness))
+            if (h.kcal > 0) put("Ккал съедено", number(h.kcal))
+            if (h.protein > 0) put("Белок съедено", number(h.protein))
+            put("Комментарий", rich(h.comments))
+            put("Ключ", rich("h${h.date}"))
         }
-
-        p.put("Тренировок", number(body.workouts))
-        p.put("Тренировки мин", number(body.workoutMin))
-        p.put("Силовая", checkbox(body.strength))
-        if (body.gtgStatus.isNotBlank()) p.put("Зарядка", select(body.gtgStatus))
-        p.put("Заметки тела", rich(body.notes))
-        if (body.weightKg > 0) p.put("Вес кг", number(Math.round(body.weightKg * 10.0) / 10.0))
-        if (body.restingHr > 0) p.put("Пульс покоя", number(body.restingHr))
-        if (body.hrv > 0) p.put("HRV", number(body.hrv))
-        if (body.steps > 0) p.put("Шаги", number(body.steps))
-        if (body.sleepHours > 0) p.put("Сон Garmin ч", number(Math.round(body.sleepHours * 10.0) / 10.0))
-        if (body.sleepScore > 0) p.put("Сон счёт", number(body.sleepScore))
-        return p
     }
 }

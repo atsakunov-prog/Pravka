@@ -21,6 +21,9 @@ class NotionLifeSchemaTest {
 
     private fun keys(o: org.json.JSONObject): Set<String> = o.keys().asSequence().toSet()
 
+    private fun text(row: org.json.JSONObject, key: String): String =
+        row.getJSONObject(key).getJSONArray("rich_text").getJSONObject(0).getJSONObject("text").getString("content")
+
     private fun assertFits(db: NotionLifeSchema.Db, row: org.json.JSONObject) {
         val extra = keys(row) - db.columns.map { it.name }.toSet()
         assertTrue("лишние колонки для «${db.name}»: $extra", extra.isEmpty())
@@ -113,71 +116,79 @@ class NotionLifeSchemaTest {
     }
 
     @Test
-    fun `справочник - категории, приложения, цели и синк`() {
+    fun `категории - справочник с ценностью часа и порядком`() {
         val c = ZasechkaStore.Category("Работа: текущая", "работа по клиентам", baseMin = 90, value = 10)
-        assertFits(NotionLifeSchema.SPRAVOCHNIK, NotionLifeSchema.categoryRow(c, 3, now))
-        assertFits(NotionLifeSchema.SPRAVOCHNIK, NotionLifeSchema.appRow("com.google.android.youtube", "YouTube", "Потери", true, 47, now))
-        assertFits(NotionLifeSchema.SPRAVOCHNIK, NotionLifeSchema.targetRow("Калории", "kcal", 2500, "ккал", 1, now))
-        assertFits(NotionLifeSchema.SPRAVOCHNIK, NotionLifeSchema.statusRow("последний обход 12:00", now))
-        assertFits(NotionLifeSchema.SPRAVOCHNIK, NotionLifeSchema.nowRow(null, now))
-        assertFits(
-            NotionLifeSchema.SPRAVOCHNIK,
-            NotionLifeSchema.nowRow(entry(1, now - 600_000L, 0L, "Программирую Засечку", "Систематизация"), now),
-        )
+        val row = NotionLifeSchema.categoryRow(c, 3)
+        assertFits(NotionLifeSchema.KATEGORII, row)
+        assertEquals(10, row.getJSONObject("Ценность часа").getInt("number"))
+        assertEquals(90, row.getJSONObject("Базовое время мин").getInt("number"))
+        assertEquals(3, row.getJSONObject("Порядок").getInt("number"))
+        assertEquals("cat:работа: текущая", text(row, "Ключ"))
     }
 
     @Test
-    fun `сутки складываются в Дни и не трогают Сашины поля`() {
-        val start = NotionLifeSchema.dayStartOf("2026-09-04")
-        val h = 3_600_000L
-        val main = listOf(
-            entry(1, start - 2 * h, start + 7 * h, "сон", "Сон", source = "auto"),
-            entry(2, start + 7 * h, start + 8 * h, "Завтрак", "Еда"),
-            entry(3, start + 8 * h, start + 12 * h, "Работа над отчётом", "Работа: текущая", client = "Tasty Coffee"),
-            entry(4, start + 12 * h, start + 13 * h, "Отдых на диване", "Отдых"),
-            entry(5, start + 13 * h, start + 24 * h, "не размечено", "Не размечено", source = "gap"),
+    fun `телефон за сутки ложится в Телефон, пустой день строкой не заводится`() {
+        val p = NotionLifeSchema.PhoneDay(
+            screenMin = 192, pickups = 41, glances = 12, youtubeMin = 47, telegramMin = 32, claudeMin = 70,
+            callsMin = 18, calls = 3, callers = "Мама, Петя", apps = "Claude 1 ч 10 м · YouTube 47 м",
         )
-        val prev = entry(0, start - 3 * h, start - 2 * h, "сон", "Сон", source = "auto")
-        val row = NotionLifeSchema.dayRow(
-            date = "2026-09-04",
-            main = main.filter { it.start >= start },
-            allClosed = main + prev,
-            meals = emptyList(),
-            phone = NotionLifeSchema.PhoneDay(screenMin = 100, youtubeMin = 20, calls = 2, callsMin = 9, callers = "Мама"),
-            body = NotionLifeSchema.BodyDay(workouts = 1, workoutMin = 32, gtgStatus = "частично", weightKg = 86.3),
-            budgetOf = { (it.end - it.start) / 60_000L },
-            worthOf = { c -> if (c.startsWith("Работа")) 10 else if (c == "Отдых") -2 else 0 },
-            now = start + 30 * h,
-        )
+        val row = NotionLifeSchema.phoneRow("2026-09-04", p)
         assertNotNull(row)
         row!!
-        assertFits(NotionLifeSchema.DNI, row)
-        for (his in listOf("Дети дома", "Марианна дома днём", "Якорь утра", "Заметка дня")) {
-            assertFalse("приложение тронуло поле Саши «$his»", row.has(his))
-        }
-        assertEquals(240, row.getJSONObject("Работа").getInt("number"))
-        assertEquals(60, row.getJSONObject("Диван").getInt("number"))
-        assertEquals(1, row.getJSONObject("Контактов").getInt("number"))
-        // Сон цепочкой через полночь: кусок 21:00–22:00, кусок 22:00–07:00 = 600 минут.
-        assertEquals(600, row.getJSONObject("Сон мин").getInt("number"))
-        assertEquals("21:00", row.getJSONObject("Отбой").getJSONArray("rich_text").getJSONObject(0).getJSONObject("text").getString("content"))
-        assertEquals("07:00", row.getJSONObject("Подъём").getJSONArray("rich_text").getJSONObject(0).getJSONObject("text").getString("content"))
-        // Первое действие после подъёма — не еда: работа в 8:00, через 60 минут.
-        assertEquals(60, row.getJSONObject("Первое действие через").getInt("number"))
-        assertEquals(20, row.getJSONObject("YouTube").getInt("number"))
-        assertEquals(38, row.getJSONObject("Балл дня").getInt("number"))
-        assertEquals("частично", row.getJSONObject("Зарядка").getJSONObject("select").getString("name"))
-        assertEquals(86.3, row.getJSONObject("Вес кг").getDouble("number"), 0.01)
+        assertFits(NotionLifeSchema.TELEFON, row)
+        assertEquals(47, row.getJSONObject("YouTube").getInt("number"))
+        assertEquals(70, row.getJSONObject("Claude").getInt("number"))
+        assertEquals(3, row.getJSONObject("Звонков").getInt("number"))
+        assertEquals("2026-09", row.getJSONObject("Месяц").getJSONObject("select").getString("name"))
+        assertEquals("2026-W36", row.getJSONObject("Неделя").getJSONObject("select").getString("name"))
+        assertEquals("p2026-09-04", text(row, "Ключ"))
+        assertNull(NotionLifeSchema.phoneRow("2026-08-19", NotionLifeSchema.PhoneDay()))
     }
 
     @Test
-    fun `пустые сутки строкой не заводятся`() {
-        assertNull(
-            NotionLifeSchema.dayRow(
-                "2026-08-19", emptyList(), emptyList(), emptyList(),
-                NotionLifeSchema.PhoneDay(), NotionLifeSchema.BodyDay(), { 0L }, { 0 }, now,
-            ),
+    fun `форма за сутки ложится в Форму, TSB считается из CTL и ATL`() {
+        val h = SportStore.Health(
+            date = "2026-09-04", restingHr = 52, hrv = 61, sleepHours = 7.2, sleepScore = 82, sleepQuality = 3,
+            steps = 9100, weightKg = 86.3, vo2max = 47.0, ctl = 41.6, atl = 52.1, readiness = 0,
+            kcal = 2100, protein = 145, fat = 70, carbs = 210, comments = "",
         )
+        val row = NotionLifeSchema.healthRow(h)
+        assertNotNull(row)
+        row!!
+        assertFits(NotionLifeSchema.FORMA, row)
+        assertEquals(-10.5, row.getJSONObject("TSB").getDouble("number"), 0.01)
+        assertEquals(86.3, row.getJSONObject("Вес кг").getDouble("number"), 0.01)
+        assertEquals(145, row.getJSONObject("Белок съедено").getInt("number"))
+        assertFalse("нулевая готовность не пишется", row.has("Готовность"))
+        assertEquals("h2026-09-04", text(row, "Ключ"))
+        val empty = h.copy(restingHr = 0, hrv = 0, sleepHours = 0.0, steps = 0, weightKg = 0.0, vo2max = 0.0, ctl = 0.0, atl = 0.0, kcal = 0, protein = 0)
+        assertNull(NotionLifeSchema.healthRow(empty))
+    }
+
+    @Test
+    fun `ISO-неделя - понедельник первый, год берётся у недели`() {
+        assertEquals("2026-W36", NotionLifeSchema.weekKey("2026-09-04"))
+        assertEquals("2026-W36", NotionLifeSchema.weekKey("2026-09-06")) // воскресенье той же недели
+        assertEquals("2026-W37", NotionLifeSchema.weekKey("2026-09-07")) // понедельник
+        assertEquals("2026-W01", NotionLifeSchema.weekKey("2025-12-29")) // 29.12.2025 — первая неделя 2026
+        assertEquals("2020-W53", NotionLifeSchema.weekKey("2021-01-03")) // 03.01.2021 — 53-я неделя 2020
+        assertEquals("2026-09", NotionLifeSchema.monthKey("2026-09-04"))
+    }
+
+    @Test
+    fun `в каждой строке по дням есть Месяц и Неделя для итогов Notion`() {
+        val e = entry(7, now - 3_600_000L, now, "Разбор", "Систематизация")
+        val ribbon = NotionLifeSchema.ribbonRow(e, 60, 4, now)
+        assertTrue(ribbon.has("Месяц") && ribbon.has("Неделя"))
+        val w = SportStore.Workout(
+            id = "i1", start = now - 3_600_000L, type = "Run", name = "Утренний бег", seconds = 1920,
+            movingSeconds = 1900, distanceM = 5040.0, elevationM = 12.0, load = 40, intensity = 80,
+            avgHr = 163, maxHr = 175, avgWatts = 0, normWatts = 0, paceSecPerKm = 372, gapSecPerKm = 0,
+            cadence = 170, calories = 380, feel = 0, rpe = 0, decoupling = 0.0, efficiency = 0.0,
+            zoneMinutes = emptyList(), icuUrl = "",
+        )
+        val row = NotionLifeSchema.workoutRow(w)
+        assertTrue(row.has("Месяц") && row.has("Неделя"))
     }
 
     @Test

@@ -10,7 +10,7 @@ import ru.zf.pravka.data.PhoneStore
  * оказался неудачным, засоряет ленту. просто давай считать каждый день,
  * сколько на Клод, телеграм, звонки, сколько на ютуб». Лента больше не знает
  * о телефоне ничего, кроме сна; телефонный слой считает свои суммы по дням,
- * и здесь они складываются в сводку для вкладки и для «Дней» в Notion.
+ * и здесь они складываются в сводку для вкладки и для строки «Телефона» в Notion.
  *
  * Чистый Kotlin: проверяется JVM-тестом.
  */
@@ -21,6 +21,7 @@ object PhoneDaySummary {
         "ютьюб" to "youtube", "ю-туб" to "youtube", "ютуб" to "youtube",
         "телеграм" to "telegram", "телега" to "telegram",
         "клауд" to "claude", "клод" to "claude",
+        "слушалка" to "slushalka",
     )
 
     data class AppMinutes(val pkg: String, val label: String, val category: String, val minutes: Long)
@@ -131,10 +132,11 @@ object PhoneDaySummary {
         return parts.joinToString(" · ")
     }
 
-    /** Телефон за день в форме для строки «Дней» Notion. */
-    fun forNotion(day: PhoneStore.Day?, labels: Map<String, String>): NotionLifeSchema.PhoneDay {
+    /** Телефон за день в форме строки «Телефона» Notion. */
+    fun forNotion(day: PhoneStore.Day?, labels: Map<String, String>, tracked: Map<String, String>): NotionLifeSchema.PhoneDay {
         if (day == null) return NotionLifeSchema.PhoneDay()
         val callers = day.callers.entries.sortedByDescending { it.value }.map { it.key }.filter { it.isNotBlank() }
+        val summary = of(day, tracked, labels)
         return NotionLifeSchema.PhoneDay(
             screenMin = (day.screenMs + 30_000L) / 60_000L,
             pickups = day.pickups,
@@ -142,9 +144,11 @@ object PhoneDaySummary {
             youtubeMin = minutesOf(day, labels, "youtube"),
             telegramMin = minutesOf(day, labels, "telegram"),
             claudeMin = minutesOf(day, labels, "claude"),
+            slushalkaMin = minutesOf(day, labels, "slushalka"),
             callsMin = (day.callsMs + 30_000L) / 60_000L,
             calls = day.calls,
             callers = callers.take(8).joinToString(", "),
+            apps = summary.apps.joinToString(" · ") { "${it.label} ${dur(it.minutes)}" },
         )
     }
 }

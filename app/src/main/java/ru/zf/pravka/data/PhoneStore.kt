@@ -20,7 +20,7 @@ import org.json.JSONObject
 // звонки резали дела врезками, потом ложились параллельным треком - оба
 // опыта владелец закрыл («засоряет ленту»). Теперь телефон считается ПО ДНЯМ:
 // сколько на YouTube, Telegram, Claude, сколько звонков - и эти суммы видны
-// строкой во вкладке и в «Днях» Notion.
+// строкой во вкладке и строкой на день в «Телефоне» Notion.
 //
 // Storage is day-level AGGREGATES, not raw sessions: per day - screen time,
 // pickups, glances (short peeks = отвлечения), per-app foreground

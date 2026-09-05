@@ -90,12 +90,15 @@ class PhoneDaySummaryTest {
 
     @Test
     fun `для Notion - три приложения, экран, звонки и собеседники строкой`() {
-        val n = PhoneDaySummary.forNotion(day, labels)
+        val n = PhoneDaySummary.forNotion(day, labels, tracked)
         assertEquals(47L, n.youtubeMin)
         assertEquals(32L, n.telegramMin)
         assertEquals(70L, n.claudeMin)
         assertEquals(192L, n.screenMin)
         assertEquals(3, n.calls)
         assertEquals("Мама, Петя", n.callers)
+        // Приложения — только отмеченные, по убыванию: Chrome не отмечен и не попадает.
+        assertEquals("Claude 1 ч 10 м · YouTube 47 м · Telegram 32 м", n.apps)
+        assertTrue(n.any)
     }
 }

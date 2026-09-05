@@ -17,7 +17,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import ru.zf.pravka.BuildConfig
 import ru.zf.pravka.core.NotionLifeSchema
 import ru.zf.pravka.core.PhoneDaySummary
 import ru.zf.pravka.provider.batchAnswer
@@ -36,20 +35,22 @@ import ru.zf.pravka.provider.submitBatch
  * времени, а еда и тело — огрызками. ужас». Теперь под хабом «Правка:
  * разборы» у каждого домена своя база:
  *
- *   Засечка      — только лента, строка на дело, минуты складываются в 1440.
- *   Дни          — сутки одной строкой: лента, телефон (YouTube, Telegram,
- *                  Claude, звонки), сон, еда, тело. Плюс ЕГО поля — «Дети
- *                  дома», «Марианна дома днём», «Якорь утра», «Заметка дня»,
- *                  которых нет в схеме и которые мы поэтому не трогаем.
+ *   Засечка      — только лента, строка на дело, с ценностью часа и очками;
+ *                  минуты складываются в 1440.
  *   Еда          — приём с КБЖУ и составом.
- *   Тренировки   — активность с часов.
+ *   Тренировки   — активность с часов со всем, что отдаёт intervals.
  *   Силовые      — сессия подходов голосом.
  *   Зарядка      — день GTG.
- *   Справочник   — структура как она настроена: категории с ценностью часа,
- *                  приложения по дням, цели питания, состояние синка и что
- *                  идёт сейчас.
- *   Паттерны, Подтверждения — библиотека аналитика; приложение приносит туда
- *                  кандидатов и вердикты владельца, статусы не трогает.
+ *   Телефон      — сутки телефона: YouTube, Telegram, Claude, экран, звонки.
+ *   Форма        — сутки wellness: CTL/ATL/TSB, пульс покоя, HRV, сон, вес.
+ *   Категории    — справочник категорий с ценностью часа.
+ *   Паттерны, Подтверждения — библиотека аналитика (лежит в подстранице
+ *                  «Разбор»); приложение приносит туда кандидатов и вердикты
+ *                  владельца, статусы не трогает.
+ *
+ * Агрегатов здесь нет нарочно: «Дни» с пятьюдесятью колонками владелец
+ * назвал фигнёй, и он прав — итоги по категориям за неделю и месяц Notion
+ * складывает сам по полям «Месяц» и «Неделя», которые стоят у каждой строки.
  *
  * Приложение само находит базы под хабом по названиям, создаёт недостающие и
  * достраивает недостающие колонки, поэтому структура в Notion всегда ровно
@@ -66,8 +67,9 @@ import ru.zf.pravka.provider.submitBatch
  *
  * ПЕРЕЕЗД со старой раскладки: строки еды, тренировок, силовых и зарядки,
  * лежавшие в «Засечке», архивируются, их ключи забываются — и те же события
- * приезжают в свои базы заново. Устаревшие колонки «Засечки» и «Дней»
- * убираются один раз, когда переезд закончен.
+ * приезжают в свои базы заново; ключи «Дней» просто забываются (база в
+ * корзине), служебные строки бывшего «Справочника» архивируются. Устаревшие
+ * колонки «Засечки» и «Категорий» убираются один раз, когда переезд закончен.
  */
 class NotionLifeSync(
     private val context: Context,
@@ -96,8 +98,6 @@ class NotionLifeSync(
         private const val BUDGET = 120
         /** Пауза между запросами: лимит Notion — три в секунду. */
         private const val PAUSE_MS = 340L
-        /** Сколько последних суток пересчитываем в «Дни»: досчёт телефона уходит на месяц назад. */
-        private const val DAYS_BACK = 45
         /**
          * После 401/403 синк не стучится каждые пять минут — это бессмысленно
          * и шумно, — но и не молчит до смены токена: раз в час пробует снова,
@@ -125,7 +125,6 @@ class NotionLifeSync(
         private const val DUPE_GIVEUP_MS = 30 * 3_600_000L
 
         /** Ключи событий по базам: по префиксу ключа видно, где живёт страница. */
-        private val EVENT_PREFIXES = listOf("t", "f", "w", "s", "g")
         private fun dbOfKey(key: String): String? = when {
             key.startsWith("day:") || key.startsWith("pat:") || key.startsWith("conf:") ||
                 key.startsWith("cat:") || key.startsWith("app:") || key.startsWith("target:") ||
@@ -135,8 +134,13 @@ class NotionLifeSync(
             key.startsWith("w") -> NotionLifeSchema.TRENIROVKI.name
             key.startsWith("s") -> NotionLifeSchema.SILOVYE.name
             key.startsWith("g") -> NotionLifeSchema.ZARYADKA.name
+            key.startsWith("p") -> NotionLifeSchema.TELEFON.name
+            key.startsWith("h") -> NotionLifeSchema.FORMA.name
             else -> null
         }
+        /** Ключи раскладок 1 и 2, которым в базах больше не место: их страницы архивируются. */
+        private fun obsoleteKey(key: String): Boolean =
+            key.startsWith("app:") || key.startsWith("target:") || key.startsWith("sync:") || key.startsWith("c")
     }
 
     // ---- Состояние ----
@@ -203,7 +207,6 @@ class NotionLifeSync(
     fun pending(): Int = queue.size
 
     private val hm = SimpleDateFormat("HH:mm", Locale.US)
-    private val stampFmt = SimpleDateFormat("dd.MM HH:mm", Locale.US)
 
     // ---- Вход ----
 
@@ -237,9 +240,6 @@ class NotionLifeSync(
                 }
                 brokenDbs.clear()
                 val done = drain(token, cfg)
-                // Состояние синка и «что идёт сейчас» — живые строки
-                // Справочника, обновляются на каждом тике, если изменились.
-                liveRows(token, cfg)
                 if (due) retireColumns(token)
                 saveState()
                 done
@@ -370,24 +370,40 @@ class NotionLifeSync(
      */
     private fun migrateState() {
         var moved = 0
-        for (key in state.pages.keys.toList()) {
-            val legacyPrefix = key.startsWith("f") || key.startsWith("w") || key.startsWith("s") ||
-                key.startsWith("g") || key.startsWith("c")
-            if (!legacyPrefix || key.startsWith("sync:")) continue
-            val pageId = state.pages.remove(key) ?: continue
-            state.hashes.remove(key)
-            state.legacy[pageId] = key
-            moved++
+        if (state.schemaVersion < 2) {
+            for (key in state.pages.keys.toList()) {
+                val legacyPrefix = key.startsWith("f") || key.startsWith("w") || key.startsWith("s") ||
+                    key.startsWith("g") || key.startsWith("c")
+                if (!legacyPrefix || key.startsWith("sync:")) continue
+                val pageId = state.pages.remove(key) ?: continue
+                state.hashes.remove(key)
+                state.legacy[pageId] = key
+                moved++
+            }
+            // Карты еды и тела надо снять заново из НОВЫХ баз (там пусто), а не
+            // считать восстановленными по старой «Засечке».
+            state.mapped.removeAll(setOf(NotionLifeSchema.EDA.name, NotionLifeSchema.TRENIROVKI.name,
+                NotionLifeSchema.SILOVYE.name, NotionLifeSchema.ZARYADKA.name))
         }
-        // Карты еды и тела надо снять заново из НОВЫХ баз (там пусто), а не
-        // считать восстановленными по старой «Засечке».
-        state.mapped.removeAll(setOf(NotionLifeSchema.EDA.name, NotionLifeSchema.TRENIROVKI.name,
-            NotionLifeSchema.SILOVYE.name, NotionLifeSchema.ZARYADKA.name, NotionLifeSchema.SPRAVOCHNIK.name))
+        if (state.schemaVersion < 3) {
+            // Раскладка 2 → 3: «Дней» больше нет (база в корзине — стучаться в
+            // неё незачем), служебные строки «Справочника» уходят в архив.
+            for (key in state.pages.keys.toList()) {
+                if (key.startsWith("day:")) {
+                    state.pages.remove(key); state.hashes.remove(key)
+                } else if (obsoleteKey(key)) {
+                    val pageId = state.pages.remove(key) ?: continue
+                    state.hashes.remove(key)
+                    state.legacy[pageId] = key
+                    moved++
+                }
+            }
+            state.mapped.remove("Справочник")
+            state.dbs.remove("Справочник")
+            state.dbs.remove("Дни")
+        }
         if (moved > 0) {
-            eventLog.add(
-                "жизнь → Notion: переезд на новую структуру — $moved строк еды и тела уйдут из " +
-                    "«Засечки» в архив и приедут в свои базы"
-            )
+            eventLog.add("жизнь → Notion: переезд на новую структуру — $moved строк старой раскладки уйдут в архив")
         }
     }
 
@@ -434,8 +450,9 @@ class NotionLifeSync(
             NotionLifeSchema.TRENIROVKI.name to { p -> richText(p, "WorkoutId") },
             NotionLifeSchema.SILOVYE.name to { p -> richText(p, "SessionId") },
             NotionLifeSchema.ZARYADKA.name to { p -> richText(p, "GtgId") },
-            NotionLifeSchema.SPRAVOCHNIK.name to { p -> richText(p, "Ключ") },
-            NotionLifeSchema.DNI.name to { p -> p.optJSONObject("Дата")?.optJSONObject("date")?.optString("start")?.take(10)?.let { "day:$it" }.orEmpty() },
+            NotionLifeSchema.TELEFON.name to { p -> richText(p, "Ключ") },
+            NotionLifeSchema.FORMA.name to { p -> richText(p, "Ключ") },
+            NotionLifeSchema.KATEGORII.name to { p -> richText(p, "Ключ") },
             PATTERNS to { p -> titleText(p, "Паттерн").let { if (it.isBlank()) "" else "pat:" + patternKey(it) } },
             CONFIRMATIONS to { p -> richText(p, "Ключ") },
         )
@@ -710,61 +727,41 @@ class NotionLifeSync(
                 val key = "g${g.date}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.gtgRow(g))
             }
         }
-        // 3. Призраки: страницы событий, которых в приложении больше нет
-        // (перенумерованная лента, удалённый приём, старые комментарии).
-        for (key in state.pages.keys.toList()) {
-            val db = dbOfKey(key) ?: if (key.startsWith("c")) "" else continue
-            if (key !in wanted) enqueue(key, db, null)
-        }
-        // 4. Дни — полтора месяца назад: досчёт телефона может привезти
-        // прошлые дни, а строка дня дешёвая — считается тут, в Notion едет
-        // только изменившаяся.
-        state.dbs[NotionLifeSchema.DNI.name]?.let { dDb ->
-            val phoneDays = phone.daysFlow.value
+        // 3. Телефон по дням: сколько на YouTube, Telegram, Claude, звонки.
+        state.dbs[NotionLifeSchema.TELEFON.name]?.let { db ->
             val labels = phone.labelsFlow.value
-            val today = NotionLifeSchema.dayKey(now)
-            var date = today
-            repeat(DAYS_BACK + 1) {
-                val row = dayRow(date, closed, phoneDays[date], labels, ::worthOf, now)
-                if (row != null) enqueue("day:$date", dDb, row)
-                date = dayBefore(date)
+            val tracked = phone.trackedApps()
+            for ((date, day) in phone.daysFlow.value) {
+                val row = NotionLifeSchema.phoneRow(date, PhoneDaySummary.forNotion(day, labels, tracked)) ?: continue
+                val key = "p$date"; wanted.add(key); enqueue(key, db, row)
             }
         }
-        // 5. Справочник: структура как настроена сейчас.
-        state.dbs[NotionLifeSchema.SPRAVOCHNIK.name]?.let { db ->
-            val liveKeys = HashSet<String>()
+        // 4. Форма по дням: wellness intervals.
+        state.dbs[NotionLifeSchema.FORMA.name]?.let { db ->
+            for (h in sport.healthFlow.value) {
+                val row = NotionLifeSchema.healthRow(h) ?: continue
+                val key = "h${h.date}"; wanted.add(key); enqueue(key, db, row)
+            }
+        }
+        // 5. Категории — справочник: ценность часа, подсказка, базовое время.
+        state.dbs[NotionLifeSchema.KATEGORII.name]?.let { db ->
             categories.forEachIndexed { i, c ->
                 val key = "cat:" + c.name.trim().lowercase()
-                liveKeys.add(key)
-                enqueue(key, db, NotionLifeSchema.categoryRow(c, i + 1, now))
+                wanted.add(key)
+                enqueue(key, db, NotionLifeSchema.categoryRow(c, i + 1))
             }
-            val tracked = phone.trackedApps()
-            val labels = phone.labelsFlow.value
-            val todayPhone = phone.daysFlow.value[NotionLifeSchema.dayKey(now)]
-            for ((pkg, category) in phone.immersiveMap()) {
-                val key = "app:$pkg"
-                liveKeys.add(key)
-                val label = labels[pkg] ?: pkg.substringAfterLast('.')
-                val minutes = ((todayPhone?.apps?.get(pkg) ?: 0L) + 30_000L) / 60_000L
-                enqueue(key, db, NotionLifeSchema.appRow(pkg, label, category, pkg in tracked, minutes, now))
+        }
+        // Призраки: страницы событий, которых в приложении больше нет
+        // (перенумерованная лента, удалённый приём, переименованная
+        // категория), и строки прошлых раскладок.
+        for (key in state.pages.keys.toList()) {
+            if (key in wanted) continue
+            val db = dbOfKey(key) ?: when {
+                key.startsWith("cat:") -> state.dbs[NotionLifeSchema.KATEGORII.name] ?: ""
+                obsoleteKey(key) -> ""
+                else -> continue
             }
-            val t = settings.foodTargets()
-            listOf(
-                Triple("Калории", "kcal" to t.kcal, "ккал"),
-                Triple("Белок", "protein" to t.protein, "г"),
-                Triple("Жиры", "fat" to t.fat, "г"),
-                Triple("Углеводы", "carbs" to t.carbs, "г"),
-            ).forEachIndexed { i, (name, kv, unit) ->
-                val key = "target:${kv.first}"
-                liveKeys.add(key)
-                enqueue(key, db, NotionLifeSchema.targetRow(name, kv.first, kv.second, unit, i + 1, now))
-            }
-            // Категория переименована или удалена — её строка справочника уходит.
-            for (key in state.pages.keys.toList()) {
-                if ((key.startsWith("cat:") || key.startsWith("app:") || key.startsWith("target:")) && key !in liveKeys) {
-                    enqueue(key, db, null)
-                }
-            }
+            enqueue(key, db, null)
         }
         // 6. Паттерны приложения и подтверждения к ним.
         val pDb = state.dbs[PATTERNS]
@@ -805,86 +802,6 @@ class NotionLifeSync(
             if (state.pages[key] == null) return
         } else if (state.hashes[key] == hash && state.pages[key] != null) return
         queue.add(Job(key, db, props, hash))
-    }
-
-    /** Сутки одной строкой: лента, телефон, еда, тело — считает схема, здесь только сбор входов. */
-    private fun dayRow(
-        date: String,
-        closed: List<ZasechkaStore.Entry>,
-        phoneDay: PhoneStore.Day?,
-        labels: Map<String, String>,
-        worthOf: (String) -> Int,
-        now: Long,
-    ): JSONObject? {
-        val start = NotionLifeSchema.dayStartOf(date)
-        val end = start + 86_400_000L
-        val main = closed.filter { it.start >= start && it.start < end }
-        val meals = food.mealsFlow.value.filter { it.confirmed && NotionLifeSchema.dayKey(it.ts) == date }
-        val workouts = sport.workoutsFlow.value.filter { NotionLifeSchema.dayKey(it.start) == date }
-        val health = sport.healthFlow.value.firstOrNull { it.date == date }
-        val session = strength.sessionsFlow.value.firstOrNull { it.date == date && (!it.empty || it.done) }
-        val gtg = strength.gtgFlow.value.firstOrNull { it.date == date && it.any }
-        val notes = strength.rawFlow.value
-            .filter { it.kind == "comment" && NotionLifeSchema.dayKey(it.ts) == date }
-            .sortedBy { it.ts }
-            .joinToString("; ") { "${hm.format(Date(it.ts))} ${it.text.trim()}" }
-        // Сон с часов: сперва wellness, иначе приписка Garmin на строке сна.
-        val wake = main.filter { it.category.equals("Сон", ignoreCase = true) }.maxByOrNull { it.end }
-        val garmin = wake?.let { sleepFromNote(it.raw) }
-        val body = NotionLifeSchema.BodyDay(
-            workouts = workouts.size,
-            workoutMin = workouts.sumOf { it.minutes },
-            strength = session != null,
-            gtgStatus = gtg?.status().orEmpty(),
-            notes = notes,
-            weightKg = health?.weightKg ?: 0.0,
-            restingHr = health?.restingHr ?: 0,
-            hrv = health?.hrv ?: 0,
-            steps = health?.steps ?: 0,
-            sleepHours = health?.sleepHours?.takeIf { it > 0 } ?: garmin?.first ?: 0.0,
-            sleepScore = health?.sleepScore?.takeIf { it > 0 } ?: garmin?.second ?: 0,
-        )
-        return NotionLifeSchema.dayRow(
-            date = date,
-            main = main,
-            allClosed = closed,
-            meals = meals,
-            phone = PhoneDaySummary.forNotion(phoneDay, labels),
-            body = body,
-            budgetOf = { zasechka.budgetMinutes(it, now) },
-            worthOf = worthOf,
-            now = now,
-        )
-    }
-
-    // ---- Живые строки Справочника: состояние синка и «сейчас» ----
-
-    private suspend fun liveRows(token: String, cfg: String) {
-        val db = state.dbs[NotionLifeSchema.SPRAVOCHNIK.name] ?: return
-        if (db in brokenDbs) return
-        val now = System.currentTimeMillis()
-        val open = runCatching { zasechka.openEntry() }.getOrNull()
-        val status = buildString {
-            append("обход ${stampFmt.format(Date(state.lastScan))}")
-            append(" · версия ${BuildConfig.VERSION_NAME}")
-            if (queue.isNotEmpty()) append(" · в очереди ${queue.size}")
-            if (state.legacy.isNotEmpty()) append(" · переезд: осталось ${state.legacy.size}")
-            if (lastError.isNotBlank()) append(" · ошибка: $lastError")
-        }
-        // Хеш «сейчас» без секунд, иначе строка ехала бы каждый тик ради
-        // одной и той же минуты начала.
-        val jobs = listOf(
-            Job("sync:status", db, NotionLifeSchema.statusRow(status, now), status.hashCode()),
-            Job("sync:now", db, NotionLifeSchema.nowRow(open, now), (open?.id ?: 0L).hashCode() * 31 + (open?.title.hashCode() ?: 0)),
-        )
-        for (job in jobs) {
-            if (state.hashes[job.key] == job.hash && state.pages[job.key] != null) continue
-            val ok = runCatching { push(token, job) }.onFailure { e ->
-                lastError = e.message ?: "сеть"
-            }.isSuccess
-            if (!ok) return
-            sleep()
-        }
     }
 
     // ---- Разгребание очереди ----
@@ -1088,14 +1005,6 @@ class NotionLifeSync(
     private fun patternKey(text: String): String = text.lowercase()
         .replace(Regex("[^а-яёa-z0-9 ]"), " ")
         .split(' ').filter { it.length > 3 }.take(5).sorted().joinToString(" ")
-
-    /** «Garmin: сон 7.2 ч, счёт 82» → 7.2 и 82. */
-    private fun sleepFromNote(raw: String): Pair<Double, Int>? {
-        val m = Regex("""сон\s+([\d.,]+)\s*ч""", RegexOption.IGNORE_CASE).find(raw) ?: return null
-        val hours = m.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
-        val score = Regex("""счёт\s+(\d+)""", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-        return hours to score
-    }
 
     private fun timeNow(): String = hm.format(Date(System.currentTimeMillis()))
 
