@@ -1,0 +1,7 @@
+pravka=2.0.319
+versionName=2.0.319
+apk=pravka-debug.apk
+versionCode=319
+commit=18e2ae48644b7da93e1133c12bc5bb2ee7df4a2e
+branch=claude/parallel-tracks-timesheets-4s8zvc
+builtAt=2026-09-05T13:18Z
