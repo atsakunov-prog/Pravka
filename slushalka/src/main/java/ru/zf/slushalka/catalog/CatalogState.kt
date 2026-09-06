@@ -21,11 +21,13 @@ import ru.zf.slushalka.library.documentUri
  * Каталог Флибусты внутри приложения: стопка открытых лент, поиск и
  * скачивание книги **прямо в папку библиотеки**.
  *
- * Скачанная книга ложится папкой `Флибуста/<Автор> - <Название>/` с fb2 (или
- * epub) и обложкой внутри - ровно так, как библиотека понимает книгу. После
- * этого папка перечитывается, и книга появляется на полке как любая другая:
- * читалка, вопросы по книге, пересказ - всё работает; нет только звука. Если
- * начитку купят позже, её достаточно положить в ту же папку.
+ * Скачанная книга ложится папкой `<Автор> - <Название>/` с fb2 (или epub) и
+ * обложкой внутри **прямо в корень библиотеки**, рядом с аудиокнигами - ровно
+ * так, как библиотека понимает книгу, и так, чтобы всё лежало плоско и было
+ * видно сразу (владелец: «папка Books в Downloads, там всё будет лежать»).
+ * После этого папка перечитывается, и книга появляется на полке как любая
+ * другая: читалка, вопросы по книге, пересказ - всё работает; нет только
+ * звука. Если начитку купят позже, её достаточно положить в ту же папку.
  */
 class CatalogState(private val app: SlushalkaApp) {
 
@@ -181,9 +183,12 @@ class CatalogState(private val app: SlushalkaApp) {
 
     // ----------------------------------------------------------- скачивание
 
-    /** Уже лежит в библиотеке - та самая книга, если её скачивали отсюда. */
+    /**
+     * Уже лежит в библиотеке - та самая книга, если её скачивали отсюда.
+     * По имени папки, где бы она ни лежала: в корне или в прежней «Флибуста/».
+     */
     fun inLibrary(entry: OpdsEntry): Book? {
-        val suffix = "/$FOLDER/${folderName(entry)}"
+        val suffix = "/${folderName(entry)}"
         return app.state.books.value.firstOrNull { it.id.endsWith(suffix) && it.textDocId != null }
     }
 
@@ -297,13 +302,11 @@ class CatalogState(private val app: SlushalkaApp) {
         }
     }
 
-    /** Папка книги внутри `Флибуста/` - заводится, если её ещё нет. */
+    /** Папка книги в корне библиотеки - заводится, если её ещё нет. */
     private fun folderId(tree: Uri, entry: OpdsEntry): String {
         val root = DocumentsContract.getTreeDocumentId(tree)
-        val shelf = Saf.ensureChild(app, tree, root, FOLDER, DocumentsContract.Document.MIME_TYPE_DIR)
-            ?: throw FlibustaClient.CatalogException("Не удалось завести папку «$FOLDER» в библиотеке")
-        return Saf.ensureChild(app, tree, shelf, folderName(entry), DocumentsContract.Document.MIME_TYPE_DIR)
-            ?: throw FlibustaClient.CatalogException("Не удалось завести папку книги")
+        return Saf.ensureChild(app, tree, root, folderName(entry), DocumentsContract.Document.MIME_TYPE_DIR)
+            ?: throw FlibustaClient.CatalogException("Не удалось завести папку книги в библиотеке")
     }
 
     private fun writeInto(tree: Uri, dir: String, name: String, mime: String, bytes: ByteArray): Boolean =
@@ -321,9 +324,6 @@ class CatalogState(private val app: SlushalkaApp) {
     }
 
     companion object {
-        /** Полка внутри библиотеки, куда ложится всё скачанное. */
-        const val FOLDER = "Флибуста"
-
         /** Своего MIME у fb2 в Android нет; октет-стрим не заставит систему дописать расширение. */
         private const val MIME_FB2 = "application/octet-stream"
 

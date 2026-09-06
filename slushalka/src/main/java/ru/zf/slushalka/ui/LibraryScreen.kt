@@ -178,8 +178,10 @@ private fun Welcome(onPickTree: () -> Unit, modifier: Modifier = Modifier) {
             Text("Где книги?", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.height(12.dp))
             Text(
-                "Выбери папку на телефоне, в которой лежат книги. Каждая книга - своя папка: " +
-                    "mp3 внутри, рядом обложка и текст в fb2 или epub.\n\n" +
+                "Выбери папку на телефоне, в которой будут лежать книги. Удобнее всего завести " +
+                    "папку Books в Downloads: туда же будут ложиться книги из Флибусты, и всё " +
+                    "видно в одном месте. Каждая книга - своя папка: mp3 внутри, рядом обложка " +
+                    "и текст в fb2 или epub.\n\n" +
                     "Всё читается прямо оттуда, ничего никуда не копируется.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -279,7 +279,7 @@ private fun FeedList(
 
 /** Та же книга, что и запись каталога: по имени папки, в которую её положили. */
 private fun sameBook(book: Book, entry: OpdsEntry): Boolean =
-    book.textDocId != null && book.id.endsWith("/${CatalogState.FOLDER}/${CatalogState.folderName(entry)}")
+    book.textDocId != null && book.id.endsWith("/${CatalogState.folderName(entry)}")
 
 @Composable
 private fun SectionLabel(text: String) {
@@ -492,8 +492,8 @@ private fun BookSheet(
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                "Книга ляжет в папку «${CatalogState.FOLDER}» внутри библиотеки - для чтения " +
-                    "и вопросов, звука у неё нет. Появится начитка - положи её в ту же папку.",
+                "Книга ляжет своей папкой в библиотеку, рядом с остальными, - для чтения, " +
+                    "озвучки и вопросов; записи у неё нет. Появится начитка - положи её в ту же папку.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

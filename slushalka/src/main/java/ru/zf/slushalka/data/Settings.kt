@@ -73,6 +73,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         // Каталог Флибусты: адрес сайта. Меняется на зеркало, когда основной
         // не открывается, - поэтому настройка, а не константа.
         val flibustaUrl: String = DEFAULT_FLIBUSTA_URL,
+        // Озвучка книги без записи системным синтезом: темп и голос. Голос -
+        // имя из движка (у Google это «ru-ru-x-…»), пусто - какой движок даст.
+        val ttsRate: Float = 1.0f,
+        val ttsVoice: String = "",
     )
 
     val flow: StateFlow<Prefs> = context.dataStore.data
@@ -111,6 +115,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 recapModel = p[KEY_RECAP_MODEL]?.takeIf { it in MODELS } ?: MODEL_SONNET,
                 recapEffort = p[KEY_RECAP_EFFORT]?.takeIf { it in EFFORTS } ?: "",
                 flibustaUrl = p[KEY_FLIBUSTA]?.takeIf { it.isNotBlank() } ?: DEFAULT_FLIBUSTA_URL,
+                ttsRate = p[KEY_TTS_RATE] ?: 1.0f,
+                ttsVoice = p[KEY_TTS_VOICE] ?: "",
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -151,6 +157,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setRecapModel(v: String) = edit { if (v in MODELS) it[KEY_RECAP_MODEL] = v }
     suspend fun setRecapEffort(v: String) = edit { if (v in EFFORTS) it[KEY_RECAP_EFFORT] = v }
     suspend fun setFlibustaUrl(v: String) = edit { it[KEY_FLIBUSTA] = v.trim() }
+    suspend fun setTtsRate(v: Float) = edit { it[KEY_TTS_RATE] = v.coerceIn(0.5f, 2.5f) }
+    suspend fun setTtsVoice(v: String) = edit { it[KEY_TTS_VOICE] = v }
 
     companion object {
         const val MODEL_OPUS = "claude-opus-5"
@@ -230,5 +238,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_RECAP_MODEL = stringPreferencesKey("recap_model")
         private val KEY_RECAP_EFFORT = stringPreferencesKey("recap_effort")
         private val KEY_FLIBUSTA = stringPreferencesKey("flibusta_url")
+        private val KEY_TTS_RATE = floatPreferencesKey("tts_rate")
+        private val KEY_TTS_VOICE = stringPreferencesKey("tts_voice")
     }
 }

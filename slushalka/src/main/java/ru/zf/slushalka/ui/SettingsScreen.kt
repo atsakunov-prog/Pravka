@@ -81,8 +81,12 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             Section("Книги")
             Text(
                 if (prefs.libraryUri.isBlank()) "Папка не выбрана"
-                else "Найдено книг: ${books.size}",
+                else "${ru.zf.slushalka.data.Saf.humanPath(prefs.libraryUri)} · книг: ${books.size}",
                 style = MaterialTheme.typography.bodyMedium,
+            )
+            Note(
+                "Одна папка на всё: аудиокниги, которые кладёшь сам, и книги из Флибусты. " +
+                    "Договорились держать её в Downloads/Books - пикер открывается сразу там."
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onPickTree) { Text("Выбрать папку") }
@@ -136,12 +140,58 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 singleLine = true,
             )
             Note(
-                "Каталог открывается лупой на полке. Книга скачивается в папку «Флибуста» внутри " +
-                    "библиотеки - отдельной папкой с fb2 и обложкой - и появляется на полке как " +
-                    "книга без звука: читалка, вопросы и пересказ работают, плеера нет. Появится " +
-                    "начитка - положи файлы в ту же папку.\n\n" +
+                "Каталог открывается лупой на полке. Книга скачивается в папку библиотеки " +
+                    "своей папкой «Автор - Название» с fb2 и обложкой и появляется на полке как " +
+                    "книга без записи: читалка, озвучка, вопросы и пересказ работают, плеера нет. " +
+                    "Появится начитка - положи файлы в ту же папку.\n\n" +
                     "Если сайт в этой сети не открывается, помогает VPN или адрес зеркала здесь."
             )
+
+            Section("Озвучка")
+            val speech by app.readAloud.state.collectAsState()
+            Note(
+                "Книгу без записи читает вслух синтез речи телефона: кнопка «Озвучить» в " +
+                    "читалке. Голос - тот, что установлен в системе: у Google и Samsung есть " +
+                    "русские голоса получше заводского, их докачивают в настройках синтеза " +
+                    "речи (кнопка ниже), а здесь выбирают. Голоса с пометкой «сеть» звучат " +
+                    "естественнее, но требуют интернета."
+            )
+            val voices = remember(speech.ready) { app.readAloud.voices() }
+            when {
+                speech.error != null && !speech.ready -> Text(speech.error!!, style = MaterialTheme.typography.bodyMedium)
+                !speech.ready -> Text("Движок синтеза речи поднимается…", style = MaterialTheme.typography.bodyMedium)
+                voices.isEmpty() -> Text(
+                    "Русских голосов в движке не нашлось - поставь их в настройках синтеза речи.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                else -> FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    voices.forEach { v ->
+                        val chosen = if (prefs.ttsVoice.isNotBlank()) prefs.ttsVoice == v.name
+                        else app.readAloud.currentVoice() == v.name
+                        FilterChip(
+                            selected = chosen,
+                            onClick = {
+                                app.readAloud.setVoice(v.name)
+                                scope.launch { state.settings.setTtsVoice(v.name) }
+                            },
+                            label = { Text(voiceLabel(v)) },
+                        )
+                    }
+                }
+            }
+            NumberSlider(
+                label = { "Темп: " + formatSpeed(it) },
+                value = prefs.ttsRate,
+                range = 0.6f..2.0f,
+                steps = 13,
+            ) { r ->
+                app.readAloud.setRate(r)
+                scope.launch { state.settings.setTtsRate(r) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { app.readAloud.sample() }, enabled = speech.ready) { Text("Послушать") }
+                TextButton(onClick = { app.readAloud.openSystemSettings() }) { Text("Голоса системы") }
+            }
 
             Section("Кто слушает")
             OutlinedTextField(
@@ -328,6 +378,22 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
     if (showGallery) {
         PictureGallery(app) { showGallery = false }
     }
+}
+
+/**
+ * Имя голоса по-человечески. У Google голоса называются вроде «ru-ru-x-rud-network»:
+ * префикс языка убираем, «network» и «local» переводим, качество - звёздочками.
+ */
+private fun voiceLabel(v: android.speech.tts.Voice): String {
+    val raw = v.name.removePrefix("ru-ru-").removePrefix("ru-RU-").removePrefix("ru_RU-")
+        .replace("-network", "").replace("-local", "").replace("_", " ")
+    val stars = when {
+        v.quality >= android.speech.tts.Voice.QUALITY_VERY_HIGH -> " ★★★"
+        v.quality >= android.speech.tts.Voice.QUALITY_HIGH -> " ★★"
+        v.quality >= android.speech.tts.Voice.QUALITY_NORMAL -> " ★"
+        else -> ""
+    }
+    return raw.ifBlank { v.name } + stars + if (v.isNetworkConnectionRequired) " · сеть" else ""
 }
 
 @Composable

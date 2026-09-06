@@ -120,8 +120,10 @@ fun ReaderScreen(
     val prefs by state.prefs.collectAsState()
     val busy by state.busy.collectAsState()
     val play by app.player.state.collectAsState()
+    val speech by app.readAloud.state.collectAsState()
 
     var bars by remember { mutableStateOf(true) }
+    var showRate by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showRecap by remember { mutableStateOf(false) }
     var showGallery by remember { mutableStateOf(false) }
@@ -239,6 +241,15 @@ fun ReaderScreen(
     // откатывало бы звук к началу страницы. Перелистнули - верх экрана.
     fun readPlace(): Int = place?.takeIf { it >= offset && it < shownEnd } ?: offset
 
+    // Озвучка этой книги: подсвечивается читаемая фраза, а страница идёт за
+    // чтецом - когда фраза уходит за край экрана, читалка перелистывает к ней.
+    val speakingHere = speech.active && speech.bookId == bk.id
+    val speechRange = if (speakingHere && speech.speaking) speech.range else null
+    LaunchedEffect(speech.charOffset, speakingHere, speech.speaking) {
+        if (!speakingHere || !speech.speaking) return@LaunchedEffect
+        if (speech.charOffset < offset || speech.charOffset >= shownEnd) target = speech.charOffset
+    }
+
     LaunchedEffect(offset, shownEnd, place) {
         // Место чтения пишется на диск, когда листание успокоилось, - и запись
         // подтягивается к нему тем же движением.
@@ -265,7 +276,8 @@ fun ReaderScreen(
                 onShown = { start, end -> offset = start; shownEnd = end },
                 onToggleBars = { bars = !bars },
                 onPicture = onTapPicture, onLongPress = onLong,
-                highlight = highlightRange, highlightAlpha = highlight.value,
+                highlight = speechRange ?: highlightRange,
+                highlightAlpha = if (speechRange != null) SPEECH_ALPHA else highlight.value,
             )
         } else {
             ScrollBody(
@@ -275,7 +287,8 @@ fun ReaderScreen(
                 onShown = { start, end -> offset = start; shownEnd = end },
                 onToggleBars = { bars = !bars },
                 onPicture = onTapPicture, onLongPress = onLong,
-                highlight = highlightRange, highlightAlpha = highlight.value,
+                highlight = speechRange ?: highlightRange,
+                highlightAlpha = if (speechRange != null) SPEECH_ALPHA else highlight.value,
             )
         }
 
@@ -351,15 +364,41 @@ fun ReaderScreen(
                     Spacer(Modifier.width(10.dp))
                     LoveLine(alpha = 0.3f, size = 10, color = palette.fg)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (speakingHere) {
+                    // Озвучка идёт: вместо кнопок - управление ею. Абзац назад и
+                    // вперёд, пауза, темп, выключить.
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        TextButton(onClick = { app.readAloud.skip(-1) }) { Text("‹ абзац", color = palette.fg) }
+                        PlayPauseButton(speech.speaking, size = 46.dp) { app.readAloud.playPause() }
+                        TextButton(onClick = { app.readAloud.skip(+1) }) { Text("абзац ›", color = palette.fg) }
+                        Spacer(Modifier.weight(1f))
+                        SpeedButton(speech.rate, size = 40.dp) { showRate = true }
+                        TextButton(onClick = { app.readAloud.stop() }) { Text("Стоп", color = palette.fg) }
+                    }
+                    speech.error?.let { err ->
+                        Text(err, color = palette.dim, fontSize = 12.sp)
+                    }
+                } else Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (bk.hasAudio) {
                         TextButton(onClick = {
                             state.listenFrom(readPlace())
                             onListen()
                         }) { Text("Слушать отсюда", color = palette.fg) }
+                    } else {
+                        // Записи нет - читает синтез речи, с этой страницы.
+                        TextButton(onClick = { app.readAloud.start(bk, t, readPlace()) }) {
+                            Text("Озвучить", color = palette.fg)
+                        }
                     }
                     TextButton(onClick = { showRecap = true }) { Text("Содержание", color = palette.fg) }
                     TextButton(onClick = { onAsk(readPlace(), null) }) { Text("Спросить", color = palette.fg) }
+                }
+                if (!speakingHere && !bk.hasAudio) {
+                    speech.error?.let { err -> Text(err, color = palette.dim, fontSize = 12.sp) }
                 }
             }
         }
@@ -379,6 +418,9 @@ fun ReaderScreen(
         }
     }
 
+    if (showRate) {
+        ReadAloudRateDialog(app, speech.rate) { showRate = false }
+    }
     if (showSettings) {
         ReaderSettingsDialog(
             app,
@@ -446,6 +488,36 @@ fun ReaderScreen(
             },
         )
     }
+}
+
+/** Подсветка читаемой фразы держится ровно, пока говорит движок, - не гаснет, как найденное место. */
+private const val SPEECH_ALPHA = 0.42f
+
+/** Темп озвучки. Значения - как у скорости плеера, только у синтеза шаг заметнее. */
+@Composable
+private fun ReadAloudRateDialog(app: SlushalkaApp, rate: Float, onClose: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Темп озвучки") },
+        text = {
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                listOf(0.7f, 0.85f, 1.0f, 1.15f, 1.3f, 1.5f, 1.75f, 2.0f).forEach { r ->
+                    androidx.compose.material3.FilterChip(
+                        selected = kotlin.math.abs(rate - r) < 0.01f,
+                        onClick = {
+                            app.readAloud.setRate(r)
+                            scope.launch { app.settings.setTtsRate(r) }
+                        },
+                        label = { Text(formatSpeed(r)) },
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Готово") } },
+    )
 }
 
 // ------------------------------------------------------------------ прокрутка

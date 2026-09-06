@@ -141,6 +141,10 @@ class AppState(private val app: SlushalkaApp) {
     fun open(book: Book) {
         val tree = treeUri() ?: return
         app.scope.launch {
+            // Озвучка другой книги вместе с этой - каша: выключаем.
+            if (app.readAloud.state.value.active && app.readAloud.state.value.bookId != book.id) {
+                app.readAloud.stop()
+            }
             val ready = ensureDurations(book)
             _current.value = ready
             _text.value = null

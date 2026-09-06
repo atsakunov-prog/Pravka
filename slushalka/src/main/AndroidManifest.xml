@@ -56,6 +56,14 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+        <!-- Озвучка книги без записи системным синтезом речи. Своя служба, а
+             не PlaybackService: тот держит ExoPlayer с файлами, а здесь звук
+             рождает движок TTS. Передний план - чтобы чтение не обрывалось,
+             когда экран погас и приложение свёрнуто. -->
+        <service
+            android:name=".speech.ReadAloudService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="ru.zf.slushalka.files"

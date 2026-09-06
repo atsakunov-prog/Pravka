@@ -19,6 +19,7 @@ import ru.zf.slushalka.data.PositionSync
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.data.Updater
 import ru.zf.slushalka.player.PlayerHolder
+import ru.zf.slushalka.speech.ReadAloud
 import ru.zf.slushalka.text.TextRepo
 import ru.zf.slushalka.ui.AppState
 
@@ -42,6 +43,7 @@ class SlushalkaApp : Application() {
     lateinit var recognizer: ChunkRecognizer; private set
     lateinit var state: AppState; private set
     lateinit var catalog: CatalogState; private set
+    lateinit var readAloud: ReadAloud; private set
 
     override fun onCreate() {
         super.onCreate()
@@ -62,6 +64,7 @@ class SlushalkaApp : Application() {
         }
         state = AppState(this)
         catalog = CatalogState(this)
+        readAloud = ReadAloud(this)
         player.artworkFor = { bookId, absMs -> state.pictureUriAt(bookId, absMs) }
     }
 }

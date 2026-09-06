@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
+import ru.zf.slushalka.data.Saf
 import ru.zf.slushalka.library.Book
 import ru.zf.slushalka.ui.AskSheet
 import ru.zf.slushalka.ui.CatalogScreen
@@ -62,7 +63,9 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     Root(
-                        onPickTree = { pickTree.launch(null) },
+                        // Пикер открывается сразу в Downloads: библиотека живёт в
+                        // Downloads/Books, чтобы всё лежало в одном видном месте.
+                        onPickTree = { pickTree.launch(Saf.downloadsUri()) },
                         onNeedMic = { askPermission.launch(Manifest.permission.RECORD_AUDIO) },
                         hasMic = {
                             ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
