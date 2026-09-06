@@ -63,6 +63,13 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val updateAuto: Boolean = true,
         /** Сверять переход «звук → текст» распознаванием последних секунд. */
         val refineOnSwitch: Boolean = true,
+        // Модели: кто отвечает на вопрос по книге и кто пересказывает, и с
+        // каким усилием (пусто — параметр не передаётся, решает API). Заводские
+        // — те, что были зашиты: Опус на вопрос, Сонет на пересказ.
+        val askModel: String = MODEL_OPUS,
+        val askEffort: String = "",
+        val recapModel: String = MODEL_SONNET,
+        val recapEffort: String = "",
     )
 
     val flow: StateFlow<Prefs> = context.dataStore.data
@@ -94,6 +101,12 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
                 updateAuto = p[KEY_UPD_AUTO] ?: true,
                 refineOnSwitch = p[KEY_REFINE] ?: true,
+                // Модель не из каталога (снятая с API, опечатка старой сборки)
+                // откатывается к заводской, а не уезжает в запрос за 404.
+                askModel = p[KEY_ASK_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
+                askEffort = p[KEY_ASK_EFFORT]?.takeIf { it in EFFORTS } ?: "",
+                recapModel = p[KEY_RECAP_MODEL]?.takeIf { it in MODELS } ?: MODEL_SONNET,
+                recapEffort = p[KEY_RECAP_EFFORT]?.takeIf { it in EFFORTS } ?: "",
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -129,10 +142,30 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
     suspend fun setUpdateAuto(v: Boolean) = edit { it[KEY_UPD_AUTO] = v }
     suspend fun setRefineOnSwitch(v: Boolean) = edit { it[KEY_REFINE] = v }
+    suspend fun setAskModel(v: String) = edit { if (v in MODELS) it[KEY_ASK_MODEL] = v }
+    suspend fun setAskEffort(v: String) = edit { if (v in EFFORTS) it[KEY_ASK_EFFORT] = v }
+    suspend fun setRecapModel(v: String) = edit { if (v in MODELS) it[KEY_RECAP_MODEL] = v }
+    suspend fun setRecapEffort(v: String) = edit { if (v in EFFORTS) it[KEY_RECAP_EFFORT] = v }
 
     companion object {
         const val MODEL_OPUS = "claude-opus-5"
         const val MODEL_SONNET = "claude-sonnet-5"
+        const val MODEL_FABLE = "claude-fable-5-1"
+
+        /** Что можно выбрать в настройках; порядок — от дешёвой к дорогой. */
+        val MODELS = listOf(MODEL_SONNET, MODEL_OPUS, MODEL_FABLE)
+
+        fun modelLabel(model: String): String = when (model) {
+            MODEL_SONNET -> "Сонет 5"
+            MODEL_OPUS -> "Опус 5"
+            MODEL_FABLE -> "Fable 5.1"
+            else -> model
+        }
+
+        /** output_config.effort; пустая строка — не передавать (API берёт high). */
+        val EFFORTS = listOf("", "low", "medium", "high", "xhigh", "max")
+
+        fun effortLabel(effort: String): String = if (effort.isBlank()) "по умолчанию" else effort
 
         /** Знаков в «странице»: стандартная машинописная - 1800. */
         const val PAGE_CHARS = 1800
@@ -181,5 +214,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
         private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")
         private val KEY_REFINE = booleanPreferencesKey("refine_on_switch")
+        private val KEY_ASK_MODEL = stringPreferencesKey("ask_model")
+        private val KEY_ASK_EFFORT = stringPreferencesKey("ask_effort")
+        private val KEY_RECAP_MODEL = stringPreferencesKey("recap_model")
+        private val KEY_RECAP_EFFORT = stringPreferencesKey("recap_effort")
     }
 }

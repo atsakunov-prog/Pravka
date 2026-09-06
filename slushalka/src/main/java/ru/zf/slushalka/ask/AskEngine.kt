@@ -26,13 +26,15 @@ class AskEngine(
         val percent: Int,
         val cutoffChar: Int,
         val elapsed: String,
+        /** Кто ответит — из настроек на момент вопроса; от этого зависит прикидка цены. */
+        val model: String,
     ) {
         val pages: Int get() = (fragment.length + prefix.length) / Settings.PAGE_CHARS
         /** Прикидка расхода: ~2.5 знака на токен русского текста. */
         val estUsd: Double
             get() {
                 val tokens = (fragment.length + prefix.length) / 2.5
-                return ClaudeClient.costUsd(Settings.MODEL_OPUS, tokens.toInt(), 500)
+                return ClaudeClient.costUsd(model, tokens.toInt(), 500)
             }
     }
 
@@ -76,6 +78,7 @@ class AskEngine(
             percent = if (text.length > 0) (cutoff * 100 / text.length) else 0,
             cutoffChar = cutoff,
             elapsed = formatClock(absMs),
+            model = p.askModel,
         )
     }
 
@@ -94,10 +97,13 @@ class AskEngine(
             }
             add(ClaudeClient.Block(place + "\n\n" + Prompts.fragment(ctx.fragment)))
         }
+        // Модель и усилие — настройки (раздел «Модели»); заводская — Опус.
+        val p = settings.now()
         return client.ask(
-            model = Settings.MODEL_OPUS,
+            model = p.askModel,
             system = blocks,
             question = question,
+            effort = p.askEffort,
             onDelta = onDelta,
         ).map { reply ->
             val ask = Ask(
@@ -136,9 +142,10 @@ class AskEngine(
     }
 
     /**
-     * «Что там было»: пересказ последних глав. Сонетом - он справляется и
-     * стоит вчетверо дешевле Опуса. Спойлеров тут не бывает по построению:
-     * дальше текущего места модели просто нечего не показали.
+     * «Что там было»: пересказ последних глав. Заводская модель — Сонет
+     * (меняется в настройках, раздел «Модели»): он справляется и стоит
+     * заметно дешевле Опуса. Спойлеров тут не бывает по построению: дальше
+     * текущего места модели просто нечего не показали.
      */
     suspend fun recap(
         book: Book,
@@ -150,8 +157,9 @@ class AskEngine(
         val fragment = text.slice(range.first, range.last)
         if (fragment.length < 400) return Result.success("")
         val chapter = text.chapterAt(range.last)?.title.orEmpty()
+        val p = settings.now()
         return client.ask(
-            model = Settings.MODEL_SONNET,
+            model = p.recapModel,
             system = listOf(
                 ClaudeClient.Block(Prompts.RECAP_RULES, cache = true),
                 ClaudeClient.Block(
@@ -161,6 +169,7 @@ class AskEngine(
             ),
             question = "Напомни, что было в этом куске.",
             maxTokens = 1100,
+            effort = p.recapEffort,
             onDelta = onDelta,
         ).map { it.text }
     }

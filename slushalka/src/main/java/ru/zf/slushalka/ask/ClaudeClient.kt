@@ -44,6 +44,8 @@ class ClaudeClient(private val settings: Settings) {
         system: List<Block>,
         question: String,
         maxTokens: Int = 1400,
+        /** output_config.effort; пусто — не передавать, решает API. */
+        effort: String = "",
         onDelta: (String) -> Unit = {},
     ): Result<Reply> = withContext(Dispatchers.IO) {
         runCatching {
@@ -52,7 +54,13 @@ class ClaudeClient(private val settings: Settings) {
 
             val body = JSONObject().apply {
                 put("model", model)
-                put("max_tokens", maxTokens)
+                // Размышления считаются в тот же max_tokens: на глубоком
+                // усилии без запаса ответ обрывался бы на мыслях, не начавшись.
+                put("max_tokens", maxTokens + if (effort in DEEP_EFFORTS) 8000 else 0)
+                if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
+                // Параметр thinking не передаётся: адаптивные мысли — поведение
+                // по умолчанию у всех трёх моделей, а явное «disabled» Fable
+                // отвергает с 400.
                 put("stream", true)
                 put("system", JSONArray().apply {
                     system.filter { it.text.isNotBlank() }.forEach { b ->
@@ -157,11 +165,21 @@ class ClaudeClient(private val settings: Settings) {
     }
 
     companion object {
+        /** Усилия, на которых мысли занимают заметную часть бюджета ответа. */
+        private val DEEP_EFFORTS = setOf("xhigh", "max")
+
+        private class Price(val input: Double, val output: Double, cacheRead: Double? = null) {
+            val cacheRead: Double = cacheRead ?: (input * 0.1)
+        }
+
         // Доллары за миллион токенов; кэш - производная от входной цены:
-        // запись на час стоит 2x, чтение 0.1x.
+        // запись на час стоит 2x, чтение 0.1x, если у модели нет своей цены.
         private val PRICES = mapOf(
-            Settings.MODEL_SONNET to (3.0 to 15.0),
-            Settings.MODEL_OPUS to (5.0 to 25.0),
+            // Сонет 5 дешевле 4.6 ($3/$15): старая цена завышала расход в полтора раза.
+            Settings.MODEL_SONNET to Price(2.0, 10.0),
+            Settings.MODEL_OPUS to Price(5.0, 25.0),
+            // Fable 5.1: вдвое дороже Опуса, чтение кэша — $0.25 за миллион.
+            Settings.MODEL_FABLE to Price(10.0, 50.0, cacheRead = 0.25),
         )
 
         fun costUsd(
@@ -171,10 +189,11 @@ class ClaudeClient(private val settings: Settings) {
             cacheWriteTokens: Int = 0,
             cacheReadTokens: Int = 0,
         ): Double {
-            val (pIn, pOut) = PRICES[model] ?: return 0.0
+            val p = PRICES[model] ?: return 0.0
             val input =
-                (inputTokens + 2.0 * cacheWriteTokens + 0.1 * cacheReadTokens) / 1_000_000.0 * pIn
-            return input + outputTokens / 1_000_000.0 * pOut
+                (inputTokens + 2.0 * cacheWriteTokens) / 1_000_000.0 * p.input +
+                    cacheReadTokens / 1_000_000.0 * p.cacheRead
+            return input + outputTokens / 1_000_000.0 * p.output
         }
     }
 }

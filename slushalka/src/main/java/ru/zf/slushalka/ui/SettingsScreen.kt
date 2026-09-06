@@ -2,6 +2,8 @@ package ru.zf.slushalka.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -40,8 +42,9 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import ru.zf.slushalka.BuildConfig
 import ru.zf.slushalka.SlushalkaApp
+import ru.zf.slushalka.data.Settings
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit) {
     val state = app.state
@@ -218,6 +221,31 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
+            // Модели — отдельным разделом, как в Правке: владелец просил
+            // выбирать и модель, и усилие, а не искать это под вопросами.
+            Section("Модели")
+            Note(
+                "Какая модель отвечает и с каким усилием. Усилие — глубина размышлений: " +
+                    "«по умолчанию» значит не передавать параметр (API берёт high), low " +
+                    "быстрее и дешевле, xhigh и max — для трудных вопросов. Заводские — " +
+                    "как было: Опус на вопрос, Сонет на пересказ. Fable 5.1 вдвое дороже Опуса."
+            )
+            ModelPicker(
+                title = "Вопрос по книге",
+                model = prefs.askModel,
+                effort = prefs.askEffort,
+                onModel = { m -> scope.launch { state.settings.setAskModel(m) } },
+                onEffort = { e -> scope.launch { state.settings.setAskEffort(e) } },
+            )
+            Spacer(Modifier.height(10.dp))
+            ModelPicker(
+                title = "Пересказ «что там было»",
+                model = prefs.recapModel,
+                effort = prefs.recapEffort,
+                onModel = { m -> scope.launch { state.settings.setRecapModel(m) } },
+                onEffort = { e -> scope.launch { state.settings.setRecapEffort(e) } },
+            )
+
             Section("Обновление")
             val update by app.updater.status.collectAsState()
             // Своя версия - прямо здесь, а не только в «О приложении» внизу:
@@ -293,6 +321,37 @@ private fun Note(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 4.dp, bottom = 6.dp),
     )
+}
+
+/** Одна дорога к модели: ряд чипов модели и ряд чипов усилия. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ModelPicker(
+    title: String,
+    model: String,
+    effort: String,
+    onModel: (String) -> Unit,
+    onEffort: (String) -> Unit,
+) {
+    Text(title, style = MaterialTheme.typography.bodyMedium)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Settings.MODELS.forEach { m ->
+            FilterChip(
+                selected = model == m,
+                onClick = { onModel(m) },
+                label = { Text(Settings.modelLabel(m)) },
+            )
+        }
+    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Settings.EFFORTS.forEach { e ->
+            FilterChip(
+                selected = effort == e,
+                onClick = { onEffort(e) },
+                label = { Text(Settings.effortLabel(e)) },
+            )
+        }
+    }
 }
 
 @Composable
