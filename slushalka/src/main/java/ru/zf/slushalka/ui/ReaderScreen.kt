@@ -112,7 +112,7 @@ fun ReaderScreen(
     app: SlushalkaApp,
     onBack: () -> Unit,
     onListen: () -> Unit,
-    onAsk: (charOffset: Int, question: String?) -> Unit,
+    onAsk: (charOffset: Int, question: String?, quote: String?) -> Unit,
 ) {
     val state = app.state
     val book by state.current.collectAsState()
@@ -126,6 +126,9 @@ fun ReaderScreen(
     var showRate by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showRecap by remember { mutableStateOf(false) }
+    var showChapters by remember { mutableStateOf(false) }
+    var showGuide by remember { mutableStateOf(false) }
+    var guideQuery by remember { mutableStateOf("") }
     var showGallery by remember { mutableStateOf(false) }
     var picture by remember { mutableStateOf<ShownPicture?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
@@ -214,6 +217,14 @@ fun ReaderScreen(
             AppState.Refine.NoSpeech ->
                 notice = "Не расслышал запись — место примерное"
             AppState.Refine.Off -> Unit
+        }
+    }
+
+    // Справочник заказан пакетом и ещё считался - проверяем при открытии книги,
+    // чтобы готовый забрался сам, без похода в лист.
+    LaunchedEffect(bk.id) {
+        if (app.guide.state(bk.id)?.status == ru.zf.slushalka.ask.GuideState.Status.PENDING) {
+            app.guide.refresh(bk)
         }
     }
 
@@ -382,7 +393,9 @@ fun ReaderScreen(
                     speech.error?.let { err ->
                         Text(err, color = palette.dim, fontSize = 12.sp)
                     }
-                } else Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                } else androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
                     if (bk.hasAudio) {
                         TextButton(onClick = {
                             state.listenFrom(readPlace())
@@ -394,8 +407,12 @@ fun ReaderScreen(
                             Text("Озвучить", color = palette.fg)
                         }
                     }
-                    TextButton(onClick = { showRecap = true }) { Text("Содержание", color = palette.fg) }
-                    TextButton(onClick = { onAsk(readPlace(), null) }) { Text("Спросить", color = palette.fg) }
+                    // «Содержание» - главы, тап - переход. Пересказ «что там было»
+                    // раньше жил под этим словом, теперь он - «Напомнить».
+                    TextButton(onClick = { showChapters = true }) { Text("Содержание", color = palette.fg) }
+                    TextButton(onClick = { showRecap = true }) { Text("Напомнить", color = palette.fg) }
+                    TextButton(onClick = { onAsk(readPlace(), null, null) }) { Text("Спросить", color = palette.fg) }
+                    TextButton(onClick = { guideQuery = ""; showGuide = true }) { Text("Справочник", color = palette.fg) }
                 }
                 if (!speakingHere && !bk.hasAudio) {
                     speech.error?.let { err -> Text(err, color = palette.dim, fontSize = 12.sp) }
@@ -431,7 +448,7 @@ fun ReaderScreen(
     if (showGallery) {
         PictureGallery(
             app,
-            onAsk = { at, q -> showGallery = false; onAsk(at, q) },
+            onAsk = { at, q -> showGallery = false; onAsk(at, q, null) },
             onClose = { showGallery = false },
         )
     }
@@ -443,50 +460,73 @@ fun ReaderScreen(
             onClose = { showRecap = false },
         )
     }
+    if (showChapters) {
+        ContentsSheet(
+            text = t,
+            currentOffset = offset,
+            onPick = { start ->
+                showChapters = false
+                place = null
+                target = start
+            },
+            onClose = { showChapters = false },
+        )
+    }
+    if (showGuide) {
+        GuideSheet(
+            app = app,
+            cutoffChar = readPlace(),
+            initialQuery = guideQuery,
+            onAsk = { q -> showGuide = false; onAsk(readPlace(), q, null) },
+            onClose = { showGuide = false },
+        )
+    }
     picture?.let { shown ->
         ImageViewer(
             shown = shown,
             onAsk = {
                 picture = null
-                onAsk(shown.charOffset, ru.zf.slushalka.ask.Prompts.picture(shown.caption))
+                onAsk(shown.charOffset, ru.zf.slushalka.ask.Prompts.picture(shown.caption), null)
             },
             onClose = { picture = null },
         )
     }
-    // Долгое нажатие - разговор о карте «звук ↔ текст»; книге без записи он ни к чему.
-    pressed?.takeIf { bk.hasAudio }?.let { at ->
-        AlertDialog(
-            onDismissRequest = { pressed = null },
-            title = { Text("Это место") },
-            text = {
-                Text(
-                    if (play.absMs > 0)
-                        "«Я тут» скажет карте, что на ${formatClock(play.absMs)} записи " +
-                            "читают это место - и переходы со звука станут точными."
-                    else "Запись ещё не играла, сверять не с чем.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            },
-            confirmButton = {
-                if (play.absMs > 0) {
-                    TextButton(onClick = {
-                        state.addAnchor(play.absMs, at)
-                        notice = "Отметил: карта стала точнее"
-                        pressed = null
-                    }) { Text("Я тут") }
-                }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = {
-                        state.listenFrom(at)
-                        pressed = null
-                        onListen()
-                    }) { Text("Слушать отсюда") }
-                    TextButton(onClick = { pressed = null }) { Text("Отмена") }
-                }
-            },
-        )
+    // Долгое нажатие на абзац: спросить про него (или про выделенные фразы),
+    // заглянуть в справочник, а у аудиокниги - ещё и поправить карту.
+    pressed?.let { at ->
+        val block = blocks.getOrNull(t.blockIndexAt(at))?.takeIf { it.picture == null && it.text.isNotBlank() }
+        if (block == null) {
+            // Под пальцем картинка или пустота - говорить не о чём.
+            LaunchedEffect(at) { pressed = null }
+        } else {
+            ParagraphSheet(
+                app = app,
+                text = t,
+                block = block,
+                hasAudio = bk.hasAudio,
+                playAbsMs = play.absMs,
+                onAsk = { atChar, q, quote ->
+                    pressed = null
+                    onAsk(atChar, q, quote)
+                },
+                onAnchor = {
+                    state.addAnchor(play.absMs, at)
+                    notice = "Отметил: карта стала точнее"
+                    pressed = null
+                },
+                onListen = {
+                    state.listenFrom(at)
+                    pressed = null
+                    onListen()
+                },
+                onGuide = { q ->
+                    pressed = null
+                    guideQuery = q
+                    showGuide = true
+                },
+                onClose = { pressed = null },
+            )
+        }
     }
 }
 

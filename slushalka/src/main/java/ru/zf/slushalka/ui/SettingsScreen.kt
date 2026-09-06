@@ -252,12 +252,10 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             Note("Ключ живёт только на этом телефоне - как в Правке, без всяких прокси.")
 
             Spacer(Modifier.height(8.dp))
-            NumberSlider(
-                label = { "Страниц в вопрос: ${it.toInt()}" },
-                value = prefs.contextPages.toFloat(),
-                range = 1f..20f,
-                steps = 18,
-            ) { scope.launch { state.settings.setContextPages(it.toInt()) } }
+            Note(
+                "Сколько книги показать модели (от трёх страниц до всей книги с начала), какая модель " +
+                    "отвечает и держать ли текст в кэше час - выбирается прямо в окне вопроса и помнится."
+            )
             NumberSlider(
                 label = { "Запас против спойлера: ${it.toInt()} мин" },
                 value = (prefs.spoilerMarginSec / 60).toFloat(),
@@ -274,13 +272,6 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             Toggle("Ставить книгу на паузу на время вопроса", prefs.pauseWhileAsking) {
                 scope.launch { state.settings.setPauseWhileAsking(it) }
             }
-            Toggle("Отдавать всю книгу до текущего места", prefs.wholeBookContext) {
-                scope.launch { state.settings.setWholeBookContext(it) }
-            }
-            Note(
-                "Дороже, но отвечает на «кто это?» про героя из первой главы. Кэш держится час, " +
-                    "поэтому второй вопрос в тот же вечер стоит копейки."
-            )
             Spacer(Modifier.height(6.dp))
             NumberSlider(
                 label = { "Пересказ предлагать после перерыва: ${it.toInt()} ч" },
@@ -301,10 +292,11 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 "Какая модель отвечает и с каким усилием. Усилие — глубина размышлений: " +
                     "«по умолчанию» значит не передавать параметр (API берёт high), low " +
                     "быстрее и дешевле, xhigh и max — для трудных вопросов. Заводские — " +
-                    "Опус на вопрос, Сонет на пересказ, Fable 5.1 советнику. Fable вдвое дороже Опуса."
+                    "Опус на вопрос и справочник, Сонет на пересказ, Fable 5.1 советнику. " +
+                    "Fable вдвое дороже Опуса."
             )
             ModelPicker(
-                title = "Вопрос по книге",
+                title = "Вопрос по книге (заводская; меняется и в самом окне)",
                 model = prefs.askModel,
                 effort = prefs.askEffort,
                 onModel = { m -> scope.launch { state.settings.setAskModel(m) } },
@@ -317,6 +309,18 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 effort = prefs.recapEffort,
                 onModel = { m -> scope.launch { state.settings.setRecapModel(m) } },
                 onEffort = { e -> scope.launch { state.settings.setRecapEffort(e) } },
+            )
+            Spacer(Modifier.height(10.dp))
+            ModelPicker(
+                title = "Справочник по книге (пакетный запрос, вдвое дешевле)",
+                model = prefs.guideModel,
+                effort = null,
+                onModel = { m -> scope.launch { state.settings.setGuideModel(m) } },
+                onEffort = {},
+            )
+            Note(
+                "Книга уезжает целиком, ответ обычно за час. Опус её вытягивает; Сонет дешевле, " +
+                    "но на толстом романе путает героев; Fable точнее всех и вдвое дороже."
             )
             Spacer(Modifier.height(10.dp))
             ModelPicker(
@@ -435,7 +439,8 @@ private fun Note(text: String) {
 private fun ModelPicker(
     title: String,
     model: String,
-    effort: String,
+    /** null - усилие не выбирается (пакетному запросу оно ни к чему). */
+    effort: String?,
     onModel: (String) -> Unit,
     onEffort: (String) -> Unit,
 ) {
@@ -449,6 +454,7 @@ private fun ModelPicker(
             )
         }
     }
+    if (effort == null) return
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Settings.EFFORTS.forEach { e ->
             FilterChip(

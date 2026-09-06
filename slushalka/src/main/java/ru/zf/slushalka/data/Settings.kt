@@ -37,12 +37,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val speed: Float = 1.0f,
         val speakAnswers: Boolean = false,
         val pauseWhileAsking: Boolean = true,
-        val contextPages: Int = 5,
         // Запас против спойлера: сколько минут аудио отступить назад от
         // расчётного места, прежде чем резать текст. Привязка приблизительная,
         // и ошибаться она должна в сторону уже услышанного.
         val spoilerMarginSec: Int = 120,
-        val wholeBookContext: Boolean = false,
         val autoRewind: Boolean = true,
         val syncPositions: Boolean = true,
         // Через сколько часов паузы предлагать пересказ «что было в прошлый раз».
@@ -68,8 +66,16 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         // — те, что были зашиты: Опус на вопрос, Сонет на пересказ.
         val askModel: String = MODEL_OPUS,
         val askEffort: String = "",
+        // Сколько книги показывать модели (имя AskEngine.Scope) и держать ли
+        // контекст в кэше час, чтобы разговор из десяти вопросов не оплачивал
+        // книгу десять раз. Оба выбираются в самом окне вопроса и помнятся.
+        val askScope: String = "",
+        val askCache: Boolean = true,
         val recapModel: String = MODEL_SONNET,
         val recapEffort: String = "",
+        // Справочник по книге считается пакетным запросом (Batch API, вдвое
+        // дешевле): заводская — Опус, книга целиком ему по силам.
+        val guideModel: String = MODEL_OPUS,
         // Каталог Флибусты: адрес сайта. Меняется на зеркало, когда основной
         // не открывается, - поэтому настройка, а не константа.
         val flibustaUrl: String = DEFAULT_FLIBUSTA_URL,
@@ -95,9 +101,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 speed = p[KEY_SPEED] ?: 1.0f,
                 speakAnswers = p[KEY_SPEAK] ?: false,
                 pauseWhileAsking = p[KEY_PAUSE_ASK] ?: true,
-                contextPages = p[KEY_PAGES] ?: 5,
                 spoilerMarginSec = p[KEY_MARGIN] ?: 120,
-                wholeBookContext = p[KEY_WHOLE] ?: false,
                 autoRewind = p[KEY_REWIND] ?: true,
                 syncPositions = p[KEY_SYNC] ?: true,
                 recapAfterHours = p[KEY_RECAP_H] ?: 8,
@@ -117,8 +121,13 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 // откатывается к заводской, а не уезжает в запрос за 404.
                 askModel = p[KEY_ASK_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
                 askEffort = p[KEY_ASK_EFFORT]?.takeIf { it in EFFORTS } ?: "",
+                // Старый тумблер «вся книга до этого места» переезжает в объём:
+                // кто его включал, получает тот же объём и в новом окне.
+                askScope = p[KEY_ASK_SCOPE] ?: if (p[KEY_WHOLE] == true) "WHOLE" else "",
+                askCache = p[KEY_ASK_CACHE] ?: true,
                 recapModel = p[KEY_RECAP_MODEL]?.takeIf { it in MODELS } ?: MODEL_SONNET,
                 recapEffort = p[KEY_RECAP_EFFORT]?.takeIf { it in EFFORTS } ?: "",
+                guideModel = p[KEY_GUIDE_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
                 flibustaUrl = p[KEY_FLIBUSTA]?.takeIf { it.isNotBlank() } ?: DEFAULT_FLIBUSTA_URL,
                 ttsRate = p[KEY_TTS_RATE] ?: 1.0f,
                 ttsVoice = p[KEY_TTS_VOICE] ?: "",
@@ -142,9 +151,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setSpeed(v: Float) = edit { it[KEY_SPEED] = v.coerceIn(0.5f, 3.0f) }
     suspend fun setSpeakAnswers(v: Boolean) = edit { it[KEY_SPEAK] = v }
     suspend fun setPauseWhileAsking(v: Boolean) = edit { it[KEY_PAUSE_ASK] = v }
-    suspend fun setContextPages(v: Int) = edit { it[KEY_PAGES] = v.coerceIn(1, 40) }
     suspend fun setSpoilerMargin(v: Int) = edit { it[KEY_MARGIN] = v.coerceIn(0, 1800) }
-    suspend fun setWholeBookContext(v: Boolean) = edit { it[KEY_WHOLE] = v }
     suspend fun setAutoRewind(v: Boolean) = edit { it[KEY_REWIND] = v }
     suspend fun setSyncPositions(v: Boolean) = edit { it[KEY_SYNC] = v }
     suspend fun setRecapAfterHours(v: Int) = edit { it[KEY_RECAP_H] = v.coerceIn(1, 240) }
@@ -162,6 +169,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setRefineOnSwitch(v: Boolean) = edit { it[KEY_REFINE] = v }
     suspend fun setAskModel(v: String) = edit { if (v in MODELS) it[KEY_ASK_MODEL] = v }
     suspend fun setAskEffort(v: String) = edit { if (v in EFFORTS) it[KEY_ASK_EFFORT] = v }
+    suspend fun setAskScope(v: String) = edit { it[KEY_ASK_SCOPE] = v }
+    suspend fun setAskCache(v: Boolean) = edit { it[KEY_ASK_CACHE] = v }
+    suspend fun setGuideModel(v: String) = edit { if (v in MODELS) it[KEY_GUIDE_MODEL] = v }
     suspend fun setRecapModel(v: String) = edit { if (v in MODELS) it[KEY_RECAP_MODEL] = v }
     suspend fun setRecapEffort(v: String) = edit { if (v in EFFORTS) it[KEY_RECAP_EFFORT] = v }
     suspend fun setFlibustaUrl(v: String) = edit { it[KEY_FLIBUSTA] = v.trim() }
@@ -226,8 +236,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_SPEED = floatPreferencesKey("speed")
         private val KEY_SPEAK = booleanPreferencesKey("speak_answers")
         private val KEY_PAUSE_ASK = booleanPreferencesKey("pause_while_asking")
-        private val KEY_PAGES = intPreferencesKey("context_pages")
         private val KEY_MARGIN = intPreferencesKey("spoiler_margin_sec")
+        /** Старый тумблер «вся книга»; читается только ради переезда в askScope. */
         private val KEY_WHOLE = booleanPreferencesKey("whole_book_context")
         private val KEY_REWIND = booleanPreferencesKey("auto_rewind")
         private val KEY_SYNC = booleanPreferencesKey("sync_positions")
@@ -246,6 +256,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_REFINE = booleanPreferencesKey("refine_on_switch")
         private val KEY_ASK_MODEL = stringPreferencesKey("ask_model")
         private val KEY_ASK_EFFORT = stringPreferencesKey("ask_effort")
+        private val KEY_ASK_SCOPE = stringPreferencesKey("ask_scope")
+        private val KEY_ASK_CACHE = booleanPreferencesKey("ask_cache")
+        private val KEY_GUIDE_MODEL = stringPreferencesKey("guide_model")
         private val KEY_RECAP_MODEL = stringPreferencesKey("recap_model")
         private val KEY_RECAP_EFFORT = stringPreferencesKey("recap_effort")
         private val KEY_FLIBUSTA = stringPreferencesKey("flibusta_url")

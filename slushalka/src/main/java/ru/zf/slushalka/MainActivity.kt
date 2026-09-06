@@ -98,6 +98,7 @@ class MainActivity : ComponentActivity() {
         var asking by remember { mutableStateOf(false) }
         var askAtChar by remember { mutableStateOf<Int?>(null) }
         var askPrefill by remember { mutableStateOf<String?>(null) }
+        var askQuote by remember { mutableStateOf<String?>(null) }
         val current by state.current.collectAsState()
 
         // Куда возвращаться из читалки: книге без записи плеер не нужен,
@@ -164,9 +165,10 @@ class MainActivity : ComponentActivity() {
                     app = app,
                     onBack = { screen = afterReader() },
                     onListen = { screen = Screen.PLAYER },
-                    onAsk = { at, question ->
+                    onAsk = { at, question, quote ->
                         askAtChar = at
                         askPrefill = question
+                        askQuote = quote
                         asking = true
                     },
                 )
@@ -190,9 +192,10 @@ class MainActivity : ComponentActivity() {
                     app = app,
                     hasMic = hasMic,
                     onNeedMic = onNeedMic,
-                    onClose = { asking = false; askAtChar = null; askPrefill = null },
+                    onClose = { asking = false; askAtChar = null; askPrefill = null; askQuote = null },
                     atChar = askAtChar,
                     initialQuestion = askPrefill,
+                    quote = askQuote,
                 )
             }
         }

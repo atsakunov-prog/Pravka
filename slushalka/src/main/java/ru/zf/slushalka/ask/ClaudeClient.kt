@@ -123,7 +123,7 @@ class ClaudeClient(private val settings: Settings) {
             }
 
             val request = Request.Builder()
-                .url("https://api.anthropic.com/v1/messages")
+                .url("$API/messages")
                 .header("x-api-key", key)
                 .header("anthropic-version", "2023-06-01")
                 .post(body.toString().toRequestBody("application/json".toMediaType()))
@@ -137,6 +137,97 @@ class ClaudeClient(private val settings: Settings) {
                 active = null
             }
         }
+    }
+
+    // ------------------------------------------------------------ пакеты
+
+    /**
+     * Пакетный запрос (Message Batches): те же запросы к /v1/messages, но без
+     * ожидания у экрана и вдвое дешевле. Ответ обычно за час, крайний срок -
+     * сутки. Так считается справочник по книге: книга целиком - это сотни тысяч
+     * токенов, платить за них полную цену и держать телефон в руках незачем.
+     */
+    data class Batch(
+        val id: String,
+        /** «in_progress», «canceling» или «ended». */
+        val status: String,
+        val resultsUrl: String?,
+        val succeeded: Int,
+        val errored: Int,
+        val processing: Int,
+    ) {
+        val ended get() = status == "ended"
+    }
+
+    /**
+     * [requests] - объекты вида {custom_id, params}, где params - обычное тело
+     * запроса к /v1/messages (без stream).
+     */
+    suspend fun createBatch(requests: List<JSONObject>): Result<Batch> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("requests", JSONArray(requests))
+            val req = builder("$API/messages/batches")
+                .post(body.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            // Книга целиком - несколько мегабайт JSON; на отправку отводится больше.
+            parseBatch(executeJson(slow.newCall(req)))
+        }
+    }
+
+    suspend fun batch(id: String): Result<Batch> = withContext(Dispatchers.IO) {
+        runCatching { parseBatch(executeJson(client.newCall(builder("$API/messages/batches/$id").get().build()))) }
+    }
+
+    /**
+     * Результаты пакета - JSONL: по объекту на запрос, {custom_id, result}.
+     * Порядок не гарантирован, сверять по custom_id.
+     */
+    suspend fun batchResults(url: String): Result<List<JSONObject>> = withContext(Dispatchers.IO) {
+        runCatching {
+            slow.newCall(builder(url).get().build()).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) throw ApiException(errorText(resp.code, text))
+                text.lineSequence()
+                    .filter { it.isNotBlank() }
+                    .mapNotNull { runCatching { JSONObject(it) }.getOrNull() }
+                    .toList()
+            }
+        }
+    }
+
+    private fun builder(url: String): Request.Builder {
+        val key = settings.now().apiKey
+        if (key.isBlank()) throw ApiException("Не задан ключ Anthropic - вставь его в настройках.")
+        return Request.Builder()
+            .url(url)
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01")
+    }
+
+    private fun executeJson(call: okhttp3.Call): JSONObject = call.execute().use { resp ->
+        val text = resp.body?.string().orEmpty()
+        if (!resp.isSuccessful) throw ApiException(errorText(resp.code, text))
+        JSONObject(text)
+    }
+
+    private fun parseBatch(o: JSONObject): Batch {
+        val counts = o.optJSONObject("request_counts")
+        return Batch(
+            id = o.optString("id"),
+            status = o.optString("processing_status"),
+            resultsUrl = o.optString("results_url").takeIf { it.isNotBlank() && it != "null" },
+            succeeded = counts?.optInt("succeeded") ?: 0,
+            errored = counts?.optInt("errored") ?: 0,
+            processing = counts?.optInt("processing") ?: 0,
+        )
+    }
+
+    /** Тот же клиент, но с запасом на отправку и приём мегабайтов: книга целиком. */
+    private val slow: OkHttpClient by lazy {
+        client.newBuilder()
+            .writeTimeout(180, TimeUnit.SECONDS)
+            .readTimeout(180, TimeUnit.SECONDS)
+            .build()
     }
 
     private fun stream(call: okhttp3.Call, model: String, onDelta: (String) -> Unit): Reply {
@@ -213,6 +304,11 @@ class ClaudeClient(private val settings: Settings) {
     }
 
     companion object {
+        private const val API = "https://api.anthropic.com/v1"
+
+        /** Пакетные запросы стоят половину обычной цены - за ожидание. */
+        const val BATCH_DISCOUNT = 0.5
+
         /** Усилия, на которых мысли занимают заметную часть бюджета ответа. */
         private val DEEP_EFFORTS = setOf("xhigh", "max")
 
@@ -234,6 +330,9 @@ class ClaudeClient(private val settings: Settings) {
             // Fable 5.1: вдвое дороже Опуса, чтение кэша — $0.25 за миллион.
             Settings.MODEL_FABLE to Price(10.0, 50.0, cacheRead = 0.25),
         )
+
+        /** Цена чтения кэша за миллион токенов - для прикидки «следующие вопросы». */
+        fun cacheReadPerMillion(model: String): Double = PRICES[model]?.cacheRead ?: 0.0
 
         fun costUsd(
             model: String,

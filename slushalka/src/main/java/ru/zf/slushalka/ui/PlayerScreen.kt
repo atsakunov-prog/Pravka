@@ -85,6 +85,7 @@ fun PlayerScreen(
     var showSleep by remember { mutableStateOf(false) }
     var showMarks by remember { mutableStateOf(false) }
     var showRecap by remember { mutableStateOf(false) }
+    var showGuide by remember { mutableStateOf(false) }
     var showGallery by remember { mutableStateOf(false) }
     var fullPicture by remember { mutableStateOf<ShownPicture?>(null) }
 
@@ -215,6 +216,7 @@ fun PlayerScreen(
                             TextButton(onClick = { showRecap = true }) {
                                 Text("Напомнить содержание")
                             }
+                            TextButton(onClick = { showGuide = true }) { Text("Справочник") }
                         }
                     }
 
@@ -405,6 +407,17 @@ fun PlayerScreen(
     if (showRecap) {
         val cutoff = alignment?.charAt(play.absMs) ?: 0
         RecapSheet(app, cutoffChar = cutoff, absMs = play.absMs, onClose = { showRecap = false })
+    }
+    if (showGuide) {
+        // Справочник - по месту записи, с тем же запасом против спойлера, что у вопроса.
+        val margin = prefs.spoilerMarginSec * 1000L
+        val cutoff = alignment?.charAt((play.absMs - margin).coerceAtLeast(0L)) ?: 0
+        GuideSheet(
+            app = app,
+            cutoffChar = cutoff,
+            onAsk = { q -> showGuide = false; onAsk(null, q) },
+            onClose = { showGuide = false },
+        )
     }
     if (showGallery) {
         PictureGallery(

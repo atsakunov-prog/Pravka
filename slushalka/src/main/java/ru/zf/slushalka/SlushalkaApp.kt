@@ -8,11 +8,13 @@ import kotlinx.coroutines.launch
 import ru.zf.slushalka.ask.AskEngine
 import ru.zf.slushalka.ask.ChunkRecognizer
 import ru.zf.slushalka.ask.ClaudeClient
+import ru.zf.slushalka.ask.GuideEngine
 import ru.zf.slushalka.ask.Speaker
 import ru.zf.slushalka.catalog.Advisor
 import ru.zf.slushalka.catalog.CatalogState
 import ru.zf.slushalka.data.AskLog
 import ru.zf.slushalka.data.Bookmarks
+import ru.zf.slushalka.data.GuideStore
 import ru.zf.slushalka.data.LibraryStore
 import ru.zf.slushalka.data.Markup
 import ru.zf.slushalka.data.PositionStore
@@ -40,6 +42,7 @@ class SlushalkaApp : Application() {
     lateinit var updater: Updater; private set
     lateinit var player: PlayerHolder; private set
     lateinit var ask: AskEngine; private set
+    lateinit var guide: GuideEngine; private set
     lateinit var speaker: Speaker; private set
     lateinit var recognizer: ChunkRecognizer; private set
     lateinit var state: AppState; private set
@@ -62,6 +65,7 @@ class SlushalkaApp : Application() {
         recognizer = ChunkRecognizer(this)
         val claude = ClaudeClient(settings)
         ask = AskEngine(settings, claude, askLog)
+        guide = GuideEngine(settings, claude, GuideStore(this), askLog)
         advisor = Advisor(this, claude)
         player = PlayerHolder(this, settings, positions) { bookId ->
             scope.launch { state.syncPush(bookId) }

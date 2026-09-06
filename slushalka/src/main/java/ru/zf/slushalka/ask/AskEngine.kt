@@ -17,25 +17,61 @@ class AskEngine(
     private val askLog: AskLog,
 ) {
 
-    /** Готовый контекст вопроса - его же показываем в окошке «что уедет». */
+    /**
+     * Сколько книги показать модели. Ползунок в окне вопроса: от трёх страниц
+     * до всей книги с начала. Страницы - для «что сейчас происходит», главы -
+     * для «кто этот человек», вся книга - для героя из первой главы.
+     */
+    enum class Scope(val label: String, val short: String, val pages: Int, val chapters: Int) {
+        PAGES_3("последние 3 страницы", "3 стр.", 3, 0),
+        PAGES_5("последние 5 страниц", "5 стр.", 5, 0),
+        PAGES_10("последние 10 страниц", "10 стр.", 10, 0),
+        CHAPTER("текущая глава", "глава", 0, 1),
+        TWO_CHAPTERS("две последние главы", "2 главы", 0, 2),
+        WHOLE("вся книга до этого места", "вся книга", 0, Int.MAX_VALUE);
+
+        companion object {
+            fun of(name: String): Scope = entries.firstOrNull { it.name == name } ?: PAGES_5
+        }
+    }
+
+    /** Одна реплика разговора в окне вопроса: что показали человеку, что ушло модели, что вернулось. */
+    data class Turn(val shown: String, val prompt: String, val answer: String, val costUsd: Double)
+
+    /**
+     * Готовый контекст вопроса - его же показываем в окошке «что уедет».
+     *
+     * Текст лежит двумя блоками. [stable] - главы до текущей: пока читаешь
+     * главу, он не меняется, и кэш на него отрабатывает по-настоящему.
+     * [recent] - текущая глава до места (или просто последние страницы).
+     */
     data class Ctx(
-        val fragment: String,
-        /** Книга с начала и до текущей главы: уезжает только в режиме «вся книга». */
-        val prefix: String,
+        val stable: String,
+        val recent: String,
         val chapter: String,
         val percent: Int,
         val cutoffChar: Int,
         val elapsed: String,
-        /** Кто ответит — из настроек на момент вопроса; от этого зависит прикидка цены. */
-        val model: String,
+        val scope: Scope,
     ) {
-        val pages: Int get() = (fragment.length + prefix.length) / Settings.PAGE_CHARS
-        /** Прикидка расхода: ~2.5 знака на токен русского текста. */
-        val estUsd: Double
-            get() {
-                val tokens = (fragment.length + prefix.length) / 2.5
-                return ClaudeClient.costUsd(model, tokens.toInt(), 500)
-            }
+        val chars: Int get() = stable.length + recent.length
+        val pages: Int get() = (chars + Settings.PAGE_CHARS / 2) / Settings.PAGE_CHARS
+
+        /** Прикидка токенов: ~2.5 знака на токен русского текста плюс правила. */
+        val tokens: Int get() = (chars / 2.5).toInt() + RULES_TOKENS
+
+        /**
+         * Во что обойдётся первый вопрос. С кэшем текст пишется в кэш на час -
+         * это вдвое дороже обычного входа; окупается со второго-третьего вопроса.
+         */
+        fun estFirstUsd(model: String, cache: Boolean): Double =
+            if (cache) ClaudeClient.costUsd(model, QUESTION_TOKENS, ANSWER_TOKENS, cacheWriteTokens = tokens)
+            else ClaudeClient.costUsd(model, tokens + QUESTION_TOKENS, ANSWER_TOKENS)
+
+        /** Во что обойдётся каждый следующий вопрос в том же разговоре. */
+        fun estNextUsd(model: String, cache: Boolean): Double =
+            if (cache) ClaudeClient.costUsd(model, QUESTION_TOKENS * 3, ANSWER_TOKENS, cacheReadTokens = tokens)
+            else ClaudeClient.costUsd(model, tokens + QUESTION_TOKENS * 3, ANSWER_TOKENS)
     }
 
     /**
@@ -45,10 +81,10 @@ class AskEngine(
      * раньше: привязка приблизительная, и ошибаться она обязана в сторону уже
      * услышанного. Лучше не дорассказать, чем проговориться.
      */
-    fun context(book: Book, text: BookText, align: Alignment, absMs: Long): Ctx {
+    fun context(book: Book, text: BookText, align: Alignment, absMs: Long, scope: Scope): Ctx {
         val p = settings.now()
         val cutoffMs = (absMs - p.spoilerMarginSec * 1000L).coerceAtLeast(0L)
-        return contextAt(book, text, align.charAt(cutoffMs), absMs)
+        return contextAt(book, text, align.charAt(cutoffMs), absMs, scope)
     }
 
     /**
@@ -56,65 +92,90 @@ class AskEngine(
      * запас против спойлера не нужен - страница перед глазами, и что прочитано,
      * известно точно.
      */
-    fun contextAt(book: Book, text: BookText, cutoffChar: Int, absMs: Long): Ctx {
-        val p = settings.now()
+    fun contextAt(book: Book, text: BookText, cutoffChar: Int, absMs: Long, scope: Scope): Ctx {
         val cutoff = cutoffChar.coerceIn(0, text.length)
-        val want = p.contextPages * Settings.PAGE_CHARS
-        val from = (cutoff - want).coerceAtLeast(0)
         val chapter = text.chapterAt(cutoff)
+        val chIndex = text.chapterIndexAt(cutoff)
 
-        val prefix = if (p.wholeBookContext) {
-            // Кэш-блок обрывается на границе главы: пока слушаешь главу, он
-            // не меняется, и час кэша отрабатывает по-настоящему.
+        var stable = ""
+        val recent: String
+        if (scope.chapters == 0) {
+            recent = text.slice((cutoff - scope.pages * Settings.PAGE_CHARS).coerceAtLeast(0), cutoff)
+        } else {
             val chStart = chapter?.start ?: 0
-            if (chStart > 400) text.slice(0, chStart) else ""
-        } else ""
-
-        val fragStart = if (prefix.isNotEmpty()) (chapter?.start ?: 0) else from
+            val first = if (scope.chapters == Int.MAX_VALUE) 0 else (chIndex - (scope.chapters - 1)).coerceAtLeast(0)
+            val from = text.chapters.getOrNull(first)?.start ?: 0
+            if (from < chStart - 400) stable = text.slice(from, chStart)
+            // Глава только началась: одной её строки модели мало - добираем
+            // пару страниц из предыдущей, чтобы было о чём говорить.
+            val start = if (stable.isEmpty() && cutoff - chStart < Settings.PAGE_CHARS)
+                (cutoff - 2 * Settings.PAGE_CHARS).coerceAtLeast(0) else chStart
+            recent = text.slice(start, cutoff)
+        }
         return Ctx(
-            fragment = text.slice(fragStart, cutoff),
-            prefix = prefix,
+            stable = stable,
+            recent = recent,
             chapter = chapter?.title.orEmpty(),
             percent = if (text.length > 0) (cutoff * 100 / text.length) else 0,
             cutoffChar = cutoff,
-            elapsed = formatClock(absMs),
-            model = p.askModel,
+            elapsed = if (book.hasAudio) formatClock(absMs) else "",
+            scope = scope,
         )
     }
 
+    /**
+     * Вопрос - или уточнение к прежнему ответу: [history] уезжает как разговор.
+     *
+     * [cache] - держать текст книги в кэше час: первый вопрос дороже, каждый
+     * следующий в том же разговоре - копейки. [spoilers] снимает барьер: правила
+     * меняются на [Prompts.RULES_SPOILERS], и модель отвечает по всей книге.
+     * [quote] - кусок, выделенный в читалке; идёт в реплику, а не в систему.
+     */
     suspend fun ask(
         book: Book,
         ctx: Ctx,
+        history: List<Turn>,
         question: String,
+        quote: String?,
+        model: String,
+        cache: Boolean,
+        spoilers: Boolean,
         absMs: Long,
         onDelta: (String) -> Unit,
-    ): Result<Ask> {
+    ): Result<Turn> {
         val place = Prompts.place(book.title, book.author, ctx.chapter, ctx.percent, ctx.elapsed)
-        val blocks = buildList {
-            add(ClaudeClient.Block(Prompts.RULES, cache = true))
-            if (ctx.prefix.isNotBlank()) {
-                add(ClaudeClient.Block(Prompts.beforeThat(ctx.prefix), cache = true))
-            }
-            add(ClaudeClient.Block(place + "\n\n" + Prompts.fragment(ctx.fragment)))
+        val system = buildList {
+            add(ClaudeClient.Block(if (spoilers) Prompts.RULES_SPOILERS else Prompts.RULES, cache = cache))
+            if (ctx.stable.isNotBlank()) add(ClaudeClient.Block(Prompts.beforeThat(ctx.stable), cache = cache))
+            add(ClaudeClient.Block(place + "\n\n" + Prompts.fragment(ctx.recent), cache = cache))
         }
-        // Модель и усилие — настройки (раздел «Модели»); заводская — Опус.
+        val prompt = if (quote.isNullOrBlank()) question else Prompts.quoted(quote, question)
+        val turns = buildList {
+            history.forEach { t ->
+                add(ClaudeClient.Turn("user", t.prompt))
+                add(ClaudeClient.Turn("assistant", t.answer))
+            }
+            add(ClaudeClient.Turn("user", prompt))
+        }
         val p = settings.now()
-        return client.ask(
-            model = p.askModel,
-            system = blocks,
-            question = question,
+        return client.chat(
+            model = model,
+            system = system,
+            turns = turns,
             effort = p.askEffort,
             onDelta = onDelta,
         ).map { reply ->
-            val ask = Ask(
-                at = System.currentTimeMillis(),
-                absMs = absMs,
-                question = question,
-                answer = reply.text,
-                costUsd = reply.costUsd,
+            askLog.add(
+                book.id,
+                Ask(
+                    at = System.currentTimeMillis(),
+                    absMs = absMs,
+                    question = question,
+                    answer = reply.text,
+                    costUsd = reply.costUsd,
+                ),
             )
-            askLog.add(book.id, ask)
-            ask
+            Turn(shown = question, prompt = prompt, answer = reply.text, costUsd = reply.costUsd)
         }
     }
 
@@ -163,7 +224,7 @@ class AskEngine(
             system = listOf(
                 ClaudeClient.Block(Prompts.RECAP_RULES, cache = true),
                 ClaudeClient.Block(
-                    Prompts.place(book.title, book.author, chapter, 0, formatClock(absMs)) +
+                    Prompts.place(book.title, book.author, chapter, 0, if (book.hasAudio) formatClock(absMs) else "") +
                         "\n\n" + Prompts.fragment(fragment)
                 ),
             ),
@@ -179,5 +240,11 @@ class AskEngine(
     private companion object {
         /** Потолок пересказа: тридцать страниц - это уже не «напомни», а чтение заново. */
         const val MAX_RECAP_CHARS = 54_000
+
+        /** Токенов в правилах и служебных строках. */
+        const val RULES_TOKENS = 700
+        /** Сколько занимает вопрос и сколько - ответ, для прикидки цены. */
+        const val QUESTION_TOKENS = 80
+        const val ANSWER_TOKENS = 400
     }
 }
