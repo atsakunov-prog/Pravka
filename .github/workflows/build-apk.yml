@@ -1,16 +1,27 @@
-# Builds the signed debug APK on every push and publishes it to the
-# orphan branch "apk-builds" (single force-pushed commit, so the repo
-# does not grow). The development session fetches the APK from that
-# branch and hands it to the owner.
+# Правка: подписанный debug APK на каждый пуш, публикация в ветку `apk-builds` —
+# только из линии `pravka` и не трогая файлы Слушалки.
 #
-# versionCode = github.run_number, so every CI build installs over the
-# previous one. Local builds use the version.properties counter instead.
+# `apk-builds` одна на репозиторий: один осиротевший коммит, в котором лежат
+# файлы ОБОИХ приложений (мы кладём `pravka-debug.apk` + `build-info.txt`,
+# Слушалка из своей ветки `slushalka` — `slushalka.apk` +
+# `slushalka-build-info.txt`). Публикация сначала забирает то, что там уже
+# есть, меняет только свои файлы и пушит новый одиночный коммит поверх с
+# `--force-with-lease`. Если за это время ветку успела обновить вторая линия,
+# push отвергается и попытка повторяется уже с её файлами — так две линии не
+# затирают друг друга и не толкаются за ref (06.09 восемь одновременных
+# публикаций из восьми веток падали с «cannot lock ref»).
+#
+# versionCode = github.run_number, общий на репозиторий, так что каждая
+# следующая сборка ставится поверх предыдущей. Локальные сборки читают счётчик
+# из version.properties. Телефон принимает только сборки с branch=pravka
+# (data/Updates.kt, константа LINE) — сборка любой другой ветки остаётся
+# артефактом workflow и до телефона не доезжает.
 name: build-apk
 
 on:
   push:
     branches: ["**"]
-    paths-ignore: ["README.md", "docs/**"]
+    paths-ignore: ["README.md", "CLAUDE.md", "docs/**"]
   workflow_dispatch:
 
 permissions:
@@ -39,28 +50,56 @@ jobs:
           -PbuildBranch=${{ github.ref_name }}
           --no-daemon
 
-      - name: Publish APK to apk-builds branch
+      - name: Publish to apk-builds (only from the pravka line)
+        if: github.ref_name == 'pravka'
+        env:
+          TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.run_number }}
         run: |
+          set -euo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk
           test -f "$APK"
-          mkdir /tmp/apkpub
-          cp "$APK" /tmp/apkpub/pravka-debug.apk
-          {
-            echo "pravka=2.0.${{ github.run_number }}"
-            echo "versionName=2.0.${{ github.run_number }}"
-            echo "apk=pravka-debug.apk"
-            echo "versionCode=${{ github.run_number }}"
-            echo "commit=${GITHUB_SHA}"
-            echo "branch=${GITHUB_REF_NAME}"
-            echo "builtAt=$(date -u +%Y-%m-%dT%H:%MZ)"
-          } > /tmp/apkpub/build-info.txt
-          cd /tmp/apkpub
-          git init -q -b apk-builds
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -q -m "Pravka debug APK 1.0.${{ github.run_number }} from ${GITHUB_SHA::7} (${GITHUB_REF_NAME})"
-          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" apk-builds
+          REMOTE="https://x-access-token:${TOKEN}@github.com/${REPO}.git"
+          PUB=/tmp/apkpub
+          for attempt in 1 2 3 4 5; do
+            rm -rf "$PUB"
+            # Забираем то, что уже лежит в ветке (файлы Слушалки), и меняем только своё.
+            if git clone -q --depth 1 --branch apk-builds "$REMOTE" "$PUB" 2>/dev/null; then
+              BASE=$(git -C "$PUB" rev-parse HEAD)
+            else
+              mkdir -p "$PUB" && git -C "$PUB" init -q
+              BASE=""
+            fi
+            cp "$APK" "$PUB/pravka-debug.apk"
+            {
+              echo "pravka=2.0.${RUN}"
+              echo "versionName=2.0.${RUN}"
+              echo "apk=pravka-debug.apk"
+              echo "versionCode=${RUN}"
+              echo "commit=${GITHUB_SHA}"
+              echo "branch=${GITHUB_REF_NAME}"
+              echo "builtAt=$(date -u +%Y-%m-%dT%H:%MZ)"
+            } > "$PUB/build-info.txt"
+            git -C "$PUB" config user.name "github-actions[bot]"
+            git -C "$PUB" config user.email "github-actions[bot]@users.noreply.github.com"
+            git -C "$PUB" checkout -q --orphan publish
+            git -C "$PUB" add -A
+            git -C "$PUB" commit -q -m "Правка ${RUN} from ${GITHUB_SHA::7} (файлы Слушалки — как были)"
+            if [ -n "$BASE" ]; then
+              LEASE="--force-with-lease=refs/heads/apk-builds:${BASE}"
+            else
+              LEASE="--force"
+            fi
+            if git -C "$PUB" push -q $LEASE "$REMOTE" HEAD:refs/heads/apk-builds; then
+              echo "опубликовано (попытка $attempt)"
+              exit 0
+            fi
+            echo "apk-builds ушла вперёд, попытка $attempt не прошла — повтор"
+            sleep $((attempt * 5))
+          done
+          echo "не удалось опубликовать за 5 попыток"
+          exit 1
 
       - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4

@@ -350,15 +350,15 @@ private fun UpdatesCard(app: PravkaApp) {
                 Spacer(Modifier.width(10.dp))
                 Text(stringResource(R.string.upd_mobile), style = MaterialTheme.typography.bodySmall)
             }
-            // Линия обновления. Работа переезжает между ветками, и после
-            // слияния в основную имя перестанет совпадать — обновления молча
-            // прекратились бы. Здесь их возвращают одной строкой.
+            // Линия обновления. Заводская — константа `pravka`; поле осталось
+            // на случай переезда линии, чтобы вернуть обновления одной строкой
+            // без новой сборки.
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = branchDraft,
                 onValueChange = { branchDraft = it },
                 label = { Text(stringResource(R.string.upd_branch_label)) },
-                placeholder = { Text(BuildConfig.BUILD_BRANCH.ifBlank { "своя ветка" }) },
+                placeholder = { Text(ru.zf.pravka.data.Updates.LINE) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
