@@ -1,0 +1,7 @@
+pravka=2.0.361
+versionName=2.0.361
+apk=pravka-debug.apk
+versionCode=361
+commit=f874dacf36f4b0b998ed34950b0a2a4edee05316
+branch=pravka
+builtAt=2026-09-06T15:04Z
