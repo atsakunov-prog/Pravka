@@ -80,10 +80,8 @@ jobs:
               echo "branch=${GITHUB_REF_NAME}"
               echo "builtAt=$(date -u +%Y-%m-%dT%H:%MZ)"
             } > "$PUB/slushalka-build-info.txt"
-            # ПЕРЕХОДНОЕ — убрать, когда обе Слушалки (Саша и Марианна) обновятся
-            # до 1.1.360+: старые копии читают общий build-info.txt. Правке этот
-            # файл не страшен: у него branch=slushalka, и она его пропустит.
-            cp "$PUB/slushalka-build-info.txt" "$PUB/build-info.txt"
+            # build-info.txt рядом — файл Правки, его не трогаем. Обе Слушалки
+            # (Саша и Марианна) с 1.1.360 читают свой файл выше.
             git -C "$PUB" config user.name "github-actions[bot]"
             git -C "$PUB" config user.email "github-actions[bot]@users.noreply.github.com"
             git -C "$PUB" checkout -q --orphan publish
