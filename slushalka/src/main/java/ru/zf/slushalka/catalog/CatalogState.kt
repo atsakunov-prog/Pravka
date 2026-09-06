@@ -4,9 +4,11 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import java.io.File
 import java.util.zip.ZipFile
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,16 +39,21 @@ class CatalogState(private val app: SlushalkaApp) {
     data class Page(
         val title: String,
         val url: String,
-        /** Для поиска: вторая лента (авторы), её записи встают первыми. */
-        val authorsUrl: String? = null,
+        /** Для поиска: план запросов; записи авторов встают первыми. */
+        val search: SmartSearch.Plan? = null,
         val entries: List<OpdsEntry> = emptyList(),
         /** Сколько первых записей - авторы из поиска (под ними идёт заголовок «Книги»). */
         val authorCount: Int = 0,
         val next: String? = null,
         val loading: Boolean = false,
         val loadingMore: Boolean = false,
+        /** Авторы уже показаны, а медленный поиск по названиям ещё идёт. */
+        val booksPending: Boolean = false,
         val error: String? = null,
-    )
+    ) {
+        /** Страница автора: сюда советник приходит с вопросом «с чего начать». */
+        val isAuthor get() = url.contains("/opds/author/")
+    }
 
     private val _stack = MutableStateFlow<List<Page>>(emptyList())
     /** Стопка лент: последняя - на экране, «назад» снимает её. */
@@ -80,15 +87,25 @@ class CatalogState(private val app: SlushalkaApp) {
         push(Page(title = title.ifBlank { "Флибуста" }, url = client.resolve(href)))
     }
 
-    /** Поиск сразу по двум лентам: авторы (их мало, они первыми) и книги. */
+    /**
+     * Поиск: авторы - несколькими быстрыми запросами с вариантами написания,
+     * книги по названию - одним медленным. См. [SmartSearch].
+     */
     fun search(query: String) {
-        val q = query.trim()
-        if (q.length < 2) return
+        val plan = SmartSearch.plan(query)
+        if (plan.query.length < 2) return
+        push(Page(title = "«${plan.query}»", url = client.searchUrl(plan.bookTerm, authors = false), search = plan))
+    }
+
+    /** Поиск по совету советника: фамилия - к авторам, название - к книгам. */
+    fun searchSuggested(author: String, title: String) {
+        val plan = SmartSearch.planFor(author, title)
+        if (plan.bookTerm.isBlank() && plan.authorTerms.isEmpty()) return
         push(
             Page(
-                title = "«$q»",
-                url = client.searchUrl(q, authors = false),
-                authorsUrl = client.searchUrl(q, authors = true),
+                title = listOf(author, title).filter { it.isNotBlank() }.joinToString(" — "),
+                url = client.searchUrl(plan.bookTerm.ifBlank { author }, authors = false) + "#совет",
+                search = plan,
             )
         )
     }
@@ -105,11 +122,14 @@ class CatalogState(private val app: SlushalkaApp) {
     /** Всё заново - с корня. Пригодится, когда сменили адрес сайта. */
     fun reset() {
         loadJob?.cancel()
+        cache.clear()
         _stack.value = emptyList()
     }
 
     fun retry() {
         val page = top ?: return
+        // Повтор - это «спроси сайт ещё раз», а не «покажи то же из кэша».
+        cache.clear()
         load(page.copy(entries = emptyList(), error = null))
     }
 
@@ -128,57 +148,128 @@ class CatalogState(private val app: SlushalkaApp) {
     private fun load(page: Page) {
         replaceTop { page.copy(loading = true, error = null) }
         loadJob = app.scope.launch {
-            val result = runCatching {
-                coroutineScope {
-                    val authors = page.authorsUrl?.let { u -> async { runCatching { client.feed(u) } } }
-                    val books = client.feed(page.url)
-                    val authorEntries = authors?.await()?.getOrNull()?.entries.orEmpty()
-                    Triple(books, authorEntries, books.next)
-                }
-            }
-            // Пока грузили, могли уйти на другую ленту - тогда ответ не наш.
-            if (top?.url != page.url) return@launch
-            result.onSuccess { (feed, authorEntries, next) ->
-                replaceTop {
-                    it.copy(
-                        entries = authorEntries + feed.entries,
-                        authorCount = authorEntries.size,
-                        next = next,
-                        loading = false,
-                    )
-                }
-            }.onFailure { e ->
-                replaceTop { it.copy(loading = false, error = FlibustaClient.readable(e)) }
-            }
+            val plan = page.search
+            if (plan != null) loadSearch(page, plan) else loadFeed(page)
         }
     }
 
-    /** Следующая страница ленты - дописывается в хвост. */
+    /** Пока грузили, могли уйти на другую ленту - тогда ответ уже не наш. */
+    private fun stale(page: Page) = top?.url != page.url
+
+    private suspend fun loadFeed(page: Page) {
+        val result = runCatching { feed(page.url) }
+        if (stale(page)) return
+        result.onSuccess { f ->
+            replaceTop { it.copy(entries = f.entries, next = f.next, loading = false) }
+            prefetch(f.next)
+        }.onFailure { e ->
+            replaceTop { it.copy(loading = false, error = FlibustaClient.readable(e)) }
+        }
+    }
+
+    /**
+     * Поиск в два такта. Авторы приходят за секунду - их показываем сразу и
+     * первыми. Книги по названию Флибуста ищет долго (десятки секунд бывает),
+     * и ждать их, глядя на пустой экран, незачем: внизу висит «ищу книги…»,
+     * а список авторов уже можно листать.
+     */
+    private suspend fun loadSearch(page: Page, plan: SmartSearch.Plan) = coroutineScope {
+        val books = if (plan.bookTerm.isBlank()) null
+        else async { runCatching { feed(client.searchUrl(plan.bookTerm, authors = false)) } }
+        val authorFeeds = plan.authorTerms.map { term ->
+            async { runCatching { feed(client.searchUrl(term, authors = true)) }.getOrNull() }
+        }
+        val authors = authorFeeds.awaitAll().filterNotNull().flatMap { it.entries }
+            .distinctBy { SmartSearch.keyOf(it) }
+            .sortedBy { SmartSearch.rank(it, plan) }
+            .take(MAX_AUTHORS)
+        if (stale(page)) return@coroutineScope
+        replaceTop {
+            it.copy(entries = authors, authorCount = authors.size, loading = false, booksPending = books != null)
+        }
+        if (books == null) return@coroutineScope
+
+        var result = books.await()
+        // Фраза целиком в названиях не нашлась - пробуем самое длинное слово:
+        // «Азазель Акунин» → «Азазель». Один запасной запрос, не больше: он дорогой.
+        val fallback = plan.bookFallback
+        if (fallback != null && result.getOrNull()?.entries?.isEmpty() == true) {
+            result = runCatching { feed(client.searchUrl(fallback, authors = false)) }
+        }
+        if (stale(page)) return@coroutineScope
+        result.onSuccess { f ->
+            replaceTop { it.copy(entries = it.entries + f.entries, next = f.next, booksPending = false) }
+            prefetch(f.next)
+        }.onFailure { e ->
+            replaceTop { it.copy(booksPending = false, error = FlibustaClient.readable(e)) }
+        }
+    }
+
+    /** Следующая страница ленты - дописывается в хвост. Обычно уже лежит в кэше: её подтянули заранее. */
     fun loadMore() {
         val page = top ?: return
         val next = page.next ?: return
         if (page.loading || page.loadingMore) return
         replaceTop { it.copy(loadingMore = true) }
         loadJob = app.scope.launch {
-            val result = runCatching { client.feed(client.resolve(next)) }
-            if (top?.url != page.url) return@launch
-            result.onSuccess { feed ->
+            val result = runCatching { feed(client.resolve(next)) }
+            if (stale(page)) return@launch
+            result.onSuccess { f ->
                 replaceTop {
                     // Флибуста иногда повторяет записи на стыке страниц.
                     val known = it.entries.mapTo(HashSet()) { e -> e.key }
-                    val fresh = feed.entries.filter { e -> e.key !in known }
+                    val fresh = f.entries.filter { e -> e.key !in known }
                     it.copy(
                         entries = it.entries + fresh,
                         // Страница без единой новой записи, но со ссылкой «дальше», -
                         // повод остановиться, а не крутить подгрузку по кругу.
-                        next = if (fresh.isEmpty()) null else feed.next,
+                        next = if (fresh.isEmpty()) null else f.next,
                         loadingMore = false,
                     )
                 }
+                prefetch(f.next)
             }.onFailure { e ->
                 replaceTop { it.copy(loadingMore = false, error = FlibustaClient.readable(e)) }
             }
         }
+    }
+
+    // ------------------------------------------------------------------ кэш
+
+    private class Cached(val feed: OpdsFeed, val at: Long)
+
+    /** Ленты по адресу, недавние. «Назад» и повторный поиск открываются мгновенно. */
+    private val cache = object : LinkedHashMap<String, Cached>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Cached>?) = size > CACHE_MAX
+    }
+    private val inflight = HashMap<String, Deferred<OpdsFeed>>()
+
+    /**
+     * Лента из кэша или с сайта. Один адрес не качается дважды одновременно:
+     * подгрузка вперёд и докрутка до низа часто просят одно и то же.
+     */
+    private suspend fun feed(url: String): OpdsFeed {
+        cache[url]?.takeIf { System.currentTimeMillis() - it.at < CACHE_TTL_MS }?.let { return it.feed }
+        val job = inflight.getOrPut(url) {
+            app.scope.async {
+                try {
+                    client.feed(url).also { cache[url] = Cached(it, System.currentTimeMillis()) }
+                } finally {
+                    inflight.remove(url)
+                }
+            }
+        }
+        return job.await()
+    }
+
+    /**
+     * Следующая страница качается заранее, пока человек читает эту: у Флибусты
+     * по двадцать записей на страницу, и каждая - отдельный медленный запрос.
+     * К моменту, когда докрутили до низа, продолжение уже лежит в кэше.
+     */
+    private fun prefetch(next: String?) {
+        val url = next?.let { client.resolve(it) } ?: return
+        app.scope.launch { runCatching { feed(url) } }
     }
 
     // ----------------------------------------------------------- скачивание
@@ -324,6 +415,11 @@ class CatalogState(private val app: SlushalkaApp) {
     }
 
     companion object {
+        private const val CACHE_MAX = 60
+        private const val CACHE_TTL_MS = 20 * 60_000L
+        /** Авторов в выдаче поиска - больше не нужно, дальше идут книги. */
+        private const val MAX_AUTHORS = 25
+
         /** Своего MIME у fb2 в Android нет; октет-стрим не заставит систему дописать расширение. */
         private const val MIME_FB2 = "application/octet-stream"
 

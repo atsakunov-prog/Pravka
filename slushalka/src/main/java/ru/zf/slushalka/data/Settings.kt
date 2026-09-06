@@ -77,6 +77,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         // имя из движка (у Google это «ru-ru-x-…»), пусто - какой движок даст.
         val ttsRate: Float = 1.0f,
         val ttsVoice: String = "",
+        // Советник в каталоге: кто отвечает, с каким усилием, ходить ли в интернет.
+        // Заводская модель — Fable 5.1: владелец просил именно её.
+        val adviseModel: String = MODEL_FABLE,
+        val adviseEffort: String = "",
+        val adviseWeb: Boolean = true,
     )
 
     val flow: StateFlow<Prefs> = context.dataStore.data
@@ -117,6 +122,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 flibustaUrl = p[KEY_FLIBUSTA]?.takeIf { it.isNotBlank() } ?: DEFAULT_FLIBUSTA_URL,
                 ttsRate = p[KEY_TTS_RATE] ?: 1.0f,
                 ttsVoice = p[KEY_TTS_VOICE] ?: "",
+                adviseModel = p[KEY_ADVISE_MODEL]?.takeIf { it in MODELS } ?: MODEL_FABLE,
+                adviseEffort = p[KEY_ADVISE_EFFORT]?.takeIf { it in EFFORTS } ?: "",
+                adviseWeb = p[KEY_ADVISE_WEB] ?: true,
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -159,6 +167,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setFlibustaUrl(v: String) = edit { it[KEY_FLIBUSTA] = v.trim() }
     suspend fun setTtsRate(v: Float) = edit { it[KEY_TTS_RATE] = v.coerceIn(0.5f, 2.5f) }
     suspend fun setTtsVoice(v: String) = edit { it[KEY_TTS_VOICE] = v }
+    suspend fun setAdviseModel(v: String) = edit { if (v in MODELS) it[KEY_ADVISE_MODEL] = v }
+    suspend fun setAdviseEffort(v: String) = edit { if (v in EFFORTS) it[KEY_ADVISE_EFFORT] = v }
+    suspend fun setAdviseWeb(v: Boolean) = edit { it[KEY_ADVISE_WEB] = v }
 
     companion object {
         const val MODEL_OPUS = "claude-opus-5"
@@ -240,5 +251,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_FLIBUSTA = stringPreferencesKey("flibusta_url")
         private val KEY_TTS_RATE = floatPreferencesKey("tts_rate")
         private val KEY_TTS_VOICE = stringPreferencesKey("tts_voice")
+        private val KEY_ADVISE_MODEL = stringPreferencesKey("advise_model")
+        private val KEY_ADVISE_EFFORT = stringPreferencesKey("advise_effort")
+        private val KEY_ADVISE_WEB = booleanPreferencesKey("advise_web")
     }
 }

@@ -137,6 +137,8 @@ class MainActivity : ComponentActivity() {
 
                 Screen.CATALOG -> CatalogScreen(
                     app = app,
+                    hasMic = hasMic,
+                    onNeedMic = onNeedMic,
                     onClose = { screen = Screen.LIBRARY },
                     onOpenBook = openBook,
                 )

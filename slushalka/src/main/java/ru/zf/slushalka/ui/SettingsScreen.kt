@@ -301,7 +301,7 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 "Какая модель отвечает и с каким усилием. Усилие — глубина размышлений: " +
                     "«по умолчанию» значит не передавать параметр (API берёт high), low " +
                     "быстрее и дешевле, xhigh и max — для трудных вопросов. Заводские — " +
-                    "как было: Опус на вопрос, Сонет на пересказ. Fable 5.1 вдвое дороже Опуса."
+                    "Опус на вопрос, Сонет на пересказ, Fable 5.1 советнику. Fable вдвое дороже Опуса."
             )
             ModelPicker(
                 title = "Вопрос по книге",
@@ -317,6 +317,22 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 effort = prefs.recapEffort,
                 onModel = { m -> scope.launch { state.settings.setRecapModel(m) } },
                 onEffort = { e -> scope.launch { state.settings.setRecapEffort(e) } },
+            )
+            Spacer(Modifier.height(10.dp))
+            ModelPicker(
+                title = "Советник в каталоге Флибусты",
+                model = prefs.adviseModel,
+                effort = prefs.adviseEffort,
+                onModel = { m -> scope.launch { state.settings.setAdviseModel(m) } },
+                onEffort = { e -> scope.launch { state.settings.setAdviseEffort(e) } },
+            )
+            Toggle("Советник смотрит в интернет", prefs.adviseWeb) {
+                scope.launch { state.settings.setAdviseWeb(it) }
+            }
+            Note(
+                "С интернетом советник отвечает, что о книге говорят читатели и критики; " +
+                    "каждый поиск стоит около цента сверх токенов, не больше трёх на ответ. " +
+                    "Выключатель здесь - заводское положение, в самом листе его можно переключить."
             )
 
             Section("Обновление")

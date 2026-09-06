@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.flow.distinctUntilChanged
 import ru.zf.slushalka.SlushalkaApp
+import ru.zf.slushalka.catalog.Advisor
 import ru.zf.slushalka.catalog.CatalogState
 import ru.zf.slushalka.catalog.OpdsEntry
 import ru.zf.slushalka.library.Book
@@ -78,10 +79,15 @@ import ru.zf.slushalka.library.Book
  * адрес - вернулся туда же, где был. «Назад» снимает верхнюю ленту, с корня -
  * закрывает экран.
  */
+/** С чем пришли к советнику: место, готовый вопрос и надо ли смотреть в интернет. */
+private data class Advice(val scope: Advisor.Scope, val question: String?, val web: Boolean)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CatalogScreen(
     app: SlushalkaApp,
+    hasMic: () -> Boolean,
+    onNeedMic: () -> Unit,
     onClose: () -> Unit,
     onOpenBook: (Book) -> Unit,
 ) {
@@ -98,6 +104,12 @@ fun CatalogScreen(
     val page = stack.lastOrNull()
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<OpdsEntry?>(null) }
+    var advice by remember { mutableStateOf<Advice?>(null) }
+
+    // Советник знает, где мы: на странице автора он про автора, иначе - про полку.
+    fun adviceScope(): Advisor.Scope = page?.takeIf { it.isAuthor }?.let { p ->
+        Advisor.Scope.Author(p.title, p.entries.filter { it.isBook }.map { it.title })
+    } ?: Advisor.Scope.Library
 
     fun goBack() {
         if (!catalog.back()) onClose()
@@ -149,6 +161,16 @@ fun CatalogScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
             )
 
+            // Советник - одной строкой под поиском: с полки «что почитать», у автора «с чего начать».
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = { advice = Advice(adviceScope(), null, prefs.adviseWeb) }) {
+                    Text(if (page?.isAuthor == true) "Советник · с чего начать у автора?" else "Советник · что почитать?")
+                }
+            }
+
             if (prefs.libraryUri.isBlank()) {
                 Note(
                     "Папка с книгами ещё не выбрана - скачивать пока некуда. " +
@@ -170,7 +192,7 @@ fun CatalogScreen(
                 page.error != null && page.entries.isEmpty() -> Trouble(page.error, prefs.flibustaUrl) {
                     catalog.retry()
                 }
-                page.entries.isEmpty() -> Text(
+                page.entries.isEmpty() && !page.booksPending -> Text(
                     "Ничего не нашлось",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -191,6 +213,23 @@ fun CatalogScreen(
         }
     }
 
+    advice?.let { a ->
+        AdvisorSheet(
+            app = app,
+            scope = a.scope,
+            initialQuestion = a.question,
+            initialWeb = a.web,
+            hasMic = hasMic,
+            onNeedMic = onNeedMic,
+            onSearch = { author, title ->
+                advice = null
+                selected = null
+                catalog.searchSuggested(author, title)
+            },
+            onDismiss = { advice = null },
+        )
+    }
+
     selected?.let { entry ->
         BookSheet(
             app = app,
@@ -200,6 +239,9 @@ fun CatalogScreen(
             onFollow = { title, href ->
                 selected = null
                 catalog.open(title, href)
+            },
+            onAdvise = { question, web ->
+                advice = Advice(Advisor.Scope.Book(entry), question, web || prefs.adviseWeb && question == null)
             },
             onOpenBook = { book ->
                 selected = null
@@ -253,14 +295,26 @@ private fun FeedList(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         }
         item(key = "tail") {
-            if (page.authorsUrl != null && entries.size == page.authorCount && page.error == null) {
+            if (page.search != null && entries.size == page.authorCount) {
                 SectionLabel("Книги")
-                Text(
-                    "Книг с таким названием не нашлось",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 6.dp),
-                )
+                if (page.booksPending) {
+                    Text(
+                        "Ищу книги по названию… у Флибусты это небыстро",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 6.dp),
+                    )
+                    LinearProgressIndicator(Modifier.fillMaxWidth().padding(bottom = 8.dp))
+                } else if (page.error == null) {
+                    Text(
+                        "Книг с таким названием не нашлось",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 6.dp),
+                    )
+                }
+            } else if (page.booksPending) {
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 10.dp))
             }
             when {
                 page.error != null -> Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
@@ -435,6 +489,8 @@ private fun BookSheet(
     download: CatalogState.Download,
     inLibrary: Book?,
     onFollow: (title: String, href: String) -> Unit,
+    /** К советнику: с готовым вопросом или без; [web] - смотреть ли в интернет. */
+    onAdvise: (question: String?, web: Boolean) -> Unit,
     onOpenBook: (Book) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -475,6 +531,13 @@ private fun BookSheet(
 
             Spacer(Modifier.height(14.dp))
             Actions(entry, download, inLibrary, catalog, onOpenBook)
+
+            // Советник про эту книгу: о чём она и что о ней говорят (второе - с интернетом).
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { onAdvise("О чём эта книга, без спойлеров?", false) }) { Text("О чём книга?") }
+                TextButton(onClick = { onAdvise("Что о ней говорят читатели и критики?", true) }) { Text("Что о ней говорят?") }
+                TextButton(onClick = { onAdvise(null, false) }) { Text("Спросить советника") }
+            }
 
             if (entry.summary.isNotBlank()) {
                 Spacer(Modifier.height(14.dp))

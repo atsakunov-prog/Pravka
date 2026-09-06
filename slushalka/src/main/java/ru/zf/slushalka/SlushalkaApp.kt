@@ -9,6 +9,7 @@ import ru.zf.slushalka.ask.AskEngine
 import ru.zf.slushalka.ask.ChunkRecognizer
 import ru.zf.slushalka.ask.ClaudeClient
 import ru.zf.slushalka.ask.Speaker
+import ru.zf.slushalka.catalog.Advisor
 import ru.zf.slushalka.catalog.CatalogState
 import ru.zf.slushalka.data.AskLog
 import ru.zf.slushalka.data.Bookmarks
@@ -44,6 +45,7 @@ class SlushalkaApp : Application() {
     lateinit var state: AppState; private set
     lateinit var catalog: CatalogState; private set
     lateinit var readAloud: ReadAloud; private set
+    lateinit var advisor: Advisor; private set
 
     override fun onCreate() {
         super.onCreate()
@@ -58,7 +60,9 @@ class SlushalkaApp : Application() {
         updater = Updater(this, settings)
         speaker = Speaker(this)
         recognizer = ChunkRecognizer(this)
-        ask = AskEngine(settings, ClaudeClient(settings), askLog)
+        val claude = ClaudeClient(settings)
+        ask = AskEngine(settings, claude, askLog)
+        advisor = Advisor(this, claude)
         player = PlayerHolder(this, settings, positions) { bookId ->
             scope.launch { state.syncPush(bookId) }
         }

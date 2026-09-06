@@ -23,6 +23,9 @@ class ClaudeClient(private val settings: Settings) {
 
     data class Reply(val text: String, val costUsd: Double)
 
+    /** Реплика разговора: роль «user» или «assistant» и её текст. */
+    data class Turn(val role: String, val text: String)
+
     class ApiException(message: String) : Exception(message)
 
     private val client = OkHttpClient.Builder()
@@ -47,6 +50,31 @@ class ClaudeClient(private val settings: Settings) {
         /** output_config.effort; пусто — не передавать, решает API. */
         effort: String = "",
         onDelta: (String) -> Unit = {},
+    ): Result<Reply> = chat(
+        model = model,
+        system = system,
+        turns = listOf(Turn("user", question)),
+        maxTokens = maxTokens,
+        effort = effort,
+        onDelta = onDelta,
+    )
+
+    /**
+     * Разговор из нескольких реплик, при желании - с поиском в интернете.
+     *
+     * [webSearch] подключает серверный инструмент `web_search`: модель сама
+     * ищет и читает, а сюда приходит только текст. Поиск платный - десять
+     * долларов за тысячу запросов, - поэтому число обращений ограничено, а
+     * каждое учитывается в цене ответа.
+     */
+    suspend fun chat(
+        model: String,
+        system: List<Block>,
+        turns: List<Turn>,
+        maxTokens: Int = 1400,
+        effort: String = "",
+        webSearch: Boolean = false,
+        onDelta: (String) -> Unit = {},
     ): Result<Reply> = withContext(Dispatchers.IO) {
         runCatching {
             val key = settings.now().apiKey
@@ -54,6 +82,14 @@ class ClaudeClient(private val settings: Settings) {
 
             val body = JSONObject().apply {
                 put("model", model)
+                if (webSearch) {
+                    put("tools", JSONArray().put(
+                        JSONObject()
+                            .put("type", "web_search_20260209")
+                            .put("name", "web_search")
+                            .put("max_uses", MAX_WEB_SEARCHES)
+                    ))
+                }
                 // Размышления считаются в тот же max_tokens: на глубоком
                 // усилии без запаса ответ обрывался бы на мыслях, не начавшись.
                 put("max_tokens", maxTokens + if (effort in DEEP_EFFORTS) 8000 else 0)
@@ -79,9 +115,11 @@ class ClaudeClient(private val settings: Settings) {
                         })
                     }
                 })
-                put("messages", JSONArray().put(
-                    JSONObject().put("role", "user").put("content", question)
-                ))
+                put("messages", JSONArray().apply {
+                    turns.filter { it.text.isNotBlank() }.forEach { t ->
+                        put(JSONObject().put("role", t.role).put("content", t.text))
+                    }
+                })
             }
 
             val request = Request.Builder()
@@ -107,6 +145,8 @@ class ClaudeClient(private val settings: Settings) {
         var cacheWrite = 0
         var cacheRead = 0
         var outputTokens = 0
+        var webSearches = 0
+        var refused = false
 
         call.execute().use { resp ->
             val source = resp.body?.source() ?: throw ApiException("Пустой ответ сервера")
@@ -136,8 +176,14 @@ class ClaudeClient(private val settings: Settings) {
                         cacheRead = usage?.optInt("cache_read_input_tokens") ?: 0
                     }
                     "message_delta" -> {
-                        outputTokens = obj.optJSONObject("usage")?.optInt("output_tokens")
-                            ?: outputTokens
+                        val usage = obj.optJSONObject("usage")
+                        outputTokens = usage?.optInt("output_tokens") ?: outputTokens
+                        usage?.optJSONObject("server_tool_use")?.let { st ->
+                            webSearches = st.optInt("web_search_requests", webSearches)
+                        }
+                        // Фильтр безопасности отвечает не ошибкой, а обычным 200 со
+                        // stop_reason «refusal»; проверять надо его, а не текст.
+                        if (obj.optJSONObject("delta")?.optString("stop_reason") == "refusal") refused = true
                     }
                     "error" -> throw ApiException(
                         obj.optJSONObject("error")?.optString("message") ?: "Ошибка модели"
@@ -145,10 +191,12 @@ class ClaudeClient(private val settings: Settings) {
                 }
             }
         }
+        if (refused) throw ApiException("Модель отказалась отвечать на этот запрос")
         if (sb.isBlank()) throw IOException("Модель не ответила")
         return Reply(
             text = sb.toString().trim(),
-            costUsd = costUsd(model, inputTokens, outputTokens, cacheWrite, cacheRead),
+            costUsd = costUsd(model, inputTokens, outputTokens, cacheWrite, cacheRead) +
+                webSearches * WEB_SEARCH_USD,
         )
     }
 
@@ -167,6 +215,11 @@ class ClaudeClient(private val settings: Settings) {
     companion object {
         /** Усилия, на которых мысли занимают заметную часть бюджета ответа. */
         private val DEEP_EFFORTS = setOf("xhigh", "max")
+
+        /** Поисков в интернете на один ответ: трёх хватает узнать, что говорят о книге. */
+        private const val MAX_WEB_SEARCHES = 3
+        /** Десять долларов за тысячу поисков. */
+        private const val WEB_SEARCH_USD = 0.01
 
         private class Price(val input: Double, val output: Double, cacheRead: Double? = null) {
             val cacheRead: Double = cacheRead ?: (input * 0.1)
