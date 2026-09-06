@@ -13,7 +13,8 @@ interface ProofreadProvider {
     // conversationContext: the owner's previous takes in the same chat -
     //   separate from contextBefore because its INSTRUCTION differs (tone,
     //   gender, referents - not seam punctuation).
-    // modelOverride: redo chips run on a stronger model.
+    // strong: redo chips run on the owner's «сильнее» model (settings → Модели)
+    //   instead of the everyday one.
     suspend fun proofread(
         input: String,
         mode: ProofreadMode,
@@ -21,7 +22,7 @@ interface ProofreadProvider {
         onDelta: ((String) -> Unit)? = null,
         directive: String = "",
         contextBefore: String = "",
-        modelOverride: String? = null,
+        strong: Boolean = false,
         conversationContext: String = "",
     ): Result<ProofreadResult>
 }

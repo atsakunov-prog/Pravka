@@ -15,8 +15,8 @@ import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.ProofreadProvider
 import ru.zf.pravka.core.ProofreadResult
 import ru.zf.pravka.core.Prompts
+import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.PromptStore
-import ru.zf.pravka.data.Settings
 
 import ru.zf.pravka.provider.ClaudeProvider.ApiException
 import ru.zf.pravka.provider.ClaudeProvider.ApiReply
@@ -41,8 +41,9 @@ import ru.zf.pravka.provider.ClaudeProvider.BatchAnswer
 // Еда: сказанное (и снятое) -> КБЖУ. Расширения ClaudeProvider: транспорт там, разбор здесь.
 
 /**
- * Разбирает один приём пищи. Сонета здесь достаточно: трудное - узнать
- * блюдо и прикинуть порцию, а не рассудить; таблицы КБЖУ модель знает.
+ * Разбирает один приём пищи. Модель — дорога «Тело и еда» (заводская Опус,
+ * меняется в настройках): трудное - узнать блюдо и прикинуть порцию, а не
+ * рассудить; таблицы КБЖУ модель знает.
  *
  * [image] - снимок тарелки: тогда к промпту добавляется указание мерить
  * порции по посуде в кадре и читать этикетку, если она попала в кадр.
@@ -95,9 +96,11 @@ suspend fun ClaudeProvider.parseFood(
             Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
         }
         val started = System.currentTimeMillis()
+        val choice = settings.modelChoice(ModelRoute.BODY)
         val reply = requestWithOneRetry(
-            apiKey, Settings.MODEL_OPUS, parts, "", null,
+            apiKey, choice.model, parts, "", null,
             images = listOfNotNull(image),
+            effortOverride = choice.effort,
         )
         val parsed = parseFoodReply(reply.text)
         FoodParse(
@@ -105,10 +108,10 @@ suspend fun ClaudeProvider.parseFood(
             timeOfDay = parsed.timeOfDay,
             items = parsed.items,
             note = parsed.note,
-            costUsd = costUsd(Settings.MODEL_OPUS, reply),
+            costUsd = costUsd(choice.model, reply),
             tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
             tokensOut = reply.outputTokens,
-            model = Settings.MODEL_OPUS,
+            model = choice.model,
             latencyMs = System.currentTimeMillis() - started,
         )
     }

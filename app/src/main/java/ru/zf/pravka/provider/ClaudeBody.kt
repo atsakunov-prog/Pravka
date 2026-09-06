@@ -15,8 +15,8 @@ import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.ProofreadProvider
 import ru.zf.pravka.core.ProofreadResult
 import ru.zf.pravka.core.Prompts
+import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.PromptStore
-import ru.zf.pravka.data.Settings
 
 import ru.zf.pravka.provider.ClaudeProvider.ApiException
 import ru.zf.pravka.provider.ClaudeProvider.ApiReply
@@ -108,12 +108,16 @@ suspend fun ClaudeProvider.parseBody(
             cacheStableAlways = true,
         )
         val started = System.currentTimeMillis()
-        val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
-        parseBodyReply(reply).copy(latencyMs = System.currentTimeMillis() - started)
+        val choice = settings.modelChoice(ModelRoute.BODY)
+        val reply = requestWithOneRetry(
+            apiKey, choice.model, parts, "", null,
+            effortOverride = choice.effort,
+        )
+        parseBodyReply(reply, choice.model).copy(latencyMs = System.currentTimeMillis() - started)
     }
 }
 
-private fun ClaudeProvider.parseBodyReply(reply: ApiReply): BodyParse {
+private fun ClaudeProvider.parseBodyReply(reply: ApiReply, model: String): BodyParse {
     val o = jsonObjectOf(
         reply.text,
         "Модель ответила не JSON. Сказанное сохранено — можно разобрать заново.",
@@ -197,7 +201,7 @@ private fun ClaudeProvider.parseBodyReply(reply: ApiReply): BodyParse {
             costUsd = 0.0,
             tokensIn = 0,
             tokensOut = 0,
-            model = Settings.MODEL_OPUS,
+            model = model,
             latencyMs = 0L,
         )
     }
@@ -218,10 +222,10 @@ private fun ClaudeProvider.parseBodyReply(reply: ApiReply): BodyParse {
         feel = feel?.takeIf { it.feel > 0 || it.knee.isNotBlank() },
         question = o.optString("question").trim(),
         note = o.optString("note").trim(),
-        costUsd = costUsd(Settings.MODEL_OPUS, reply),
+        costUsd = costUsd(model, reply),
         tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
         tokensOut = reply.outputTokens,
-        model = Settings.MODEL_OPUS,
+        model = model,
         latencyMs = 0L,
     )
 }
@@ -245,7 +249,11 @@ suspend fun ClaudeProvider.extractRules(pageText: String): Result<RulesParse> = 
             template.trimEnd() + "\n\nСтраница блока:\n" + body
         }
         val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
-        val reply = requestWithOneRetry(apiKey, Settings.MODEL_SONNET, parts, "", null)
+        val choice = settings.modelChoice(ModelRoute.BODY_LIGHT)
+        val reply = requestWithOneRetry(
+            apiKey, choice.model, parts, "", null,
+            effortOverride = choice.effort,
+        )
         val o = jsonObjectOf(reply.text, "Правила блока не разобрались — модель ответила не JSON.")
         val week = mutableListOf<Pair<String, String>>()
         o.optJSONArray("week")?.let { a ->
@@ -277,7 +285,7 @@ suspend fun ClaudeProvider.extractRules(pageText: String): Result<RulesParse> = 
             kneeRed = o.optString("kneeRed").trim().take(300),
             week = week,
             extra = extra.take(8),
-            costUsd = costUsd(Settings.MODEL_SONNET, reply),
+            costUsd = costUsd(choice.model, reply),
             tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
             tokensOut = reply.outputTokens,
         )
@@ -285,7 +293,8 @@ suspend fun ClaudeProvider.extractRules(pageText: String): Result<RulesParse> = 
 }
 
 /**
- * Отвечает на вопрос о тренировках. Опус: считать тут нечего - все цифры
+ * Отвечает на вопрос о тренировках. Заводская модель — Опус (дорога «Тело и
+ * еда», меняется в настройках): считать тут нечего - все цифры
  * уже в [contextBlock], - а вот сказать «сегодня не грузись, и вот почему»
  * это суждение, и оно стоит своих денег.
  *
@@ -314,20 +323,25 @@ suspend fun ClaudeProvider.coach(
         }
         val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
         val started = System.currentTimeMillis()
-        val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", onDelta)
+        val choice = settings.modelChoice(ModelRoute.BODY)
+        val reply = requestWithOneRetry(
+            apiKey, choice.model, parts, "", onDelta,
+            effortOverride = choice.effort,
+        )
         CoachAnswer(
             text = reply.text.trim(),
-            costUsd = costUsd(Settings.MODEL_OPUS, reply),
+            costUsd = costUsd(choice.model, reply),
             tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
             tokensOut = reply.outputTokens,
-            model = Settings.MODEL_OPUS,
+            model = choice.model,
             latencyMs = System.currentTimeMillis() - started,
         )
     }
 }
 
 /**
- * Тренер-консультант: короткий вопрос про упражнение. Сонет, а не Опус:
+ * Тренер-консультант: короткий вопрос про упражнение. Заводская — Сонет
+ * (дорога «Подсказки»), а не Опус:
  * техника отвечается карточкой движения и правилами недели, полная
  * телеметрия тут лишняя — и по деньгам, и по скорости между подходами.
  */
@@ -354,13 +368,17 @@ suspend fun ClaudeProvider.trainer(
         }
         val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
         val started = System.currentTimeMillis()
-        val reply = requestWithOneRetry(apiKey, Settings.MODEL_SONNET, parts, "", onDelta)
+        val choice = settings.modelChoice(ModelRoute.BODY_LIGHT)
+        val reply = requestWithOneRetry(
+            apiKey, choice.model, parts, "", onDelta,
+            effortOverride = choice.effort,
+        )
         CoachAnswer(
             text = reply.text.trim(),
-            costUsd = costUsd(Settings.MODEL_SONNET, reply),
+            costUsd = costUsd(choice.model, reply),
             tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
             tokensOut = reply.outputTokens,
-            model = Settings.MODEL_SONNET,
+            model = choice.model,
             latencyMs = System.currentTimeMillis() - started,
         )
     }

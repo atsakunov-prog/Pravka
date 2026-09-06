@@ -39,7 +39,7 @@ object EvalRunner {
                     val prepared = applier.prepare(item.input)
                     val res = app.claudeProvider.proofread(
                         prepared.text, ProofreadMode.CLEAN, prepared.dictBlock,
-                        onDelta = null, directive = "", contextBefore = "", modelOverride = null,
+                        onDelta = null, directive = "", contextBefore = "",
                     ).getOrNull()
                     done++
                     if (res == null) {

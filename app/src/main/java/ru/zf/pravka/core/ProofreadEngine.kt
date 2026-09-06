@@ -49,7 +49,7 @@ class ProofreadEngine(
         mode: ProofreadMode,
         onDelta: ((String) -> Unit)? = null,
         directive: String = "",
-        modelOverride: String? = null,
+        strong: Boolean = false,
         // Recent takes from the same conversation (owner's request): read-only
         // context so a reply keeps the thread's tone and referents.
         conversationContext: String = "",
@@ -62,8 +62,8 @@ class ProofreadEngine(
 
         val prepared = dictionary.prepare(input)
 
-        // One provider, one model: Sonnet (the owner's choice - Haiku simplified
-        // too much and the Nano experiment was a dead end).
+        // One provider; the model is the owner's setting (Sonnet by default -
+        // Haiku simplified too much and the Nano experiment was a dead end).
         val rawResult = claude.proofread(
             prepared.text, mode, prepared.dictBlock, onDelta,
             directive = directive,
@@ -72,7 +72,7 @@ class ProofreadEngine(
             // "tone/gender/referents" one. Merging them (the old way) put the
             // conversation under the seam instruction and neutered it.
             contextBefore = target.contextBefore(),
-            modelOverride = modelOverride,
+            strong = strong,
             conversationContext = conversationContext,
         ).getOrElse { error ->
             val message = error.message ?: "Неизвестная ошибка"

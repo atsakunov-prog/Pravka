@@ -15,8 +15,8 @@ import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.ProofreadProvider
 import ru.zf.pravka.core.ProofreadResult
 import ru.zf.pravka.core.Prompts
+import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.PromptStore
-import ru.zf.pravka.data.Settings
 
 import ru.zf.pravka.provider.ClaudeProvider.ApiException
 import ru.zf.pravka.provider.ClaudeProvider.ApiReply
@@ -38,7 +38,8 @@ import ru.zf.pravka.provider.ClaudeProvider.RulesParse
 import ru.zf.pravka.provider.ClaudeProvider.CoachAnswer
 import ru.zf.pravka.provider.ClaudeProvider.BatchAnswer
 
-// Засечка: одна надиктованная фраза -> структурная запись ленты (Опус, правила под часовым кэшем),
+// Засечка: одна надиктованная фраза -> структурная запись ленты (заводская модель — Опус,
+// меняется в настройках → «Модели»; правила под часовым кэшем),
 // плюс самообучение: поправки владельца -> правила промпта батчем.
 //
 // Расширения ClaudeProvider: транспорт (запрос, стрим, кэш, деньги) живёт в нём,
@@ -273,9 +274,13 @@ $raw
             dictPart = varTail,
             afterInput = "",
         )
-        val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+        val choice = settings.modelChoice(ModelRoute.ZASECHKA)
+        val reply = requestWithOneRetry(
+            apiKey, choice.model, parts, "", null,
+            effortOverride = choice.effort,
+        )
         parseZasechka(reply.text).copy(
-            costUsd = costUsd(Settings.MODEL_OPUS, reply),
+            costUsd = costUsd(choice.model, reply),
             tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
             tokensOut = reply.outputTokens,
         )
@@ -390,7 +395,11 @@ suspend fun ClaudeProvider.zasechkaRules(
         val prompt = zasechkaRulesSystem(categories, existingRules) + "\n\n" +
             zasechkaRulesUser(spoken, corrections)
         val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
-        val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+        val choice = settings.modelChoice(ModelRoute.ZASECHKA_RULES)
+        val reply = requestWithOneRetry(
+            apiKey, choice.model, parts, "", null,
+            effortOverride = choice.effort,
+        )
         parseRulesJson(reply.text)
     }
 }
@@ -405,16 +414,22 @@ suspend fun ClaudeProvider.zasechkaRulesSubmit(
     corrections: List<String>,
     categories: List<String>,
     existingRules: List<String>,
-): Result<String> = submitBatch(
-    system = zasechkaRulesSystem(categories, existingRules),
-    user = zasechkaRulesUser(spoken, corrections),
-    model = Settings.MODEL_OPUS,
-    maxTokens = 2000,
-)
+): Result<String> {
+    val choice = settings.modelChoice(ModelRoute.ZASECHKA_RULES)
+    return submitBatch(
+        system = zasechkaRulesSystem(categories, existingRules),
+        user = zasechkaRulesUser(spoken, corrections),
+        model = choice.model,
+        maxTokens = 2000,
+        effort = choice.effort,
+    )
+}
 
 /** Ответ ночного батча; null — ещё считается, спросим на следующем тике. */
 suspend fun ClaudeProvider.zasechkaRulesCollect(batchId: String): Result<Pair<List<String>, BatchAnswer>?> =
-    batchAnswer(batchId, Settings.MODEL_OPUS).map { answer ->
+    // Модель здесь нужна только для цены. Заявка ушла ночью, а к утру
+    // владелец мог переставить настройку — тогда цена посчитается по новой.
+    batchAnswer(batchId, settings.modelChoice(ModelRoute.ZASECHKA_RULES).model).map { answer ->
         if (answer == null) null else parseRulesJson(answer.text) to answer
     }
 

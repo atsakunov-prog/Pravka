@@ -15,6 +15,7 @@ import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.ProofreadProvider
 import ru.zf.pravka.core.ProofreadResult
 import ru.zf.pravka.core.Prompts
+import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
 
@@ -81,7 +82,7 @@ class ClaudeProvider(
         onDelta: ((String) -> Unit)?,
         directive: String,
         contextBefore: String,
-        modelOverride: String?,
+        strong: Boolean,
         conversationContext: String,
     ): Result<ProofreadResult> =
         withContext(Dispatchers.IO) {
@@ -90,8 +91,12 @@ class ClaudeProvider(
                 if (apiKey.isBlank()) {
                     throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
                 }
-                // Sonnet by default; redo chips pass Opus for extra quality.
-                val model = modelOverride ?: Settings.MODEL_SONNET
+                // Две дороги владельца (настройки → «Модели»): повседневная
+                // чистка и «сильнее» для чипов переделки. Заводские — Сонет и
+                // Опус, но обе меняются на телефоне без новой сборки.
+                val everyday = settings.modelChoice(ModelRoute.PRAVKA)
+                val choice = if (strong) settings.modelChoice(ModelRoute.PRAVKA_STRONG) else everyday
+                val model = choice.model
                 // ONE master template (CLEAN) for every mode; BUSINESS/SOFTEN
                 // are style directives riding in the uncached slot, so all
                 // modes share the same cached prefix.
@@ -116,9 +121,17 @@ class ClaudeProvider(
                     .filter { it.isNotBlank() }
                     .joinToString("\n\n")
                 val parts = Prompts.assemble(template, dictAndRules, fullDirective, contextBefore, conversationContext)
+                    // Кэш стабильного префикса — на повседневной модели: там он
+                    // читается с каждой диктовки. Переделка на другой модели —
+                    // другое пространство кэша, и запись за 2x ушла бы впустую;
+                    // на той же модели это тот же кэш, пусть читает.
+                    .copy(cacheStableAlways = model == everyday.model)
 
                 val started = System.currentTimeMillis()
-                val reply = requestWithOneRetry(apiKey, model, parts, input, onDelta)
+                val reply = requestWithOneRetry(
+                    apiKey, model, parts, input, onDelta,
+                    effortOverride = choice.effort,
+                )
                 ProofreadResult(
                     text = reply.text,
                     providerId = id,
@@ -151,11 +164,15 @@ class ClaudeProvider(
                 if (apiKey.isBlank()) {
                     throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
                 }
-                val model = Settings.MODEL_SONNET
+                val choice = settings.modelChoice(ModelRoute.PRAVKA)
+                val model = choice.model
                 val prompt = instruction.trim() + "\n\n<текст>\n" + content + "\n</текст>"
                 val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
                 val started = System.currentTimeMillis()
-                val reply = requestWithOneRetry(apiKey, model, parts, "", onDelta)
+                val reply = requestWithOneRetry(
+                    apiKey, model, parts, "", onDelta,
+                    effortOverride = choice.effort,
+                )
                 ProofreadResult(
                     text = reply.text,
                     providerId = id,
@@ -259,9 +276,13 @@ class ClaudeProvider(
 $existingBlock$casesBlock
 """.trimIndent()
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
-            val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+            val choice = settings.modelChoice(ModelRoute.PRAVKA_LEARN)
+            val reply = requestWithOneRetry(
+                apiKey, choice.model, parts, "", null,
+                effortOverride = choice.effort,
+            )
             parseLearn(reply.text).copy(
-                costUsd = costUsd(Settings.MODEL_OPUS, reply),
+                costUsd = costUsd(choice.model, reply),
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
             )
@@ -321,12 +342,16 @@ $existingBlock$casesBlock
 $listing
 """.trimIndent()
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
-            val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+            val choice = settings.modelChoice(ModelRoute.PRAVKA_LEARN)
+            val reply = requestWithOneRetry(
+                apiKey, choice.model, parts, "", null,
+                effortOverride = choice.effort,
+            )
             val parsed = parseLearn(reply.text)
-            require(parsed.rules.isNotEmpty()) { "Опус не вернул правил — набор не тронут." }
+            require(parsed.rules.isNotEmpty()) { "Модель не вернула правил — набор не тронут." }
             OptimizedRules(
                 rules = parsed.rules,
-                costUsd = costUsd(Settings.MODEL_OPUS, reply),
+                costUsd = costUsd(choice.model, reply),
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
             )
@@ -613,11 +638,13 @@ $listing
         // фото обрывается на середине JSON.
         val estimatedInputTokens =
             (parts.dictPart.length + input.length) / 2 + 1 + images.size * 1600
-        // Opus (redo chips) thinks adaptively by default, and thinking tokens
-        // count toward max_tokens: without headroom a 350-char redo burned the
-        // whole budget on thinking and died with stop_reason=max_tokens before
-        // emitting a single word (owner saw an endless spinner, 2026-08-18).
-        val thinkingHeadroom = if (model == Settings.MODEL_SONNET) 0 else 8000
+        // Модели с адаптивными размышлениями считают мысли в тот же
+        // max_tokens: без запаса переделка в 350 знаков сжигала бюджет на
+        // мыслях и умирала с stop_reason=max_tokens, не выдав ни слова
+        // (владелец видел бесконечный спиннер, 18.08.2026). Кому мысли
+        // выключены — решает RequestPolicy, а не имя модели в этом файле.
+        val thinkingOff = RequestPolicy.thinkingOff(model, effortOverride)
+        val thinkingHeadroom = RequestPolicy.thinkingHeadroom(model, effortOverride)
         // Оценка по длине входа врёт там, где длинный вход просит короткий
         // ответ и наоборот (разбор «Итогов»): такой вызов задаёт бюджет сам.
         val maxTokens = if (maxTokensOverride > 0) maxTokensOverride
@@ -633,11 +660,12 @@ $listing
             // a second, and the 90s readTimeout becomes a per-chunk timeout
             // instead of a hard ceiling on total generation time.
             put("stream", true)
-            // Proofreading is mechanical; thinking would only add latency and
-            // cost, so it is disabled on Sonnet. On Opus (redo chips) the
-            // parameter is omitted: adaptive thinking is its default, and an
-            // explicit "disabled" there has documented failure modes.
-            if (model == Settings.MODEL_SONNET) {
+            // Правка — механика: на Сонете размышления выключены, они только
+            // добавляют секунды и деньги. Вне Сонета параметр опускается:
+            // адаптивные мысли — поведение по умолчанию, явное «disabled» на
+            // Опусе имеет документированные сбои, а на Fable — это 400.
+            // Усилие xhigh/max включает мысли и Сонету (см. RequestPolicy).
+            if (thinkingOff) {
                 put("thinking", JSONObject().put("type", "disabled"))
             }
             put(
@@ -675,12 +703,12 @@ $listing
                                     JSONObject().apply {
                                         put("type", "text")
                                         put("text", parts.stablePrefix)
-                                        // Cache only the everyday Sonnet path: a
-                                        // rare Opus redo would pay the 2x cache
-                                        // write and likely never read it back.
-                                        // cacheStableAlways — для Опус-путей,
-                                        // которые ходят часто (Засечка).
-                                        if (model == Settings.MODEL_SONNET || parts.cacheStableAlways) {
+                                        // Кэшировать или нет — решает вызывающий
+                                        // (cacheStableAlways): чистка ставит точку
+                                        // на повседневной модели, разборы режимов —
+                                        // всегда, редкая переделка на чужой модели —
+                                        // нет: запись за 2x никто бы не прочитал.
+                                        if (parts.cacheStableAlways) {
                                             put(
                                                 "cache_control",
                                                 JSONObject().put("type", "ephemeral").put("ttl", "1h"),

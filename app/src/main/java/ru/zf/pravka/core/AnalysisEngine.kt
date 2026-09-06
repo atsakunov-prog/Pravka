@@ -3,6 +3,7 @@ package ru.zf.pravka.core
 import java.util.Calendar
 import ru.zf.pravka.data.AnalysisStore
 import ru.zf.pravka.data.EventLog
+import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
@@ -44,8 +45,9 @@ class AnalysisEngine(
     companion object {
         // Ночью: и день закрыт, и лента уже нормализована после полуночи.
         private const val NIGHT_HOUR = 4
-        private const val MODEL = Settings.MODEL_OPUS
-        // Ответ — шесть строк, но думает Опус адаптивно, и мысли тоже
+        // Модель и усилие — настройка владельца (ModelRoute.PATTERNS;
+        // заводские Опус и high), читаются при каждой отправке.
+        // Ответ — шесть строк, но модель думает адаптивно, и мысли тоже
         // считаются в max_tokens. Это ПОТОЛОК, а не смета: платим только за
         // выданное, поэтому скупиться незачем — на тесном потолке модель
         // упиралась в него, не дойдя до строк, и владелец получал «ответ
@@ -111,11 +113,16 @@ class AnalysisEngine(
             return Result.failure(IllegalStateException("За этот период почти нет данных"))
         }
         val system = prompts.effective(PromptStore.PromptId.PATTERNS)
+        // Модель пишется в отчёт: ответ батча придёт через часы, и цена
+        // должна считаться по той модели, что отвечала, а не по нынешней.
+        val choice = settings.modelChoice(ModelRoute.PATTERNS)
         if (immediate) {
             val report = store.addPending(
-                mode, from, to, "", MODEL, built.hash, built.chars, source = "вручную",
+                mode, from, to, "", choice.model, built.hash, built.chars, source = "вручную",
             )
-            val answer = claude.analyzeNow(system, built.text, MODEL, MAX_TOKENS).getOrElse { e ->
+            val answer = claude.analyzeNow(
+                system, built.text, choice.model, MAX_TOKENS, choice.effort,
+            ).getOrElse { e ->
                 store.fail(report.id, e.message ?: "не вышло")
                 eventLog.add("итоги: разбор сейчас не вышел — ${e.message}")
                 return Result.failure(e)
@@ -132,11 +139,11 @@ class AnalysisEngine(
             )
             return Result.success("сразу")
         }
-        val outcome = claude.submitBatch(system, built.text, MODEL, MAX_TOKENS)
+        val outcome = claude.submitBatch(system, built.text, choice.model, MAX_TOKENS, choice.effort)
         return outcome.fold(
             onSuccess = { batchId ->
                 store.addPending(
-                    mode, from, to, batchId, MODEL, built.hash, built.chars,
+                    mode, from, to, batchId, choice.model, built.hash, built.chars,
                     source = if (immediate) "вручную" else "ночью",
                 )
                 eventLog.add(

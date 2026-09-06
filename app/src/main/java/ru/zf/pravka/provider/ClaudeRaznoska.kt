@@ -15,8 +15,8 @@ import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.ProofreadProvider
 import ru.zf.pravka.core.ProofreadResult
 import ru.zf.pravka.core.Prompts
+import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.PromptStore
-import ru.zf.pravka.data.Settings
 
 import ru.zf.pravka.provider.ClaudeProvider.ApiException
 import ru.zf.pravka.provider.ClaudeProvider.ApiReply
@@ -38,7 +38,8 @@ import ru.zf.pravka.provider.ClaudeProvider.RulesParse
 import ru.zf.pravka.provider.ClaudeProvider.CoachAnswer
 import ru.zf.pravka.provider.ClaudeProvider.BatchAnswer
 
-// Разноска: наговор -> дела в Todoist (Опус). Расширения ClaudeProvider: транспорт там, разбор здесь.
+// Разноска: наговор -> дела в Todoist (заводская модель — Опус, меняется в настройках → «Модели»).
+// Расширения ClaudeProvider: транспорт там, разбор здесь.
 
 /**
  * Разбирает один наговор на дела для Todoist. Работает на Опусе: трудное
@@ -81,15 +82,19 @@ suspend fun ClaudeProvider.splitTasks(
         }
         val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
         val started = System.currentTimeMillis()
-        val reply = requestWithOneRetry(apiKey, Settings.MODEL_OPUS, parts, "", null)
+        val choice = settings.modelChoice(ModelRoute.RAZNOSKA)
+        val reply = requestWithOneRetry(
+            apiKey, choice.model, parts, "", null,
+            effortOverride = choice.effort,
+        )
         val (tasks, notes) = parseTasks(reply.text, knownLabels, resolveProject)
         SplitResult(
             tasks = tasks,
             notes = notes,
-            costUsd = costUsd(Settings.MODEL_OPUS, reply),
+            costUsd = costUsd(choice.model, reply),
             tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
             tokensOut = reply.outputTokens,
-            model = Settings.MODEL_OPUS,
+            model = choice.model,
             latencyMs = System.currentTimeMillis() - started,
         )
     }

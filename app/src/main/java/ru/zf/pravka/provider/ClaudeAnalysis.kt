@@ -54,7 +54,8 @@ suspend fun ClaudeProvider.analyzeNow(
     user: String,
     model: String,
     maxTokens: Int,
-    effort: String = "high",
+    /** Усилие output_config.effort; пусто — не передавать, решает API. */
+    effort: String = "",
 ): Result<BatchAnswer> = withContext(Dispatchers.IO) {
     runCatchingApi {
         val apiKey = settings.apiKey()
@@ -91,7 +92,8 @@ suspend fun ClaudeProvider.submitBatch(
     user: String,
     model: String,
     maxTokens: Int,
-    effort: String = "high",
+    /** Усилие output_config.effort; пусто — не передавать, решает API. */
+    effort: String = "",
 ): Result<String> = withContext(Dispatchers.IO) {
     runCatchingApi {
         val apiKey = settings.apiKey()
@@ -99,7 +101,7 @@ suspend fun ClaudeProvider.submitBatch(
         val params = JSONObject().apply {
             put("model", model)
             put("max_tokens", maxTokens)
-            put("output_config", JSONObject().put("effort", effort))
+            if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
             put("system", JSONArray().put(JSONObject().apply {
                 put("type", "text")
                 put("text", system)

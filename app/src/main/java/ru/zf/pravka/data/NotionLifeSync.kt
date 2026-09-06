@@ -174,6 +174,8 @@ class NotionLifeSync(
         val dupes = HashMap<String, String>()
         /** Батч сверки в работе: его id, что отправили и когда. */
         var dupeBatch = ""
+        /** Модель ушедшей заявки — цена ответа считается по ней, даже если настройку переставили. */
+        var dupeModel = ""
         var dupeAt = 0L
         val dupeKeys = ArrayList<String>()
         val dupeIds = ArrayList<String>()
@@ -526,7 +528,7 @@ class NotionLifeSync(
 
         // 1. Ответ на прошлый вопрос, если он готов.
         if (state.dupeBatch.isNotBlank()) {
-            val answer = ask?.batchAnswer(state.dupeBatch, Settings.MODEL_FABLE)?.getOrNull()
+            val answer = ask?.batchAnswer(state.dupeBatch, state.dupeModel.ifBlank { Settings.MODEL_FABLE })?.getOrNull()
             if (answer != null) {
                 applyDupeAnswer(answer.text)
                 state.dupeBatch = ""
@@ -599,7 +601,9 @@ class NotionLifeSync(
                     "или -1, по одному числу на каждую новую формулировку, в том же порядке."
             )
         }
-        val id = ask.submitBatch(system, user, Settings.MODEL_FABLE, maxTokens = 2000, effort = "medium")
+        // Заводская — Fable 5.1 на среднем усилии; меняется в настройках → «Модели».
+        val choice = settings.modelChoice(ModelRoute.PATTERNS_DUPES)
+        val id = ask.submitBatch(system, user, choice.model, maxTokens = 2000, effort = choice.effort)
             .getOrElse { e ->
                 lastError = e.message ?: "сверка не отправилась"
                 eventLog.add("паттерны: сверка не отправилась — $lastError")
@@ -607,6 +611,7 @@ class NotionLifeSync(
                 return
             }
         state.dupeBatch = id
+        state.dupeModel = choice.model
         state.dupeKeys.clear()
         state.dupeKeys.addAll(doubtful.map { "pat:" + patternKey(it.text) })
         state.dupeIds.clear()
@@ -1059,6 +1064,7 @@ class NotionLifeSync(
             o.optJSONObject("legacy")?.let { l -> l.keys().forEach { k -> state.legacy[k] = l.optString(k) } }
             o.optJSONObject("dupes")?.let { d -> d.keys().forEach { k -> state.dupes[k] = d.optString(k) } }
             state.dupeBatch = o.optString("dupeBatch")
+            state.dupeModel = o.optString("dupeModel")
             state.dupeAt = o.optLong("dupeAt")
             o.optJSONArray("dupeKeys")?.let { a -> for (i in 0 until a.length()) state.dupeKeys.add(a.optString(i)) }
             o.optJSONArray("dupeIds")?.let { a -> for (i in 0 until a.length()) state.dupeIds.add(a.optString(i)) }
@@ -1081,6 +1087,7 @@ class NotionLifeSync(
             .put("legacy", JSONObject(state.legacy as Map<*, *>))
             .put("dupes", JSONObject(state.dupes as Map<*, *>))
             .put("dupeBatch", state.dupeBatch)
+            .put("dupeModel", state.dupeModel)
             .put("dupeAt", state.dupeAt)
             .put("dupeKeys", JSONArray(state.dupeKeys as List<*>))
             .put("dupeIds", JSONArray(state.dupeIds as List<*>))
@@ -1099,7 +1106,7 @@ class NotionLifeSync(
     fun resetMaps() {
         state.pages.clear(); state.hashes.clear(); state.mapped.clear(); state.dbs.clear(); state.dupes.clear()
         state.schemaOk.clear(); state.retired.clear(); state.legacy.clear()
-        state.dupeBatch = ""; state.dupeAt = 0L; state.dupeKeys.clear(); state.dupeIds.clear()
+        state.dupeBatch = ""; state.dupeModel = ""; state.dupeAt = 0L; state.dupeKeys.clear(); state.dupeIds.clear()
         state.lastScan = 0L
         queue.clear()
         blockedConfig = null

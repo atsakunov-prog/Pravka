@@ -1670,7 +1670,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             // stream back onto the ticker. Deltas arrive on an IO thread; both
             // the node write and the ticker are main-thread work, so hop.
             val target = AccessibilityTarget(this@PravkaAccessibilityService, pinnedNode)
-            // Opus thinks before it writes: no text deltas for several seconds.
+            // Сильная модель думает перед ответом: несколько секунд без текста.
             // Show a pulse so the wait doesn't read as a hang.
             if (strongModel) {
                 floatingButton?.showTicker()
@@ -1705,7 +1705,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 app.engine.proofread(
                     target, mode, onDelta,
                     directive = directive,
-                    modelOverride = if (strongModel) Settings.MODEL_OPUS else null,
+                    strong = strongModel,
                     conversationContext = conversationContext,
                 )
             }.getOrElse { e ->
@@ -1718,7 +1718,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             busy = false
             app.eventLog.add(
                 "proofread ${mode.name}${if (directive.isNotBlank()) "+redo" else ""}" +
-                    "${if (strongModel) "(opus)" else ""}: ${outcome.javaClass.simpleName}"
+                    "${if (strongModel) "(сильнее)" else ""}: ${outcome.javaClass.simpleName}"
             )
             Feedback.report(this@PravkaAccessibilityService, outcome)
             // Auto-capture for learning: remember what we delivered; if the

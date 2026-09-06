@@ -9,6 +9,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.core.DictMode
+import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.Settings
 
 // Mines the proofread history for RECURRING recognition errors worth a
@@ -56,10 +57,18 @@ PROTECT: from — правильное редкое слово, to — пуст�
 $samples
 """.trimIndent()
 
+                // Та же дорога, что у чистки диктовки: словарь — часть Правки.
+                val choice = settings.modelChoice(ModelRoute.PRAVKA)
                 val body = JSONObject().apply {
-                    put("model", Settings.MODEL_SONNET)
-                    put("max_tokens", 2048)
-                    put("thinking", JSONObject().put("type", "disabled"))
+                    put("model", choice.model)
+                    // Запас под мысли — тем моделям, которые думают (см. RequestPolicy).
+                    put("max_tokens", 2048 + RequestPolicy.thinkingHeadroom(choice.model, choice.effort))
+                    if (choice.effort.isNotBlank()) {
+                        put("output_config", JSONObject().put("effort", choice.effort))
+                    }
+                    if (RequestPolicy.thinkingOff(choice.model, choice.effort)) {
+                        put("thinking", JSONObject().put("type", "disabled"))
+                    }
                     put(
                         "messages",
                         JSONArray().put(
@@ -86,7 +95,7 @@ $samples
                     root.optJSONObject("usage")?.let { u ->
                         val tIn = u.optInt("input_tokens")
                         val tOut = u.optInt("output_tokens")
-                        stats.recordAux(Pricing.costUsd(Settings.MODEL_SONNET, tIn, tOut), tIn, tOut)
+                        stats.recordAux(Pricing.costUsd(choice.model, tIn, tOut), tIn, tOut)
                     }
                     val content = root.getJSONArray("content")
                     val sb = StringBuilder()

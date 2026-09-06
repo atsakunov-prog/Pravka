@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
@@ -15,11 +16,10 @@ private val Context.dataStore by preferencesDataStore(name = "settings")
 class Settings(private val context: Context) {
 
     companion object {
+        // Каталог моделей. Кто где работает — не здесь: заводские значения
+        // дорог лежат в ModelRoute, выбор владельца читается modelChoice().
         const val MODEL_SONNET = "claude-sonnet-5"
-        const val MODEL_OPUS = "claude-opus-5"   // redo chips + разбор Засечки
-        // Сверка формулировок паттернов: раз в сутки, батчем (половина цены).
-        // Ошибка склейки дороже её стоимости — паттерн с вердиктом владельца
-        // не должен слиться с чужим, поэтому здесь самая сильная модель.
+        const val MODEL_OPUS = "claude-opus-5"
         const val MODEL_FABLE = "claude-fable-5-1"
 
         // Dictation engines.
@@ -131,6 +131,42 @@ class Settings(private val context: Context) {
 
     suspend fun setApiKey(value: String) {
         context.dataStore.edit { it[KEY_API_KEY] = value.trim() }
+    }
+
+    // ---- Модели: какая и с каким усилием на каждой дороге в Claude ----
+    //
+    // Ключи — по имени дороги (`model_pravka`, `effort_zasechka`), значения
+    // — строки API. Заводское значение НЕ пишется в хранилище: пока владелец
+    // не трогал дорогу, ключа нет, и смена заводского в новой сборке
+    // подхватывается сама. Выбор проверяется при чтении (ModelChoice.of):
+    // снятая с API модель откатывается к заводской, а не ловит 404.
+
+    private fun modelKey(route: ModelRoute) = stringPreferencesKey("model_" + route.key)
+    private fun effortKey(route: ModelRoute) = stringPreferencesKey("effort_" + route.key)
+
+    fun modelChoiceFlow(route: ModelRoute): Flow<ModelChoice> = context.dataStore.data.map { prefs ->
+        ModelChoice.of(route, prefs[modelKey(route)], prefs[effortKey(route)])
+    }
+
+    /** Модель и усилие для дороги — читается перед каждым запросом. */
+    suspend fun modelChoice(route: ModelRoute): ModelChoice = modelChoiceFlow(route).first()
+
+    suspend fun setModel(route: ModelRoute, model: String) {
+        if (model !in Models.ALL) return
+        context.dataStore.edit { it[modelKey(route)] = model }
+    }
+
+    suspend fun setEffort(route: ModelRoute, effort: String) {
+        if (effort !in Models.EFFORTS) return
+        context.dataStore.edit { it[effortKey(route)] = effort }
+    }
+
+    /** Заводское: ключи снимаются, а не переписываются (см. выше, почему). */
+    suspend fun resetModelChoice(route: ModelRoute) {
+        context.dataStore.edit {
+            it.remove(modelKey(route))
+            it.remove(effortKey(route))
+        }
     }
 
     val speechEngineFlow = context.dataStore.data.map { it[KEY_SPEECH_ENGINE] ?: SPEECH_GOOGLE }

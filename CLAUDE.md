@@ -31,7 +31,11 @@
   (+ `WhisperNative.kt`), `data/Recordings.kt`, `data/WavFile.kt`,
   `data/LiveDraft.kt`, `trigger/DictationService.kt`, `core/VoiceCommands.kt`.
 - **Claude:** `provider/ClaudeProvider.kt` — только транспорт (HTTP, SSE-стрим,
-  кэш промпта, ретраи, деньги через `Pricing.kt`) плюс Правка (чистка, обучение).
+  кэш промпта, ретраи, деньги через `Pricing.kt`, форма запроса по модели и
+  усилию — `RequestPolicy.kt`) плюс Правка (чистка, обучение). Какая модель и
+  с каким усилием на какой дороге — `data/ModelRoutes.kt` (каталог дорог и
+  заводские) и `settings.modelChoice(ModelRoute.X)`; владелец меняет это в
+  настройках, группа «Модели» (`ModelsSettings.kt`).
   Разборы режимов — расширения того же класса рядом: `ClaudeZasechka.kt`,
   `ClaudeRaznoska.kt`, `ClaudeFood.kt`, `ClaudeBody.kt`, `ClaudeAnalysis.kt`.
   Контракты (`ClaudeProvider.XxxParse`) остаются вложенными в главный класс.
@@ -42,13 +46,15 @@
   `data/LearnStore.kt`, `data/EditWatchStore.kt`, `core/ProofreadEngine.kt`.
 - **Хранение и обвязка:** `data/StoreFiles.kt` (атомарная запись, `.prev`,
   `.corrupt`), `data/DiskWriter.kt`, `data/Backups.kt`, `data/Settings.kt`,
-  `data/EventLog.kt`, `data/Stats.kt`, `data/Updates.kt`, `ui/*`.
+  `data/ModelRoutes.kt`, `data/EventLog.kt`, `data/Stats.kt`, `data/Updates.kt`,
+  `ui/*`.
 - **Служба доступности:** `trigger/PravkaAccessibilityService.kt` — хозяин
   микрофона, оверлейных окон, стопки кнопок и тиков. Режимные куски — расширения
   рядом: `trigger/ServiceZasechka.kt`, `ServiceRaznoska.kt`, `ServiceBody.kt`,
   `ServiceAnalysis.kt`. Сами кнопки — `*ButtonController.kt`.
 - **Сборка приложения:** `PravkaApp.kt` (сервис-локатор: все сторы и движки),
-  `MainActivity.kt` (вкладки), `SettingsTab.kt` (группы настроек).
+  `MainActivity.kt` (вкладки), `SettingsTab.kt` (группы настроек),
+  `ModelsSettings.kt` (группа «Модели»).
 
 ## Сборка и проверка
 
@@ -90,8 +96,13 @@ CI (`.github/workflows/build-apk.yml`) собирает APK на каждый п
 6. **Ошибку не затирать общей фразой**, HTTP-причина доходит до владельца целой.
    Молчаливая механика читается как поломка: отложенная дорога наружу называет
    состояние словами и даёт кнопку подтолкнуть.
-7. **Разборы Засечки, Тела и Еды — Опус** со стабильным префиксом под часовым
-   кэшем; словарь `{DICT}` — в переменном хвосте. Правка текста и тренер — Сонет.
+7. **Модель и усилие — настройка владельца, не константа.** Каждый вызов
+   Claude читает `settings.modelChoice(ModelRoute.X)`; дороги и заводские —
+   `data/ModelRoutes.kt`. Заводские: разборы Засечки, Тела и Еды — Опус со
+   стабильным префиксом под часовым кэшем (словарь `{DICT}` — в переменном
+   хвосте), правка текста и подсказки тренера — Сонет, сверка паттернов —
+   Fable 5.1. `thinking: disabled` — только Сонету и только до high
+   (`RequestPolicy`): Опусу с xhigh/max и Fable явное «disabled» — это 400.
 8. **Подпись — только `keystore/pravka.jks`.** Прокси на VPS не делаем. Своей
    камеры не открываем (системный интент и сканер Play Services).
 9. **intervals.icu:** поля `fatTotal` и `icu_rpe`; `optString` у JSON null
