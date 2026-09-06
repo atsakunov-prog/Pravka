@@ -50,6 +50,7 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ru.zf.slushalka.SlushalkaApp
+import ru.zf.slushalka.ask.GuideChapter
 import ru.zf.slushalka.ask.GuideEntry
 import ru.zf.slushalka.ask.GuideState
 import ru.zf.slushalka.ask.Prompts
@@ -89,7 +90,9 @@ fun GuideSheet(
     var tab by remember { mutableIntStateOf(if (initialQuery.isBlank()) 0 else 1) }
     var showAll by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf<GuideEntry?>(null) }
-    var askFor by remember { mutableStateOf<GuideEntry?>(null) }
+    var openChapter by remember { mutableStateOf<GuideChapter?>(null) }
+    /** О чём спрашивают и какого оно вида: 0 герой, 1 место, 2 слово, 3 глава. */
+    var askFor by remember { mutableStateOf<Pair<GuideEntry, Int>?>(null) }
     // Придуманные моделью вопросы про статью - на время листа, чтобы второе
     // открытие той же статьи не стоило второго запроса.
     val suggestCache = remember { HashMap<String, List<String>>() }
@@ -269,7 +272,12 @@ fun GuideSheet(
                     LazyColumn(Modifier.weight(1f)) {
                         if (tab == 0) {
                             items(chapters) { ch ->
-                                Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { openChapter = ch }
+                                        .padding(vertical = 8.dp),
+                                ) {
                                     Text(
                                         "Глава ${ch.chapter}" + (if (ch.title.isNotBlank()) ". ${ch.title}" else ""),
                                         style = MaterialTheme.typography.bodyLarge,
@@ -387,7 +395,34 @@ fun GuideSheet(
             },
             confirmButton = { TextButton(onClick = { open = null }) { Text("Закрыть") } },
             dismissButton = {
-                TextButton(onClick = { askFor = e; open = null }) { Text("Спросить…") }
+                TextButton(onClick = { askFor = e to (st?.guide?.kindOf(e) ?: 0); open = null }) { Text("Спросить…") }
+            },
+        )
+    }
+
+    // Глава: содержание целиком и «Спросить…» - как у героя. Глава для вопроса
+    // притворяется статьёй: имя - номер и название, роль - содержание.
+    openChapter?.let { ch ->
+        AlertDialog(
+            onDismissRequest = { openChapter = null },
+            title = { Text("Глава ${ch.chapter}" + (if (ch.title.isNotBlank()) ". ${ch.title}" else "")) },
+            text = {
+                Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
+                    Text(ch.summary, style = MaterialTheme.typography.bodyMedium)
+                }
+            },
+            confirmButton = { TextButton(onClick = { openChapter = null }) { Text("Закрыть") } },
+            dismissButton = {
+                TextButton(onClick = {
+                    askFor = GuideEntry(
+                        name = "Глава ${ch.chapter}" + (if (ch.title.isNotBlank()) " («${ch.title}»)" else ""),
+                        aliases = emptyList(),
+                        chapter = ch.chapter,
+                        role = ch.summary,
+                        notes = emptyList(),
+                    ) to 3
+                    openChapter = null
+                }) { Text("Спросить…") }
             },
         )
     }
@@ -395,8 +430,7 @@ fun GuideSheet(
     // Что именно спросить про статью: свой вопрос сверху, ниже - три вопроса,
     // которые модель придумала по этой статье (урезанной до дочитанных глав);
     // пока думает или не вышло - готовые по виду статьи.
-    askFor?.let { e ->
-        val kind = st?.guide?.kindOf(e) ?: 0
+    askFor?.let { (e, kind) ->
         var own by remember(e) { mutableStateOf("") }
         val key = "${e.name}|$upTo"
         var suggested by remember(e, upTo) { mutableStateOf(suggestCache[key]) }

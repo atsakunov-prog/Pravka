@@ -199,7 +199,7 @@ class AskEngine(
      * на пару сотен токенов. Статья приходит уже урезанной до дочитанных глав.
      */
     suspend fun suggest(book: Book, entry: GuideEntry, kind: Int, readChapters: Int): Result<List<String>> {
-        val what = when (kind) { 0 -> "ГЕРОЙ"; 1 -> "МЕСТО"; else -> "СЛОВО" }
+        val what = when (kind) { 0 -> "ГЕРОЙ"; 1 -> "МЕСТО"; 2 -> "СЛОВО"; else -> "ГЛАВА (её краткое содержание ниже)" }
         val context = buildString {
             append("КНИГА: «").append(book.title).append("»")
             if (book.author.isNotBlank()) append(", ").append(book.author)
