@@ -132,7 +132,12 @@ fun ReaderScreen(
     var working by remember { mutableStateOf<String?>(null) }
     var pendingHighlight by remember { mutableStateOf<Int?>(null) }
     var pressed by remember { mutableStateOf<Int?>(null) }
+    // Что на экране: [offset] - верх (начало страницы или первого абзаца),
+    // [shownEnd] - конец видимого. [place] - точное место, с которого пришли
+    // из записи; пока оно на экране, местом чтения считается оно, а не верх.
     var offset by remember { mutableIntStateOf(0) }
+    var shownEnd by remember { mutableIntStateOf(0) }
+    var place by remember { mutableStateOf<Int?>(null) }
     var target by remember { mutableStateOf<Int?>(null) }
     var highlightRange by remember { mutableStateOf<IntRange?>(null) }
     val highlight = remember { androidx.compose.animation.core.Animatable(0f) }
@@ -189,6 +194,7 @@ fun ReaderScreen(
         val start = state.readingStart()
         offset = start.offset
         target = start.offset
+        place = start.offset
         if (!start.fromAudio) return@LaunchedEffect
 
         working = "Слушаю оригинал…"
@@ -197,6 +203,7 @@ fun ReaderScreen(
         when (result) {
             is AppState.Refine.Found -> {
                 target = result.charOffset
+                place = result.charOffset
                 pendingHighlight = result.charOffset
             }
             AppState.Refine.Trusted -> pendingHighlight = start.offset
@@ -227,12 +234,18 @@ fun ReaderScreen(
         pendingHighlight = null
     }
 
-    LaunchedEffect(offset) {
-        // Место чтения пишется на диск, когда листание успокоилось.
+    // Место чтения. Пока страница, на которую пришли из записи, не перелистнута,
+    // это само место записи, а не верх страницы: иначе «заглянул и закрыл»
+    // откатывало бы звук к началу страницы. Перелистнули - верх экрана.
+    fun readPlace(): Int = place?.takeIf { it >= offset && it < shownEnd } ?: offset
+
+    LaunchedEffect(offset, shownEnd, place) {
+        // Место чтения пишется на диск, когда листание успокоилось, - и запись
+        // подтягивается к нему тем же движением.
         kotlinx.coroutines.delay(700)
-        state.saveReadChar(offset)
+        state.saveReadChar(readPlace())
     }
-    DisposableEffect(Unit) { onDispose { state.saveReadChar(offset) } }
+    DisposableEffect(Unit) { onDispose { state.saveReadChar(readPlace()) } }
 
     LaunchedEffect(notice) {
         if (notice != null) {
@@ -249,7 +262,8 @@ fun ReaderScreen(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
                 target = target, onTargetUsed = { target = null },
-                onOffset = { offset = it }, onToggleBars = { bars = !bars },
+                onShown = { start, end -> offset = start; shownEnd = end },
+                onToggleBars = { bars = !bars },
                 onPicture = onTapPicture, onLongPress = onLong,
                 highlight = highlightRange, highlightAlpha = highlight.value,
             )
@@ -258,7 +272,8 @@ fun ReaderScreen(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
                 target = target, onTargetUsed = { target = null },
-                onOffset = { offset = it }, onToggleBars = { bars = !bars },
+                onShown = { start, end -> offset = start; shownEnd = end },
+                onToggleBars = { bars = !bars },
                 onPicture = onTapPicture, onLongPress = onLong,
                 highlight = highlightRange, highlightAlpha = highlight.value,
             )
@@ -337,11 +352,11 @@ fun ReaderScreen(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     TextButton(onClick = {
-                        state.listenFrom(offset)
+                        state.listenFrom(readPlace())
                         onListen()
                     }) { Text("Слушать отсюда", color = palette.fg) }
                     TextButton(onClick = { showRecap = true }) { Text("Содержание", color = palette.fg) }
-                    TextButton(onClick = { onAsk(offset, null) }) { Text("Спросить", color = palette.fg) }
+                    TextButton(onClick = { onAsk(readPlace(), null) }) { Text("Спросить", color = palette.fg) }
                 }
             }
         }
@@ -442,7 +457,8 @@ private fun ScrollBody(
     isHeading: (Block) -> Boolean,
     target: Int?,
     onTargetUsed: () -> Unit,
-    onOffset: (Int) -> Unit,
+    /** Что на экране: от начала первого видимого абзаца до конца последнего. */
+    onShown: (start: Int, end: Int) -> Unit,
     onToggleBars: () -> Unit,
     onPicture: (ShownPicture) -> Unit,
     onLongPress: (Int) -> Unit,
@@ -458,9 +474,16 @@ private fun ScrollBody(
         onTargetUsed()
     }
     LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex }
+        snapshotFlow {
+            val shown = listState.layoutInfo.visibleItemsInfo
+            (shown.firstOrNull()?.index ?: -1) to (shown.lastOrNull()?.index ?: -1)
+        }
             .distinctUntilChanged()
-            .collectLatest { index -> blocks.getOrNull(index)?.let { onOffset(it.start) } }
+            .collectLatest { (first, last) ->
+                val head = blocks.getOrNull(first) ?: return@collectLatest
+                val tail = blocks.getOrNull(last) ?: head
+                onShown(head.start, tail.end)
+            }
     }
 
     Box(
@@ -534,7 +557,8 @@ private fun PagedBody(
     isHeading: (Block) -> Boolean,
     target: Int?,
     onTargetUsed: () -> Unit,
-    onOffset: (Int) -> Unit,
+    /** Что на экране: от начала страницы до начала следующей. */
+    onShown: (start: Int, end: Int) -> Unit,
     onToggleBars: () -> Unit,
     onPicture: (ShownPicture) -> Unit,
     onLongPress: (Int) -> Unit,
@@ -602,7 +626,9 @@ private fun PagedBody(
                 .distinctUntilChanged()
                 .collectLatest { index ->
                     val page = pages.getOrNull(index) ?: return@collectLatest
-                    onOffset(page.startChar)
+                    val end = pages.getOrNull(index + 1)?.startChar
+                        ?: page.pieces.lastOrNull()?.end ?: page.startChar
+                    onShown(page.startChar, end)
                     // Подошли к краю окна - пересчитываем следующее, взяв за
                     // середину текущую страницу. Только если окно правда
                     // сдвинется, иначе пересчёт пошёл бы по кругу.

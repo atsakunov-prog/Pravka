@@ -134,7 +134,8 @@ class AppState(private val app: SlushalkaApp) {
 
     // ----------------------------------------------------------------- книга
 
-    fun open(book: Book, autoPlay: Boolean) {
+    /** Открывает книгу на месте, где остановились. Звук не трогает: пуск - рукой. */
+    fun open(book: Book) {
         val tree = treeUri() ?: return
         app.scope.launch {
             val ready = ensureDurations(book)
@@ -146,11 +147,7 @@ class AppState(private val app: SlushalkaApp) {
             runCatching {
                 app.startService(Intent(app, ru.zf.slushalka.player.PlaybackService::class.java))
             }
-            if (!app.player.isOpen(ready.id)) {
-                app.player.open(tree, ready, autoPlay = autoPlay)
-            } else if (autoPlay && !app.player.state.value.playing) {
-                app.player.playPause()
-            }
+            if (!app.player.isOpen(ready.id)) app.player.open(tree, ready)
             // Книгу открыли руками - вопрос «продолжить с другого устройства?»
             // про неё уже неактуален.
             if (_resumeOffer.value?.bookId == ready.id) _resumeOffer.value = null
@@ -655,9 +652,41 @@ class AppState(private val app: SlushalkaApp) {
         }
     }
 
+    /**
+     * Место чтения. Пишется не само по себе: место в книге одно, и пока
+     * читаешь глазами, запись подтягивается к странице - на диск они ложатся
+     * вместе, с каждой перелистнутой страницей. Вернулся к плееру или открыл
+     * приложение через день - звук стоит там, где остановились глаза.
+     */
     fun saveReadChar(offset: Int) {
         val book = _current.value ?: return
+        followReading(book, offset)
         app.positions.setReadChar(book.id, offset)
+        // В папку библиотеки - тем же шагом, что плеер на ходу: раз в две
+        // минуты. Иначе после часа чтения второе устройство знало бы место
+        // только с последней паузы звука.
+        val now = System.currentTimeMillis()
+        if (now - lastReadSyncAt > READ_SYNC_EVERY_MS) {
+            lastReadSyncAt = now
+            app.scope.launch { syncPush(book.id) }
+        }
+    }
+
+    private var lastReadSyncAt = 0L
+
+    /** Запись подтягивается к странице. Стоит ли она, решает плеер: идущий звук главнее. */
+    private fun followReading(book: Book, offset: Int) {
+        val align = _alignment.value ?: return
+        val audioMs = align.audioAt(offset)
+        if (app.player.isOpen(book.id)) {
+            app.player.followReading(audioMs)
+        } else {
+            // Плеер этой книги не поднят - пишем прямо в позиции, тем же порядком.
+            val (index, inFile) = book.locate(audioMs)
+            app.positions.save(
+                app.positions.get(book.id).copy(fileIndex = index, posMs = inFile, absMs = audioMs),
+            )
+        }
     }
 
     /** Откуда открыть читалку. [fromAudio] - место взято из записи, его стоит сверить. */
@@ -666,14 +695,15 @@ class AppState(private val app: SlushalkaApp) {
     fun readingStart(): ReadStart {
         val book = _current.value ?: return ReadStart(0, false)
         val saved = app.positions.get(book.id).readChar
-        val align = _alignment.value
-        val byAudio = align?.charAt(app.player.state.value.absMs) ?: 0
-        // Читал глазами и с тех пор не слушал - продолжаем оттуда же, и
-        // сверять по звуку нечего.
-        return if (saved >= 0 && kotlin.math.abs(saved - byAudio) < 4000) {
+        val align = _alignment.value ?: return ReadStart(saved.coerceAtLeast(0), false)
+        val absMs = app.player.state.value.absMs
+        // Запись стоит там, куда её довели глаза (откат при открытии книги -
+        // самое большее полминуты): продолжаем со своей страницы, сверять по
+        // звуку нечего. Ушла дальше - с тех пор слушали, и правда теперь у неё.
+        return if (saved >= 0 && kotlin.math.abs(align.audioAt(saved) - absMs) <= READ_FRESH_MS) {
             ReadStart(saved, false)
         } else {
-            ReadStart(byAudio, true)
+            ReadStart(align.charAt(absMs), true)
         }
     }
 
@@ -747,6 +777,11 @@ class AppState(private val app: SlushalkaApp) {
         private const val MARKUP_ENOUGH = 6
         /** Столько пустых проб подряд - и дальше молоть незачем. */
         private const val EARLY_GIVE_UP = 5
+        /** Запись не дальше минуты от места чтения - значит, с тех пор не слушали.
+         * Полминуты из этой минуты съедает откат при открытии книги. */
+        private const val READ_FRESH_MS = 60_000L
+        /** Место чтения уезжает в папку библиотеки не чаще, чем место слушания. */
+        private const val READ_SYNC_EVERY_MS = 120_000L
     }
 
     fun declineResume() {

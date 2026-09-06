@@ -135,8 +135,12 @@ class PlayerHolder(
     /**
      * Ставит книгу целиком: перемотка между файлами становится обычной
      * перемоткой, а не «открыть следующий файл».
+     *
+     * Сама книга не заводится - никогда. Звук идёт только с пуска рукой:
+     * открыл приложение, увидел, где остановился, и сам решил, слушать ли
+     * сейчас.
      */
-    fun open(tree: Uri, b: Book, startAbsMs: Long? = null, autoPlay: Boolean = false) {
+    fun open(tree: Uri, b: Book, startAbsMs: Long? = null) {
         treeUri = tree
         book = b
         val saved = positions.get(b.id)
@@ -168,7 +172,7 @@ class PlayerHolder(
         player.setPlaybackSpeed(if (saved.speed > 0f) saved.speed else settings.now().speed)
         player.skipSilenceEnabled = settings.now().skipSilence
         player.prepare()
-        player.playWhenReady = autoPlay
+        player.playWhenReady = false
         listenedAcc = saved.listenedMs
         lastPauseAt = 0L
         push()
@@ -281,6 +285,25 @@ class PlayerHolder(
     fun jumpToFile(index: Int) {
         val b = book ?: return
         seekTo(b.offsetOf(index.coerceIn(0, b.files.lastIndex)))
+    }
+
+    /**
+     * Читалка долистала сюда: запись подтягивается к странице. Место в книге
+     * одно, единиц у него две, и пока глаза впереди ушей, правда - у глаз.
+     * Иначе выходило так: послушал до двадцатой страницы, дочитал до
+     * семидесятой, вернулся - а плеер всё ещё на двадцатой.
+     *
+     * Только пока звук стоит. Идёт - правда у него: страницы тогда листают
+     * вслед за чтецом, и дёргать плеер на каждой было бы поломкой. И без
+     * отката при следующем пуске: откат нужен, чтобы вспомнить, о чём шла
+     * речь, а дочитавший сюда глазами и так знает.
+     */
+    fun followReading(absMs: Long) {
+        if (book == null || player.mediaItemCount == 0) return
+        if (player.playWhenReady) return
+        if (kotlin.math.abs(absNow() - absMs) < 1_000) return
+        seekTo(absMs)
+        lastPauseAt = 0L
     }
 
     fun setSpeed(v: Float) {

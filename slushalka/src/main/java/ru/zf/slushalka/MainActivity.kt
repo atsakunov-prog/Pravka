@@ -108,8 +108,8 @@ class MainActivity : ComponentActivity() {
                 Screen.LIBRARY -> LibraryScreen(
                     app = app,
                     onPickTree = onPickTree,
-                    onOpen = { book, play ->
-                        state.open(book, autoPlay = play)
+                    onOpen = { book ->
+                        state.open(book)
                         startPlayback()
                         screen = Screen.PLAYER
                     },

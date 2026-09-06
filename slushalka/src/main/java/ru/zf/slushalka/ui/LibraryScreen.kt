@@ -49,7 +49,7 @@ import ru.zf.slushalka.library.Book
 fun LibraryScreen(
     app: SlushalkaApp,
     onPickTree: () -> Unit,
-    onOpen: (Book, Boolean) -> Unit,
+    onOpen: (Book) -> Unit,
     onSettings: () -> Unit,
 ) {
     val state = app.state
@@ -137,7 +137,7 @@ fun LibraryScreen(
                     book = book,
                     rev = rev,
                     others = others[book.id].orEmpty(),
-                    onClick = { onOpen(book, false) },
+                    onClick = { onOpen(book) },
                 )
             }
         }
@@ -192,12 +192,13 @@ private fun BusyBar(text: String) {
     }
 }
 
+/** Открывает книгу на своём месте, но не заводит: пуск - рукой, как у любой другой. */
 @Composable
-private fun ContinueCard(app: SlushalkaApp, book: Book, rev: Int, onOpen: (Book, Boolean) -> Unit) {
+private fun ContinueCard(app: SlushalkaApp, book: Book, rev: Int, onOpen: (Book) -> Unit) {
     val st = app.state.stateOf(book.id)
     val left = (book.totalMs - st.absMs).coerceAtLeast(0)
     Card(
-        onClick = { onOpen(book, true) },
+        onClick = { onOpen(book) },
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
