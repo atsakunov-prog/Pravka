@@ -108,6 +108,9 @@ fun ParagraphSheet(
     block: Block,
     hasAudio: Boolean,
     playAbsMs: Long,
+    /** Обведённый пальцем кусок: он уже выбран, фразы не предлагаются. */
+    lasso: String? = null,
+    lassoEnd: Int? = null,
     onAsk: (atChar: Int, question: String?, quote: String) -> Unit,
     onAnchor: () -> Unit,
     onListen: () -> Unit,
@@ -119,13 +122,14 @@ fun ParagraphSheet(
     val sentences = remember(block) { splitSentences(block.text) }
     var selected by remember { mutableStateOf(setOf<Int>()) }
 
-    val selection = remember(selected, sentences) {
-        (if (selected.isEmpty()) block.text else selected.sorted().joinToString(" ") { sentences[it] })
+    val selection = remember(selected, sentences, lasso) {
+        (lasso ?: if (selected.isEmpty()) block.text else selected.sorted().joinToString(" ") { sentences[it] })
+            .trim()
             .take(QUOTE_MAX)
     }
-    // Вопрос про кусок - с контекстом до конца этого абзаца: то, что на
-    // странице, читатель уже видит, а дальше заглядывать незачем.
-    val at = block.end.coerceAtMost(text.length)
+    // Вопрос про кусок - с контекстом до конца этого абзаца (или обводки): то,
+    // что на странице, читатель уже видит, а дальше заглядывать незачем.
+    val at = (lassoEnd ?: block.end).coerceAtMost(text.length)
 
     // Герои из справочника, упомянутые в выделенном, - если справочник готов.
     val mentioned = remember(selection, book?.id) {
@@ -148,16 +152,30 @@ fun ParagraphSheet(
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp),
         ) {
-            Text("Этот кусок", style = MaterialTheme.typography.titleLarge)
+            Text(if (lasso != null) "Обведённое" else "Этот кусок", style = MaterialTheme.typography.titleLarge)
             Text(
-                if (sentences.size > 1) "Тапни фразы, о которых спросить, - или спрашивай обо всём абзаце."
-                else "Спросить про этот абзац.",
+                when {
+                    lasso != null -> "Спросить про то, что обвёл."
+                    sentences.size > 1 -> "Тапни фразы, о которых спросить, - или спрашивай обо всём абзаце."
+                    else -> "Спросить про этот абзац."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(8.dp))
             Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
-                sentences.forEachIndexed { i, s ->
+                if (lasso != null) {
+                    Text(
+                        "«$selection»",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.primaryContainer)
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
+                if (lasso == null) sentences.forEachIndexed { i, s ->
                     val on = i in selected
                     Text(
                         s,

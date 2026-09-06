@@ -60,6 +60,9 @@ class AskEngine(
         val cutoffChar: Int,
         val elapsed: String,
         val scope: Scope,
+        /** Номер главы (с единицы) и сколько их всего - для строки «МЕСТО». */
+        val chapterIndex: Int = 0,
+        val chapterCount: Int = 0,
     ) {
         val chars: Int get() = stable.length + recent.length
         val pages: Int get() = (chars + Settings.PAGE_CHARS / 2) / Settings.PAGE_CHARS
@@ -127,6 +130,8 @@ class AskEngine(
             cutoffChar = cutoff,
             elapsed = if (book.hasAudio) formatClock(absMs) else "",
             scope = scope,
+            chapterIndex = chIndex + 1,
+            chapterCount = text.chapters.size,
         )
     }
 
@@ -150,7 +155,9 @@ class AskEngine(
         absMs: Long,
         onDelta: (String) -> Unit,
     ): Result<Turn> {
-        val place = Prompts.place(book.title, book.author, ctx.chapter, ctx.percent, ctx.elapsed)
+        val place = Prompts.place(
+            book.title, book.author, ctx.chapter, ctx.percent, ctx.elapsed, ctx.chapterIndex, ctx.chapterCount,
+        )
         val system = buildList {
             add(ClaudeClient.Block(if (spoilers) Prompts.RULES_SPOILERS else Prompts.RULES, cache = cache))
             if (ctx.stable.isNotBlank()) add(ClaudeClient.Block(Prompts.beforeThat(ctx.stable), cache = cache))
@@ -183,6 +190,41 @@ class AskEngine(
                 ),
             )
             Turn(shown = question, prompt = prompt, answer = reply.text, costUsd = reply.costUsd, truncated = reply.truncated)
+        }
+    }
+
+    /**
+     * Три вопроса про статью справочника - что интересно спросить о герое на
+     * этом месте. Считает дешёвая модель пересказа (заводская - Сонет): работа
+     * на пару сотен токенов. Статья приходит уже урезанной до дочитанных глав.
+     */
+    suspend fun suggest(book: Book, entry: GuideEntry, kind: Int, readChapters: Int): Result<List<String>> {
+        val what = when (kind) { 0 -> "ГЕРОЙ"; 1 -> "МЕСТО"; else -> "СЛОВО" }
+        val context = buildString {
+            append("КНИГА: «").append(book.title).append("»")
+            if (book.author.isNotBlank()) append(", ").append(book.author)
+            append("\nДОЧИТАНО ГЛАВ: ").append(readChapters).append('\n')
+            append(what).append(": ").append(entry.name)
+            if (entry.aliases.isNotEmpty()) append(" (").append(entry.aliases.joinToString(", ")).append(")")
+            append('\n').append(entry.role).append('\n')
+            entry.notes.forEach { append("Глава ").append(it.chapter).append(": ").append(it.text).append('\n') }
+        }
+        val p = settings.now()
+        return client.ask(
+            model = p.recapModel,
+            system = listOf(ClaudeClient.Block(Prompts.SUGGEST_RULES)),
+            question = context + "\nПредложи три вопроса.",
+            maxTokens = 600,
+            effort = p.recapEffort,
+        ).map { reply ->
+            askLog.add(
+                GuideEngine.LOG_KEY,
+                Ask(System.currentTimeMillis(), 0L, "Вопросы про «${entry.name}»", reply.text, reply.costUsd),
+            )
+            reply.text.lines()
+                .map { it.trim().trimStart('-', '•', '*', '–', '—', ' ').trimStart { c -> c.isDigit() || c == '.' || c == ')' }.trim() }
+                .filter { it.length > 5 }
+                .take(4)
         }
     }
 

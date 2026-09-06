@@ -76,18 +76,32 @@ object Prompts {
            разметки: ответ могут читать вслух.
     """.trimIndent()
 
+    /**
+     * Где человек в книге - первая строка контекста. Название, автор, номер
+     * главы и её название, процент, а у аудиокниги ещё и время звучания:
+     * модель должна понимать, о какой книге речь и докуда дошли.
+     */
     fun place(
         title: String,
         author: String,
         chapter: String,
         percent: Int,
         elapsed: String,
+        chapterIndex: Int = 0,
+        chapterCount: Int = 0,
     ): String = buildString {
         append("КНИГА: «").append(title).append("»")
         if (author.isNotBlank()) append(", ").append(author)
         append('\n')
         append("МЕСТО: ")
-        if (chapter.isNotBlank()) append(chapter).append(", ")
+        if (chapterIndex > 0) {
+            append("глава ").append(chapterIndex)
+            if (chapterCount > 0) append(" из ").append(chapterCount)
+            if (chapter.isNotBlank()) append(" («").append(chapter).append("»)")
+            append(", ")
+        } else if (chapter.isNotBlank()) {
+            append(chapter).append(", ")
+        }
         append("примерно ").append(percent).append("% книги")
         if (elapsed.isNotBlank()) append(", ").append(elapsed).append(" звучания")
     }
@@ -222,6 +236,27 @@ object Prompts {
         }
 
     fun chapterMark(index: Int, title: String): String = "\n\n=== ГЛАВА $index: $title ===\n\n"
+
+    /**
+     * Придумать вопросы про статью справочника. Модель видит только то, что
+     * видит читатель, - статью, урезанную до дочитанных глав, - поэтому и
+     * вопросы получаются без спойлеров.
+     */
+    val SUGGEST_RULES = """
+        Ты помогаешь читателю книги придумать, что интересно спросить о герое,
+        месте или слове на том месте, где он сейчас. Тебе дают название книги,
+        статью справочника - ровно то, что читатель уже знает, - и число
+        дочитанных глав.
+
+        Предложи ТРИ вопроса: короткие, живые, разные по углу - мотивы, отношения
+        с другими, роль в истории до сих пор, детали быта и эпохи, странности,
+        которые бросаются в глаза. Только по известному: ни одного вопроса,
+        который намекает на будущее («что с ним станет», «окажется ли он»,
+        «сыграет ли это»).
+
+        Каждый вопрос с новой строки, без нумерации, без разметки, без
+        пояснений до и после.
+    """.trimIndent()
 
     /** Что спросить про статью справочника - по её виду: герой, место, слово. */
     fun guidePresets(kind: Int): List<String> = when (kind) {

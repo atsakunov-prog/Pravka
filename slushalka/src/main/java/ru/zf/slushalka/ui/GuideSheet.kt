@@ -90,6 +90,9 @@ fun GuideSheet(
     var showAll by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf<GuideEntry?>(null) }
     var askFor by remember { mutableStateOf<GuideEntry?>(null) }
+    // Придуманные моделью вопросы про статью - на время листа, чтобы второе
+    // открытие той же статьи не стоило второго запроса.
+    val suggestCache = remember { HashMap<String, List<String>>() }
 
     val b = book
     val t = text
@@ -389,10 +392,22 @@ fun GuideSheet(
         )
     }
 
-    // Что именно спросить про статью: готовые вопросы по её виду и свой.
+    // Что именно спросить про статью: свой вопрос сверху, ниже - три вопроса,
+    // которые модель придумала по этой статье (урезанной до дочитанных глав);
+    // пока думает или не вышло - готовые по виду статьи.
     askFor?.let { e ->
         val kind = st?.guide?.kindOf(e) ?: 0
         var own by remember(e) { mutableStateOf("") }
+        val key = "${e.name}|$upTo"
+        var suggested by remember(e, upTo) { mutableStateOf(suggestCache[key]) }
+        var thinking by remember(e, upTo) { mutableStateOf(false) }
+        LaunchedEffect(e, upTo) {
+            if (suggested != null || b == null) return@LaunchedEffect
+            thinking = true
+            app.ask.suggest(b, e.visibleAt(upTo) ?: e, kind, readChapters)
+                .onSuccess { list -> if (list.isNotEmpty()) { suggestCache[key] = list; suggested = list } }
+            thinking = false
+        }
         fun go(q: String) {
             askFor = null
             onAsk(Prompts.aboutEntry(e.name, e.aliases, q))
@@ -401,13 +416,7 @@ fun GuideSheet(
             onDismissRequest = { askFor = null },
             title = { Text("Спросить про «${e.name}»") },
             text = {
-                Column {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Prompts.guidePresets(kind).forEach { q ->
-                            AssistChip(onClick = { go(q) }, label = { Text(q) })
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     OutlinedTextField(
                         value = own,
                         onValueChange = { own = it },
@@ -416,7 +425,37 @@ fun GuideSheet(
                         minLines = 1,
                         maxLines = 4,
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(10.dp))
+                    val list = suggested
+                    when {
+                        list != null -> {
+                            Text(
+                                "Или один из этих:",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            list.forEach { q ->
+                                TextButton(onClick = { go(q) }, modifier = Modifier.fillMaxWidth()) {
+                                    Text(q, modifier = Modifier.fillMaxWidth())
+                                }
+                            }
+                        }
+                        thinking -> {
+                            Text(
+                                "Придумываю вопросы по статье…",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                        }
+                        else -> FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Prompts.guidePresets(kind).forEach { q ->
+                                AssistChip(onClick = { go(q) }, label = { Text(q) })
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         "Вопрос уйдёт с текстом книги до этого места, без спойлеров.",
                         style = MaterialTheme.typography.labelSmall,

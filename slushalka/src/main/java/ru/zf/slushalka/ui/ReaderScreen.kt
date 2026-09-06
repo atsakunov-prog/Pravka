@@ -61,6 +61,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -129,6 +131,11 @@ fun ReaderScreen(
     var showChapters by remember { mutableStateOf(false) }
     var showGuide by remember { mutableStateOf(false) }
     var guideQuery by remember { mutableStateOf("") }
+    // «Обвести и спросить»: режим включён кнопкой, росчерк превращается в
+    // диапазон знаков по раскладке текста (см. Lasso.kt).
+    var lasso by remember { mutableStateOf(false) }
+    var lassoPick by remember { mutableStateOf<IntRange?>(null) }
+    val hits = remember { TextHits() }
     var showGallery by remember { mutableStateOf(false) }
     var picture by remember { mutableStateOf<ShownPicture?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
@@ -278,7 +285,7 @@ fun ReaderScreen(
         val onTapPicture: (ShownPicture) -> Unit = { picture = it }
         if (prefs.readerPaged) {
             PagedBody(
-                app = app, bookId = bk.id, blocks = blocks, palette = palette,
+                app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
                 target = target, onTargetUsed = { target = null },
                 onShown = { start, end -> offset = start; shownEnd = end },
@@ -289,7 +296,7 @@ fun ReaderScreen(
             )
         } else {
             ScrollBody(
-                app = app, bookId = bk.id, blocks = blocks, palette = palette,
+                app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
                 target = target, onTargetUsed = { target = null },
                 onShown = { start, end -> offset = start; shownEnd = end },
@@ -298,6 +305,18 @@ fun ReaderScreen(
                 highlight = speechRange ?: highlightRange,
                 highlightAlpha = if (speechRange != null) SPEECH_ALPHA else highlight.value,
             )
+        }
+
+        if (lasso) {
+            LassoLayer(palette) { rect ->
+                val picked = hits.select(rect)?.let { snapToWords(t.plain, it) }
+                lasso = false
+                if (picked == null || picked.last - picked.first < 2) {
+                    notice = "Не попал по тексту - попробуй обвести ещё раз"
+                } else {
+                    lassoPick = picked
+                }
+            }
         }
 
         // Картинка поблизости: карта или план держится под рукой ещё пару
@@ -409,6 +428,9 @@ fun ReaderScreen(
                     TextButton(onClick = { showChapters = true }) { Text("Содержание", color = palette.fg) }
                     TextButton(onClick = { showRecap = true }) { Text("Напомнить", color = palette.fg) }
                     TextButton(onClick = { onAsk(readPlace(), null, null) }) { Text("Спросить", color = palette.fg) }
+                    TextButton(onClick = { lasso = !lasso }) {
+                        Text(if (lasso) "Не обводить" else "Обвести", color = if (lasso) palette.dim else palette.fg)
+                    }
                     TextButton(onClick = { guideQuery = ""; showGuide = true }) { Text("Справочник", color = palette.fg) }
                 }
                 if (!speakingHere && !bk.hasAudio) {
@@ -488,6 +510,44 @@ fun ReaderScreen(
             onClose = { picture = null },
         )
     }
+    // Обведённое: тот же лист, что у абзаца, но кусок уже выбран.
+    lassoPick?.let { range ->
+        val block = blocks.getOrNull(t.blockIndexAt(range.first))
+        if (block == null) {
+            LaunchedEffect(range) { lassoPick = null }
+        } else {
+            ParagraphSheet(
+                app = app,
+                text = t,
+                block = block,
+                hasAudio = bk.hasAudio,
+                playAbsMs = play.absMs,
+                lasso = t.plain.substring(range.first, range.last.coerceAtMost(t.length)),
+                lassoEnd = range.last,
+                onAsk = { atChar, q, quote ->
+                    lassoPick = null
+                    onAsk(atChar, q, quote)
+                },
+                onAnchor = {
+                    state.addAnchor(play.absMs, block.start)
+                    notice = "Отметил: карта стала точнее"
+                    lassoPick = null
+                },
+                onListen = {
+                    state.listenFrom(block.start)
+                    lassoPick = null
+                    onListen()
+                },
+                onGuide = { q ->
+                    lassoPick = null
+                    guideQuery = q
+                    showGuide = true
+                },
+                onClose = { lassoPick = null },
+            )
+        }
+    }
+
     // Долгое нажатие на абзац: спросить про него (или про выделенные фразы),
     // заглянуть в справочник, а у аудиокниги - ещё и поправить карту.
     pressed?.let { at ->
@@ -565,6 +625,7 @@ private fun ScrollBody(
     bookId: String,
     blocks: List<Block>,
     palette: ReaderPalette,
+    hits: TextHits,
     margin: Int,
     styleFor: (Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
@@ -644,12 +705,16 @@ private fun ScrollBody(
                     }
                 } else {
                     val heading = isHeading(block)
+                    // Абзац докладывает, где лежит и как разложен, - ради обводки.
+                    DisposableEffect(block.start) { onDispose { hits.forget(block.start) } }
                     Text(
                         text = litText(block.text, block.start, highlight, highlightAlpha, palette),
                         style = styleFor(heading),
+                        onTextLayout = { hits.layout(block.start, it) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = if (heading) 28.dp else 0.dp, bottom = 10.dp),
+                            .padding(top = if (heading) 28.dp else 0.dp, bottom = 10.dp)
+                            .onGloballyPositioned { hits.place(block.start, it.boundsInRoot()) },
                     )
                 }
             }
@@ -665,6 +730,7 @@ private fun PagedBody(
     bookId: String,
     blocks: List<Block>,
     palette: ReaderPalette,
+    hits: TextHits,
     margin: Int,
     styleFor: (Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
@@ -801,10 +867,15 @@ private fun PagedBody(
                                 onPicture(ShownPicture(file, pic.caption, pic.charOffset))
                             }
                         } else {
+                            DisposableEffect(piece.start) { onDispose { hits.forget(piece.start) } }
                             Text(
                                 litText(piece.text, piece.start, highlight, highlightAlpha, palette),
                                 style = style,
-                                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                                onTextLayout = { hits.layout(piece.start, it) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 10.dp)
+                                    .onGloballyPositioned { hits.place(piece.start, it.boundsInRoot()) },
                             )
                         }
                     }
