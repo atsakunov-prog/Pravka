@@ -36,7 +36,14 @@ class AskEngine(
     }
 
     /** Одна реплика разговора в окне вопроса: что показали человеку, что ушло модели, что вернулось. */
-    data class Turn(val shown: String, val prompt: String, val answer: String, val costUsd: Double)
+    data class Turn(
+        val shown: String,
+        val prompt: String,
+        val answer: String,
+        val costUsd: Double,
+        /** Ответ упёрся в потолок длины - человеку стоит об этом сказать. */
+        val truncated: Boolean = false,
+    )
 
     /**
      * Готовый контекст вопроса - его же показываем в окошке «что уедет».
@@ -175,7 +182,7 @@ class AskEngine(
                     costUsd = reply.costUsd,
                 ),
             )
-            Turn(shown = question, prompt = prompt, answer = reply.text, costUsd = reply.costUsd)
+            Turn(shown = question, prompt = prompt, answer = reply.text, costUsd = reply.costUsd, truncated = reply.truncated)
         }
     }
 
@@ -229,7 +236,7 @@ class AskEngine(
                 ),
             ),
             question = "Напомни, что было в этом куске.",
-            maxTokens = 1100,
+            maxTokens = 4000,
             effort = p.recapEffort,
             onDelta = onDelta,
         ).map { it.text }

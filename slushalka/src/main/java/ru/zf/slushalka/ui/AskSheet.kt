@@ -420,6 +420,14 @@ fun AskSheet(
                     ) {
                         Column(Modifier.padding(14.dp)) {
                             Text(turn.answer, style = MaterialTheme.typography.bodyLarge)
+                            if (turn.truncated) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Ответ упёрся в потолок длины. Напиши «продолжи» - договорит.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
                             Spacer(Modifier.height(6.dp))
                             Row {
                                 TextButton(onClick = { app.speaker.speak(turn.answer) }) { Text("Вслух") }

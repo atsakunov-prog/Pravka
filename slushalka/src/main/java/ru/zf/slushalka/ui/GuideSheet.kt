@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -51,16 +52,18 @@ import kotlinx.coroutines.launch
 import ru.zf.slushalka.SlushalkaApp
 import ru.zf.slushalka.ask.GuideEntry
 import ru.zf.slushalka.ask.GuideState
+import ru.zf.slushalka.ask.Prompts
 import ru.zf.slushalka.data.Settings
 
 /**
- * Справочник по книге: герои, места, словарь.
+ * Справочник по книге: главы, герои, места, словарь.
  *
- * Показывает только то, до чего читатель дошёл: статьи о героях, которые ещё
- * не появились, спрятаны, заметки о будущих главах - тоже. Тумблер «всё, со
- * спойлерами» снимает это руками. Пока справочника нет - кнопка заказать
- * (пакетом, вдвое дешевле, обычно в течение часа); пока считается - лист сам
- * проверяет раз в минуту.
+ * Показывает только дочитанные главы: статьи о героях, которые ещё не
+ * появились, спрятаны, заметки о будущих главах - тоже, и текущая глава
+ * считается ещё не прочитанной - её запись рассказала бы то, что на этой
+ * странице впереди. Тумблер «всё, со спойлерами» снимает это руками. Пока
+ * справочника нет - кнопка заказать (пакетом, вдвое дешевле, обычно в течение
+ * часа); пока считается - лист сам проверяет раз в минуту.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -83,15 +86,17 @@ fun GuideSheet(
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf(initialQuery) }
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by remember { mutableIntStateOf(if (initialQuery.isBlank()) 0 else 1) }
     var showAll by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf<GuideEntry?>(null) }
+    var askFor by remember { mutableStateOf<GuideEntry?>(null) }
 
     val b = book
     val t = text
 
-    // С диска состояние читается один раз - дальше живёт в потоке движка.
-    LaunchedEffect(b?.id) { b?.let { app.guide.state(it.id) } }
+    // При открытии: своё состояние с диска, чужой файл из папки книги, проверка
+    // пакета - всё одним вызовом.
+    LaunchedEffect(b?.id, t) { b?.let { app.guide.sync(it, t).onFailure { e -> error = e.message } } }
     val st = b?.let { states[it.id] }
 
     // Пакет считается - проверяем раз в минуту, пока лист открыт.
@@ -99,13 +104,14 @@ fun GuideSheet(
         val bk = b ?: return@LaunchedEffect
         if (st?.status != GuideState.Status.PENDING) return@LaunchedEffect
         while (true) {
-            app.guide.refresh(bk).onFailure { error = it.message }
             delay(60_000)
+            app.guide.refresh(bk, t).onFailure { error = it.message }
         }
     }
 
-    val chapterNow = t?.let { it.chapterIndexAt(cutoffChar) + 1 } ?: 1
-    val upTo = if (showAll) Int.MAX_VALUE else chapterNow
+    // Дочитанные главы: текущая не в счёт.
+    val readChapters = t?.chapterIndexAt(cutoffChar) ?: 0
+    val upTo = if (showAll) Int.MAX_VALUE else readChapters
 
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet) {
         // Во весь рост - только когда есть что листать; предложение заказать
@@ -124,7 +130,7 @@ fun GuideSheet(
                 return@Column
             }
             Text(
-                "«${b.title}» · глава $chapterNow из ${t.chapters.size}",
+                "«${b.title}» · дочитано глав: $readChapters из ${t.chapters.size}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -136,15 +142,16 @@ fun GuideSheet(
                     Text(
                         "Справочника по этой книге ещё нет. ${Settings.modelLabel(prefs.guideModel)} прочтёт её " +
                             "целиком - ${est.pages} стр." + (if (est.parts > 1) " в ${est.parts} частях" else "") +
-                            " - и составит статьи о героях, местах и словах, каждую с привязкой к главе. " +
-                            "Ты увидишь только то, до чего дочитал.",
+                            " - и составит краткое содержание каждой главы и статьи о героях, местах и словах, " +
+                            "каждую с привязкой к главе. Ты увидишь только то, что уже дочитал.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "Считается пакетным запросом: вдвое дешевле обычного, готово обычно в течение часа, " +
-                            "самое позднее к завтрашнему дню. Приложение можно закрыть - справочник " +
-                            "заберётся при следующем открытии книги. Модель меняется в настройках, раздел «Модели».",
+                            "самое позднее к завтрашнему дню. Приложение можно закрыть - справочник заберётся " +
+                            "при следующем открытии книги и лягет файлом в её папку: кто читает ту же книгу с " +
+                            "той же папки, получит его даром. Модель меняется в настройках, раздел «Модели».",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -180,35 +187,46 @@ fun GuideSheet(
                             onClick = {
                                 busy = true
                                 coroutine.launch {
-                                    app.guide.refresh(b).onFailure { error = it.message }
+                                    app.guide.refresh(b, t).onFailure { error = it.message }
                                     busy = false
                                 }
                             },
                         ) { Text("Проверить сейчас") }
                         Spacer(Modifier.weight(1f))
-                        TextButton(onClick = { app.guide.forget(b.id) }) { Text("Забыть заказ") }
+                        TextButton(onClick = { app.guide.forget(b) }) { Text("Забыть заказ") }
                     }
                 }
 
                 GuideState.Status.FAILED -> {
                     Text("Не вышло", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
-                    Text(st.error.ifBlank { "Причина неизвестна" }, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "Пакет посчитался, но справочник из ответа не собрался. Что именно случилось:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Column(Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())) {
+                        Text(st.error.ifBlank { "Причина неизвестна" }, style = MaterialTheme.typography.bodySmall)
+                    }
                     if (st.costUsd > 0) {
+                        Spacer(Modifier.height(6.dp))
                         Text(
-                            "Списано %.2f $".format(st.costUsd),
+                            "Списано %.2f $ · ${Settings.modelLabel(st.model)} · ${stamp(st.createdAt)}".format(st.costUsd),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     Spacer(Modifier.height(10.dp))
-                    Button(onClick = { app.guide.forget(b.id) }) { Text("Попробовать снова") }
+                    Button(onClick = { app.guide.forget(b) }) { Text("Заказать заново") }
                 }
 
                 GuideState.Status.READY -> {
                     val guide = st.guide ?: return@Column
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (showAll) "Вся книга - со спойлерами" else "До главы $chapterNow, без спойлеров",
+                            if (showAll) "Вся книга - со спойлерами"
+                            else if (readChapters == 0) "Первая глава ещё не дочитана - пока пусто"
+                            else "Главы 1–$readChapters, без спойлеров",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.weight(1f),
                         )
@@ -222,75 +240,100 @@ fun GuideSheet(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(6.dp))
+                    val chapters = guide.chapters.filter { it.chapter <= upTo && it.matches(query) }
                     val lists = listOf(guide.characters, guide.places, guide.terms)
-                    val labels = listOf("Герои", "Места", "Словарь")
                     val visible = lists.map { list -> list.mapNotNull { it.visibleAt(upTo) }.filter { it.matches(query) } }
+                    val labels = listOf("Главы · ${chapters.size}", "Герои · ${visible[0].size}", "Места · ${visible[1].size}", "Словарь · ${visible[2].size}")
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         labels.forEachIndexed { i, label ->
-                            FilterChip(
-                                selected = tab == i,
-                                onClick = { tab = i },
-                                label = { Text("$label · ${visible[i].size}") },
-                            )
+                            FilterChip(selected = tab == i, onClick = { tab = i }, label = { Text(label) })
                         }
                     }
                     Spacer(Modifier.height(4.dp))
-                    val shown = visible[tab]
-                    if (shown.isEmpty()) {
+                    val empty = if (tab == 0) chapters.isEmpty() else visible[tab - 1].isEmpty()
+                    if (empty) {
                         Text(
-                            if (query.isNotBlank()) "Ничего похожего до этого места книги."
-                            else "До этого места здесь пока пусто.",
+                            when {
+                                query.isNotBlank() -> "Ничего похожего в дочитанных главах."
+                                readChapters == 0 -> "Откроется, когда дочитаешь первую главу."
+                                else -> "В дочитанных главах здесь пока пусто."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(vertical = 12.dp),
                         )
                     }
                     LazyColumn(Modifier.weight(1f)) {
-                        items(shown) { e ->
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable { open = e }
-                                    .padding(vertical = 8.dp),
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(e.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                                    Spacer(Modifier.weight(1f))
+                        if (tab == 0) {
+                            items(chapters) { ch ->
+                                Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                                     Text(
-                                        "гл. ${e.chapter}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        "Глава ${ch.chapter}" + (if (ch.title.isNotBlank()) ". ${ch.title}" else ""),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.SemiBold,
                                     )
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(ch.summary, style = MaterialTheme.typography.bodyMedium)
                                 }
-                                if (e.aliases.isNotEmpty()) {
+                                HorizontalDivider()
+                            }
+                        } else {
+                            items(visible[tab - 1]) { e ->
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { open = e }
+                                        .padding(vertical = 8.dp),
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(e.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                                        Spacer(Modifier.weight(1f))
+                                        Text(
+                                            "гл. ${e.chapter}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    if (e.aliases.isNotEmpty()) {
+                                        Text(
+                                            e.aliases.joinToString(", "),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
                                     Text(
-                                        e.aliases.joinToString(", "),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
+                                        e.role,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 }
-                                Text(
-                                    e.role,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                HorizontalDivider()
                             }
-                            HorizontalDivider()
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             "${Settings.modelLabel(st.model)} · ${stamp(st.createdAt)}" +
+                                (if (st.by.isNotBlank()) " · ${st.by}" else "") +
                                 (if (st.costUsd > 0) " · %.2f $".format(st.costUsd) else "") +
-                                (if (st.error.isNotBlank()) " · часть не разобралась" else ""),
+                                (if (st.error.isNotBlank()) " · с оговорками" else ""),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = { app.guide.forget(b.id) }) { Text("Пересобрать") }
+                        TextButton(onClick = { app.guide.forget(b) }) { Text("Пересобрать") }
+                    }
+                    if (st.error.isNotBlank()) {
+                        Text(
+                            st.error,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }
@@ -341,11 +384,50 @@ fun GuideSheet(
             },
             confirmButton = { TextButton(onClick = { open = null }) { Text("Закрыть") } },
             dismissButton = {
-                TextButton(onClick = {
-                    open = null
-                    onAsk("Расскажи про «${e.name}»: что о нём известно к этому месту книги и какую роль он тут играет?")
-                }) { Text("Спросить") }
+                TextButton(onClick = { askFor = e; open = null }) { Text("Спросить…") }
             },
+        )
+    }
+
+    // Что именно спросить про статью: готовые вопросы по её виду и свой.
+    askFor?.let { e ->
+        val kind = st?.guide?.kindOf(e) ?: 0
+        var own by remember(e) { mutableStateOf("") }
+        fun go(q: String) {
+            askFor = null
+            onAsk(Prompts.aboutEntry(e.name, e.aliases, q))
+        }
+        AlertDialog(
+            onDismissRequest = { askFor = null },
+            title = { Text("Спросить про «${e.name}»") },
+            text = {
+                Column {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Prompts.guidePresets(kind).forEach { q ->
+                            AssistChip(onClick = { go(q) }, label = { Text(q) })
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = own,
+                        onValueChange = { own = it },
+                        placeholder = { Text("Свой вопрос") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 1,
+                        maxLines = 4,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Вопрос уйдёт с текстом книги до этого места, без спойлеров.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = own.isNotBlank(), onClick = { go(own) }) { Text("Спросить") }
+            },
+            dismissButton = { TextButton(onClick = { askFor = null }) { Text("Отмена") } },
         )
     }
 }

@@ -65,7 +65,7 @@ class SlushalkaApp : Application() {
         recognizer = ChunkRecognizer(this)
         val claude = ClaudeClient(settings)
         ask = AskEngine(settings, claude, askLog)
-        guide = GuideEngine(settings, claude, GuideStore(this), askLog)
+        guide = GuideEngine(this, settings, claude, GuideStore(this), askLog)
         advisor = Advisor(this, claude)
         player = PlayerHolder(this, settings, positions) { bookId ->
             scope.launch { state.syncPush(bookId) }

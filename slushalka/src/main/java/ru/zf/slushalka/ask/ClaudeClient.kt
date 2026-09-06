@@ -21,7 +21,10 @@ class ClaudeClient(private val settings: Settings) {
     /** Кусок системного промпта. [cache] - можно ли кэшировать его на час. */
     data class Block(val text: String, val cache: Boolean = false)
 
-    data class Reply(val text: String, val costUsd: Double)
+    data class Reply(val text: String, val costUsd: Double, val stopReason: String = "") {
+        /** Ответ упёрся в max_tokens и оборван на полуслове. */
+        val truncated get() = stopReason == "max_tokens"
+    }
 
     /** Реплика разговора: роль «user» или «assistant» и её текст. */
     data class Turn(val role: String, val text: String)
@@ -46,7 +49,7 @@ class ClaudeClient(private val settings: Settings) {
         model: String,
         system: List<Block>,
         question: String,
-        maxTokens: Int = 1400,
+        maxTokens: Int = DEFAULT_MAX_TOKENS,
         /** output_config.effort; пусто — не передавать, решает API. */
         effort: String = "",
         onDelta: (String) -> Unit = {},
@@ -71,7 +74,7 @@ class ClaudeClient(private val settings: Settings) {
         model: String,
         system: List<Block>,
         turns: List<Turn>,
-        maxTokens: Int = 1400,
+        maxTokens: Int = DEFAULT_MAX_TOKENS,
         effort: String = "",
         webSearch: Boolean = false,
         onDelta: (String) -> Unit = {},
@@ -238,6 +241,7 @@ class ClaudeClient(private val settings: Settings) {
         var outputTokens = 0
         var webSearches = 0
         var refused = false
+        var stopReason = ""
 
         call.execute().use { resp ->
             val source = resp.body?.source() ?: throw ApiException("Пустой ответ сервера")
@@ -274,7 +278,9 @@ class ClaudeClient(private val settings: Settings) {
                         }
                         // Фильтр безопасности отвечает не ошибкой, а обычным 200 со
                         // stop_reason «refusal»; проверять надо его, а не текст.
-                        if (obj.optJSONObject("delta")?.optString("stop_reason") == "refusal") refused = true
+                        obj.optJSONObject("delta")?.optString("stop_reason")?.takeIf { it.isNotBlank() && it != "null" }
+                            ?.let { stopReason = it }
+                        if (stopReason == "refusal") refused = true
                     }
                     "error" -> throw ApiException(
                         obj.optJSONObject("error")?.optString("message") ?: "Ошибка модели"
@@ -288,6 +294,7 @@ class ClaudeClient(private val settings: Settings) {
             text = sb.toString().trim(),
             costUsd = costUsd(model, inputTokens, outputTokens, cacheWrite, cacheRead) +
                 webSearches * WEB_SEARCH_USD,
+            stopReason = stopReason,
         )
     }
 
@@ -308,6 +315,14 @@ class ClaudeClient(private val settings: Settings) {
 
         /** Пакетные запросы стоят половину обычной цены - за ожидание. */
         const val BATCH_DISCOUNT = 0.5
+
+        /**
+         * Потолок ответа. Мысли модели считаются в тот же бюджет, что и текст:
+         * при прежних 1400 адаптивные размышления Опуса съедали его почти
+         * целиком, и ответ обрывался на втором абзаце. Платится только за то,
+         * что реально написано, поэтому запас ничего не стоит.
+         */
+        const val DEFAULT_MAX_TOKENS = 8000
 
         /** Усилия, на которых мысли занимают заметную часть бюджета ответа. */
         private val DEEP_EFFORTS = setOf("xhigh", "max")

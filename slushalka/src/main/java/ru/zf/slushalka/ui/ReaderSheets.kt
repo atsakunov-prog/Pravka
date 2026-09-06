@@ -132,7 +132,9 @@ fun ParagraphSheet(
         val b = book ?: return@remember emptyList()
         val st = app.guide.state(b.id)
         if (st?.status != GuideState.Status.READY) return@remember emptyList()
-        val upTo = text.chapterIndexAt(block.start) + 1
+        // Видны только дочитанные главы: текущая ещё не кончилась, и запись о
+        // ней рассказала бы то, что на этой странице ещё впереди.
+        val upTo = text.chapterIndexAt(block.start)
         st.guide?.all.orEmpty()
             .filter { it.visibleAt(upTo) != null && it.mentionedIn(selection) }
             .take(6)
