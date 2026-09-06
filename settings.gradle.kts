@@ -14,6 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
+// Ветка `slushalka`: здесь живёт только Слушалка. Правка — в ветке `pravka`
+// того же репозитория; общие у них keystore и ветка `apk-builds`.
 rootProject.name = "Pravka"
-include(":app")
 include(":slushalka")

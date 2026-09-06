@@ -171,11 +171,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val PAGE_CHARS = 1800
 
         /**
-         * Где приложение ищет свежую сборку. Каждый коммит уезжает в ветку
-         * `apk-builds` вместе с файлом версий - его и читаем.
+         * Где приложение ищет свежую сборку. Каждый пуш в ветку `slushalka`
+         * уезжает в ветку `apk-builds` вместе со СВОИМ файлом версий - его и
+         * читаем. Лежащий рядом `build-info.txt` - файл Правки: до 06.09 обе
+         * линии писали его по очереди, и Слушалка предлагала «версию 358» с
+         * чужим APK внутри.
          */
         const val DEFAULT_UPDATE_URL =
-            "https://raw.githubusercontent.com/atsakunov-prog/Pravka/apk-builds/build-info.txt"
+            "https://raw.githubusercontent.com/atsakunov-prog/Pravka/apk-builds/slushalka-build-info.txt"
 
         const val FONT_SERIF = "serif"
         const val FONT_SANS = "sans"

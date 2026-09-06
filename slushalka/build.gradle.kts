@@ -20,8 +20,9 @@ val localProps = Properties().apply {
 fun prop(key: String, default: String? = null): String? =
     localProps.getProperty(key)?.takeIf { it.isNotBlank() } ?: default
 
-// Read-only view of the shared counter: :app owns the increment, we only
-// follow it, so one `assembleDebug` cannot bump the number twice.
+// Счётчик версий читается, но не двигается: номер сборки задаёт CI
+// (-PbuildNumber = номер запуска workflow, общий на репозиторий), а локальная
+// сборка просто берёт то, что записано.
 val versionProps = Properties().apply {
     rootProject.file("version.properties").inputStream().use { load(it) }
 }

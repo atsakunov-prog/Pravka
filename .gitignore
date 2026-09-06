@@ -9,8 +9,5 @@ build/
 captures/
 .cxx/
 
-# Local machine config: SDK path, keystore passwords, Telegram bot credentials
+# Local machine config: SDK path, keystore passwords
 local.properties
-
-# adb Wi-Fi saved address (machine-specific)
-scripts/.adb-address

@@ -69,7 +69,13 @@ class Updater(private val context: Context, private val settings: Settings) {
         if (_status.value is Status.Downloading) return
         lastCheck = now
 
+        // Свой файл версий, не общий: `build-info.txt` в apk-builds - файл
+        // Правки. Старый адрес, если он остался в настройках, переводится на свой.
         val infoUrl = prefs.updateUrl.trim().ifBlank { Settings.DEFAULT_UPDATE_URL }
+            .let {
+                if (it.endsWith("/build-info.txt")) it.removeSuffix("build-info.txt") + "slushalka-build-info.txt"
+                else it
+            }
         _status.value = Status.Checking
         _status.value = withContext(Dispatchers.IO) {
             runCatching {
@@ -83,11 +89,18 @@ class Updater(private val context: Context, private val settings: Settings) {
                     .toMap()
                 val code = fields["versionCode"]?.toIntOrNull()
                     ?: return@runCatching Status.Failed("В файле версий нет versionCode")
+                // Файл без строки slushalka= - сборка не Слушалки (так выглядел
+                // общий build-info.txt после пуша Правки): номер у неё больше,
+                // а APK внутри чужой. Раньше это предлагалось как «версия 358».
+                val name = fields["slushalka"]?.takeIf { it.isNotBlank() }
+                    ?: return@runCatching Status.Failed(
+                        "В файле версий нет строки slushalka - это сборка не Слушалки"
+                    )
                 if (code <= BuildConfig.VERSION_CODE) return@runCatching Status.UpToDate(now)
                 Status.Ready(
                     Available(
                         versionCode = code,
-                        versionName = fields["slushalka"] ?: code.toString(),
+                        versionName = name,
                         builtAt = fields["builtAt"].orEmpty(),
                         // Имя файла приезжает из того же build-info: переименование
                         // сборки не потребует новой версии приложения.
@@ -138,6 +151,16 @@ class Updater(private val context: Context, private val settings: Settings) {
             }
         }
         if (part.length() < 1_000_000) throw IllegalStateException("Файл оказался слишком мал")
+        // Последний замок: это должна быть Слушалка. Чужой APK система поверх
+        // и так не поставит, но «приложение не установлено» без объяснения
+        // хуже честной ошибки с именем пакета.
+        val pkg = context.packageManager.getPackageArchiveInfo(part.path, 0)?.packageName
+        if (pkg != BuildConfig.APPLICATION_ID) {
+            part.delete()
+            throw IllegalStateException(
+                "Скачался не тот APK (${pkg ?: "не читается"}) - в apk-builds лежит чужая сборка"
+            )
+        }
         target.delete()
         if (!part.renameTo(target)) throw IllegalStateException("Не удалось сохранить файл")
         return target
