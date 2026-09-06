@@ -9,6 +9,7 @@ import ru.zf.slushalka.ask.AskEngine
 import ru.zf.slushalka.ask.ChunkRecognizer
 import ru.zf.slushalka.ask.ClaudeClient
 import ru.zf.slushalka.ask.Speaker
+import ru.zf.slushalka.catalog.CatalogState
 import ru.zf.slushalka.data.AskLog
 import ru.zf.slushalka.data.Bookmarks
 import ru.zf.slushalka.data.LibraryStore
@@ -40,6 +41,7 @@ class SlushalkaApp : Application() {
     lateinit var speaker: Speaker; private set
     lateinit var recognizer: ChunkRecognizer; private set
     lateinit var state: AppState; private set
+    lateinit var catalog: CatalogState; private set
 
     override fun onCreate() {
         super.onCreate()
@@ -59,6 +61,7 @@ class SlushalkaApp : Application() {
             scope.launch { state.syncPush(bookId) }
         }
         state = AppState(this)
+        catalog = CatalogState(this)
         player.artworkFor = { bookId, absMs -> state.pictureUriAt(bookId, absMs) }
     }
 }

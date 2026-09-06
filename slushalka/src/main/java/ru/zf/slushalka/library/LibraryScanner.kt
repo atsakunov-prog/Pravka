@@ -12,6 +12,10 @@ import android.provider.DocumentsContract
  * Отдельно разбирается раскладка «диск 1 / диск 2»: если в папке самой аудио
  * нет, но лежит текст книги (fb2/epub) или подпапки называются частями, все
  * куски собираются в одну книгу, а не в две-три.
+ *
+ * И ещё одно: **папка с одним текстом и без подпапок - тоже книга**, только
+ * без звука. Так выглядит книга, скачанная из каталога Флибусты: её читают
+ * глазами, а звук, если появится рядом, подхватится при следующем чтении папки.
  */
 class LibraryScanner(private val context: Context) {
 
@@ -51,7 +55,13 @@ class LibraryScanner(private val context: Context) {
             return listOf(makeBook(relPath, docId, folderName, files, cover, text))
         }
 
-        if (dirs.isEmpty()) return emptyList()
+        if (dirs.isEmpty()) {
+            // Текст без записи и без подпапок - книга для чтения. Условие про
+            // подпапки нарочно: случайный fb2 в корне библиотеки не должен
+            // превращать всю полку в одну «книгу».
+            return if (text != null) listOf(makeBook(relPath, docId, folderName, emptyList(), cover, text))
+            else emptyList()
+        }
 
         val merge = text != null || dirs.all { looksLikePart(it.name) }
         if (merge) {

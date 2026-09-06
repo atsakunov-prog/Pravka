@@ -92,34 +92,37 @@ class AppState(private val app: SlushalkaApp) {
     }
 
     fun rescan() {
+        app.scope.launch { rescanNow() }
+    }
+
+    /** То же, но дождаться: каталог после скачивания хочет знать, появилась ли книга. */
+    suspend fun rescanNow() {
         val tree = treeUri() ?: return
-        app.scope.launch {
-            _busy.value = "Читаю папку…"
-            val known = _books.value.associateBy { it.id }
-            val found = withContext(Dispatchers.IO) { LibraryScanner(app).scan(tree) }
-            // Уже измеренные длительности переносим: мерить заново долго и незачем.
-            val merged = found.map { b ->
-                val old = known[b.id] ?: return@map b
-                val byDoc = old.files.associateBy { it.docId }
-                b.copy(
-                    files = b.files.map { f ->
-                        val prev = byDoc[f.docId]
-                        if (prev != null && prev.size == f.size) f.copy(durationMs = prev.durationMs) else f
-                    },
-                    title = b.title.ifBlank { old.title },
-                    author = b.author.ifBlank { old.author },
-                )
-            }
-            app.library.replace(tree.toString(), merged)
-            _books.value = merged
-            _busy.value = null
-            syncPull()
+        _busy.value = "Читаю папку…"
+        val known = _books.value.associateBy { it.id }
+        val found = withContext(Dispatchers.IO) { LibraryScanner(app).scan(tree) }
+        // Уже измеренные длительности переносим: мерить заново долго и незачем.
+        val merged = found.map { b ->
+            val old = known[b.id] ?: return@map b
+            val byDoc = old.files.associateBy { it.docId }
+            b.copy(
+                files = b.files.map { f ->
+                    val prev = byDoc[f.docId]
+                    if (prev != null && prev.size == f.size) f.copy(durationMs = prev.durationMs) else f
+                },
+                title = b.title.ifBlank { old.title },
+                author = b.author.ifBlank { old.author },
+            )
         }
+        app.library.replace(tree.toString(), merged)
+        _books.value = merged
+        _busy.value = null
+        syncPull()
     }
 
     /** Длительности нужны раньше звука: без них не посчитать место в книге. */
     private suspend fun ensureDurations(book: Book): Book {
-        if (book.durationsReady) return book
+        if (book.durationsReady || !book.hasAudio) return book
         val tree = treeUri() ?: return book
         val measured = withContext(Dispatchers.IO) {
             Durations.probe(app, tree, book) { done, total ->
@@ -142,12 +145,18 @@ class AppState(private val app: SlushalkaApp) {
             _current.value = ready
             _text.value = null
             _alignment.value = null
-            // Служба поднимается вместе с книгой: она и держит воспроизведение
-            // живым, когда экран погаснет, и рисует плеер на локскрине.
-            runCatching {
-                app.startService(Intent(app, ru.zf.slushalka.player.PlaybackService::class.java))
+            if (ready.hasAudio) {
+                // Служба поднимается вместе с книгой: она и держит воспроизведение
+                // живым, когда экран погаснет, и рисует плеер на локскрине.
+                runCatching {
+                    app.startService(Intent(app, ru.zf.slushalka.player.PlaybackService::class.java))
+                }
+                if (!app.player.isOpen(ready.id)) app.player.open(tree, ready)
+            } else {
+                // Книга без записи: плеер не трогаем, а если в нём играет другая
+                // книга - ставим на паузу, как при любом переходе к чтению.
+                app.player.pauseForAsking()
             }
-            if (!app.player.isOpen(ready.id)) app.player.open(tree, ready)
             // Книгу открыли руками - вопрос «продолжить с другого устройства?»
             // про неё уже неактуален.
             if (_resumeOffer.value?.bookId == ready.id) _resumeOffer.value = null
@@ -165,7 +174,9 @@ class AppState(private val app: SlushalkaApp) {
             _busy.value = null
             if (_current.value?.id != book.id) return@launch
             _text.value = t
-            if (t != null) {
+            // Книге без записи карта «звук ↔ текст» не нужна: без неё читалка
+            // открывается на сохранённой странице и ничего не сверяет по звуку.
+            if (t != null && book.hasAudio) {
                 _alignment.value = Alignment.build(book, t, app.positions.get(book.id).anchors)
                 loadMarkup(book, t)
                 // Текст разобран - теперь шторке есть что показать вместо обложки.

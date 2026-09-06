@@ -308,7 +308,8 @@ fun ReaderScreen(
                     .padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onBack) { Text("‹ Плеер", color = palette.fg) }
+                // Книге без записи плеер не нужен - «назад» ведёт на полку.
+                TextButton(onClick = onBack) { Text(if (bk.hasAudio) "‹ Плеер" else "‹ Полка", color = palette.fg) }
                 Text(
                     t.chapterAt(offset)?.title.orEmpty(),
                     color = palette.dim,
@@ -351,10 +352,12 @@ fun ReaderScreen(
                     LoveLine(alpha = 0.3f, size = 10, color = palette.fg)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    TextButton(onClick = {
-                        state.listenFrom(readPlace())
-                        onListen()
-                    }) { Text("Слушать отсюда", color = palette.fg) }
+                    if (bk.hasAudio) {
+                        TextButton(onClick = {
+                            state.listenFrom(readPlace())
+                            onListen()
+                        }) { Text("Слушать отсюда", color = palette.fg) }
+                    }
                     TextButton(onClick = { showRecap = true }) { Text("Содержание", color = palette.fg) }
                     TextButton(onClick = { onAsk(readPlace(), null) }) { Text("Спросить", color = palette.fg) }
                 }
@@ -408,7 +411,8 @@ fun ReaderScreen(
             onClose = { picture = null },
         )
     }
-    pressed?.let { at ->
+    // Долгое нажатие - разговор о карте «звук ↔ текст»; книге без записи он ни к чему.
+    pressed?.takeIf { bk.hasAudio }?.let { at ->
         AlertDialog(
             onDismissRequest = { pressed = null },
             title = { Text("Это место") },

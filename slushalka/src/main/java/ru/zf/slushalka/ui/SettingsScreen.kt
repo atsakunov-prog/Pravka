@@ -54,6 +54,7 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
 
     var key by remember { mutableStateOf(prefs.apiKey) }
     var profile by remember { mutableStateOf(prefs.profile) }
+    var flibusta by remember { mutableStateOf(prefs.flibustaUrl) }
     var showGallery by remember { mutableStateOf(false) }
     val current by state.current.collectAsState()
     val text by state.text.collectAsState()
@@ -119,6 +120,28 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                     TextButton(onClick = { state.reparseText() }) { Text("Разобрать заново") }
                 }
             }
+
+            Section("Флибуста")
+            OutlinedTextField(
+                value = flibusta,
+                onValueChange = {
+                    flibusta = it
+                    scope.launch { state.settings.setFlibustaUrl(it) }
+                    // Ленты уже открытого каталога вели на прежний адрес.
+                    app.catalog.reset()
+                },
+                label = { Text("Адрес каталога") },
+                placeholder = { Text(Settings.DEFAULT_FLIBUSTA_URL) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            Note(
+                "Каталог открывается лупой на полке. Книга скачивается в папку «Флибуста» внутри " +
+                    "библиотеки - отдельной папкой с fb2 и обложкой - и появляется на полке как " +
+                    "книга без звука: читалка, вопросы и пересказ работают, плеера нет. Появится " +
+                    "начитка - положи файлы в ту же папку.\n\n" +
+                    "Если сайт в этой сети не открывается, помогает VPN или адрес зеркала здесь."
+            )
 
             Section("Кто слушает")
             OutlinedTextField(

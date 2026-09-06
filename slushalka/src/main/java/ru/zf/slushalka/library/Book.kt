@@ -45,6 +45,13 @@ data class Book(
     val totalMs: Long get() = files.sumOf { it.durationMs }
     val durationsReady: Boolean get() = files.isNotEmpty() && files.all { it.durationMs > 0 }
 
+    /**
+     * Есть ли что слушать. Книга, скачанная из каталога, - это один fb2 без
+     * записи: её только читают, плеер и карта «звук ↔ текст» ей не нужны.
+     * Положи рядом mp3 - и при следующем чтении папки она станет обычной.
+     */
+    val hasAudio: Boolean get() = files.isNotEmpty()
+
     /** Смещение начала файла [index] от начала книги. */
     fun offsetOf(index: Int): Long {
         var sum = 0L

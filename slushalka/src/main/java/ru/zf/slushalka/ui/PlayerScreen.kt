@@ -93,6 +93,25 @@ fun PlayerScreen(
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Книга не выбрана") }
         return
     }
+    // Сюда книга без записи попадать не должна - её открывают читалкой. Но если
+    // всё-таки попала, честно сказать и увести читать лучше пустого плеера.
+    if (!b.hasAudio) {
+        Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(b.title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "У этой книги нет записи - только текст.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onRead) { Text("Читать") }
+                TextButton(onClick = onBack) { Text("К библиотеке") }
+            }
+        }
+        return
+    }
 
     Scaffold(
         topBar = {

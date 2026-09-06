@@ -85,7 +85,8 @@ fun AskSheet(
     var pausedByUs by remember { mutableStateOf(false) }
     // Место фиксируется на момент открытия окна: пока набираешь вопрос,
     // книга уже стоит, и «сейчас» никуда не уезжает.
-    val askedAtMs = remember { play.absMs }
+    // У книги без записи плеер может держать чужую книгу - её секунды сюда не берём.
+    val askedAtMs = remember { if (book?.hasAudio == false) 0L else play.absMs }
 
     val voice = remember { VoiceInput(app) }
 

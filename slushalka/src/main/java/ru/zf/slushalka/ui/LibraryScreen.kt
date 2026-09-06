@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.zf.slushalka.SlushalkaApp
 import kotlinx.coroutines.launch
+import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,6 +53,7 @@ fun LibraryScreen(
     onPickTree: () -> Unit,
     onOpen: (Book) -> Unit,
     onSettings: () -> Unit,
+    onCatalog: () -> Unit,
 ) {
     val state = app.state
     val books by state.books.collectAsState()
@@ -67,6 +70,10 @@ fun LibraryScreen(
             TopAppBar(
                 title = { Text("Слушалка") },
                 actions = {
+                    // Каталог Флибусты: найти книгу и положить её на эту же полку.
+                    IconButton(onClick = onCatalog) {
+                        Icon(Icons.Default.Search, contentDescription = "Флибуста")
+                    }
                     IconButton(onClick = { state.rescan() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Перечитать папку")
                     }
@@ -222,16 +229,21 @@ private fun ContinueCard(app: SlushalkaApp, book: Book, rev: Int, onOpen: (Book)
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (book.totalMs > 0) {
-                        "${formatClock(st.absMs)} · осталось ${formatLeft(left, st.speed.takeIf { it > 0 } ?: 1f)}"
-                    } else "длительности ещё не измерены",
+                    when {
+                        !book.hasAudio -> if (st.readChar > 0) "читаю, стр. ${st.readChar / Settings.PAGE_CHARS + 1}" else "текст, без звука"
+                        book.totalMs > 0 ->
+                            "${formatClock(st.absMs)} · осталось ${formatLeft(left, st.speed.takeIf { it > 0 } ?: 1f)}"
+                        else -> "длительности ещё не измерены"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { if (book.totalMs > 0) st.absMs.toFloat() / book.totalMs else 0f },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (book.hasAudio) {
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { if (book.totalMs > 0) st.absMs.toFloat() / book.totalMs else 0f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
     }
@@ -271,7 +283,8 @@ private fun BookRow(
             val bits = buildList {
                 if (book.author.isNotBlank()) add(book.author)
                 if (book.totalMs > 0) add(formatSpan(book.totalMs))
-                add("${book.files.size} ф.")
+                // Книга из каталога - один текст: файлов у неё не «0», а нет вовсе.
+                if (book.hasAudio) add("${book.files.size} ф.") else add("только текст")
                 if (book.textDocId == null) add("без текста")
             }
             Text(
@@ -281,9 +294,14 @@ private fun BookRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (st.absMs > 0 || others.isNotEmpty()) {
+            if (st.absMs > 0 || others.isNotEmpty() || (!book.hasAudio && st.readChar > 0)) {
                 Spacer(Modifier.height(4.dp))
-                val mine = if (st.finished) "дослушано" else if (st.absMs > 0) "$percent%" else ""
+                val mine = when {
+                    st.finished -> "дослушано"
+                    !book.hasAudio -> "стр. ${st.readChar / Settings.PAGE_CHARS + 1}"
+                    st.absMs > 0 -> "$percent%"
+                    else -> ""
+                }
                 val theirs = others.joinToString(" · ") { (who, ms) ->
                     val p = if (book.totalMs > 0) (ms * 100 / book.totalMs).toInt() else 0
                     "$who $p%"

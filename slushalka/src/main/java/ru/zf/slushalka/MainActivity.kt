@@ -23,14 +23,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
+import ru.zf.slushalka.library.Book
 import ru.zf.slushalka.ui.AskSheet
+import ru.zf.slushalka.ui.CatalogScreen
 import ru.zf.slushalka.ui.LibraryScreen
 import ru.zf.slushalka.ui.PlayerScreen
 import ru.zf.slushalka.ui.ReaderScreen
 import ru.zf.slushalka.ui.SettingsScreen
 import ru.zf.slushalka.ui.SlushalkaTheme
 
-enum class Screen { LIBRARY, PLAYER, READER, SETTINGS }
+enum class Screen { LIBRARY, PLAYER, READER, SETTINGS, CATALOG }
 
 class MainActivity : ComponentActivity() {
 
@@ -95,10 +97,27 @@ class MainActivity : ComponentActivity() {
         var askPrefill by remember { mutableStateOf<String?>(null) }
         val current by state.current.collectAsState()
 
+        // Куда возвращаться из читалки: книге без записи плеер не нужен,
+        // из неё «назад» - сразу на полку.
+        fun afterReader(): Screen = if (current?.hasAudio == false) Screen.LIBRARY else Screen.PLAYER
+
+        // Книга со звуком открывается плеером, книга из каталога - сразу читалкой.
+        val openBook: (Book) -> Unit = { book ->
+            state.open(book)
+            if (book.hasAudio) {
+                startPlayback()
+                screen = Screen.PLAYER
+            } else {
+                screen = Screen.READER
+            }
+        }
+
         BackHandler(enabled = screen != Screen.LIBRARY || asking) {
             when {
                 asking -> asking = false
-                screen == Screen.READER -> screen = Screen.PLAYER
+                screen == Screen.READER -> screen = afterReader()
+                // В каталоге «назад» сперва снимает верхнюю ленту, и только с корня уходит.
+                screen == Screen.CATALOG -> if (!app.catalog.back()) screen = Screen.LIBRARY
                 else -> screen = Screen.LIBRARY
             }
         }
@@ -108,12 +127,15 @@ class MainActivity : ComponentActivity() {
                 Screen.LIBRARY -> LibraryScreen(
                     app = app,
                     onPickTree = onPickTree,
-                    onOpen = { book ->
-                        state.open(book)
-                        startPlayback()
-                        screen = Screen.PLAYER
-                    },
+                    onOpen = openBook,
                     onSettings = { screen = Screen.SETTINGS },
+                    onCatalog = { screen = Screen.CATALOG },
+                )
+
+                Screen.CATALOG -> CatalogScreen(
+                    app = app,
+                    onClose = { screen = Screen.LIBRARY },
+                    onOpenBook = openBook,
                 )
 
                 Screen.PLAYER -> PlayerScreen(
@@ -135,7 +157,7 @@ class MainActivity : ComponentActivity() {
 
                 Screen.READER -> ReaderScreen(
                     app = app,
-                    onBack = { screen = Screen.PLAYER },
+                    onBack = { screen = afterReader() },
                     onListen = { screen = Screen.PLAYER },
                     onAsk = { at, question ->
                         askAtChar = at
@@ -146,7 +168,14 @@ class MainActivity : ComponentActivity() {
 
                 Screen.SETTINGS -> SettingsScreen(
                     app = app,
-                    onBack = { screen = if (current != null) Screen.PLAYER else Screen.LIBRARY },
+                    onBack = {
+                        val c = current
+                        screen = when {
+                            c == null -> Screen.LIBRARY
+                            c.hasAudio -> Screen.PLAYER
+                            else -> Screen.READER
+                        }
+                    },
                     onPickTree = onPickTree,
                 )
             }

@@ -70,6 +70,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val askEffort: String = "",
         val recapModel: String = MODEL_SONNET,
         val recapEffort: String = "",
+        // Каталог Флибусты: адрес сайта. Меняется на зеркало, когда основной
+        // не открывается, - поэтому настройка, а не константа.
+        val flibustaUrl: String = DEFAULT_FLIBUSTA_URL,
     )
 
     val flow: StateFlow<Prefs> = context.dataStore.data
@@ -107,6 +110,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 askEffort = p[KEY_ASK_EFFORT]?.takeIf { it in EFFORTS } ?: "",
                 recapModel = p[KEY_RECAP_MODEL]?.takeIf { it in MODELS } ?: MODEL_SONNET,
                 recapEffort = p[KEY_RECAP_EFFORT]?.takeIf { it in EFFORTS } ?: "",
+                flibustaUrl = p[KEY_FLIBUSTA]?.takeIf { it.isNotBlank() } ?: DEFAULT_FLIBUSTA_URL,
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -146,6 +150,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setAskEffort(v: String) = edit { if (v in EFFORTS) it[KEY_ASK_EFFORT] = v }
     suspend fun setRecapModel(v: String) = edit { if (v in MODELS) it[KEY_RECAP_MODEL] = v }
     suspend fun setRecapEffort(v: String) = edit { if (v in EFFORTS) it[KEY_RECAP_EFFORT] = v }
+    suspend fun setFlibustaUrl(v: String) = edit { it[KEY_FLIBUSTA] = v.trim() }
 
     companion object {
         const val MODEL_OPUS = "claude-opus-5"
@@ -179,6 +184,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
          */
         const val DEFAULT_UPDATE_URL =
             "https://raw.githubusercontent.com/atsakunov-prog/Pravka/apk-builds/slushalka-build-info.txt"
+
+        /** Адрес каталога Флибусты. Ленты OPDS лежат под `/opds`. */
+        const val DEFAULT_FLIBUSTA_URL = "https://flibusta.is"
 
         const val FONT_SERIF = "serif"
         const val FONT_SANS = "sans"
@@ -221,5 +229,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_ASK_EFFORT = stringPreferencesKey("ask_effort")
         private val KEY_RECAP_MODEL = stringPreferencesKey("recap_model")
         private val KEY_RECAP_EFFORT = stringPreferencesKey("recap_effort")
+        private val KEY_FLIBUSTA = stringPreferencesKey("flibusta_url")
     }
 }
