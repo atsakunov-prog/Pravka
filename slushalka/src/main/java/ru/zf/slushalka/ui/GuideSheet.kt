@@ -327,12 +327,12 @@ fun GuideSheet(
                         )
                         Text(n.text, style = MaterialTheme.typography.bodyMedium)
                     }
-                    if (!showAll && e.notes.size > visibleNotes.size) {
+                    if (!showAll) {
+                        // Одна и та же строка у всех статей: сказать «дальше о нём ещё
+                        // три записи» - значит выдать, что герой ещё сыграет.
                         Spacer(Modifier.height(10.dp))
                         Text(
-                            "Дальше в книге о нём ещё ${e.notes.size - visibleNotes.size} " +
-                                plural(e.notes.size - visibleNotes.size, "запись", "записи", "записей") +
-                                " - откроются по мере чтения.",
+                            "Записи о следующих главах откроются по мере чтения.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -352,13 +352,3 @@ fun GuideSheet(
 
 private fun stamp(ms: Long): String =
     if (ms <= 0) "—" else SimpleDateFormat("d.MM HH:mm", Locale("ru")).format(Date(ms))
-
-private fun plural(n: Int, one: String, few: String, many: String): String {
-    val m10 = n % 10
-    val m100 = n % 100
-    return when {
-        m10 == 1 && m100 != 11 -> one
-        m10 in 2..4 && m100 !in 12..14 -> few
-        else -> many
-    }
-}
