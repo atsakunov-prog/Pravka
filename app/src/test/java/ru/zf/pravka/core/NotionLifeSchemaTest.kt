@@ -32,10 +32,11 @@ class NotionLifeSchemaTest {
 
     private fun entry(
         id: Long, start: Long, end: Long, title: String, category: String,
-        source: String = "voice", raw: String = "", client: String = "",
+        source: String = "voice", raw: String = "", client: String = "", comment: String = "",
     ) = ZasechkaStore.Entry(
         id = id, start = start, end = end, raw = raw, title = title, category = category,
         client = client, useful = 0, source = source, synced = false, createdAt = start,
+        comment = comment,
     )
 
     @Test
@@ -57,6 +58,18 @@ class NotionLifeSchemaTest {
         assertEquals(6.0, row.getJSONObject("Очки").getDouble("number"), 0.01)
         assertEquals("голос", row.getJSONObject("Записано").getJSONObject("select").getString("name"))
         assertEquals("t42", row.getJSONObject("EntryId").getJSONArray("rich_text").getJSONObject(0).getJSONObject("text").getString("content"))
+    }
+
+    @Test
+    fun `комментарий к делу едет своей колонкой, пустой - пустым массивом`() {
+        val e = entry(43, now - 90 * 60_000L, now - 30 * 60_000L, "Созвон с Ильёй", "Звонки", comment = "Договорились о бюджете до пятницы")
+        val row = NotionLifeSchema.ribbonRow(e, minutes = 60, worth = 7, now = now)
+        assertFits(NotionLifeSchema.ZASECHKA, row)
+        assertEquals("Договорились о бюджете до пятницы", text(row, "Комментарий"))
+        // Пустой комментарий кладётся тоже: иначе снятый в приложении текст
+        // остался бы висеть в Notion.
+        val bare = NotionLifeSchema.ribbonRow(e.copy(comment = ""), minutes = 60, worth = 7, now = now)
+        assertEquals(0, bare.getJSONObject("Комментарий").getJSONArray("rich_text").length())
     }
 
     @Test

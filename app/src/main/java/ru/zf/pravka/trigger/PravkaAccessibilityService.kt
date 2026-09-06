@@ -109,6 +109,10 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var zWhisperRecording = false
     // Tap on the live plate: kill the mic, type instead (confidential takes).
     @Volatile internal var zTypeInstead = false
+    // Комментарий к делу из меню «З»: id записи, куда уедет ближайший тейк;
+    // 0 — обычная запись в ленту. Сбрасывается на старте обычного тейка, чтобы
+    // брошенное окно ввода не увело следующую фразу в чужой комментарий.
+    @Volatile internal var zCommentFor = 0L
     @Volatile internal var cachedZEnabled = true
     @Volatile internal var cachedStackIdle = true
     @Volatile internal var cachedZGapMin = 45
@@ -876,6 +880,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             zButton?.hideTicker()
             if (file == null) {
+                zCommentFor = 0L
                 zButton?.setBusy(false)
                 Haptics.error(this)
                 Feedback.toast(this, getString(R.string.dictation_empty))
@@ -886,8 +891,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                 val result = app.transcribeDictation(file)
                 result.onSuccess { text ->
                     app.recordings.delete(file.name)
-                    onZasechkaText(text)
+                    // Тейк из меню «Комментарий к…» уходит не в разбор ленты,
+                    // а в поле комментария записи, тем же флагом, что и тут.
+                    if (zCommentFor > 0L) onZasechkaCommentText(text) else onZasechkaText(text)
                 }.onFailure { e ->
+                    zCommentFor = 0L
                     zButton?.setBusy(false)
                     // Audio stays in Recordings, like a failed Правка take.
                     Haptics.error(this@PravkaAccessibilityService)

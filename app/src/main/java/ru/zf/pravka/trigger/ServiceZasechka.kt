@@ -77,6 +77,8 @@ fun PravkaAccessibilityService.onZasechkaTap() {
         Feedback.toast(this, getString(R.string.z_busy_zasechka))
         return
     }
+    // Тап — запись в ленту, даже если окно комментария бросили открытым.
+    zCommentFor = 0L
     if (!hasMicPermission()) {
         micRequestForZasechka = true
         requestMicPermission()
@@ -84,6 +86,36 @@ fun PravkaAccessibilityService.onZasechkaTap() {
     }
     startZasechkaCapture()
 }
+
+/**
+ * Пункт меню «З»: ближайший тейк — не запись в ленту, а комментарий к делу
+ * [entryId]. Микрофон тот же, плашка та же, разница — куда уезжает текст: не
+ * Сонету-разборщику ленты, а движку Правки (словарь, правила, чистка) и оттуда
+ * в поле комментария записи. Охрана единственного микрофона — как у тапа.
+ */
+internal fun PravkaAccessibilityService.startZasechkaComment(entryId: Long) {
+    touched()
+    if (zSession != null || zWhisperRecording || rSession != null || rWhisperRecording ||
+        eSession != null || eWhisperRecording || googleSession != null || DictationService.recording
+    ) {
+        Haptics.error(this)
+        Feedback.toast(this, getString(R.string.z_busy_zasechka))
+        return
+    }
+    zCommentFor = entryId
+    if (!hasMicPermission()) {
+        // Разрешение вернётся в startZasechkaCapture — флаг уже стоит.
+        micRequestForZasechka = true
+        requestMicPermission()
+        return
+    }
+    startZasechkaCapture()
+}
+
+/** Подпись плашки на старте: комментарий должен быть узнаваем с первого взгляда. */
+internal fun PravkaAccessibilityService.zTickerPrompt(): String =
+    if (zCommentFor > 0L) "💬 комментарий к делу… (тап сюда — набрать текстом)"
+    else "🎙 говори… (тап сюда — набрать текстом)"
 
 internal fun PravkaAccessibilityService.startZasechkaCapture() {
     zButton?.hideInput()
@@ -94,7 +126,7 @@ internal fun PravkaAccessibilityService.startZasechkaCapture() {
         // Whisper has no live words - the plate still shows, because it
         // is also the "type instead" tap target (confidential takes).
         zButton?.showTicker()
-        zButton?.updateTicker("🎙 говори… (тап сюда — набрать текстом)")
+        zButton?.updateTicker(zTickerPrompt())
         Haptics.start(this)
         startDictation()
     } else {
@@ -132,7 +164,7 @@ internal fun PravkaAccessibilityService.startZasechkaGoogle() {
     )
     zButton?.setRecording(true)
     zButton?.showTicker()
-    zButton?.updateTicker("🎙 говори… (тап сюда — набрать текстом)")
+    zButton?.updateTicker(zTickerPrompt())
     Haptics.start(this)
     runCatching { startMicHold() }
 }
@@ -169,7 +201,8 @@ internal fun PravkaAccessibilityService.onZasechkaPlateTap() {
 internal fun PravkaAccessibilityService.openZasechkaTypeIn(prefill: String) {
     zButton?.showInput(prefill) { typed ->
         val text = typed.trim()
-        if (text.isNotEmpty()) onZasechkaText(text, source = "text")
+        if (text.isEmpty()) return@showInput
+        if (zCommentFor > 0L) onZasechkaCommentText(text) else onZasechkaText(text, source = "text")
     }
 }
 
@@ -190,14 +223,78 @@ internal fun PravkaAccessibilityService.onZasechkaLiveDone(text: String) {
     if (zTypeInstead) {
         zTypeInstead = false
         zButton?.setBusy(false)
-        openZasechkaTypeIn(text.trim())
+        openZasechkaTypeIn(text.trim())  // окно само разведёт: лента или комментарий
+        return
+    }
+    if (zCommentFor > 0L) {
+        onZasechkaCommentText(text)
         return
     }
     onZasechkaText(text)
 }
 
+/**
+ * Текст комментария в руках (любой движок или набран): причесать движком
+ * Правки — как тап по «П», со словарём и правилами, — и записать в дело.
+ * Короткую фразу движок не трогает (его порог — 15 знаков), сбой чистки не
+ * теряет сказанное: в комментарий ложится сырой текст, причина — в записке
+ * целиком (правило: ошибку не затирать общей фразой). Прежний комментарий не
+ * затирается — новая фраза дописывается с новой строки: «добавить», не
+ * «заменить».
+ */
+internal fun PravkaAccessibilityService.onZasechkaCommentText(raw: String) {
+    val entryId = zCommentFor
+    zCommentFor = 0L
+    val text = raw.trim()
+    if (text.isBlank() || entryId <= 0L) {
+        zButton?.setBusy(false)
+        Haptics.error(this)
+        Feedback.toast(this, getString(R.string.dictation_empty))
+        return
+    }
+    if (!scope.isActive) return
+    zButton?.setBusy(true)
+    scope.launch {
+        val target = ru.zf.pravka.target.PlainTextTarget(text)
+        val outcome = runCatching { app.engine.proofread(target, ProofreadMode.CLEAN) }
+            .getOrElse { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                app.eventLog.add("засечка: чистка комментария упала: ${e.javaClass.simpleName}: ${e.message}")
+                ProofreadEngine.Outcome.Failed(e.message ?: "Неизвестная ошибка")
+            }
+        val cleaned = (target.result ?: text).trim().ifBlank { text }
+        val entry = runCatching { app.zasechkaStore.entryById(entryId) }.getOrNull()
+        val saved = entry != null && runCatching {
+            app.zasechkaStore.setComment(
+                entryId,
+                if (entry.comment.isBlank()) cleaned else entry.comment + "\n" + cleaned,
+            )
+        }.getOrDefault(false)
+        zButton?.setBusy(false)
+        if (entry == null || !saved) {
+            // Сказанное не пропадает: оно в записке и в журнале словами.
+            Haptics.error(this@onZasechkaCommentText)
+            zButton?.showNote("💬 Не записал — дела уже нет в ленте\n«$cleaned»", ok = false, holdMs = 5_000)
+            app.eventLog.add("засечка: комментарий к $entryId не записан, записи нет; текст: $cleaned")
+            return@launch
+        }
+        app.eventLog.add("засечка: комментарий к «${entry.title}»: $cleaned")
+        app.zasechkaSync.kickSoon(app.appScope)
+        val failure = (outcome as? ProofreadEngine.Outcome.Failed)?.message
+        if (failure == null) Haptics.success(this@onZasechkaCommentText)
+        else Haptics.error(this@onZasechkaCommentText)
+        zButton?.showNote(
+            "💬 ${entry.title.ifBlank { "без названия" }}\n$cleaned" +
+                (if (failure == null) "" else "\nзаписано без чистки: $failure"),
+            ok = failure == null,
+            holdMs = if (failure == null) 3_000 else 5_000,
+        )
+    }
+}
+
 internal fun PravkaAccessibilityService.onZasechkaLiveError(msg: String) {
     zSession = null
+    zCommentFor = 0L
     runCatching { stopMicHold() }
     zButton?.hideTicker()
     zButton?.setRecording(false)
@@ -320,6 +417,16 @@ internal fun PravkaAccessibilityService.showZasechkaMenu() {
             },
             goTab,
         )
+        // Комментарий к делу: к идущему, а если ничего не идёт — к последнему.
+        // Слова о деле чаще приходят, когда оно уже закрыто («созвонились» —
+        // и только потом что решили), поэтому пункт не пропадает с закрытием.
+        val target = open ?: runCatching { app.zasechkaStore.lastEntry() }.getOrNull()
+        val comment = target?.let { t ->
+            ZasechkaButtonController.MenuItem(
+                "💬 Комментарий к «${t.title.ifBlank { "без названия" }}»" +
+                    (if (open == null) " (последнее)" else "")
+            ) { startZasechkaComment(t.id) }
+        }
         // Владелец: «допом использую только 25 минут, 5 минут перерыв».
         // «50 минут» и «Отменить» убраны: отмена живёт в ленте, где видно,
         // что именно откатываешь, а полсотни минут он не ставил ни разу.
@@ -327,6 +434,7 @@ internal fun PravkaAccessibilityService.showZasechkaMenu() {
         val items = if (pomodoroEndsAt > 0) {
             listOfNotNull(
                 header,
+                comment,
                 ZasechkaButtonController.MenuItem(
                     if (pomodoroIsBreak) "Стоп: перерыв" else "Стоп: помидор"
                 ) { stopPomodoro(byUser = true) },
@@ -336,6 +444,7 @@ internal fun PravkaAccessibilityService.showZasechkaMenu() {
         } else {
             listOfNotNull(
                 header,
+                comment,
                 ZasechkaButtonController.MenuItem("🍅 25 минут") { startPomodoro(25, isBreak = false) },
                 ZasechkaButtonController.MenuItem("Перерыв 5") { startPomodoro(5, isBreak = true) },
                 openTab,

@@ -121,6 +121,9 @@ class ZasechkaSync(
                                     )
                                     put("source", e.source)
                                     put("raw", e.raw)
+                                    // Скрипт старой версии это поле просто не
+                                    // читает; новый кладёт его в «Комментарий».
+                                    put("comment", e.comment)
                                 }
                             )
                         }

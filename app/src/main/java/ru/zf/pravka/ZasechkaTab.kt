@@ -58,7 +58,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.text.font.FontWeight
@@ -332,6 +336,8 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     var editing by remember { mutableStateOf<ZasechkaStore.Entry?>(null) }
     // Chain edit: the whole sliced-up activity at once, all fragments.
     var editingChain by remember { mutableStateOf<List<ZasechkaStore.Entry>?>(null) }
+    // Баббл 💬: комментарий к делу отдельным окном (у цепочки — к голове).
+    var commenting by remember { mutableStateOf<ZasechkaStore.Entry?>(null) }
     var draft by remember { mutableStateOf("") }
     var processing by remember { mutableStateOf(false) }
 
@@ -497,6 +503,7 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                         worthOf = worthOf,
                         onStop = if (unit.open) doStop else null,
                         onEdit = { editingChain = unit.fragments },
+                        onComment = { commenting = head },
                         onDelete = {
                             app.appScope.launch { unit.fragments.forEach { store.delete(it.id) } }
                         },
@@ -509,6 +516,7 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                         worthOf = worthOf,
                         onStop = if (head.open) doStop else null,
                         onEdit = { editing = head },
+                        onComment = { commenting = head },
                         onDelete = { app.appScope.launch { store.delete(head.id) } },
                     )
                 }
@@ -731,7 +739,10 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             onSave = { updated ->
                 editing = null
                 app.appScope.launch {
-                    store.update(updated)
+                    // Поменялся один комментарий — это не правка дела: без шага
+                    // отмены, без «edit» в источнике и без обучения Засечки.
+                    if (onlyCommentChanged(entry, updated)) store.setComment(entry.id, updated.comment)
+                    else store.update(updated)
                     app.zasechkaSync.kickSoon(app.appScope)
                 }
             },
@@ -749,13 +760,19 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     editingChain?.let { chain ->
         val first = chain.first()
         val last = chain.last()
+        val shown = first.copy(end = if (last.open) 0L else last.end)
         EditEntryDialog(
-            entry = first.copy(end = if (last.open) 0L else last.end),
+            entry = shown,
             categories = categoryNames,
             onDismiss = { editingChain = null },
             onSave = { updated ->
                 editingChain = null
                 app.appScope.launch {
+                    if (onlyCommentChanged(shown, updated)) {
+                        store.setComment(first.id, updated.comment)
+                        app.zasechkaSync.kickSoon(app.appScope)
+                        return@launch
+                    }
                     for (f in chain) {
                         var nf = f.copy(
                             title = updated.title,
@@ -766,8 +783,10 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                         )
                         if (f.id == first.id) {
                             // An open fragment has end=0 - never clamp against it.
+                            // Комментарий — как надиктовка: у головы, не у кусков.
                             nf = nf.copy(
                                 start = if (f.open) updated.start else updated.start.coerceAtMost(f.end),
+                                comment = updated.comment,
                             )
                         }
                         if (f.id == last.id) {
@@ -783,6 +802,20 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             onDelete = {
                 editingChain = null
                 app.appScope.launch { chain.forEach { store.delete(it.id) } }
+            },
+        )
+    }
+
+    commenting?.let { entry ->
+        CommentDialog(
+            entry = entry,
+            onDismiss = { commenting = null },
+            onSave = { text ->
+                commenting = null
+                app.appScope.launch {
+                    store.setComment(entry.id, text)
+                    app.zasechkaSync.kickSoon(app.appScope)
+                }
             },
         )
     }
@@ -899,6 +932,7 @@ private fun EntryRow(
     worthOf: (String) -> Int,
     onStop: (() -> Unit)?,
     onEdit: () -> Unit,
+    onComment: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Row(
@@ -961,6 +995,7 @@ private fun EntryRow(
                     PointsChip(pts)
                 }
             }
+            CommentLine(entry.comment)
         }
         if (onStop != null) {
             IconButton(onClick = onStop, modifier = Modifier.size(30.dp)) {
@@ -971,6 +1006,7 @@ private fun EntryRow(
                 )
             }
         }
+        CommentBubble(hasComment = entry.comment.isNotBlank(), onClick = onComment)
         IconButton(onClick = onEdit, modifier = Modifier.size(30.dp)) {
             Icon(
                 Icons.Filled.Edit,
@@ -1000,6 +1036,7 @@ private fun ChainBlock(
     worthOf: (String) -> Int,
     onStop: (() -> Unit)?,
     onEdit: () -> Unit,
+    onComment: () -> Unit,
     onDelete: () -> Unit,
     onEditInterruption: (ZasechkaStore.Entry) -> Unit,
 ) {
@@ -1072,6 +1109,7 @@ private fun ChainBlock(
                             PointsChip(pts, bold = true)
                         }
                     }
+                    CommentLine(head.comment)
                 }
                 if (onStop != null) {
                     IconButton(onClick = onStop, modifier = Modifier.size(30.dp)) {
@@ -1082,6 +1120,7 @@ private fun ChainBlock(
                         )
                     }
                 }
+                CommentBubble(hasComment = head.comment.isNotBlank(), onClick = onComment)
                 IconButton(onClick = onEdit, modifier = Modifier.size(30.dp)) {
                     Icon(
                         Icons.Filled.Edit,
@@ -2663,6 +2702,107 @@ private fun ImmersiveAppDialog(
 }
 
 // ---------------------------------------------------------------------------
+// Комментарий к делу: баббл в строке, строка под делом, своё окно.
+// ---------------------------------------------------------------------------
+
+/**
+ * Баббл 💬 рядом с ✎ и ✕. В core-наборе иконок Material пузыря нет, а тащить
+ * ради одного значка extended-набор незачем — он рисуется: контур пузыря с
+ * хвостиком, залитый. Пустой — бледный, с комментарием — цветом акцента, так
+ * в ленте с одного взгляда видно, у каких дел есть слова.
+ */
+@Composable
+private fun CommentBubble(hasComment: Boolean, onClick: () -> Unit) {
+    val tint = if (hasComment) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+    IconButton(onClick = onClick, modifier = Modifier.size(30.dp)) {
+        Canvas(Modifier.size(15.dp)) {
+            val w = size.width
+            val body = size.height * 0.78f
+            val path = Path().apply {
+                addRoundRect(RoundRect(Rect(0f, 0f, w, body), CornerRadius(body * 0.38f)))
+                // Хвостик влево-вниз, как у реплики в мессенджере.
+                moveTo(w * 0.18f, body - 1f)
+                lineTo(w * 0.10f, size.height)
+                lineTo(w * 0.42f, body - 1f)
+                close()
+            }
+            drawPath(path, tint)
+        }
+    }
+}
+
+/** Третья строка записи — сам комментарий, той же бледностью, что дыры в ленте. */
+@Composable
+private fun CommentLine(comment: String) {
+    if (comment.isBlank()) return
+    Text(
+        comment,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(top = 2.dp),
+    )
+}
+
+/**
+ * Поменялся ли в редакторе ТОЛЬКО комментарий. Время сравнивается минутами —
+ * как оно и стоит в полях: у записи есть секунды, а поле их не показывает, и
+ * нетронутое поле, распарсенное обратно, отличалось бы от записи на секунды.
+ */
+private fun onlyCommentChanged(before: ZasechkaStore.Entry, after: ZasechkaStore.Entry): Boolean =
+    after.title == before.title && after.category == before.category && after.client == before.client &&
+        fmtTime(after.start) == fmtTime(before.start) &&
+        after.open == before.open && (after.open || fmtTime(after.end) == fmtTime(before.end))
+
+/**
+ * Комментарий к делу отдельным окном — по тапу на баббл. Одно поле и ничего
+ * лишнего: слова к делу пишутся чаще, чем правится само дело, а полный
+ * редактор с временем и категорией ради них долгий. Диктовка — кнопкой «П»
+ * прямо в поле: это и есть движок Правки, со словарём, правилами и чисткой.
+ */
+@Composable
+private fun CommentDialog(
+    entry: ZasechkaStore.Entry,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var comment by remember { mutableStateOf(entry.comment) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(capFirst(entry.title.ifBlank { entry.category.ifBlank { "без названия" } })) },
+        text = {
+            Column {
+                Text(
+                    "${fmtTime(entry.start)}–${if (entry.open) "…" else fmtTime(entry.end)}" +
+                        (if (entry.category.isBlank()) "" else " · ${entry.category}"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = comment,
+                    onValueChange = { comment = it },
+                    label = { Text("Комментарий") },
+                    placeholder = { Text("что было внутри — «П» надиктует сюда") },
+                    minLines = 3,
+                    maxLines = 8,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (entry.comment.isNotBlank()) {
+                    TextButton(onClick = { onSave("") }) {
+                        Text("Убрать комментарий", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(onClick = { onSave(comment.trim()) }) { Text("Сохранить") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Entry editor: every field down to the minutes.
 // ---------------------------------------------------------------------------
 
@@ -2677,6 +2817,7 @@ private fun EditEntryDialog(
     var title by remember { mutableStateOf(entry.title) }
     var category by remember { mutableStateOf(entry.category) }
     var client by remember { mutableStateOf(entry.client) }
+    var comment by remember { mutableStateOf(entry.comment) }
     var startText by remember { mutableStateOf(fmtTime(entry.start)) }
     var endText by remember { mutableStateOf(if (entry.open) "" else fmtTime(entry.end)) }
     var categoryMenu by remember { mutableStateOf(false) }
@@ -2727,6 +2868,18 @@ private fun EditEntryDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
+                // Комментарий — обычное поле: тап по «П» надиктует прямо сюда,
+                // со словарём и чисткой, как в любое поле любого приложения.
+                OutlinedTextField(
+                    value = comment,
+                    onValueChange = { comment = it },
+                    label = { Text("Комментарий") },
+                    placeholder = { Text("что было внутри — «П» надиктует сюда") },
+                    minLines = 2,
+                    maxLines = 5,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = startText,
@@ -2769,6 +2922,7 @@ private fun EditEntryDialog(
                         title = title.trim(),
                         category = category.trim(),
                         client = client.trim(),
+                        comment = comment.trim(),
                         start = newStart,
                         end = if (newEnd > 0) newEnd.coerceAtLeast(newStart) else newEnd,
                         // Полезность руками больше не ставится: её заменила

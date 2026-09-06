@@ -146,6 +146,11 @@ class ZasechkaStore(private val context: Context) {
         val createdAt: Long,
         val pomodoros: Int = 0,   // 🍅 completed while this entry ran
         val notionSynced: Boolean = false,  // delivered to the Notion mirror
+        // Комментарий владельца к делу — ЧТО было внутри («обсудили бюджет,
+        // договорились до пятницы»). Отдельно от raw нарочно: raw — дословная
+        // надиктовка, из которой дело родилось, и её читает обучение; сюда
+        // еда ничего не приписывает. Пустая строка — комментария нет.
+        val comment: String = "",
     ) {
         val open: Boolean get() = end == 0L
         /** Exact span in ms - the only honest unit for adding a day up. */
@@ -285,6 +290,22 @@ class ZasechkaStore(private val context: Context) {
         entries.lastOrNull { it.open }
     }
 
+    suspend fun entryById(id: Long): Entry? = mutex.withLock {
+        ensureLoaded()
+        entries.firstOrNull { it.id == id }
+    }
+
+    /**
+     * Куда ложится комментарий из меню «З», когда ничего не идёт: последнее
+     * настоящее дело. Заполнитель «Не размечено» — не дело, комментировать
+     * его нечего; авто-факт (сон, тренировка с часов) — дело, к нему
+     * комментарий уместен.
+     */
+    suspend fun lastEntry(): Entry? = mutex.withLock {
+        ensureLoaded()
+        entries.filter { it.source != GAP_SOURCE }.maxByOrNull { it.start }
+    }
+
     /**
      * Starts a new entry at [start] and closes the open one (if any) at that
      * same moment - the ribbon stays continuous. A retroactive start earlier
@@ -378,6 +399,7 @@ class ZasechkaStore(private val context: Context) {
                         // Надиктовка принадлежит одному отрезку: копия на
                         // каждом куске размазывала заметку по выгрузкам.
                         raw = if (first) e.raw else "",
+                        comment = if (first) e.comment else "",
                         pomodoros = if (first) e.pomodoros else 0,
                         synced = false,
                         notionSynced = false,
@@ -393,6 +415,7 @@ class ZasechkaStore(private val context: Context) {
                     start = segStart,
                     end = if (e.open) 0L else e.end,
                     raw = "",
+                    comment = "",
                     pomodoros = 0,
                     synced = false,
                     notionSynced = false,
@@ -679,6 +702,7 @@ class ZasechkaStore(private val context: Context) {
                             // Надиктовка принадлежит одному фрагменту — тому,
                             // что держит id; копии размазывали заметку.
                             raw = if (firstSeg) m.raw else "",
+                            comment = if (firstSeg) m.comment else "",
                             pomodoros = 0,
                             synced = false,
                             notionSynced = false,
@@ -694,6 +718,7 @@ class ZasechkaStore(private val context: Context) {
                     start = cursor,
                     end = if (m.open) 0L else kotlin.math.max(m.end, cursor),
                     raw = if (firstSeg) m.raw else "",
+                    comment = if (firstSeg) m.comment else "",
                     synced = false,
                     notionSynced = false,
                 )
@@ -785,6 +810,7 @@ class ZasechkaStore(private val context: Context) {
                         e.copy(
                             id = nextId(),
                             raw = "",
+                            comment = "",
                             start = e0,
                             end = if (e.open) 0L else e.end,
                             pomodoros = 0,
@@ -995,6 +1021,28 @@ class ZasechkaStore(private val context: Context) {
         true
     }
 
+    /**
+     * Записать комментарий к делу — тем же путём, что [annotate], и по тем же
+     * причинам: текст не участвует в инвариантах ленты (пересчёт не нужен),
+     * а шаг отмены он занимать не должен — комментарии пишутся по нескольку
+     * раз в день, и стопка из пяти шагов забилась бы ими за вечер. Обучение
+     * Засечки сюда тоже не смотрит: комментарий — не поправка робота.
+     *
+     * Полная замена, не дописывание: голосовая дорога сама решает, склеивать
+     * ли с прежним текстом (см. `ServiceZasechka.onZasechkaCommentText`).
+     * Возвращает false, если записи с таким id нет.
+     */
+    suspend fun setComment(id: Long, comment: String): Boolean = mutex.withLock {
+        ensureLoaded()
+        val index = entries.indexOfFirst { it.id == id }
+        if (index < 0) return@withLock false
+        val text = comment.trim()
+        if (entries[index].comment == text) return@withLock true
+        entries[index] = entries[index].copy(comment = text, synced = false, notionSynced = false)
+        persist()
+        true
+    }
+
     /** A completed 🍅 is credited to the entry that was running. */
     suspend fun incrementPomodoro(id: Long): Unit = mutex.withLock {
         ensureLoaded()
@@ -1059,7 +1107,7 @@ class ZasechkaStore(private val context: Context) {
         var previousRaw = ""
         val csv = buildString {
             append(csvLegend())
-            append("date,start,end,id,minutes,title,category,client,useful,source,is_open,value,points,base_min,raw\n")
+            append("date,start,end,id,minutes,title,category,client,useful,source,is_open,value,points,base_min,raw,comment\n")
             for (e in list) {
                 val end = if (e.open) now else e.end
                 append(dateFormat.format(Date(e.start))).append(',')
@@ -1089,7 +1137,8 @@ class ZasechkaStore(private val context: Context) {
                 append((cat?.baseMin ?: 0).toString()).append(',')
                 val raw = if (e.raw.isNotBlank() && e.raw == previousRaw) "" else e.raw
                 if (e.raw.isNotBlank()) previousRaw = e.raw
-                append(csvEscape(raw)).append('\n')
+                append(csvEscape(raw)).append(',')
+                append(csvEscape(e.comment)).append('\n')
             }
         }
         val out = File(context.cacheDir, "pravka-zasechka.csv")
@@ -1157,6 +1206,8 @@ class ZasechkaStore(private val context: Context) {
         #   base_min          типичная длительность такого дела, 0 — не задана.
         #   raw               что было надиктовано. Печатается один раз на фразу:
         #                     у продолжений дела пусто, это не потеря данных.
+        #   comment           комментарий владельца к делу — что было внутри.
+        #                     Лежит на первом куске дела, у продолжений пусто.
         #
         # ДВЕ ЧЕСТНЫЕ СУММЫ
         #   сколько времени заняло  → SUM(minutes)  GROUP BY date, category
@@ -1310,6 +1361,7 @@ class ZasechkaStore(private val context: Context) {
                     // насыпал бы в таблицу дубли всей истории.
                     synced = true,
                     createdAt = start,
+                    comment = cell("comment"),
                 )
             )
         }
@@ -1606,6 +1658,7 @@ class ZasechkaStore(private val context: Context) {
                     createdAt = o.optLong("createdAt", start),
                     pomodoros = o.optInt("pomodoros", 0),
                     notionSynced = o.optBoolean("notionSynced", false),
+                    comment = o.optString("comment", ""),
                 )
             )
         }
@@ -1823,6 +1876,9 @@ class ZasechkaStore(private val context: Context) {
                             put("createdAt", e.createdAt)
                             if (e.pomodoros > 0) put("pomodoros", e.pomodoros)
                             put("notionSynced", e.notionSynced)
+                            // Как pomodoros: пишется только когда есть, старый
+                            // файл читается без миграции.
+                            if (e.comment.isNotBlank()) put("comment", e.comment)
                         }
                     )
                 }
