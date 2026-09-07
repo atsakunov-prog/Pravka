@@ -248,6 +248,8 @@ internal fun ReportTab(app: PravkaApp) {
     val tasks by app.todoistStore.tasksFlow.collectAsState()
     val kcalTarget by app.settings.foodKcalFlow.collectAsState(initial = 0)
     val proteinTarget by app.settings.foodProteinFlow.collectAsState(initial = 0)
+    val fatTarget by app.settings.foodFatFlow.collectAsState(initial = 0)
+    val carbsTarget by app.settings.foodCarbsFlow.collectAsState(initial = 0)
     val goalWeight by app.settings.goalWeightFlow.collectAsState(initial = 0)
 
     var costs by remember { mutableStateOf<Map<String, Double>>(emptyMap()) }
@@ -461,7 +463,11 @@ internal fun ReportTab(app: PravkaApp) {
 
         // ---- еда ----
         item {
-            FoodCard(app, dayStart, kcalTarget, proteinTarget, isToday, meals.size)
+            FoodCard(
+                app, dayStart,
+                kcalTarget = kcalTarget, proteinTarget = proteinTarget, fatTarget = fatTarget, carbsTarget = carbsTarget,
+                isToday = isToday, mealsSize = meals.size, weightKg = app.sportStore.lastWeight(),
+            )
         }
 
         // ---- дела и Правка ----
@@ -897,6 +903,16 @@ private fun CompareCard(
                 maxOf(food.protein, refFood.protein).toFloat(), PROTEIN_INK,
                 "${food.protein} г", "${refFood.protein} г", DayReport.delta(food.protein.toLong(), refFood.protein.toLong()),
                 deltaColor((food.protein - refFood.protein).toLong(), true, neutral),
+            )
+            CompareRow(
+                "Жиры$refPhoneText", food.fat.toFloat(), refFood.fat.toFloat(),
+                maxOf(food.fat, refFood.fat).toFloat(), FAT_INK,
+                "${food.fat} г", "${refFood.fat} г", DayReport.delta(food.fat.toLong(), refFood.fat.toLong()), neutral,
+            )
+            CompareRow(
+                "Углеводы$refPhoneText", food.carbs.toFloat(), refFood.carbs.toFloat(),
+                maxOf(food.carbs, refFood.carbs).toFloat(), CARBS_INK,
+                "${food.carbs} г", "${refFood.carbs} г", DayReport.delta(food.carbs.toLong(), refFood.carbs.toLong()), neutral,
             )
         }
         Spacer(Modifier.height(4.dp))
@@ -1349,8 +1365,44 @@ private fun BodyCard(
 }
 
 // ---------------------------------------------------------------------------
-// Еда
+// Еда: статистика по КБЖУ
 // ---------------------------------------------------------------------------
+
+/**
+ * Плитка одного макроса против цели из настроек Тела. Белок — пол (зелёный,
+ * когда добрал), калории, жиры и углеводы — потолок (красный, когда перебрал):
+ * владелец на рекомпозиции, белок 140+ — его же правило.
+ */
+@Composable
+private fun MacroTile(
+    label: String,
+    value: Int,
+    target: Int,
+    unit: String,
+    ink: Color,
+    floor: Boolean,
+    hint: String?,
+    modifier: Modifier,
+) {
+    val neutral = MaterialTheme.colorScheme.onSurfaceVariant
+    val shown = when {
+        value <= 0 -> "—"
+        unit.isBlank() -> "$value"
+        else -> "$value $unit"
+    }
+    val delta = if (target > 0 && value > 0) {
+        DayReport.delta(value.toLong(), target.toLong(), unit) + " к цели $target · " + pct(share(value.toLong(), target.toLong()))
+    } else if (target > 0) {
+        "цель $target"
+    } else null
+    val color = when {
+        target <= 0 || value <= 0 -> neutral
+        floor -> if (value >= target) GOOD else BAD
+        value > target -> BAD
+        else -> neutral
+    }
+    KpiTile(label, shown, modifier, delta = delta, deltaColor = color, hint = hint, valueColor = ink)
+}
 
 @Composable
 private fun FoodCard(
@@ -1358,39 +1410,112 @@ private fun FoodCard(
     dayStart: Long,
     kcalTarget: Int,
     proteinTarget: Int,
+    fatTarget: Int,
+    carbsTarget: Int,
     isToday: Boolean,
     mealsSize: Int,
+    weightKg: Double,
 ) {
+    val dateKey = isoOf(dayStart)
     val days7 = (6 downTo 0).map { dayStart - it * DAY }
-    val totals = days7.map { app.foodStore.dayTotal(isoOf(it)) }
-    val today = totals.last()
-    PaperCard(label = "Еда") {
-        if (totals.all { it.empty } || mealsSize == 0) {
-            PaperHint("Приёмов за эти семь дней в дневнике нет.")
+    val days28 = (27 downTo 0).map { dayStart - it * DAY }
+    val totals7 = days7.map { app.foodStore.dayTotal(isoOf(it)) }
+    val totals28 = days28.map { app.foodStore.dayTotal(isoOf(it)) }
+    val today = totals7.last()
+    val meals = app.foodStore.mealsOn(dateKey)
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    PaperCard(label = "Еда: КБЖУ") {
+        if (mealsSize == 0 || totals28.all { it.empty }) {
+            PaperHint("Приёмов за четыре недели в дневнике нет.")
             return@PaperCard
         }
-        val neutral = MaterialTheme.colorScheme.onSurfaceVariant
+        // ---- день против целей ----
+        val macroKcal = (today.protein * 4f + today.fat * 9f + today.carbs * 4f).coerceAtLeast(1f)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            KpiTile(
-                "Ккал", if (today.kcal > 0) "${today.kcal}" else "—", Modifier.weight(1f),
-                delta = if (kcalTarget > 0 && today.kcal > 0) DayReport.delta(today.kcal.toLong(), kcalTarget.toLong()) + " к цели $kcalTarget" else null,
-                deltaColor = neutral,
-                hint = "приёмов ${today.meals}",
-                valueColor = KCAL_INK,
+            MacroTile(
+                "Ккал", today.kcal, kcalTarget, "", KCAL_INK, floor = false,
+                hint = "приёмов ${today.meals}" + (if (today.fiber > 0) " · клетчатка ${today.fiber} г" else ""),
+                modifier = Modifier.weight(1f),
             )
-            KpiTile(
-                "Белок", if (today.protein > 0) "${today.protein} г" else "—", Modifier.weight(1f),
-                delta = if (proteinTarget > 0 && today.protein > 0) DayReport.delta(today.protein.toLong(), proteinTarget.toLong(), "г") + " к цели $proteinTarget" else null,
-                deltaColor = deltaColor((today.protein - proteinTarget).toLong(), if (proteinTarget > 0) true else null, neutral),
-                hint = "жиры ${today.fat} г · углеводы ${today.carbs} г" + (if (today.fiber > 0) " · клетчатка ${today.fiber} г" else ""),
-                valueColor = PROTEIN_INK,
+            MacroTile(
+                "Белок", today.protein, proteinTarget, "г", PROTEIN_INK, floor = true,
+                hint = if (weightKg > 0 && today.protein > 0) "${fmt1(today.protein / weightKg)} г на кг веса" else "${pct((today.protein * 4f / macroKcal).toDouble())} калорий",
+                modifier = Modifier.weight(1f),
             )
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MacroTile(
+                "Жиры", today.fat, fatTarget, "г", FAT_INK, floor = false,
+                hint = if (today.fat > 0) "${pct((today.fat * 9f / macroKcal).toDouble())} калорий" else null,
+                modifier = Modifier.weight(1f),
+            )
+            MacroTile(
+                "Углеводы", today.carbs, carbsTarget, "г", CARBS_INK, floor = false,
+                hint = if (today.carbs > 0) "${pct((today.carbs * 4f / macroKcal).toDouble())} калорий" else null,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        PaperHint(
+            "Цели — из настроек Тела. Белок — пол: зелёный, когда добрал; калории, жиры и " +
+                "углеводы — потолок: красный, когда перебрал. Считаются только подтверждённые приёмы.",
+        )
+
+        // ---- по приёмам ----
+        if (meals.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Text("По приёмам", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            val kinds = listOf("завтрак", "обед", "ужин", "перекус")
+            val byKind = meals.groupBy { it.kind.trim().lowercase().ifBlank { "приём" } }
+            val order = kinds.filter { it in byKind } + byKind.keys.filter { it !in kinds }.sorted()
+            val dayKcal = today.kcal.coerceAtLeast(1)
+            for (k in order) {
+                val list = byKind[k] ?: continue
+                val kcal = list.sumOf { it.kcal }
+                val prot = list.sumOf { it.protein }
+                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        k.replaceFirstChar { it.uppercase() } + (if (list.size > 1) " ×${list.size}" else ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.width(96.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Box(
+                        Modifier.weight(1f).height(9.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(4.dp)),
+                    ) {
+                        Box(
+                            Modifier.fillMaxWidth((kcal.toFloat() / dayKcal).coerceIn(0.015f, 1f)).height(9.dp)
+                                .background(KCAL_INK, RoundedCornerShape(4.dp)),
+                        )
+                    }
+                    Text(
+                        "$kcal ккал · Б $prot г",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 8.dp),
+                        maxLines = 1,
+                    )
+                }
+            }
+            val heaviest = order.maxByOrNull { k -> byKind[k]!!.sumOf { it.kcal } }
+            if (heaviest != null && today.kcal > 0) {
+                PaperHint(
+                    "Самый тяжёлый приём — $heaviest: " +
+                        pct(share(byKind[heaviest]!!.sumOf { it.kcal }.toLong(), today.kcal.toLong())) + " калорий дня.",
+                )
+            }
+        }
+
+        // ---- по дням ----
+        Spacer(Modifier.height(12.dp))
         Text("Калории по дням", style = MaterialTheme.typography.labelMedium, color = KCAL_INK)
         StackedColumns(
             columns = days7.mapIndexed { i, ds ->
-                StackedColumn(weekdayOf(ds), listOf(ChartSlice("ккал", totals[i].kcal.toFloat(), KCAL_INK)), faded = isToday && i == 6)
+                StackedColumn(weekdayOf(ds), listOf(ChartSlice("ккал", totals7[i].kcal.toFloat(), KCAL_INK)), faded = isToday && i == 6)
             },
             height = 96.dp,
             target = kcalTarget.takeIf { it > 0 }?.toFloat(),
@@ -1398,23 +1523,88 @@ private fun FoodCard(
             highlight = 6,
         )
         Spacer(Modifier.height(8.dp))
-        Text("Белок по дням", style = MaterialTheme.typography.labelMedium, color = PROTEIN_INK)
+        Text("Белок по дням, г", style = MaterialTheme.typography.labelMedium, color = PROTEIN_INK)
         StackedColumns(
             columns = days7.mapIndexed { i, ds ->
-                StackedColumn(weekdayOf(ds), listOf(ChartSlice("белок", totals[i].protein.toFloat(), PROTEIN_INK)), faded = isToday && i == 6)
+                StackedColumn(weekdayOf(ds), listOf(ChartSlice("белок", totals7[i].protein.toFloat(), PROTEIN_INK)), faded = isToday && i == 6)
             },
             height = 80.dp,
             target = proteinTarget.takeIf { it > 0 }?.toFloat(),
             valueText = { "${it.roundToInt()}" },
             highlight = 6,
         )
-        PaperHint("Пунктир — цели из настроек Тела. Считаются только подтверждённые приёмы.")
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text("Жиры, г", style = MaterialTheme.typography.labelMedium, color = FAT_INK)
+                StackedColumns(
+                    columns = days7.mapIndexed { i, ds ->
+                        StackedColumn(weekdayOf(ds), listOf(ChartSlice("жиры", totals7[i].fat.toFloat(), FAT_INK)), faded = isToday && i == 6)
+                    },
+                    height = 72.dp,
+                    target = fatTarget.takeIf { it > 0 }?.toFloat(),
+                    valueText = { "${it.roundToInt()}" },
+                    highlight = 6,
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text("Углеводы, г", style = MaterialTheme.typography.labelMedium, color = CARBS_INK)
+                StackedColumns(
+                    columns = days7.mapIndexed { i, ds ->
+                        StackedColumn(weekdayOf(ds), listOf(ChartSlice("углеводы", totals7[i].carbs.toFloat(), CARBS_INK)), faded = isToday && i == 6)
+                    },
+                    height = 72.dp,
+                    target = carbsTarget.takeIf { it > 0 }?.toFloat(),
+                    valueText = { "${it.roundToInt()}" },
+                    highlight = 6,
+                )
+            }
+        }
+        PaperHint("Пунктир — цели из настроек. Пустой день — приёмов не записано, а не «ничего не ел».")
+
+        // ---- доли макросов по дням ----
+        Spacer(Modifier.height(12.dp))
+        Text("Доли калорий по дням: белки · жиры · углеводы", style = MaterialTheme.typography.labelMedium, color = labelColor)
+        StackedColumns(
+            columns = days7.mapIndexed { i, ds ->
+                val t = totals7[i]
+                val p = t.protein * 4f
+                val f = t.fat * 9f
+                val c = t.carbs * 4f
+                val sum = p + f + c
+                if (sum <= 0f) StackedColumn(weekdayOf(ds), emptyList())
+                else StackedColumn(
+                    weekdayOf(ds),
+                    listOf(
+                        ChartSlice("белки", p / sum * 100f, PROTEIN_INK),
+                        ChartSlice("жиры", f / sum * 100f, FAT_INK),
+                        ChartSlice("углеводы", c / sum * 100f, CARBS_INK),
+                    ),
+                    faded = isToday && i == 6,
+                )
+            },
+            height = 72.dp,
+            highlight = 6,
+        )
+        val fed7 = totals7.filter { !it.empty }
+        if (fed7.isNotEmpty()) {
+            val p = fed7.sumOf { it.protein } * 4f
+            val f = fed7.sumOf { it.fat } * 9f
+            val c = fed7.sumOf { it.carbs } * 4f
+            val sum = (p + f + c).coerceAtLeast(1f)
+            Text(
+                "За неделю: белки ${pct((p / sum).toDouble())} · жиры ${pct((f / sum).toDouble())} · углеводы ${pct((c / sum).toDouble())} калорий",
+                style = MaterialTheme.typography.bodySmall,
+                color = labelColor,
+            )
+        }
+
+        // ---- донат дня ----
         if (today.kcal > 0) {
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             val p = today.protein * 4f
             val f = today.fat * 9f
             val c = today.carbs * 4f
-            val sum = (p + f + c).coerceAtLeast(1f)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 DonutChart(
                     listOf(ChartSlice("белки", p, PROTEIN_INK), ChartSlice("жиры", f, FAT_INK), ChartSlice("углеводы", c, CARBS_INK)),
@@ -1427,22 +1617,101 @@ private fun FoodCard(
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    LegendRow(PROTEIN_INK, "Белки", "${today.protein} г", sub = pct((p / sum).toDouble()))
-                    LegendRow(FAT_INK, "Жиры", "${today.fat} г", sub = pct((f / sum).toDouble()))
-                    LegendRow(CARBS_INK, "Углеводы", "${today.carbs} г", sub = pct((c / sum).toDouble()))
+                    LegendRow(PROTEIN_INK, "Белки", "${today.protein} г", sub = pct((p / macroKcal).toDouble()))
+                    LegendRow(FAT_INK, "Жиры", "${today.fat} г", sub = pct((f / macroKcal).toDouble()))
+                    LegendRow(CARBS_INK, "Углеводы", "${today.carbs} г", sub = pct((c / macroKcal).toDouble()))
                     PaperHint("доли по калориям: белки и углеводы ×4, жиры ×9")
                 }
             }
         }
-        val fed = totals.filter { !it.empty }
-        if (fed.size >= 2) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Среднее за ${fed.size} дн. с записями: ${fed.sumOf { it.kcal } / fed.size} ккал · " +
-                    "белок ${fed.sumOf { it.protein } / fed.size} г",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+
+        // ---- средние и попадания ----
+        val fed28 = totals28.filter { !it.empty }
+        fun avg(list: List<ru.zf.pravka.data.FoodStore.DayTotal>, of: (ru.zf.pravka.data.FoodStore.DayTotal) -> Int): String =
+            if (list.isEmpty()) "—" else "${list.sumOf(of) / list.size}"
+        if (fed7.isNotEmpty() || fed28.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Text("В среднем за день с записями", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            Row(Modifier.fillMaxWidth()) {
+                Text("", Modifier.weight(1.3f))
+                for (h in listOf("7 дн. (${fed7.size})", "28 дн. (${fed28.size})", "цель")) {
+                    Text(h, style = MaterialTheme.typography.labelSmall, color = labelColor, modifier = Modifier.weight(1f), maxLines = 1)
+                }
+            }
+            data class AvgRow(val name: String, val ink: Color, val of: (ru.zf.pravka.data.FoodStore.DayTotal) -> Int, val target: Int)
+            val rows = listOf(
+                AvgRow("Ккал", KCAL_INK, { it.kcal }, kcalTarget),
+                AvgRow("Белок, г", PROTEIN_INK, { it.protein }, proteinTarget),
+                AvgRow("Жиры, г", FAT_INK, { it.fat }, fatTarget),
+                AvgRow("Углеводы, г", CARBS_INK, { it.carbs }, carbsTarget),
+                AvgRow("Клетчатка, г", labelColor, { it.fiber }, 0),
             )
+            for (r in rows) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                    Text(r.name, style = MaterialTheme.typography.bodySmall, color = r.ink, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1.3f))
+                    Text(avg(fed7, r.of), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    Text(avg(fed28, r.of), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    Text(if (r.target > 0) "${r.target}" else "—", style = MaterialTheme.typography.bodySmall, color = labelColor, modifier = Modifier.weight(1f))
+                }
+            }
+            if (fed7.isNotEmpty() && (proteinTarget > 0 || kcalTarget > 0)) {
+                val protHits = fed7.count { it.protein >= proteinTarget }
+                val kcalHits = fed7.count { it.kcal <= kcalTarget }
+                Text(
+                    listOfNotNull(
+                        if (proteinTarget > 0) "белок добран в $protHits из ${fed7.size} дней" else null,
+                        if (kcalTarget > 0) "калории в потолке в $kcalHits из ${fed7.size}" else null,
+                    ).joinToString(" · ").replaceFirstChar { it.uppercase() },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (weightKg > 0 && fed7.isNotEmpty()) {
+                val avgProt = fed7.sumOf { it.protein }.toDouble() / fed7.size
+                Text(
+                    "Белок на кг веса: ${fmt1(avgProt / weightKg)} г в среднем за неделю" +
+                        (if (proteinTarget > 0) " · цель $proteinTarget г — это ${fmt1(proteinTarget / weightKg)} г/кг при ${fmt1(weightKg)} кг" else ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = labelColor,
+                )
+            }
+        }
+
+        // ---- четыре недели ----
+        val weeks = (3 downTo 0).map { w -> totals28.subList(21 - 7 * w, 28 - 7 * w).filter { !it.empty } }
+        if (weeks.count { it.isNotEmpty() } >= 2) {
+            Spacer(Modifier.height(12.dp))
+            Text("Четыре недели, в среднем за день с записями", style = MaterialTheme.typography.titleSmall)
+            val weekLabels = listOf("−3 нед", "−2 нед", "−1 нед", "эта")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("Ккал", style = MaterialTheme.typography.labelMedium, color = KCAL_INK)
+                    StackedColumns(
+                        columns = weeks.mapIndexed { i, list ->
+                            val v = if (list.isEmpty()) 0f else list.sumOf { it.kcal }.toFloat() / list.size
+                            StackedColumn(weekLabels[i], listOf(ChartSlice("ккал", v, KCAL_INK)))
+                        },
+                        height = 72.dp,
+                        target = kcalTarget.takeIf { it > 0 }?.toFloat(),
+                        valueText = { "${it.roundToInt()}" },
+                        highlight = 3,
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("Белок, г", style = MaterialTheme.typography.labelMedium, color = PROTEIN_INK)
+                    StackedColumns(
+                        columns = weeks.mapIndexed { i, list ->
+                            val v = if (list.isEmpty()) 0f else list.sumOf { it.protein }.toFloat() / list.size
+                            StackedColumn(weekLabels[i], listOf(ChartSlice("белок", v, PROTEIN_INK)))
+                        },
+                        height = 72.dp,
+                        target = proteinTarget.takeIf { it > 0 }?.toFloat(),
+                        valueText = { "${it.roundToInt()}" },
+                        highlight = 3,
+                    )
+                }
+            }
+            PaperHint("Неделя — семь дней до выбранного; в среднем считаются только дни с записями, иначе пропущенный день выглядел бы как голодовка.")
         }
     }
 }
