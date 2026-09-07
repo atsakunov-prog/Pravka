@@ -70,6 +70,17 @@ import ru.zf.pravka.provider.submitBatch
  * приезжают в свои базы заново; ключи «Дней» просто забываются (база в
  * корзине), служебные строки бывшего «Справочника» архивируются. Устаревшие
  * колонки «Засечки» и «Категорий» убираются один раз, когда переезд закончен.
+ *
+ * ОШИБКИ НЕ МОЛЧАТ И НЕ ОСТАНАВЛИВАЮТ ЧУЖОЕ (07.09, владелец: «связь с Notion
+ * совсем плохо идёт», а причины было не увидеть). 404 на СТРАНИЦУ — карта
+ * врала, страницу удалили или заархивировали руками: она заводится заново,
+ * а не объявляет сломанной всю базу. 404 на БАЗУ — интеграцию к ней не
+ * пустили: откладывается только она. База, чью карту не удалось снять,
+ * пропускается на один обход, а не валит обход целиком. 429/409/5xx и сеть —
+ * строка ждёт следующего тика без шума в журнале. Любой другой срыв внутри
+ * синка ловится здесь же и попадает в состояние словами: служба зовёт синк
+ * через runCatching и сама ничего не скажет. Состояние всегда заканчивается
+ * временем последней удачной записи — по нему видно, жив ли синк, не гадая.
  */
 class NotionLifeSync(
     private val context: Context,
@@ -180,6 +191,8 @@ class NotionLifeSync(
         val dupeKeys = ArrayList<String>()
         val dupeIds = ArrayList<String>()
         var lastScan = 0L
+        /** Когда в Notion последний раз удачно ушла строка — главный признак живого синка. */
+        var lastOk = 0L
     }
 
     private val state = State()
@@ -202,13 +215,21 @@ class NotionLifeSync(
     @Volatile private var lastError = ""
     @Volatile private var blockedConfig: String? = null
     @Volatile private var blockedAt = 0L
+    /** Когда последний раз писали в журнал про сеть или 429: такие строки — не чаще раза в час. */
+    @Volatile private var lastTransientLog = 0L
     private val _statusFlow = MutableStateFlow("")
     val statusFlow: StateFlow<String> = _statusFlow
 
     fun lastError(): String = lastError
     fun pending(): Int = queue.size
+    /** Момент последней удачной записи в Notion; 0 — ещё ни одной. */
+    fun lastOk(): Long = state.lastOk
 
     private val hm = SimpleDateFormat("HH:mm", Locale.US)
+    private val dmhm = SimpleDateFormat("dd.MM HH:mm", Locale.US)
+
+    /** Что уехало в Notion: [SENT] — как задумано, [REVIVED] — страница пропала и заведена заново. */
+    private enum class Outcome { SENT, REVIVED }
 
     // ---- Вход ----
 
@@ -220,35 +241,58 @@ class NotionLifeSync(
     suspend fun sync(force: Boolean = false): Boolean {
         if (!settings.notionLife()) return false
         val token = settings.notionToken().trim()
-        if (token.isBlank()) return false
+        if (token.isBlank()) {
+            // Пустая строка состояния читается как поломка. Скажем, чего не хватает.
+            _statusFlow.value = "токен Notion не задан — «Настройки» → «Тело» → Notion"
+            return false
+        }
         val hub = NotionPlanSync.pageId(settings.notionLifeHub())
         val cfg = "$token|$hub"
         val now = System.currentTimeMillis()
         if (!force && cfg == blockedConfig && now - blockedAt < RETRY_BLOCKED_MS) return false
         if (!running.compareAndSet(false, true)) return false
         try {
-            return withContext(Dispatchers.IO) {
-                loadState()
-                if (cfg != blockedConfig || force) blockedConfig = null
-                if (!ensureDbs(token, hub)) return@withContext false
-                val due = force || state.lastScan == 0L || now - state.lastScan >= SCAN_MS
-                if (due) {
-                    ensureSchema(token)
-                    if (!ensureMaps(token)) return@withContext false
-                    dupeStep(token)
-                    scan()
-                    state.lastScan = now
-                    saveState()
-                }
-                brokenDbs.clear()
-                val done = drain(token, cfg)
-                if (due) retireColumns(token)
-                saveState()
-                done
-            }
+            return withContext(Dispatchers.IO) { step(token, hub, cfg, now, force) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // Служба зовёт синк через runCatching и молчит. Без этой ветки
+            // сорвавшийся обход не оставлял бы следа: ни в журнале, ни в
+            // состоянии — а владелец смотрел бы на пустую строку и гадал.
+            lastError = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+            eventLog.add("жизнь → Notion: синк сорвался — ${e.javaClass.simpleName}: $lastError")
+            _statusFlow.value = "${timeNow()} · сорвалось: $lastError" + lastOkSuffix()
+            return false
         } finally {
             running.set(false)
         }
+    }
+
+    private suspend fun step(token: String, hub: String, cfg: String, now: Long, force: Boolean): Boolean {
+        loadState()
+        if (cfg != blockedConfig || force) blockedConfig = null
+        if (!ensureDbs(token, hub)) {
+            _statusFlow.value = "${timeNow()} · хаб не читается: $lastError" + lastOkSuffix()
+            return false
+        }
+        val due = force || state.lastScan == 0L || now - state.lastScan >= SCAN_MS
+        var skip: Set<String> = emptySet()
+        if (due) {
+            ensureSchema(token)
+            // База, чью карту не удалось снять, пропускается на этот обход —
+            // остальные едут. Раньше один 404 на «Паттерны» останавливал всё
+            // и повторялся каждые пять минут, потому что обход не засчитывался.
+            skip = ensureMaps(token)
+            dupeStep(token, skip)
+            scan(skip)
+            state.lastScan = now
+            saveState()
+        }
+        brokenDbs.clear()
+        val done = drain(token, cfg)
+        if (due) retireColumns(token)
+        saveState()
+        return done
     }
 
     // ---- Базы под хабом ----
@@ -343,16 +387,37 @@ class NotionLifeSync(
             } ?: continue
             val have = existing.optJSONObject("properties")?.keys()?.asSequence()?.toSet() ?: emptySet()
             val missing = db.columns.filter { it.name !in have && it.type != "title" }
+            val body = JSONObject()
+            val changed = ArrayList<String>()
             if (missing.isNotEmpty()) {
                 val props = JSONObject()
                 missing.forEach { props.put(it.name, NotionLifeSchema.propertyJson(it)) }
-                val ok = runCatching { patch("$API/databases/$id", token, JSONObject().put("properties", props)) }
+                body.put("properties", props)
+                changed.add("колонки: ${missing.joinToString { it.name }}")
+            }
+            // Название и описание базы — тоже структура, и тоже из кода: база
+            // «Категории» два дня звалась в Notion «Справочником», а хаб и
+            // документы — «Категориями»; читатель баз видел несовпадение и не
+            // понимал, чему верить. Выравнивается вместе с колонками, один раз
+            // на версию схемы.
+            val liveTitle = plainText(existing.optJSONArray("title"))
+            val liveDesc = plainText(existing.optJSONArray("description"))
+            if (liveTitle.isNotBlank() && liveTitle != db.name) {
+                body.put("title", NotionLifeSchema.textArray(db.name))
+                changed.add("название «$liveTitle» → «${db.name}»")
+            }
+            if (liveDesc != db.description) {
+                body.put("description", NotionLifeSchema.textArray(db.description))
+                changed.add("описание")
+            }
+            if (body.length() > 0) {
+                val ok = runCatching { patch("$API/databases/$id", token, body) }
                     .onFailure { e ->
                         lastError = e.message ?: "сеть"
-                        eventLog.add("жизнь → Notion: колонки «${db.name}» не достроились — $lastError")
+                        eventLog.add("жизнь → Notion: схема «${db.name}» не достроилась — $lastError")
                     }.isSuccess
                 if (!ok) continue
-                eventLog.add("жизнь → Notion: «${db.name}» — достроено колонок: ${missing.size} (${missing.joinToString { it.name }})")
+                eventLog.add("жизнь → Notion: «${db.name}» — ${changed.joinToString("; ")}")
             }
             state.schemaOk.add(db.name)
             sleepBlocking()
@@ -444,8 +509,14 @@ class NotionLifeSync(
      * Восстановить «ключ → страница» из самих баз. Один раз на базу: дальше
      * карта живёт в файле. Без этого переустановка приложения означала бы
      * вторую копию всех строк.
+     *
+     * Возвращает базы, карту которых снять не удалось (сеть, 404 закрытой
+     * базы): их строки на этом обходе не трогаются — ни заводить (были бы
+     * дубли), ни архивировать как призраков (страницы на месте, просто не
+     * видны). Остальные едут. Раньше такой сбой валил весь обход.
      */
-    private suspend fun ensureMaps(token: String): Boolean {
+    private suspend fun ensureMaps(token: String): Set<String> {
+        val failed = HashSet<String>()
         val plan = listOf<Pair<String, (JSONObject) -> String>>(
             NotionLifeSchema.ZASECHKA.name to { p -> richText(p, "EntryId") },
             NotionLifeSchema.EDA.name to { p -> richText(p, "MealId") },
@@ -462,15 +533,17 @@ class NotionLifeSync(
             if (name in state.mapped) continue
             val db = state.dbs[name] ?: continue
             var cursor: String? = null
+            var whole = true
             do {
                 val body = JSONObject().put("page_size", 100)
                 if (cursor != null) body.put("start_cursor", cursor)
                 val reply = runCatching { post("$API/databases/$db/query", token, body) }
                     .getOrElse { e ->
                         lastError = e.message ?: "сеть"
-                        eventLog.add("жизнь → Notion: база «$name» не читается — $lastError")
-                        return false
-                    }
+                        eventLog.add("жизнь → Notion: база «$name» не читается — $lastError; её строки подождут следующего обхода")
+                        whole = false
+                        null
+                    } ?: break
                 val results = reply.optJSONArray("results") ?: JSONArray()
                 for (i in 0 until results.length()) {
                     val page = results.optJSONObject(i) ?: continue
@@ -489,10 +562,14 @@ class NotionLifeSync(
                 cursor = reply.optString("next_cursor").takeIf { reply.optBoolean("has_more") && it.isNotBlank() }
                 sleep()
             } while (cursor != null)
+            if (!whole) {
+                failed.add(name)
+                continue
+            }
             state.mapped.add(name)
             saveState()
         }
-        return true
+        return failed
     }
 
     private fun richText(props: JSONObject, name: String): String =
@@ -502,6 +579,14 @@ class NotionLifeSync(
     private fun titleText(props: JSONObject, name: String): String =
         props.optJSONObject(name)?.optJSONArray("title")?.optJSONObject(0)
             ?.optString("plain_text").orEmpty()
+
+    /** Заголовок или описание базы одной строкой: rich_text склеивается по кускам. */
+    private fun plainText(arr: JSONArray?): String {
+        if (arr == null) return ""
+        val sb = StringBuilder()
+        for (i in 0 until arr.length()) sb.append(arr.optJSONObject(i)?.optString("plain_text").orEmpty())
+        return sb.toString().trim()
+    }
 
     // ---- Склейка дублей паттернов ----
 
@@ -521,8 +606,9 @@ class NotionLifeSync(
      *
      * Явные повторы ловятся пересечением слов даром, до всякой модели.
      */
-    private suspend fun dupeStep(token: String) {
+    private suspend fun dupeStep(token: String, skip: Set<String>) {
         val ask = provider
+        if (PATTERNS in skip) return
         val pDb = state.dbs[PATTERNS] ?: return
         val now = System.currentTimeMillis()
 
@@ -687,10 +773,13 @@ class NotionLifeSync(
 
     // ---- Обход: что должно лежать в Notion ----
 
-    private suspend fun scan() {
+    private suspend fun scan(skip: Set<String>) {
         queue.clear()
         food.load(); sport.load(); strength.load(); analysis.load()
         val now = System.currentTimeMillis()
+        val today = NotionLifeSchema.dayKey(now)
+        // База без карты на этом обходе не трогается вовсе — см. ensureMaps.
+        fun dbFor(name: String): String? = state.dbs[name]?.takeIf { name !in skip }
         val all = zasechka.all()
         val closed = all.filter { !it.open }
         val categories = zasechka.categories()
@@ -704,7 +793,7 @@ class NotionLifeSync(
         }
 
         // 1. Лента — только основной трек, другого больше нет.
-        state.dbs[NotionLifeSchema.ZASECHKA.name]?.let { zDb ->
+        dbFor(NotionLifeSchema.ZASECHKA.name)?.let { zDb ->
             for (e in closed.sortedBy { it.start }) {
                 val key = "t${e.id}"
                 wanted.add(key)
@@ -712,28 +801,30 @@ class NotionLifeSync(
             }
         }
         // 2. Еда, тренировки, силовые, зарядка — каждая в свою базу.
-        state.dbs[NotionLifeSchema.EDA.name]?.let { db ->
+        dbFor(NotionLifeSchema.EDA.name)?.let { db ->
             for (m in food.mealsFlow.value.filter { it.confirmed }) {
                 val key = "f${m.id}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.mealRow(m))
             }
         }
-        state.dbs[NotionLifeSchema.TRENIROVKI.name]?.let { db ->
+        dbFor(NotionLifeSchema.TRENIROVKI.name)?.let { db ->
             for (w in sport.workoutsFlow.value) {
                 val key = "w${w.id.ifBlank { w.start.toString() }}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.workoutRow(w))
             }
         }
-        state.dbs[NotionLifeSchema.SILOVYE.name]?.let { db ->
-            for (s in strength.sessionsFlow.value.filter { !it.empty || it.done }) {
+        dbFor(NotionLifeSchema.SILOVYE.name)?.let { db ->
+            // Сессия с одними галочками чек-листа — тоже сессия: иначе база
+            // «Силовые» стоит пустой при живом журнале (07.09).
+            for (s in strength.sessionsFlow.value.filter { NotionLifeSchema.sessionMatters(it) }) {
                 val key = "s${s.date}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.sessionRow(s))
             }
         }
-        state.dbs[NotionLifeSchema.ZARYADKA.name]?.let { db ->
+        dbFor(NotionLifeSchema.ZARYADKA.name)?.let { db ->
             for (g in strength.gtgFlow.value.filter { it.any }) {
                 val key = "g${g.date}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.gtgRow(g))
             }
         }
         // 3. Телефон по дням: сколько на YouTube, Telegram, Claude, звонки.
-        state.dbs[NotionLifeSchema.TELEFON.name]?.let { db ->
+        dbFor(NotionLifeSchema.TELEFON.name)?.let { db ->
             val labels = phone.labelsFlow.value
             val tracked = phone.trackedApps()
             for ((date, day) in phone.daysFlow.value) {
@@ -742,14 +833,17 @@ class NotionLifeSync(
             }
         }
         // 4. Форма по дням: wellness intervals.
-        state.dbs[NotionLifeSchema.FORMA.name]?.let { db ->
+        dbFor(NotionLifeSchema.FORMA.name)?.let { db ->
             for (h in sport.healthFlow.value) {
-                val row = NotionLifeSchema.healthRow(h) ?: continue
+                // Завтрашний прогноз CTL/ATL строкой не становится; его
+                // вчерашняя строка уходит призраком, когда день наступает
+                // и приезжает настоящий.
+                val row = NotionLifeSchema.healthRow(h, today) ?: continue
                 val key = "h${h.date}"; wanted.add(key); enqueue(key, db, row)
             }
         }
         // 5. Категории — справочник: ценность часа, подсказка, базовое время.
-        state.dbs[NotionLifeSchema.KATEGORII.name]?.let { db ->
+        dbFor(NotionLifeSchema.KATEGORII.name)?.let { db ->
             categories.forEachIndexed { i, c ->
                 val key = "cat:" + c.name.trim().lowercase()
                 wanted.add(key)
@@ -761,16 +855,20 @@ class NotionLifeSync(
         // категория), и строки прошлых раскладок.
         for (key in state.pages.keys.toList()) {
             if (key in wanted) continue
-            val db = dbOfKey(key) ?: when {
-                key.startsWith("cat:") -> state.dbs[NotionLifeSchema.KATEGORII.name] ?: ""
+            val name = dbOfKey(key) ?: if (key.startsWith("cat:")) NotionLifeSchema.KATEGORII.name else null
+            // База без карты на этом обходе: её страницы не призраки, мы их
+            // просто не пересчитывали. Архивировать нельзя.
+            if (name != null && name in skip) continue
+            val db = when {
+                name != null -> state.dbs[name] ?: ""
                 obsoleteKey(key) -> ""
                 else -> continue
             }
             enqueue(key, db, null)
         }
         // 6. Паттерны приложения и подтверждения к ним.
-        val pDb = state.dbs[PATTERNS]
-        val cDb = state.dbs[CONFIRMATIONS]
+        val pDb = dbFor(PATTERNS)
+        val cDb = dbFor(CONFIRMATIONS)
         if (pDb != null) {
             for (pt in analysis.patternsFlow.value) {
                 val pKey = "pat:" + patternKey(pt.text)
@@ -812,10 +910,16 @@ class NotionLifeSync(
     // ---- Разгребание очереди ----
 
     private suspend fun drain(token: String, cfg: String): Boolean {
-        if (queue.isEmpty()) return false
+        if (queue.isEmpty()) {
+            // После перезапуска строка состояния пуста, и владелец не знает,
+            // ходил ли синк вообще. Скажем: всё на месте — и когда писали.
+            if (_statusFlow.value.isBlank()) _statusFlow.value = "${timeNow()} · всё на месте" + lastOkSuffix()
+            return false
+        }
         var sent = 0
         var archived = 0
         var rejected = 0
+        var revived = 0
         val iter = queue.iterator()
         // Отвергнутые тоже стоят запроса, поэтому считаются в бюджет тика:
         // иначе пачка кривых строк выгребла бы всю очередь за один заход.
@@ -830,11 +934,12 @@ class NotionLifeSync(
                     blockedConfig = cfg
                     blockedAt = System.currentTimeMillis()
                     eventLog.add("жизнь → Notion: $message — синк на паузе, попробую через час или после смены токена")
-                    _statusFlow.value = "${timeNow()} · $message"
+                    _statusFlow.value = "${timeNow()} · $message — на паузе до смены токена или через час" + lastOkSuffix()
                     return sent > 0
                 }
-                // 404 на страницу или базу: чаще всего интеграцию не пустили
-                // к ОДНОЙ базе. Остальные не должны стоять из-за неё.
+                // 404 на страницу push() разбирает сам (страницы нет — заводит
+                // заново). Сюда 404 доходит от базы: интеграцию к ней не
+                // пустили. Остальные базы не должны стоять из-за неё.
                 if (message.contains("HTTP 404")) {
                     if (job.properties == null && job.archivePageId == null) {
                         // Страницы уже нет — карта врала, забываем.
@@ -848,7 +953,7 @@ class NotionLifeSync(
                         continue
                     }
                     if (job.db.isNotBlank() && brokenDbs.add(job.db)) {
-                        val name = state.dbs.entries.firstOrNull { it.value == job.db }?.key ?: job.db
+                        val name = dbName(job.db)
                         eventLog.add(
                             "жизнь → Notion: база «$name» не отвечает ($message) — открой ей интеграцию " +
                                 "(… → Connections на хабе), остальные едут дальше"
@@ -863,18 +968,39 @@ class NotionLifeSync(
                 // откладывается до следующего обхода (хеш ей не записан),
                 // остальные едут дальше.
                 if (message.contains("HTTP 400")) {
+                    if (job.properties == null && pageGone(message)) {
+                        // Архивировали уже архивную: цель достигнута.
+                        state.pages.remove(job.key); state.hashes.remove(job.key)
+                        iter.remove()
+                        continue
+                    }
                     iter.remove()
                     if (rejected == 0) eventLog.add("жизнь → Notion: строка «${job.key}» не принята ($message) — пропускаю")
                     rejected++
                     sleep()
                     continue
                 }
+                if (retryLater(message)) {
+                    // 429 «подожди», 409 «попробуй снова», 5xx Notion и просто
+                    // сеть: строка остаётся в очереди и уедет следующим тиком.
+                    // В журнал — не чаще раза в час, иначе плохая сеть за ночь
+                    // заваливает его одинаковыми строками.
+                    val at = System.currentTimeMillis()
+                    if (at - lastTransientLog > 3_600_000L) {
+                        eventLog.add("жизнь → Notion: $message — подожду до следующего тика, в очереди ${queue.size}")
+                        lastTransientLog = at
+                    }
+                    _statusFlow.value = "${timeNow()} · Notion не ответил ($message), в очереди ${queue.size} — повторю через пять минут" + lastOkSuffix()
+                    return sent > 0
+                }
                 eventLog.add("жизнь → Notion: не удалось ($message), в очереди ${queue.size}")
-                _statusFlow.value = "${timeNow()} · не удалось: $message"
+                _statusFlow.value = "${timeNow()} · не удалось: $message, в очереди ${queue.size}" + lastOkSuffix()
                 return sent > 0
             }
             iter.remove()
             sent++
+            state.lastOk = System.currentTimeMillis()
+            if (result.getOrNull() == Outcome.REVIVED) revived++
             if (job.properties == null) archived++
             sleep()
         }
@@ -882,23 +1008,51 @@ class NotionLifeSync(
         // их убираем, иначе тик за тиком будет упираться в них же.
         if (brokenDbs.isNotEmpty()) queue.removeAll { it.db in brokenDbs }
         lastError = ""
-        _statusFlow.value = "${timeNow()} · отправлено $sent" +
-            (if (rejected > 0) ", не принято $rejected" else "") +
-            (if (queue.isNotEmpty()) ", в очереди ${queue.size}" else " ✓")
-        eventLog.add(
-            "жизнь → Notion: отправлено $sent" +
-                (if (archived > 0) ", убрано строк $archived" else "") +
-                (if (rejected > 0) ", не принято $rejected" else "") +
-                (if (queue.isNotEmpty()) ", осталось ${queue.size}" else "")
-        )
+        val closed = brokenDbs.map { dbName(it) }
+        val summary = buildString {
+            append("отправлено $sent")
+            if (archived > 0) append(", убрано строк $archived")
+            if (revived > 0) append(", заведено заново $revived")
+            if (rejected > 0) append(", не принято $rejected")
+            if (closed.isNotEmpty()) append(" · закрыты интеграции: ${closed.joinToString()}")
+            // Галочка — только когда всё действительно уехало: раньше «отправлено
+            // 0 ✓» стояло и при закрытых базах, и это читалось как порядок.
+            if (queue.isNotEmpty()) append(", в очереди ${queue.size}")
+            else if (closed.isEmpty() && rejected == 0) append(" ✓")
+        }
+        _statusFlow.value = "${timeNow()} · $summary" + lastOkSuffix()
+        eventLog.add("жизнь → Notion: $summary")
         return sent > 0
     }
 
-    private fun push(token: String, job: Job) {
+    /** Имя базы по id — для журнала; неизвестный id остаётся id. */
+    private fun dbName(id: String): String = state.dbs.entries.firstOrNull { it.value == id }?.key ?: id
+
+    /**
+     * Ошибка, после которой ту же строку стоит просто повторить через тик:
+     * лимит запросов, конфликт записи, сбой на стороне Notion или сеть
+     * (у сетевого исключения в тексте нет нашего «Notion HTTP»).
+     */
+    private fun retryLater(message: String): Boolean =
+        message.contains("HTTP 429") || message.contains("HTTP 409") ||
+            Regex("HTTP 5\\d\\d").containsMatchIn(message) || !message.contains("Notion HTTP")
+
+    /**
+     * Страницы, на которую указывает карта, больше нет: Notion отвечает 404 на
+     * неё (удалена окончательно) или 400 «archived» (в корзине). Это не про
+     * базу — у 404 базы в тексте слово «database».
+     */
+    private fun pageGone(message: String?): Boolean {
+        val m = message.orEmpty()
+        return (m.contains("HTTP 404") && !m.contains("database", ignoreCase = true)) ||
+            (m.contains("HTTP 400") && m.contains("archiv", ignoreCase = true))
+    }
+
+    private fun push(token: String, job: Job): Outcome {
         if (job.archivePageId != null) {
             patch("$API/pages/${job.archivePageId}", token, JSONObject().put("archived", true))
             state.legacy.remove(job.archivePageId)
-            return
+            return Outcome.SENT
         }
         val existing = state.pages[job.key]
         if (job.properties == null) {
@@ -907,24 +1061,46 @@ class NotionLifeSync(
                 state.pages.remove(job.key)
                 state.hashes.remove(job.key)
             }
-            return
+            return Outcome.SENT
         }
         val (props, whole) = withRelations(job)
+        var outcome = Outcome.SENT
         if (existing != null) {
-            patch("$API/pages/$existing", token, JSONObject().put("properties", props))
+            try {
+                patch("$API/pages/$existing", token, JSONObject().put("properties", props))
+            } catch (e: java.io.IOException) {
+                if (!pageGone(e.message)) throw e
+                // Страницу удалили или заархивировали руками — карта врала.
+                // Заводим строку заново: приложение — источник правды, Notion
+                // — зеркало. Раньше такой 404 объявлял «сломанной» ВСЮ базу,
+                // и её строки ждали следующего обхода — каждый час, навсегда.
+                // Если создать не вышло (база целиком закрыта), карта остаётся
+                // прежней: страница на месте, просто мы её не видим, а забыть
+                // её значило бы завести дубль, когда доступ вернут.
+                create(token, job, props)
+                outcome = Outcome.REVIVED
+            }
         } else {
-            val reply = post(
-                "$API/pages", token,
-                JSONObject()
-                    .put("parent", JSONObject().put("database_id", job.db))
-                    .put("properties", props),
-            )
-            val id = reply.optString("id")
-            if (id.isNotBlank()) state.pages[job.key] = id
+            create(token, job, props)
         }
         // Хеш значит «отправлено ЦЕЛИКОМ», иначе строка больше никогда не
         // вернётся в очередь: связь могла ждать страницы, которой ещё нет.
         if (whole) state.hashes[job.key] = job.hash else state.hashes.remove(job.key)
+        return outcome
+    }
+
+    private fun create(token: String, job: Job, props: JSONObject) {
+        val reply = post(
+            "$API/pages", token,
+            JSONObject()
+                .put("parent", JSONObject().put("database_id", job.db))
+                .put("properties", props),
+        )
+        val id = reply.optString("id")
+        // Без id страница в Notion есть, а в карте нет — следующий обход
+        // создал бы вторую. Лучше не записывать хеш и повторить позже.
+        if (id.isBlank()) throw java.io.IOException("Notion не вернул id созданной страницы")
+        state.pages[job.key] = id
     }
 
     /**
@@ -1013,6 +1189,14 @@ class NotionLifeSync(
 
     private fun timeNow(): String = hm.format(Date(System.currentTimeMillis()))
 
+    /** « · последняя запись 14:20» или « · последняя запись 05.09 21:10» — хвост любого состояния. */
+    private fun lastOkSuffix(): String {
+        val at = state.lastOk
+        if (at <= 0L) return ""
+        val sameDay = NotionLifeSchema.dayKey(at) == NotionLifeSchema.dayKey(System.currentTimeMillis())
+        return " · последняя запись " + (if (sameDay) hm.format(Date(at)) else dmhm.format(Date(at)))
+    }
+
     private suspend fun sleep() = delay(PAUSE_MS)
     private fun sleepBlocking() = Thread.sleep(PAUSE_MS)
 
@@ -1069,6 +1253,7 @@ class NotionLifeSync(
             o.optJSONArray("dupeKeys")?.let { a -> for (i in 0 until a.length()) state.dupeKeys.add(a.optString(i)) }
             o.optJSONArray("dupeIds")?.let { a -> for (i in 0 until a.length()) state.dupeIds.add(a.optString(i)) }
             state.lastScan = o.optLong("lastScan")
+            state.lastOk = o.optLong("lastOk")
         }
         // Файл прошлой раскладки: обход снова с нуля — схема достроится,
         // строки еды и тела переедут, карты новых баз снимутся заново.
@@ -1092,6 +1277,7 @@ class NotionLifeSync(
             .put("dupeKeys", JSONArray(state.dupeKeys as List<*>))
             .put("dupeIds", JSONArray(state.dupeIds as List<*>))
             .put("lastScan", state.lastScan)
+            .put("lastOk", state.lastOk)
         runCatching {
             val tmp = File(stateFile.parentFile, "$STATE_FILE.tmp")
             tmp.writeText(o.toString())

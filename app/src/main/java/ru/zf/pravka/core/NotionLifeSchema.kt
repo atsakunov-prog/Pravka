@@ -55,9 +55,13 @@ object NotionLifeSchema {
      * появляется колонка: синхронизатор перечитывает базу только при смене
      * версии, иначе новая колонка в коде так и осталась бы только в коде, а
      * каждая строка ленты уезжала бы в Notion с неизвестным свойством (400).
-     * 4 — «Комментарий» в Засечке.
+     * 4 — «Комментарий» в Засечке. 5 (07.09) — «Начало», «Конец» и «Оценка» в
+     * Засечке, «Время» и «Уверенность» в Еде, «Жиры съедено» и «Углеводы
+     * съедено» в Форме, «Галочек» в Силовых; заодно синхронизатор выравнивает
+     * названия и описания баз по коду — «Категории» в Notion два дня звались
+     * «Справочником», хотя код и текст хаба говорили «Категории».
      */
-    const val VERSION = 4
+    const val VERSION = 5
 
     data class Column(
         val name: String,
@@ -95,6 +99,13 @@ object NotionLifeSchema {
     private fun monthCol() = selCol("Месяц", emptyList(), MONTH_DESC)
     private fun weekCol() = selCol("Неделя", emptyList(), WEEK_DESC)
 
+    /**
+     * Уверенность приёма еды — самая слабая среди позиций: «точно» (упаковка,
+     * штрихкод, рацион), «примерно» (продукт понятен, порция на глаз), «наугад»
+     * (незнакомое составное блюдо). Читателю таблицы это важнее, чем позиции.
+     */
+    val SURENESS = listOf("точно", "примерно", "наугад")
+
     /** Как строка попала в ленту — словами владельца, а не кодами. */
     val RECORDED = listOf("голос", "текст", "правка руками", "из Todoist", "метка NFC", "автопилот", "авто: телефон или часы", "заполнитель")
 
@@ -108,6 +119,8 @@ object NotionLifeSchema {
             titleCol("Дело"),
             dateCol("Дата", "начало и конец дела; для порядка внутри дня"),
             dateCol("День", DAY_DESC),
+            textCol("Начало", "HH:MM по часам Саши — то же, что начало «Даты», но без часового пояса: читается глазами и SQL одинаково"),
+            textCol("Конец", "HH:MM по часам Саши — конец дела"),
             numCol("Минуты", "разность минут суток: сумма за День = 1440 (у сегодняшнего — сколько прошло)"),
             selCol("Категория", ZasechkaStore.DEFAULT_CATEGORIES.map { it.name }),
             textCol("Клиент"),
@@ -120,6 +133,7 @@ object NotionLifeSchema {
             weekCol(),
             textCol("Надиктовано", "голос Саши как есть, с ошибками распознавания"),
             textCol("Комментарий", "комментарий Саши к делу: что было внутри, чем кончилось"),
+            numCol("Оценка", "оценка дела 1–5 (★ в ленте): ставится редко, пусто — не оценивал"),
             textCol("EntryId", "ключ синхронизатора"),
         ),
         retired = listOf(
@@ -139,6 +153,7 @@ object NotionLifeSchema {
             titleCol("Приём"),
             dateCol("Дата", "когда съедено"),
             dateCol("День", DAY_DESC),
+            textCol("Время", "HH:MM по часам Саши — когда съедено"),
             selCol("Вид", listOf("завтрак", "обед", "ужин", "перекус")),
             numCol("Ккал"),
             numCol("Белок"),
@@ -149,6 +164,7 @@ object NotionLifeSchema {
             numCol("Позиций"),
             textCol("Состав", "позиции с граммами и ккал"),
             selCol("Записано", listOf("голос", "текст", "фото", "штрихкод", "рацион")),
+            selCol("Уверенность", SURENESS, "самая слабая уверенность среди позиций: точно — упаковка, штрихкод или рацион; примерно — порция на глаз; наугад — незнакомое составное блюдо"),
             monthCol(),
             textCol("Надиктовано"),
             textCol("Заметка модели", "чего не хватило для точного разбора"),
@@ -207,7 +223,8 @@ object NotionLifeSchema {
             numCol("Минуты"),
             numCol("Самочувствие", "1–5, где 1 отлично"),
             checkCol("Сделано", "владелец закрыл сессию"),
-            numCol("Упражнений"),
+            numCol("Упражнений", "упражнения с надиктованными подходами"),
+            numCol("Галочек", "упражнения, отмеченные в чек-листе без чисел: «сделал по схеме»"),
             textCol("Упражнения", "подходы: «Гоблет 3×12 @16; Свинги 2×15 @16»"),
             monthCol(),
             textCol("Надиктовано"),
@@ -308,6 +325,8 @@ object NotionLifeSchema {
             numCol("Готовность"),
             numCol("Ккал съедено", "из дневника еды, если уехало в wellness"),
             numCol("Белок съедено"),
+            numCol("Жиры съедено"),
+            numCol("Углеводы съедено"),
             textCol("Комментарий", "заметка дня в intervals"),
             textCol("Ключ", "ключ синхронизатора"),
         ),
@@ -365,8 +384,11 @@ object NotionLifeSchema {
     )
     fun dateSingle(ms: Long) = JSONObject().put("date", JSONObject().put("start", dateTime.format(Date(ms))))
     fun dateDay(date: String) = JSONObject().put("date", JSONObject().put("start", date))
+    /** Число, которого может и не быть: ноль стирает значение в Notion, а не пишет «0». */
+    fun numberOrEmpty(v: Int) = JSONObject().put("number", if (v > 0) v else JSONObject.NULL)
 
-    private fun textArray(text: String): JSONArray =
+    /** Массив rich_text для значения, заголовка или описания базы. */
+    fun textArray(text: String): JSONArray =
         if (text.isBlank()) JSONArray()
         else JSONArray().put(JSONObject().put("text", JSONObject().put("content", text.take(1900))))
 
@@ -474,6 +496,10 @@ object NotionLifeSchema {
         put("Дело", title(e.title.ifBlank { e.category.ifBlank { "без названия" } }))
         put("Дата", dateRange(e.start, end))
         put("День", dateDay(dayKey(e.start)))
+        // Часы и минуты словами — владелец просил видеть начало и конец как в
+        // ленте, а SQL-слой Notion отдаёт «Дату» в UTC.
+        put("Начало", rich(clock(e.start)))
+        put("Конец", rich(clock(end)))
         put("Минуты", number(minutes))
         if (e.category.isNotBlank()) put("Категория", select(e.category))
         put("Клиент", rich(e.client))
@@ -488,6 +514,7 @@ object NotionLifeSchema {
         put("Надиктовано", rich(e.raw.substringBefore("\nКБЖУ:").trim()))
         // Кладётся и пустым: снятый комментарий должен стереться и в Notion.
         put("Комментарий", rich(e.comment))
+        put("Оценка", numberOrEmpty(e.useful))
         put("EntryId", rich("t${e.id}"))
     }
 
@@ -496,6 +523,7 @@ object NotionLifeSchema {
         put("Приём", title(cap(kind.ifBlank { "приём" }) + (if (m.shortList.isNotBlank()) " · ${m.shortList}" else "")))
         put("Дата", dateSingle(m.ts))
         put("День", dateDay(dayKey(m.ts)))
+        put("Время", rich(clock(m.ts)))
         if (kind in setOf("завтрак", "обед", "ужин", "перекус")) put("Вид", select(kind))
         put("Ккал", number(m.kcal))
         put("Белок", number(m.protein))
@@ -514,6 +542,7 @@ object NotionLifeSchema {
             ),
         )
         put("Записано", select(mealRecorded(m.source)))
+        mealSureness(m.items)?.let { put("Уверенность", select(it)) }
         put("Месяц", select(monthKey(dayKey(m.ts))))
         put("Надиктовано", rich(m.raw))
         put("Заметка модели", rich(m.note))
@@ -555,8 +584,34 @@ object NotionLifeSchema {
         put("WorkoutId", rich("w${w.id.ifBlank { w.start.toString() }}"))
     }
 
+    /**
+     * Уверенность приёма — по самой слабой позиции: одно «наугад» в составе
+     * делает наугад и весь приём. Пусто — модель уверенности не назвала.
+     */
+    fun mealSureness(items: List<MealItem>): String? {
+        val s = items.map { it.sureness.trim().lowercase() }.filter { it.isNotBlank() }
+        return when {
+            s.any { it.contains("наугад") } -> "наугад"
+            s.any { it.contains("примерн") } -> "примерно"
+            s.isNotEmpty() && s.size == items.size && s.all { it.contains("точн") } -> "точно"
+            else -> null
+        }
+    }
+
+    /**
+     * Какая силовая сессия достойна строки в Notion. Раньше — только с
+     * надиктованными подходами или закрытая кнопкой «сделано»; сессия,
+     * отмеченная галочками чек-листа («сделал по схеме»), с одним лишь
+     * самочувствием или минутами, в Notion не попадала — и база «Силовые»
+     * стояла пустой при живом журнале (07.09).
+     */
+    fun sessionMatters(s: StrengthStore.Session): Boolean =
+        !s.empty || s.done || s.checkedIds.isNotEmpty() || s.feel > 0 || s.minutes > 0 || s.note.isNotBlank()
+
     fun sessionRow(s: StrengthStore.Session): JSONObject = JSONObject().apply {
-        put("Сессия", title(s.title.ifBlank { s.block.ifBlank { "силовая" } }))
+        // День в заголовке, как у зарядки: в таблице заголовок — первая
+        // колонка, и «05.09 · пт · Силовая A» читается без даты рядом.
+        put("Сессия", title("${humanDay(s.date)} · ${s.title.ifBlank { s.block.ifBlank { "силовая" } }}"))
         put("Дата", dateDay(s.date))
         put("День", dateDay(s.date))
         put("Блок", rich(s.block))
@@ -564,6 +619,7 @@ object NotionLifeSchema {
         if (s.feel in 1..5) put("Самочувствие", number(s.feel))
         put("Сделано", checkbox(s.done))
         put("Упражнений", number(s.exercises.size))
+        put("Галочек", number(s.checkedIds.size))
         put("Упражнения", rich(s.exercises.joinToString("; ") { "${it.name} ${it.compact()}" }))
         put("Месяц", select(monthKey(s.date)))
         put("Надиктовано", rich(s.note))
@@ -639,8 +695,15 @@ object NotionLifeSchema {
         }
     }
 
-    /** Строка «Формы»: wellness intervals за сутки. null — пустой день. */
-    fun healthRow(h: SportStore.Health): JSONObject? {
+    /**
+     * Строка «Формы»: wellness intervals за сутки. null — пустой день или
+     * день, который ещё не наступил: выгрузка спрашивает intervals до
+     * завтра включительно (тренировка вечером в поясе впереди), и на завтра
+     * приезжает прогноз CTL/ATL — строка «08.09 · вт» с двумя числами при
+     * живом 07.09 читалась как мусор. Наступит день — строка появится.
+     */
+    fun healthRow(h: SportStore.Health, today: String = dayKey(System.currentTimeMillis())): JSONObject? {
+        if (h.date > today) return null
         val any = h.ctl > 0 || h.atl > 0 || h.restingHr > 0 || h.hrv > 0 || h.sleepHours > 0 ||
             h.steps > 0 || h.weightKg > 0 || h.vo2max > 0 || h.readiness > 0
         if (!any) return null
@@ -663,6 +726,8 @@ object NotionLifeSchema {
             if (h.readiness > 0) put("Готовность", number(h.readiness))
             if (h.kcal > 0) put("Ккал съедено", number(h.kcal))
             if (h.protein > 0) put("Белок съедено", number(h.protein))
+            if (h.fat > 0) put("Жиры съедено", number(h.fat))
+            if (h.carbs > 0) put("Углеводы съедено", number(h.carbs))
             put("Комментарий", rich(h.comments))
             put("Ключ", rich("h${h.date}"))
         }

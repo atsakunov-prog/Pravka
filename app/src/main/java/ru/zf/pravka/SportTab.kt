@@ -3095,10 +3095,16 @@ internal fun BodySportSettings(app: PravkaApp) {
                     enabled = !pushingLife,
                 ) { Text(if (pushingLife) "Отправляю…" else "Синхронизировать сейчас") }
             }
-            if (lifeStatus.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                PaperHint(lifeStatus)
-            }
+            Spacer(Modifier.height(4.dp))
+            // Состояние словами и всегда с временем последней удачной записи:
+            // «отправлено 12 ✓ · последняя запись 14:20». Пустая строка до
+            // первого тика читалась как поломка — теперь она говорит, чего ждать.
+            PaperHint(
+                lifeStatus.ifBlank {
+                    "Состояние появится после первого тика службы — до пяти минут после запуска. " +
+                        "Не терпится — «Синхронизировать сейчас»."
+                }
+            )
             TextButton(onClick = {
                 app.appScope.launch {
                     app.notionLifeSync.resetMaps()
