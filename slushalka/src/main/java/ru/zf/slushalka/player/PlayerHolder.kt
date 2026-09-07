@@ -1,6 +1,7 @@
 package ru.zf.slushalka.player
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -100,6 +101,12 @@ class PlayerHolder(
     }
 
     private val listener = object : Player.Listener {
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            // Именно здесь, а не в playPause(): сюда приходит любой пуск - с
+            // кнопки на экране, из шторки, с гарнитуры, после ответа на вопрос.
+            if (playWhenReady) ensureService()
+        }
+
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (isPlaying) {
                 lastTickAt = System.currentTimeMillis()
@@ -126,6 +133,31 @@ class PlayerHolder(
         override fun onPlayerError(error: PlaybackException) {
             _state.value = _state.value.copy(error = error.message ?: "Файл не читается")
         }
+    }
+
+    /**
+     * Служба воспроизведения должна быть жива всякий раз, когда идёт звук:
+     * только она кладёт плеер в шторку и держит книгу живой, когда приложение
+     * свёрнуто. Заводится она при открытии книги - но книга живёт дольше службы.
+     * На паузе служба уходит из переднего плана, и дальше её останавливают:
+     * система - когда приложение постояло в фоне, смахивание из недавних -
+     * через onTaskRemoved. Сам плеер при этом остаётся в Application с книгой
+     * внутри, и следующее «слушать» заводило голый ExoPlayer: звук есть, а
+     * шторка пустая, и стоило уйти в другое приложение - книга замолкала, потому
+     * что процесс без службы переднего плана система замораживает.
+     *
+     * Поэтому служба поднимается на каждом пуске. Служба уже живёт - вызов
+     * пустой (onStartCommand без действия), нет - она создаётся, отдаёт сессию
+     * media3, та подключается к плееру, видит, что он играет, и сама переводит
+     * службу в передний план. Обычный startService, не foreground-вариант:
+     * пуск идёт из видимого экрана, и здесь он разрешён, а у startForegroundService
+     * есть пятисекундный срок на startForeground, который зависит от media3 и
+     * при срыве валит приложение. Из фона (ответ дочитали вслух при погашенном
+     * экране) система может отказать - тогда звук пойдёт как раньше, без
+     * шторки; лучше так, чем не пойдёт совсем.
+     */
+    private fun ensureService() {
+        runCatching { context.startService(Intent(context, PlaybackService::class.java)) }
     }
 
     // ---------------------------------------------------------------- книга
