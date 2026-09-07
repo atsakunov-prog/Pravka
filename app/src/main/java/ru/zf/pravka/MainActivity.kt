@@ -201,6 +201,7 @@ internal enum class Tab(val titleRes: Int) {
     SPORT(R.string.tab_sport),
     FOOD(R.string.tab_food),
     MORE(R.string.tab_more),
+    REPORT(R.string.tab_report),
     ITOGI(R.string.tab_itogi),
     EXPORT(R.string.tab_export),
     SETTINGS(R.string.tab_settings),
@@ -220,6 +221,7 @@ internal enum class Tab(val titleRes: Int) {
  * вниз или сюда. Внизу места ровно на пять кнопок.
  */
 private val SERVICE_TABS = listOf(
+    Tab.REPORT,
     Tab.ITOGI,
     Tab.EXPORT,
     Tab.SETTINGS,
@@ -232,6 +234,7 @@ private val SERVICE_TABS = listOf(
 
 /** Одна строка про то, зачем эта вкладка — чтобы не открывать её наугад. */
 private fun serviceHint(tab: Tab): String = when (tab) {
+    Tab.REPORT -> "День в графиках: балл, лента по часам, телефон, тело, еда — и тот же день неделю назад рядом"
     Tab.ITOGI -> "Повторы, которые Опус находит по всему логу каждую ночь"
     Tab.EXPORT -> "Вся жизнь одним CSV плюс запрос для чата с твоими паттернами"
     Tab.SETTINGS -> "Ключ Anthropic, распознавание, служба, сохранённые записи"
@@ -549,6 +552,7 @@ private fun MainScreen(
                         autoAction = foodActionPending,
                         onAutoConsumed = { foodActionPending = null },
                     )
+                    Tab.REPORT -> ReportTab(app)
                     Tab.ITOGI -> ItogiTab(app)
                     Tab.EXPORT -> ExportTab(app)
                     Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings)

@@ -70,7 +70,7 @@
 | **zasechka** | `ZasechkaStore/Engine/Sync/Corrections`, кнопка «З», автопилот, NFC, `PhoneSweeper`, `IcuSweeper`, `StackHandleController` | core |
 | **dela** | Todoist, Разноска, кнопка «Д» | core, zasechka (запуск дела в ленте) |
 | **body** | спорт, силовые, зарядка, план (`PlanStore/PlanSync/PlanLine`), intervals, Notion (план, справочник, Дневник), еда, кнопка «Т» | core, zasechka (только `annotate`, `insertInterruption`, `coveredByOwner`) |
-| **razbory** | `AnalysisBuilder/Engine/Store`, `DigestBuilder`, `NotionLifeSync`, вкладка Итоги | все сторы, только чтение |
+| **razbory** | `AnalysisBuilder/Engine/Store`, `DigestBuilder`, `NotionLifeSync`, вкладка Паттерны; вкладка Отчёт (`ReportTab`, `core/DayReport`, `ui/Charts`) | все сторы, только чтение |
 | **app** | `PravkaApp` (локатор), `MainActivity`, `SettingsTab`, служба и `Service*.kt`, `Updates` | все |
 
 Правило зависимостей: режим зависит от core и от узкого интерфейса ленты, но не

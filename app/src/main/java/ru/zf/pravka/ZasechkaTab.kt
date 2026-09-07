@@ -74,7 +74,6 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -91,52 +90,12 @@ import ru.zf.pravka.trigger.onZasechkaTap
 // and fixing - the tab is deliberately editable down to minutes, because the
 // voice pipeline is fast but not sacred.
 
-// Owner's rainbow: every category sits on the spectrum by how well the hour
-// is spent. Work and study burn red, sport is orange, people are the warm
-// greens, recovery and logistics cool off through cyan and blue, and pure
-// leisure lands on violet. The hue is fixed per name; a custom category the
-// owner adds later gets a stable hash spot on the same rainbow. Light theme
-// dims the value (inks on paper), dark theme runs full brightness (markers).
-private val CATEGORY_HUES = mapOf(
-    "работа: привлечение" to 0f,
-    "работа: текущая" to 8f,
-    "работа: планирование" to 16f,
-    "работа: звонки" to 24f,
-    "чтение" to 32f,
-    "систематизация" to 40f,
-    "спорт: силовая" to 48f,
-    "спорт: бег" to 56f,
-    "спорт: вело" to 64f,
-    "спорт: прочее" to 72f,
-    "семья" to 88f,
-    "секс: с марианной" to 100f,
-    "социальное: внешнее" to 118f,
-    "звонки" to 135f,
-    "сон" to 155f,
-    "еда" to 170f,
-    "передвижение: пешком" to 190f,
-    "передвижение: вело" to 205f,
-    "передвижение: транспорт" to 220f,
-    "быт" to 235f,
-    "отдых" to 262f,
-    "секс: соло" to 278f,
-    // Legacy v1/v2 name still alive on the device - keep it with "соло".
-    "секс" to 278f,
-    // The very bottom of the spectrum: time spent on nothing at all.
-    // ("прокрастинация" lived for one build before the rename.)
-    "потери" to 292f,
-    "не размечено" to 292f,
-    "прокрастинация" to 292f,
-)
-
-/** Position on the effectiveness rainbow, 0 (red) .. 280 (violet). */
-private fun categoryHue(name: String): Float {
-    val key = name.trim().lowercase()
-    return CATEGORY_HUES[key] ?: (abs(key.hashCode()) % 281).toFloat()
-}
+// Радуга владельца живёт в core/CategoryRainbow.kt: по ней сортируются итоги
+// здесь и раскладывается донат дня в «Отчёте». Тут — только заливка под тему.
+internal fun categoryHue(name: String): Float = ru.zf.pravka.core.CategoryRainbow.hue(name)
 
 @Composable
-private fun categoryColor(name: String): Color {
+internal fun categoryColor(name: String): Color {
     val dark = isSystemInDarkTheme()
     if (name.isBlank()) return if (dark) Color(0xFF9A9184) else Color(0xFF8A8172)
     // Softened rainbow (owner: "чуть-чуть помягче") - same hues, less punch.
@@ -206,7 +165,7 @@ private fun PointsChip(points: Int, bold: Boolean = false) {
 // +20 очень красный»).
 private const val ROW_SCORE_SPAN = 20f
 
-private fun scoreColor(value: Float, span: Float): Color = when {
+internal fun scoreColor(value: Float, span: Float): Color = when {
     value >= span * 0.75f -> Color(0xFFEF4444)
     value >= span * 0.45f -> Color(0xFFF97316)
     value >= span * 0.15f -> Color(0xFFEAB308)
@@ -829,7 +788,7 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
  * red only lights up when the day actually reaches it.
  */
 @Composable
-private fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
+internal fun RainbowScoreBar(balance: Int, weekMode: Boolean) {
     // Half the track is a strong day: eight hours of work at +8 plus an hour
     // of sport lands near a hundred; a week of those near five hundred.
     val span = if (weekMode) 500f else 100f
@@ -2035,13 +1994,13 @@ private val FRIENDLY_LABELS = mapOf(
 
 // Some packages (work profile, hidden components) refuse a label - the last
 // TWO segments at least say whose package it is ("zoom.videomeetings").
-private fun appLabelOf(labels: Map<String, String>, pkg: String): String =
+internal fun appLabelOf(labels: Map<String, String>, pkg: String): String =
     labels[pkg] ?: FRIENDLY_LABELS[pkg] ?: pkg.split('.').takeLast(2).joinToString(".")
 
 // Furniture: never phone use - launchers, system UI, the docked-hub
 // screensaver, the dialer (call time is a ribbon entry). Old stored data may
 // still carry them; fresh sweeps exclude most at the source.
-private fun isFurniturePkg(pkg: String): Boolean =
+internal fun isFurniturePkg(pkg: String): Boolean =
     pkg.contains("launcher", ignoreCase = true) ||
         pkg.contains("systemui", ignoreCase = true) ||
         pkg.contains("hubui", ignoreCase = true) ||
