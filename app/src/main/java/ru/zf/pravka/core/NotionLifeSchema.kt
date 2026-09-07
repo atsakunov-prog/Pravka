@@ -55,13 +55,23 @@ object NotionLifeSchema {
      * появляется колонка: синхронизатор перечитывает базу только при смене
      * версии, иначе новая колонка в коде так и осталась бы только в коде, а
      * каждая строка ленты уезжала бы в Notion с неизвестным свойством (400).
-     * 4 — «Комментарий» в Засечке. 5 (07.09) — «Начало», «Конец» и «Оценка» в
-     * Засечке, «Время» и «Уверенность» в Еде, «Жиры съедено» и «Углеводы
-     * съедено» в Форме, «Галочек» в Силовых; заодно синхронизатор выравнивает
-     * названия и описания баз по коду — «Категории» в Notion два дня звались
+     * 4 — «Комментарий» в Засечке. 5 (07.09) — «Оценка» в Засечке,
+     * «Уверенность» в Еде, «Жиры съедено» и «Углеводы съедено» в Форме,
+     * «Галочек» в Силовых; заодно синхронизатор выравнивает названия и
+     * описания баз по коду — «Категории» в Notion два дня звались
      * «Справочником», хотя код и текст хаба говорили «Категории».
+     * 6 (07.09, вечер) — время по-экселевски и без «сентябрей». У дела и
+     * тренировки «Начало» и «Конец» — две настоящие даты со временем вместо
+     * одного диапазона «Дата» (владелец: «начало — это начальная дата, конец —
+     * конечная, а минуты — разница, как в Excel»); они для сортировки и счёта.
+     * Для глаз — две короткие текстовые колонки рядом с названием: «Когда» =
+     * «07.09 · пн» и «Время» = «14:59–16:16» (владелец: «первая колонка — Еда с
+     * Борей, вторая — 14:59–16:16, только вывести нормально, без этих
+     * сентябрей»: Notion показывает дату полностью, «September 7, 2026 2:59
+     * PM», и формат его свойства из API не сменить). Дубли «Дата» + «День» в
+     * Силовых и Зарядке убраны.
      */
-    const val VERSION = 5
+    const val VERSION = 6
 
     data class Column(
         val name: String,
@@ -93,6 +103,7 @@ object NotionLifeSchema {
     private fun urlCol(name: String, d: String = "") = Column(name, "url", description = d)
 
     private const val DAY_DESC = "сутки Саши (Europe/Moscow) датой без времени: складывать и группировать дни по этому полю"
+    private const val WHEN_DESC = "«07.09 · пн» — день коротко, для глаз; складывать и группировать по «День»"
     private const val MONTH_DESC = "YYYY-MM — для группировки и итогов по месяцам"
     private const val WEEK_DESC = "ISO-неделя YYYY-Wnn (понедельник—воскресенье) — для итогов по неделям"
 
@@ -117,11 +128,12 @@ object NotionLifeSchema {
         description = "Таймшит: строка на дело основного трека. Минуты складываются в сутки ровно в 1440.",
         columns = listOf(
             titleCol("Дело"),
-            dateCol("Дата", "начало и конец дела; для порядка внутри дня"),
+            textCol("Когда", WHEN_DESC),
+            textCol("Время", "«14:59–16:16» по часам Саши — то же, что «Начало» и «Конец», но коротко и без часового пояса"),
+            dateCol("Начало", "начало дела, дата со временем; для сортировки и счёта"),
+            dateCol("Конец", "конец дела, дата со временем; Минуты = Конец − Начало"),
             dateCol("День", DAY_DESC),
-            textCol("Начало", "HH:MM по часам Саши — то же, что начало «Даты», но без часового пояса: читается глазами и SQL одинаково"),
-            textCol("Конец", "HH:MM по часам Саши — конец дела"),
-            numCol("Минуты", "разность минут суток: сумма за День = 1440 (у сегодняшнего — сколько прошло)"),
+            numCol("Минуты", "Конец − Начало в целых минутах суток: сумма за День = 1440 (у сегодняшнего — сколько прошло)"),
             selCol("Категория", ZasechkaStore.DEFAULT_CATEGORIES.map { it.name }),
             textCol("Клиент"),
             numCol("Ценность часа", "ценность часа категории на шкале владельца, от −10 до +10"),
@@ -140,6 +152,9 @@ object NotionLifeSchema {
             "Домен", "Бюджет", "Носитель ID", "Поверх", "Носитель", "Параллели", "Детали",
             "Полезность", "Приём", "Ккал", "Белок", "Жиры", "Углеводы", "Км", "Пульс", "Ватт",
             "Load", "Самочувствие", "Сон ч", "Сон счёт",
+            // Диапазон «начало → конец» в одной ячейке владелец читать не смог:
+            // «здесь всё внутри одной даты». Его заменили «Начало» и «Конец».
+            "Дата",
         ),
     )
 
@@ -150,10 +165,11 @@ object NotionLifeSchema {
         knownId = "93a2ddd886df43798e8b7b3bd5989e9b",
         description = "Дневник еды: строка на подтверждённый приём с КБЖУ и составом.",
         columns = listOf(
-            titleCol("Приём"),
-            dateCol("Дата", "когда съедено"),
+            titleCol("Приём", "«Завтрак · Геркулес, творог»: вид и состав коротко"),
+            textCol("Когда", WHEN_DESC),
+            textCol("Время", "«07:24» по часам Саши"),
+            dateCol("Дата", "когда съедено, дата со временем; для сортировки"),
             dateCol("День", DAY_DESC),
-            textCol("Время", "HH:MM по часам Саши — когда съедено"),
             selCol("Вид", listOf("завтрак", "обед", "ужин", "перекус")),
             numCol("Ккал"),
             numCol("Белок"),
@@ -179,8 +195,11 @@ object NotionLifeSchema {
         knownId = "14959c11b0c24f84913458a9c3bd50a8",
         description = "Тренировки из intervals.icu (Garmin): строка на активность.",
         columns = listOf(
-            titleCol("Тренировка"),
-            dateCol("Дата"),
+            titleCol("Тренировка", "«Бег · Москва Бег»: вид и имя активности с часов"),
+            textCol("Когда", WHEN_DESC),
+            textCol("Время", "«16:04–16:40» по часам Саши"),
+            dateCol("Начало", "старт активности, дата со временем; для сортировки"),
+            dateCol("Конец", "старт плюс elapsed"),
             dateCol("День", DAY_DESC),
             selCol("Вид", listOf("бег", "вело", "силовая", "ходьба", "прочее")),
             numCol("Минуты", "elapsed с потолком правдоподобия"),
@@ -207,6 +226,7 @@ object NotionLifeSchema {
             urlCol("Ссылка"),
             textCol("WorkoutId", "ключ синхронизатора"),
         ),
+        retired = listOf("Дата"),
     )
 
     // ---- Силовые голосом ----
@@ -216,8 +236,7 @@ object NotionLifeSchema {
         knownId = "d404dbc567a446a19eb9c513790b760f",
         description = "Журнал силовых, надиктованный владельцу: строка на сессию с подходами.",
         columns = listOf(
-            titleCol("Сессия"),
-            dateCol("Дата"),
+            titleCol("Сессия", "«05.09 · сб · Силовая A»"),
             dateCol("День", DAY_DESC),
             textCol("Блок", "блок плана: «A · дом», «Турник»"),
             numCol("Минуты"),
@@ -230,6 +249,8 @@ object NotionLifeSchema {
             textCol("Надиктовано"),
             textCol("SessionId", "ключ синхронизатора"),
         ),
+        // «Дата» и «День» были одним и тем же днём в двух колонках.
+        retired = listOf("Дата"),
     )
 
     // ---- Зарядка (GTG) ----
@@ -239,8 +260,7 @@ object NotionLifeSchema {
         knownId = "6d24bc844f9345d5a7a4f9dabe776dbb",
         description = "Зарядка и GTG-цепочка: строка на день.",
         columns = listOf(
-            titleCol("Зарядка"),
-            dateCol("Дата"),
+            titleCol("Зарядка", "«24.08 · пн · выполнена»"),
             dateCol("День", DAY_DESC),
             selCol("Статус", listOf("выполнена", "частично", "пропущена")),
             checkCol("Сделана"),
@@ -255,6 +275,7 @@ object NotionLifeSchema {
             textCol("Заметка"),
             textCol("GtgId", "ключ синхронизатора"),
         ),
+        retired = listOf("Дата"),
     )
 
     // ---- Категории: единственная справочная таблица ----
@@ -379,9 +400,6 @@ object NotionLifeSchema {
     fun number(v: Number) = JSONObject().put("number", v)
     fun checkbox(on: Boolean) = JSONObject().put("checkbox", on)
     fun link(u: String) = JSONObject().put("url", if (u.isBlank()) JSONObject.NULL else u)
-    fun dateRange(start: Long, end: Long) = JSONObject().put(
-        "date", JSONObject().put("start", dateTime.format(Date(start))).put("end", dateTime.format(Date(end))),
-    )
     fun dateSingle(ms: Long) = JSONObject().put("date", JSONObject().put("start", dateTime.format(Date(ms))))
     fun dateDay(date: String) = JSONObject().put("date", JSONObject().put("start", date))
     /** Число, которого может и не быть: ноль стирает значение в Notion, а не пишет «0». */
@@ -436,6 +454,9 @@ object NotionLifeSchema {
     }
 
     fun clock(ms: Long): String = hm.format(Date(ms))
+
+    /** «14:59–16:16» — начало и конец по часам владельца, колонка «Время». */
+    fun span(start: Long, end: Long): String = clock(start) + "–" + clock(end)
 
     /** «5:53» из секунд на километр. */
     fun pace(secPerKm: Int): String =
@@ -494,12 +515,12 @@ object NotionLifeSchema {
     fun ribbonRow(e: ZasechkaStore.Entry, minutes: Long, worth: Int, now: Long): JSONObject = JSONObject().apply {
         val end = if (e.open) now else e.end
         put("Дело", title(e.title.ifBlank { e.category.ifBlank { "без названия" } }))
-        put("Дата", dateRange(e.start, end))
+        // Для глаз — коротко и словами; для сортировки и счёта — даты ниже.
+        put("Когда", rich(humanDay(dayKey(e.start))))
+        put("Время", rich(span(e.start, end)))
+        put("Начало", dateSingle(e.start))
+        put("Конец", dateSingle(end))
         put("День", dateDay(dayKey(e.start)))
-        // Часы и минуты словами — владелец просил видеть начало и конец как в
-        // ленте, а SQL-слой Notion отдаёт «Дату» в UTC.
-        put("Начало", rich(clock(e.start)))
-        put("Конец", rich(clock(end)))
         put("Минуты", number(minutes))
         if (e.category.isNotBlank()) put("Категория", select(e.category))
         put("Клиент", rich(e.client))
@@ -521,9 +542,10 @@ object NotionLifeSchema {
     fun mealRow(m: FoodStore.Meal): JSONObject = JSONObject().apply {
         val kind = m.kind.trim().lowercase()
         put("Приём", title(cap(kind.ifBlank { "приём" }) + (if (m.shortList.isNotBlank()) " · ${m.shortList}" else "")))
+        put("Когда", rich(humanDay(dayKey(m.ts))))
+        put("Время", rich(clock(m.ts)))
         put("Дата", dateSingle(m.ts))
         put("День", dateDay(dayKey(m.ts)))
-        put("Время", rich(clock(m.ts)))
         if (kind in setOf("завтрак", "обед", "ужин", "перекус")) put("Вид", select(kind))
         put("Ккал", number(m.kcal))
         put("Белок", number(m.protein))
@@ -552,8 +574,12 @@ object NotionLifeSchema {
     fun workoutRow(w: SportStore.Workout): JSONObject = JSONObject().apply {
         val kindName = SportCoach.sportName(w.type)
         val name = kindName + (if (w.name.isNotBlank() && !w.name.equals(w.type, true) && !w.name.equals(kindName, true)) " · ${w.name}" else "")
+        val end = w.start + w.seconds * 1000L
         put("Тренировка", title(name))
-        put("Дата", dateRange(w.start, w.start + w.seconds * 1000L))
+        put("Когда", rich(humanDay(dayKey(w.start))))
+        put("Время", rich(span(w.start, end)))
+        put("Начало", dateSingle(w.start))
+        put("Конец", dateSingle(end))
         put("День", dateDay(dayKey(w.start)))
         put("Вид", select(sportKind(w.type)))
         put("Минуты", number(w.minutes))
@@ -612,7 +638,6 @@ object NotionLifeSchema {
         // День в заголовке, как у зарядки: в таблице заголовок — первая
         // колонка, и «05.09 · пт · Силовая A» читается без даты рядом.
         put("Сессия", title("${humanDay(s.date)} · ${s.title.ifBlank { s.block.ifBlank { "силовая" } }}"))
-        put("Дата", dateDay(s.date))
         put("День", dateDay(s.date))
         put("Блок", rich(s.block))
         if (s.minutes > 0) put("Минуты", number(s.minutes))
@@ -628,7 +653,6 @@ object NotionLifeSchema {
 
     fun gtgRow(g: StrengthStore.GtgDay): JSONObject = JSONObject().apply {
         put("Зарядка", title("${humanDay(g.date)} · ${g.status()}"))
-        put("Дата", dateDay(g.date))
         put("День", dateDay(g.date))
         put("Статус", select(g.status()))
         put("Сделана", checkbox(g.charged))

@@ -45,6 +45,15 @@ class NotionLifeSchemaTest {
 
     private fun hhmm(ms: Long): String = SimpleDateFormat("HH:mm", Locale.US).format(Date(ms))
 
+    /** Начало ISO-строки даты со временем в зоне JVM — без смещения, его формат пишет сам. */
+    private fun isoLocal(ms: Long): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date(ms))
+
+    private fun titleText(row: org.json.JSONObject, key: String): String =
+        row.getJSONObject(key).getJSONArray("title").getJSONObject(0).getJSONObject("text").getString("content")
+
+    private fun dateStart(row: org.json.JSONObject, key: String): String =
+        row.getJSONObject(key).getJSONObject("date").getString("start")
+
     @Test
     fun `в каждой базе ровно один заголовок и нет одноимённых колонок`() {
         for (db in NotionLifeSchema.ALL) {
@@ -79,16 +88,23 @@ class NotionLifeSchemaTest {
     }
 
     @Test
-    fun `начало и конец дела едут словами HH-MM, оценка - числом или пустотой`() {
+    fun `начало и конец дела - две даты, для глаз - Когда и Время коротко, оценка - числом или пустотой`() {
         val start = now - 90 * 60_000L
         val end = now - 30 * 60_000L
         val e = entry(44, start, end, "Разговор с Наташей", "Работа: звонки", useful = 4)
         val row = NotionLifeSchema.ribbonRow(e, minutes = 60, worth = 7, now = now)
         assertFits(NotionLifeSchema.ZASECHKA, row)
-        // Владелец просил видеть начало и конец как в ленте: SQL-слой Notion
-        // отдаёт «Дату» в UTC, а эти две колонки — по его часам.
-        assertEquals(hhmm(start), text(row, "Начало"))
-        assertEquals(hhmm(end), text(row, "Конец"))
+        // По-экселевски: «Начало» и «Конец» — настоящие даты, «Минуты» — их
+        // разность; диапазона «Дата» в строке больше нет (он в retired).
+        assertTrue(dateStart(row, "Начало").startsWith(isoLocal(start)))
+        assertTrue(dateStart(row, "Конец").startsWith(isoLocal(end)))
+        assertFalse(row.has("Дата"))
+        assertTrue(NotionLifeSchema.ZASECHKA.retired.contains("Дата"))
+        // Владелец: «первая колонка — название, вторая — 14:59–16:16, без
+        // сентябрей». Notion показывает даты длинно, поэтому для глаз — текст.
+        assertEquals("Разговор с Наташей", titleText(row, "Дело"))
+        assertEquals("${hhmm(start)}–${hhmm(end)}", text(row, "Время"))
+        assertEquals(NotionLifeSchema.humanDay(NotionLifeSchema.dayKey(start)), text(row, "Когда"))
         assertEquals(4, row.getJSONObject("Оценка").getInt("number"))
         // Не оценивал — колонка стирается, а не получает ноль: иначе средняя
         // оценка по дням считалась бы с нулями.
@@ -120,7 +136,10 @@ class NotionLifeSchemaTest {
         assertEquals(380, row.getJSONObject("Ккал").getInt("number"))
         assertEquals("фото", row.getJSONObject("Записано").getJSONObject("select").getString("name"))
         assertEquals("завтрак", row.getJSONObject("Вид").getJSONObject("select").getString("name"))
+        assertEquals("Завтрак · Омлет, Капучино", titleText(row, "Приём"))
         assertEquals(hhmm(now), text(row, "Время"))
+        assertEquals(NotionLifeSchema.humanDay(NotionLifeSchema.dayKey(now)), text(row, "Когда"))
+        assertTrue(dateStart(row, "Дата").startsWith(isoLocal(now)))
         // Уверенность приёма — по самой слабой позиции: «точно» и «примерно» дают «примерно».
         assertEquals("примерно", row.getJSONObject("Уверенность").getJSONObject("select").getString("name"))
     }
@@ -153,6 +172,13 @@ class NotionLifeSchemaTest {
         assertEquals("бег", row.getJSONObject("Вид").getJSONObject("select").getString("name"))
         assertEquals("5:53", row.getJSONObject("Темп").getJSONArray("rich_text").getJSONObject(0).getJSONObject("text").getString("content"))
         assertEquals(32, row.getJSONObject("Минуты").getInt("number"))
+        // Как у дела: две даты вместо диапазона, для глаз — «Когда» и «Время».
+        val start = now - 3_600_000L
+        val end = start + 1920 * 1000L
+        assertTrue(dateStart(row, "Начало").startsWith(isoLocal(start)))
+        assertTrue(dateStart(row, "Конец").startsWith(isoLocal(end)))
+        assertEquals("Бег · Утренний бег", titleText(row, "Тренировка"))
+        assertEquals("${hhmm(start)}–${hhmm(end)}", text(row, "Время"))
     }
 
     @Test
@@ -164,7 +190,10 @@ class NotionLifeSchemaTest {
         )
         val sRow = NotionLifeSchema.sessionRow(s)
         assertFits(NotionLifeSchema.SILOVYE, sRow)
-        assertEquals("05.09 · сб · Силовая A", sRow.getJSONObject("Сессия").getJSONArray("title").getJSONObject(0).getJSONObject("text").getString("content"))
+        assertEquals("05.09 · сб · Силовая A", titleText(sRow, "Сессия"))
+        // День один, и колонка дня одна: «Дата» дублировала «День».
+        assertEquals("2026-09-05", dateStart(sRow, "День"))
+        assertFalse(sRow.has("Дата"))
         val g = StrengthStore.GtgDay(date = "2026-09-05", charged = true, hangSec = 25, negatives = 3, knee = "зелёный")
         val row = NotionLifeSchema.gtgRow(g)
         assertFits(NotionLifeSchema.ZARYADKA, row)

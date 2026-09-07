@@ -481,6 +481,10 @@ class NotionLifeSync(
      */
     private fun retireColumns(token: String) {
         if (state.schemaVersion != NotionLifeSchema.VERSION || state.legacy.isNotEmpty()) return
+        // И только когда очередь пуста: после смены схемы строки едут заново
+        // пачками по 120, и убрать «Дату» раньше, чем у всех появились
+        // «Начало» и «Конец», значит на полчаса оставить таблицу без времени.
+        if (queue.isNotEmpty()) return
         for (db in NotionLifeSchema.ALL) {
             if (db.retired.isEmpty() || db.name in state.retired) continue
             val id = state.dbs[db.name] ?: continue
