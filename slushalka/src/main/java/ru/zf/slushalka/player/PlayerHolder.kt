@@ -15,6 +15,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import ru.zf.slushalka.data.BookState
+import ru.zf.slushalka.data.Journal
 import ru.zf.slushalka.data.PositionStore
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
@@ -53,6 +54,8 @@ class PlayerHolder(
     private val context: Context,
     private val settings: Settings,
     private val positions: PositionStore,
+    /** Журнал подходов: каждый тик игры и каждая пауза - для статистики. */
+    private val journal: Journal,
     /** Дёргается, когда позицию пора отправить в папку библиотеки. */
     private val onSyncDue: (bookId: String) -> Unit,
 ) {
@@ -110,9 +113,13 @@ class PlayerHolder(
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (isPlaying) {
                 lastTickAt = System.currentTimeMillis()
+                // Подход начался (или продолжился после короткой паузы).
+                book?.let { journal.listening(it.id, absNow()) }
                 scheduleTick()
             } else {
                 lastPauseAt = System.currentTimeMillis()
+                // Пауза, буферизация, конец книги - слушание остановилось.
+                if (book != null) journal.stopped(absNow())
                 saveNow(markHistory = true)
                 book?.id?.let(onSyncDue)
             }
@@ -396,6 +403,10 @@ class PlayerHolder(
             if (player.isPlaying) {
                 listenedAcc += (now - lastTickAt).coerceIn(0, 2000)
                 lastTickAt = now
+                // Журналу - место в записи каждым тиком: из шага между тиками
+                // он считает пройденное, а перемотку (шаг больше десяти секунд)
+                // отбрасывает сам.
+                book?.let { journal.listening(it.id, absNow(), now) }
                 if (now - lastSaveAt > SAVE_EVERY_MS) saveNow()
                 refreshArtwork()
                 if (now - lastSyncAt > SYNC_EVERY_MS) {

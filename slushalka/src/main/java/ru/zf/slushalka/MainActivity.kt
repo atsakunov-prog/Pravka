@@ -32,8 +32,9 @@ import ru.zf.slushalka.ui.PlayerScreen
 import ru.zf.slushalka.ui.ReaderScreen
 import ru.zf.slushalka.ui.SettingsScreen
 import ru.zf.slushalka.ui.SlushalkaTheme
+import ru.zf.slushalka.ui.StatsScreen
 
-enum class Screen { LIBRARY, PLAYER, READER, SETTINGS, CATALOG }
+enum class Screen { LIBRARY, PLAYER, READER, SETTINGS, CATALOG, STATS }
 
 class MainActivity : ComponentActivity() {
 
@@ -88,6 +89,8 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         // Уход из приложения - такой же повод записать позицию, как пауза.
         app.player.saveNow()
+        // И журнал подходов тоже: идущий подход лежит на диске не старше минуты.
+        app.journal.saveNow()
         app.positions.flush()
     }
 
@@ -134,7 +137,10 @@ class MainActivity : ComponentActivity() {
                     onOpen = openBook,
                     onSettings = { screen = Screen.SETTINGS },
                     onCatalog = { screen = Screen.CATALOG },
+                    onStats = { screen = Screen.STATS },
                 )
+
+                Screen.STATS -> StatsScreen(app = app, onBack = { screen = Screen.LIBRARY })
 
                 Screen.CATALOG -> CatalogScreen(
                     app = app,

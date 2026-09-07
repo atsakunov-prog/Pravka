@@ -198,6 +198,28 @@ fun SleepButton(leftMs: Long, size: Dp = 46.dp, onClick: () -> Unit) {
     }
 }
 
+/** Три столбика - значок статистики для верхней панели полки. */
+@Composable
+fun StatsGlyph(size: Dp = 22.dp, color: Color? = null) {
+    val c = color ?: MaterialTheme.colorScheme.onSurfaceVariant
+    Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val bar = w * 0.22f
+        val gap = (w - bar * 3) / 2f
+        val heights = floatArrayOf(0.45f, 0.95f, 0.7f)
+        for (i in 0 until 3) {
+            val bh = h * heights[i]
+            drawRoundRect(
+                color = c,
+                topLeft = Offset(i * (bar + gap), h - bh),
+                size = Size(bar, bh),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(bar * 0.3f),
+            )
+        }
+    }
+}
+
 /** Скорость - справа от play, числом: цифра тут понятнее любой пиктограммы. */
 @Composable
 fun SpeedButton(speed: Float, size: Dp = 46.dp, onClick: () -> Unit) {

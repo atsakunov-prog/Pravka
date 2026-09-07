@@ -104,6 +104,10 @@ class AskLog(context: Context) {
     @Synchronized
     fun totalUsd(): Double = byBook.values.sumOf { list -> list.sumOf { it.costUsd } }
 
+    /** Сколько вопросов задано - из тех, что ещё хранятся (по полсотни на книгу). */
+    @Synchronized
+    fun count(): Int = byBook.values.sumOf { it.size }
+
     private fun persist() {
         val root = JSONObject()
         byBook.forEach { (id, list) ->

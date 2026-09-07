@@ -271,7 +271,13 @@ fun ReaderScreen(
         kotlinx.coroutines.delay(700)
         state.saveReadChar(readPlace())
     }
-    DisposableEffect(Unit) { onDispose { state.saveReadChar(readPlace()) } }
+    DisposableEffect(Unit) {
+        onDispose {
+            state.saveReadChar(readPlace())
+            // Ушли с экрана - чтение глазами кончилось, журнал подходов об этом узнаёт.
+            state.readerClosed()
+        }
+    }
 
     LaunchedEffect(notice) {
         if (notice != null) {

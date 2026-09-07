@@ -15,6 +15,7 @@ import ru.zf.slushalka.catalog.CatalogState
 import ru.zf.slushalka.data.AskLog
 import ru.zf.slushalka.data.Bookmarks
 import ru.zf.slushalka.data.GuideStore
+import ru.zf.slushalka.data.Journal
 import ru.zf.slushalka.data.LibraryStore
 import ru.zf.slushalka.data.Markup
 import ru.zf.slushalka.data.PositionStore
@@ -37,6 +38,7 @@ class SlushalkaApp : Application() {
     lateinit var texts: TextRepo; private set
     lateinit var bookmarks: Bookmarks; private set
     lateinit var askLog: AskLog; private set
+    lateinit var journal: Journal; private set
     lateinit var sync: PositionSync; private set
     lateinit var markup: Markup; private set
     lateinit var updater: Updater; private set
@@ -58,6 +60,7 @@ class SlushalkaApp : Application() {
         texts = TextRepo(this)
         bookmarks = Bookmarks(this)
         askLog = AskLog(this)
+        journal = Journal(this)
         sync = PositionSync(this)
         markup = Markup(this)
         updater = Updater(this, settings)
@@ -67,7 +70,7 @@ class SlushalkaApp : Application() {
         ask = AskEngine(settings, claude, askLog)
         guide = GuideEngine(this, settings, claude, GuideStore(this), askLog)
         advisor = Advisor(this, claude)
-        player = PlayerHolder(this, settings, positions) { bookId ->
+        player = PlayerHolder(this, settings, positions, journal) { bookId ->
             scope.launch { state.syncPush(bookId) }
         }
         state = AppState(this)

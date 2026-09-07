@@ -54,6 +54,7 @@ fun LibraryScreen(
     onOpen: (Book) -> Unit,
     onSettings: () -> Unit,
     onCatalog: () -> Unit,
+    onStats: () -> Unit,
 ) {
     val state = app.state
     val books by state.books.collectAsState()
@@ -74,6 +75,9 @@ fun LibraryScreen(
                     IconButton(onClick = onCatalog) {
                         Icon(Icons.Default.Search, contentDescription = "Флибуста")
                     }
+                    // Статистика: сколько, когда и как быстро. Значок рисуется,
+                    // как и кнопки плеера: в базовом наборе иконок графика нет.
+                    IconButton(onClick = onStats) { StatsGlyph() }
                     IconButton(onClick = { state.rescan() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Перечитать папку")
                     }

@@ -677,6 +677,7 @@ class AppState(private val app: SlushalkaApp) {
         val book = _current.value ?: return
         followReading(book, offset)
         app.positions.setReadChar(book.id, offset)
+        noteReading(book, offset)
         // В папку библиотеки - тем же шагом, что плеер на ходу: раз в две
         // минуты. Иначе после часа чтения второе устройство знало бы место
         // только с последней паузы звука.
@@ -688,6 +689,29 @@ class AppState(private val app: SlushalkaApp) {
     }
 
     private var lastReadSyncAt = 0L
+
+    /**
+     * Страница в журнал подходов - но только когда её читают глазами. Пока
+     * говорит озвучка, страницы листаются за ней, и абзацы в журнал кладёт она
+     * сама; пока идёт запись, читалка идёт за чтецом - это слушание, и его
+     * считает плеер. Иначе один и тот же час записался бы дважды.
+     */
+    private fun noteReading(book: Book, offset: Int) {
+        val speech = app.readAloud.state.value
+        if (speech.active && speech.bookId == book.id) return
+        if (app.player.isOpen(book.id) && app.player.state.value.playing) return
+        app.journal.reading(book.id, offset)
+    }
+
+    /** Читалку закрыли: чтение глазами остановилось, время до возвращения не в зачёт. */
+    fun readerClosed() {
+        val book = _current.value ?: return
+        val speech = app.readAloud.state.value
+        // Озвучка продолжает и с закрытой читалкой - её подход не трогаем.
+        if (speech.active && speech.bookId == book.id) return
+        if (app.player.isOpen(book.id) && app.player.state.value.playing) return
+        app.journal.stopped()
+    }
 
     /** Запись подтягивается к странице. Стоит ли она, решает плеер: идущий звук главнее. */
     private fun followReading(book: Book, offset: Int) {

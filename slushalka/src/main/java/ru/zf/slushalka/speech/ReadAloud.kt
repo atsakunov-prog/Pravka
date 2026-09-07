@@ -235,6 +235,7 @@ class ReadAloud(private val app: SlushalkaApp) {
         runCatching { tts?.stop() }
         if (!keepFocus) abandonFocus()
         _state.value = s.copy(speaking = false)
+        app.journal.stopped(s.charOffset.toLong())
     }
 
     fun resume() {
@@ -268,12 +269,14 @@ class ReadAloud(private val app: SlushalkaApp) {
     }
 
     fun stop() {
+        val s = _state.value
         generation++
         runCatching { tts?.stop() }
         abandonFocus()
         pausedByFocus = false
         pendingStart = null
-        _state.value = State(rate = _state.value.rate, ready = _state.value.ready)
+        if (s.active && s.speaking) app.journal.stopped(s.charOffset.toLong())
+        _state.value = State(rate = s.rate, ready = s.ready)
     }
 
     // ------------------------------------------------------------- механика
@@ -392,6 +395,9 @@ class ReadAloud(private val app: SlushalkaApp) {
             lastSavedBlock = piece.block
             app.state.saveReadChar(piece.start)
         }
+        // В журнал подходов - каждый кусок: из шага между ними считаются
+        // прочитанные знаки, а время идёт от пуска до паузы.
+        _state.value.bookId?.let { app.journal.aloud(it, piece.start) }
         enqueueUpTo(index + 1, gen)
     }
 
