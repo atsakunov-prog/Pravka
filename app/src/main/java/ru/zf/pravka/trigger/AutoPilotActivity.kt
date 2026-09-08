@@ -16,6 +16,10 @@ class AutoPilotActivity : Activity() {
         /** Запись, о которой кнопка (отмена автопоездки), и та, что шла до неё. */
         const val EXTRA_ID = "id"
         const val EXTRA_PREV = "prev"
+        /** Конец куска (дорога задним числом: от отъезда [EXTRA_AT] до приезда). */
+        const val EXTRA_UNTIL = "until"
+        /** Куда приехал — по имени места находится его дело по приезду. */
+        const val EXTRA_TO = "to"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,6 +34,8 @@ class AutoPilotActivity : Activity() {
                 fromPlace = intent?.getStringExtra(EXTRA_PLACE).orEmpty(),
                 id = intent?.getLongExtra(EXTRA_ID, 0L) ?: 0L,
                 prevId = intent?.getLongExtra(EXTRA_PREV, 0L) ?: 0L,
+                untilMs = intent?.getLongExtra(EXTRA_UNTIL, 0L) ?: 0L,
+                toPlace = intent?.getStringExtra(EXTRA_TO).orEmpty(),
             )
         }
         finish()

@@ -44,6 +44,8 @@ class PravkaAccessibilityService : AccessibilityService() {
 
         /** Окно двойного тапа по «З» на локскрине. */
         internal const val LOCK_DOUBLE_TAP_MS = 1_500L
+        /** Сколько якорь времени ждёт свой тейк (см. `onZasechkaTap`). */
+        const val Z_ANCHOR_TTL_MS = 2 * 60_000L
 
         /**
          * Потолок записи, начатой с заблокированного экрана. Владелец: «через
@@ -113,6 +115,13 @@ class PravkaAccessibilityService : AccessibilityService() {
     // 0 — обычная запись в ленту. Сбрасывается на старте обычного тейка, чтобы
     // брошенное окно ввода не увело следующую фразу в чужой комментарий.
     @Volatile internal var zCommentFor = 0L
+    /**
+     * Якорь времени ближайшего тейка Засечки (см. `onZasechkaTap`): с какого
+     * момента и до какого считать сказанное. Ноль — «сейчас», как обычно.
+     */
+    @Volatile internal var zAnchorStart = 0L
+    @Volatile internal var zAnchorEnd = 0L
+    @Volatile internal var zAnchorSetAt = 0L
     @Volatile internal var cachedZEnabled = true
     @Volatile internal var cachedStackIdle = true
     @Volatile internal var cachedZGapMin = 45
@@ -225,7 +234,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             service = this,
             scope = scope,
             settings = app.settings,
-            onShortTap = ::onZasechkaTap,
+            onShortTap = { onZasechkaTap() },
             onLongPress = ::showZasechkaMenu,
         )
         zButton?.onTickerTap = ::onZasechkaPlateTap

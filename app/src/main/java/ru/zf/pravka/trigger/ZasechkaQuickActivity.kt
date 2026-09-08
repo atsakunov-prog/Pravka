@@ -15,6 +15,14 @@ class ZasechkaQuickActivity : Activity() {
         const val W_RECORD = "record"    // default: start a voice take
         const val W_POMO25 = "pomo25"
         const val W_BREAK5 = "break5"
+        /**
+         * Якорь времени тейка: пуш автопилота знает, КОГДА кончилась дорога
+         * («машина отключилась в 14:02») — сказанное ляжет с этого момента,
+         * а не с секунды, когда владелец договорил. [EXTRA_UNTIL] — конец
+         * закрытой дыры, тогда сказанное — вставка ровно в неё.
+         */
+        const val EXTRA_AT = "at"
+        const val EXTRA_UNTIL = "until"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -26,7 +34,10 @@ class ZasechkaQuickActivity : Activity() {
             when (intent?.getStringExtra(EXTRA_WHAT)) {
                 W_POMO25 -> service.startPomodoro(25, isBreak = false)
                 W_BREAK5 -> service.startPomodoro(5, isBreak = true)
-                else -> service.onZasechkaTap()
+                else -> service.onZasechkaTap(
+                    anchorStart = intent?.getLongExtra(EXTRA_AT, 0L) ?: 0L,
+                    anchorEnd = intent?.getLongExtra(EXTRA_UNTIL, 0L) ?: 0L,
+                )
             }
         }
         finish()

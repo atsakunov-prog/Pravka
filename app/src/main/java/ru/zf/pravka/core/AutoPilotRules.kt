@@ -1,6 +1,14 @@
 package ru.zf.pravka.core
 
 /**
+ * Дело, которое место начинает само по приезду: у Летово это «Забираю
+ * Серёжу» [Семья]. Владелец (08.09.2026): «вышел из машины и подсоединился к
+ * Wi-Fi Летова — ставится „Летово, забираю Серёжу“, потому что скорее всего
+ * это оно». Пустое название — у места дела нет, автопилот спрашивает.
+ */
+data class PlaceDeal(val title: String, val category: String)
+
+/**
  * Решения автопилота Засечки — без Android, чтобы их можно было прогнать
  * JVM-тестом. Сам автопилот (`trigger/AutoPilot.kt`) только собирает сигналы
  * (сеть, эфир, Bluetooth) и показывает уведомления; ЧТО сказать и что
@@ -19,6 +27,64 @@ object AutoPilotRules {
      * лента к тому моменту уже врёт.
      */
     const val BLINK_MS = 30 * 60_000L
+
+    /**
+     * Сколько может пройти между потерей сети места и подключением машины,
+     * чтобы это была ОДНА дорога: вышел из дома, дошёл до машины, поехал.
+     * Двадцать минут: до парковки у Летово идти дольше пяти, а через
+     * полчаса это уже другая история. Владелец (08.09.2026): «через три
+     * минуты подключаюсь к машине — логично предположить, что я вышел из
+     * дома; включить машину и слепить с выходом из дома».
+     */
+    const val CAR_AFTER_LEAVE_MS = 20 * 60_000L
+
+    /**
+     * Сколько живёт якорь времени из пуша. «Вышел из машины в 14:02 — что
+     * теперь?» нажатое вечером не должно резать ленту на шесть часов назад:
+     * за это время владелец наверняка уже наговорил день сам.
+     */
+    const val ANCHOR_MAX_AGE_MS = 6 * 3_600_000L
+
+    /**
+     * С какого момента начинать «Поездку на машине», когда подключился
+     * Bluetooth. Если только что (в [CAR_AFTER_LEAVE_MS]) пропала сеть
+     * места [leftPlace] — дорога началась ТАМ, у двери, а не у зажигания:
+     * иначе три минуты до машины остаются на «Работе», а пуш «уехал из
+     * дома?» висит рядом с уже идущей поездкой. Дело, начатое владельцем
+     * ПОСЛЕ отъезда ([openStart] позже [leftAtMs]), — его слово: он знает,
+     * что делал между дверью и машиной, и резать это задним числом нельзя;
+     * тогда поездка стартует с подключения.
+     */
+    fun carTripStart(connectedAt: Long, leftPlace: String, leftAtMs: Long, openStart: Long?): Long {
+        if (leftPlace.isBlank() || leftAtMs <= 0L) return connectedAt
+        val since = connectedAt - leftAtMs
+        if (since < 0L || since > CAR_AFTER_LEAVE_MS) return connectedAt
+        if (openStart != null && openStart > leftAtMs) return connectedAt
+        return leftAtMs
+    }
+
+    /**
+     * Годится ли якорь времени [anchor] (момент, от которого пуш или дыра в
+     * ленте предложили считать сказанное) для записи, которую владелец
+     * делает в [now]. Якорь в будущем, старше [ANCHOR_MAX_AGE_MS] или
+     * перекрытый делом, начатым уже после него ([latestRealStart] позже
+     * якоря), — не годится: лента с тех пор жила своей жизнью, и запись
+     * начинается «сейчас», как обычно. Дело, начатое ровно В якорь (дело
+     * места по приезду), якорь не ломает: сказанное его заменит.
+     */
+    fun anchoredStart(anchor: Long, now: Long, latestRealStart: Long): Long? {
+        if (anchor <= 0L || anchor > now) return null
+        if (now - anchor > ANCHOR_MAX_AGE_MS) return null
+        if (latestRealStart > anchor) return null
+        return anchor
+    }
+
+    /** Дело места по имени, без регистра: «Летово» и «летово» — одно место. */
+    fun dealFor(place: String, deals: Map<String, PlaceDeal>): PlaceDeal? {
+        if (place.isBlank()) return null
+        val d = deals.entries.firstOrNull { it.key.trim().equals(place.trim(), ignoreCase = true) }?.value
+        return d?.takeIf { it.title.isNotBlank() }
+    }
 
     /** Дорога узнаётся по категории ИЛИ по названию: «Поездка домой». */
     fun travelish(title: String, category: String): Boolean {

@@ -80,6 +80,8 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.core.PhoneDaySummary
 import ru.zf.pravka.data.PhoneStore
 import ru.zf.pravka.data.PhoneSweeper
+import ru.zf.pravka.core.AutoPilotRules
+import ru.zf.pravka.core.PlaceDeal
 import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.data.phoneDayKey
 import ru.zf.pravka.ui.Feedback
@@ -297,6 +299,10 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     var editingChain by remember { mutableStateOf<List<ZasechkaStore.Entry>?>(null) }
     // Баббл 💬: комментарий к делу отдельным окном (у цепочки — к голове).
     var commenting by remember { mutableStateOf<ZasechkaStore.Entry?>(null) }
+    // Тап по «не размечено» или по «··· N мин без записи»: сказать, что это
+    // было, или присоединить к соседу (владелец: «очень часто что-то просто
+    // не дозаписалось или обрубилось — тогда присоединять к прошлому»).
+    var gapFor by remember { mutableStateOf<GapTarget?>(null) }
     var draft by remember { mutableStateOf("") }
     var processing by remember { mutableStateOf(false) }
 
@@ -455,13 +461,18 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                 val doStop: () -> Unit = {
                     app.appScope.launch { app.zasechkaEngine.closeOpen() }
                 }
+                // Заполнитель «не размечено» — не запись, чтобы её править:
+                // тап открывает выбор «что это было / к соседу».
+                val isGap = head.source == "gap"
                 if (unit.chain) {
                     ChainBlock(
                         unit = unit,
                         now = now,
                         worthOf = worthOf,
                         onStop = if (unit.open) doStop else null,
-                        onEdit = { editingChain = unit.fragments },
+                        onEdit = {
+                            if (isGap) gapFor = gapTargetOf(dayUnits, index, head) else editingChain = unit.fragments
+                        },
                         onComment = { commenting = head },
                         onDelete = {
                             app.appScope.launch { unit.fragments.forEach { store.delete(it.id) } }
@@ -474,13 +485,15 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                         now = now,
                         worthOf = worthOf,
                         onStop = if (head.open) doStop else null,
-                        onEdit = { editing = head },
+                        onEdit = { if (isGap) gapFor = gapTargetOf(dayUnits, index, head) else editing = head },
                         onComment = { commenting = head },
                         onDelete = { app.appScope.launch { store.delete(head.id) } },
                     )
                 }
                 // A visible hole in the ribbon is the whole point of the app -
                 // drawn between this unit and the chronologically older one.
+                // Свежая дыра (заполнитель придёт после карантина) — тот же
+                // выбор по тапу, что и у «не размечено».
                 if (index < dayUnits.size - 1) {
                     val older = dayUnits[index + 1]
                     if (!older.open) {
@@ -492,7 +505,18 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                                 // Deliberately faint: the holes must not
                                 // shout louder than the entries.
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                                modifier = Modifier.padding(start = 56.dp, top = 1.dp, bottom = 1.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        gapFor = GapTarget(
+                                            start = older.endMs(now),
+                                            end = unit.start,
+                                            gap = null,
+                                            prev = older.fragments.last().takeIf { it.source != "gap" },
+                                            next = unit.fragments.first().takeIf { it.source != "gap" },
+                                        )
+                                    }
+                                    .padding(start = 56.dp, top = 1.dp, bottom = 1.dp),
                             )
                         }
                     }
@@ -778,6 +802,173 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             },
         )
     }
+
+    gapFor?.let { target ->
+        GapDialog(
+            target = target,
+            now = now,
+            onDismiss = { gapFor = null },
+            onSay = {
+                gapFor = null
+                val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
+                // Якорь — границы дыры: сказанное ляжет ровно в неё (или с её
+                // начала, если дыра живая), а не «сейчас».
+                else service.onZasechkaTap(anchorStart = target.start, anchorEnd = target.end)
+            },
+            onType = { text ->
+                gapFor = null
+                app.appScope.launch {
+                    val outcome = runCatching {
+                        app.zasechkaEngine.record(text, "text", target.start, target.end)
+                    }.getOrNull()
+                    Feedback.toast(
+                        app,
+                        when {
+                            outcome == null -> app.getString(R.string.z_record_failed)
+                            outcome.action == "none" -> "🤷 ${outcome.say.ifBlank { "не про ленту" }}"
+                            outcome.action == "insert" && outcome.error != null -> outcome.error
+                            !outcome.categorized -> app.getString(R.string.z_saved_raw, outcome.error ?: "")
+                            else -> "⏱ ${outcome.entry.title} ${fmtTime(outcome.entry.start)}" +
+                                (if (outcome.entry.open) "" else "–${fmtTime(outcome.entry.end)}")
+                        },
+                    )
+                }
+            },
+            onJoinPrev = {
+                gapFor = null
+                val prev = target.prev ?: return@GapDialog
+                app.appScope.launch {
+                    // Живая дыра — предыдущее дело просто ещё идёт: открываем
+                    // его обратно, заполнитель уйдёт сам. Закрытая — предыдущее
+                    // дело дотягивается до конца дыры.
+                    store.update(prev.copy(end = if (target.end == 0L) 0L else target.end))
+                    app.zasechkaSync.kickSoon(app.appScope)
+                    Feedback.toast(
+                        app,
+                        if (target.end == 0L) "▶ «${prev.title}» снова идёт"
+                        else "⏱ «${prev.title}» до ${fmtTime(target.end)}",
+                    )
+                }
+            },
+            onJoinNext = {
+                gapFor = null
+                val next = target.next ?: return@GapDialog
+                app.appScope.launch {
+                    store.update(next.copy(start = target.start))
+                    app.zasechkaSync.kickSoon(app.appScope)
+                    Feedback.toast(app, "⏱ «${next.title}» с ${fmtTime(target.start)}")
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Дыра в ленте, по которой тапнул владелец: заполнитель «не размечено» или
+ * «··· N мин без записи» между делами. [gap] — сама запись-заполнитель (у
+ * свежей дыры её ещё нет), [prev] и [next] — соседи по времени, к которым
+ * дыру можно присоединить; [end] = 0 — дыра живая, тикает до сейчас.
+ */
+private data class GapTarget(
+    val start: Long,
+    val end: Long,
+    val gap: ZasechkaStore.Entry?,
+    val prev: ZasechkaStore.Entry?,
+    val next: ZasechkaStore.Entry?,
+)
+
+/** Соседи заполнителя по времени: список единиц дня идёт от новых к старым. */
+private fun gapTargetOf(units: List<DayUnit>, index: Int, gap: ZasechkaStore.Entry): GapTarget {
+    val prev = units.getOrNull(index + 1)?.fragments?.last()?.takeIf { it.source != "gap" }
+    val next = if (gap.open) null else units.getOrNull(index - 1)?.fragments?.first()?.takeIf { it.source != "gap" }
+    return GapTarget(start = gap.start, end = gap.end, gap = gap, prev = prev, next = next)
+}
+
+/**
+ * Что делать с дырой. Владелец (08.09.2026): «нажать прямо на розовое „не
+ * размечено“, и там выбор: либо сказать, что это было, либо присоединить к
+ * предыдущему — очень часто что-то просто не дозаписалось или обрубилось».
+ * Третий выход — к следующему: обрубается и начало.
+ */
+@Composable
+private fun GapDialog(
+    target: GapTarget,
+    now: Long,
+    onDismiss: () -> Unit,
+    onSay: () -> Unit,
+    onType: (String) -> Unit,
+    onJoinPrev: () -> Unit,
+    onJoinNext: () -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    val live = target.end == 0L
+    val endMs = if (live) now else target.end
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                if (live) "Не размечено с ${fmtTime(target.start)}"
+                else "Не размечено ${fmtTime(target.start)}–${fmtTime(target.end)}"
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    fmtDur(msToMin(endMs - target.start)) + (if (live) ", идёт" else ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text("Что это было?", style = MaterialTheme.typography.bodyMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("набрать — или «П» надиктует сюда") },
+                        singleLine = true,
+                    )
+                    IconButton(onClick = { onType(text.trim()) }, enabled = text.isNotBlank()) {
+                        Icon(Icons.Filled.Send, contentDescription = "записать")
+                    }
+                }
+                OutlinedButton(onClick = onSay, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        if (live) "🎙 Сказать — ляжет с ${fmtTime(target.start)}"
+                        else "🎙 Сказать — ляжет ровно в ${fmtTime(target.start)}–${fmtTime(target.end)}"
+                    )
+                }
+                if (target.prev != null || target.next != null) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        if (live) "Или это всё ещё то же дело:" else "Или это обрывок соседнего дела:",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    target.prev?.let { prev ->
+                        OutlinedButton(onClick = onJoinPrev, modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                if (live) "▶ Продолжить «${capFirst(prev.title)}»"
+                                else "◀ К предыдущему: «${capFirst(prev.title)}»",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    target.next?.let { next ->
+                        OutlinedButton(onClick = onJoinNext, modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                "▶ К следующему: «${capFirst(next.title)}»",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
+    )
 }
 
 /**
@@ -1462,13 +1653,20 @@ private fun AutoPilotSection(app: PravkaApp) {
     val unnamed = seen.keys.filter { !places.containsKey(it) }
         .sortedByDescending { seen[it] ?: 0L }
 
+    // Дело места по приезду: закрыв дорогу, автопилот сам начинает его
+    // («Летово» → «Забираю Серёжу»). Ключ — имя места, см. Settings.
+    val deals by settings.autoPlaceDealsFlow.collectAsState(initial = emptyMap<String, PlaceDeal>())
+    val dealCategories by app.zasechkaStore.categoriesFlow.collectAsState()
+    var dealPlace by remember { mutableStateOf<String?>(null) }
     if (places.isNotEmpty()) {
         Text("Мои места", style = MaterialTheme.typography.bodyMedium)
         Text(
             "Кнопка справа выбирает, что считать приездом. «подключился» — " +
                 "точнее, так ловится дом. «вижу сеть» — для мест вроде Летово, " +
                 "к чьему Wi-Fi ты не подключаешься: приезд засчитывается, как " +
-                "только сеть появилась в эфире.",
+                "только сеть появилась в эфире. У места может быть дело по " +
+                "приезду: закрыв дорогу, автопилот сам начнёт его; не то — " +
+                "«Сказать» в пуше заменит.",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1487,8 +1685,33 @@ private fun AutoPilotSection(app: PravkaApp) {
                     Text("✕")
                 }
             }
+            val deal = AutoPilotRules.dealFor(name, deals)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (deal != null) {
+                        "по приезду: «${deal.title}»" +
+                            (if (deal.category.isNotBlank()) " [${deal.category}]" else "")
+                    } else "по приезду — спросить, что делаешь",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f).padding(start = 12.dp),
+                )
+                TextButton(onClick = { dealPlace = name }) { Text(if (deal != null) "изменить" else "дело…") }
+            }
         }
         Spacer(Modifier.height(6.dp))
+    }
+    dealPlace?.let { place ->
+        PlaceDealDialog(
+            place = place,
+            current = AutoPilotRules.dealFor(place, deals),
+            categories = dealCategories.map { it.name },
+            onDismiss = { dealPlace = null },
+            onSave = { title, category ->
+                dealPlace = null
+                scope.launch { settings.setAutoPlaceDeal(place, title, category) }
+            },
+        )
     }
 
     if (unnamed.isEmpty()) {
@@ -1657,6 +1880,71 @@ private fun AutoPilotSection(app: PravkaApp) {
     toggle(stillAsk, "«Точно ещё …?», когда телефон задвигался") { on ->
         scope.launch { settings.setAutoStillAsk(on) }
     }
+}
+
+/** Дело места по приезду: название и категория; пустое название — дела нет. */
+@Composable
+private fun PlaceDealDialog(
+    place: String,
+    current: PlaceDeal?,
+    categories: List<String>,
+    onDismiss: () -> Unit,
+    onSave: (title: String, category: String) -> Unit,
+) {
+    var title by remember { mutableStateOf(current?.title.orEmpty()) }
+    var category by remember { mutableStateOf(current?.category.orEmpty()) }
+    var categoryMenu by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Приехал в «$place» — что начать?") },
+        text = {
+            Column {
+                Text(
+                    "Дорога закроется приездом, и это дело начнётся с того же момента. " +
+                        "Ошибся автопилот — «Сказать» в пуше заменит его.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Дело") },
+                    placeholder = { Text("Забираю Серёжу") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Box {
+                    OutlinedButton(onClick = { categoryMenu = true }) {
+                        Text("Категория: " + category.ifBlank { "нет" })
+                    }
+                    DropdownMenu(expanded = categoryMenu, onDismissRequest = { categoryMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("без категории") },
+                            onClick = { category = ""; categoryMenu = false },
+                        )
+                        for (c in categories) {
+                            DropdownMenuItem(text = { Text(c) }, onClick = { category = c; categoryMenu = false })
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(title.trim(), category) }) { Text("Готово") }
+        },
+        dismissButton = {
+            Row {
+                if (current != null) {
+                    TextButton(onClick = { onSave("", "") }) {
+                        Text("Убрать", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                TextButton(onClick = onDismiss) { Text("Отмена") }
+            }
+        },
+    )
 }
 
 /**

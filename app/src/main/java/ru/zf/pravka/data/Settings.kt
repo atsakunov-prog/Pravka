@@ -10,6 +10,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import ru.zf.pravka.core.PlaceDeal
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
@@ -91,6 +92,9 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_PLACES = stringPreferencesKey("auto_places")
         private val KEY_AUTO_SEEN = stringPreferencesKey("auto_seen_ssids")
         private val KEY_AUTO_VISIBLE = stringPreferencesKey("auto_visible_ssids")
+        private val KEY_AUTO_PLACE_DEALS = stringPreferencesKey("auto_place_deals")
+        /** Заводские дела мест — см. [autoPlaceDealsFlow]. */
+        private val FACTORY_PLACE_DEALS = mapOf("Летово" to PlaceDeal("Забираю Серёжу", "Семья"))
         private val KEY_NFC_TAGS = stringPreferencesKey("nfc_tags")
         private val KEY_AUTO_CAR_BT = stringPreferencesKey("auto_car_bt")
         private val KEY_AUTO_CAR_BT_ADDR = stringPreferencesKey("auto_car_bt_addr")
@@ -494,6 +498,53 @@ class Settings(private val context: Context) {
             }.getOrDefault(emptyList()).toMutableSet()
             if (on) cur.add(ssid) else cur.remove(ssid)
             prefs[KEY_AUTO_VISIBLE] = org.json.JSONArray(cur.toList()).toString()
+        }
+    }
+
+    /**
+     * Дело, которое место начинает само по приезду: имя места → название и
+     * категория. Владелец (08.09.2026): «вышел из машины и через некоторое
+     * время подсоединился к Wi-Fi Летова — ставится „Летово, забираю Серёжу“,
+     * потому что скорее всего это оно». Ключ — ИМЯ места, не SSID: у одного
+     * места может быть две сети, а дело одно. Заводское значение — ровно этот
+     * случай; правится в настройках автопилота. Пустая строка в хранилище —
+     * владелец всё убрал, заводское не возвращается.
+     */
+    val autoPlaceDealsFlow = context.dataStore.data.map { prefs ->
+        val raw = prefs[KEY_AUTO_PLACE_DEALS]
+        if (raw == null) FACTORY_PLACE_DEALS
+        else runCatching {
+            val o = org.json.JSONObject(raw)
+            o.keys().asSequence().associateWith { k ->
+                val d = o.optJSONObject(k)
+                PlaceDeal(d?.optString("title").orEmpty(), d?.optString("category").orEmpty())
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    /** Пустое [title] — у места дела больше нет. */
+    suspend fun setAutoPlaceDeal(place: String, title: String, category: String) {
+        if (place.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val cur = prefs[KEY_AUTO_PLACE_DEALS]?.let { raw ->
+                runCatching { org.json.JSONObject(raw) }.getOrNull()
+            } ?: org.json.JSONObject().also { o ->
+                // Первая правка: заводское переезжает в хранилище целиком,
+                // иначе оно бы исчезло вместе с ключом.
+                for ((k, v) in FACTORY_PLACE_DEALS) {
+                    o.put(k, org.json.JSONObject().put("title", v.title).put("category", v.category))
+                }
+            }
+            // Одно место — одна запись, без регистра.
+            val same = cur.keys().asSequence().filter { it.equals(place.trim(), ignoreCase = true) }.toList()
+            same.forEach { cur.remove(it) }
+            if (title.isNotBlank()) {
+                cur.put(
+                    place.trim(),
+                    org.json.JSONObject().put("title", title.trim()).put("category", category.trim()),
+                )
+            }
+            prefs[KEY_AUTO_PLACE_DEALS] = cur.toString()
         }
     }
 

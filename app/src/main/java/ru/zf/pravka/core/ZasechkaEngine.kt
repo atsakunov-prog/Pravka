@@ -58,7 +58,24 @@ class ZasechkaEngine(
     private val nowFormat = SimpleDateFormat("EEEE, d MMMM, HH:mm", Locale("ru"))
     private val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
 
-    suspend fun record(raw: String, source: String): Outcome {
+    /**
+     * Одна фраза — одно действие в ленте. [anchorStart] и [anchorEnd] — якорь
+     * времени от того, кто позвал диктовку: пуш автопилота («машина
+     * отключилась в 14:02 — что теперь?») или дыра «не размечено» во вкладке.
+     * Раньше «Сказать» из пуша писало дело с момента, когда владелец
+     * договорил, — и поездка тянулась до этой секунды, а не до выхода из
+     * машины (владелец: «должен поставить в засечку с временем, когда я вышел
+     * из машины, чтобы прилепилось к прошлому»). Один якорь — новая запись
+     * начнётся с него; с [anchorEnd] — закрытый кусок, вставкой ровно в дыру.
+     * Названное владельцем время сильнее якоря: «с 13:00» побеждает. Годность
+     * якоря решает [AutoPilotRules.anchoredStart].
+     */
+    suspend fun record(
+        raw: String,
+        source: String,
+        anchorStart: Long = 0L,
+        anchorEnd: Long = 0L,
+    ): Outcome {
         val now = System.currentTimeMillis()
         val text = raw.trim()
         val categories = store.categories()
@@ -116,13 +133,28 @@ class ZasechkaEngine(
                 // или insert — выводится из них: назван конец в прошлом,
                 // значит кусок закрыт, что бы модель ни думала.
                 val said = spokenSpan(p, now)
+                // Якорь: годится, только если лента с того момента не жила
+                // своей жизнью (владелец не начал ничего позже него).
+                val anchorAt: Long? = if (anchorStart > 0L) {
+                    AutoPilotRules.anchoredStart(anchorStart, now, store.lastEntry()?.start ?: 0L)
+                } else null
+                // Якорь-интервал (дыра в ленте): владелец времени не назвал —
+                // сказанное ложится вставкой ровно в дыру.
+                val anchorSpan: Pair<Long, Long>? =
+                    if (said.start == null && said.end == null && anchorStart > 0L &&
+                        minOf(anchorEnd, now) - anchorStart >= 60_000L
+                    ) anchorStart to minOf(anchorEnd, now) else null
                 val insertSpan: Pair<Long, Long>? =
-                    if (p.action == "new" || p.action == "insert") said.closedPast(now) else null
+                    if (p.action == "new" || p.action == "insert") said.closedPast(now) ?: anchorSpan else null
                 when {
                     // «Всё, закончил» — закрыть открытое, нового не начинать.
+                    // Без названного времени — по якорю: «закончил» в ответ
+                    // на «машина отключилась в 14:02» закрывает дорогу в 14:02.
                     p.action == "stop" -> {
                         val at = (timeOnDay(now, p.endTime)
-                            ?: (now - p.startOffsetMin * 60_000L)).coerceAtMost(now)
+                            ?: (if (p.startOffsetMin > 0) now - p.startOffsetMin * 60_000L else null)
+                            ?: anchorAt
+                            ?: now).coerceAtMost(now)
                         val closed = store.closeOpen(at)
                         if (closed == null) {
                             Outcome(
@@ -175,7 +207,8 @@ class ZasechkaEngine(
                         eventLog.add(
                             "засечка-вставка: «${entry.title}» " +
                                 "[${entry.category.ifBlank { "без категории" }}] " +
-                                "${(insEnd - insStart) / 60_000} мин задним числом, обрамление продолжено"
+                                "${(insEnd - insStart) / 60_000} мин задним числом, обрамление продолжено" +
+                                (if (anchorSpan != null && said.closedPast(now) == null) " (в дыру ленты)" else "")
                         )
                         sync.kickSoon(scope)
                         Outcome(entry, categorized = true, error = null, action = "insert")
@@ -239,8 +272,8 @@ class ZasechkaEngine(
                         // Начало берём из названного времени, если оно было:
                         // «с 12:00 время с семьёй» обязано начаться в 12:00,
                         // а не сейчас. Не назвали — отступ назад, не назвали и
-                        // его — сейчас.
-                        val start = said.start ?: now
+                        // его — якорь пуша или дыры, нет и его — сейчас.
+                        val start = said.start ?: anchorAt ?: now
                         val entry = store.startEntry(
                             start = start,
                             raw = text,
@@ -258,7 +291,8 @@ class ZasechkaEngine(
                             "засечка: «${entry.title}» [${entry.category.ifBlank { "без категории" }}]" +
                                 (if (start < now - 60_000L)
                                     " задним числом с " + timeFormat.format(Date(start))
-                                else "")
+                                else "") +
+                                (if (said.start == null && anchorAt != null) " (якорь пуша)" else "")
                         )
                         sync.kickSoon(scope)
                         Outcome(entry, categorized = true, error = null)
