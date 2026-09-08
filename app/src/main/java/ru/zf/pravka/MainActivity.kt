@@ -112,9 +112,74 @@ class MainActivity : ComponentActivity() {
         // Кнопка еды: «сфоткай тарелку» / «штрихкод» с длинного нажатия
         // открывают Тело (Е) и сразу запускают камеру или сканер.
         const val EXTRA_FOOD_ACTION = "food_action"
+
+        /** На какой сборке приложение уже само просило уведомления — раз на сборку. */
+        private const val KEY_NOTIF_APP_ASKED_BUILD = "notif_app_asked_build"
     }
 
     private val serviceEnabled = mutableStateOf(false)
+
+    // Разрешены ли уведомления — для плашки над вкладками. Владелец
+    // (08.09.2026): после обновления пуши «видимо, уходят», и автопилот молчит
+    // в пустоту, пока не заглянешь в настройки автопилота. Теперь об этом
+    // говорит само приложение, а первое открытие на новой сборке само
+    // поднимает системный диалог (см. maybeAskNotifications).
+    private val notifEnabled = mutableStateOf(true)
+    private val requestNotif = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> onNotifResult(granted) }
+
+    private fun notificationsOn(): Boolean = runCatching {
+        getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
+    }.getOrDefault(true)
+
+    /** Первое открытие на этой сборке при выключенных уведомлениях — диалог сам. */
+    private fun maybeAskNotifications() {
+        if (notifEnabled.value || android.os.Build.VERSION.SDK_INT < 33) return
+        val prefs = getSharedPreferences(
+            ru.zf.pravka.trigger.PravkaAccessibilityService.PREFS_INTERNAL, MODE_PRIVATE,
+        )
+        val build = BuildConfig.VERSION_CODE
+        if (prefs.getInt(KEY_NOTIF_APP_ASKED_BUILD, 0) == build) return
+        prefs.edit().putInt(KEY_NOTIF_APP_ASKED_BUILD, build).apply()
+        (application as PravkaApp).eventLog.add("уведомления выключены — приложение просит заново (сборка $build)")
+        requestNotif.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    /** Кнопка «Разрешить» на плашке: диалог, а если система его уже не покажет — настройки. */
+    private fun fixNotifications() {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            requestNotif.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            openNotificationSettings()
+        }
+    }
+
+    private fun onNotifResult(granted: Boolean) {
+        val app = application as PravkaApp
+        notifEnabled.value = notificationsOn()
+        when {
+            granted -> app.eventLog.add("уведомления: разрешены из приложения")
+            android.os.Build.VERSION.SDK_INT >= 33 &&
+                !shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS) -> {
+                // Диалог система уже не показывает — только руками.
+                app.eventLog.add("уведомления: система диалог не показывает — открываю настройки")
+                openNotificationSettings()
+            }
+            else -> app.eventLog.add("уведомления: владелец отказал в диалоге приложения")
+        }
+    }
+
+    private fun openNotificationSettings() {
+        runCatching {
+            startActivity(
+                android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            ru.zf.pravka.ui.Feedback.toast(this, "Включи «Разрешить уведомления» для Правки", long = true)
+        }
+    }
 
     // «Открыть Засечку» из меню кнопки обязано приземлять именно на Засечку.
     // Раньше вкладка читалась только в onCreate — а приложение почти всегда
@@ -177,6 +242,8 @@ class MainActivity : ComponentActivity() {
                     whisperProvider = app.whisperProvider,
                     recordings = app.recordings,
                     serviceEnabled = serviceEnabled.value,
+                    notifEnabled = notifEnabled.value,
+                    onFixNotifications = { fixNotifications() },
                     onOpenAccessibilitySettings = {
                         startActivity(
                             android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
@@ -191,6 +258,8 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         serviceEnabled.value = ru.zf.pravka.trigger.PravkaAccessibilityService.instance != null
+        notifEnabled.value = notificationsOn()
+        maybeAskNotifications()
     }
 }
 
@@ -431,6 +500,8 @@ private fun MainScreen(
     whisperProvider: ru.zf.pravka.provider.WhisperProvider,
     recordings: ru.zf.pravka.data.Recordings,
     serviceEnabled: Boolean,
+    notifEnabled: Boolean = true,
+    onFixNotifications: () -> Unit = {},
     onOpenAccessibilitySettings: () -> Unit,
 ) {
     // Служебные вкладки живут под «Ещё». Ссылка снаружи (уведомление, меню
@@ -529,6 +600,9 @@ private fun MainScreen(
         },
     ) { padding ->
         Column(Modifier.padding(padding)) {
+            // Пуши выключены — говорим сверху, а не в глубине настроек
+            // автопилота: без них молчат автопилот, напоминания и обновления.
+            if (!notifEnabled) NotificationsBanner(onFixNotifications)
             val open = moreTab
             if (tab == Tab.MORE && open == null) {
                 MoreList(onOpen = { moreTab = it })
@@ -567,6 +641,31 @@ private fun MainScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * Плашка над вкладками, пока уведомления Правки выключены. Владелец увидел
+ * автопилот целиком только когда включил пуши руками — и заметил, что после
+ * обновления они, «видимо», выключаются снова. Причина не найдена, но
+ * молчание приложения об этом — точно поломка.
+ */
+@Composable
+private fun NotificationsBanner(onFix: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.errorContainer)
+            .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Уведомления выключены: автопилот Засечки, напоминания и обновления молчат.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onFix) { Text("Разрешить") }
     }
 }
 

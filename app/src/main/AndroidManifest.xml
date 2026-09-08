@@ -132,6 +132,15 @@
             android:noHistory="true"
             android:exported="false" />
 
+        <!-- Трамплин за разрешением на уведомления: служба замечает, что они
+             выключены (после обновления), а спросить умеет только Activity. -->
+        <activity
+            android:name=".trigger.NotifPermissionActivity"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false" />
+
         <!-- Трамплин за уведомлением об обновлении. -->
         <activity
             android:name=".trigger.UpdateActivity"

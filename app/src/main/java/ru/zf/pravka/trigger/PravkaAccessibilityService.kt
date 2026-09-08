@@ -69,6 +69,10 @@ class PravkaAccessibilityService : AccessibilityService() {
         // gap nudge per distinct gap.
         internal const val KEY_Z_MORNING_DAY = "z_morning_day"
         internal const val KEY_Z_EVENING_DAY = "z_evening_day"
+        /** Сборка, на которой служба поднималась в прошлый раз (см. `ServiceNotifPermission.kt`). */
+        internal const val KEY_SEEN_BUILD = "svc_seen_build"
+        /** На какой сборке уже просили вернуть уведомления — раз на сборку. */
+        internal const val KEY_NOTIF_NUDGED_BUILD = "notif_nudged_build"
         internal const val KEY_Z_GAP_NOTIFIED = "z_gap_notified_end"
         internal const val KEY_Z_BEAT_AT = "z_beat_at"
         internal const val KEY_Z_ASK_AT = "z_ask_at"
@@ -193,6 +197,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         // A fresh "connected" after takes were mid-flight = the process died
         // and the system rebound the service. Makes crashes visible in the log.
         app.eventLog.add("service connected")
+        // Сборка, обновление и уведомления — в журнал; выключенные уведомления
+        // после обновления — вопрос владельцу (ServiceNotifPermission.kt).
+        runCatching { checkNotificationsAfterUpdate() }
         floatingButton = FloatingButtonController(
             service = this,
             scope = scope,
