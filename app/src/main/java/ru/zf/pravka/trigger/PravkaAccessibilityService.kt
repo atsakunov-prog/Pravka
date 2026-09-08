@@ -63,7 +63,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Internal bookkeeping prefs, read by the Learning tab too.
         const val PREFS_INTERNAL = "pravka_internal"
         const val KEY_LAST_LEARN_BATCH = "last_learn_batch"
-        const val KEY_LAST_RULES_OPT = "last_rules_opt"
 
         // Засечка reminder anti-spam: one morning/evening nudge per day, one
         // gap nudge per distinct gap.
@@ -77,7 +76,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         internal const val KEY_Z_BEAT_AT = "z_beat_at"
         internal const val KEY_Z_ASK_AT = "z_ask_at"
         internal const val KEY_Z_ASK_ID = "z_ask_entry"
-        internal const val KEY_Z_LEARN_DAY = "z_learn_day"
 
         // Pomodoro survives a service restart: the deadline is on disk.
         internal const val KEY_Z_POMO_ENDS = "z_pomo_ends"
@@ -91,8 +89,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         // is at its busiest, and a synchronous a11y query into it can hang
         // for the full accessibility timeout and freeze the transition (the
         // owner's 3-10s black screen on fold/unfold).
-        const val RULES_OPT_PERIOD_MS = 7L * 24 * 3600 * 1000
-        const val RULES_OPT_MIN_COUNT = 6
     }
 
     // An uncaught exception in any launched job used to kill the whole app
@@ -1296,22 +1292,18 @@ class PravkaAccessibilityService : AccessibilityService() {
                 app.eventLog.add("learn batch: ${cases.size} edits")
                 app.learnLog.add("батч-анализ: правок к разбору — ${cases.size}")
                 if (force) Feedback.toast(this@PravkaAccessibilityService, "Разбираю правок: ${cases.size} (Опус)…")
-                val result = app.claudeProvider.learnBatch(cases)
+                val result = app.claudeProvider.learnBatch(cases, app.dictionaryStore.all())
                 result.onSuccess { proposals ->
                     internal.edit().putLong(KEY_LAST_LEARN_BATCH, System.currentTimeMillis()).apply()
                     app.editWatch.remove(ripe.take(5).map { it.id })
                     app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
                     app.learnLog.add("батч-анализ стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
-                    val q = queueProposals(proposals)
-                    app.eventLog.add(
-                        "learn batch: dict=${proposals.dict.size} rules=${proposals.rules.size} " +
-                            "auto+=${q.autoDict} pending+=${q.pendingRules}"
-                    )
-                    if (q.autoDict > 0 || q.pendingRules > 0) {
-                        showLearnNotification(q)
-                        refreshLearnBadge()
-                    }
-                    maybeAutoOptimizeRules(internal)
+                    val added = queueProposals(proposals)
+                    app.eventLog.add("learn batch: dict=${proposals.dict.size} added=$added")
+                    // Тишина после «Разобрать сейчас» читается как поломка —
+                    // пустой результат тоже называется словами.
+                    if (added > 0) showLearnNotification(added)
+                    else if (force) Feedback.toast(this@PravkaAccessibilityService, "Ничего словарного в правках не нашлось.")
                 }.onFailure { e ->
                     app.stats.recordError()
                     app.eventLog.add("learn batch failed: ${e.message}")
@@ -1319,50 +1311,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
             } finally {
                 learnBatchRunning = false
-            }
-        }
-    }
-
-    /**
-     * Ночной разбор Засечки: раз в сутки, глубокой ночью, сопоставить
-     * надиктовки с тем, что из них получилось.
-     *
-     * БАТЧЕМ — и это не мелочь: разбор идёт Опусом на сотне пар, а батч стоит
-     * ровно половину. Ночью ответа никто не ждёт, так что единственная цена
-     * батча (он отвечает в течение часа, а обещает сутки) здесь не цена
-     * вовсе. Заявка уходит в окно 3–5 утра, ответ забирается на любом
-     * последующем тике одним дешёвым GET. Нет нового материала — до сети
-     * дело не доходит вовсе.
-     */
-    private suspend fun zasechkaLearnTick() {
-        val prefs = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
-        val cal = java.util.Calendar.getInstance()
-        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-        val today = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
-            .format(java.util.Date())
-        // Заявка уходит ночью, ответ забирается на любом тике: батч отвечает
-        // обычно в течение часа, но обещаны сутки. Опрос — один дешёвый GET.
-        if (hour in 3..5 && prefs.getString(KEY_Z_LEARN_DAY, "") != today) {
-            prefs.edit().putString(KEY_Z_LEARN_DAY, today).apply()
-            app.zasechkaEngine.learnSubmit()
-        }
-        val got = app.zasechkaEngine.learnCollect()
-        if (got > 0) app.eventLog.add("засечка-обучение: ночью предложено правил — $got")
-        refreshZasechkaBadge()
-    }
-
-    /** ⭐ над «З», пока предложенные правила ждут суда. Тап — в Засечку. */
-    private suspend fun refreshZasechkaBadge() {
-        val pending = runCatching { app.zasechkaRules.all().count { it.pending } }.getOrDefault(0)
-        if (pending == 0) {
-            zButton?.hideLearnBadge()
-        } else {
-            zButton?.showLearnBadge("⭐") {
-                startActivity(
-                    android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                        .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
             }
         }
     }
@@ -1383,83 +1331,39 @@ class PravkaAccessibilityService : AccessibilityService() {
         floatingButton?.hideLearnBadge()
     }
 
-    // Weekly housekeeping (owner's request): when the rule set has grown,
-    // Opus consolidates it automatically - dubs merged, contradictions out,
-    // no hard size cap. Runs after a successful learn batch, at
-    // most once per RULES_OPT_PERIOD_MS; the result is applied directly and
-    // logged (the manual button with its preview dialog stays available).
-    private suspend fun maybeAutoOptimizeRules(internal: android.content.SharedPreferences) {
-        val last = internal.getLong(KEY_LAST_RULES_OPT, 0L)
-        if (System.currentTimeMillis() - last < RULES_OPT_PERIOD_MS) return
-        val rules = app.rulesStore.all()
-        if (rules.size < RULES_OPT_MIN_COUNT) return
-        app.learnLog.add("автооптимизация набора правил (раз в неделю): ${rules.size} шт., запускаю Опус…")
-        app.claudeProvider.optimizeRules(rules)
-            .onSuccess { opt ->
-                app.stats.recordAux(opt.costUsd, opt.tokensIn, opt.tokensOut)
-                app.rulesStore.replaceAll(opt.rules.map { Triple(it.text, it.before, it.after) })
-                internal.edit().putLong(KEY_LAST_RULES_OPT, System.currentTimeMillis()).apply()
-                app.learnLog.add(
-                    "АВТООПТИМИЗАЦИЯ: набор заменён, ${rules.size} → ${opt.rules.size}, " +
-                        "стоила $" + "%.4f".format(java.util.Locale.US, opt.costUsd)
-                )
-            }
-            .onFailure { e ->
-                app.stats.recordError()
-                app.learnLog.add("автооптимизация НЕ УДАЛАСЬ: ${e.message} (набор не тронут)")
-            }
-    }
-
-    data class QueueResult(val autoDict: Int, val pendingRules: Int)
-
     /**
-     * Owner's split (2026-08-20): dictionary findings ("Поли" -> "Полли",
-     * "фор раннер" -> "Forerunner") are mechanical - they go STRAIGHT into
-     * the dictionary, marked "авто" so they're easy to review or delete.
-     * RULES are judgment calls - they stay pending until approved. A rule
-     * proposal matching an EXISTING rule counts as a confirmation (its ×N
-     * grows) instead of being silently dropped.
+     * Находки разбора идут ПРЯМО в словарь с пометкой «авто-обучение» — их
+     * легко найти и снять. Правил разбор больше не предлагает (владелец,
+     * 08.09.2026: «там уже всё, что возможно, придумано, а он додумывает
+     * дурацкие вещи; упор — на замены одного слова другим, и это в словарь»),
+     * поэтому и очереди на одобрение у него нет: что не стало словом, не
+     * стало ничем. Слово, которое в словаре уже есть, не дублируется.
      */
-    private suspend fun queueProposals(proposals: ru.zf.pravka.provider.ClaudeProvider.LearnProposals): QueueResult {
+    private suspend fun queueProposals(proposals: ru.zf.pravka.provider.ClaudeProvider.LearnProposals): Int {
         val known = app.dictionaryStore.all().map { it.from.lowercase() }.toHashSet()
-        var autoDict = 0
+        var added = 0
         proposals.dict
             .filter { it.from.isNotBlank() && it.from.lowercase() !in known }
             .forEach { d ->
-                val mode = if (d.mode == "PROTECT") ru.zf.pravka.core.DictMode.PROTECT
-                    else ru.zf.pravka.core.DictMode.HARD
+                val mode = when (d.mode) {
+                    "PROTECT" -> ru.zf.pravka.core.DictMode.PROTECT
+                    "HINT" -> ru.zf.pravka.core.DictMode.HINT
+                    else -> ru.zf.pravka.core.DictMode.HARD
+                }
                 val note = listOf(d.note.trim(), "авто-обучение").filter { it.isNotBlank() }.joinToString(" · ")
                 app.dictionaryStore.add(d.from, d.to, mode, note)
-                autoDict++
+                added++
                 app.learnLog.add("В СЛОВАРЬ автоматически: ${d.from} → ${d.to} [${d.mode}]")
             }
         // New words must bias the recognizer too, same as a manual add.
-        if (autoDict > 0) cachedBiasing = collectBiasing()
-        // Duplicates of EXISTING rules are prevented at the source now: the
-        // learn prompt carries the current rule set with a "don't re-propose"
-        // instruction (the old confirm-counter never worked usefully).
-        val fresh = mutableListOf<ru.zf.pravka.data.LearnStore.Suggestion>()
-        for (r in proposals.rules) {
-            fresh.add(
-                ru.zf.pravka.data.LearnStore.Suggestion(
-                    id = 0, kind = "rule", text = r.text,
-                    exampleBefore = r.before, exampleAfter = r.after,
-                )
-            )
-            app.learnLog.add("предложение (правило): ${r.text}")
-        }
-        return QueueResult(autoDict, app.learnStore.add(fresh))
+        if (added > 0) cachedBiasing = collectBiasing()
+        return added
     }
 
     /** One human sentence out of a learn round's outcome. */
-    private fun learnSummary(q: QueueResult): String {
-        val parts = mutableListOf<String>()
-        if (q.autoDict > 0) parts.add("в словарь добавлено: ${q.autoDict}")
-        if (q.pendingRules > 0) parts.add("правил на одобрение: ${q.pendingRules} (раздел «Обучение»)")
-        return parts.joinToString(", ").replaceFirstChar { it.uppercase() } + "."
-    }
+    private fun learnSummary(added: Int): String = "В словарь добавлено: $added."
 
-    private fun showLearnNotification(q: QueueResult) {
+    private fun showLearnNotification(added: Int) {
         runCatching {
             val nm = getSystemService(android.app.NotificationManager::class.java)
             val channelId = "pravka-learning"
@@ -1479,7 +1383,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             )
             val notif = android.app.Notification.Builder(this, channelId)
                 .setContentTitle("Правка научилась новому")
-                .setContentText(learnSummary(q))
+                .setContentText(learnSummary(added))
                 .setSmallIcon(android.R.drawable.ic_menu_edit)
                 .setContentIntent(open)
                 .setAutoCancel(true)
@@ -1524,18 +1428,15 @@ class PravkaAccessibilityService : AccessibilityService() {
                 dictated = match.first,
                 cleaned = match.second,
                 final = current,
+                known = app.dictionaryStore.all(),
             )
             busy = false
             floatingButton?.setBusy(false)
             result.onSuccess { proposals ->
                 app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
                 app.learnLog.add("разбор стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
-                val q = queueProposals(proposals)
-                app.eventLog.add(
-                    "learn: dict=${proposals.dict.size} rules=${proposals.rules.size} " +
-                        "auto+=${q.autoDict} pending+=${q.pendingRules}"
-                )
-                if (q.pendingRules > 0) refreshLearnBadge()
+                val added = queueProposals(proposals)
+                app.eventLog.add("learn: dict=${proposals.dict.size} added=$added")
                 // This edit is analyzed - close its auto-watch so the batch
                 // doesn't re-analyze the same text later.
                 val closed = app.editWatch.all()
@@ -1545,11 +1446,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                     app.editWatch.remove(closed)
                     app.learnLog.add("наблюдение закрыто: разобрано вручную (${closed.size})")
                 }
-                if (q.autoDict == 0 && q.pendingRules == 0) {
-                    Feedback.toast(this@PravkaAccessibilityService, "Ничего системного в правках не нашлось.")
+                if (added == 0) {
+                    Feedback.toast(this@PravkaAccessibilityService, "Ничего словарного в правках не нашлось.")
                 } else {
                     Haptics.success(this@PravkaAccessibilityService)
-                    Feedback.toast(this@PravkaAccessibilityService, learnSummary(q))
+                    Feedback.toast(this@PravkaAccessibilityService, learnSummary(added))
                 }
             }.onFailure { e ->
                 app.stats.recordError()
@@ -1951,7 +1852,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Значки и плашки привязаны к кнопкам: без них они висели бы
             // посреди экрана сами по себе. Убрать — значит убрать всё.
             floatingButton?.hideLearnBadge()
-            zButton?.hideLearnBadge()
             zButton?.hideTicker()
             rButton?.hideTicker()
             rButton?.hidePlate()
@@ -1962,7 +1862,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             stacked = true      // чтобы expandButtons развёз все четыре
             expandButtons(silent = true)
             refreshLearnBadge()
-            scope.launch { refreshZasechkaBadge() }
         }
         refreshHandles()
         Haptics.start(this)
@@ -2089,8 +1988,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             // Обновления: сам решает, прошли ли сутки, сам тянет и сам говорит.
             scope.launch { runCatching { app.updates.tick() } }
-            // Ночной разбор Засечки и значок над «З».
-            scope.launch { runCatching { zasechkaLearnTick() } }
             zasechkaReminderCheck()
             zReminderHandler.postDelayed(this, 5 * 60_000L)
         }

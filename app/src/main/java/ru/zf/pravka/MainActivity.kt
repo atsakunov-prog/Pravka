@@ -948,7 +948,11 @@ private fun LearningTab(app: PravkaApp) {
         } else {
             app.dictionaryStore.add(
                 sug.from, sug.to,
-                if (sug.mode == "PROTECT") DictMode.PROTECT else DictMode.HARD,
+                when (sug.mode) {
+                    "PROTECT" -> DictMode.PROTECT
+                    "HINT" -> DictMode.HINT
+                    else -> DictMode.HARD
+                },
                 sug.note,
             )
             app.learnLog.add("ПРИНЯТО в словарь: ${sug.from} → ${sug.to} [${sug.mode}]")
@@ -1080,8 +1084,9 @@ private fun LearningTab(app: PravkaApp) {
         SectionCard(label = "Предложения (${pending.size})") {
             if (pending.isEmpty()) {
                 HintText(
-                    "Пока пусто. Правила появятся здесь после разбора твоих правок; " +
-                        "словарные находки уходят в словарь сами."
+                    "Пусто — и так и останется: разбор правок больше не придумывает " +
+                        "правил, а словарные находки («одно слово вместо другого») " +
+                        "уходят в словарь сами, с пометкой «авто-обучение»."
                 )
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1152,8 +1157,9 @@ private fun LearningTab(app: PravkaApp) {
                 HintText("Принятые правила появятся здесь и будут уходить в каждый запрос чистки.")
             } else {
                 HintText(
-                    "Набор оптимизируется сам раз в неделю (Опус сливает дубли и " +
-                        "противоречия); кнопка ниже — то же вручную, с предпросмотром."
+                    "Набор правится только руками: новых правил разбор не предлагает, " +
+                        "сам себя набор не переписывает. Кнопка ниже — Опус сливает дубли " +
+                        "и противоречия, с предпросмотром."
                 )
                 Spacer(Modifier.height(6.dp))
                 var optimizing by remember { mutableStateOf(false) }
@@ -1208,15 +1214,6 @@ private fun LearningTab(app: PravkaApp) {
                                 optimized = null
                                 app.appScope.launch {
                                     app.rulesStore.replaceAll(chosen.map { Triple(it.text, it.before, it.after) })
-                                    // The weekly auto-optimizer counts from here too,
-                                    // so it doesn't redo the work right after.
-                                    ctx.getSharedPreferences(
-                                        PravkaAccessibilityService.PREFS_INTERNAL,
-                                        android.content.Context.MODE_PRIVATE,
-                                    ).edit().putLong(
-                                        PravkaAccessibilityService.KEY_LAST_RULES_OPT,
-                                        System.currentTimeMillis(),
-                                    ).apply()
                                     app.learnLog.add("набор правил ЗАМЕНЁН оптимизированным (${chosen.size})")
                                     loadTick++
                                 }

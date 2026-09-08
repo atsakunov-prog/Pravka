@@ -12,9 +12,6 @@ import ru.zf.pravka.data.ZasechkaSync
 import ru.zf.pravka.data.dayStartMs
 import ru.zf.pravka.provider.ClaudeProvider
 import ru.zf.pravka.provider.zasechka
-import ru.zf.pravka.provider.zasechkaRules
-import ru.zf.pravka.provider.zasechkaRulesSubmit
-import ru.zf.pravka.provider.zasechkaRulesCollect
 
 // Засечка's counterpart to ProofreadEngine: one dictated (or typed) phrase in,
 // one timesheet ACTION out. Usually that's a new entry (closes the previous
@@ -30,18 +27,14 @@ class ZasechkaEngine(
     private val eventLog: EventLog,
     private val sync: ZasechkaSync,
     private val scope: CoroutineScope,
-    // Самообучение: одобренные правила едут в каждый разбор, поправки копятся
-    // до следующего «Обучить».
+    // Правила разбора, одобренные владельцем, едут в каждый разбор. Набор
+    // правится руками в настройках Засечки; робот новых не предлагает.
     private val rules: ru.zf.pravka.data.RulesStore,
-    private val corrections: ru.zf.pravka.data.ZasechkaCorrections,
 ) {
 
     companion object {
         // Сколько прошлых дней показывать разборщику как «вот его словарь дел».
         private const val RECENT_DAYS = 4L
-        // Сколько надиктовок отдавать разбору за раз. Больше - дороже и
-        // мутнее: закономерность видна и на сотне.
-        private const val BATCH = 120
     }
 
     data class Outcome(
@@ -416,154 +409,6 @@ class ZasechkaEngine(
             sync.kickSoon(scope)
         }
         return closed
-    }
-
-    /**
-     * «Обучить»: сопоставить то, что владелец НАДИКТОВАЛ, с тем, что в итоге
-     * оказалось в ленте, и превратить расхождения в правила.
-     *
-     * Сначала я построил это на его ручных правках — и это была ошибка,
-     * которую он сам и назвал. Правка руками ловит только те промахи, которые
-     * он заметил и полез исправлять. А самый частый промах он не правит, он к
-     * нему привыкает: сказал «с 18:30 до 18:50», а записалось только начало.
-     * Такое видно ровно из пары «фраза → запись», и Опус это поймёт сам.
-     * Поэтому материал теперь — ВСЯ история надиктовок, а поправки идут
-     * дополнительным, более сильным сигналом: там владелец сказал прямо.
-     *
-     * Возвращает, сколько предложений появилось; −1 — разбор не дошёл.
-     * Водяной знак двигается только при успехе: не дошло — материал цел.
-     */
-    private data class Material(
-        val spoken: List<String>,
-        val fixes: List<String>,
-        val upTo: Long,
-    ) {
-        val empty: Boolean get() = spoken.isEmpty() && fixes.isEmpty()
-    }
-
-    private suspend fun material(all: Boolean): Material {
-        val since = if (all) 0L else corrections.lastSeenDictation()
-        val spoken = store.all()
-            .filter { it.raw.isNotBlank() && it.createdAt > since }
-            .sortedBy { it.createdAt }
-            .takeLast(BATCH)
-        val fixes = corrections.all()
-
-        // «Сказал → записалось». Время в паре обязательно: половина промахов
-        // именно в нём, а без границ их не увидеть.
-        val lines = spoken.map { e ->
-            val end = if (e.open) "…" else timeFormat.format(Date(e.end))
-            buildString {
-                append("- сказал: «").append(e.raw.take(300)).append("»\n")
-                append("  записалось: «").append(e.title).append("» [")
-                append(e.category.ifBlank { "без категории" }).append("] ")
-                append(timeFormat.format(Date(e.start))).append('–').append(end)
-                append(" (").append(e.durationMin()).append(" мин)")
-                if (e.client.isNotBlank()) append(", клиент «").append(e.client).append('»')
-                if (e.source == "edit") append("\n  (эту запись он потом правил руками)")
-            }
-        }
-        val fixLines = fixes.takeLast(40).map { c ->
-            "- сказал: «${c.raw}» → робот записал «${c.wasTitle}» [${
-                c.wasCategory.ifBlank { "без категории" }
-            }] → владелец поправил на «${c.nowTitle}» [${
-                c.nowCategory.ifBlank { "без категории" }
-            }] (поправил ${c.what})"
-        }
-
-        return Material(lines, fixLines, spoken.lastOrNull()?.createdAt ?: 0L)
-    }
-
-    /** Что вешать на предложения и куда двигать водяной знак — общий хвост. */
-    private suspend fun applyProposed(proposed: List<String>, upTo: Long, how: String): Int {
-        for (r in proposed) rules.addPending(r)
-        if (upTo > 0) corrections.setLastSeenDictation(upTo)
-        corrections.clear()
-        corrections.setLastLearnAt(System.currentTimeMillis())
-        eventLog.add("засечка-обучение ($how): предложений — ${proposed.size}")
-        return proposed.size
-    }
-
-    /**
-     * Разбор ПО КНОПКЕ: владелец стоит над экраном и ждёт. Обычным вызовом,
-     * не батчем — батч отвечает через час, и это не то, чего ждут от кнопки.
-     */
-    suspend fun learn(all: Boolean = false): Int {
-        val m = material(all)
-        if (m.empty) return 0
-        val existing = rules.all().filter { !it.pending }.map { it.text }
-        return claude.zasechkaRules(
-            spoken = m.spoken,
-            corrections = m.fixes,
-            categories = store.categories().map { it.name },
-            existingRules = existing,
-        ).fold(
-            onSuccess = { applyProposed(it, m.upTo, "кнопкой") },
-            onFailure = { e ->
-                eventLog.add("засечка-обучение: не вышло — ${e.message}")
-                -1
-            },
-        )
-    }
-
-    /**
-     * НОЧЬЮ — батчем: ответа никто не ждёт, а батч стоит половину. Заявка
-     * уходит и забывается; ответ заберёт [learnCollect] на одном из
-     * следующих тиков. Водяной знак не двигается до ответа: батч может не
-     * дойти, и материал должен остаться целым.
-     */
-    suspend fun learnSubmit(): Boolean {
-        if (corrections.pendingBatch() != null) return false
-        val m = material(all = false)
-        if (m.empty) return false
-        val existing = rules.all().filter { !it.pending }.map { it.text }
-        return claude.zasechkaRulesSubmit(
-            spoken = m.spoken,
-            corrections = m.fixes,
-            categories = store.categories().map { it.name },
-            existingRules = existing,
-        ).fold(
-            onSuccess = { id ->
-                corrections.setPendingBatch(id, m.upTo)
-                eventLog.add(
-                    "засечка-обучение: заявка в батч — ${m.spoken.size} надиктовок, " +
-                        "${m.fixes.size} поправок"
-                )
-                true
-            },
-            onFailure = { e ->
-                eventLog.add("засечка-обучение: заявка не ушла — ${e.message}")
-                false
-            },
-        )
-    }
-
-    /** Забрать ночной ответ, если он готов. −1 — ещё считается или нечего. */
-    suspend fun learnCollect(): Int {
-        val (id, upTo) = corrections.pendingBatch() ?: return -1
-        return claude.zasechkaRulesCollect(id).fold(
-            onSuccess = { pair ->
-                if (pair == null) return -1   // ещё в работе, спросим позже
-                val (proposed, answer) = pair
-                stats.recordAux(answer.costUsd, answer.tokensIn, answer.tokensOut)
-                corrections.clearPendingBatch()
-                applyProposed(proposed, upTo, "ночью батчем")
-            },
-            onFailure = { e ->
-                // Заявка сгорела (сутки истекли, ошибка) — забываем её, чтобы
-                // следующая ночь могла отправить новую. Материал цел.
-                corrections.clearPendingBatch()
-                eventLog.add("засечка-обучение: батч не забрался — ${e.message}")
-                -1
-            },
-        )
-    }
-
-    /** Сколько материала ждёт разбора — для кнопки и для значка. */
-    suspend fun learnBacklog(): Int {
-        val since = corrections.lastSeenDictation()
-        return store.all().count { it.raw.isNotBlank() && it.createdAt > since } +
-            corrections.all().size
     }
 
     /** Название категории буква в букву, как в списке владельца. */

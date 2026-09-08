@@ -177,13 +177,6 @@ class ZasechkaStore(private val context: Context) {
     /** Wired by PravkaApp: incidents and recoveries land in the event log. */
     var logger: ((String) -> Unit)? = null
 
-    /**
-     * Wired by PravkaApp: правка записи уходит в журнал самообучения. Крючок
-     * висит именно на [update] — это единственная точка, через которую
-     * проходят ВСЕ правки: и руками из диалога, и цепочкой, и голосом.
-     */
-    var correctionLogger: ((before: Entry, after: Entry) -> Unit)? = null
-
     private val mutex = Mutex()
     private var loaded = false
     private var entries = mutableListOf<Entry>()
@@ -959,8 +952,6 @@ class ZasechkaStore(private val context: Context) {
         val index = entries.indexOfFirst { it.id == entry.id }
         if (index >= 0) {
             snapshotLocked("правку «${entries[index].title.ifBlank { "без названия" }}»")
-            // Чем он поправил робота — материал для правил Засечки.
-            runCatching { correctionLogger?.invoke(entries[index], entry) }
             entries[index] = entry.copy(synced = false, notionSynced = false)
             normalizeLocked()
             entries.sortBy { it.start }

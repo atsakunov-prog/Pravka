@@ -206,36 +206,41 @@ class ClaudeProvider(
 
     /**
      * Compares the recognizer's raw text, our cleaned output and the owner's
-     * hand-corrected final. Returns dictionary proposals (recurring
-     * recognition errors) and short prompt rules (systematic preferences).
+     * hand-corrected final. Returns DICTIONARY proposals only: recurring
+     * recognition errors and the words he swaps for other words. Rules are
+     * not proposed any more (owner, 08.09.2026: the rule set is complete and
+     * the analyst kept inventing silly ones); [LearnProposals.rules] stays in
+     * the contract for [optimizeRules] and comes back empty from here.
      * Runs on Opus - this is rare, quality matters more than cost.
      */
     suspend fun learn(
         dictated: String,
         cleaned: String,
         final: String,
-    ): Result<LearnProposals> = learnBatch(listOf(Triple(dictated, cleaned, final)))
+        known: List<ru.zf.pravka.core.DictEntry> = emptyList(),
+    ): Result<LearnProposals> = learnBatch(listOf(Triple(dictated, cleaned, final)), known)
 
-    /** Batch flavor: the daily auto-capture analysis sends several edits at once. */
+    /**
+     * Batch flavor: the daily auto-capture analysis sends several edits at
+     * once. [known] is the owner's current dictionary — a word already there
+     * must not come back as a proposal.
+     */
     suspend fun learnBatch(
         cases: List<Triple<String, String, String>>,
+        known: List<ru.zf.pravka.core.DictEntry> = emptyList(),
     ): Result<LearnProposals> = withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
             if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
             require(cases.isNotEmpty()) { "Нет правок для анализа." }
-            // The analyst must SEE the current rule set, or it keeps
-            // re-deriving rules the owner already approved (the gender
-            // agreement rule came back every round before this).
-            val existingRules = rulesStore.all().filter { it.enabled }
-            val existingBlock = if (existingRules.isEmpty()) "" else buildString {
-                append("УЖЕ ДЕЙСТВУЮЩИЕ правила (менять их не надо):\n")
-                existingRules.forEachIndexed { i, r -> append(i + 1).append(". ").append(r.text).append('\n') }
-                append(
-                    "НЕ предлагай эти правила снова — ни дословно, ни перефразированными, " +
-                        "ни их частные случаи. Если правка владельца лишь подтверждает " +
-                        "действующее правило — пропусти её. Предлагай только то, чего в списке нет.\n\n"
-                )
+            val knownBlock = if (known.isEmpty()) "" else buildString {
+                append("УЖЕ В СЛОВАРЕ (не предлагай снова):\n")
+                for (d in known) {
+                    append("- ").append(d.from)
+                    if (d.to.isNotBlank()) append(" → ").append(d.to)
+                    append(" [").append(d.mode.name).append("]\n")
+                }
+                append('\n')
             }
             val casesBlock = buildString {
                 cases.forEachIndexed { i, (dictated, cleaned, final) ->
@@ -251,29 +256,32 @@ class ClaudeProvider(
 - cleaned: что сделала автоматическая чистка (модель);
 - final: как в итоге поправил текст сам владелец. Это эталон.
 
-Сравни cleaned и final в каждом случае и извлеки, чему стоит
-научиться НАСОВСЕМ:
+Сравни cleaned и final и найди только одно: где владелец ЗАМЕНИЛ ОДНО
+СЛОВО (или короткое устойчивое выражение) НА ДРУГОЕ. Это словарная
+запись — и это единственное, что ты возвращаешь:
+{"mode": "HARD" | "HINT" | "PROTECT", "from": "...", "to": "...", "note": "..."}
+- HARD: распознаватель или чистка стабильно пишут слово неверно (имя,
+  термин, бренд): from — неверная форма, to — верная. Подстановка
+  сработает до модели, поэтому from должно быть однозначным — ошибка,
+  которая ни в каком контексте не бывает правильным словом.
+- HINT: владелец предпочитает одно слово другому («фидбэк» → «обратная
+  связь»), но замена зависит от контекста: from — что он вычёркивает,
+  to — что ставит, note — когда. Модель увидит это как подсказку.
+- PROTECT: редкое правильное слово, которое чистка «исправляет» зря:
+  from — само слово, to — пустая строка.
 
-1. "dict" — словарные записи для ПОВТОРЯЕМЫХ ошибок распознавания
-   (имена, термины, которые распознаватель пишет неверно):
-   {"mode": "HARD" | "PROTECT", "from": "...", "to": "...", "note": "..."}
-   HARD: from — неверная форма, to — верная. PROTECT: from — редкое
-   правильное слово, to — пустая строка.
-
-2. "rules" — правила для промпта чистки. Каждое правило:
-   {"rule": "...", "before": "...", "after": "..."}
-   - "rule": императив не длиннее 140 символов, по-русски. Обобщай
-     НАМЕРЕНИЕ владельца и указывай УСЛОВИЕ применимости («в
-     сообщениях-перечнях…», «в деловой переписке…»), а не буквальную
-     подстановку слов. Разовая правка по смыслу правилом НЕ является.
-   - "before"/"after": короткий фрагмент (до 120 символов) из правок
-     владельца, показывающий правило в действии.
+Чего НЕ делать:
+- Не выводить правил, стилистических предпочтений и обобщений. Перестановка
+  фраз, знаки, регистр, длина, тон — не словарь. Всё это пропускай.
+- Не превращать разовую правку по смыслу в запись: слово стоит записи,
+  только если то же исправление повторится в следующей диктовке.
+- Сомневаешься — не предлагай. Пустой список лучше выдумки.
 
 Ответ — СТРОГО JSON без пояснений:
-{"dict": [...], "rules": [...]}
-Если учиться нечему — пустые массивы.
+{"dict": [...]}
+Если учиться нечему — {"dict": []}.
 
-$existingBlock$casesBlock
+$knownBlock$casesBlock
 """.trimIndent()
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
             val choice = settings.modelChoice(ModelRoute.PRAVKA_LEARN)
@@ -281,7 +289,10 @@ $existingBlock$casesBlock
                 apiKey, choice.model, parts, "", null,
                 effortOverride = choice.effort,
             )
+            // Rules the model returns anyway are dropped here, not queued:
+            // nobody asked for them.
             parseLearn(reply.text).copy(
+                rules = emptyList(),
                 costUsd = costUsd(choice.model, reply),
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
@@ -529,7 +540,7 @@ $listing
                 val d = array.optJSONObject(i) ?: continue
                 val mode = d.optString("mode")
                 val from = d.optString("from").trim()
-                if (from.isEmpty() || mode !in listOf("HARD", "PROTECT")) continue
+                if (from.isEmpty() || mode !in listOf("HARD", "HINT", "PROTECT")) continue
                 dict.add(DictProposal(mode, from, d.optString("to").trim(), d.optString("note").trim()))
             }
         }

@@ -78,6 +78,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.PhoneDaySummary
+import ru.zf.pravka.core.WakingShare
 import ru.zf.pravka.data.PhoneStore
 import ru.zf.pravka.data.PhoneSweeper
 import ru.zf.pravka.core.AutoPilotRules
@@ -550,12 +551,19 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                 msByCat[k] = (msByCat[k] ?: 0L) + e.durationMsIn(rangeStart, rangeTo, now)
             }
             val minutesByCat = msByCat.mapValues { msToMin(it.value) }
+            // Сон в итогах не строка. Владелец (08.09): «там обычно сон на
+            // 7 часов и всё остальное очень коротко — уберём сон, будем
+            // считать чистое время и проценты от бодрствования». Строки —
+            // только бодрствование, доля каждой — от него же
+            // (core/WakingShare.kt); сон остаётся числом в заголовке.
             val names = (categoryNames + mainEntries.map { it.category.trim() }.filter { it.isNotBlank() })
                 .distinctBy { it.lowercase() }
+                .filter { !WakingShare.isSleep(it) }
                 .sortedBy { categoryHue(it) }
             val rows = names.map { it to (minutesByCat[it.lowercase()] ?: 0L) } +
                 listOfNotNull(minutesByCat[""]?.takeIf { it > 0 }?.let { "" to it })
-            val total = msToMin(msByCat.values.sum())
+            val awakeMin = WakingShare.awakeMinutes(minutesByCat)
+            val sleepMin = msToMin(msByCat.filterKeys { WakingShare.isSleep(it) }.values.sum())
             // Day pomodoro counters live in the service's internal prefs.
             val pomoCount = remember(now, dayStart, weekMode) {
                 val prefs = context.getSharedPreferences("pravka_internal", android.content.Context.MODE_PRIVATE)
@@ -571,7 +579,9 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             val elapsedMs = (rangeTo - rangeStart).coerceAtLeast(0L)
             val uncoveredMin = msToMin((elapsedMs - msByCat.values.sum()).coerceAtLeast(0L))
             Text(
-                (if (weekMode) "За неделю" else "За день") + ": ${fmtDur(total)} · записей: ${mainEntries.size}" +
+                (if (weekMode) "За неделю" else "За день") + ": ${fmtDur(awakeMin)} без сна" +
+                    (if (sleepMin > 0) " · сон ${fmtDur(sleepMin)}" else "") +
+                    " · записей: ${mainEntries.size}" +
                     (if (pomoCount > 0) " · 🍅 $pomoCount" else "") +
                     (if (uncoveredMin >= 2) " · не покрыто ${fmtDur(uncoveredMin)}" else ""),
                 style = MaterialTheme.typography.titleSmall,
@@ -657,6 +667,16 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = rowAlpha),
                         modifier = Modifier.padding(start = 8.dp).width(64.dp),
+                    )
+                    // Доля от бодрствования — между временем и очками, где
+                    // владелец её и попросил («справа между временем и
+                    // стоимостью»).
+                    Text(
+                        WakingShare.label(minutes, awakeMin),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = rowAlpha),
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.width(40.dp),
                     )
                     // Сколько эта категория дала дню - тут и видно, кто съел
                     // балл: строка «Потери −19» объясняет ноль на полоске.
@@ -1484,7 +1504,7 @@ internal fun ZasechkaSettings(app: PravkaApp) {
         Spacer(Modifier.height(12.dp))
         BackupsSection(app)
 
-        ZasechkaLearning(app)
+        ZasechkaRulesSection(app)
 
         Spacer(Modifier.height(12.dp))
         Text("Выгрузить CSV", style = MaterialTheme.typography.titleSmall)
@@ -2631,99 +2651,42 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
  * кнопка «сделай хорошо».
  */
 /**
- * Самообучение Засечки: поправки владельца → предложенные правила → его «да»
- * → правила едут в каждый разбор. То же, что «Обучить» в Правке, но предмет
- * другой: не как он пишет, а что у него значат слова про время.
- *
- * Ничего не включается само. Правило, которое владелец не судил, в промпт не
- * идёт — иначе робот однажды начал бы учить сам себя на своих же промахах.
+ * Правила разбора Засечки: набор, одобренный владельцем, едет в каждый разбор
+ * фразы. Самообучение, которое их предлагало каждую ночь (батч Опусом, ⭐ над
+ * «З», «Обучить», «Прогнать всю историю»), снято 08.09.2026 — владелец: «все
+ * паттерны и так уже найдены, звёздочка очень сильно раздражает, я на них
+ * вообще не смотрю». Осталось то, что работает: список с тумблерами.
+ * Предложение, застрявшее с прежних ночей, показывается ещё раз — судить или
+ * снять руками, само оно никуда не уедет и в промпт не попадёт.
  */
 @Composable
-private fun ZasechkaLearning(app: PravkaApp) {
+private fun ZasechkaRulesSection(app: PravkaApp) {
     val scope = app.appScope
     var rules by remember { mutableStateOf(emptyList<ru.zf.pravka.data.RulesStore.Rule>()) }
-    var pendingCount by remember { mutableStateOf(0) }
     var reload by remember { mutableStateOf(0) }
-    var busy by remember { mutableStateOf(false) }
 
     LaunchedEffect(reload) {
         rules = runCatching { app.zasechkaRules.all() }.getOrDefault(emptyList())
-        // Материал — это все НАДИКТОВКИ, которых разбор ещё не видел, а не
-        // только правки руками: самый частый промах владелец не правит, он к
-        // нему привыкает.
-        pendingCount = runCatching { app.zasechkaEngine.learnBacklog() }.getOrDefault(0)
     }
 
     val proposed = rules.filter { it.pending }
     val active = rules.filter { !it.pending }
+    // Пустой раздел не показываем: добавить правило руками отсюда нельзя,
+    // а робот новых не предлагает — говорить было бы нечего.
+    if (proposed.isEmpty() && active.isEmpty()) return
 
     Spacer(Modifier.height(12.dp))
-    Text("Самообучение", style = MaterialTheme.typography.titleSmall)
+    Text("Правила разбора", style = MaterialTheme.typography.titleSmall)
     Text(
-        "Каждую ночь Опус сверяет, что ты наговорил, с тем, что из этого вышло " +
-            "в ленте: где сказал «с 18:30 до 18:50», а записалось только " +
-            "начало; куда раз за разом уезжает категория; какие слова у тебя " +
-            "значат время. Найдёт закономерность — предложит " +
-            "правило, и над кнопкой «З» загорится ⭐. Правило заработает " +
-            "только после твоего «да».\n\nНочью это уходит батчем — вдвое " +
-            "дешевле, ответ приходит в течение часа. Кнопки ниже считают " +
-            "сразу и по полной цене: они на случай «хочу прямо сейчас».",
+        "Что у тебя значат слова про время и дела — уходит в каждый разбор " +
+            "фразы. Новых правил робот не предлагает, набор правится здесь.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    Spacer(Modifier.height(8.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Button(
-            enabled = !busy && pendingCount > 0,
-            onClick = {
-                busy = true
-                scope.launch {
-                    val n = runCatching { app.zasechkaEngine.learn() }.getOrDefault(-1)
-                    Feedback.toast(
-                        app,
-                        when {
-                            n > 0 -> "Предложено правил: $n"
-                            n == 0 -> "Закономерностей не нашлось — это тоже ответ"
-                            else -> "Разбор не дошёл, поправки целы"
-                        },
-                    )
-                    busy = false
-                    reload++
-                }
-            },
-        ) { Text(if (busy) "Думаю…" else "Обучить") }
-        Spacer(Modifier.width(10.dp))
-        Text(
-            if (pendingCount > 0) "ждёт разбора: $pendingCount"
-            else "нового материала нет",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-    // Первый раз: в ленте лежат месяцы надиктовок, которых разбор не видел.
-    TextButton(
-        enabled = !busy,
-        onClick = {
-            busy = true
-            scope.launch {
-                val n = runCatching { app.zasechkaEngine.learn(all = true) }.getOrDefault(-1)
-                Feedback.toast(
-                    app,
-                    when {
-                        n > 0 -> "Предложено правил: $n"
-                        n == 0 -> "Закономерностей не нашлось — это тоже ответ"
-                        else -> "Разбор не дошёл, материал цел"
-                    },
-                )
-                busy = false
-                reload++
-            }
-        },
-    ) { Text("Прогнать всю историю") }
 
     if (proposed.isNotEmpty()) {
         Spacer(Modifier.height(10.dp))
-        Text("Предлагаю — суди", style = MaterialTheme.typography.bodyMedium)
+        Text("Предложено раньше — суди или сними", style = MaterialTheme.typography.bodyMedium)
         for (r in proposed) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
