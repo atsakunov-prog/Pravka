@@ -33,7 +33,7 @@ import ru.zf.slushalka.text.Chapter
  * `слушалка-справочник.json` - как разметка. Значит, он переезжает вместе с
  * книгой: второй читатель на своём телефоне получает его даром, без второго
  * заказа. При открытии книги без своего справочника файл из папки
- * подхватывается, если он сделан к тому же тексту.
+ * подхватывается, если он сделан к тому же тексту (см. [Fit]).
  *
  * Спойлер-барьер здесь устроен иначе, чем у вопроса: модель видит всю книгу,
  * но каждую запись привязывает к главе, а читателю показывают только записи о
@@ -127,13 +127,19 @@ class GuideEngine(
         when (local?.status) {
             null -> {
                 val imported = withContext(Dispatchers.IO) { readFromBook(book) } ?: return@withLock Result.success(null)
-                if (text != null && !imported.second.fits(text)) return@withLock Result.success(null)
+                if (text != null && !imported.second.fits(book, text)) return@withLock Result.success(null)
                 Result.success(put(book.id, imported.first))
             }
-            GuideState.Status.PENDING -> refreshLocked(book, local)
+            // Текст передаётся дальше: пакет, добравшийся до конца именно
+            // сейчас, запишется в папку книги вместе с меткой «к какому тексту».
+            GuideState.Status.PENDING -> refreshLocked(book, local, text)
             GuideState.Status.READY -> {
                 withContext(Dispatchers.IO) {
-                    if (!existsInBook(book)) writeToBook(book, local, text)
+                    // Файла нет - положить. Лежит без метки текста (записан, когда
+                    // текст ещё не был разобран) - переписать с меткой: до 08.09
+                    // второе устройство такой файл молча отбрасывало.
+                    val fit = fitInBook(book)
+                    if (fit == null || (text != null && !fit.marked)) writeToBook(book, local, text)
                 }
                 Result.success(local)
             }
@@ -242,7 +248,7 @@ class GuideEngine(
     fun forget(book: Book) {
         store.delete(book.id)
         _states.value = _states.value - book.id
-        val tree = treeUri() ?: return
+        val tree = treeOf(book) ?: return
         Thread {
             runCatching {
                 Saf.findChild(context, tree, book.folderDocId, FILE)?.let { docId ->
@@ -260,21 +266,38 @@ class GuideEngine(
 
     // ------------------------------------------------------- файл у книги
 
-    /** К какому тексту сделан справочник: другое издание нумерует главы иначе. */
-    data class Fit(val chars: Int, val chapters: Int) {
-        fun fits(text: BookText): Boolean =
-            chapters == text.chapters.size || kotlin.math.abs(chars - text.length) * 50 < text.length
+    /**
+     * К какому тексту сделан справочник: другое издание нумерует главы иначе.
+     * Файл без длины и числа глав ([marked] = false) записан до того, как текст
+     * разобрали; тогда верим имени файла текста - справочник лежит в папке
+     * самой книги, и другому тексту там взяться неоткуда.
+     */
+    data class Fit(val chars: Int, val chapters: Int, val textName: String) {
+        val marked: Boolean get() = chars >= 0 || chapters >= 0
+
+        fun fits(book: Book, text: BookText): Boolean = when {
+            !marked -> textName.isBlank() || textName == book.textName.orEmpty()
+            chapters == text.chapters.size -> true
+            else -> kotlin.math.abs(chars - text.length) * 50 < text.length
+        }
     }
 
-    private fun treeUri(): Uri? = settings.now().libraryUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
+    /** Папка, в которой книга найдена; у книг из старой библиотеки - главная. */
+    private fun treeOf(book: Book): Uri? =
+        book.treeUri ?: settings.now().libraryUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
 
-    private fun existsInBook(book: Book): Boolean {
-        val tree = treeUri() ?: return true
-        return Saf.findChild(context, tree, book.folderDocId, FILE) != null
+    /** Что за файл лежит в папке книги; null - файла нет (или папки библиотеки уже нет). */
+    private fun fitInBook(book: Book): Fit? {
+        val tree = treeOf(book) ?: return Fit(0, 0, "")
+        val docId = Saf.findChild(context, tree, book.folderDocId, FILE) ?: return null
+        val raw = Saf.readText(context, tree, docId) ?: return null
+        return runCatching { fitOf(JSONObject(raw)) }.getOrNull()
     }
+
+    private fun fitOf(o: JSONObject) = Fit(o.optInt("chars", -1), o.optInt("главы", -1), o.optString("text"))
 
     private fun writeToBook(book: Book, state: GuideState, text: BookText?): Boolean {
-        val tree = treeUri() ?: return false
+        val tree = treeOf(book) ?: return false
         val docId = Saf.ensureChild(context, tree, book.folderDocId, FILE, "application/json") ?: return false
         val body = state.toJson().apply {
             put("книга", book.title)
@@ -288,14 +311,14 @@ class GuideEngine(
     }
 
     private fun readFromBook(book: Book): Pair<GuideState, Fit>? {
-        val tree = treeUri() ?: return null
+        val tree = treeOf(book) ?: return null
         val docId = Saf.findChild(context, tree, book.folderDocId, FILE) ?: return null
         val raw = Saf.readText(context, tree, docId) ?: return null
         return runCatching {
             val o = JSONObject(raw)
             val state = GuideState.fromJson(o)
             if (state.status != GuideState.Status.READY || state.guide == null) return null
-            state to Fit(o.optInt("chars", -1), o.optInt("главы", -1))
+            state to fitOf(o)
         }.getOrNull()
     }
 

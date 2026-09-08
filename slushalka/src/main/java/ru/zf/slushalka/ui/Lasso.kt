@@ -63,6 +63,22 @@ class TextHits {
     }
 
     /**
+     * Границы строк (верх, низ) всех кусков на экране в координатах корня -
+     * для листания тапом в прокрутке: страница вперёд начинается с первой
+     * строки, которая не влезла целиком, а не с середины строки.
+     */
+    fun lines(): List<Pair<Float, Float>> {
+        val out = ArrayList<Pair<Float, Float>>()
+        for (h in map.values) {
+            val b = h.bounds ?: continue
+            val l = h.layout ?: continue
+            for (i in 0 until l.lineCount) out += (b.top + l.getLineTop(i)) to (b.top + l.getLineBottom(i))
+        }
+        out.sortBy { it.first }
+        return out
+    }
+
+    /**
      * Знаки книги под прямоугольником (в координатах корня экрана). Внутри
      * каждого задетого куска берётся от знака под левым верхним углом до знака
      * под правым нижним: обвёл три строки - получил с начала первой задетой

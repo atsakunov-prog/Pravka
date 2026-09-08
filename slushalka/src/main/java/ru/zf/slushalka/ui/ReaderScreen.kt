@@ -63,6 +63,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -256,6 +258,25 @@ fun ReaderScreen(
     // откатывало бы звук к началу страницы. Перелистнули - верх экрана.
     fun readPlace(): Int = place?.takeIf { it >= offset && it < shownEnd } ?: offset
 
+    // Смена способа листать посреди чтения: новое тело читалки открывается на
+    // той же странице. Само оно места не знает - переход ему задаётся целью,
+    // а цель к этому моменту уже израсходована прежним телом. Без этого
+    // страницы ждали бы якоря вечно («Размечаю страницы…»), а прокрутка
+    // начиналась бы с первой строки книги и туда же записывала место чтения.
+    var pagedNow by remember { mutableStateOf(prefs.readerPaged) }
+    LaunchedEffect(prefs.readerPaged) {
+        if (pagedNow == prefs.readerPaged) return@LaunchedEffect
+        pagedNow = prefs.readerPaged
+        target = readPlace()
+        place = null
+    }
+
+    // Высота панелей - для листания тапом в прокрутке: под панелями текст не
+    // читают, и «страница» - это полоса между ними. Помнится и когда панели
+    // спрятаны, чтобы не мерить заново при каждом появлении.
+    var topBarPx by remember { mutableIntStateOf(0) }
+    var bottomBarPx by remember { mutableIntStateOf(0) }
+
     // Озвучка этой книги: подсвечивается читаемая фраза, а страница идёт за
     // чтецом - когда фраза уходит за край экрана, читалка перелистывает к ней.
     val speakingHere = speech.active && speech.bookId == bk.id
@@ -304,6 +325,7 @@ fun ReaderScreen(
             ScrollBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
+                bars = bars, topBarPx = topBarPx, bottomBarPx = bottomBarPx,
                 target = target, onTargetUsed = { target = null },
                 onShown = { start, end -> offset = start; shownEnd = end },
                 onToggleBars = { bars = !bars },
@@ -348,6 +370,7 @@ fun ReaderScreen(
         ) {
             Row(
                 Modifier
+                    .onSizeChanged { topBarPx = it.height }
                     .fillMaxWidth()
                     .background(palette.bg.copy(alpha = 0.96f))
                     .statusBarsPadding()
@@ -383,6 +406,7 @@ fun ReaderScreen(
         ) {
             Column(
                 Modifier
+                    .onSizeChanged { bottomBarPx = it.height }
                     .fillMaxWidth()
                     .background(palette.bg.copy(alpha = 0.96f))
                     .navigationBarsPadding()
@@ -635,6 +659,10 @@ private fun ScrollBody(
     margin: Int,
     styleFor: (Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
+    /** Панели видны и сколько они закрывают сверху и снизу (px). */
+    bars: Boolean,
+    topBarPx: Int,
+    bottomBarPx: Int,
     target: Int?,
     onTargetUsed: () -> Unit,
     /** Что на экране: от начала первого видимого абзаца до конца последнего. */
@@ -647,11 +675,54 @@ private fun ScrollBody(
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val statusPx = with(density) { WindowInsets.statusBars.asPaddingValues().calculateTopPadding().roundToPx() }
+    val navPx = with(density) { WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding().roundToPx() }
+    // Где на экране лежит сам список - границы строк из [hits] даны в
+    // координатах корня, и сравнивать их надо в одних единицах.
+    var boxTop by remember { mutableStateOf(0f) }
 
     LaunchedEffect(target) {
         val to = target ?: return@LaunchedEffect
         listState.scrollToItem(blocks.indexOfLast { it.start <= to }.coerceAtLeast(0))
         onTargetUsed()
+    }
+
+    /**
+     * Читаемая полоса: между панелями, когда они видны, и между часами и
+     * жестовой полоской, когда спрятаны. Тап по краю листает ровно на неё.
+     */
+    fun band(): ClosedFloatingPointRange<Float> {
+        val h = listState.layoutInfo.viewportSize.height.toFloat()
+        val top = boxTop + (if (bars) topBarPx else statusPx)
+        val bottom = boxTop + h - (if (bars) bottomBarPx else navPx)
+        return if (bottom > top) top..bottom else boxTop..(boxTop + h)
+    }
+
+    /**
+     * На страницу вперёд - по строкам, как в режиме страниц: следующая
+     * начинается с первой строки, которая не влезла целиком. Прежний шаг
+     * «0,88 экрана» не совпадал ни с видимым, ни со строками: с панелями
+     * перескакивал строки, без них показывал уже прочитанное.
+     */
+    fun stepForward(): Float {
+        val band = band()
+        val height = band.endInclusive - band.start
+        val next = hits.lines()
+            .filter { (top, bottom) -> top >= band.start && bottom > band.endInclusive }
+            .minByOrNull { it.first }
+        val step = next?.let { it.first - band.start } ?: height
+        // Строка выше полосы или щель между абзацами шире страницы - шаг на всю полосу.
+        return if (step < height * 0.3f || step > height * 1.2f) height else step
+    }
+
+    /** Назад - на полосу, а затем строка, разрезанная верхним краем, показывается целиком. */
+    suspend fun pageBack() {
+        val height = band().endInclusive - band().start
+        listState.animateScrollBy(-height)
+        val top = band().start
+        val cut = hits.lines().firstOrNull { (a, b) -> a < top && b > top } ?: return
+        listState.animateScrollBy(cut.first - top)
     }
     LaunchedEffect(listState) {
         snapshotFlow {
@@ -669,13 +740,13 @@ private fun ScrollBody(
     Box(
         Modifier
             .fillMaxSize()
+            .onGloballyPositioned { boxTop = it.positionInRoot().y }
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { pos ->
-                        val step = listState.layoutInfo.viewportSize.height * 0.88f
                         when {
-                            pos.x < size.width * 0.28f -> scope.launch { listState.animateScrollBy(-step) }
-                            pos.x > size.width * 0.72f -> scope.launch { listState.animateScrollBy(step) }
+                            pos.x < size.width * 0.28f -> scope.launch { pageBack() }
+                            pos.x > size.width * 0.72f -> scope.launch { listState.animateScrollBy(stepForward()) }
                             else -> onToggleBars()
                         }
                     },
@@ -786,9 +857,19 @@ private fun PagedBody(
 
         // Разбивка считается для окна вокруг текущего места: у романа страниц
         // под тысячу, и мерить их все ради одного разворота незачем.
+        //
+        // Новый якорь - открытие книги или переход - считается от него. Всё
+        // остальное (кегль, шрифт, поля, поворот экрана) - от читаемой
+        // страницы: иначе после «А+» разбивка шла от давнего якоря, и читалка
+        // откатывала к месту, с которого когда-то пришли.
+        var shownStart by remember { mutableIntStateOf(-1) }
+        var lastAnchor by remember { mutableIntStateOf(Int.MIN_VALUE) }
         LaunchedEffect(anchor, widthPx, heightPx, style, headingStyle, blocks) {
-            if (anchor < 0 || widthPx <= 0 || heightPx <= 0) return@LaunchedEffect
-            val range = windowFor(anchor)
+            if (widthPx <= 0 || heightPx <= 0) return@LaunchedEffect
+            val at = if (anchor != lastAnchor || shownStart < 0) anchor else shownStart
+            lastAnchor = anchor
+            if (at < 0) return@LaunchedEffect
+            val range = windowFor(at)
             window = range
             val fresh = Paginator.paginate(
                 blocks = blocks,
@@ -802,7 +883,7 @@ private fun PagedBody(
                 gapPx = gapPx,
             )
             pages = fresh
-            val index = Paginator.indexOf(fresh, anchor)
+            val index = Paginator.indexOf(fresh, at)
             if (fresh.isNotEmpty()) pagerState.scrollToPage(index.coerceIn(0, fresh.lastIndex))
         }
 
@@ -813,6 +894,7 @@ private fun PagedBody(
                     val page = pages.getOrNull(index) ?: return@collectLatest
                     val end = pages.getOrNull(index + 1)?.startChar
                         ?: page.pieces.lastOrNull()?.end ?: page.startChar
+                    shownStart = page.startChar
                     onShown(page.startChar, end)
                     // Подошли к краю окна - пересчитываем следующее, взяв за
                     // середину текущую страницу. Только если окно правда

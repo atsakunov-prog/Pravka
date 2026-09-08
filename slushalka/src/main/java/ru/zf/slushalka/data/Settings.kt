@@ -29,8 +29,13 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         /** false - DataStore ещё не ответил, значения ниже пока заводские. */
         val loaded: Boolean = false,
         val apiKey: String = "",
-        // Дерево SAF, выбранное системным пикером: библиотека целиком.
+        // Дерево SAF, выбранное системным пикером: главная папка библиотеки.
+        // Сюда ложатся книги из каталога и папка синхронизации `_Слушалка`.
         val libraryUri: String = "",
+        // Ещё папки с книгами: карта памяти, папка другого приложения, то, что
+        // синхронизирует с облаком сторонняя программа. Читаются наравне с
+        // главной, но ничего в них не пишется, кроме файлов у самих книг.
+        val libraryExtra: List<String> = emptyList(),
         // Чьё это устройство - имя дорожки в синхронизации позиций.
         val profile: String = "",
         val skipSec: Int = 10,
@@ -56,6 +61,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerKeepAwake: Boolean = true,
         /** true - листание постранично, false - обычная прокрутка. */
         val readerPaged: Boolean = false,
+        // Масштаб всего интерфейса: на большом планшете или читалке с крупным
+        // экраном система нередко считает плотность малой, и кнопки с надписями
+        // выходят мелкими. Множитель к плотности - растёт всё разом, включая
+        // текст читалки (кегль там свой, подберётся под устройство).
+        val uiScale: Float = 1.0f,
         // Обновление приложения.
         val updateUrl: String = DEFAULT_UPDATE_URL,
         val updateAuto: Boolean = true,
@@ -88,7 +98,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val adviseModel: String = MODEL_FABLE,
         val adviseEffort: String = "",
         val adviseWeb: Boolean = true,
-    )
+    ) {
+        /** Все папки библиотеки, главная первой. */
+        val libraryUris: List<String>
+            get() = (listOf(libraryUri) + libraryExtra).filter { it.isNotBlank() }.distinct()
+    }
 
     val flow: StateFlow<Prefs> = context.dataStore.data
         .map { p ->
@@ -96,6 +110,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 loaded = true,
                 apiKey = p[KEY_API] ?: "",
                 libraryUri = p[KEY_LIB] ?: "",
+                libraryExtra = p[KEY_LIB_EXTRA]?.split('\n')?.filter { it.isNotBlank() } ?: emptyList(),
                 profile = p[KEY_PROFILE] ?: "",
                 skipSec = p[KEY_SKIP] ?: 10,
                 speed = p[KEY_SPEED] ?: 1.0f,
@@ -114,6 +129,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerTheme = p[KEY_R_THEME] ?: THEME_AUTO,
                 readerKeepAwake = p[KEY_R_AWAKE] ?: true,
                 readerPaged = p[KEY_R_PAGED] ?: false,
+                uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
                 updateAuto = p[KEY_UPD_AUTO] ?: true,
                 refineOnSwitch = p[KEY_REFINE] ?: true,
@@ -146,6 +162,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
 
     suspend fun setApiKey(v: String) = edit { it[KEY_API] = v.trim() }
     suspend fun setLibraryUri(v: String) = edit { it[KEY_LIB] = v }
+    suspend fun addLibraryExtra(v: String) = edit {
+        val list = (it[KEY_LIB_EXTRA]?.split('\n') ?: emptyList()).filter { s -> s.isNotBlank() }
+        if (v !in list && v != it[KEY_LIB]) it[KEY_LIB_EXTRA] = (list + v).joinToString("\n")
+    }
+    suspend fun removeLibraryExtra(v: String) = edit {
+        val list = (it[KEY_LIB_EXTRA]?.split('\n') ?: emptyList()).filter { s -> s.isNotBlank() && s != v }
+        it[KEY_LIB_EXTRA] = list.joinToString("\n")
+    }
     suspend fun setProfile(v: String) = edit { it[KEY_PROFILE] = v.trim() }
     suspend fun setSkipSec(v: Int) = edit { it[KEY_SKIP] = v.coerceIn(5, 60) }
     suspend fun setSpeed(v: Float) = edit { it[KEY_SPEED] = v.coerceIn(0.5f, 3.0f) }
@@ -164,6 +188,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderTheme(v: String) = edit { it[KEY_R_THEME] = v }
     suspend fun setReaderKeepAwake(v: Boolean) = edit { it[KEY_R_AWAKE] = v }
     suspend fun setReaderPaged(v: Boolean) = edit { it[KEY_R_PAGED] = v }
+    suspend fun setUiScale(v: Float) = edit { if (v in UI_SCALES) it[KEY_UI_SCALE] = v }
     suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
     suspend fun setUpdateAuto(v: Boolean) = edit { it[KEY_UPD_AUTO] = v }
     suspend fun setRefineOnSwitch(v: Boolean) = edit { it[KEY_REFINE] = v }
@@ -204,6 +229,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         /** Знаков в «странице»: стандартная машинописная - 1800. */
         const val PAGE_CHARS = 1800
 
+        /** Ступени масштаба интерфейса; 1,0 - как считает система. */
+        val UI_SCALES = listOf(1.0f, 1.15f, 1.3f, 1.5f, 1.75f)
+
         /**
          * Где приложение ищет свежую сборку. Каждый пуш в ветку `slushalka`
          * уезжает в ветку `apk-builds` вместе со СВОИМ файлом версий - его и
@@ -231,6 +259,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
 
         private val KEY_API: Preferences.Key<String> = stringPreferencesKey("anthropic_api_key")
         private val KEY_LIB = stringPreferencesKey("library_uri")
+        /** Дополнительные папки, через перевод строки: в URI его быть не может. */
+        private val KEY_LIB_EXTRA = stringPreferencesKey("library_extra")
         private val KEY_PROFILE = stringPreferencesKey("profile")
         private val KEY_SKIP = intPreferencesKey("skip_sec")
         private val KEY_SPEED = floatPreferencesKey("speed")
@@ -251,6 +281,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_THEME = stringPreferencesKey("reader_theme")
         private val KEY_R_AWAKE = booleanPreferencesKey("reader_keep_awake")
         private val KEY_R_PAGED = booleanPreferencesKey("reader_paged")
+        private val KEY_UI_SCALE = floatPreferencesKey("ui_scale")
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
         private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")
         private val KEY_REFINE = booleanPreferencesKey("refine_on_switch")

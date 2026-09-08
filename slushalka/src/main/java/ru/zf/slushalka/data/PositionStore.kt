@@ -122,14 +122,16 @@ class PositionStore(context: Context) {
     fun merge(bookId: String, remote: BookState) {
         val local = states[bookId]
         if (local != null && local.updatedAt >= remote.updatedAt) return
-        // Из чужого устройства приезжает только позиция; отметки «я тут» и
-        // история - хозяйство этого телефона.
+        // Из чужого устройства приезжает только позиция - в записи и в тексте;
+        // отметки «я тут» и история - хозяйство этого телефона. Старый файл без
+        // места чтения (-1) своё место не стирает.
         states[bookId] = (local ?: BookState(bookId)).copy(
             fileIndex = remote.fileIndex,
             posMs = remote.posMs,
             absMs = remote.absMs,
             updatedAt = remote.updatedAt,
             finished = remote.finished,
+            readChar = if (remote.readChar >= 0) remote.readChar else local?.readChar ?: -1,
         )
         persist()
     }

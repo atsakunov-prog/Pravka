@@ -34,6 +34,13 @@ data class Book(
     /** Путь папки внутри библиотеки: он же ключ позиции и на других устройствах. */
     val id: String,
     val folderDocId: String,
+    /**
+     * Дерево SAF, в котором книга найдена. Папок у библиотеки может быть
+     * несколько, и все ссылки на файлы книги собираются от её дерева, а не от
+     * главной папки. Пусто - книга из библиотеки, записанной до 08.09: она из
+     * главной папки.
+     */
+    val tree: String = "",
     val title: String,
     val author: String,
     val files: List<BookFile>,
@@ -51,6 +58,8 @@ data class Book(
      * Положи рядом mp3 - и при следующем чтении папки она станет обычной.
      */
     val hasAudio: Boolean get() = files.isNotEmpty()
+
+    val treeUri: Uri? get() = tree.takeIf { it.isNotBlank() }?.let(Uri::parse)
 
     /** Смещение начала файла [index] от начала книги. */
     fun offsetOf(index: Int): Long {
@@ -72,6 +81,7 @@ data class Book(
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
         .put("folder", folderDocId)
+        .put("tree", tree)
         .put("title", title)
         .put("author", author)
         .put("cover", coverDocId ?: JSONObject.NULL)
@@ -85,6 +95,7 @@ data class Book(
             return Book(
                 id = o.getString("id"),
                 folderDocId = o.getString("folder"),
+                tree = o.optString("tree"),
                 title = o.optString("title"),
                 author = o.optString("author"),
                 files = (0 until arr.length()).map { BookFile.fromJson(arr.getJSONObject(it)) },

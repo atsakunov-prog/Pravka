@@ -46,7 +46,7 @@ import ru.zf.slushalka.data.Settings
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit) {
+fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit, onPickExtraTree: () -> Unit) {
     val state = app.state
     val prefs by state.prefs.collectAsState()
     val books by state.books.collectAsState()
@@ -81,17 +81,54 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             Section("Книги")
             Text(
                 if (prefs.libraryUri.isBlank()) "Папка не выбрана"
-                else "${ru.zf.slushalka.data.Saf.humanPath(prefs.libraryUri)} · книг: ${books.size}",
+                else "${ru.zf.slushalka.data.Saf.humanPath(prefs.libraryUri)} · книг: " +
+                    "${books.count { it.tree == prefs.libraryUri || it.tree.isBlank() }}",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Note(
-                "Одна папка на всё: аудиокниги, которые кладёшь сам, и книги из Флибусты. " +
-                    "Договорились держать её в Downloads/Books - пикер открывается сразу там."
+                "Главная папка: сюда ложатся книги из Флибусты и здесь живёт «_Слушалка» с " +
+                    "позициями. Договорились держать её в Downloads/Books - пикер открывается сразу там."
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onPickTree) { Text("Выбрать папку") }
                 TextButton(onClick = { state.rescan() }) { Text("Перечитать") }
             }
+            // Ещё папки: карта памяти, папка, которую синхронизирует с облаком
+            // сторонняя программа, чужая коллекция. Читаются наравне с главной.
+            prefs.libraryExtra.forEach { uri ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${ru.zf.slushalka.data.Saf.humanPath(uri)} · книг: ${books.count { it.tree == uri }}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { state.removeExtraTree(uri) }) { Text("Убрать") }
+                }
+            }
+            if (prefs.libraryUri.isNotBlank()) {
+                TextButton(onClick = onPickExtraTree) { Text("Добавить ещё папку") }
+                Note(
+                    "Книги из всех папок - на одной полке. Позиции, разметка и справочник у книги " +
+                        "лежат в её собственной папке, где бы она ни была."
+                )
+            }
+
+            Section("Экран")
+            Text("Масштаб интерфейса", style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Settings.UI_SCALES.forEach { k ->
+                    FilterChip(
+                        selected = kotlin.math.abs(prefs.uiScale - k) < 0.01f,
+                        onClick = { scope.launch { state.settings.setUiScale(k) } },
+                        label = { Text("${(k * 100).toInt()}%") },
+                    )
+                }
+            }
+            Note(
+                "Для планшета или читалки с большим экраном, где всё выходит мелким: " +
+                    "растёт разом весь интерфейс, кнопки и надписи. Кегль текста в читалке " +
+                    "настраивается отдельно, в «Аа Вид»."
+            )
 
             // Раздел про открытую книгу - здесь, а не только в настройках
             // читалки: сюда заходят в первую очередь, и «где мои картинки»

@@ -6,11 +6,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.slushalka.library.Book
 
-/** Разобранная библиотека на диске: вкладка открывается мгновенно и без сети. */
+/**
+ * Разобранная библиотека на диске: вкладка открывается мгновенно и без сети.
+ * Книги из всех папок библиотеки лежат вместе, каждая помнит своё дерево.
+ */
 class LibraryStore(context: Context) {
 
     private val file = File(context.filesDir, "library.json")
     private var books: List<Book> = emptyList()
+    /** Главная папка на момент записи; книги без дерева (старый файл) - из неё. */
     private var treeUri: String = ""
 
     init {
@@ -19,15 +23,17 @@ class LibraryStore(context: Context) {
             treeUri = root.optString("tree")
             val arr = root.optJSONArray("books") ?: JSONArray()
             books = (0 until arr.length()).map { Book.fromJson(arr.getJSONObject(it)) }
+                .map { if (it.tree.isBlank()) it.copy(tree = treeUri) else it }
         }
     }
 
+    /** Книги из этих папок; из папки, которую убрали из настроек, - не показываются. */
     @Synchronized
-    fun books(forTree: String): List<Book> = if (treeUri == forTree) books else emptyList()
+    fun books(forTrees: List<String>): List<Book> = books.filter { it.tree in forTrees }
 
     @Synchronized
-    fun replace(forTree: String, list: List<Book>) {
-        treeUri = forTree
+    fun replace(primaryTree: String, list: List<Book>) {
+        treeUri = primaryTree
         books = list
         persist()
     }

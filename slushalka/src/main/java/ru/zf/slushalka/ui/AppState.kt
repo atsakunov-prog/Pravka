@@ -46,11 +46,15 @@ class AppState(private val app: SlushalkaApp) {
     private val _alignment = MutableStateFlow<Alignment?>(null)
     val alignment: StateFlow<Alignment?> = _alignment
 
-    /** Докуда дошли на других устройствах и у второго слушателя. */
-    private val _others = MutableStateFlow<Map<String, List<Pair<String, Long>>>>(emptyMap())
-    val others: StateFlow<Map<String, List<Pair<String, Long>>>> = _others
+    /** Докуда дошёл второй слушатель: секунда записи и знак текста. */
+    data class OtherPlace(val who: String, val absMs: Long, val readChar: Int)
 
-    data class ResumeOffer(val bookId: String, val absMs: Long, val from: String, val at: Long)
+    /** Докуда дошли на других устройствах и у второго слушателя. */
+    private val _others = MutableStateFlow<Map<String, List<OtherPlace>>>(emptyMap())
+    val others: StateFlow<Map<String, List<OtherPlace>>> = _others
+
+    /** Своя дорожка с другого устройства ушла дальше: [readChar] - место чтения, -1 - не передано. */
+    data class ResumeOffer(val bookId: String, val absMs: Long, val readChar: Int, val from: String, val at: Long)
 
     private val _resumeOffer = MutableStateFlow<ResumeOffer?>(null)
     val resumeOffer: StateFlow<ResumeOffer?> = _resumeOffer
@@ -66,28 +70,52 @@ class AppState(private val app: SlushalkaApp) {
         app.scope.launch {
             // Первое значение из DataStore приезжает асинхронно: спросить
             // раньше - получить заводскую пустоту и решить, что книг нет.
-            val tree = settings.flow.first { it.loaded }.libraryUri
-            if (tree.isNotBlank()) {
-                _books.value = app.library.books(tree)
+            val p = settings.flow.first { it.loaded }
+            if (p.libraryUri.isNotBlank()) {
+                _books.value = app.library.books(p.libraryUris)
                 if (_books.value.isEmpty()) rescan() else syncPull()
             }
         }
     }
 
+    /** Главная папка библиотеки: сюда качает каталог и здесь лежит `_Слушалка`. */
     fun treeUri(): Uri? = prefs.value.libraryUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
+
+    /** Дерево, в котором лежит книга: папок несколько, и файлы книги ищутся в своей. */
+    fun treeOf(book: Book): Uri? = book.treeUri ?: treeUri()
 
     // ------------------------------------------------------------ библиотека
 
     fun onTreePicked(uri: Uri) {
+        keepPermission(uri)
+        app.scope.launch {
+            settings.setLibraryUri(uri.toString())
+            rescan()
+        }
+    }
+
+    /** Ещё одна папка с книгами - к главной, а не вместо неё. */
+    fun onExtraTreePicked(uri: Uri) {
+        keepPermission(uri)
+        app.scope.launch {
+            settings.addLibraryExtra(uri.toString())
+            rescan()
+        }
+    }
+
+    fun removeExtraTree(uri: String) {
+        app.scope.launch {
+            settings.removeLibraryExtra(uri)
+            rescan()
+        }
+    }
+
+    private fun keepPermission(uri: Uri) {
         runCatching {
             app.contentResolver.takePersistableUriPermission(
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
-        }
-        app.scope.launch {
-            settings.setLibraryUri(uri.toString())
-            rescan()
         }
     }
 
@@ -98,9 +126,15 @@ class AppState(private val app: SlushalkaApp) {
     /** То же, но дождаться: каталог после скачивания хочет знать, появилась ли книга. */
     suspend fun rescanNow() {
         val tree = treeUri() ?: return
+        val trees = prefs.value.libraryUris
         _busy.value = "Читаю папку…"
         val known = _books.value.associateBy { it.id }
-        val found = withContext(Dispatchers.IO) { LibraryScanner(app).scan(tree) }
+        val found = withContext(Dispatchers.IO) {
+            val scanner = LibraryScanner(app)
+            // Ключ книги - путь от имени папки; две папки с одним именем и одной
+            // книгой внутри дали бы двойника, а полка на двойных ключах падает.
+            trees.flatMap { scanner.scan(Uri.parse(it)) }.distinctBy { it.id }
+        }
         // Уже измеренные длительности переносим: мерить заново долго и незачем.
         val merged = found.map { b ->
             val old = known[b.id] ?: return@map b
@@ -123,7 +157,7 @@ class AppState(private val app: SlushalkaApp) {
     /** Длительности нужны раньше звука: без них не посчитать место в книге. */
     private suspend fun ensureDurations(book: Book): Book {
         if (book.durationsReady || !book.hasAudio) return book
-        val tree = treeUri() ?: return book
+        val tree = treeOf(book) ?: return book
         val measured = withContext(Dispatchers.IO) {
             Durations.probe(app, tree, book) { done, total ->
                 _busy.value = "Меряю длительности: $done из $total"
@@ -139,7 +173,7 @@ class AppState(private val app: SlushalkaApp) {
 
     /** Открывает книгу на месте, где остановились. Звук не трогает: пуск - рукой. */
     fun open(book: Book) {
-        val tree = treeUri() ?: return
+        val tree = treeOf(book) ?: return
         app.scope.launch {
             // Озвучка другой книги вместе с этой - каша: выключаем.
             if (app.readAloud.state.value.active && app.readAloud.state.value.bookId != book.id) {
@@ -170,7 +204,7 @@ class AppState(private val app: SlushalkaApp) {
     }
 
     private fun loadText(book: Book) {
-        val tree = treeUri() ?: return
+        val tree = treeOf(book) ?: return
         app.scope.launch {
             if (book.textDocId == null) return@launch
             _busy.value = "Разбираю текст книги…"
@@ -273,7 +307,7 @@ class AppState(private val app: SlushalkaApp) {
         bump()
         // Вместе с отметками уходит и файл разметки: иначе та же карта
         // вернулась бы при следующем открытии книги.
-        val tree = treeUri() ?: return
+        val tree = treeOf(book) ?: return
         app.scope.launch { withContext(Dispatchers.IO) { app.markup.delete(tree, book) } }
     }
 
@@ -365,7 +399,7 @@ class AppState(private val app: SlushalkaApp) {
         staged: Boolean = true,
         radius: Int = Locator.DEFAULT_RADIUS,
     ): Probe {
-        val tree = treeUri() ?: return Probe(null, null, 0, Miss.NO_AUDIO)
+        val tree = treeOf(book) ?: return Probe(null, null, 0, Miss.NO_AUDIO)
         val (index, inFile) = book.locate(atMs)
         val file = book.files.getOrNull(index) ?: return Probe(null, null, 0, Miss.NO_AUDIO)
         val from: Long
@@ -605,8 +639,8 @@ class AppState(private val app: SlushalkaApp) {
 
     /** Карта уезжает файлом в папку книги - оттуда её возьмут другие устройства. */
     private suspend fun saveMarkup(): Boolean {
-        val tree = treeUri() ?: return false
         val book = _current.value ?: return false
+        val tree = treeOf(book) ?: return false
         val text = _text.value ?: return false
         val anchors = app.positions.get(book.id).anchors.filter { it.manual }
         if (anchors.isEmpty()) return false
@@ -617,7 +651,7 @@ class AppState(private val app: SlushalkaApp) {
 
     /** Разметка, приехавшая вместе с книгой: считать заново ничего не надо. */
     private suspend fun loadMarkup(book: Book, text: BookText) {
-        val tree = treeUri() ?: return
+        val tree = treeOf(book) ?: return
         val map = withContext(Dispatchers.IO) { app.markup.read(tree, book) } ?: return
         if (!map.matches(book, text)) return
         val mine = app.positions.get(book.id).anchors
@@ -755,9 +789,19 @@ class AppState(private val app: SlushalkaApp) {
         if (!p.syncPositions || p.profile.isBlank()) return
         app.player.saveNow()
         val all = app.positions.all()
-        withContext(Dispatchers.IO) { app.sync.push(tree, p.profile, all) }
+        // Вопросы - только когда что-то спросили или слилось: файл с ответами
+        // потолще позиций, и переписывать его каждые две минуты незачем.
+        val asksRev = app.askLog.revision
+        val asks = if (asksRev != pushedAsksRev) app.askLog.all() else null
+        withContext(Dispatchers.IO) {
+            app.sync.push(tree, p.profile, all)
+            if (asks != null) app.sync.pushAsks(tree, p.profile, asks)
+        }
+        if (asks != null) pushedAsksRev = asksRev
         bump()
     }
+
+    private var pushedAsksRev = -1
 
     fun syncPull() {
         val tree = treeUri() ?: return
@@ -767,24 +811,36 @@ class AppState(private val app: SlushalkaApp) {
             val remotes = withContext(Dispatchers.IO) { app.sync.pull(tree) }
             val mine = remotes.firstOrNull { it.profile.equals(p.profile, true) }
             val others = remotes.filter { !it.profile.equals(p.profile, true) }
+            val hasAudio = _books.value.associate { it.id to it.hasAudio }
 
             // Своя же дорожка с другого устройства: молча не подменяем - вдруг
-            // там кто-то листал. Спрашиваем, если расхождение больше минуты.
+            // там кто-то листал. Спрашиваем, если расхождение больше минуты
+            // записи, а у книги без записи - больше страницы текста. Место, где
+            // здесь ещё не открывали, подхватывается без вопросов.
             mine?.states?.forEach { (id, remote) ->
                 val local = app.positions.get(id)
-                if (remote.updatedAt > local.updatedAt + 60_000 &&
+                val far = if (hasAudio[id] != false) {
                     kotlin.math.abs(remote.absMs - local.absMs) > 30_000
-                ) {
+                } else {
+                    local.readChar >= 0 && remote.readChar >= 0 &&
+                        kotlin.math.abs(remote.readChar - local.readChar) > Settings.PAGE_CHARS
+                }
+                if (remote.updatedAt > local.updatedAt + 60_000 && far) {
                     if (_resumeOffer.value == null) {
-                        _resumeOffer.value = ResumeOffer(id, remote.absMs, p.profile, remote.updatedAt)
+                        _resumeOffer.value = ResumeOffer(id, remote.absMs, remote.readChar, p.profile, remote.updatedAt)
                     }
                 } else if (remote.updatedAt > local.updatedAt) {
                     app.positions.merge(id, remote)
                 }
             }
 
-            _others.value = others.flatMap { r -> r.states.map { (id, s) -> id to (r.profile to s.absMs) } }
+            _others.value = others
+                .flatMap { r -> r.states.map { (id, s) -> id to OtherPlace(r.profile, s.absMs, s.readChar) } }
                 .groupBy({ it.first }, { it.second })
+
+            // Вопросы, заданные с другого устройства, - в свою историю.
+            val asks = withContext(Dispatchers.IO) { app.sync.pullAsks(tree, p.profile) }
+            asks?.forEach { (id, list) -> app.askLog.merge(id, list) }
             bump()
         }
     }
@@ -793,10 +849,17 @@ class AppState(private val app: SlushalkaApp) {
         val offer = _resumeOffer.value ?: return
         _resumeOffer.value = null
         val book = _books.value.firstOrNull { it.id == offer.bookId } ?: return
+        // Место чтения - сразу в позиции: книга без записи откроется на той
+        // странице, а у аудиокниги читалка сверит его со звуком, как всегда.
+        if (offer.readChar >= 0) app.positions.setReadChar(book.id, offer.readChar)
+        if (!book.hasAudio) {
+            bump()
+            return
+        }
         app.scope.launch {
             val ready = ensureDurations(book)
             _current.value = ready
-            app.player.open(treeUri() ?: return@launch, ready, startAbsMs = offer.absMs)
+            app.player.open(treeOf(ready) ?: return@launch, ready, startAbsMs = offer.absMs)
             loadText(ready)
         }
     }

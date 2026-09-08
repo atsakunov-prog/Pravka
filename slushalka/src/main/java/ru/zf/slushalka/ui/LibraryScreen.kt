@@ -160,8 +160,14 @@ fun LibraryScreen(
             onDismissRequest = { state.declineResume() },
             title = { Text("Продолжить с другого устройства?") },
             text = {
+                // У книги без записи место - страница, а не секунда.
+                val where = if (book?.hasAudio == false && o.readChar >= 0) {
+                    "стр. ${o.readChar / Settings.PAGE_CHARS + 1}"
+                } else {
+                    formatClock(o.absMs)
+                }
                 Text(
-                    "«${book?.title ?: o.bookId}» — там остановились на ${formatClock(o.absMs)} " +
+                    "«${book?.title ?: o.bookId}» — там остановились на $where " +
                         "(${formatAgo(o.at)}). Здесь место другое."
                 )
             },
@@ -260,7 +266,7 @@ private fun BookRow(
     app: SlushalkaApp,
     book: Book,
     rev: Int,
-    others: List<Pair<String, Long>>,
+    others: List<AppState.OtherPlace>,
     onClick: () -> Unit,
 ) {
     val st = app.state.stateOf(book.id)
@@ -308,9 +314,12 @@ private fun BookRow(
                     st.absMs > 0 -> "$percent%"
                     else -> ""
                 }
-                val theirs = others.joinToString(" · ") { (who, ms) ->
-                    val p = if (book.totalMs > 0) (ms * 100 / book.totalMs).toInt() else 0
-                    "$who $p%"
+                val theirs = others.joinToString(" · ") { o ->
+                    when {
+                        book.totalMs > 0 -> "${o.who} ${(o.absMs * 100 / book.totalMs).toInt()}%"
+                        o.readChar >= 0 -> "${o.who} стр. ${o.readChar / Settings.PAGE_CHARS + 1}"
+                        else -> o.who
+                    }
                 }
                 Text(
                     listOf(mine, theirs).filter { it.isNotBlank() }.joinToString("  ·  "),

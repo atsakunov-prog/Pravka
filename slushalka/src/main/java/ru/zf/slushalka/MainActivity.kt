@@ -15,12 +15,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
 import ru.zf.slushalka.data.Saf
@@ -44,6 +47,11 @@ class MainActivity : ComponentActivity() {
         uri?.let { app.state.onTreePicked(it) }
     }
 
+    /** Ещё одна папка библиотеки - к главной. */
+    private val pickExtraTree = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
+        uri?.let { app.state.onExtraTreePicked(it) }
+    }
+
     private val askPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -58,21 +66,30 @@ class MainActivity : ComponentActivity() {
             askPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         setContent {
-            SlushalkaTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background,
-                ) {
-                    Root(
-                        // Пикер открывается сразу в Downloads: библиотека живёт в
-                        // Downloads/Books, чтобы всё лежало в одном видном месте.
-                        onPickTree = { pickTree.launch(Saf.downloadsUri()) },
-                        onNeedMic = { askPermission.launch(Manifest.permission.RECORD_AUDIO) },
-                        hasMic = {
-                            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
-                                PackageManager.PERMISSION_GRANTED
-                        },
-                    )
+            // Масштаб интерфейса - множитель к плотности экрана: всё, что
+            // измерено в dp и sp, растёт разом. На читалке с большим экраном
+            // система считает плотность малой, и без этого кнопки мелкие.
+            val prefs by app.settings.flow.collectAsState()
+            val base = LocalDensity.current
+            val density = remember(base, prefs.uiScale) { Density(base.density * prefs.uiScale, base.fontScale) }
+            CompositionLocalProvider(LocalDensity provides density) {
+                SlushalkaTheme {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background,
+                    ) {
+                        Root(
+                            // Пикер открывается сразу в Downloads: библиотека живёт в
+                            // Downloads/Books, чтобы всё лежало в одном видном месте.
+                            onPickTree = { pickTree.launch(Saf.downloadsUri()) },
+                            onPickExtraTree = { pickExtraTree.launch(null) },
+                            onNeedMic = { askPermission.launch(Manifest.permission.RECORD_AUDIO) },
+                            hasMic = {
+                                ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+                                    PackageManager.PERMISSION_GRANTED
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -95,7 +112,12 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Root(onPickTree: () -> Unit, onNeedMic: () -> Unit, hasMic: () -> Boolean) {
+    private fun Root(
+        onPickTree: () -> Unit,
+        onPickExtraTree: () -> Unit,
+        onNeedMic: () -> Unit,
+        hasMic: () -> Boolean,
+    ) {
         val state = app.state
         var screen by remember { mutableStateOf(Screen.LIBRARY) }
         var asking by remember { mutableStateOf(false) }
@@ -190,6 +212,7 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onPickTree = onPickTree,
+                    onPickExtraTree = onPickExtraTree,
                 )
             }
 

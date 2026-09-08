@@ -32,9 +32,9 @@ class LibraryScanner(private val context: Context) {
         val rootId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
             ?: return emptyList()
         val rootName = displayName(treeUri, rootId) ?: "Библиотека"
-        return walk(treeUri, rootId, rootName, rootName).sortedWith(
-            compareBy(NaturalOrder) { it.id }
-        )
+        return walk(treeUri, rootId, rootName, rootName)
+            .map { it.copy(tree = treeUri.toString()) }
+            .sortedWith(compareBy(NaturalOrder) { it.id })
     }
 
     // ---------------------------------------------------------------- обход
