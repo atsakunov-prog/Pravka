@@ -1,0 +1,7 @@
+pravka=2.0.398
+versionName=2.0.398
+apk=pravka-debug.apk
+versionCode=398
+commit=68d721a8a8df3b80eb8163f76b4a9a092bb479a8
+branch=pravka
+builtAt=2026-09-09T07:41Z
