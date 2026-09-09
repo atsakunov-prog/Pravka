@@ -66,7 +66,6 @@ object Prompts {
 
     val PATTERNS: String get() = ru.zf.pravka.core.prompts.PromptsAnalysis.PATTERNS
 
-    val CHAT_HANDOFF: String get() = ru.zf.pravka.core.prompts.PromptsAnalysis.CHAT_HANDOFF
 
     val RULES: String get() = ru.zf.pravka.core.prompts.PromptsBody.RULES
 

@@ -305,7 +305,7 @@ private val SERVICE_TABS = listOf(
 private fun serviceHint(tab: Tab): String = when (tab) {
     Tab.REPORT -> "День в графиках: балл, лента по часам, телефон, тело, еда — и тот же день неделю назад рядом"
     Tab.ITOGI -> "Повторы, которые Опус находит по всему логу каждую ночь"
-    Tab.EXPORT -> "Вся жизнь одним CSV плюс запрос для чата с твоими паттернами"
+    Tab.EXPORT -> "Вся жизнь одной книгой Excel: листы как базы в Notion, свежее сверху"
     Tab.SETTINGS -> "Ключ Anthropic, распознавание, служба, сохранённые записи"
     Tab.DICTIONARY -> "Как писать имена и термины: заменять, подсказывать, не трогать"
     Tab.STATS -> "Токены и деньги по дням"
@@ -363,14 +363,20 @@ private fun MoreList(onOpen: (Tab) -> Unit) {
 }
 
 /**
- * Выгрузка всего одним файлом — владелец: «файл, где было бы и таймшит, и
- * тело еда и тело спорт, чтобы разбирать». Сам файл собирает DigestBuilder,
- * тот же, что кнопка в «Сводке для чата»; здесь просто короткая дорога.
+ * Единственная выгрузка приложения — вся жизнь одной книгой Excel.
+ *
+ * Владелец (09.09): «уберём все эти экспорты csv и сводки, я ими не пользуюсь,
+ * и сделаем один экспорт, который будет экспортировать всё то, что в Notion…
+ * мне надоел этот Notion, в Excel мне как-то удобнее». Книгу собирает
+ * `LifeExport` из тех же строк, что уезжают в Notion: лист на базу, колонка в
+ * колонку, свежее сверху. Ничего своего у файла нет — что в Notion, то и тут.
  */
 @Composable
 private fun ExportTab(app: PravkaApp) {
     val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
+    var lastError by remember { mutableStateOf("") }
+    val notionStatus by app.notionLifeSync.statusFlow.collectAsState()
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -379,78 +385,57 @@ private fun ExportTab(app: PravkaApp) {
     ) {
         ScreenTitle(stringResource(R.string.tab_export))
         HintText(
-            "«Вся жизнь» — один CSV на все домены: таймшит Засечки, еда, " +
-                "тренировки, силовые с подходами, зарядка с заметками и " +
-                "комментарии. Строка на событие, хронологически, за всю " +
-                "глубину хранения — файл кормят Клоду в чат. Начинается " +
-                "легендой: что складывать можно только minutes при budget=1 " +
-                "(и это ровно сутки), а тренировки и еда — пометки на том же " +
-                "времени, а не время сверх него. Обычно файл не нужен: всё то " +
-                "же самое раз в час само уезжает в Notion, в «Правка: разборы»."
+            "Одна книга .xlsx — та же структура, что в Notion под «Правка: " +
+                "разборы»: листы " +
+                ru.zf.pravka.core.NotionLifeSchema.ALL.joinToString(", ") { it.name } +
+                ". Колонки как в базах, даты — настоящие даты Excel, на каждом " +
+                "листе свежее сверху, шапка закреплена, фильтр включён. Идущее " +
+                "сейчас дело в файл не попадает, как и в Notion."
         )
         Spacer(Modifier.height(14.dp))
-        @Composable
-        fun lifeCsvButton(label: String) {
-            Button(
-                onClick = {
-                    busy = true
-                    app.appScope.launch {
-                        val intent = runCatching { app.digestBuilder.lifeCsvIntent() }
-                            .getOrNull()
-                        busy = false
-                        if (intent == null) {
-                            Feedback.toast(app, "Не собрался — посмотри Логи")
-                        } else {
-                            runCatching {
-                                context.startActivity(
-                                    android.content.Intent.createChooser(intent, "CSV всей жизни")
-                                )
-                            }
+        Button(
+            onClick = {
+                busy = true
+                lastError = ""
+                app.appScope.launch {
+                    val intent = runCatching { app.lifeExport.shareIntent() }
+                        .onFailure { e ->
+                            // Причина целиком: «не собрался» без причины читается как поломка.
+                            lastError = "Не собралась: ${e.javaClass.simpleName}: ${e.message}"
+                            app.eventLog.add("выгрузка xlsx: $lastError")
+                        }
+                        .getOrNull()
+                    busy = false
+                    if (intent != null) {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent.createChooser(intent, "Вся жизнь (.xlsx)")
+                            )
                         }
                     }
-                },
-                enabled = !busy,
-            ) { Text(label) }
+                }
+            },
+            enabled = !busy,
+        ) { Text(if (busy) "Собираю…" else "Выгрузить .xlsx") }
+        if (lastError.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                lastError,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
-        lifeCsvButton(if (busy) "Собираю…" else "CSV всей жизни")
         Spacer(Modifier.height(16.dp))
-        // Разбор владелец делает в чате, а не здесь. Единственное, чего у
-        // чата нет и быть не может, — накопленные паттерны с ЕГО вердиктами:
-        // они живут только в приложении. Кнопка ровно про это, и стоит она
-        // вплотную к CSV, потому что копируются они парой.
         Text(
-            "Запрос для чата",
+            "Notion",
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
         HintText(
-            "Копирует в буфер текст запроса вместе со всеми паттернами, " +
-                "которые ты подтвердил, и теми, что отклонил. Порядок такой: " +
-                "выгрузи CSV, прицепи его в чат, вставь этот текст. " +
-                "Отклонённые уезжают нарочно — чтобы он не предлагал их снова."
-        )
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = {
-                app.appScope.launch {
-                    runCatching { app.analysisStore.load() }
-                    val text = app.promptStore
-                        .effective(PromptStore.PromptId.CHAT_HANDOFF)
-                        .replace("{PATTERNS}", app.analysisStore.handoffBlock())
-                        .replace("{TODAY}", app.analysisEngine.today())
-                    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
-                    clipboard?.setPrimaryClip(
-                        android.content.ClipData.newPlainText("Запрос для чата", text)
-                    )
-                    Feedback.toast(app, "Запрос скопирован — вставляй в чат", long = true)
-                }
-            },
-        ) { Text("Скопировать запрос для чата") }
-        Spacer(Modifier.height(14.dp))
-        HintText(
-            "Сводки текстом за день и неделю — во вкладке Тело (С), карточка " +
-                "«Сводка для чата». Выгрузки одной Засечки и одной Еды — в их " +
-                "вкладках. Сам текст запроса правится в «Ещё → Промпты»."
+            "Синхронизация продолжается сама, раз в час; книга — снимок тех же " +
+                "данных на момент нажатия. Состояние синка: " +
+                notionStatus.ifBlank { "ещё не запускался" } +
+                ". Настройки — «Ещё → Настройки → Тело», Notion."
         )
     }
 }
@@ -1806,7 +1791,6 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.BODY to R.string.prompt_title_body,
     PromptStore.PromptId.RULES to R.string.prompt_title_rules,
     PromptStore.PromptId.PATTERNS to R.string.prompt_title_patterns,
-    PromptStore.PromptId.CHAT_HANDOFF to R.string.prompt_title_handoff,
 )
 
 @Composable

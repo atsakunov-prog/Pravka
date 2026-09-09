@@ -784,17 +784,8 @@ internal fun BodyFoodSettings(app: PravkaApp) {
             toIcu,
         ) { v -> app.appScope.launch { app.settings.setFoodToIcu(v) } }
         Spacer(Modifier.height(10.dp))
+        // Выгрузки дневника здесь нет: вся жизнь одним xlsx — в «Ещё → Выгрузки».
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
-                app.appScope.launch {
-                    val intent = app.foodStore.shareCsvIntent()
-                    runCatching {
-                        context.startActivity(
-                            android.content.Intent.createChooser(intent, "Дневник еды")
-                        )
-                    }
-                }
-            }) { Text("Выгрузить CSV") }
             OutlinedButton(onClick = {
                 scope.launch {
                     val done = app.foodEngine.syncPending(force = true)

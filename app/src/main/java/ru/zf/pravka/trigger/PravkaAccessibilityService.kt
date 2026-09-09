@@ -77,11 +77,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         internal const val KEY_Z_ASK_AT = "z_ask_at"
         internal const val KEY_Z_ASK_ID = "z_ask_entry"
 
-        // Pomodoro survives a service restart: the deadline is on disk.
-        internal const val KEY_Z_POMO_ENDS = "z_pomo_ends"
-        internal const val KEY_Z_POMO_BREAK = "z_pomo_break"
-        internal const val KEY_Z_POMO_DAY_PREFIX = "z_pomo_n_"
-
         // Chrome flavors whose url bar the per-site watcher reads.
 
         // Windows that never host our text fields. Querying their node tree
@@ -154,8 +149,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var eTypeInstead = false
     @Volatile internal var cachedEEnabled = true
     internal var micRequestForFood = false
-    // Отдых между подходами: дедлайн на диске не нужен - это минуты, а не
-    // помидор, и переживать перезапуск службы ему незачем.
+    // Отдых между подходами: дедлайн на диске не нужен - это минуты, и
+    // переживать перезапуск службы ему незачем.
     @Volatile internal var restUntil = 0L
     @Volatile internal var cachedRestSec = 90
 
@@ -426,7 +421,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             launch { app.zasechkaStore.clientsFlow.collect { zClientsCached = it } }
         }
         zReminderHandler.postDelayed(zReminderTick, 60_000)
-        restorePomodoro()
         lagExpectedAt = 0L
         lagHandler.removeCallbacks(lagTick)
         lagHandler.postDelayed(lagTick, 2_000)
@@ -1927,16 +1921,42 @@ class PravkaAccessibilityService : AccessibilityService() {
         return true
     }
 
-    // ---- Помидоры: the "З" button doubles as a pomodoro timer ----
+    // ---- Экран во время диктовки ----
 
-    internal var pomodoroEndsAt = 0L
-    internal var pomodoroIsBreak = false
-    internal val pomodoroHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    internal val pomodoroTicker = object : Runnable {
-        override fun run() {
-            tickPomodoro()
-            if (pomodoroEndsAt > 0) pomodoroHandler.postDelayed(this, 15_000)
+    private var screenKeeper: android.view.View? = null
+
+    /**
+     * Пока идёт любой тейк — Правки, Засечки, Дел, Тела — экран не гаснет.
+     * Владелец: «когда начитываю, Правка не держит экран: он гаснет, и
+     * приходится тыкать в текстбокс». Служба не Activity и своего окна с
+     * содержимым не имеет, поэтому держит крошечное невидимое окно 1×1 с
+     * FLAG_KEEP_SCREEN_ON: система не гасит экран, пока видно хотя бы одно
+     * окно с этим флагом, — это и есть штатный способ, устаревшие
+     * SCREEN_*_WAKE_LOCK не нужны. Окно живёт ровно столько, сколько микрофон
+     * (зовёт DictationService на старте и стопе), и снимается из
+     * WindowManager, а не прячется: складыванию Fold каждое наше окно стоит
+     * перерисовки.
+     */
+    fun keepScreenOn(on: Boolean) {
+        val wm = getSystemService(android.view.WindowManager::class.java) ?: return
+        if (!on) {
+            val v = screenKeeper ?: return
+            screenKeeper = null
+            runCatching { wm.removeView(v) }
+            return
         }
+        if (screenKeeper != null) return
+        val v = android.view.View(this)
+        val p = android.view.WindowManager.LayoutParams(
+            1, 1,
+            android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+            android.graphics.PixelFormat.TRANSLUCENT,
+        ).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.START }
+        screenKeeper = v
+        if (runCatching { wm.addView(v, p) }.isFailure) screenKeeper = null
     }
 
     // ---- Засечка reminders: the button itself nags about the gaps ----
@@ -2053,7 +2073,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         runCatching {
             val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0) +
                 (rButton?.windowCount() ?: 0) + (eButton?.windowCount() ?: 0) +
-                (tailHandle?.windowCount() ?: 0) + (topHandle?.windowCount() ?: 0)
+                (tailHandle?.windowCount() ?: 0) + (topHandle?.windowCount() ?: 0) +
+                (if (screenKeeper != null) 1 else 0)
             app.eventLog.add("смена конфигурации: наших окон $n")
         }
     }
@@ -2091,7 +2112,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         runCatching { autoPilot.stop() }
         ripenessHandler.removeCallbacks(ripenessCheck)
         zReminderHandler.removeCallbacks(zReminderTick)
-        pomodoroHandler.removeCallbacks(pomodoroTicker)
         chromeHandler.removeCallbacks(chromeTicker)
         lagHandler.removeCallbacks(lagTick)
         configHandler.removeCallbacks(configSettled)
@@ -2104,6 +2124,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         eSession?.stop()
         eSession = null
         runCatching { stopMicHold() }
+        keepScreenOn(false)
         floatingButton?.destroy()
         floatingButton = null
         zButton?.destroy()

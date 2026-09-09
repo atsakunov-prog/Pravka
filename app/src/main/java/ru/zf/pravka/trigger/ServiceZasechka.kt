@@ -29,8 +29,8 @@ import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.Haptics
 
 // Засечка в службе: тап «З», запись с локскрина, разбор фразы в ленту, плашка,
-// помидоры и напоминания о дырах. Расширения PravkaAccessibilityService: сама служба
-// остаётся хозяином микрофона, окон и тиков, режимная логика живёт здесь.
+// мысль к делу и напоминания о дырах. Расширения PravkaAccessibilityService: сама
+// служба остаётся хозяином микрофона, окон и тиков, режимная логика живёт здесь.
 
 internal fun PravkaAccessibilityService.lockedDoubleTapArmed(now: Long): Boolean {
     val armed = now - lockArmedAt in 1..PravkaAccessibilityService.LOCK_DOUBLE_TAP_MS
@@ -108,10 +108,11 @@ fun PravkaAccessibilityService.onZasechkaTap(anchorStart: Long = 0L, anchorEnd: 
 }
 
 /**
- * Пункт меню «З»: ближайший тейк — не запись в ленту, а комментарий к делу
- * [entryId]. Микрофон тот же, плашка та же, разница — куда уезжает текст: не
- * Сонету-разборщику ленты, а движку Правки (словарь, правила, чистка) и оттуда
- * в поле комментария записи. Охрана единственного микрофона — как у тапа.
+ * «Записать мысль» из меню «З»: ближайший тейк — не запись в ленту, а
+ * комментарий к делу [entryId]. Микрофон тот же, плашка та же, разница — куда
+ * уезжает текст: не Сонету-разборщику ленты, а движку Правки (словарь, правила,
+ * чистка) и оттуда в поле комментария записи. Охрана единственного микрофона —
+ * как у тапа.
  */
 internal fun PravkaAccessibilityService.startZasechkaComment(entryId: Long) {
     touched()
@@ -132,9 +133,9 @@ internal fun PravkaAccessibilityService.startZasechkaComment(entryId: Long) {
     startZasechkaCapture()
 }
 
-/** Подпись плашки на старте: комментарий должен быть узнаваем с первого взгляда. */
+/** Подпись плашки на старте: мысль должна быть узнаваема с первого взгляда. */
 internal fun PravkaAccessibilityService.zTickerPrompt(): String =
-    if (zCommentFor > 0L) "💬 комментарий к делу… (тап сюда — набрать текстом)"
+    if (zCommentFor > 0L) "💭 мысль к делу… (тап сюда — набрать текстом)"
     else "🎙 говори… (тап сюда — набрать текстом)"
 
 internal fun PravkaAccessibilityService.startZasechkaCapture() {
@@ -427,12 +428,24 @@ internal fun PravkaAccessibilityService.showZasechkaMenu() {
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
-    val openTab = ZasechkaButtonController.MenuItem("Открыть Засечку", goTab)
-    // The top pill answers "что сейчас считается?" without opening the
-    // app: current дело and since when (owner's request). Tap -> the tab.
+    val openTab = ZasechkaButtonController.MenuItem("Открыть Засечку", onClick = goTab)
     scope.launch {
         val now = System.currentTimeMillis()
         val open = runCatching { app.zasechkaStore.openEntry() }.getOrNull()
+        // Мысль — к идущему делу, а если ничего не идёт — к последнему: слова о
+        // деле чаще приходят, когда оно уже закрыто («созвонились» — и только
+        // потом что решили). Владелец (09.09): комментарии к делу — это не
+        // «что я делаю», это мысли по ходу дня: запомнил, увидел, хочу
+        // обдумать. Поэтому кнопка первая, темнее остальных и зовётся так.
+        val target = open ?: runCatching { app.zasechkaStore.lastEntry() }.getOrNull()
+        val thought = target?.let { t ->
+            ZasechkaButtonController.MenuItem(
+                "💭 Записать мысль\n→ к «${t.title.ifBlank { "без названия" }}»" +
+                    (if (open == null) " (последнее)" else ""),
+                accent = true,
+            ) { startZasechkaComment(t.id) }
+        }
+        // Что сейчас считается и с какого времени — без открытия приложения.
         val header = ZasechkaButtonController.MenuItem(
             when {
                 open != null ->
@@ -440,194 +453,15 @@ internal fun PravkaAccessibilityService.showZasechkaMenu() {
                         zDur(now - open.start)
                 else -> "— сейчас ничего не идёт"
             },
-            goTab,
+            onClick = goTab,
         )
-        // Комментарий к делу: к идущему, а если ничего не идёт — к последнему.
-        // Слова о деле чаще приходят, когда оно уже закрыто («созвонились» —
-        // и только потом что решили), поэтому пункт не пропадает с закрытием.
-        val target = open ?: runCatching { app.zasechkaStore.lastEntry() }.getOrNull()
-        val comment = target?.let { t ->
-            ZasechkaButtonController.MenuItem(
-                "💬 Комментарий к «${t.title.ifBlank { "без названия" }}»" +
-                    (if (open == null) " (последнее)" else "")
-            ) { startZasechkaComment(t.id) }
-        }
-        // Владелец: «допом использую только 25 минут, 5 минут перерыв».
-        // «50 минут» и «Отменить» убраны: отмена живёт в ленте, где видно,
-        // что именно откатываешь, а полсотни минут он не ставил ни разу.
+        // Помидоров здесь больше нет: владелец ими не пользовался, а место
+        // сверху занял тот пункт, которым он пользоваться собирается.
         val close = ZasechkaButtonController.MenuItem("Закрыть") { zButton?.hideMenu() }
-        val items = if (pomodoroEndsAt > 0) {
-            listOfNotNull(
-                header,
-                comment,
-                ZasechkaButtonController.MenuItem(
-                    if (pomodoroIsBreak) "Стоп: перерыв" else "Стоп: помидор"
-                ) { stopPomodoro(byUser = true) },
-                openTab,
-                close,
-            )
-        } else {
-            listOfNotNull(
-                header,
-                comment,
-                ZasechkaButtonController.MenuItem("🍅 25 минут") { startPomodoro(25, isBreak = false) },
-                ZasechkaButtonController.MenuItem("Перерыв 5") { startPomodoro(5, isBreak = true) },
-                openTab,
-                close,
-            )
-        }
-        zButton?.showMenu(items)
+        zButton?.showMenu(listOfNotNull(thought, header, openTab, close))
     }
 }
 
-fun PravkaAccessibilityService.startPomodoro(minutes: Int, isBreak: Boolean) {
-    pomodoroEndsAt = System.currentTimeMillis() + minutes * 60_000L
-    pomodoroIsBreak = isBreak
-    getSharedPreferences(PravkaAccessibilityService.PREFS_INTERNAL, android.content.Context.MODE_PRIVATE).edit()
-        .putLong(PravkaAccessibilityService.KEY_Z_POMO_ENDS, pomodoroEndsAt)
-        .putBoolean(PravkaAccessibilityService.KEY_Z_POMO_BREAK, isBreak)
-        .apply()
-    Haptics.start(this)
-    Feedback.toast(this, if (isBreak) "Перерыв $minutes мин" else "🍅 $minutes мин — поехали")
-    pomodoroHandler.removeCallbacks(pomodoroTicker)
-    pomodoroTicker.run()
-}
-
-fun PravkaAccessibilityService.stopPomodoro(byUser: Boolean) {
-    clearPomodoro()
-    if (byUser) Feedback.toast(this, "Таймер остановлен")
-}
-
-internal fun PravkaAccessibilityService.clearPomodoro() {
-    pomodoroEndsAt = 0
-    pomodoroHandler.removeCallbacks(pomodoroTicker)
-    getSharedPreferences(PravkaAccessibilityService.PREFS_INTERNAL, android.content.Context.MODE_PRIVATE).edit()
-        .remove(PravkaAccessibilityService.KEY_Z_POMO_ENDS).remove(PravkaAccessibilityService.KEY_Z_POMO_BREAK).apply()
-    zButton?.setPomodoro(null, null)
-}
-
-internal fun PravkaAccessibilityService.tickPomodoro() {
-    if (pomodoroEndsAt <= 0) return
-    val left = pomodoroEndsAt - System.currentTimeMillis()
-    if (left <= 0) {
-        completePomodoro()
-        return
-    }
-    val minutesLeft = (left + 59_999) / 60_000
-    zButton?.setPomodoro(
-        minutesLeft.toString(),
-        if (pomodoroIsBreak) ZasechkaButtonController.POMO_BREAK
-        else ZasechkaButtonController.POMO_FOCUS,
-    )
-}
-
-internal fun PravkaAccessibilityService.completePomodoro() {
-    val wasBreak = pomodoroIsBreak
-    clearPomodoro()
-    Haptics.success(this)
-    if (wasBreak) {
-        zPomodoroNotify("Перерыв кончился", "Ещё помидор?")
-        return
-    }
-    scope.launch {
-        val open = app.zasechkaStore.openEntry()
-        if (open != null) app.zasechkaStore.incrementPomodoro(open.id)
-        val internal = getSharedPreferences(PravkaAccessibilityService.PREFS_INTERNAL, android.content.Context.MODE_PRIVATE)
-        val dayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
-            .format(java.util.Date(System.currentTimeMillis()))
-        val n = internal.getInt(PravkaAccessibilityService.KEY_Z_POMO_DAY_PREFIX + dayKey, 0) + 1
-        internal.edit().putInt(PravkaAccessibilityService.KEY_Z_POMO_DAY_PREFIX + dayKey, n).apply()
-        app.eventLog.add("помидор №$n готов" + (open?.let { " («${it.title}»)" } ?: ""))
-        zPomodoroNotify(
-            "Помидор №$n готов 🍅",
-            open?.let { "«${it.title}» — сделано. Перерыв?" } ?: "Перерыв?",
-        )
-    }
-}
-
-/**
- * The deadline lives on disk, so a running pomodoro rides through app
- * updates and service restarts: still ticking -> resume the countdown;
- * finished while we were dead -> credit it (entry + day counter) and,
- * if the finish was recent, still fire the "готов" notification - the
- * owner should not lose a pomodoro to an APK install.
- */
-internal fun PravkaAccessibilityService.restorePomodoro() {
-    val internal = getSharedPreferences(PravkaAccessibilityService.PREFS_INTERNAL, android.content.Context.MODE_PRIVATE)
-    val ends = internal.getLong(PravkaAccessibilityService.KEY_Z_POMO_ENDS, 0L)
-    if (ends <= 0) return
-    pomodoroIsBreak = internal.getBoolean(PravkaAccessibilityService.KEY_Z_POMO_BREAK, false)
-    val now = System.currentTimeMillis()
-    if (ends > now) {
-        pomodoroEndsAt = ends
-        pomodoroHandler.removeCallbacks(pomodoroTicker)
-        pomodoroTicker.run()
-    } else {
-        val wasBreak = pomodoroIsBreak
-        val endedAgo = now - ends
-        clearPomodoro()
-        if (wasBreak) {
-            if (endedAgo < 10 * 60_000L) zPomodoroNotify("Перерыв кончился", "Ещё помидор?")
-            return
-        }
-        scope.launch {
-            // The entry that was running when the bell should have rung.
-            if (endedAgo < 30 * 60_000L) {
-                app.zasechkaStore.openEntry()?.let { app.zasechkaStore.incrementPomodoro(it.id) }
-            }
-            val dayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
-                .format(java.util.Date(ends))
-            val n = internal.getInt(PravkaAccessibilityService.KEY_Z_POMO_DAY_PREFIX + dayKey, 0) + 1
-            internal.edit().putInt(PravkaAccessibilityService.KEY_Z_POMO_DAY_PREFIX + dayKey, n).apply()
-            app.eventLog.add("помидор №$n дозасчитан после перезапуска")
-            if (endedAgo < 10 * 60_000L) {
-                zPomodoroNotify("Помидор №$n готов 🍅", "Досчитал за время обновления. Перерыв?")
-            }
-        }
-    }
-}
-
-internal fun PravkaAccessibilityService.zPomodoroNotify(title: String, text: String) {
-    runCatching {
-        val nm = getSystemService(android.app.NotificationManager::class.java)
-        val channelId = "pravka-zasechka"
-        if (nm.getNotificationChannel(channelId) == null) {
-            nm.createNotificationChannel(
-                android.app.NotificationChannel(
-                    channelId, getString(R.string.z_channel),
-                    android.app.NotificationManager.IMPORTANCE_DEFAULT,
-                )
-            )
-        }
-        fun quick(what: String, code: Int): android.app.PendingIntent =
-            android.app.PendingIntent.getActivity(
-                this, code,
-                android.content.Intent(this, ZasechkaQuickActivity::class.java)
-                    .putExtra(ZasechkaQuickActivity.EXTRA_WHAT, what)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
-            )
-        val notif = android.app.Notification.Builder(this, channelId)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setSmallIcon(R.drawable.ic_tile)
-            .addAction(
-                android.app.Notification.Action.Builder(
-                    null as android.graphics.drawable.Icon?, "Перерыв 5",
-                    quick(ZasechkaQuickActivity.W_BREAK5, 7),
-                ).build()
-            )
-            .addAction(
-                android.app.Notification.Action.Builder(
-                    null as android.graphics.drawable.Icon?, "🍅 25",
-                    quick(ZasechkaQuickActivity.W_POMO25, 8),
-                ).build()
-            )
-            .setAutoCancel(true)
-            .build()
-        nm.notify(45, notif)
-    }
-}
 
 internal fun PravkaAccessibilityService.zTime(ms: Long): String =
     java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))

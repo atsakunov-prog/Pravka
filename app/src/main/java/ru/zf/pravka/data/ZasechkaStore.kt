@@ -144,7 +144,10 @@ class ZasechkaStore(private val context: Context) {
         val source: String,       // "voice" | "text" | "edit" | "auto"
         val synced: Boolean,      // delivered to the Sheets webhook
         val createdAt: Long,
-        val pomodoros: Int = 0,   // 🍅 completed while this entry ran
+        // 🍅 помидоров, дозревших за делом, — история: таймер снят 09.09
+        // (владелец им не пользовался), поле читается и пишется ради старых
+        // записей и колонки «Помидоры» в Notion.
+        val pomodoros: Int = 0,
         val notionSynced: Boolean = false,  // delivered to the Notion mirror
         // Комментарий владельца к делу — ЧТО было внутри («обсудили бюджет,
         // договорились до пятницы»). Отдельно от raw нарочно: raw — дословная
@@ -1034,16 +1037,6 @@ class ZasechkaStore(private val context: Context) {
         true
     }
 
-    /** A completed 🍅 is credited to the entry that was running. */
-    suspend fun incrementPomodoro(id: Long): Unit = mutex.withLock {
-        ensureLoaded()
-        val index = entries.indexOfFirst { it.id == id }
-        if (index >= 0) {
-            entries[index] = entries[index].copy(pomodoros = entries[index].pomodoros + 1)
-            persist()
-        }
-    }
-
     /** Entries overlapping [from, to) - for the day view and the digests. */
     suspend fun forRange(from: Long, to: Long): List<Entry> = mutex.withLock {
         ensureLoaded()
@@ -1085,126 +1078,17 @@ class ZasechkaStore(private val context: Context) {
     }
 
 
-    // ---- CSV export (same share pattern as the transcription metrics) ----
-
-    suspend fun shareCsvIntent(): Intent {
-        val list = all()
-        // Worth per hour and typical length live on the category; carried into
-        // every row so a spreadsheet can add the day up on its own.
-        val cats = categories().associateBy { it.name.trim().lowercase() }
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
-        val now = System.currentTimeMillis()
-        var previousRaw = ""
-        val csv = buildString {
-            append(csvLegend())
-            append("date,start,end,id,minutes,title,category,client,useful,source,is_open,value,points,base_min,raw,comment\n")
-            for (e in list) {
-                val end = if (e.open) now else e.end
-                append(dateFormat.format(Date(e.start))).append(',')
-                append(hm(timeFormat, e.start)).append(',')
-                append(hm(timeFormat, end)).append(',')
-                append(e.id.toString()).append(',')
-                // Минуты - РАЗНОСТЬ МИНУТ СУТОК, а не округление собственной
-                // длительности. Разница не косметическая: округляя каждую
-                // строку отдельно, день из двадцати записей приезжал в сумме на
-                // 1436 или 1443 минуты вместо 1440. Разность соседних минут
-                // суток телескопируется: сумма за день - ровно 1440.
-                append(dayMinutes(e.start, end).toString()).append(',')
-                append(csvEscape(e.title)).append(',')
-                append(csvEscape(e.category)).append(',')
-                append(csvEscape(e.client)).append(',')
-                append(if (e.useful > 0) e.useful.toString() else "").append(',')
-                append(e.source).append(',')
-                append(if (e.open) "true" else "false").append(',')
-                // value = worth of an hour of this category (-10..+10),
-                // points = what this row did to the day's balance,
-                // base_min = the category's typical length (0 = no check-in).
-                val cat = cats[e.category.trim().lowercase()]
-                val worth = cat?.value ?: 0
-                val points = worth * e.durationMs(now) / 3_600_000.0
-                append(worth.toString()).append(',')
-                append(String.format(Locale.US, "%.1f", points)).append(',')
-                append((cat?.baseMin ?: 0).toString()).append(',')
-                val raw = if (e.raw.isNotBlank() && e.raw == previousRaw) "" else e.raw
-                if (e.raw.isNotBlank()) previousRaw = e.raw
-                append(csvEscape(raw)).append(',')
-                append(csvEscape(e.comment)).append('\n')
-            }
-        }
-        val out = File(context.cacheDir, "pravka-zasechka.csv")
-        withContext(Dispatchers.IO) { out.writeText(csv) }
-        return shareFileIntent(context, out, "text/csv")
-    }
-
-    /**
-     * Время строки печатается ОКРУГЛЁННЫМ до ближайшей минуты — до той самой,
-     * которую считает [dayMinutes]. Иначе выходило вот что: минуты брались
-     * округлением, а часы-минуты — усечением, и на половине стыков
-     * «время начала плюс minutes» не попадало в начало следующей строки.
-     * Читатель файла насчитал 107 таких разрывов на 291 стык, сто из них
-     * ровно в минуту, — и был прав: два округления от одного числа обязаны
-     * быть одним округлением. Проверено на 19 тысячах стыков: при усечении
-     * расходится 51%, при округлении — ноль.
-     */
-    private fun hm(fmt: SimpleDateFormat, ms: Long): String = fmt.format(Date(ms + 30_000L))
-
     /**
      * Длина строки в минутах - как РАЗНОСТЬ МИНУТ СУТОК. Обе минуты считаются
      * от дня НАЧАЛА записи: дело, кончающееся ровно в полночь (а лента режет по
      * полуночи каждое такое), при отсчёте конца от его собственных суток давало
-     * минуту 0 и строку длиной −1380 минут.
+     * минуту 0 и строку длиной −1380 минут. Урок выгрузок, оставшийся в коде
+     * после самих выгрузок: этими минутами живут Notion и книга Excel.
      */
     private fun dayMinutes(start: Long, end: Long): Long {
         val base = dayStartMs(start)
         return (end - base + 30_000L) / 60_000L - (start - base + 30_000L) / 60_000L
     }
-
-    /**
-     * Шапка-легенда для того, кто будет это читать, - и человека, и модели.
-     * Строки с «#» в начале: так помечают комментарии почти все инструменты
-     * (в pandas это `comment='#'`). Импорт Правки такие строки пропускает.
-     */
-    private fun csvLegend(): String = """
-        # ЗАСЕЧКА — таймшит владельца. Как это читать.
-        #
-        # Лента непрерывна и не пересекается: одна строка на каждый отрезок
-        # времени, сумма minutes за день — ровно 1440 (у сегодняшнего — сколько
-        # его прошло). Ничто не идёт «поверх»: телефон (ютуб, звонки, Клод)
-        # считается отдельно по дням и в этом файле не лежит.
-        #
-        # КОЛОНКИ
-        #   date              дата строки, YYYY-MM-DD. Ни одна запись не пересекает
-        #                     полночь: то, что шло через неё, разрезано на две.
-        #   start, end        местное время ЧЧ:ММ. Идущая сейчас запись закрыта
-        #                     временем выгрузки и помечена is_open.
-        #   id                номер записи, уникальный в ленте.
-        #   minutes           минуты, занятые в сутках. СУММА ЗА ДЕНЬ = 1440. У
-        #                     любого дня может не хватать свежей дыры, которую
-        #                     заполнитель ещё не закрыл (он ждёт 45 минут).
-        #   title             название дела словами владельца.
-        #   category          категория из его списка.
-        #   client            клиент/проект.
-        #   useful            старая ручная оценка 1–5, обычно пусто. Не используйте.
-        #   source            откуда строка: voice/text — сказал сам, edit — правил
-        #                     руками, todoist — из задачи, auto — нашёл телефон или
-        #                     часы (сон, тренировка), gap — авто-заполнитель
-        #                     неразмеченного времени.
-        #   is_open           true — запись ещё шла на момент выгрузки.
-        #   value             ценность ЧАСА этой категории, от −10 до +10.
-        #   points            что строка дала дню: value × часы. Сумма points за
-        #                     день — балл дня.
-        #   base_min          типичная длительность такого дела, 0 — не задана.
-        #   raw               что было надиктовано. Печатается один раз на фразу:
-        #                     у продолжений дела пусто, это не потеря данных.
-        #   comment           комментарий владельца к делу — что было внутри.
-        #                     Лежит на первом куске дела, у продолжений пусто.
-        #
-        # ДВЕ ЧЕСТНЫЕ СУММЫ
-        #   сколько времени заняло  → SUM(minutes)  GROUP BY date, category
-        #   каким был день          → SUM(points)   GROUP BY date
-        #
-    """.trimIndent() + "\n"
 
     /**
      * Минуты, которыми строка занимает СУТКИ — разностью минут суток, поэтому
@@ -1216,11 +1100,6 @@ class ZasechkaStore(private val context: Context) {
     /** Ручная запись или находка робота — одним словом, для фильтра. */
     fun sourceKind(e: Entry): String =
         if (e.source == "auto" || e.source == GAP_SOURCE) "auto" else "manual"
-
-    private fun csvEscape(s: String): String {
-        if (s.none { it == ',' || it == '"' || it == '\n' || it == '\r' }) return s
-        return "\"" + s.replace("\"", "\"\"").replace('\r', ' ').replace('\n', ' ') + "\""
-    }
 
     // ---- CSV import: обратная дорога ----
 

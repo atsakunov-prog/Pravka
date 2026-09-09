@@ -91,16 +91,25 @@ class DictationService : Service() {
         return START_NOT_STICKY
     }
 
+    // Экран не гаснет, пока микрофон наш: окно-хранитель держит служба
+    // доступности (у неё есть окна), а здесь — единственная точка, через
+    // которую проходит каждый тейк любого режима и обоих движков.
+    private fun keepScreen(on: Boolean) {
+        runCatching { PravkaAccessibilityService.instance?.keepScreenOn(on) }
+    }
+
     private fun holdStart() {
         if (holding) return
         holding = true
         startForegroundWithType(holdStop = true)
         acquireWakeLock()
+        keepScreen(true)
     }
 
     private fun holdStop() {
         holding = false
         releaseWakeLock()
+        keepScreen(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -110,6 +119,7 @@ class DictationService : Service() {
         if (active) return
         startForegroundWithType()
         acquireWakeLock()
+        keepScreen(true)
 
         val recordings = Recordings(this)
         // Cheap directory sweep at the start of a take, never in its hot path.
@@ -168,6 +178,7 @@ class DictationService : Service() {
 
     private fun stop() {
         releaseWakeLock()
+        keepScreen(false)
         if (active) {
             active = false
             recording = false
@@ -192,6 +203,7 @@ class DictationService : Service() {
     override fun onDestroy() {
         if (active) stop()
         releaseWakeLock()
+        keepScreen(false)
         super.onDestroy()
     }
 

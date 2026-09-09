@@ -864,7 +864,6 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         }
 
         // ---- Настройки ----
-        item { DigestSection(app) }
 
         // Настройки — в одной вкладке со всеми остальными, группой «Тело».
         item { SettingsLink("Настройки тела: правила, Notion, цели", onOpenSettings) }
@@ -2645,99 +2644,6 @@ private fun TalkCard(talk: SportStore.Talk, onDelete: () -> Unit) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/**
- * Сводка для чата: день или неделя одним текстом. Собирается на телефоне из
- * уже имеющихся сторов — ни запроса в сеть, ни токена. Дорого стоит совет, а
- * не его исходные данные.
- */
-@Composable
-private fun DigestSection(app: PravkaApp) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var busy by remember { mutableStateOf(false) }
-    var preview by remember { mutableStateOf("") }
-
-    val build: (Boolean) -> Unit = { weekly ->
-        if (!busy) {
-            busy = true
-            app.appScope.launch {
-                val text = runCatching {
-                    if (weekly) app.digestBuilder.week() else app.digestBuilder.day()
-                }.getOrElse { e -> "Сводка не собралась: ${e.message}" }
-                busy = false
-                preview = text
-            }
-        }
-    }
-
-    PaperCard(label = "сводка для чата") {
-        PaperHint(
-            "Таймшит, тренировки, подходы с прошлым разом, здоровье, зарядка и " +
-                "еда — одним текстом. Отправляешь Клоду в чат, он советует."
-        )
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { build(false) }, enabled = !busy) { Text("За день") }
-            Button(onClick = { build(true) }, enabled = !busy) { Text("За неделю") }
-            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-        }
-        Spacer(Modifier.height(8.dp))
-        // «Фактически вся моя жизнь, всеобъемлющий файл» — его словами.
-        // Таймшит, еда, тренировки, силовые, зарядка и комментарии, строка на
-        // событие, хронологически, за всю глубину хранения.
-        @Composable
-        fun lifeCsvButton(label: String) {
-            OutlinedButton(onClick = {
-                app.appScope.launch {
-                    val intent = runCatching { app.digestBuilder.lifeCsvIntent() }
-                        .getOrNull()
-                    if (intent == null) {
-                        Feedback.toast(app, "Не собрался — посмотри Логи")
-                    } else {
-                        runCatching {
-                            context.startActivity(
-                                android.content.Intent.createChooser(intent, "CSV всей жизни")
-                            )
-                        }
-                    }
-                }
-            }) { Text(label) }
-        }
-        Text("CSV всей жизни", style = MaterialTheme.typography.titleSmall)
-        lifeCsvButton("Выгрузить CSV")
-        if (preview.isNotBlank()) {
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
-                    clipboard?.setPrimaryClip(
-                        android.content.ClipData.newPlainText("Сводка", preview)
-                    )
-                    Feedback.toast(app, "Сводка в буфере — вставляй в чат")
-                }) { Text("В буфер") }
-                OutlinedButton(onClick = {
-                    app.appScope.launch {
-                        val intent = app.digestBuilder.shareIntent(preview, "pravka-svodka.txt")
-                        runCatching {
-                            context.startActivity(
-                                android.content.Intent.createChooser(intent, "Сводка")
-                            )
-                        }
-                    }
-                }) { Text("Файлом") }
-                OutlinedButton(onClick = { preview = "" }) { Text("Скрыть") }
-            }
-            Spacer(Modifier.height(10.dp))
-            PaperHint("${preview.length} знаков")
-            Spacer(Modifier.height(6.dp))
-            Text(
-                preview,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
             )
         }
     }

@@ -564,14 +564,6 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                 listOfNotNull(minutesByCat[""]?.takeIf { it > 0 }?.let { "" to it })
             val awakeMin = WakingShare.awakeMinutes(minutesByCat)
             val sleepMin = msToMin(msByCat.filterKeys { WakingShare.isSleep(it) }.values.sum())
-            // Day pomodoro counters live in the service's internal prefs.
-            val pomoCount = remember(now, dayStart, weekMode) {
-                val prefs = context.getSharedPreferences("pravka_internal", android.content.Context.MODE_PRIVATE)
-                val fmt = SimpleDateFormat("yyyyMMdd", Locale.US)
-                (0 until if (weekMode) 7 else 1).sumOf {
-                    prefs.getInt("z_pomo_n_" + fmt.format(Date(dayStart - it * 86_400_000L)), 0)
-                }
-            }
             // The audit line: the ribbon must add up to the clock. Covered time
             // vs the day's elapsed span - a visible remainder means a real hole
             // (a fresh one, still inside the 45-minute «Потери» quarantine),
@@ -582,7 +574,6 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                 (if (weekMode) "За неделю" else "За день") + ": ${fmtDur(awakeMin)} без сна" +
                     (if (sleepMin > 0) " · сон ${fmtDur(sleepMin)}" else "") +
                     " · записей: ${mainEntries.size}" +
-                    (if (pomoCount > 0) " · 🍅 $pomoCount" else "") +
                     (if (uncoveredMin >= 2) " · не покрыто ${fmtDur(uncoveredMin)}" else ""),
                 style = MaterialTheme.typography.titleSmall,
             )
@@ -1506,20 +1497,8 @@ internal fun ZasechkaSettings(app: PravkaApp) {
 
         ZasechkaRulesSection(app)
 
-        Spacer(Modifier.height(12.dp))
-        Text("Выгрузить CSV", style = MaterialTheme.typography.titleSmall)
-        OutlinedButton(onClick = {
-            app.appScope.launch {
-                context.startActivity(app.zasechkaStore.shareCsvIntent())
-            }
-        }) { Text("Выгрузить ленту") }
-        Text(
-            "Строка на дело, сумма minutes за день — ровно 1440. Файл начинается " +
-                "легендой для того, кому его отдают. Обычно не нужен: лента раз в " +
-                "час сама уезжает в Notion, в «Правка: разборы».",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // Своей выгрузки у ленты больше нет (09.09): вся жизнь одним xlsx,
+        // лист «Засечка» как база в Notion, — в «Ещё → Выгрузки».
 
         Spacer(Modifier.height(18.dp))
         AutoPilotSection(app)

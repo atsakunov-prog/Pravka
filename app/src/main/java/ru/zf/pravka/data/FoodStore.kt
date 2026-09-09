@@ -355,32 +355,6 @@ class FoodStore(private val context: Context) {
         }
         return out.sortedByDescending { it.ts }
     }
-
-    /** Выгрузка дневника: тот же путь наружу, что у CSV Засечки. */
-    suspend fun shareCsvIntent(): android.content.Intent = withContext(Dispatchers.IO) {
-        val sb = StringBuilder("date,time,kind,item,grams,kcal,protein,fat,carbs,fiber,source,raw\n")
-        fun cell(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
-        val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
-        for (m in _mealsFlow.value.filter { it.confirmed }.sortedBy { it.ts }) {
-            for (item in m.items) {
-                sb.append(dayKey(m.ts)).append(',')
-                    .append(timeFormat.format(Date(m.ts))).append(',')
-                    .append(cell(m.kind)).append(',')
-                    .append(cell(item.name)).append(',')
-                    .append(item.grams).append(',')
-                    .append(item.kcal).append(',')
-                    .append(item.protein).append(',')
-                    .append(item.fat).append(',')
-                    .append(item.carbs).append(',')
-                    .append(item.fiber).append(',')
-                    .append(cell(m.source)).append(',')
-                    .append(cell(m.raw)).append('\n')
-            }
-        }
-        val out = File(context.cacheDir, "pravka-eda.csv")
-        out.writeText(sb.toString())
-        shareFileIntent(context, out, "text/csv")
-    }
 }
 
 /** yyyy-MM-dd в зоне телефона: ключ дня и в дневнике, и в wellness. */

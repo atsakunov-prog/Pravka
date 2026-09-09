@@ -17,7 +17,7 @@
 | Дела и Разноска: Todoist, кнопка «Д» | `docs/dela.md` |
 | Тело: план дня, силовые, зарядка, светофор, intervals, Notion (план, справочник, Дневник) | `docs/telo.md` |
 | Еда: КБЖУ, дневник, рацион, wellness | `docs/eda.md` |
-| Разборы: паттерны, дайджесты, CSV всей жизни, структура и синк жизни в Notion | `docs/razbory.md` |
+| Разборы: паттерны, структура и синк жизни в Notion, книга Excel «Вся жизнь» | `docs/razbory.md` |
 | Отчёт: день в графиках, сравнение с тем же днём неделю назад, коэффициенты | `docs/otchet.md` |
 | Служба, плавающие кнопки, самообновление, настройки, хранение | `docs/build.md`, `docs/data.md`, раздел «Движок» ниже |
 | Деление на модули, что где лежит и почему | `docs/architecture.md` |
@@ -31,6 +31,8 @@
 - **Диктовка:** `provider/GoogleSpeechSession.kt`, `provider/WhisperProvider.kt`
   (+ `WhisperNative.kt`), `data/Recordings.kt`, `data/WavFile.kt`,
   `data/LiveDraft.kt`, `trigger/DictationService.kt`, `core/VoiceCommands.kt`.
+  Пока микрофон наш, экран не гаснет: `DictationService` зовёт
+  `PravkaAccessibilityService.keepScreenOn` (окно 1×1 с `FLAG_KEEP_SCREEN_ON`).
 - **Claude:** `provider/ClaudeProvider.kt` — только транспорт (HTTP, SSE-стрим,
   кэш промпта, ретраи, деньги через `Pricing.kt`, форма запроса по модели и
   усилию — `RequestPolicy.kt`) плюс Правка (чистка, обучение). Какая модель и

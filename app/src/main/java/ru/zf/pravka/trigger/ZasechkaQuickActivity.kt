@@ -13,8 +13,6 @@ class ZasechkaQuickActivity : Activity() {
     companion object {
         const val EXTRA_WHAT = "what"
         const val W_RECORD = "record"    // default: start a voice take
-        const val W_POMO25 = "pomo25"
-        const val W_BREAK5 = "break5"
         /**
          * Якорь времени тейка: пуш автопилота знает, КОГДА кончилась дорога
          * («машина отключилась в 14:02») — сказанное ляжет с этого момента,
@@ -31,14 +29,11 @@ class ZasechkaQuickActivity : Activity() {
         if (service == null) {
             Feedback.toast(this, getString(R.string.toast_no_service))
         } else {
-            when (intent?.getStringExtra(EXTRA_WHAT)) {
-                W_POMO25 -> service.startPomodoro(25, isBreak = false)
-                W_BREAK5 -> service.startPomodoro(5, isBreak = true)
-                else -> service.onZasechkaTap(
-                    anchorStart = intent?.getLongExtra(EXTRA_AT, 0L) ?: 0L,
-                    anchorEnd = intent?.getLongExtra(EXTRA_UNTIL, 0L) ?: 0L,
-                )
-            }
+            // Единственное действие — тейк; «что» оставлено на будущее.
+            service.onZasechkaTap(
+                anchorStart = intent?.getLongExtra(EXTRA_AT, 0L) ?: 0L,
+                anchorEnd = intent?.getLongExtra(EXTRA_UNTIL, 0L) ?: 0L,
+            )
         }
         finish()
     }

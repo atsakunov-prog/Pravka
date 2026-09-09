@@ -251,17 +251,21 @@ class PravkaApp : Application() {
         ru.zf.pravka.data.NotionLifeSync(
             context = this,
             settings = settings,
-            zasechka = zasechkaStore,
-            food = foodStore,
-            sport = sportStore,
-            strength = strengthStore,
+            rows = lifeRows,
             analysis = analysisStore,
-            phone = phoneStore,
             client = httpClient,
             eventLog = eventLog,
             provider = claudeProvider,
         )
     }
+    // Строки всей жизни по базам — одним сборщиком для Notion и для книги
+    // Excel, чтобы выгрузка и синк не разошлись ни на строку.
+    val lifeRows by lazy {
+        ru.zf.pravka.data.LifeRows(zasechkaStore, foodStore, sportStore, strengthStore, phoneStore)
+    }
+    // Единственная выгрузка: вся жизнь одной книгой xlsx, лист на базу Notion
+    // («Ещё → Выгрузки»). Владелец: «в Excel мне как-то удобнее».
+    val lifeExport by lazy { ru.zf.pravka.data.LifeExport(this, lifeRows) }
     val planSync by lazy {
         ru.zf.pravka.core.PlanSync(
             icu = icuSportSync,
@@ -301,19 +305,6 @@ class PravkaApp : Application() {
             planStore = planStore,
             stats = stats,
             eventLog = eventLog,
-        )
-    }
-
-    // Сводка дня и недели для чата: таймшит, подходы, здоровье, еда — одним
-    // текстом, без единого запроса в сеть.
-    val digestBuilder by lazy {
-        ru.zf.pravka.core.DigestBuilder(
-            context = this,
-            zasechka = zasechkaStore,
-            sport = sportStore,
-            strength = strengthStore,
-            food = foodStore,
-            plan = planStore,
         )
     }
 

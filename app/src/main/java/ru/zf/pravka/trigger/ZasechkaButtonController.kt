@@ -25,11 +25,11 @@ import ru.zf.pravka.data.Settings
 // not only in text fields - a timesheet must be reachable from anywhere,
 // including the home screen. Gestures mirror the big button:
 //   short tap  -> record an entry (speak, tap again to stop)
-//   long press -> pomodoro menu + open the tab
+//   long press -> menu: «Записать мысль», what is running now, open the tab
 //   drag       -> move; the "П" trails behind on a rubber band (owner's
 //                 design: the two buttons travel as a linked pair)
 // States: idle amber "З" / recording red stop / busy spinner / remind pulse
-// (a time gap is waiting) / pomodoro countdown (the glyph becomes minutes).
+// (a time gap is waiting).
 class ZasechkaButtonController(
     private val service: PravkaAccessibilityService,
     private val scope: CoroutineScope,
@@ -55,9 +55,9 @@ class ZasechkaButtonController(
         // «внимание сюда», второй заводить незачем.
         private val NOTE_BAD = REC_RED
 
-        // Pomodoro faces: pine for focus, ink-soft for the break.
-        val POMO_FOCUS = 0xFF2F6B5E.toInt()
-        val POMO_BREAK = 0xFF6E6659.toInt()
+        // Тёмная таблетка меню — «Записать мысль»: главный пункт должен
+        // читаться первым, не сливаясь с янтарными соседями.
+        private val INK = 0xFF5A4A3A.toInt()
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -70,7 +70,6 @@ class ZasechkaButtonController(
     private var button: FrameLayout? = null
     private var background: GradientDrawable? = null
     private var glyph: ImageView? = null
-    private var counter: TextView? = null   // pomodoro minutes
     private var recDot: View? = null
     private var progress: ProgressBar? = null
     private var params: WindowManager.LayoutParams? = null
@@ -84,8 +83,6 @@ class ZasechkaButtonController(
     private var recording = false
     private var reminding = false
     private var enabled = false
-    private var pomodoroText: String? = null
-    private var pomodoroColor: Int? = null
     private var pulse: ValueAnimator? = null
 
     private var ticker: FrameLayout? = null
@@ -162,25 +159,13 @@ class ZasechkaButtonController(
         glyph?.setImageResource(ModeGlyphs.zasechka())
     }
 
-    /** text = minutes left ("17"); null returns the "З" glyph. */
-    fun setPomodoro(text: String?, color: Int?) {
-        pomodoroText = text
-        pomodoroColor = if (text != null) color else null
-        counter?.text = text ?: ""
-        applyFaceAndLook()
-    }
-
-    // One place decides face (glyph/counter/dot/spinner) and color/alpha from
-    // the state set, so states can flip in any order without a stale look.
+    // One place decides face (glyph/dot/spinner) and color/alpha from the
+    // state set, so states can flip in any order without a stale look.
     private fun applyFaceAndLook() {
         val b = button ?: return
-        glyph?.visibility =
-            if (!busy && !recording && pomodoroText == null) View.VISIBLE else View.GONE
-        counter?.visibility =
-            if (!busy && !recording && pomodoroText != null) View.VISIBLE else View.GONE
+        glyph?.visibility = if (!busy && !recording) View.VISIBLE else View.GONE
         pulse?.cancel()
         pulse = null
-        val pomo = pomodoroColor
         when {
             recording -> {
                 background?.setColor(REC_RED)
@@ -199,10 +184,6 @@ class ZasechkaButtonController(
                     addUpdateListener { b.alpha = it.animatedValue as Float }
                     start()
                 }
-            }
-            pomo != null -> {
-                background?.setColor(pomo)
-                b.alpha = 0.92f
             }
             else -> {
                 background?.setColor(AMBER)
@@ -524,7 +505,8 @@ class ZasechkaButtonController(
 
     // ---- Long-press menu: a single column of amber pills ----
 
-    class MenuItem(val label: String, val onClick: () -> Unit)
+    /** [accent] — тёмная таблетка: главный пункт, читается первым. */
+    class MenuItem(val label: String, val accent: Boolean = false, val onClick: () -> Unit)
 
     private var menu: android.widget.LinearLayout? = null
     private val menuDismiss = Runnable { hideMenu() }
@@ -548,10 +530,18 @@ class ZasechkaButtonController(
                 textSize = 15f
                 background = GradientDrawable().apply {
                     cornerRadius = dp(18).toFloat()
-                    setColor(AMBER)
+                    setColor(if (item.accent) INK else AMBER)
                 }
-                alpha = 0.96f
-                setPadding(dp(16), dp(9), dp(16), dp(9))
+                alpha = if (item.accent) 0.98f else 0.96f
+                if (item.accent) {
+                    typeface = android.graphics.Typeface.create(
+                        android.graphics.Typeface.SANS_SERIF,
+                        android.graphics.Typeface.BOLD,
+                    )
+                    setPadding(dp(16), dp(11), dp(16), dp(11))
+                } else {
+                    setPadding(dp(16), dp(9), dp(16), dp(9))
+                }
                 setOnClickListener {
                     hideMenu()
                     item.onClick()
@@ -718,23 +708,6 @@ class ZasechkaButtonController(
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
-        counter = TextView(service).apply {
-            visibility = View.GONE
-            setTextColor(PAPER)
-            typeface = android.graphics.Typeface.create(
-                android.graphics.Typeface.SANS_SERIF,
-                android.graphics.Typeface.BOLD,
-            )
-            textSize = 16f
-            gravity = Gravity.CENTER
-        }
-        container.addView(
-            counter,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            ),
-        )
         recDot = View(service).apply {
             visibility = View.GONE
             background = GradientDrawable().apply {
@@ -790,7 +763,7 @@ class ZasechkaButtonController(
         scope.launch {
             settings.fabAlphaFlow.collect { alpha ->
                 idleAlpha = alpha
-                if (!busy && !recording && !reminding && pomodoroText == null) {
+                if (!busy && !recording && !reminding) {
                     container.alpha = idleAlpha
                 }
             }

@@ -18,7 +18,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.core.NotionLifeSchema
-import ru.zf.pravka.core.PhoneDaySummary
 import ru.zf.pravka.provider.batchAnswer
 import ru.zf.pravka.provider.submitBatch
 
@@ -85,12 +84,9 @@ import ru.zf.pravka.provider.submitBatch
 class NotionLifeSync(
     private val context: Context,
     private val settings: Settings,
-    private val zasechka: ZasechkaStore,
-    private val food: FoodStore,
-    private val sport: SportStore,
-    private val strength: StrengthStore,
+    /** Строки всех баз — те же, что уходят в книгу Excel (`LifeExport`). */
+    private val rows: LifeRows,
     private val analysis: AnalysisStore,
-    private val phone: PhoneStore,
     private val client: OkHttpClient,
     private val eventLog: EventLog,
     /** Сверка формулировок при склейке дублей паттернов; без ключа — только по словам. */
@@ -779,16 +775,10 @@ class NotionLifeSync(
 
     private suspend fun scan(skip: Set<String>) {
         queue.clear()
-        food.load(); sport.load(); strength.load(); analysis.load()
+        analysis.load()
         val now = System.currentTimeMillis()
-        val today = NotionLifeSchema.dayKey(now)
         // База без карты на этом обходе не трогается вовсе — см. ensureMaps.
         fun dbFor(name: String): String? = state.dbs[name]?.takeIf { name !in skip }
-        val all = zasechka.all()
-        val closed = all.filter { !it.open }
-        val categories = zasechka.categories()
-        val worth = categories.associate { it.name.trim().lowercase() to it.value }
-        fun worthOf(cat: String) = worth[cat.trim().lowercase()] ?: 0
         val wanted = HashSet<String>()
 
         // 0. Переезд: страницы старой раскладки — в архив.
@@ -796,62 +786,14 @@ class NotionLifeSync(
             queue.add(Job("legacy:$pageId", "", null, 0, archivePageId = pageId))
         }
 
-        // 1. Лента — только основной трек, другого больше нет.
-        dbFor(NotionLifeSchema.ZASECHKA.name)?.let { zDb ->
-            for (e in closed.sortedBy { it.start }) {
-                val key = "t${e.id}"
+        // 1. Лента, еда, тренировки, силовые, зарядка, телефон, форма,
+        // категории — строки собирает LifeRows, одни и те же для Notion и для
+        // книги Excel; здесь только раскладка по базам и очередь.
+        for (table in rows.collect(now)) {
+            val db = dbFor(table.db.name) ?: continue
+            for ((key, row) in table.rows) {
                 wanted.add(key)
-                enqueue(key, zDb, NotionLifeSchema.ribbonRow(e, zasechka.budgetMinutes(e, now), worthOf(e.category), now))
-            }
-        }
-        // 2. Еда, тренировки, силовые, зарядка — каждая в свою базу.
-        dbFor(NotionLifeSchema.EDA.name)?.let { db ->
-            for (m in food.mealsFlow.value.filter { it.confirmed }) {
-                val key = "f${m.id}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.mealRow(m))
-            }
-        }
-        dbFor(NotionLifeSchema.TRENIROVKI.name)?.let { db ->
-            for (w in sport.workoutsFlow.value) {
-                val key = "w${w.id.ifBlank { w.start.toString() }}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.workoutRow(w))
-            }
-        }
-        dbFor(NotionLifeSchema.SILOVYE.name)?.let { db ->
-            // Сессия с одними галочками чек-листа — тоже сессия: иначе база
-            // «Силовые» стоит пустой при живом журнале (07.09).
-            for (s in strength.sessionsFlow.value.filter { NotionLifeSchema.sessionMatters(it) }) {
-                val key = "s${s.date}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.sessionRow(s))
-            }
-        }
-        dbFor(NotionLifeSchema.ZARYADKA.name)?.let { db ->
-            for (g in strength.gtgFlow.value.filter { it.any }) {
-                val key = "g${g.date}"; wanted.add(key); enqueue(key, db, NotionLifeSchema.gtgRow(g))
-            }
-        }
-        // 3. Телефон по дням: сколько на YouTube, Telegram, Claude, звонки.
-        dbFor(NotionLifeSchema.TELEFON.name)?.let { db ->
-            val labels = phone.labelsFlow.value
-            val tracked = phone.trackedApps()
-            for ((date, day) in phone.daysFlow.value) {
-                val row = NotionLifeSchema.phoneRow(date, PhoneDaySummary.forNotion(day, labels, tracked)) ?: continue
-                val key = "p$date"; wanted.add(key); enqueue(key, db, row)
-            }
-        }
-        // 4. Форма по дням: wellness intervals.
-        dbFor(NotionLifeSchema.FORMA.name)?.let { db ->
-            for (h in sport.healthFlow.value) {
-                // Завтрашний прогноз CTL/ATL строкой не становится; его
-                // вчерашняя строка уходит призраком, когда день наступает
-                // и приезжает настоящий.
-                val row = NotionLifeSchema.healthRow(h, today) ?: continue
-                val key = "h${h.date}"; wanted.add(key); enqueue(key, db, row)
-            }
-        }
-        // 5. Категории — справочник: ценность часа, подсказка, базовое время.
-        dbFor(NotionLifeSchema.KATEGORII.name)?.let { db ->
-            categories.forEachIndexed { i, c ->
-                val key = "cat:" + c.name.trim().lowercase()
-                wanted.add(key)
-                enqueue(key, db, NotionLifeSchema.categoryRow(c, i + 1))
+                enqueue(key, db, row)
             }
         }
         // Призраки: страницы событий, которых в приложении больше нет

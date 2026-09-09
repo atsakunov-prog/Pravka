@@ -1743,14 +1743,6 @@ private fun TasksAppCard(
                 (if (isToday) " · в списке на сегодня $dueToday · просрочено $overdue" else ""),
             style = MaterialTheme.typography.bodySmall,
         )
-        // Помидоры считает служба в своих настройках — по дню.
-        val prefs = context.getSharedPreferences("pravka_internal", Context.MODE_PRIVATE)
-        val pomoFmt = SimpleDateFormat("yyyyMMdd", Locale.US)
-        val pomoToday = prefs.getInt("z_pomo_n_" + pomoFmt.format(Date(dayStart)), 0)
-        val pomoWeek = (0..6).sumOf { prefs.getInt("z_pomo_n_" + pomoFmt.format(Date(dayStart - it * DAY)), 0) }
-        if (pomoToday > 0 || pomoWeek > 0) {
-            Text("Помидоров 🍅 за день $pomoToday · за семь дней $pomoWeek", style = MaterialTheme.typography.bodySmall)
-        }
         Spacer(Modifier.height(10.dp))
         val days14 = (13 downTo 0).map { dayStart - it * DAY }
         val costs14 = days14.map { (costs[isoOf(it)] ?: 0.0).toFloat() }
