@@ -88,6 +88,26 @@ class NotionLifeSchemaTest {
     }
 
     @Test
+    fun `длинный комментарий едет кусками, а не обрезается`() {
+        // Мысли за долгое дело складываются в один комментарий; хвост за
+        // 1900-м знаком раньше молча терялся в зеркале.
+        val thoughts = (1..60).joinToString("\n") { "Мысль номер $it: " + "слово ".repeat(12).trim() }
+        assertTrue(thoughts.length > 2 * NotionLifeSchema.TEXT_CHUNK)
+        val e = entry(45, now - 90 * 60_000L, now - 30 * 60_000L, "Работа над отчётом", "Работа", comment = thoughts)
+        val arr = NotionLifeSchema.ribbonRow(e, minutes = 60, worth = 7, now = now).getJSONObject("Комментарий").getJSONArray("rich_text")
+        assertTrue(arr.length() >= 3)
+        val glued = StringBuilder()
+        for (i in 0 until arr.length()) {
+            val piece = arr.getJSONObject(i).getJSONObject("text").getString("content")
+            assertTrue("кусок $i длиннее лимита Notion", piece.length <= NotionLifeSchema.TEXT_CHUNK)
+            glued.append(piece)
+        }
+        assertEquals(thoughts, glued.toString())
+        // Книга Excel склеивает куски в одну ячейку.
+        assertEquals(Xlsx.Cell.Text(thoughts), LifeXlsx.cell(NotionLifeSchema.ZASECHKA.columns.first { it.name == "Комментарий" }, NotionLifeSchema.ribbonRow(e, 60, 7, now)))
+    }
+
+    @Test
     fun `начало и конец дела - две даты, для глаз - Когда и Время коротко, оценка - числом или пустотой`() {
         val start = now - 90 * 60_000L
         val end = now - 30 * 60_000L

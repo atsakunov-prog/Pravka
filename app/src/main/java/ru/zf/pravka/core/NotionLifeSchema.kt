@@ -405,10 +405,29 @@ object NotionLifeSchema {
     /** Число, которого может и не быть: ноль стирает значение в Notion, а не пишет «0». */
     fun numberOrEmpty(v: Int) = JSONObject().put("number", if (v > 0) v else JSONObject.NULL)
 
-    /** Массив rich_text для значения, заголовка или описания базы. */
-    fun textArray(text: String): JSONArray =
-        if (text.isBlank()) JSONArray()
-        else JSONArray().put(JSONObject().put("text", JSONObject().put("content", text.take(1900))))
+    /** Notion принимает до 2000 знаков в одном куске rich_text и до ста кусков в поле. */
+    const val TEXT_CHUNK = 1900
+    private const val TEXT_CHUNKS_MAX = 100
+
+    /**
+     * Массив rich_text для значения, заголовка или описания базы. Длинный
+     * текст режется на куски по [TEXT_CHUNK] знаков, а не обрезается: до
+     * 09.09 всё после 1900-го знака молча пропадало, а комментарий к делу
+     * стал дневником мыслей — за трёхчасовое дело их набирается на страницу,
+     * и терять хвост в зеркале нельзя. Читатели (`plainText` синка,
+     * `LifeXlsx.text`) склеивают куски обратно.
+     */
+    fun textArray(text: String): JSONArray {
+        val arr = JSONArray()
+        if (text.isBlank()) return arr
+        var from = 0
+        while (from < text.length && arr.length() < TEXT_CHUNKS_MAX) {
+            val to = minOf(text.length, from + TEXT_CHUNK)
+            arr.put(JSONObject().put("text", JSONObject().put("content", text.substring(from, to))))
+            from = to
+        }
+        return arr
+    }
 
     /** «2026-09-05» для момента времени — сутки владельца. */
     fun dayKey(ms: Long): String = iso.format(Date(ms))
