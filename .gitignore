@@ -14,3 +14,7 @@ local.properties
 
 # adb Wi-Fi saved address (machine-specific)
 scripts/.adb-address
+
+# Python bytecode от tools/gen_reference.py
+__pycache__/
+*.pyc

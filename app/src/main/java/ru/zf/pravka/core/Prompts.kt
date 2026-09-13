@@ -11,6 +11,11 @@ object Prompts {
     const val PLACEHOLDER_INPUT = "{INPUT}"
     const val PLACEHOLDER_DICT = "{DICT}"
 
+    // Справочник витаминов и элементов: ключи, единицы, нормы. Стоит в
+    // СТАБИЛЬНОЙ части промпта (выше словаря и выше {VARS}) — он не меняется
+    // от запроса к запросу и обязан жить под часовым кэшем.
+    const val PLACEHOLDER_MICRO = "{MICRO}"
+
     // Factory CLEAN v2.0: merged from the owner's external review (another (…см. prompts/PromptsPravka.kt)
     val CLEAN_CLAUDE: String get() = ru.zf.pravka.core.prompts.PromptsPravka.CLEAN_CLAUDE
 

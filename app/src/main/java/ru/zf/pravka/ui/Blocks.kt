@@ -6,8 +6,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
@@ -18,9 +21,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.util.Locale
+import ru.zf.pravka.core.Micronutrients
 
 // Общие кирпичи бумажной вёрстки: заголовок раздела, карточка, подсказка,
 // полоска «сколько от цели». Настройки Правки держат такие же у себя внутри
@@ -141,5 +146,70 @@ fun GoalRow(
             )
         }
         GoalBar(value, target, color)
+    }
+}
+
+// ---- Витамины и элементы: полоска со светофором и засечкой нормы ----
+
+/** Цвета светофора веществ. Держатся здесь, чтобы вкладка и отчёт светили одинаково. */
+val MicroLow = Color(0xFFDC2626)     // меньше половины нормы
+val MicroMid = Color(0xFFCA8A04)     // половина - четыре пятых
+val MicroOk = Color(0xFF16A34A)      // норма закрыта
+val MicroOver = Color(0xFFEA580C)    // выше верхнего предела
+
+fun microColor(level: Micronutrients.Level): Color = when (level) {
+    Micronutrients.Level.LOW -> MicroLow
+    Micronutrients.Level.MID -> MicroMid
+    Micronutrients.Level.OK -> MicroOk
+    Micronutrients.Level.OVER -> MicroOver
+}
+
+/**
+ * Полоска вещества: заливка светофором и ЗАСЕЧКА нормы поперёк.
+ *
+ * Почему засечка, а не край полоски (как у калорий). У калорий цель — это
+ * потолок, и упереться в правый край там осмысленно. У витамина норма — не
+ * потолок, а отметка «достаточно»: с таблетками её переходят легко и иногда
+ * нарочно (витамин D зимой), и перебор надо ВИДЕТЬ, а не упирать в границу.
+ * Поэтому шкала полоски шире нормы, норма стоит риской внутри, и сразу видно
+ * не только «добрал ли», но и «насколько мимо».
+ */
+@Composable
+fun MicroBar(
+    nutrient: Micronutrients.Nutrient,
+    value: Double,
+    height: Dp = 10.dp,
+) {
+    val scale = nutrient.scale()
+    val level = Micronutrients.level(nutrient, value)
+    val track = MaterialTheme.colorScheme.surfaceVariant
+    val shape = RoundedCornerShape(height / 2)
+    // Риска должна читаться и на пустом треке, и поверх заливки, поэтому она
+    // тёмная с прозрачностью, а не белая и не цвета темы.
+    val notchColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+        .compositeOver(track)
+    val fill = if (scale <= 0) 0f else (value / scale).toFloat().coerceIn(0f, 1f)
+    val notch = if (scale <= 0) 0f else (nutrient.norm / scale).toFloat().coerceIn(0.02f, 0.98f)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(height)
+            .background(track, shape)
+    ) {
+        if (fill > 0f) {
+            Box(
+                Modifier
+                    .fillMaxWidth(fill)
+                    .height(height)
+                    .background(microColor(level), shape)
+            )
+        }
+        // Засечка нормы. Долями ширины, а не смещением в dp: ширина полоски
+        // известна только на измерении, а вес в Row отдаёт её сам.
+        Row(Modifier.fillMaxWidth().height(height)) {
+            Spacer(Modifier.weight(notch))
+            Box(Modifier.width(2.dp).fillMaxHeight().background(notchColor))
+            Spacer(Modifier.weight(1f - notch))
+        }
     }
 }

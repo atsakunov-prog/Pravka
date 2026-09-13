@@ -60,11 +60,15 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.MealItem
+import ru.zf.pravka.core.Micronutrients
 import ru.zf.pravka.data.FoodStore
 import ru.zf.pravka.data.RationBook
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.GoalBar
 import ru.zf.pravka.ui.GoalRow
+import ru.zf.pravka.ui.MicroBar
+import ru.zf.pravka.ui.MicroOver
+import ru.zf.pravka.ui.microColor
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.PaperLabel
@@ -276,6 +280,9 @@ internal fun FoodTab(
             }
         }
 
+        // ---- Витамины и элементы ----
+        item { MicroCard(total) }
+
         // ---- Что съел: четыре дороги ----
         item {
             PaperCard(label = "записать") {
@@ -482,6 +489,123 @@ internal fun FoodTab(
     }
 }
 
+/** Сколько дефицитов показывает свёрнутая карточка — и полосками, и в строке. */
+private const val LOW_SHOWN = 4
+
+/**
+ * Витамины и элементы за день: полоска на вещество, засечка нормы, светофор.
+ *
+ * Свёрнутая карточка показывает не первые попавшиеся вещества, а те, которых
+ * МАЛО: это единственная строка, по которой можно что-то сделать сегодня.
+ * Остальные полоски — по тапу: они нужны раз в неделю, а места занимают
+ * весь экран.
+ */
+@Composable
+private fun MicroCard(total: FoodStore.DayTotal) {
+    var open by remember { mutableStateOf(false) }
+    val totals = total.micro
+    val low = remember(totals) { Micronutrients.lacking(totals) }
+    val over = remember(totals) { Micronutrients.over(totals) }
+    val shown = if (open) Micronutrients.ALL else low.take(LOW_SHOWN)
+    PaperCard(
+        label = "витамины и элементы",
+        trailing = {
+            TextButton(onClick = { open = !open }) {
+                Text(if (open) "свернуть" else "все ${Micronutrients.ALL.size}")
+            }
+        },
+    ) {
+        if (totals.isEmpty() && !open) {
+            PaperHint(
+                "За этот день веществ не посчитано. Они приезжают с разбором еды " +
+                    "и с рационом; таблетки скажи отдельно — «выпил витамин D и магний»."
+            )
+            return@PaperCard
+        }
+        // Одна строка вместо двадцати полосок: что закрыто, чего мало, что
+        // перебрано. Свёрнутую карточку читают именно её.
+        val okCount = Micronutrients.ALL.count {
+            Micronutrients.level(it, totals[it.id] ?: 0.0) == Micronutrients.Level.OK
+        }
+        // Список дефицитов режем: в пустой день их девятнадцать, и строка
+        // превращается в стену, из которой не следует ничего.
+        val lowNames = low.take(LOW_SHOWN).joinToString(", ") { it.name.lowercase() } +
+            (if (low.size > LOW_SHOWN) " и ещё ${low.size - LOW_SHOWN}" else "")
+        Text(
+            "Норму закрыли $okCount из ${Micronutrients.ALL.size}" +
+                (if (low.isEmpty()) "" else " · мало: $lowNames"),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (over.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Перебор: " + over.joinToString(", ") { it.name.lowercase() },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MicroOver,
+            )
+        }
+        if (total.pills.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            PaperHint("Из банки: " + total.pills)
+        }
+        if (shown.isEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            PaperHint("Ничего в дефиците — полоски по тапу на «все».")
+            return@PaperCard
+        }
+        Spacer(Modifier.height(10.dp))
+        for (n in shown) {
+            MicroRow(
+                nutrient = n,
+                value = totals[n.id] ?: 0.0,
+                fromPills = total.microPills[n.id] ?: 0.0,
+            )
+        }
+        if (open) {
+            Spacer(Modifier.height(8.dp))
+            PaperHint(
+                "Риска на полоске — суточная норма мужчины 43 лет. Цифры считает " +
+                    "модель по составу еды и точно — по рациону и штрихкоду: это " +
+                    "порядок величины, а не анализ крови. У натрия норма — потолок, " +
+                    "а не цель."
+            )
+        }
+    }
+}
+
+/** Одно вещество: сколько от нормы, светофором, и зачем оно нужно. */
+@Composable
+private fun MicroRow(
+    nutrient: Micronutrients.Nutrient,
+    value: Double,
+    fromPills: Double,
+) {
+    val level = Micronutrients.level(nutrient, value)
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(nutrient.name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                Micronutrients.amount(value) + " / " + Micronutrients.amount(nutrient.norm) +
+                    " " + nutrient.unit + " · " + Micronutrients.word(level),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = microColor(level),
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        MicroBar(nutrient, value)
+        Spacer(Modifier.height(4.dp))
+        PaperHint(
+            (if (fromPills > 0) "из банки " + Micronutrients.amount(fromPills) + " " +
+                nutrient.unit + " · " else "") + nutrient.why + ". " + nutrient.source
+        )
+    }
+}
+
 /** Один приём: позиции, итог и ручки. */
 @Composable
 private fun MealCard(
@@ -543,14 +667,23 @@ private fun MealCard(
                     )
                     PaperHint(
                         listOfNotNull(
+                            if (item.pill) "таблетка" else null,
                             if (item.grams > 0) "${item.grams} г" else null,
-                            "Б${item.protein} Ж${item.fat} У${item.carbs}",
-                            item.sureness.takeIf { it.isNotBlank() },
+                            // У таблетки макросов нет — писать «Б0 Ж0 У0» значит
+                            // занимать строку ничем.
+                            if (item.pill) null else "Б${item.protein} Ж${item.fat} У${item.carbs}",
+                            item.sureness.takeIf { it.isNotBlank() && !item.pill },
+                            item.micro.takeIf { it.isNotEmpty() }?.let { Micronutrients.short(it, limit = 4) },
                         ).joinToString(" · ")
                     )
                 }
                 Text("${item.kcal}", style = MaterialTheme.typography.bodyMedium)
             }
+        }
+        val mealMicro = meal.micro
+        if (mealMicro.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            PaperHint("Витамины приёма: " + Micronutrients.short(mealMicro, limit = 8))
         }
         if (meal.note.isNotBlank()) {
             Spacer(Modifier.height(6.dp))

@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.core.MealItem
+import ru.zf.pravka.core.Micronutrients
 
 // Еда: дневник приёмов пищи с разобранным КБЖУ (`food.json`).
 //
@@ -67,6 +68,17 @@ class FoodStore(private val context: Context) {
         val fiber: Int get() = items.sumOf { it.fiber }
         val grams: Int get() = items.sumOf { it.grams }
 
+        /** Витамины и элементы приёма: разреженная сумма по позициям. */
+        val micro: Map<String, Double> get() = Micronutrients.sum(items.map { it.micro })
+
+        /**
+         * Горсть таблеток, а не еда. Считается веществами, но не калориями, и
+         * в ленту Засечки не приписывается: записи «Еда» под неё не бывает.
+         */
+        val supplement: Boolean
+            get() = kind.trim().equals(MealItem.SUPPLEMENT, ignoreCase = true) ||
+                (items.isNotEmpty() && items.all { it.pill })
+
         /** «Омлет, тост, кофе» - строка для плашки и для ленты. */
         val shortList: String get() = items.joinToString(", ") { it.name }
     }
@@ -80,6 +92,14 @@ class FoodStore(private val context: Context) {
         val carbs: Int,
         val fiber: Int,
         val meals: Int,
+        /** Витамины и элементы за сутки: еда и таблетки вместе. */
+        val micro: Map<String, Double> = emptyMap(),
+        /** Только из еды — чтобы было видно, что закрыто тарелкой, а что банкой. */
+        val microFood: Map<String, Double> = emptyMap(),
+        /** Только из таблеток. */
+        val microPills: Map<String, Double> = emptyMap(),
+        /** Что именно выпито: «Витамин D 50 мкг · Магний 300 мг». */
+        val pills: String = "",
     ) {
         val empty: Boolean get() = meals == 0
     }
@@ -214,6 +234,10 @@ class FoodStore(private val context: Context) {
     /** Итог дня по подтверждённым приёмам. */
     fun dayTotal(date: String): DayTotal {
         val meals = mealsOn(date)
+        // Делим ПОЗИЦИЯМИ, а не приёмами: в одном завтраке бывает и творог,
+        // и капсула витамина D, и приписать капсулу еде значило бы соврать.
+        val items = meals.flatMap { it.items }
+        val fromPills = items.filter { it.pill }
         return DayTotal(
             date = date,
             kcal = meals.sumOf { it.kcal },
@@ -222,6 +246,10 @@ class FoodStore(private val context: Context) {
             carbs = meals.sumOf { it.carbs },
             fiber = meals.sumOf { it.fiber },
             meals = meals.size,
+            micro = Micronutrients.sum(meals.map { it.micro }),
+            microFood = Micronutrients.sum(items.filterNot { it.pill }.map { it.micro }),
+            microPills = Micronutrients.sum(fromPills.map { it.micro }),
+            pills = fromPills.joinToString(" · ") { it.name }.take(400),
         )
     }
 
@@ -303,12 +331,30 @@ class FoodStore(private val context: Context) {
                                 put("c", it.carbs)
                                 put("fiber", it.fiber)
                                 put("sure", it.sureness)
+                                // Разреженная карта: нечего писать - нет и ключа.
+                                if (it.micro.isNotEmpty()) put("micro", microJson(it.micro))
+                                if (it.pill) put("pill", true)
                             }
                         )
                     }
                 )
             }
         )
+    }
+
+    private fun microJson(map: Map<String, Double>): JSONObject = JSONObject().apply {
+        // Округление до сотой: дневник не аптека, а лишние знаки раздувают файл.
+        for ((id, v) in map) put(id, Math.round(v * 100.0) / 100.0)
+    }
+
+    private fun microOf(o: JSONObject?): Map<String, Double> {
+        if (o == null) return emptyMap()
+        val out = LinkedHashMap<String, Double>()
+        for (key in o.keys()) {
+            val v = o.optDouble(key, 0.0)
+            if (v > 0) out[key] = v
+        }
+        return out
     }
 
     private fun parse(array: JSONArray): List<Meal> {
@@ -329,6 +375,8 @@ class FoodStore(private val context: Context) {
                             carbs = it.optInt("c"),
                             fiber = it.optInt("fiber"),
                             sureness = it.optString("sure"),
+                            micro = microOf(it.optJSONObject("micro")),
+                            pill = it.optBoolean("pill", false),
                         )
                     )
                 }

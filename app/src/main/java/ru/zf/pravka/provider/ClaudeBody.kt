@@ -79,10 +79,18 @@ suspend fun ClaudeProvider.parseBody(
         // подменяем прочерком на случай, если владелец в правленом шаблоне
         // оставил {DICT} над {VARS}: пусть кэш живёт, а словарь ему уедет
         // в хвосте.
-        val head = (if (split >= 0) template.substring(0, split) else template)
+        val micro = ru.zf.pravka.core.Micronutrients.promptBlock()
+        var head = (if (split >= 0) template.substring(0, split) else template)
             .replace("{EXERCISES}", exerciseBook.ifBlank { "Справочник упражнений не загружен." })
             .replace("{RATION}", rationBook.ifBlank { "Справочник рациона не загружен." })
+            .replace(Prompts.PLACEHOLDER_MICRO, micro)
             .replace(Prompts.PLACEHOLDER_DICT, "—")
+        // Владелец мог поправить шаблон ещё до того, как появились витамины, и
+        // его правка живёт в PromptStore. Тогда справочник дописывается в конец
+        // головы — то есть в тот же кэшируемый кусок, — а не пропадает молча:
+        // без ключей модель напишет вещества по-своему, и мы их выбросим.
+        if (!head.contains(micro)) head = head.trimEnd() + "\n\n" + micro + "\n"
+
         var tail = if (split >= 0) template.substring(split + Prompts.PLACEHOLDER_VARS.length) else ""
         tail = tail
             .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
@@ -189,6 +197,8 @@ private fun ClaudeProvider.parseBodyReply(reply: ApiReply, model: String): BodyP
                 carbs = t.optInt("carbs", 0).coerceIn(0, 1000),
                 fiber = t.optInt("fiber", 0).coerceIn(0, 200),
                 sureness = t.optString("sure").trim().take(12),
+                micro = microOf(t.optJSONObject("micro")),
+                pill = t.optBoolean("pill", false),
             )
             items.add(if (item.kcal == 0) item.copy(kcal = item.kcalFromMacros()) else item)
         }

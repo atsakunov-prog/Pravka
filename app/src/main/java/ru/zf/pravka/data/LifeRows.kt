@@ -17,7 +17,8 @@ import ru.zf.pravka.core.PhoneDaySummary
  * кто и куда их отправит — не наше дело.
  *
  * Ключ строки — тот же служебный ключ, по которому синхронизатор узнаёт свою
- * страницу (`t42`, `f17`, `w…`, `s2026-09-05`, `g…`, `p…`, `h…`, `cat:…`).
+ * страницу (`t42`, `f17`, `v2026-09-13`, `w…`, `s2026-09-05`, `g…`, `p…`, `h…`,
+ * `cat:…`, `n:vd`).
  */
 class LifeRows(
     private val zasechka: ZasechkaStore,
@@ -30,7 +31,7 @@ class LifeRows(
     /** База и её строки: ключ синхронизатора → свойства строки в формате Notion. */
     class Table(val db: NotionLifeSchema.Db, val rows: List<Pair<String, JSONObject>>)
 
-    /** Читает сторы и собирает строки всех восьми баз в порядке `NotionLifeSchema.ALL`. */
+    /** Читает сторы и собирает строки всех баз в порядке `NotionLifeSchema.ALL`. */
     suspend fun collect(now: Long = System.currentTimeMillis()): List<Table> {
         food.load(); sport.load(); strength.load()
         val today = NotionLifeSchema.dayKey(now)
@@ -51,6 +52,20 @@ class LifeRows(
         out += Table(
             NotionLifeSchema.EDA,
             food.mealsFlow.value.filter { it.confirmed }.map { m -> "f${m.id}" to NotionLifeSchema.mealRow(m) },
+        )
+        // Витамины по дням: считаются из тех же подтверждённых приёмов, что и
+        // строки «Еды», — просто в другом разрезе. Дни берём только те, где
+        // что-то посчиталось: пустая строка на каждый день года сказала бы
+        // «витаминов не ел», а правда в том, что их не считали.
+        out += Table(
+            NotionLifeSchema.VITAMINY,
+            food.mealsFlow.value.filter { it.confirmed }
+                .map { dayKey(it.ts) }
+                .distinct()
+                .sorted()
+                .mapNotNull { date ->
+                    NotionLifeSchema.vitaminRow(food.dayTotal(date))?.let { "v$date" to it }
+                },
         )
         out += Table(
             NotionLifeSchema.TRENIROVKI,
@@ -84,6 +99,15 @@ class LifeRows(
         out += Table(
             NotionLifeSchema.KATEGORII,
             categories.mapIndexed { i, c -> "cat:" + c.name.trim().lowercase() to NotionLifeSchema.categoryRow(c, i + 1) },
+        )
+        // Справочник веществ: норма, предел и «зачем» рядом с колонками
+        // «Витаминов». Он статический — но без него книга Excel показывает
+        // двадцать столбцов цифр, о которых неоткуда узнать, много это или мало.
+        out += Table(
+            NotionLifeSchema.NORMY,
+            ru.zf.pravka.core.Micronutrients.ALL.mapIndexed { i, n ->
+                "n:" + n.id to NotionLifeSchema.normRow(n, i + 1)
+            },
         )
         return out
     }

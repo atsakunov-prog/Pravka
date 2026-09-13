@@ -528,10 +528,15 @@ internal fun PravkaAccessibilityService.showFoodPlate(mealId: Long) {
             index = index,
             title = item.name,
             meta = listOfNotNull(
+                if (item.pill) "таблетка" else null,
                 if (item.grams > 0) "${item.grams} г" else null,
-                "${item.kcal} ккал",
-                "Б${item.protein} Ж${item.fat} У${item.carbs}",
-                item.sureness.takeIf { it.isNotBlank() && it != "точно" },
+                // У таблетки калорий нет: «0 ккал · Б0 Ж0 У0» занимало бы всю
+                // строку и не говорило бы ничего. Вместо них — дозы.
+                if (item.pill) null else "${item.kcal} ккал",
+                if (item.pill) null else "Б${item.protein} Ж${item.fat} У${item.carbs}",
+                item.micro.takeIf { it.isNotEmpty() }
+                    ?.let { ru.zf.pravka.core.Micronutrients.short(it, limit = 3) },
+                item.sureness.takeIf { it.isNotBlank() && it != "точно" && !item.pill },
             ).joinToString(" · "),
         )
     }
@@ -539,7 +544,11 @@ internal fun PravkaAccessibilityService.showFoodPlate(mealId: Long) {
         header = meal.kind.uppercase(java.util.Locale("ru")) +
             (if (meal.source == "barcode") " · ШТРИХКОД" else ""),
         rows = rows,
-        footer = "${meal.kcal} ккал · Б${meal.protein} Ж${meal.fat} У${meal.carbs}",
+        footer = if (meal.supplement) {
+            ru.zf.pravka.core.Micronutrients.short(meal.micro, limit = 5).ifBlank { "без дозировок" }
+        } else {
+            "${meal.kcal} ккал · Б${meal.protein} Ж${meal.fat} У${meal.carbs}"
+        },
         note = meal.note,
         onEditItem = { index -> editFoodItem(mealId, index) },
         onDropItem = { index -> dropFoodItem(mealId, index) },
@@ -622,7 +631,12 @@ internal fun PravkaAccessibilityService.confirmFood(mealId: Long) {
             }
         }
         eButton?.showNote(
-            "✓ ${meal.kcal} ккал · $tail",
+            // Горсть таблеток в калориях не измеряется: «✓ 0 ккал» читалось бы
+            // как «ничего не записал».
+            if (meal.supplement) {
+                "✓ " + ru.zf.pravka.core.Micronutrients.short(meal.micro, limit = 4)
+                    .ifBlank { "добавки записаны" }
+            } else "✓ ${meal.kcal} ккал · $tail",
             "↩︎",
             onAction = { undoFood(mealId) },
         )

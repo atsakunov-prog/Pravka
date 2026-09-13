@@ -163,6 +163,7 @@ class FoodEngine(
         )
         eventLog.add(
             "еда: «${raw.take(60)}» → позиций ${meal.items.size}, ${meal.kcal} ккал, " +
+                (if (meal.micro.isNotEmpty()) Micronutrients.short(meal.micro, limit = 4) + ", " else "") +
                 String.format(java.util.Locale.US, "%.3f", costUsd) + " USD"
         )
         return Parsed(meal, note)
@@ -341,6 +342,10 @@ class FoodEngine(
      */
     private suspend fun annotateRibbon(meal: FoodStore.Meal): String {
         if (!settings.foodToRibbon()) return ""
+        // Горсть таблеток — не приём пищи: записи «Еда» под неё в ленте нет и
+        // быть не должно, а приписка «КБЖУ: 0 ккал» к чужому обеду только
+        // портила бы его строку.
+        if (meal.supplement) return ""
         val from = meal.ts - RIBBON_WINDOW_MS
         val to = meal.ts + RIBBON_WINDOW_MS
         val candidates = zasechkaStore.forRange(from, to)

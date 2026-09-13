@@ -165,6 +165,68 @@ class NotionLifeSchemaTest {
     }
 
     @Test
+    fun `витамины приёма едут своей колонкой, а таблетка помечена в составе`() {
+        val m = FoodStore.Meal(
+            id = 8, ts = now, createdAt = now, kind = "завтрак", raw = "творог и витамин D",
+            items = listOf(
+                MealItem(
+                    name = "Творог 5%", grams = 200, kcal = 234, protein = 33, fat = 10, carbs = 3,
+                    sureness = "точно", micro = mapOf("ca" to 240.0, "b12" to 2.0),
+                ),
+                MealItem(
+                    name = "Витамин D3 2000 МЕ", grams = 0, kcal = 0, protein = 0, fat = 0, carbs = 0,
+                    sureness = "точно", micro = mapOf("vd" to 50.0), pill = true,
+                ),
+            ),
+            confirmed = true,
+        )
+        val row = NotionLifeSchema.mealRow(m)
+        assertFits(NotionLifeSchema.EDA, row)
+        assertEquals("Витамин D 50 мкг · Витамин B12 2 мкг · Кальций 240 мг", text(row, "Витамины"))
+        assertTrue(text(row, "Состав").contains("Витамин D3 2000 МЕ (таблетка)"))
+    }
+
+    @Test
+    fun `сутки витаминов ложатся в свою базу колонкой на вещество`() {
+        val date = NotionLifeSchema.dayKey(now)
+        val total = FoodStore.DayTotal(
+            date = date, kcal = 1800, protein = 120, fat = 60, carbs = 180, fiber = 20, meals = 3,
+            micro = mapOf("ca" to 900.0, "vd" to 52.5, "mg" to 120.0, "vc" to 2500.0),
+            microFood = mapOf("ca" to 900.0, "mg" to 120.0, "vc" to 2500.0),
+            microPills = mapOf("vd" to 50.0),
+            pills = "Витамин D3 2000 МЕ",
+        )
+        val row = NotionLifeSchema.vitaminRow(total)!!
+        assertFits(NotionLifeSchema.VITAMINY, row)
+        assertEquals(52.5, row.getJSONObject("Витамин D, мкг").getDouble("number"), 0.001)
+        assertEquals(900.0, row.getJSONObject("Кальций, мг").getDouble("number"), 0.001)
+        // Вещества, которого за день не было, в строке нет вовсе: ноль в Notion
+        // читался бы как измеренный ноль.
+        assertFalse(row.has("Йод, мкг"))
+        assertTrue(text(row, "Мало").contains("Магний"))
+        assertEquals("Витамин C", text(row, "Перебор"))
+        assertEquals("Витамин D3 2000 МЕ", text(row, "Из банки"))
+        assertEquals("v$date", text(row, "Ключ"))
+        // Пустые сутки строкой не становятся: «витаминов не ел» и «не считали» -
+        // разные вещи.
+        assertNull(NotionLifeSchema.vitaminRow(total.copy(micro = emptyMap())))
+    }
+
+    @Test
+    fun `справочник норм ложится строкой на вещество`() {
+        for ((i, n) in Micronutrients.ALL.withIndex()) {
+            val row = NotionLifeSchema.normRow(n, i + 1)
+            assertFits(NotionLifeSchema.NORMY, row)
+            assertEquals(n.name, titleText(row, "Вещество"))
+            assertEquals(n.why, text(row, "Зачем"))
+            assertEquals("n:" + n.id, text(row, "Ключ"))
+            // Колонка справочника обязана совпасть с колонкой «Витаминов»,
+            // иначе VLOOKUP в книге Excel ищет то, чего нет.
+            assertTrue(NotionLifeSchema.VITAMINY.has(text(row, "Колонка")))
+        }
+    }
+
+    @Test
     fun `уверенность приёма - самая слабая среди позиций`() {
         fun item(s: String) = MealItem(name = "x", grams = 100, kcal = 100, protein = 5, fat = 5, carbs = 5, sureness = s)
         assertEquals("точно", NotionLifeSchema.mealSureness(listOf(item("точно"), item("точно"))))
