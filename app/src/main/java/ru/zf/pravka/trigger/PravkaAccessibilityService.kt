@@ -145,7 +145,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal var tailHandle: StackHandleController? = null
     /** Ручка над «П»: многоточие, убирает и возвращает ВСЕ четыре кнопки. */
     internal var topHandle: StackHandleController? = null
-    /** Значок между «П» и «З»: кто слушает — телефон или гарнитура; тап переключает. */
+    /** Плашка между «П» и «З»: кто слушает — телефон или гарнитура; тап переключает. */
     internal var micToggle: MicSourceController? = null
     internal var eSession: GoogleSpeechSession? = null
     @Volatile internal var eWhisperRecording = false
@@ -302,16 +302,16 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Значок микрофона между «П» и «З» (MicSourceController): состояние
-        // держит настройка, значок её показывает и переключает; стопке от
-        // него нужен только отсчёт простоя. Ставит его на место refreshHandles.
+        // Плашка микрофона между «П» и «З» (MicSourceController): состояние
+        // держит настройка, плашка её показывает и переключает; стопке от
+        // неё нужен только отсчёт простоя. Ставит её на место refreshHandles.
         micToggle = MicSourceController(this, scope, app.settings).also { t ->
             t.onTap = { touched() }
         }
 
         // The linked chain (owner's design): drag any bubble and the others
         // trail behind on a rubber band, in order "П" - "З" - "Д" - "Т"; между
-        // «П» и «З» — слот значка микрофона, поэтому смещения считает slotOffset.
+        // «П» и «З» — слот плашки микрофона, поэтому смещения считает slotOffset.
         val pairGap = (8 * resources.displayMetrics.density).toInt()
         // Перетаскивание больше НЕ разворачивает стопку: спрятанное должно
         // оставаться спрятанным, куда бы связку ни увезли. Раньше здесь
@@ -1887,8 +1887,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             h.moveTo(x, y, size, above = true)
         }
 
-        // Значок микрофона — сразу под «П», в своём слоте. Убрано всё — убран
-        // и он: значок без кнопок висел бы посреди экрана сам по себе.
+        // Плашка микрофона — сразу под «П», в своём слоте. Убрано всё — убрана
+        // и она: плашка без кнопок висела бы посреди экрана сама по себе.
         micToggle?.let { t ->
             if (allHidden) {
                 t.hide()
@@ -1914,8 +1914,8 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /**
      * Смещение верха слота стопки от верха «П»: 1 — «З», 2 — «Д», 3 — «Т».
-     * Между «П» и «З» стоит значок микрофона в своём слоте (треть кнопки и
-     * поля), дальше — обычный просвет; арифметика одна на всех —
+     * Между «П» и «З» стоит плашка микрофона в своём слоте (половина высоты
+     * кнопки и поля), дальше — обычный просвет; арифметика одна на всех —
      * `core/StackGeometry.kt`, под тестами.
      */
     internal fun slotOffset(slot: Int): Int {

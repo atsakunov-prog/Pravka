@@ -23,13 +23,17 @@ import ru.zf.pravka.provider.MicRouting
 import ru.zf.pravka.ui.Haptics
 
 /**
- * Значок между «П» и «З»: кто слушает диктовку — телефон или Bluetooth-гарнитура.
+ * Плашка между «П» и «З»: кто слушает диктовку — телефон или Bluetooth-гарнитура.
  *
  * Владелец (13.09.2026): «между правкой и засечкой будет иконка размером в
  * треть от них. Это кнопочка-переключалка между БТ и микрофоном телефона. Она
  * будет показывать, кто слушает, и если на неё нажимаешь, то переключается».
- * Заглушка на время, пока помощник с кнопки гарнитуры не готов; правило
- * «микрофон выбирает владелец, а не подключение» — в `docs/agreements.md`.
+ * Кружок в треть кнопки не прожил и дня: «совсем маленькая, у меня просто не
+ * получается по ней попасть, и это совсем неправильно» — теперь это
+ * прямоугольник со скруглёнными углами на всю ширину кнопки и в половину её
+ * высоты, а тап-зона — весь слот между кнопками. Заглушка на время, пока
+ * помощник с кнопки гарнитуры не готов; правило «микрофон выбирает владелец,
+ * а не подключение» — в `docs/agreements.md`.
  *
  * Состояние одно на всё приложение — тумблер «микрофон телефона» в Общих
  * (`Settings.phoneMicOnlyFlow`): значок его показывает и переключает, ничего
@@ -62,7 +66,8 @@ class MicSourceController(
     private val audioManager = service.getSystemService(AudioManager::class.java)
     private val density = service.resources.displayMetrics.density
     private fun dp(value: Int): Int = (value * density).toInt()
-    private val pad = dp(5)
+    /** Поля над и под плашкой: чтобы не липла к кнопкам, но и слот не раздувала. */
+    private val pad = dp(3)
     private val main = Handler(Looper.getMainLooper())
 
     private var frame: FrameLayout? = null
@@ -76,7 +81,7 @@ class MicSourceController(
     /** Любое касание значка — стопке отсчёт простоя заново (`touched()`). */
     var onTap: (() -> Unit)? = null
 
-    /** Высота слота между «П» и «З» при кнопке [buttonSize]: кружок в треть и поля. */
+    /** Высота слота между «П» и «З» при кнопке [buttonSize]: плашка в половину и поля. */
     fun slotPx(buttonSize: Int): Int = StackGeometry.toggleSlot(buttonSize, pad)
 
     init {
@@ -91,24 +96,26 @@ class MicSourceController(
     @SuppressLint("ClickableViewAccessibility")
     fun show() {
         if (frame != null) return
-        val slot = slotPx(buttonSize.coerceAtLeast(dp(Settings.FAB_SIZE_DEFAULT)))
-        val circle = StackGeometry.toggleSize(buttonSize.coerceAtLeast(dp(Settings.FAB_SIZE_DEFAULT)))
+        val size = buttonSize.coerceAtLeast(dp(Settings.FAB_SIZE_DEFAULT))
+        val slot = slotPx(size)
+        val height = StackGeometry.toggleHeight(size)
         val f = FrameLayout(service)
         val iv = ImageView(service).apply {
             background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = cornerPx(height)
                 setColor(GREY)
             }
             elevation = dp(3).toFloat()
             imageTintList = ColorStateList.valueOf(PAPER)
             scaleType = ImageView.ScaleType.FIT_CENTER
         }
-        f.addView(iv, FrameLayout.LayoutParams(circle, circle, Gravity.CENTER))
-        // Тап-зона — весь слот, а не кружок в 16 dp: в кружок такой величины
-        // пальцем не попасть, а промах уходит в кнопку под ним.
+        f.addView(iv, FrameLayout.LayoutParams(size, height, Gravity.CENTER))
+        // Тап-зона — весь слот между кнопками, а не только плашка: промах на
+        // пару точек не должен уходить в «П» или «З».
         f.setOnClickListener { flip() }
         val p = WindowManager.LayoutParams(
-            slot,
+            size,
             slot,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
@@ -136,17 +143,17 @@ class MicSourceController(
     /** Перепись окон для журнала складывания. */
     fun windowCount(): Int = if (frame != null) 1 else 0
 
-    /** Слот сразу под «П», по её оси; размер пересчитывается под текущую кнопку. */
+    /** Слот сразу под «П», той же ширины; размер пересчитывается под текущую кнопку. */
     fun moveTo(buttonX: Int, buttonY: Int, buttonSize: Int) {
         val p = params ?: return
         val f = frame ?: return
         if (buttonSize != this.buttonSize && buttonSize > 0) {
             this.buttonSize = buttonSize
-            val slot = slotPx(buttonSize)
-            p.width = slot
-            p.height = slot
-            val circle = StackGeometry.toggleSize(buttonSize)
-            icon?.layoutParams = FrameLayout.LayoutParams(circle, circle, Gravity.CENTER)
+            p.width = buttonSize
+            p.height = slotPx(buttonSize)
+            val height = StackGeometry.toggleHeight(buttonSize)
+            icon?.layoutParams = FrameLayout.LayoutParams(buttonSize, height, Gravity.CENTER)
+            (icon?.background as? GradientDrawable)?.cornerRadius = cornerPx(height)
             applyLook()
         }
         val bounds = runCatching { windowManager.currentWindowMetrics.bounds }.getOrNull()
@@ -172,12 +179,17 @@ class MicSourceController(
         onTap?.invoke()
     }
 
+    /** Скругление — треть высоты: прямоугольник, а не пилюля и не кружок. */
+    private fun cornerPx(height: Int): Float = height * 0.3f
+
     private fun applyLook() {
         val iv = icon ?: return
         iv.setImageResource(if (headset) R.drawable.ic_mic_headset else R.drawable.ic_mic_phone)
         (iv.background as? GradientDrawable)?.setColor(if (headset) HEADSET else GREY)
-        val circle = iv.layoutParams?.width ?: 0
-        val inset = (circle * 0.2f).toInt()
+        // Пиктограмма в две трети высоты плашки: в кружке она была в 10 dp и
+        // читалась как соринка.
+        val height = iv.layoutParams?.height ?: 0
+        val inset = (height / 6f).toInt()
         iv.setPadding(inset, inset, inset, inset)
         frame?.alpha = if (headset && !headsetPresent) ALPHA_ABSENT else ALPHA
     }
