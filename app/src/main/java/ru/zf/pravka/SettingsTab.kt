@@ -506,12 +506,15 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
             onCheckedChange = { on -> scope.launch { settings.setPhoneMicOnly(on) } },
         )
         Spacer(Modifier.width(8.dp))
-        Text("Слушать только микрофон телефона", style = MaterialTheme.typography.bodyMedium)
+        Text("Микрофон телефона (выкл. — гарнитура Bluetooth)", style = MaterialTheme.typography.bodyMedium)
     }
     HintText(
-        "Bluetooth машины и наушники не перехватывают диктовку: в дороге " +
-            "Правка слышит тебя, а не салон. Выключи, если наоборот нужен " +
-            "микрофон гарнитуры."
+        "То же самое переключает значок между «П» и «З»: телефончик — слушает " +
+            "телефон, Bluetooth машины и наушники диктовку не перехватывают, в " +
+            "дороге Правка слышит тебя, а не салон; наушники — перед тейком " +
+            "поднимается канал гарнитуры и слушает её микрофон, после тейка " +
+            "канал опускается. Выбирает не подключение, а ты: гарнитура на шее " +
+            "слышит хуже кармана. Не подключена — значок бледный, слушает телефон."
     )
 
     Spacer(Modifier.height(18.dp))

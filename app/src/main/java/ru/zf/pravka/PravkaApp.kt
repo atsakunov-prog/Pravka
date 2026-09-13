@@ -28,9 +28,10 @@ import ru.zf.pravka.target.ClipboardTarget
 class PravkaApp : Application() {
 
     /**
-     * «Слушать только микрофон телефона» — кэш для горячих дорог записи:
-     * DictationService стартует на главном потоке, читать DataStore там
-     * нельзя. Значение держит коллектор ниже, по умолчанию включено.
+     * Кто слушает диктовку (true — телефон, false — Bluetooth-гарнитура) —
+     * кэш для горячих дорог записи: DictationService стартует на главном
+     * потоке, читать DataStore там нельзя. Значение держит коллектор ниже,
+     * по умолчанию телефон; переключает значок между «П» и «З».
      */
     @Volatile var phoneMicOnly: Boolean = true
 

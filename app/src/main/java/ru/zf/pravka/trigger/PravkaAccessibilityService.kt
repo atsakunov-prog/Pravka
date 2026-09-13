@@ -21,6 +21,7 @@ import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.R
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.core.ProofreadMode
+import ru.zf.pravka.core.StackGeometry
 import ru.zf.pravka.core.UndoStack
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.provider.GoogleSpeechSession
@@ -144,6 +145,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal var tailHandle: StackHandleController? = null
     /** Ручка над «П»: многоточие, убирает и возвращает ВСЕ четыре кнопки. */
     internal var topHandle: StackHandleController? = null
+    /** Значок между «П» и «З»: кто слушает — телефон или гарнитура; тап переключает. */
+    internal var micToggle: MicSourceController? = null
     internal var eSession: GoogleSpeechSession? = null
     @Volatile internal var eWhisperRecording = false
     @Volatile internal var eTypeInstead = false
@@ -278,7 +281,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             h.onDragged = { hx, hy, dropped ->
                 touched()
                 val size = floatingButton?.buttonSizePx() ?: 0
-                val gap = (8 * resources.displayMetrics.density).toInt()
                 val lift = h.sizePx + (5 * resources.displayMetrics.density).toInt()
                 // Ровно обратное тому, что делает moveTo(above = true): так
                 // ручка после броска остаётся там же, где палец её отпустил,
@@ -286,21 +288,30 @@ class PravkaAccessibilityService : AccessibilityService() {
                 val px = hx - (size - h.sizePx) / 2
                 val py = hy + lift
                 floatingButton?.followTo(px, py, dropped)
-                zButton?.followTo(px, py + (size + gap), dropped)
+                zButton?.followTo(px, py + slotOffset(1), dropped)
                 // Спрятанные ставим под «З»: оттуда они и выезжают.
-                rButton?.followTo(px, py + (if (stacked) 1 else 2) * (size + gap), dropped)
-                eButton?.followTo(px, py + (if (stacked) 1 else 3) * (size + gap), dropped)
+                rButton?.followTo(px, py + slotOffset(if (stacked) 1 else 2), dropped)
+                eButton?.followTo(px, py + slotOffset(if (stacked) 1 else 3), dropped)
                 val slot = when {
                     stacked -> 1
                     cachedEEnabled -> 3
                     else -> 2
                 }
-                tailHandle?.moveTo(px, py + slot * (size + gap), size, above = false)
+                tailHandle?.moveTo(px, py + slotOffset(slot), size, above = false)
+                micToggle?.moveTo(px, py, size)
             }
         }
 
+        // Значок микрофона между «П» и «З» (MicSourceController): состояние
+        // держит настройка, значок её показывает и переключает; стопке от
+        // него нужен только отсчёт простоя. Ставит его на место refreshHandles.
+        micToggle = MicSourceController(this, scope, app.settings).also { t ->
+            t.onTap = { touched() }
+        }
+
         // The linked chain (owner's design): drag any bubble and the others
-        // trail behind on a rubber band, in order "П" - "З" - "Д" - "Т".
+        // trail behind on a rubber band, in order "П" - "З" - "Д" - "Т"; между
+        // «П» и «З» — слот значка микрофона, поэтому смещения считает slotOffset.
         val pairGap = (8 * resources.displayMetrics.density).toInt()
         // Перетаскивание больше НЕ разворачивает стопку: спрятанное должно
         // оставаться спрятанным, куда бы связку ни увезли. Раньше здесь
@@ -308,16 +319,15 @@ class PravkaAccessibilityService : AccessibilityService() {
         // пальцем — то есть спрятать их надолго было попросту нельзя.
         floatingButton?.onDragged = { x, y, dropped ->
             touched()
-            val size = floatingButton?.buttonSizePx() ?: 0
-            zButton?.followTo(x, y + size + pairGap, dropped)
-            rButton?.followTo(x, y + (if (stacked) 1 else 2) * (size + pairGap), dropped)
-            eButton?.followTo(x, y + (if (stacked) 1 else 3) * (size + pairGap), dropped)
+            zButton?.followTo(x, y + slotOffset(1), dropped)
+            rButton?.followTo(x, y + slotOffset(if (stacked) 1 else 2), dropped)
+            eButton?.followTo(x, y + slotOffset(if (stacked) 1 else 3), dropped)
             refreshHandles()
         }
         zButton?.onDragged = { x, y, dropped ->
             touched()
             val size = floatingButton?.buttonSizePx() ?: 0
-            floatingButton?.followTo(x, y - size - pairGap, dropped)
+            floatingButton?.followTo(x, y - slotOffset(1), dropped)
             rButton?.followTo(x, y + (if (stacked) 0 else 1) * (size + pairGap), dropped)
             eButton?.followTo(x, y + (if (stacked) 0 else 2) * (size + pairGap), dropped)
             refreshHandles()
@@ -326,7 +336,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             touched()
             val size = floatingButton?.buttonSizePx() ?: 0
             zButton?.followTo(x, y - size - pairGap, dropped)
-            floatingButton?.followTo(x, y - 2 * (size + pairGap), dropped)
+            floatingButton?.followTo(x, y - slotOffset(2), dropped)
             eButton?.followTo(x, y + size + pairGap, dropped)
             refreshHandles()
         }
@@ -335,14 +345,13 @@ class PravkaAccessibilityService : AccessibilityService() {
             val size = floatingButton?.buttonSizePx() ?: 0
             rButton?.followTo(x, y - size - pairGap, dropped)
             zButton?.followTo(x, y - 2 * (size + pairGap), dropped)
-            floatingButton?.followTo(x, y - 3 * (size + pairGap), dropped)
+            floatingButton?.followTo(x, y - slotOffset(3), dropped)
             refreshHandles()
         }
         floatingButton?.pairAnchor = anchor@{
             if (!cachedZEnabled) return@anchor null
             val (zx, zy) = zButton?.currentPosition() ?: return@anchor null
-            val size = floatingButton?.buttonSizePx() ?: return@anchor null
-            zx to (zy - size - pairGap)
+            zx to (zy - slotOffset(1))
         }
         // The "П" lives on screen permanently (owner: "пусть будет всегда") -
         // no field-following, no window watching. Without a focused field a
@@ -1809,11 +1818,9 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal fun collapseButtons() {
         if (stacked) return
         val (x, y) = floatingButton?.currentPosition() ?: return
-        val size = floatingButton?.buttonSizePx() ?: 0
-        val gap = (8 * resources.displayMetrics.density).toInt()
         stacked = true
         // «П» и «З» остаются на своих местах в цепочке и работают как обычно.
-        val underZ = y + size + gap
+        val underZ = y + slotOffset(1)
         zButton?.followTo(x, underZ, true)
         // «Д» и «Е» схлопываются В «З» и прячутся: оттуда же и выедут.
         // Раньше они оставались торчать краями — и наезжали на саму «З».
@@ -1874,11 +1881,21 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (folding) return
         val (x, y) = floatingButton?.currentPosition() ?: return
         val size = floatingButton?.buttonSizePx() ?: return
-        val gap = (8 * resources.displayMetrics.density).toInt()
 
         topHandle?.let { h ->
             h.show(allHidden)
             h.moveTo(x, y, size, above = true)
+        }
+
+        // Значок микрофона — сразу под «П», в своём слоте. Убрано всё — убран
+        // и он: значок без кнопок висел бы посреди экрана сам по себе.
+        micToggle?.let { t ->
+            if (allHidden) {
+                t.hide()
+            } else {
+                t.show()
+                t.moveTo(x, y, size)
+            }
         }
 
         val tail = tailHandle ?: return
@@ -1892,7 +1909,20 @@ class PravkaAccessibilityService : AccessibilityService() {
             else -> 2
         }
         tail.show(stacked)
-        tail.moveTo(x, y + slot * (size + gap), size, above = false)
+        tail.moveTo(x, y + slotOffset(slot), size, above = false)
+    }
+
+    /**
+     * Смещение верха слота стопки от верха «П»: 1 — «З», 2 — «Д», 3 — «Т».
+     * Между «П» и «З» стоит значок микрофона в своём слоте (треть кнопки и
+     * поля), дальше — обычный просвет; арифметика одна на всех —
+     * `core/StackGeometry.kt`, под тестами.
+     */
+    internal fun slotOffset(slot: Int): Int {
+        val size = floatingButton?.buttonSizePx() ?: 0
+        val gap = (8 * resources.displayMetrics.density).toInt()
+        val zGap = micToggle?.slotPx(size) ?: gap
+        return StackGeometry.slotOffset(slot, size, gap, zGap)
     }
 
     /**
@@ -1905,17 +1935,15 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (!stacked) return false
         val (x, y) = floatingButton?.currentPosition() ?: return false
         stacked = false
-        val size = floatingButton?.buttonSizePx() ?: 0
-        val gap = (8 * resources.displayMetrics.density).toInt()
         // Сначала показать, потом развезти: тогда «Д» и «Е» видно, как они
         // выезжают из-под «З», а не как они появляются готовыми на местах.
         floatingButton?.setStacked(false)
         zButton?.setStacked(false)
         rButton?.setStacked(false)
         eButton?.setStacked(false)
-        zButton?.followTo(x, y + size + gap, true)
-        rButton?.followTo(x, y + 2 * (size + gap), true)
-        eButton?.followTo(x, y + 3 * (size + gap), true)
+        zButton?.followTo(x, y + slotOffset(1), true)
+        rButton?.followTo(x, y + slotOffset(2), true)
+        eButton?.followTo(x, y + slotOffset(3), true)
         refreshHandles()
         if (!silent) Haptics.start(this)
         return true
@@ -2054,6 +2082,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         folding = true
         tailHandle?.hide()
         topHandle?.hide()
+        micToggle?.hide()
         // И сами кнопки. Владелец показал, где ответ: «если все кнопки
         // сложить в три точки, то никаких проблем нет, складывается всё
         // отлично» — в журнале при этом «наших окон 0». Значит дело не в том,
@@ -2074,7 +2103,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0) +
                 (rButton?.windowCount() ?: 0) + (eButton?.windowCount() ?: 0) +
                 (tailHandle?.windowCount() ?: 0) + (topHandle?.windowCount() ?: 0) +
-                (if (screenKeeper != null) 1 else 0)
+                (micToggle?.windowCount() ?: 0) + (if (screenKeeper != null) 1 else 0)
             app.eventLog.add("смена конфигурации: наших окон $n")
         }
     }
@@ -2138,6 +2167,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         tailHandle = null
         topHandle?.hide()
         topHandle = null
+        micToggle?.hide()
+        micToggle = null
         scope.cancel()
         super.onDestroy()
     }

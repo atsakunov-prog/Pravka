@@ -2,6 +2,7 @@ package ru.zf.pravka.provider
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -56,6 +57,7 @@ class GoogleSpeechSession(
     private var producedAny = false   // did this session ever start recognizing?
     private var readyFired = false
     private var segmented = false     // segmented mode confirmed working
+    private var scoRaised = false     // канал гарнитуры подняли мы — нам и опускать
 
     private var onReady: () -> Unit = {}
     private var onPartial: (String) -> Unit = {}
@@ -77,6 +79,11 @@ class GoogleSpeechSession(
         // is why segmented mode never engaged (112 takes, segmented=false on all)
         // and every pause cost a ~1.5s deaf restart gap.
         private const val SEGMENTED_SILENCE_MS = 30_000
+
+        // Сколько ждать, пока гарнитура поднимет канал SCO, прежде чем
+        // стартовать распознаватель: обычно полсекунды-секунда, дольше —
+        // стартуем как есть, и в журнале видно почему.
+        private const val SCO_WAIT_MS = 1_500L
 
         private fun onDeviceSupported() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
@@ -146,26 +153,42 @@ class GoogleSpeechSession(
             active = true
             stopping = false
             errorStreak = 0
-            // Системному распознавателю входное устройство не укажешь, но
-            // Bluetooth-микрофон он берёт только при поднятом SCO-канале
-            // (машина после звонка, гарнитура). Роняем SCO перед стартом —
-            // и распознаватель слышит телефон, а не салон.
-            if ((context.applicationContext as? ru.zf.pravka.PravkaApp)?.phoneMicOnly != false) {
-                runCatching {
-                    val am = context.getSystemService(android.content.Context.AUDIO_SERVICE)
-                        as android.media.AudioManager
-                    @Suppress("DEPRECATION")
-                    if (am.isBluetoothScoOn) {
-                        am.stopBluetoothSco()
-                        onLog("BT SCO был поднят — уронил: слушаем микрофон телефона")
-                    }
-                }
-            }
             onLog(
                 "start onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} " +
                     "formatting=$formatting segmentedRequested=$segmentedSession"
             )
-            startListening()
+            // Системному распознавателю входное устройство не укажешь, но
+            // Bluetooth-микрофон он берёт только при поднятом SCO-канале
+            // (машина после звонка, гарнитура). Куда смотреть, решает владелец
+            // значком между «П» и «З». Телефон: роняем SCO перед стартом — и
+            // распознаватель слышит телефон, а не салон. Гарнитура: поднимаем
+            // канал и ЖДЁМ, пока он встанет, — стартовав раньше, первые слова
+            // услышим телефоном из кармана.
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val phone = (context.applicationContext as? ru.zf.pravka.PravkaApp)?.phoneMicOnly != false
+            when {
+                phone -> {
+                    runCatching {
+                        @Suppress("DEPRECATION")
+                        if (am.isBluetoothScoOn) {
+                            am.stopBluetoothSco()
+                            onLog("BT SCO был поднят — уронил: слушаем микрофон телефона")
+                        }
+                    }
+                    startListening()
+                }
+                MicRouting.headsetMic(am) == null -> {
+                    onLog("выбрана гарнитура, но её нет среди входов — слушаем как есть")
+                    startListening()
+                }
+                else -> {
+                    scoRaised = MicRouting.raise(am, onLog)
+                    MicRouting.awaitSco(context, am, main, SCO_WAIT_MS, onLog) {
+                        if (recognizer != null && !stopping) startListening()
+                        else onLog("BT SCO встал, но сессию уже остановили — не стартуем")
+                    }
+                }
+            }
         }
     }
 
@@ -346,6 +369,12 @@ class GoogleSpeechSession(
         val r = recognizer
         recognizer = null
         runCatching { r?.destroy() }
+        if (scoRaised) {
+            scoRaised = false
+            runCatching {
+                MicRouting.drop(context.getSystemService(Context.AUDIO_SERVICE) as AudioManager, onLog)
+            }
+        }
         onLog("finish len=${text.length} segmented=$segmented")
         onDone(text)
     }
