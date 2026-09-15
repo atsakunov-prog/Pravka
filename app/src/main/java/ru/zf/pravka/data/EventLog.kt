@@ -21,6 +21,8 @@ import java.util.Locale
 class EventLog(
     private val context: Context,
     private val fileName: String = "dictation-events.log",
+    /** Потолок файла до ротации. У лога запросов к Claude — больше: один запрос это десятки килобайт. */
+    private val maxBytes: Long = MAX_BYTES,
 ) {
 
     companion object {
@@ -43,7 +45,7 @@ class EventLog(
 
     private fun append(at: Long, line: String) {
         if (written < 0) written = if (file.exists()) file.length() else 0L
-        if (written > MAX_BYTES) rotate()
+        if (written > maxBytes) rotate()
         val text = "${stamp.format(Date(at))}  $line\n"
         val w = writer ?: BufferedWriter(FileWriter(file, true)).also { writer = it }
         w.write(text)
@@ -63,6 +65,17 @@ class EventLog(
     }
 
     fun exists(): Boolean = file.exists() && file.length() > 0
+
+    /** Стереть лог целиком (кнопка «Очистить» у лога запросов). */
+    fun clear() {
+        DiskWriter.post {
+            runCatching { writer?.close() }
+            writer = null
+            file.delete()
+            File(context.filesDir, "$fileName.1").delete()
+            written = 0L
+        }
+    }
 
     /** Newest [n] lines for the on-screen log viewer (call off the main thread). */
     fun readLast(n: Int): List<String> = runCatching {

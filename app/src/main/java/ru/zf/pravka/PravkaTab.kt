@@ -342,6 +342,7 @@ private enum class ExportWhat(val title: String) {
     METRICS("Метрики диктовки (CSV)"),
     EVENTS("Лог событий диктовки"),
     HISTORY("История правок (JSONL)"),
+    REQUESTS("Запросы к Claude (отладка)"),
 }
 
 private enum class Period(val title: String) { DAY("Сегодня"), WEEK("7 дней"), MONTH("30 дней"), ALL("Всё"), CUSTOM("Свой") }
@@ -385,7 +386,7 @@ private fun DictationExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
                         Text(w.title, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
-                if (what != ExportWhat.HISTORY) {
+                if (what != ExportWhat.HISTORY && what != ExportWhat.REQUESTS) {
                     Spacer(Modifier.height(8.dp))
                     Text("Период", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -429,6 +430,7 @@ private fun DictationExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
                             if (period == Period.ALL) app.eventLog.shareIntent()
                             else app.eventLog.shareRangeIntent(from, to)
                         ExportWhat.HISTORY -> app.historyLog.shareIntent()
+                        ExportWhat.REQUESTS -> app.requestLog.shareIntent()
                     }
                 }.getOrElse { e -> error = "Не собралась: ${e.message}"; return@Button }
                 onDismiss()

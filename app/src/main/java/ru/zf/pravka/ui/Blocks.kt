@@ -62,13 +62,21 @@ fun PaperCard(
                 trailing?.invoke()
             }
         }
+        // Узор знаков режима — на самой плашке, под текстом (владелец, 15.09).
+        val decor = LocalModeDecor.current
         Card(Modifier.fillMaxWidth()) {
-            Column(
+            Box(
                 Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                content = content,
-            )
+                    .then(if (decor != null) Modifier.glyphPattern(decor) else Modifier),
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    content = content,
+                )
+            }
         }
     }
 }

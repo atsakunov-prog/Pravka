@@ -638,6 +638,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     fun startRecordingNow() {
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
+        probeFieldEdits(dictationTarget?.get())
         floatingButton?.setRecording(true)
         Haptics.start(this)
         startDictation()
@@ -690,6 +691,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // host app - deliberately AFTER startListening() is already issued, so
         // it can't clip the first word.
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
+        probeFieldEdits(dictationTarget?.get())
         floatingButton?.setRecording(true)
         floatingButton?.showTicker()
         floatingButton?.showCancelBubble { cancelLiveDictation() }
@@ -1457,6 +1459,48 @@ class PravkaAccessibilityService : AccessibilityService() {
                 Haptics.error(this@PravkaAccessibilityService)
                 Feedback.toast(this@PravkaAccessibilityService, e.message ?: "Ошибка обучения")
             }
+        }
+    }
+
+    /**
+     * Правки владельца → словарь, без слежки за полями. Перед новым тейком поле
+     * читается один раз (его и так ищут как цель вставки) и сравнивается с
+     * тем, что мы в него прислали: поменялось одно слово — запись в словарь
+     * сразу, без модели (`core/EditDiff.kt`: похожее слово — замена, иное —
+     * подсказка); сложнее — остаётся кнопке «Разобрать сейчас». Владелец
+     * (15.09.2026): «должны добавляться правки, если я правлю тот текст,
+     * который он уже прислал в текстбокс». Один binder-вызов не на главном
+     * потоке, никаких подписок на события.
+     */
+    private fun probeFieldEdits(node: AccessibilityNodeInfo?) {
+        if (node == null) return
+        scope.launch(Dispatchers.Default) {
+            val pkg = runCatching { node.packageName?.toString() }.getOrNull() ?: return@launch
+            val current = runCatching { node.effectiveText() }.getOrDefault("")
+            if (current.isBlank()) return@launch
+            runCatching {
+                app.editWatch.onFieldText(pkg, current, ::wordOverlap, windowMs = 6L * 3600 * 1000)
+                val entry = app.editWatch.all().lastOrNull {
+                    it.pkg == pkg && it.editedTs > 0 && it.lastSeen == current.take(2000)
+                } ?: return@launch
+                val sub = ru.zf.pravka.core.EditDiff.singleSubstitution(entry.cleaned, entry.lastSeen)
+                    ?: return@launch
+                if (app.dictionaryStore.all().any { it.from.equals(sub.from, ignoreCase = true) }) {
+                    app.editWatch.remove(listOf(entry.id))
+                    return@launch
+                }
+                val mode = if (sub.similar) ru.zf.pravka.core.DictMode.HARD else ru.zf.pravka.core.DictMode.HINT
+                app.dictionaryStore.add(
+                    sub.from, sub.to, mode,
+                    if (mode == ru.zf.pravka.core.DictMode.HINT) "владелец предпочитает это слово" else "правка руками",
+                )
+                app.editWatch.remove(listOf(entry.id))
+                app.learnLog.add("В СЛОВАРЬ из правки руками: ${sub.from} → ${sub.to} [$mode]")
+                app.eventLog.add("edit→dict: ${sub.from} → ${sub.to} [$mode]")
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    Feedback.toast(this@PravkaAccessibilityService, "Словарь: «${sub.from}» → «${sub.to}»")
+                }
+            }.onFailure { app.eventLog.add("edit probe failed: ${it.message}") }
         }
     }
 

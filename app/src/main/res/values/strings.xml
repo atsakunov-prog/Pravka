@@ -180,8 +180,8 @@
 
     <!-- Спорт и еда -->
     <string name="tab_more">Ещё</string>
-    <string name="tab_sport">Тело (С)</string>
-    <string name="tab_food">Тело (Е)</string>
+    <string name="tab_sport">Спорт</string>
+    <string name="tab_food">Еда</string>
     <string name="tab_report">Общая статистика</string>
     <string name="e_busy">Микрофон занят другой записью — сначала заверши её</string>
     <string name="e_busy_pravka">Идёт запись Тела — останови её кнопкой «Т»</string>

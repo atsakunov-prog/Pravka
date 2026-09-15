@@ -294,7 +294,8 @@ internal enum class Tab(val titleRes: Int) {
  * долларом в шапке любой вкладки).
  */
 private val SERVICE_TABS = listOf(
-    Tab.REPORT,
+    // «Общая статистика» в списке не нужна (владелец, 15.09): к ней ведёт
+    // значок статистики в шапке Засечки, Дел, Спорта и Еды.
     Tab.DICTIONARY,
     Tab.PROMPTS,
     Tab.LEARNING,
@@ -680,7 +681,7 @@ private fun MainScreen(
                                 }
                                 Tab.SPORT -> {
                                     TabHeader(
-                                        title = "Тело · спорт",
+                                        title = stringResource(R.string.tab_sport),
                                         icon = painterResource(R.drawable.ic_mode_sport),
                                         actions = {
                                             StatsAction(openReport)
@@ -692,7 +693,7 @@ private fun MainScreen(
                                 }
                                 else -> {
                                     TabHeader(
-                                        title = "Тело · еда",
+                                        title = stringResource(R.string.tab_food),
                                         icon = painterResource(R.drawable.ic_mode_food),
                                         actions = {
                                             StatsAction(openReport)
@@ -1430,6 +1431,34 @@ private fun LogsTab(app: PravkaApp) {
             }
         }
 
+        SectionCard(label = "Запросы к Claude (отладка)") {
+            val debugOn by app.settings.debugLogFlow.collectAsState(initial = false)
+            var reqTail by remember { mutableStateOf<List<String>>(emptyList()) }
+            var reqTick by remember { mutableStateOf(0) }
+            LaunchedEffect(reqTick, loadTick) {
+                reqTail = withContext(Dispatchers.IO) { app.requestLog.readLast(60) }
+            }
+            HintText(
+                if (debugOn) "Режим отладки включён: сюда пишется каждый запрос целиком."
+                else "Режим отладки выключен (Настройки → Общее → Отладка). Ниже — что успело записаться."
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (reqTail.isEmpty()) "Пусто." else reqTail.joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 40,
+            )
+            Row {
+                TextButton(onClick = { share(app.requestLog.shareIntent(), "Запросы к Claude") }) { Text("Файлом") }
+                TextButton(onClick = {
+                    app.requestLog.clear()
+                    reqTick++
+                    Feedback.toast(context, "Лог запросов очищен")
+                }) { Text("Очистить", color = MaterialTheme.colorScheme.error) }
+            }
+        }
+
         SectionCard(label = "История правок") {
             HintText("Полный журнал в JSONL — для разбора качества.")
             Spacer(Modifier.height(6.dp))
@@ -1481,6 +1510,9 @@ private fun DictionaryTab(
     var mining by remember { mutableStateOf(false) }
     var suggestions by remember { mutableStateOf<List<ru.zf.pravka.provider.DictMiner.Suggestion>?>(null) }
     var picked by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    // Разделы свёрнуты, пока не тапнули по заголовку (владелец, 15.09.2026:
+    // «иначе приходится крутить очень долго»); поиск раскрывает все.
+    var opened by remember { mutableStateOf<Set<DictMode>>(emptySet()) }
 
     LaunchedEffect(Unit) { store.all() }  // triggers initial load
 
@@ -1582,10 +1614,14 @@ private fun DictionaryTab(
 
         for (mode in DictMode.entries) {
             val sectionEntries = section(mode)
+            val expanded = query.isNotEmpty() || mode in opened
             item(key = "header_$mode") {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 14.dp, bottom = 6.dp, start = 4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { opened = if (mode in opened) opened - mode else opened + mode }
+                        .padding(top = 14.dp, bottom = 6.dp, start = 4.dp),
                 ) {
                     Box(
                         Modifier
@@ -1604,10 +1640,16 @@ private fun DictionaryTab(
                         ),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (expanded) "▾" else "▸",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
             }
-            items(sectionEntries, key = { it.id }) { entry ->
+            if (expanded) items(sectionEntries, key = { it.id }) { entry ->
                 DictRow(entry, onClick = { dialogEntry = entry }, onToggle = { enabled ->
                     scope.launch { store.update(entry.copy(enabled = enabled)) }
                 })

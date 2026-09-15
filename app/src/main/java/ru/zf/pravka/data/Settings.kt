@@ -37,6 +37,7 @@ class Settings(private val context: Context) {
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
+        private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
         private val KEY_LEARN_AUTO = booleanPreferencesKey("learn_auto_capture")
 
@@ -196,6 +197,14 @@ class Settings(private val context: Context) {
     val proseModeFlow = context.dataStore.data.map { it[KEY_PROSE_MODE] ?: false }
     suspend fun setProseMode(value: Boolean) {
         context.dataStore.edit { it[KEY_PROSE_MODE] = value }
+    }
+
+    // Режим отладки (15.09.2026): каждый запрос к Claude целиком — в
+    // отдельный лог, чтобы владелец мог выгрузить и посмотреть, не уезжает ли
+    // в модель лишнего. Выключен — транспорт ничего не пишет.
+    val debugLogFlow = context.dataStore.data.map { it[KEY_DEBUG_LOG] ?: false }
+    suspend fun setDebugLog(value: Boolean) {
+        context.dataStore.edit { it[KEY_DEBUG_LOG] = value }
     }
 
     // Formatting rules are usually message-oriented and would fight the prose

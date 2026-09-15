@@ -112,12 +112,16 @@ class EditWatchStore(private val context: Context) {
         pkg: String,
         current: String,
         overlap: (String, String) -> Double,
+        // Пассивная проверка перед новым тейком смотрит дальше 15 минут: между
+        // правкой и следующей диктовкой может пройти час. Строгий диф одного
+        // слова (core/EditDiff.kt) не даёт чужому тексту сойти за правку.
+        windowMs: Long = WATCH_WINDOW_MS,
     ): Boolean = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureLoaded()
             val now = System.currentTimeMillis()
             val candidate = entries.lastOrNull {
-                it.pkg == pkg && now - it.createdTs < WATCH_WINDOW_MS && overlap(it.cleaned, current) > 0.4
+                it.pkg == pkg && now - it.createdTs < windowMs && overlap(it.cleaned, current) > 0.4
             } ?: return@withLock false
             if (candidate.lastSeen == current) return@withLock false
             val i = entries.indexOf(candidate)

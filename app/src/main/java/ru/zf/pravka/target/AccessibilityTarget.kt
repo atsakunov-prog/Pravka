@@ -3,6 +3,9 @@ package ru.zf.pravka.target
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.trigger.PravkaAccessibilityService
 
@@ -39,9 +42,29 @@ class AccessibilityTarget(
     private var fullBefore: String = ""
     private var fullAfter: String = ""
 
-    // What the last live preview put into the field - the mid-flight guard
-    // must not mistake our own streaming for the user typing.
-    @Volatile private var previewedFull: String = ""
+    // Что МЫ САМИ уже писали в поле потоком — несколько последних состояний,
+    // а не одно. Владелец (15.09.2026): «чистка обрывается на середине, в поле
+    // половина, в буфере всё». Причина была здесь: preview-корутины бежали
+    // параллельно и без очереди, поздний кусок мог записать previewedFull
+    // ПОСЛЕ более длинного, а финальный write() читал поле, пока запоздавший
+    // SET_TEXT ещё шёл, — видел «чужой» текст, решал, что владелец печатает,
+    // и уходил в буфер, оставив в поле хвост стрима. Теперь preview и write
+    // ходят в окно под одним замком, а своим считается любое из последних
+    // состояний.
+    private val fieldLock = Mutex()
+    private val previewed = ArrayDeque<String>()
+    @Volatile private var pendingPartial: String = ""
+
+    private fun isOurs(current: String): Boolean {
+        val cur = normalizedWs(current)
+        if (cur == normalizedWs(fullText)) return true
+        return previewed.any { normalizedWs(it) == cur }
+    }
+
+    private fun rememberPreviewed(full: String) {
+        previewed.addLast(full)
+        while (previewed.size > 6) previewed.removeFirst()
+    }
 
     private val hasFragmentSelection: Boolean
         get() = selStart in 0 until selEnd &&
@@ -86,11 +109,19 @@ class AccessibilityTarget(
      * locked screen (the owner folded/pocketed the phone mid-stream) the
      * preview stops instantly and the ticker takes over.
      */
-    suspend fun preview(partial: String): Boolean = withContext(Dispatchers.Default) {
-        if (service.isLockedIdle()) return@withContext false
-        runCatching { previewInner(partial) }
-            .onFailure { service.logEvent("preview: threw ${it.javaClass.simpleName}") }
-            .getOrDefault(false)
+    suspend fun preview(partial: String): Boolean {
+        if (service.isLockedIdle()) return false
+        pendingPartial = partial
+        return withContext(Dispatchers.Default) {
+            fieldLock.withLock {
+                // Пока ждали замок, приехал кусок длиннее — этот уже не нужен:
+                // очередь устаревших SET_TEXT только задерживает финал.
+                if (pendingPartial.length > partial.length) return@withLock true
+                runCatching { previewInner(partial) }
+                    .onFailure { service.logEvent("preview: threw ${it.javaClass.simpleName}") }
+                    .getOrDefault(false)
+            }
+        }
     }
 
     private fun previewInner(partial: String): Boolean {
@@ -102,11 +133,9 @@ class AccessibilityTarget(
             if (currentFocus == null || currentFocus != n) return false
         }
         // Hands off the moment the field holds anything that is not the
-        // original text or our own previous preview - the user is typing.
+        // original text or our own previous previews - the user is typing.
         val current = n.effectiveText()
-        if (normalizedWs(current) != normalizedWs(fullText) &&
-            normalizedWs(current) != normalizedWs(previewedFull)
-        ) return false
+        if (!isOurs(current)) return false
         val newFull =
             if (hasFragmentSelection) fullText.replaceRange(selStart, selEnd, partial)
             else partial
@@ -114,19 +143,26 @@ class AccessibilityTarget(
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newFull)
         }
+        // Запоминаем ДО вызова: поле меняется в момент performAction, и
+        // читатель с другого потока должен уже знать, что это наше.
+        rememberPreviewed(newFull)
         val ok = n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        if (ok) previewedFull = newFull
+        if (!ok) previewed.remove(newFull)
         return ok
     }
 
     override suspend fun write(text: String): Boolean = withContext(Dispatchers.Main) {
-        // Same as read(): a dead window must degrade to the clipboard fallback.
-        runCatching { writeInner(text) }
-            .onFailure { service.logEvent("write: threw ${it.javaClass.simpleName}") }
-            .getOrDefault(false)
+        // Под тем же замком, что и preview: финал ждёт, пока последний кусок
+        // стрима доедет до поля, и только потом смотрит, чьё там содержимое.
+        fieldLock.withLock {
+            // Same as read(): a dead window must degrade to the clipboard fallback.
+            runCatching { writeInner(text) }
+                .onFailure { service.logEvent("write: threw ${it.javaClass.simpleName}") }
+                .getOrDefault(false)
+        }
     }
 
-    private fun writeInner(text: String): Boolean {
+    private suspend fun writeInner(text: String): Boolean {
         val n = node ?: return false
         if (!n.refresh() || !n.isEditable) {
             service.logEvent("write: node gone or not editable")
@@ -151,11 +187,10 @@ class AccessibilityTarget(
         // legally flatten "\n" to a space, which is not the user typing.
         // Our own live preview is not the user typing either.
         val current = n.effectiveText()
-        if (normalizedWs(current) != normalizedWs(fullText) &&
-            (previewedFull.isEmpty() || normalizedWs(current) != normalizedWs(previewedFull))
-        ) {
+        if (!isOurs(current)) {
             service.logEvent(
-                "write: field changed mid-flight (now=${current.length} was=${fullText.length})"
+                "write: field changed mid-flight (now=${current.length} was=${fullText.length} " +
+                    "previews=${previewed.size}, last=${previewed.lastOrNull()?.length ?: 0})"
             )
             return false
         }
@@ -184,8 +219,18 @@ class AccessibilityTarget(
         }
         // ACTION_SET_TEXT is flaky in WebView and some Compose fields -
         // ALWAYS check the return value (spec 5.2).
-        val ok = n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        if (!ok) service.logEvent("write: SET_TEXT rejected (len=${newFull.length})")
+        var ok = n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (!ok) {
+            // Один повтор через паузу: поле, только что принявшее десяток
+            // потоковых SET_TEXT, иногда отвергает финальный на перерисовке.
+            // В поле в этот момент хвост стрима — оставить его нельзя.
+            service.logEvent("write: SET_TEXT rejected (len=${newFull.length}) — повтор")
+            delay(150)
+            if (n.refresh() && n.isEditable) {
+                ok = n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            }
+            if (!ok) service.logEvent("write: SET_TEXT rejected twice (len=${newFull.length})")
+        }
         if (ok) {
             fullBefore = fullText
             fullAfter = newFull

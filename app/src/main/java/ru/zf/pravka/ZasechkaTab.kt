@@ -83,6 +83,7 @@ import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.data.phoneDayKey
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.PaperLabel
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.trigger.onZasechkaTap
 import androidx.compose.foundation.combinedClickable
@@ -433,11 +434,12 @@ internal fun ZasechkaTab(app: PravkaApp) {
         // uninterrupted entry is one dense table line; a sliced-up activity is
         // ONE block: a tall line for the whole span, the net Σ beside it
         // (owner: "а то кусками") ----
-        // Лента — одна плашка с заголовком (владелец: «текст в плашках,
-        // заголовки того, что будет дальше»). Дневные записи — обычная
-        // колонка внутри карточки: их несколько десятков, ленивость не нужна.
+        // Лента — с заголовком, но БЕЗ плашки (владелец, 15.09, второй заход:
+        // «лента у Засечки — без плашки»): строки лежат прямо на фоне, как
+        // раньше. Дневные записи — обычная колонка: их несколько десятков.
         item {
-            PaperCard(label = "лента") {
+            PaperLabel("лента")
+            Column(Modifier.fillMaxWidth()) {
               dayUnits.forEachIndexed { index, unit ->
                 val head = unit.fragments.first()
                 val doStop: () -> Unit = {

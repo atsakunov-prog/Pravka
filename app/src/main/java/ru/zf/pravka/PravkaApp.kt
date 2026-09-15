@@ -42,6 +42,13 @@ class PravkaApp : Application() {
         // (и единственный, если служба доступности почему-то выключена).
         ru.zf.pravka.data.Backups.tick(this) { line -> eventLog.add(line) }
         appScope.launch { settings.phoneMicOnlyFlow.collect { phoneMicOnly = it } }
+        // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
+        // свой лог, пока тумблер включён (Настройки → Общее).
+        appScope.launch {
+            settings.debugLogFlow.collect { on ->
+                claudeProvider.requestLogger = if (on) ({ text -> requestLog.add(text) }) else null
+            }
+        }
     }
 
     val settings by lazy { Settings(this) }
@@ -52,6 +59,8 @@ class PravkaApp : Application() {
     val transcriptionLog by lazy { TranscriptionLog(this) }
     val liveDraft by lazy { LiveDraft(this) }
     val eventLog by lazy { EventLog(this) }
+    /** Лог запросов к Claude в режиме отладки: один запрос — десятки килобайт, потолок 4 МБ. */
+    val requestLog by lazy { EventLog(this, "claude-requests.log", maxBytes = 4L * 1024 * 1024) }
 
     val httpClient by lazy {
         OkHttpClient.Builder()

@@ -3,7 +3,6 @@ package ru.zf.pravka.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -23,10 +21,18 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
@@ -43,69 +49,65 @@ import ru.zf.pravka.R
 // расползлись, как расползались заголовки до этого.
 
 /**
- * Режим вкладки — какие знаки разбросать по фону. Знаки — не картинки, а
- * символы шрифта: письменные принадлежности у Правки, часы у Засечки, галочки
- * у Дел, снаряды у спорта, еда у Еды. Рисуются один раз, полупрозрачными,
- * поверх лежат плашки с текстом.
+ * Режим вкладки — какие знаки лежат узором на плашках. Знаки — символы
+ * шрифта без эмодзи-представления (цветной эмодзи не приглушить альфой):
+ * письменные у Правки, циферблаты у Засечки, галочки у Дел, снаряды у
+ * спорта, еда у Еды. Владелец (15.09, второй заход): «бэкграунд не вышел —
+ * сделаем узор на самих плашках, поплотнее, но еле заметный».
  */
-enum class ModeDecor(val glyphs: List<String>, val emoji: List<String>) {
-    PRAVKA(listOf("✒", "✎", "¶", "§", "❝", "✍", "„", "…"), listOf("🖋", "📝", "✏️")),
-    ZASECHKA(listOf("◔", "◑", "◕", "⧗", "⌛", "◷", "⏱", "◴"), listOf("⏰", "⌚", "🕰")),
-    DELA(listOf("✓", "☐", "☑", "✔", "•", "→", "☐", "✓"), listOf("📋", "🗒", "📌")),
-    SPORT(listOf("⚡", "◎", "▲", "∞", "⚑", "≋", "◇", "⚡"), listOf("🏋", "🚴", "🏃", "🥋")),
-    FOOD(listOf("○", "◌", "◍", "◐", "⊙", "◌", "○", "◔"), listOf("🥗", "🍳", "🥑", "☕")),
-    SERVICE(listOf("·", "◦", "·", "◦", "·", "◦", "·", "◦"), listOf()),
+enum class ModeDecor(val glyphs: List<String>) {
+    PRAVKA(listOf("¶", "✎", "§", "❝", "„", "✑", "❞", "“")),
+    ZASECHKA(listOf("◔", "◑", "◕", "◴", "◵", "◶", "◷", "◐")),
+    DELA(listOf("✓", "☐", "•", "→", "✓", "☐", "✓", "•")),
+    SPORT(listOf("◎", "▲", "∞", "⚑", "≋", "◇", "◈", "⬡")),
+    FOOD(listOf("○", "◌", "❋", "✿", "❀", "⊙", "◍", "✾")),
+    SERVICE(listOf("·", "◦", "·", "◦", "·", "◦", "·", "◦")),
 }
 
+/** Режим текущей вкладки — читает `PaperCard`, чтобы положить узор на плашку. */
+val LocalModeDecor = compositionLocalOf<ModeDecor?> { null }
+
 /**
- * Где лежат знаки: доли ширины и высоты, размер в sp, поворот. Позиции
- * подобраны руками так, чтобы верх (шапка) и центр (первая плашка)
- * оставались почти чистыми, а знаки уходили к краям.
+ * Узор знаков режима под содержимым плашки: плотная решётка со сдвигом
+ * чётных рядов и лёгким поворотом, цветом текста на пять сотых
+ * прозрачности — разница с плашкой минимальная, глазом читается как
+ * фактура бумаги, не как рисунок. Рисуется в drawBehind, без композиции:
+ * знаки промерены один раз на плашку.
  */
-private data class Spot(val x: Float, val y: Float, val size: Int, val rot: Float)
-
-private val SPOTS = listOf(
-    Spot(0.04f, 0.12f, 34, -14f), Spot(0.86f, 0.09f, 28, 12f),
-    Spot(0.70f, 0.24f, 22, -6f), Spot(0.08f, 0.36f, 26, 18f),
-    Spot(0.90f, 0.42f, 30, -20f), Spot(0.30f, 0.52f, 20, 8f),
-    Spot(0.62f, 0.60f, 36, -10f), Spot(0.05f, 0.70f, 24, 22f),
-    Spot(0.84f, 0.78f, 26, -8f), Spot(0.40f, 0.86f, 30, 14f),
-    Spot(0.12f, 0.92f, 22, -16f),
-)
-
-/** Фон вкладки: знаки режима, чуть заметные. Ничего не считает, не мигает. */
 @Composable
-fun ModeBackdrop(decor: ModeDecor) {
-    val ink = MaterialTheme.colorScheme.primary
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val w = maxWidth
-        val h = maxHeight
-        SPOTS.forEachIndexed { i, spot ->
-            // Эмодзи — цветные, их держим ещё бледнее, чем знаки шрифта.
-            val useEmoji = decor.emoji.isNotEmpty() && i % 4 == 3
-            val text = if (useEmoji) decor.emoji[(i / 4) % decor.emoji.size]
-            else decor.glyphs[i % decor.glyphs.size]
-            Text(
-                text,
-                fontSize = spot.size.sp,
-                color = if (useEmoji) Color.Unspecified else ink,
-                modifier = Modifier
-                    .offset(x = w * spot.x, y = h * spot.y)
-                    .graphicsLayer {
-                        alpha = if (useEmoji) 0.10f else 0.13f
-                        rotationZ = spot.rot
-                    },
-            )
+fun Modifier.glyphPattern(decor: ModeDecor): Modifier {
+    val measurer = rememberTextMeasurer()
+    val ink = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.055f)
+    val style = TextStyle(fontSize = 17.sp, color = ink)
+    val layouts = remember(decor, ink) { decor.glyphs.map { measurer.measure(it, style) } }
+    return this.drawBehind {
+        val cellW = 44.dp.toPx()
+        val cellH = 38.dp.toPx()
+        var row = 0
+        var y = -cellH * 0.35f
+        while (y < size.height) {
+            val shift = if (row % 2 == 0) 0f else cellW / 2f
+            var col = 0
+            var x = -cellW * 0.4f + shift
+            while (x < size.width) {
+                val layout = layouts[(row * 5 + col * 3) % layouts.size]
+                val rot = ((row * 13 + col * 7) % 5 - 2) * 7f
+                val pivot = Offset(x + layout.size.width / 2f, y + layout.size.height / 2f)
+                rotate(rot, pivot) { drawText(layout, topLeft = Offset(x, y)) }
+                x += cellW
+                col++
+            }
+            y += cellH
+            row++
         }
     }
 }
 
-/** Вкладка целиком: фон со знаками, поверх — содержимое. */
+/** Вкладка целиком: режим для узора плашек и содержимое. Фон — чистый, тёмный. */
 @Composable
 fun ModeFrame(decor: ModeDecor, content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxSize()) {
-        ModeBackdrop(decor)
-        content()
+    CompositionLocalProvider(LocalModeDecor provides decor) {
+        Box(Modifier.fillMaxSize()) { content() }
     }
 }
 

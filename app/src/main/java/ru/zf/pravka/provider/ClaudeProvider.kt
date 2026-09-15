@@ -38,6 +38,14 @@ class ClaudeProvider(
 ) : ProofreadProvider {
     override val id = "claude"
 
+    /**
+     * Режим отладки: сюда уезжает текст каждого запроса — стабильная часть и
+     * переменная, с размерами. Ставит PravkaApp по настройке владельца
+     * (`debugLogFlow`); null — не пишем ничего. Картинки не логируются, только
+     * их число.
+     */
+    @Volatile var requestLogger: ((String) -> Unit)? = null
+
     class ApiException(
         message: String,
         val retryable: Boolean = false,
@@ -738,6 +746,26 @@ $listing
                     }
                 )
             )
+        }
+
+        requestLogger?.let { log ->
+            runCatching {
+                val variable = parts.dictPart + input + parts.afterInput
+                val sb = StringBuilder()
+                sb.append("=== ЗАПРОС · ").append(model)
+                    .append(" · max_tokens ").append(maxTokens)
+                if (effortOverride.isNotBlank()) sb.append(" · effort ").append(effortOverride)
+                if (thinkingOff) sb.append(" · thinking off")
+                if (images.isNotEmpty()) sb.append(" · картинок ").append(images.size)
+                sb.append(" · стабильная ").append(parts.stablePrefix.length).append(" зн.")
+                    .append(if (parts.cacheStableAlways) " (кэш)" else "")
+                    .append(" · переменная ").append(variable.length).append(" зн.\n")
+                if (parts.stablePrefix.isNotBlank()) {
+                    sb.append("--- стабильная часть ---\n").append(parts.stablePrefix).append('\n')
+                }
+                sb.append("--- переменная часть ---\n").append(variable).append("\n=== КОНЕЦ ЗАПРОСА ===\n")
+                log(sb.toString())
+            }
         }
 
         val request = Request.Builder()

@@ -549,6 +549,22 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
             "слышит хуже кармана. Не подключена — плашка бледная, слушает телефон."
     )
 
+    Spacer(Modifier.height(18.dp))
+    Text("Отладка", style = MaterialTheme.typography.titleSmall)
+    val debugLog by settings.debugLogFlow.collectAsState(initial = false)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = debugLog,
+            onCheckedChange = { on -> scope.launch { settings.setDebugLog(on) } },
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("Писать запросы к Claude в лог", style = MaterialTheme.typography.bodyMedium)
+    }
+    HintText(
+        "Каждый запрос целиком — правка, Засечка, Тело, Еда: стабильная и " +
+            "переменная части с размерами. Смотреть и выгружать — «Ещё → Логи», " +
+            "«Запросы к Claude». Лог растёт быстро, держи включённым, пока смотришь."
+    )
     // Нерасшифрованные записи переехали наверх вкладки «Правка» (15.09.2026):
     // это то, что ждёт действия с утра, а не настройка.
 }
