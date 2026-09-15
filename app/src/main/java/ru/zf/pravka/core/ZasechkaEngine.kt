@@ -68,6 +68,13 @@ class ZasechkaEngine(
         source: String,
         anchorStart: Long = 0L,
         anchorEnd: Long = 0L,
+        /**
+         * Микрофон в редакторе записи (15.09.2026): фраза — поправка к записи с
+         * этим id. Кадр для номеров — день ЭТОЙ записи, а не сегодня (правят и
+         * вчерашнее), модели сказано, какую строку править, а «new» в ответе
+         * читается как edit: владелец открыл редактор не ради нового дела.
+         */
+        editTargetId: Long = 0L,
     ): Outcome {
         val now = System.currentTimeMillis()
         val text = raw.trim()
@@ -75,9 +82,16 @@ class ZasechkaEngine(
         val categoryNames = categories.map { it.name }
         val clients = store.clients()
         val previousTitle = store.all().lastOrNull()?.title.orEmpty()
+        val editTarget = if (editTargetId > 0L) store.all().firstOrNull { it.id == editTargetId } else null
 
         // Today's ribbon, numbered - the reference frame for edit/delete.
-        val today = store.forRange(dayStartMs(now), now + 1).sortedBy { it.start }
+        val today = if (editTarget == null) {
+            store.forRange(dayStartMs(now), now + 1).sortedBy { it.start }
+        } else {
+            val d = dayStartMs(editTarget.start)
+            store.forRange(d, d + 86_400_000L).sortedBy { it.start }
+        }
+        val editIndex = if (editTarget == null) 0 else today.indexOfFirst { it.id == editTarget.id } + 1
         val todayLines = today.mapIndexed { i, e ->
             val end = if (e.open) "…" else timeFormat.format(Date(e.end))
             "${i + 1}. ${timeFormat.format(Date(e.start))}–$end · " +
@@ -110,12 +124,25 @@ class ZasechkaEngine(
             todayEntries = todayLines,
             recentEntries = recentLines,
             ownerRules = runCatching { rules.enabledBlock() }.getOrDefault(""),
+            editTargetLine = if (editTarget != null && editIndex > 0) {
+                "Владелец открыл запись №$editIndex («${editTarget.title}») и надиктовал поправку к ней. " +
+                    "Фраза целиком про эту запись: верни action \"edit\" с entry $editIndex, " +
+                    "меняя только то, что он назвал (название, категорию, клиента, время). " +
+                    "«Удали» — delete той же записи."
+            } else "",
         )
 
         return parsed.fold(
-            onSuccess = { p ->
-                stats.recordAux(p.costUsd, p.tokensIn, p.tokensOut)
-                val target = today.getOrNull(p.entryIndex - 1)
+            onSuccess = { p0 ->
+                stats.recordAux(p0.costUsd, p0.tokensIn, p0.tokensOut)
+                // Поправка из редактора: модель могла ответить «new» — это всё
+                // равно правка открытой записи, новое дело здесь не заводится.
+                val p = if (editTarget != null && editIndex > 0 && (p0.action == "new" || p0.action == "insert")) {
+                    p0.copy(action = "edit", entryIndex = editIndex)
+                } else p0
+                val target = if (editTarget != null && editIndex > 0 && (p.action == "edit" || p.action == "delete")) {
+                    today.getOrNull(editIndex - 1)
+                } else today.getOrNull(p.entryIndex - 1)
                 // ВРЕМЯ РЕШАЕТ, А НЕ СЛОВО МОДЕЛИ. Раньше вставка задним
                 // числом случалась только когда модель САМА назвала намерение
                 // «insert», а начало из «с 12:00» в ветке new просто терялось —

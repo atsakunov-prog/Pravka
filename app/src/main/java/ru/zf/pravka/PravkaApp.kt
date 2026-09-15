@@ -175,38 +175,10 @@ class PravkaApp : Application() {
     // диске), файл в assets — семя и запас без сети: карточка тренировки
     // открывается каждый день, в том числе в подвале на даче. Рацион — пока
     // только из assets. Оба собираются из Notion скриптом tools/gen_reference.py.
-    // Итоги: ночной разбор жизненного лога батчем (половина цены за то, что
-    // ответ не нужен немедленно). Числа считает AnalysisBuilder, модель их
-    // только интерпретирует.
+    // Паттерны: ночной поиск повторов снят (владелец, 15.09.2026: «паттерны
+    // убираем, и поиск их убираем»). Стор остался — в нём лежат найденные
+    // раньше паттерны и вердикты владельца, их читает синк Notion.
     val analysisStore by lazy { ru.zf.pravka.data.AnalysisStore(this).also { it.logger = { l -> eventLog.add(l) } } }
-    val analysisBuilder by lazy {
-        ru.zf.pravka.core.AnalysisBuilder(
-            zasechka = zasechkaStore,
-            sport = sportStore,
-            strength = strengthStore,
-            food = foodStore,
-            plan = planStore,
-            icu = icuSportSync,
-            reports = analysisStore,
-            todoist = todoistStore,
-            stats = stats,
-            transcripts = transcriptionLog,
-            history = historyLog,
-            raznoska = raznoskaStore,
-            diary = notionDiarySync,
-        )
-    }
-    val analysisEngine by lazy {
-        ru.zf.pravka.core.AnalysisEngine(
-            claude = claudeProvider,
-            builder = analysisBuilder,
-            store = analysisStore,
-            prompts = promptStore,
-            settings = settings,
-            stats = stats,
-            eventLog = eventLog,
-        )
-    }
 
     val exerciseBook by lazy { ru.zf.pravka.data.ExerciseBook(this) }
     val rationBook by lazy { ru.zf.pravka.data.RationBook(this) }
@@ -257,6 +229,7 @@ class PravkaApp : Application() {
             client = httpClient,
             eventLog = eventLog,
             provider = claudeProvider,
+            stats = stats,
         )
     }
     // Строки всей жизни по базам — одним сборщиком для Notion и для книги

@@ -117,6 +117,8 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     @Volatile internal var zAnchorStart = 0L
     @Volatile internal var zAnchorEnd = 0L
+    /** Запись, которую правит ближайший тейк «З» (микрофон в редакторе записи); 0 — обычный тап. */
+    @Volatile internal var zEditTargetId = 0L
     @Volatile internal var zAnchorSetAt = 0L
     @Volatile internal var cachedZEnabled = true
     @Volatile internal var cachedStackIdle = true
@@ -216,18 +218,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch {
             app.settings.convoContextFlow.collect { cachedConvoContext = it }
         }
-        scope.launch {
-            app.settings.learnPeriodHoursFlow.collect { cachedLearnPeriodH = it }
-        }
-        // Auto-capture off (the owner's default now) means the service does not
-        // even SUBSCRIBE to text-change events: no event per keystroke in every
-        // app, no event.source binder round trip on this main thread.
-        scope.launch {
-            app.settings.learnAutoFlow.collect {
-                cachedLearnAuto = it
-                applyEventSubscription(it)
-            }
-        }
+        // Автообучение снято (владелец, 15.09.2026: «он уже обучился
+        // достаточно, оставить только по кнопке»): служба не подписывается на
+        // события текста вообще — ни события на каждое нажатие клавиши, ни
+        // binder-вызова за event.source на главном потоке. Учиться можно
+        // «Обучить» из меню «П» и «Разобрать сейчас» во вкладке Обучение.
+        applyEventSubscription(false)
         refreshLearnBadge()
 
         // Засечка: the second button, visible everywhere while enabled.
@@ -499,7 +495,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                                         "правка замечена: поле в $pkg, ${current.length} зн. — созреет через " +
                                             "${ru.zf.pravka.data.EditWatchStore.RIPE_QUIET_MS / 60000} мин"
                                     )
-                                    scheduleRipenessCheck()
+
                                 }
                             }
                         }
@@ -1651,7 +1647,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                     convoUpdateLast(pkg, outcome.result.text)
                 }
             }
-            maybeRunLearnBatch()
+            // Авторазбора после чистки больше нет: батч идёт только по кнопке.
             // The post-fix result bar is gone (owner: it covered the keyboard).
             // Undo lives in the long-press FAB menu; the word diff and quick
             // add-to-dictionary went with the bar.
@@ -2011,7 +2007,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // которую иначе надо помнить самому.
                 runCatching { notifyArrivedWorkouts() }
                 runCatching { autoPilot.tick() }
-                runCatching { analysisTick() }
             }
             scope.launch { runCatching { app.foodEngine.syncPending() } }
             // Дневник в Notion: галочки, feel, колено и вес уезжают сами.

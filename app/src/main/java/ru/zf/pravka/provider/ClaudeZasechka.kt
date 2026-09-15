@@ -72,6 +72,9 @@ suspend fun ClaudeProvider.zasechka(
     // Одобренные владельцем правила Засечки: как он говорит о своём
     // времени. Едут в переменный хвост, а не под кэш: список живой.
     ownerRules: String = "",
+    // Микрофон в редакторе записи: какую строку владелец правит. Пусто —
+    // обычный тап по «З».
+    editTargetLine: String = "",
 ): Result<ZasechkaParse> = withContext(Dispatchers.IO) {
     runCatchingApi {
         val apiKey = settings.apiKey()
@@ -239,12 +242,13 @@ delete: {"action": "delete", "entry": 7}
 stop:   {"action": "stop", "end_time": "", "start_offset_min": 0}
 none:   {"action": "none", "say": "..."}
 """.trimIndent() + "\n\n"
+        val editBlock = if (editTargetLine.isBlank()) "" else "\n$editTargetLine\n"
         val varTail = """
 Сейчас: $nowLocal.
 $previousBlock
-Записи сегодня (№ · время · категория · название):
+Записи дня (№ · время · категория · название):
 $todayBlock
-$recentBlock
+$editBlock$recentBlock
 Категории (после тире — пояснение, что сюда относится):
 $categoriesBlock
 

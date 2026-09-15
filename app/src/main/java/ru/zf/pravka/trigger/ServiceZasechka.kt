@@ -45,11 +45,20 @@ internal fun PravkaAccessibilityService.lockedDoubleTapArmed(now: Long): Boolean
  * недолго: «Сказать» с локскрина сначала только взводит кнопку, второй тап
  * идёт уже обычный, и якорь обязан его дождаться, — но не дожить до вечера.
  */
-fun PravkaAccessibilityService.onZasechkaTap(anchorStart: Long = 0L, anchorEnd: Long = 0L) {
+fun PravkaAccessibilityService.onZasechkaTap(
+    anchorStart: Long = 0L,
+    anchorEnd: Long = 0L,
+    /** Микрофон из редактора записи: сказанное — поправка к ЭТОЙ записи, а не новое дело. */
+    editTargetId: Long = 0L,
+) {
     touched()
     if (anchorStart > 0L) {
         zAnchorStart = anchorStart
         zAnchorEnd = anchorEnd
+        zAnchorSetAt = System.currentTimeMillis()
+    }
+    if (editTargetId > 0L) {
+        zEditTargetId = editTargetId
         zAnchorSetAt = System.currentTimeMillis()
     }
     if (isLockedIdle()) {
@@ -93,11 +102,12 @@ fun PravkaAccessibilityService.onZasechkaTap(anchorStart: Long = 0L, anchorEnd: 
     zCommentFor = 0L
     // Якорь, который никто не забрал за две минуты, — чужой: обычный тап
     // пишет «сейчас», как всегда.
-    if (zAnchorStart > 0L &&
+    if ((zAnchorStart > 0L || zEditTargetId > 0L) &&
         System.currentTimeMillis() - zAnchorSetAt > PravkaAccessibilityService.Z_ANCHOR_TTL_MS
     ) {
         zAnchorStart = 0L
         zAnchorEnd = 0L
+        zEditTargetId = 0L
     }
     if (!hasMicPermission()) {
         micRequestForZasechka = true
@@ -338,10 +348,14 @@ internal fun PravkaAccessibilityService.onZasechkaText(raw: String, source: Stri
     // Якорь потребляется одним тейком — следующая фраза уже не про него.
     val anchorStart = zAnchorStart
     val anchorEnd = zAnchorEnd
+    val editTargetId = zEditTargetId
     zAnchorStart = 0L
     zAnchorEnd = 0L
+    zEditTargetId = 0L
     scope.launch {
-        val outcome = runCatching { app.zasechkaEngine.record(text, source, anchorStart, anchorEnd) }
+        val outcome = runCatching {
+            app.zasechkaEngine.record(text, source, anchorStart, anchorEnd, editTargetId = editTargetId)
+        }
             .getOrElse { e ->
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 app.eventLog.add("засечка: record threw ${e.javaClass.simpleName}: ${e.message}")

@@ -91,6 +91,8 @@ class NotionLifeSync(
     private val eventLog: EventLog,
     /** Сверка формулировок при склейке дублей паттернов; без ключа — только по словам. */
     private val provider: ru.zf.pravka.provider.ClaudeProvider? = null,
+    /** Деньги сверки — в общий счёт стоимости API: за долларом в шапке видно ВСЕ обращения. */
+    private val stats: Stats? = null,
 ) {
 
     companion object {
@@ -616,6 +618,7 @@ class NotionLifeSync(
         if (state.dupeBatch.isNotBlank()) {
             val answer = ask?.batchAnswer(state.dupeBatch, state.dupeModel.ifBlank { Settings.MODEL_FABLE })?.getOrNull()
             if (answer != null) {
+                stats?.let { s -> runCatching { s.recordAux(answer.costUsd, answer.tokensIn, answer.tokensOut) } }
                 applyDupeAnswer(answer.text)
                 state.dupeBatch = ""
                 state.dupeKeys.clear()

@@ -44,7 +44,7 @@ import ru.zf.pravka.ui.Feedback
 // «Без даты и без проекта» (входящие) и проекты свёрнуты. Поиск - простой
 // фильтр по вхождению слова, он показывает плоский список поверх групп.
 @Composable
-fun TodoistTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
+fun TodoistTab(app: PravkaApp) {
     val store = app.todoistStore
     val tasks by store.tasksFlow.collectAsState()
     val projects by store.projectsFlow.collectAsState()
@@ -101,15 +101,8 @@ fun TodoistTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 32.dp),
     ) {
         item {
-            Text("Дела", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "Тап по делу — оно становится текущим в ленте. Когда дело закончится, " +
-                    "в задачу Todoist уедет коммент со временем. Кнопка «Д» — наговорить " +
-                    "новые дела сюда.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
+            // Название и пояснение живут в общей шапке (ui/Frame.kt); тут —
+            // только то, что меняется: идущее дело, поиск, состояние синка.
             if (running != null) {
                 Text(
                     "Сейчас идёт: ${running.title.ifBlank { "без названия" }}",
@@ -133,7 +126,6 @@ fun TodoistTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                 TextButton(onClick = {
                     app.appScope.launch { app.todoistSync.refresh(force = true) }
                 }) { Text("Обновить") }
-                TextButton(onClick = onOpenSettings) { Text("Настройки") }
                 Text(
                     status,
                     style = MaterialTheme.typography.bodySmall,

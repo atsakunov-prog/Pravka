@@ -347,13 +347,7 @@ internal fun ReportTab(app: PravkaApp) {
     ) {
         // ---- шапка и день ----
         item {
-            ScreenTitle("Отчёт")
-            HintText(
-                "День в графиках: лента, балл, телефон, тело, еда — и рядом тот же день " +
-                    "недели неделю назад, обрезанный до этого же часа. Числа считает телефон, " +
-                    "модель сюда не ходит.",
-            )
-            Spacer(Modifier.height(6.dp))
+            // Название — в общей шапке («Общая статистика»); здесь сразу день.
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { dayOffset += 1 }) {
                     Icon(Icons.Filled.KeyboardArrowLeft, contentDescription = "раньше")

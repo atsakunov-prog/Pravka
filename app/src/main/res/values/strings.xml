@@ -74,14 +74,9 @@
     <string name="tab_settings">Настройки</string>
     <string name="tab_dictionary">Словарь</string>
     <string name="tab_prompts">Промпты</string>
-    <string name="tab_stats">Статистика</string>
-    <string name="tab_transcripts">Расшифровки</string>
-    <string name="transcripts_hint">Все расшифровки, свежие сверху. Нажми на любую — текст скопируется. Под каждой — движок, длина аудио, время расшифровки и число символов.</string>
+    <string name="tab_stats">Статистика диктовки</string>
     <string name="transcripts_empty">Пока пусто — надиктуй что-нибудь.</string>
     <string name="transcript_copied">Скопировано</string>
-    <string name="transcripts_export_json">Выгрузить JSON</string>
-    <string name="transcripts_export_csv">Выгрузить метрики (CSV)</string>
-    <string name="transcripts_export_log">Выгрузить лог диктовки</string>
     <string name="draft_header">Прерванная диктовка — восстановленный текст</string>
     <string name="draft_copy">Копировать</string>
     <string name="draft_delete">Удалить</string>
@@ -129,7 +124,6 @@
     <string name="prompt_title_trainer">Тренер (вопрос про упражнение)</string>
     <string name="prompt_title_body">Тело (подходы, еда, зарядка)</string>
     <string name="prompt_title_rules">Правила блока из Notion</string>
-    <string name="prompt_title_patterns">Паттерны: ночной поиск повторов</string>
     <string name="tab_learning">Обучение</string>
     <string name="tab_logs">Логи</string>
     <string name="prompt_modified">изменён</string>
@@ -140,7 +134,7 @@
     <string name="prompt_reset">Вернуть заводской</string>
     <string name="prompt_reset_confirm">Точно вернуть?</string>
 
-    <string name="stats_header">Статистика</string>
+    <string name="stats_header">Стоимость API</string>
     <string name="stats_total">Всего правок</string>
     <string name="stats_clean">— чистка</string>
     <string name="stats_business">— деловой стиль</string>
@@ -188,9 +182,7 @@
     <string name="tab_more">Ещё</string>
     <string name="tab_sport">Тело (С)</string>
     <string name="tab_food">Тело (Е)</string>
-    <string name="tab_export">Выгрузки</string>
-    <string name="tab_itogi">Паттерны</string>
-    <string name="tab_report">Отчёт</string>
+    <string name="tab_report">Общая статистика</string>
     <string name="e_busy">Микрофон занят другой записью — сначала заверши её</string>
     <string name="e_busy_pravka">Идёт запись Тела — останови её кнопкой «Т»</string>
     <string name="e_parse_failed">Не разобрал — скажи ещё раз или набери текстом</string>

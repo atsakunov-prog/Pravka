@@ -105,7 +105,7 @@ private fun toneColor(tone: Int): Color = when (tone) {
 }
 
 @Composable
-internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
+internal fun SportTab(app: PravkaApp) {
     val store = app.sportStore
     val workouts by store.workoutsFlow.collectAsState()
     val health by store.healthFlow.collectAsState()
@@ -863,10 +863,7 @@ internal fun SportTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             }
         }
 
-        // ---- Настройки ----
-
-        // Настройки — в одной вкладке со всеми остальными, группой «Тело».
-        item { SettingsLink("Настройки тела: правила, Notion, цели", onOpenSettings) }
+        // Настройки режима — за шестерёнкой в шапке вкладки.
     }
 
     if (gtgDialog) {

@@ -97,7 +97,6 @@ private val CARBS_COLOR = Color(0xFF16A34A)
 @Composable
 internal fun FoodTab(
     app: PravkaApp,
-    onOpenSettings: () -> Unit = {},
     // «Сфоткай тарелку»/«штрихкод» с кнопки еды: вкладка открывается и сразу
     // запускает камеру или сканер, без лишнего тапа.
     autoAction: String? = null,
@@ -475,8 +474,7 @@ internal fun FoodTab(
             }
         }
 
-        // ---- Настройки ----
-        item { SettingsLink("Настройки еды: цели и куда уезжает", onOpenSettings) }
+        // Настройки режима — за шестерёнкой в шапке вкладки.
     }
 
     val editMeal = editing?.let { id -> meals.firstOrNull { it.id == id } }

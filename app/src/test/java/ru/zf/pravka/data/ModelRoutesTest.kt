@@ -31,8 +31,6 @@ class ModelRoutesTest {
         assertEquals(Settings.MODEL_OPUS, ModelRoute.ZASECHKA.defaultModel)
         assertEquals(Settings.MODEL_OPUS, ModelRoute.BODY.defaultModel)
         assertEquals(Settings.MODEL_SONNET, ModelRoute.BODY_LIGHT.defaultModel)
-        assertEquals(Settings.MODEL_OPUS, ModelRoute.PATTERNS.defaultModel)
-        assertEquals("high", ModelRoute.PATTERNS.defaultEffort)
         assertEquals(Settings.MODEL_FABLE, ModelRoute.PATTERNS_DUPES.defaultModel)
         assertEquals("medium", ModelRoute.PATTERNS_DUPES.defaultEffort)
     }
@@ -61,7 +59,7 @@ class ModelRoutesTest {
 
     @Test
     fun `пустое усилие значит «не передавать» и допустимо`() {
-        assertEquals("", ModelChoice.of(ModelRoute.PATTERNS, null, "").effort)
+        assertEquals("", ModelChoice.of(ModelRoute.PATTERNS_DUPES, null, "").effort)
         assertEquals("по умолчанию", Models.effortLabel(""))
     }
 }

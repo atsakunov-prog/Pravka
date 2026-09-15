@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
@@ -36,7 +35,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -69,7 +67,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -77,7 +74,6 @@ import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import ru.zf.pravka.core.PhoneDaySummary
 import ru.zf.pravka.core.WakingShare
 import ru.zf.pravka.data.PhoneStore
 import ru.zf.pravka.data.PhoneSweeper
@@ -86,7 +82,11 @@ import ru.zf.pravka.core.PlaceDeal
 import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.data.phoneDayKey
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.trigger.onZasechkaTap
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.res.painterResource
 
 // Вкладка «Засечка»: the owner's day as a ribbon of entries, the numbers he
 // loves, and the knobs. Everything the buttons capture lands here for review
@@ -283,7 +283,7 @@ private fun buildDayUnits(all: List<ZasechkaStore.Entry>): List<DayUnit> {
 }
 
 @Composable
-internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
+internal fun ZasechkaTab(app: PravkaApp) {
     val context = LocalContext.current
     val store = app.zasechkaStore
     val entries by store.entriesFlow.collectAsState()
@@ -293,8 +293,9 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     val syncStatus by app.zasechkaSync.statusFlow.collectAsState()
     LaunchedEffect(Unit) { store.all() }  // first read triggers the load
 
+    // Режим «Неделя» и кнопка отмены сняты (владелец, 15.09.2026: «я их не
+    // использую»); отменить последнюю операцию можно из меню долгого нажатия «З».
     var dayOffset by remember { mutableStateOf(0) }
-    var weekMode by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<ZasechkaStore.Entry?>(null) }
     // Chain edit: the whole sliced-up activity at once, all fragments.
     var editingChain by remember { mutableStateOf<List<ZasechkaStore.Entry>?>(null) }
@@ -318,7 +319,7 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
 
     val dayStart = remember(dayOffset) { dayStartBack(dayOffset) }
     val dayEnd = dayStart + 86_400_000L
-    val rangeStart = if (weekMode) dayStart - 6 * 86_400_000L else dayStart
+    val rangeStart = dayStart
     val rangeEntries = remember(entries, rangeStart, dayEnd) {
         // Tie-break: on an equal start the owner's entry goes before the auto
         // fact - a zero-length head fragment must precede the interruption it
@@ -334,9 +335,7 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
     }
     val worthOf: (String) -> Int = { worthByCat[it.trim().lowercase()] ?: 0 }
     // Day view groups the ribbon into units (chains + singles), newest first.
-    val dayUnits = remember(rangeEntries, weekMode) {
-        if (weekMode) emptyList() else buildDayUnits(rangeEntries).asReversed()
-    }
+    val dayUnits = remember(rangeEntries) { buildDayUnits(rangeEntries).asReversed() }
 
     val submitText: () -> Unit = submit@{
         val text = draft.trim()
@@ -366,25 +365,15 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 32.dp),
     ) {
-        item {
-            Text("Засечка", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "Кнопка «З» — нажал, сказал, чем занят, нажал ещё раз. Сонет разберёт по категориям сам.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-            )
-        }
-
-        // ---- date navigation + day/week toggle ----
+        // Название и значки — в общей шапке (ui/Frame.kt). Здесь сразу день.
+        // ---- date navigation ----
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { dayOffset += if (weekMode) 7 else 1 }) {
+                IconButton(onClick = { dayOffset += 1 }) {
                     Icon(Icons.Filled.KeyboardArrowLeft, contentDescription = "раньше")
                 }
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     val label = when {
-                        weekMode -> "неделя до " + dayLabelFormat.format(Date(dayStart))
                         dayOffset == 0 -> "сегодня"
                         dayOffset == 1 -> "вчера"
                         else -> dayLabelFormat.format(Date(dayStart))
@@ -392,7 +381,7 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     Text(label, style = MaterialTheme.typography.titleMedium)
                 }
                 IconButton(
-                    onClick = { dayOffset = (dayOffset - (if (weekMode) 7 else 1)).coerceAtLeast(0) },
+                    onClick = { dayOffset = (dayOffset - 1).coerceAtLeast(0) },
                     enabled = dayOffset > 0,
                 ) {
                     Icon(Icons.Filled.KeyboardArrowRight, contentDescription = "позже")
@@ -403,32 +392,12 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             val balance = rangeEntries.sumOf { e ->
                 worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now).toDouble() / 3_600_000.0
             }
-            RainbowScoreBar(kotlin.math.round(balance).toInt(), weekMode)
-            Spacer(Modifier.height(4.dp))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FilterChip(selected = !weekMode, onClick = { weekMode = false }, label = { Text("День") })
-                FilterChip(selected = weekMode, onClick = { weekMode = true }, label = { Text("Неделя") })
-                // Undo: a voice "удали обед" or a mistyped time is one press
-                // away from coming back, with the act named on the button.
-                val undoLabel by store.undoFlow.collectAsState()
-                undoLabel?.let { label ->
-                    TextButton(onClick = {
-                        app.appScope.launch {
-                            val undone = store.undoLast()
-                            app.zasechkaSync.kickSoon(app.appScope)
-                            Feedback.toast(app, if (undone != null) "↩︎ Отменено: $undone" else "Отменять нечего")
-                        }
-                    }) { Text("↩︎ $label") }
-                }
-            }
+            RainbowScoreBar(kotlin.math.round(balance).toInt(), weekMode = false)
             Spacer(Modifier.height(12.dp))
         }
 
         // ---- quick add: one dense row, voice or typed ----
-        if (!weekMode && dayOffset == 0) {
+        if (dayOffset == 0) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
@@ -442,13 +411,21 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     IconButton(onClick = { submitText() }, enabled = !processing && draft.isNotBlank()) {
                         Icon(Icons.Filled.Send, contentDescription = "записать")
                     }
+                    // Микрофон — штриховой пиктограммой, в одном языке с кнопками,
+                    // а не эмодзи (владелец: «микрофончик сделать более стильным»).
                     IconButton(onClick = {
                         val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
                         if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
                         else service.onZasechkaTap()
-                    }) { Text("🎙", fontSize = 18.sp) }
+                    }) {
+                        Icon(
+                            painterResource(R.drawable.ic_mic),
+                            contentDescription = "надиктовать",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(10.dp))
             }
         }
 
@@ -456,8 +433,12 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         // uninterrupted entry is one dense table line; a sliced-up activity is
         // ONE block: a tall line for the whole span, the net Σ beside it
         // (owner: "а то кусками") ----
-        if (!weekMode) {
-            itemsIndexed(dayUnits, key = { _, u -> u.fragments.first().id }) { index, unit ->
+        // Лента — одна плашка с заголовком (владелец: «текст в плашках,
+        // заголовки того, что будет дальше»). Дневные записи — обычная
+        // колонка внутри карточки: их несколько десятков, ленивость не нужна.
+        item {
+            PaperCard(label = "лента") {
+              dayUnits.forEachIndexed { index, unit ->
                 val head = unit.fragments.first()
                 val doStop: () -> Unit = {
                     app.appScope.launch { app.zasechkaEngine.closeOpen() }
@@ -523,17 +504,16 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     }
                 }
             }
-            if (rangeEntries.isEmpty()) {
-                item {
+              if (rangeEntries.isEmpty()) {
                     Text(
                         "Записей за этот день нет.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
-                }
+              }
             }
-            item { Spacer(Modifier.height(10.dp)) }
+            Spacer(Modifier.height(14.dp))
         }
 
         // ---- totals: EVERY category, laid out in rainbow order (red work at
@@ -541,6 +521,7 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         // of the day at a glance and aims for the inverted triangle: long red
         // bars up top, short violet ones below. Zero rows stay visible but dim.
         item {
+          PaperCard(label = "итоги") {
             // Summed in MILLISECONDS and rounded once: adding up per-entry
             // whole minutes is how the day used to come out short of the clock.
             val rangeTo = minOf(now, dayEnd)
@@ -563,23 +544,11 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             val rows = names.map { it to (minutesByCat[it.lowercase()] ?: 0L) } +
                 listOfNotNull(minutesByCat[""]?.takeIf { it > 0 }?.let { "" to it })
             val awakeMin = WakingShare.awakeMinutes(minutesByCat)
-            val sleepMin = msToMin(msByCat.filterKeys { WakingShare.isSleep(it) }.values.sum())
-            // The audit line: the ribbon must add up to the clock. Covered time
-            // vs the day's elapsed span - a visible remainder means a real hole
-            // (a fresh one, still inside the 45-minute «Потери» quarantine),
-            // not rounding, which is now exact to the minute.
-            val elapsedMs = (rangeTo - rangeStart).coerceAtLeast(0L)
-            val uncoveredMin = msToMin((elapsedMs - msByCat.values.sum()).coerceAtLeast(0L))
-            Text(
-                (if (weekMode) "За неделю" else "За день") + ": ${fmtDur(awakeMin)} без сна" +
-                    (if (sleepMin > 0) " · сон ${fmtDur(sleepMin)}" else "") +
-                    " · записей: ${mainEntries.size}" +
-                    (if (uncoveredMin >= 2) " · не покрыто ${fmtDur(uncoveredMin)}" else ""),
-                style = MaterialTheme.typography.titleSmall,
-            )
-            // Из чего сложился балл: плюс и минус по отдельности. Ноль на
-            // полоске - это чаще всего не «не посчиталось», а честная ничья:
-            // час потерь по −10 съедает час работы по +10, и это видно.
+            // Из чего сложился балл: плюс и минус по отдельности, одной
+            // строкой по центру между лентой и категориями (владелец, 15.09:
+            // «„за день 4 ч 5 мин без сна, баланс +11“ загрязняет — просто
+            // „баланс +11 = +12 − 2“, нормально, посередине»). Ноль на полоске —
+            // чаще всего честная ничья: час потерь съедает час работы.
             var plus = 0.0
             var minus = 0.0
             for (e in mainEntries) {
@@ -589,34 +558,11 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             val net = kotlin.math.round(plus + minus).toInt()
             Text(
                 "Баланс ${if (net >= 0) "+$net" else "$net"} = " +
-                    "+${kotlin.math.round(plus).toInt()} и ${kotlin.math.round(minus).toInt()}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "+${kotlin.math.round(plus).toInt()} − ${kotlin.math.round(-minus).toInt()}",
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
             )
-            // Телефон за день — то, что пришло на смену параллельному треку.
-            // Владелец: «просто давай считать каждый день, сколько на Клод,
-            // телеграм, звонки, сколько на ютуб». Одной строкой, здесь же, у
-            // итогов дня; подробности — в разделе «Телефон» ниже.
-            val phoneDays by app.phoneStore.daysFlow.collectAsState()
-            val phoneTracked by app.phoneStore.immersiveFlow.collectAsState()
-            val phoneOff by app.phoneStore.offFlow.collectAsState()
-            val phoneLabels by app.phoneStore.labelsFlow.collectAsState()
-            val phoneLine = remember(phoneDays, phoneTracked, phoneOff, phoneLabels, dayStart, weekMode) {
-                val keys =
-                    if (weekMode) (0..6).map { phoneDayKey(dayStart - it * 86_400_000L) }
-                    else listOf(phoneDayKey(dayStart))
-                val agg = aggregatePhoneDays(phoneDays, keys)
-                PhoneDaySummary.line(
-                    PhoneDaySummary.of(agg, phoneTracked.filterKeys { it !in phoneOff }, phoneLabels)
-                )
-            }
-            if (phoneLine.isNotBlank()) {
-                Text(
-                    "Телефон: $phoneLine",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             Spacer(Modifier.height(6.dp))
             val max = rows.maxOfOrNull { it.second } ?: 0L
             for ((category, minutes) in rows) {
@@ -684,52 +630,31 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(Modifier.height(12.dp))
-        }
-
-        // ---- clients (who eats the time) ----
-        if (weekMode) {
-            item {
-                val byClient = rangeEntries
-                    .filter { it.client.isNotBlank() }
-                    .groupBy { it.client }
-                    .mapValues { (_, list) ->
-                        msToMin(list.sumOf { it.durationMsIn(rangeStart, minOf(now, dayEnd), now) })
-                    }
-                    .entries.sortedByDescending { it.value }
-                if (byClient.isNotEmpty()) {
-                    Text("По клиентам", style = MaterialTheme.typography.titleSmall)
-                    for ((client, minutes) in byClient) {
-                        Text(
-                            "$client — ${fmtDur(minutes)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(vertical = 2.dp),
-                        )
-                    }
-                    Spacer(Modifier.height(12.dp))
-                }
-            }
+          }
+          Spacer(Modifier.height(14.dp))
         }
 
         // ---- the phone layer: separate from the ribbon by design ----
         item {
-            PhoneSection(app, dayStart, weekMode, now)
+            PhoneSection(app, dayStart, now)
             Spacer(Modifier.height(12.dp))
         }
-
-        // Настройки режима живут в одной вкладке со всеми остальными -
-        // здесь только дорога туда, одним тапом вместо трёх.
-        item {
-            Spacer(Modifier.height(16.dp))
-            SettingsLink("Настройки Засечки", onOpenSettings)
-        }
+        // Настройки режима — за шестерёнкой в шапке вкладки.
     }
 
+    // Микрофон в редакторе: сказанное правит ИМЕННО эту запись — движок
+    // получает её id и просит модель вернуть edit по ней, а не новое дело.
+    val dictateEdit: (ZasechkaStore.Entry) -> Unit = { target ->
+        val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+        if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
+        else service.onZasechkaTap(editTargetId = target.id)
+    }
     editing?.let { entry ->
         EditEntryDialog(
             entry = entry,
             categories = categoryNames,
             onDismiss = { editing = null },
+            onDictate = { editing = null; dictateEdit(entry) },
             onSave = { updated ->
                 editing = null
                 app.appScope.launch {
@@ -759,6 +684,7 @@ internal fun ZasechkaTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
             entry = shown,
             categories = categoryNames,
             onDismiss = { editingChain = null },
+            onDictate = { editingChain = null; dictateEdit(first) },
             onSave = { updated ->
                 editingChain = null
                 app.appScope.launch {
@@ -2344,7 +2270,7 @@ private fun aggregatePhoneDays(
 }
 
 @Composable
-private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now: Long) {
+private fun PhoneSection(app: PravkaApp, dayStart: Long, now: Long) {
     val context = LocalContext.current
     val days by app.phoneStore.daysFlow.collectAsState()
     val immersive by app.phoneStore.immersiveFlow.collectAsState()
@@ -2357,250 +2283,151 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
     var callGranted by remember { mutableStateOf(PhoneSweeper.hasCallLogAccess(context)) }
     var editingApp by remember { mutableStateOf<String?>(null) }
 
-    var expanded by remember { mutableStateOf(false) }
-
     // Re-check permissions and freshen the aggregates while the tab is open
     // (the `now` clock ticks every 30 seconds).
-    LaunchedEffect(now, dayStart, weekMode) {
+    LaunchedEffect(now, dayStart) {
         usageGranted = PhoneSweeper.hasUsageAccess(context)
         callGranted = PhoneSweeper.hasCallLogAccess(context)
         if (usageGranted) app.phoneSweeper.sweep()
     }
 
-    val keys =
-        if (weekMode) (0..6).map { phoneDayKey(dayStart - it * 86_400_000L) }
-        else listOf(phoneDayKey(dayStart))
-    val agg = aggregatePhoneDays(days, keys)
-
-    // Collapsed by default (owner's ask) - the headline carries the numbers.
-    TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(0.dp)) {
-        Text(
-            (if (expanded) "▾ Телефон" else "▸ Телефон") +
-                when {
-                    !usageGranted -> " · нет доступа"
-                    agg.screenMs > 0 ->
-                        " · ${fmtDur(agg.screenMs / 60_000)} · ↑${agg.pickups} · отвл. ${agg.glances}"
-                    else -> ""
-                },
-        )
-    }
-    if (!expanded) return
-    if (!usageGranted) {
-        Text(
-            "Дай Правке доступ к статистике использования — появятся время в приложениях, " +
-                "подъёмы телефона и счётчик отвлечений, а у итогов дня — строка «Телефон»: " +
-                "сколько на YouTube, Telegram, Claude и звонки.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedButton(onClick = {
-            runCatching {
-                context.startActivity(
-                    android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
-                )
-            }
-        }) { Text("Дать доступ к статистике") }
-        return
-    }
-
-    Text(
-        "Отвлечение = взял телефон и убрал быстрее чем за 2 минуты",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-
-    val topApps = agg.apps.entries
-        .filter { !isFurniturePkg(it.key) }
-        .sortedByDescending { it.value }
-        .take(8)
-    val maxMs = topApps.firstOrNull()?.value ?: 0L
-    for ((pkg, ms) in topApps) {
-        val label = appLabelOf(labels, pkg)
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { editingApp = pkg }
-                .padding(vertical = 2.dp),
-        ) {
-            Text(
-                (if (immersive.containsKey(pkg)) "⚡ " else "") + label,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.width(130.dp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(10.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(5.dp)),
-            ) {
-                val fraction = if (maxMs > 0) ms.toFloat() / maxMs else 0f
-                Box(
-                    Modifier
-                        .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
-                        .height(10.dp)
-                        .background(
-                            // Warm family: gold for tools, terracotta for the
-                            // attention eaters.
-                            if (immersive.containsKey(pkg)) Color(0xFFC2410C) else Color(0xFFD97706),
-                            RoundedCornerShape(5.dp),
-                        ),
-                )
-            }
-            Text(
-                fmtDur(ms / 60_000),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(start = 8.dp).width(64.dp),
-            )
-        }
-    }
-    if (topApps.isEmpty()) {
-        Text(
-            "Данных пока нет — они появятся в течение нескольких минут.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    } else {
-        Text(
-            "Тап по приложению — считать его по дням (строка «Телефон» у итогов и база «Телефон» в Notion).",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-    // Телефон в ленту не пишет ничего, кроме сна. Врезки резали дело,
-    // параллельный трек засорял ленту — оба опыта владелец закрыл. Теперь
-    // телефон считается по дням: строка «Телефон» у итогов и база «Телефон» в Notion.
-    Spacer(Modifier.height(6.dp))
-    Text(
-        "В ленту телефон не пишет ничего, кроме сна по экрану. YouTube, Telegram, " +
-            "Claude и звонки считаются по дням — строкой у итогов дня и в «Телефоне» Notion.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-
-    // Chrome per-site rows removed with the omnibox poller (owner's call:
-    // the fold black-screens correlated with it). Old site data stays in
-    // phone.json but is no longer shown or collected.
-
-    val topGlance = agg.glanceApps.entries
-        .filter { !isNoisePkg(it.key) }
-        .sortedByDescending { it.value }
-        .take(3)
-    if (topGlance.isNotEmpty()) {
-        Text(
-            "Чаще всего отвлекали: " + topGlance.joinToString(", ") {
-                "${appLabelOf(labels, it.key)} ×${it.value}"
-            },
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(top = 4.dp),
-        )
-    }
-
-    // ---- calls: counted per day from the call log ----
-    val callsOn by app.settings.zCallsFlow.collectAsState(initial = true)
+    val agg = aggregatePhoneDays(days, listOf(phoneDayKey(dayStart)))
+    val tracked = remember(immersive, offApps) { immersive.filterKeys { it !in offApps } }
     val callPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> callGranted = granted }
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
-        Column(Modifier.weight(1f)) {
-            Text("Считать звонки", style = MaterialTheme.typography.bodyMedium)
+
+    // Раздел — плашка с заголовком, всегда раскрыт и без пояснений (владелец,
+    // 15.09.2026: «просто телефон, общее время и дальше по каждому приложению
+    // сколько»). Тап по приложению — считать его по дням (строка в «Телефоне»
+    // Notion и в Общей статистике) или перестать; считаемое подсвечено.
+    // Долгое нажатие — категория и «звук в фоне». Тумблер звонков и досчёт
+    // прошлых дней сняты: звонки считаются всегда, если журнал разрешён.
+    PaperCard(
+        label = "телефон",
+        trailing = {
+            if (usageGranted && agg.screenMs > 0) {
+                Text(
+                    fmtDur(agg.screenMs / 60_000),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        },
+    ) {
+        if (!usageGranted) {
+            OutlinedButton(onClick = {
+                runCatching {
+                    context.startActivity(
+                        android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                    )
+                }
+            }) { Text("Дать доступ к статистике использования") }
+            return@PaperCard
+        }
+
+        val trackedMs = agg.apps.entries.filter { it.key in tracked }.sumOf { it.value }
+        Text(
+            buildString {
+                append("Экран ").append(fmtDur(agg.screenMs / 60_000))
+                if (trackedMs > 0) append(" · считается ").append(fmtDur(trackedMs / 60_000))
+                if (agg.calls > 0) {
+                    append(" · звонки ").append(fmtDur(agg.callsMs / 60_000)).append(" · ").append(agg.calls)
+                }
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+
+        val topApps = agg.apps.entries
+            .filter { !isFurniturePkg(it.key) }
+            .sortedByDescending { it.value }
+            .take(10)
+        val maxMs = topApps.firstOrNull()?.value ?: 0L
+        for ((pkg, ms) in topApps) {
+            val label = appLabelOf(labels, pkg)
+            val on = pkg in tracked
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .combinedClickable(
+                        onClick = {
+                            app.appScope.launch {
+                                when {
+                                    // Категория здесь — заглушка: считать по дням
+                                    // можно без неё, а настоящую даст долгое нажатие.
+                                    pkg !in immersive -> app.phoneStore.setImmersive(pkg, "телефон")
+                                    pkg in offApps -> app.phoneStore.setTracked(pkg, true)
+                                    else -> app.phoneStore.setTracked(pkg, false)
+                                }
+                            }
+                        },
+                        onLongClick = { editingApp = pkg },
+                    )
+                    .padding(vertical = 3.dp),
+            ) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (on) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(120.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(10.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(5.dp)),
+                ) {
+                    val fraction = if (maxMs > 0) ms.toFloat() / maxMs else 0f
+                    Box(
+                        Modifier
+                            .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
+                            .height(10.dp)
+                            .background(
+                                // Считаемое — акцентом, остальное — приглушённой охрой.
+                                if (on) MaterialTheme.colorScheme.primary
+                                else Color(0xFFD97706).copy(alpha = 0.45f),
+                                RoundedCornerShape(5.dp),
+                            ),
+                    )
+                }
+                Text(
+                    fmtDur(ms / 60_000),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    modifier = Modifier.padding(start = 8.dp).width(56.dp),
+                    textAlign = TextAlign.End,
+                )
+                Text(
+                    if (on) "✓" else " ",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.width(16.dp),
+                    textAlign = TextAlign.End,
+                )
+            }
+        }
+        if (topApps.isEmpty()) {
             Text(
-                "Разговоры ≥1 мин по журналу: минуты, число и с кем — за день",
+                "Данных пока нет — появятся в течение нескольких минут.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // Звонки считаются по журналу; без разрешения — только кнопка дать его.
         if (!callGranted) {
-            TextButton(onClick = { callPermission.launch(Manifest.permission.READ_CALL_LOG) }) {
-                Text("Разрешить")
-            }
-        } else {
-            Switch(checked = callsOn, onCheckedChange = { v ->
-                app.appScope.launch { app.settings.setZCalls(v) }
-            })
+            Spacer(Modifier.height(4.dp))
+            TextButton(
+                onClick = { callPermission.launch(Manifest.permission.READ_CALL_LOG) },
+                contentPadding = PaddingValues(0.dp),
+            ) { Text("Разрешить журнал звонков") }
         }
-    }
-
-    // Список того, что считается по дням, — тумблерами, а не догадками по
-    // серому списку экранного времени. Выключенное приложение остаётся в
-    // списке со своей категорией: тумблер обратно — и оно снова считается.
-    Spacer(Modifier.height(12.dp))
-    Text("Приложения по дням", style = MaterialTheme.typography.titleSmall)
-    Text(
-        "Их минуты за день — в строке «Телефон» у итогов и в «Телефоне» Notion. Тап по " +
-            "строке — категория-подсказка и «звук в фоне».",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    if (immersive.isEmpty()) {
-        Text(
-            "Пока пусто — отметь приложение тапом в списке выше.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-    for ((pkg, category) in immersive.entries.sortedBy { appLabelOf(labels, it.key).lowercase() }) {
-        val on = pkg !in offApps
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { editingApp = pkg }
-                .padding(vertical = 2.dp),
-        ) {
-            Switch(
-                checked = on,
-                onCheckedChange = { v -> app.appScope.launch { app.phoneStore.setTracked(pkg, v) } },
-            )
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    appLabelOf(labels, pkg),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (on) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    category.ifBlank { "без категории" } +
-                        (if (pkg in audioApps) " · звук в фоне" else ""),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
-            IconButton(
-                onClick = { app.appScope.launch { app.phoneStore.forgetApp(pkg) } },
-                modifier = Modifier.size(30.dp),
-            ) {
-                Icon(
-                    Icons.Filled.Clear,
-                    contentDescription = "убрать из списка",
-                    modifier = Modifier.size(15.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-
-    // Досчёт прошлых дней: телефон помнит суточные суммы по приложениям и
-    // журнал звонков дольше, чем живёт приложение. Дни до установки можно
-    // досчитать — без сессий, но с честными минутами за день.
-    var backfill by remember { mutableStateOf(false) }
-    Spacer(Modifier.height(8.dp))
-    OutlinedButton(onClick = { backfill = true }) { Text("Досчитать прошлые дни") }
-    Text(
-        "Поднимает из памяти телефона суточные суммы по приложениям и звонки за " +
-            "дни, которых Правка не видела сама. В ленту ничего не пишет — только в " +
-            "счётчики телефона и в «Телефон» Notion.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    if (backfill) {
-        BackfillDialog(app = app, onDismiss = { backfill = false })
     }
 
     editingApp?.let { pkg ->
@@ -2621,14 +2448,6 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, weekMode: Boolean, now:
     }
 }
 
-/**
- * Разметка задним числом. Показывает, что телефон помнит и чего в ленте нет,
- * даёт каждому источнику категорию и кладёт выбранное во второй трек.
- *
- * Категории не угадываются: «Клод» у владельца может быть и работой, и
- * систематизацией, и это знает только он. Поэтому список с выбором, а не
- * кнопка «сделай хорошо».
- */
 /**
  * Правила разбора Засечки: набор, одобренный владельцем, едет в каждый разбор
  * фразы. Самообучение, которое их предлагало каждую ночь (батч Опусом, ⭐ над
@@ -2718,110 +2537,6 @@ private fun ZasechkaRulesSection(app: PravkaApp) {
             }
         }
     }
-}
-
-@Composable
-private fun BackfillDialog(app: PravkaApp, onDismiss: () -> Unit) {
-    var days by remember { mutableStateOf(30) }
-    var scan by remember { mutableStateOf<ru.zf.pravka.data.PhoneSweeper.BackfillScan?>(null) }
-    var scanning by remember { mutableStateOf(true) }
-    var busy by remember { mutableStateOf(false) }
-    val stamp = remember { SimpleDateFormat("d MMMM", Locale("ru")) }
-    val labels by app.phoneStore.labelsFlow.collectAsState()
-    val tracked by app.phoneStore.immersiveFlow.collectAsState()
-
-    LaunchedEffect(days) {
-        scanning = true
-        scan = runCatching { app.phoneSweeper.scanBackfill(days) }.getOrNull()
-        scanning = false
-    }
-
-    val found = scan
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text("Досчитать прошлые дни") },
-        text = {
-            Column(
-                Modifier
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (d in listOf(7, 30, 90)) {
-                        FilterChip(
-                            selected = days == d,
-                            onClick = { if (!busy) days = d },
-                            label = { Text("$d дней") },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                when {
-                    scanning -> Text("Смотрю память телефона…", style = MaterialTheme.typography.bodySmall)
-                    found == null || found.days.isEmpty() -> Text(
-                        "Досчитывать нечего: все дни за это окно Правка видела сама.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    else -> {
-                        Text(
-                            "Дней без данных: ${found.count}. Что в них нашлось:",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        // Итог по окну — теми же словами, что строка «Телефон».
-                        val total = aggregatePhoneDays(found.days, found.days.keys.sorted())
-                        val line = PhoneDaySummary.line(PhoneDaySummary.of(total, tracked, labels))
-                        Text(
-                            line.ifBlank { "только экранное время без отмеченных приложений" },
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(vertical = 4.dp),
-                        )
-                    }
-                }
-                if (found != null && !scanning) {
-                    Spacer(Modifier.height(8.dp))
-                    // Честно про глубину: суточные суммы система держит дольше
-                    // поимённых событий, звонки — месяцами.
-                    val lines = buildList {
-                        when {
-                            found.noUsageAccess ->
-                                add("Нет доступа к статистике использования — приложений не будет.")
-                            found.appsFrom > 0 ->
-                                add("Приложения: суммы с ${stamp.format(Date(found.appsFrom))}.")
-                            else -> add("Приложения: система не отдала сумм за это окно.")
-                        }
-                        when {
-                            found.noCallAccess -> add("Нет доступа к журналу звонков.")
-                            found.callsFrom > 0 -> add("Звонки: с ${stamp.format(Date(found.callsFrom))}.")
-                        }
-                        add("Дни, которые Правка считала сама, не трогаются: они точнее.")
-                    }
-                    Text(
-                        lines.joinToString("\n"),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                enabled = !busy && !scanning && found != null && found.days.isNotEmpty(),
-                onClick = {
-                    busy = true
-                    app.appScope.launch {
-                        val added = runCatching { app.phoneSweeper.applyBackfill(found!!) }.getOrDefault(0)
-                        Feedback.toast(
-                            app,
-                            if (added > 0) "Досчитано дней: $added" else "Новых дней не нашлось",
-                        )
-                        busy = false
-                        onDismiss()
-                    }
-                },
-            ) { Text(if (busy) "Пишу…" else "Досчитать") }
-        },
-        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Отмена") } },
-    )
 }
 
 @Composable
@@ -3002,6 +2717,8 @@ private fun EditEntryDialog(
     onDismiss: () -> Unit,
     onSave: (ZasechkaStore.Entry) -> Unit,
     onDelete: () -> Unit,
+    /** Микрофон сверху: надиктовать поправку — «он поменяет» (владелец, 15.09). */
+    onDictate: (() -> Unit)? = null,
 ) {
     var title by remember { mutableStateOf(entry.title) }
     var category by remember { mutableStateOf(entry.category) }
@@ -3023,9 +2740,26 @@ private fun EditEntryDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Запись") },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Запись", modifier = Modifier.weight(1f))
+                if (onDictate != null) {
+                    IconButton(onClick = onDictate) {
+                        Icon(
+                            painterResource(R.drawable.ic_mic),
+                            contentDescription = "надиктовать поправку",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+        },
         text = {
             Column {
+                if (onDictate != null) {
+                    PaperHint("Микрофон: скажи, что поменять, — «это был обед», «до 17:40», «категория семья».")
+                    Spacer(Modifier.height(8.dp))
+                }
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },

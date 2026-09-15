@@ -116,19 +116,50 @@ class TranscriptionLog(private val context: Context) {
         }.getOrElse { emptyList() }
     }
 
+    /** Время записи в миллисекундах; строка не разобралась — 0. */
+    fun tsMillis(entry: Entry): Long =
+        runCatching { timestampFormat.parse(entry.ts)?.time ?: 0L }.getOrDefault(0L)
+
+    /**
+     * Записи за период [fromMs, toMs), свежие сверху. Владелец (15.09): у
+     * выгрузки должен быть выбор периода — день, неделя, месяц, свой, — а не
+     * «весь лог целиком».
+     */
+    @Synchronized
+    fun readRange(fromMs: Long, toMs: Long): List<Entry> =
+        readLast(100_000).filter { val t = tsMillis(it); t in fromMs until toMs }
+
     /** Shares the raw JSONL (transcripts + metrics) for prompt tuning. */
     fun shareJsonIntent(): Intent = shareFileIntent(context, file, "application/json")
+
+    /** Тот же JSONL, но только за период: файл собирается в кэше из отфильтрованных строк. */
+    fun shareJsonIntent(fromMs: Long, toMs: Long): Intent {
+        val out = File(context.cacheDir, "pravka-transcriptions.jsonl")
+        out.bufferedWriter().use { w ->
+            for (e in readRange(fromMs, toMs).asReversed()) {
+                val o = JSONObject().apply {
+                    put("ts", e.ts); put("engine", e.engine); put("audio_ms", e.audioMs)
+                    put("transcribe_ms", e.transcribeMs); put("chars", e.chars); put("words", e.words)
+                    put("ok", e.ok); put("text", e.text)
+                    if (e.error != null) put("error", e.error)
+                }
+                w.write(o.toString()); w.write("\n")
+            }
+        }
+        return shareFileIntent(context, out, "application/json")
+    }
 
     /**
      * Writes a metrics-only CSV (no transcript text) to the cache and returns a
      * share intent for it. Columns: timestamp, engine, audio seconds,
      * transcription seconds, chars, chars/sec, realtime factor, ok.
      */
-    fun shareMetricsCsvIntent(): Intent {
+    fun shareMetricsCsvIntent(fromMs: Long = 0L, toMs: Long = Long.MAX_VALUE): Intent {
         val csv = buildString {
             append("ts,engine,audio_sec,transcribe_sec,chars,words,chars_per_sec,realtime_factor,ok\n")
             // Oldest-first in the export so a spreadsheet reads chronologically.
-            for (e in readLast(10_000).asReversed()) {
+            val rows = if (fromMs == 0L && toMs == Long.MAX_VALUE) readLast(10_000) else readRange(fromMs, toMs)
+            for (e in rows.asReversed()) {
                 val audioSec = e.audioMs / 1000.0
                 val transcribeSec = e.transcribeMs / 1000.0
                 val charsPerSec = if (transcribeSec > 0) e.chars / transcribeSec else 0.0

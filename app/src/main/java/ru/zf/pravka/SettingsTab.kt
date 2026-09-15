@@ -59,8 +59,12 @@ import kotlinx.coroutines.launch
 // BodySportSettings в SportTab), а тут только собираются. Так правка режима не
 // растаскивается по двум файлам.
 
-/** Группы. Порядок сверху вниз — от общего к частному. */
-private enum class Group(val title: String, val hint: String) {
+/**
+ * Группы. Порядок сверху вниз — от общего к частному. Шестерёнка в шапке
+ * каждой вкладки открывает СВОЮ группу отдельным экраном (`ModeSettingsScreen`),
+ * а «Ещё → Настройки» — всё вместе, с службой и обновлениями сверху.
+ */
+internal enum class SettingsGroup(val title: String, val hint: String) {
     COMMON("Общее", "Ключ Anthropic, кнопки на экране, сохранённые записи"),
     MODELS("Модели", "Какая модель и с каким усилием работает в каждом режиме"),
     PRAVKA("Правка", "Распознавание речи, проза, контекст разговора"),
@@ -75,7 +79,7 @@ internal fun SettingsTab(
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
 ) {
-    var open by remember { mutableStateOf<Group?>(null) }
+    var open by remember { mutableStateOf<SettingsGroup?>(null) }
 
     Column(
         modifier = Modifier
@@ -113,27 +117,55 @@ internal fun SettingsTab(
         // не открывая ничего, ровно как состояние службы.
         UpdatesCard(app)
 
-        for (group in Group.entries) {
-            SettingsGroup(
+        for (group in SettingsGroup.entries) {
+            SettingsGroupRow(
                 group = group,
                 open = open == group,
                 // «Тело» рисует свои карточки само (PaperCard) — обёртка дала бы
                 // карточку в карточке.
-                card = group != Group.BODY,
+                card = group != SettingsGroup.BODY,
                 onToggle = { open = if (open == group) null else group },
             ) {
-                when (group) {
-                    Group.COMMON -> CommonSettings(app, serviceEnabled)
-                    Group.MODELS -> ModelsSettings(app)
-                    Group.PRAVKA -> PravkaSettings(app)
-                    Group.ZASECHKA -> ZasechkaSettings(app)
-                    Group.DELA -> TodoistSettings(app)
-                    Group.BODY -> BodySettings(app)
-                }
+                GroupContent(app, group, serviceEnabled)
             }
         }
+    }
+}
 
-        HintText(stringResource(R.string.settings_usage_hint))
+/** Содержимое одной группы — общее для свёрнутого списка и отдельного экрана режима. */
+@Composable
+private fun GroupContent(app: PravkaApp, group: SettingsGroup, serviceEnabled: Boolean) {
+    when (group) {
+        SettingsGroup.COMMON -> CommonSettings(app, serviceEnabled)
+        SettingsGroup.MODELS -> ModelsSettings(app)
+        SettingsGroup.PRAVKA -> PravkaSettings(app)
+        SettingsGroup.ZASECHKA -> ZasechkaSettings(app)
+        SettingsGroup.DELA -> TodoistSettings(app)
+        SettingsGroup.BODY -> BodySettings(app)
+    }
+}
+
+/**
+ * Настройки одного режима — экран за шестерёнкой в шапке вкладки. Владелец
+ * (15.09.2026): «шестерёнка открывает именно настройки Правки, Засечки, Тела,
+ * а общие настройки живут в Настройках». Ни службы, ни обновлений, ни чужих
+ * групп — только своя.
+ */
+@Composable
+internal fun ModeSettingsScreen(app: PravkaApp, group: SettingsGroup, serviceEnabled: Boolean) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
+    ) {
+        if (group == SettingsGroup.BODY) {
+            GroupContent(app, group, serviceEnabled)
+        } else {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) { GroupContent(app, group, serviceEnabled) }
+            }
+        }
     }
 }
 
@@ -167,8 +199,8 @@ internal fun SettingsLink(title: String, onClick: () -> Unit) {
  * сами, и карточка в карточке читается как ошибка вёрстки.
  */
 @Composable
-private fun SettingsGroup(
-    group: Group,
+private fun SettingsGroupRow(
+    group: SettingsGroup,
     open: Boolean,
     card: Boolean,
     onToggle: () -> Unit,
@@ -517,8 +549,8 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
             "слышит хуже кармана. Не подключена — плашка бледная, слушает телефон."
     )
 
-    Spacer(Modifier.height(18.dp))
-    RecordingsSection(app.recordings, serviceEnabled)
+    // Нерасшифрованные записи переехали наверх вкладки «Правка» (15.09.2026):
+    // это то, что ждёт действия с утра, а не настройка.
 }
 
 // ---------------------------------------------------------------------------

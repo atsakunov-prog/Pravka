@@ -2,6 +2,7 @@ package ru.zf.pravka
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,22 +29,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.ShoppingCart
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -87,13 +77,29 @@ import ru.zf.pravka.data.HistoryLog
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
-import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.trigger.PravkaAccessibilityService
+import ru.zf.pravka.ui.CostAction
+import ru.zf.pravka.ui.ExportAction
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.ModeDecor
+import ru.zf.pravka.ui.ModeFrame
 import ru.zf.pravka.ui.PravkaTheme
+import ru.zf.pravka.ui.SettingsAction
+import ru.zf.pravka.ui.StatsAction
+import ru.zf.pravka.ui.TabHeader
 
 // Tabs: Засечка (the daily surface), then the Правка service tabs.
 // Editorial "proofreader" design: paper, ink, red pen (ui/Theme.kt).
+//
+// Каждая вкладка — под общей шапкой (ui/Frame.kt): пиктограмма режима,
+// название с полоской и три значка справа — статистика, доллар (стоимость
+// API), шестерёнка настроек своего режима. Владелец (15.09.2026): «в каждой
+// вкладке справа наверху шестерёнка именно этого режима, кнопка статистики и
+// доллар; пояснения под названием убрать». Служебные экраны из «Ещё», экран
+// стоимости и настройки режима открываются ПОВЕРХ нижней вкладки (Page) и
+// закрываются «‹» или системным «назад» — владелец возвращается туда, откуда
+// пришёл, а не в список «Ещё».
+
 class MainActivity : ComponentActivity() {
 
     companion object {
@@ -106,7 +112,6 @@ class MainActivity : ComponentActivity() {
         const val TAB_SPORT = "sport"
         const val TAB_FOOD = "food"
         const val TAB_SETTINGS = "settings"
-        const val TAB_ITOGI = "itogi"
         const val TAB_PROMPTS = "prompts"
 
         // Кнопка еды: «сфоткай тарелку» / «штрихкод» с длинного нажатия
@@ -192,7 +197,6 @@ class MainActivity : ComponentActivity() {
     private fun tabOf(intent: android.content.Intent?): Tab? =
         when (intent?.getStringExtra(EXTRA_TAB)) {
             TAB_SETTINGS -> Tab.SETTINGS
-            TAB_ITOGI -> Tab.ITOGI
             TAB_PROMPTS -> Tab.PROMPTS
             TAB_PRAVKA -> Tab.PRAVKA
             TAB_ZASECHKA -> Tab.ZASECHKA
@@ -271,49 +275,49 @@ internal enum class Tab(val titleRes: Int) {
     FOOD(R.string.tab_food),
     MORE(R.string.tab_more),
     REPORT(R.string.tab_report),
-    ITOGI(R.string.tab_itogi),
-    EXPORT(R.string.tab_export),
     SETTINGS(R.string.tab_settings),
     DICTIONARY(R.string.tab_dictionary),
     PROMPTS(R.string.tab_prompts),
-    TRANSCRIPTS(R.string.tab_transcripts),
     LEARNING(R.string.tab_learning),
     LOGS(R.string.tab_logs),
+    /** Статистика диктовки — открывается значком статистики в шапке Правки, в «Ещё» её нет. */
     STATS(R.string.tab_stats),
 }
 
 /**
  * Что живёт под «Ещё»: всё, что обслуживает Правку, а не день. Порядок — по
- * тому, как часто туда правда заходят.
+ * тому, как часто туда правда заходят; общие настройки — последними: у
+ * каждого режима есть своя шестерёнка в шапке, сюда ходят за ключом и службой.
  *
- * Список стоит рядом с enum нарочно: добавил вкладку — сразу видно, идёт она
- * вниз или сюда. Внизу места ровно на пять кнопок.
+ * Снято 15.09.2026: «Паттерны» (и их ночной поиск), «Выгрузки» (книга Excel
+ * теперь за значком выгрузки в Общей статистике), «Статистика» (деньги — за
+ * долларом в шапке любой вкладки).
  */
 private val SERVICE_TABS = listOf(
     Tab.REPORT,
-    Tab.ITOGI,
-    Tab.EXPORT,
-    Tab.SETTINGS,
     Tab.DICTIONARY,
-    Tab.STATS,
     Tab.PROMPTS,
     Tab.LEARNING,
     Tab.LOGS,
+    Tab.SETTINGS,
 )
 
 /** Одна строка про то, зачем эта вкладка — чтобы не открывать её наугад. */
 private fun serviceHint(tab: Tab): String = when (tab) {
     Tab.REPORT -> "День в графиках: балл, лента по часам, телефон, тело, еда — и тот же день неделю назад рядом"
-    Tab.ITOGI -> "Повторы, которые Опус находит по всему логу каждую ночь"
-    Tab.EXPORT -> "Вся жизнь одной книгой Excel: листы как базы в Notion, свежее сверху"
-    Tab.SETTINGS -> "Ключ Anthropic, распознавание, служба, сохранённые записи"
+    Tab.SETTINGS -> "Общее: ключ Anthropic, кнопки на экране, служба, обновления, модели"
     Tab.DICTIONARY -> "Как писать имена и термины: заменять, подсказывать, не трогать"
-    Tab.STATS -> "Токены и деньги по дням"
-    Tab.TRANSCRIPTS -> "Журнал распознаваний с метриками: движок, время, символы"
     Tab.PROMPTS -> "Тексты запросов ко всем режимам — правятся и возвращаются к заводским"
-    Tab.LEARNING -> "Правила, выученные на твоих правках, и находки для словаря"
+    Tab.LEARNING -> "Разбор твоих правок по кнопке и принятые правила"
     Tab.LOGS -> "Что делала служба: кнопки, свипы, выгрузки, ошибки"
     else -> ""
+}
+
+/** Экран поверх нижней вкладки: служебный из «Ещё», настройки одного режима или стоимость. */
+private sealed class Page {
+    data class Service(val tab: Tab) : Page()
+    data class ModeSettings(val group: SettingsGroup) : Page()
+    data object Cost : Page()
 }
 
 @Composable
@@ -322,15 +326,9 @@ private fun MoreList(onOpen: (Tab) -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        ScreenTitle(stringResource(R.string.tab_more))
-        HintText(
-            "Служебное и выгрузки. Внизу — ежедневные режимы: Правка, " +
-                "Засечка, Дело, Тело (спорт и еда)."
-        )
-        Spacer(Modifier.height(4.dp))
         for (item in SERVICE_TABS) {
             Card(
                 Modifier
@@ -363,7 +361,9 @@ private fun MoreList(onOpen: (Tab) -> Unit) {
 }
 
 /**
- * Единственная выгрузка приложения — вся жизнь одной книгой Excel.
+ * Единственная выгрузка приложения — вся жизнь одной книгой Excel. Живёт за
+ * значком выгрузки в шапке «Общей статистики» (владелец, 15.09: «выгрузки я бы
+ * сделал в виде иконки справа вверху в статистике»).
  *
  * Владелец (09.09): «уберём все эти экспорты csv и сводки, я ими не пользуюсь,
  * и сделаем один экспорт, который будет экспортировать всё то, что в Notion…
@@ -372,94 +372,71 @@ private fun MoreList(onOpen: (Tab) -> Unit) {
  * колонку, свежее сверху. Ничего своего у файла нет — что в Notion, то и тут.
  */
 @Composable
-private fun ExportTab(app: PravkaApp) {
+private fun LifeExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
     var lastError by remember { mutableStateOf("") }
     val notionStatus by app.notionLifeSync.statusFlow.collectAsState()
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-    ) {
-        ScreenTitle(stringResource(R.string.tab_export))
-        HintText(
-            "Одна книга .xlsx — та же структура, что в Notion под «Правка: " +
-                "разборы»: листы " +
-                ru.zf.pravka.core.NotionLifeSchema.ALL.joinToString(", ") { it.name } +
-                ". Колонки как в базах, даты — настоящие даты Excel, на каждом " +
-                "листе свежее сверху, шапка закреплена, фильтр включён. Идущее " +
-                "сейчас дело в файл не попадает, как и в Notion."
-        )
-        Spacer(Modifier.height(14.dp))
-        Button(
-            onClick = {
-                busy = true
-                lastError = ""
-                app.appScope.launch {
-                    val intent = runCatching { app.lifeExport.shareIntent() }
-                        .onFailure { e ->
-                            // Причина целиком: «не собрался» без причины читается как поломка.
-                            lastError = "Не собралась: ${e.javaClass.simpleName}: ${e.message}"
-                            app.eventLog.add("выгрузка xlsx: $lastError")
-                        }
-                        .getOrNull()
-                    busy = false
-                    if (intent != null) {
-                        runCatching {
-                            context.startActivity(
-                                android.content.Intent.createChooser(intent, "Вся жизнь (.xlsx)")
-                            )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Вся жизнь одной книгой") },
+        text = {
+            Column {
+                HintText(
+                    "Одна книга .xlsx — та же структура, что в Notion под «Правка: разборы»: листы " +
+                        ru.zf.pravka.core.NotionLifeSchema.ALL.joinToString(", ") { it.name } +
+                        ". Свежее сверху, шапка закреплена, фильтр включён."
+                )
+                Spacer(Modifier.height(10.dp))
+                HintText("Notion: " + notionStatus.ifBlank { "синк ещё не запускался" })
+                if (lastError.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        lastError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    busy = true
+                    lastError = ""
+                    app.appScope.launch {
+                        val intent = runCatching { app.lifeExport.shareIntent() }
+                            .onFailure { e ->
+                                // Причина целиком: «не собрался» без причины читается как поломка.
+                                lastError = "Не собралась: ${e.javaClass.simpleName}: ${e.message}"
+                                app.eventLog.add("выгрузка xlsx: $lastError")
+                            }
+                            .getOrNull()
+                        busy = false
+                        if (intent != null) {
+                            onDismiss()
+                            runCatching {
+                                context.startActivity(
+                                    android.content.Intent.createChooser(intent, "Вся жизнь (.xlsx)")
+                                )
+                            }
                         }
                     }
-                }
-            },
-            enabled = !busy,
-        ) { Text(if (busy) "Собираю…" else "Выгрузить .xlsx") }
-        if (lastError.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                lastError,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        Spacer(Modifier.height(16.dp))
-        Text(
-            "Notion",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        HintText(
-            "Синхронизация продолжается сама, раз в час; книга — снимок тех же " +
-                "данных на момент нажатия. Состояние синка: " +
-                notionStatus.ifBlank { "ещё не запускался" } +
-                ". Настройки — «Ещё → Настройки → Тело», Notion."
-        )
-    }
+                },
+                enabled = !busy,
+            ) { Text(if (busy) "Собираю…" else "Выгрузить .xlsx") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
+    )
 }
 
-/** Шапка служебной вкладки: «‹ Ещё» и её название. */
-@Composable
-private fun MoreHeader(title: String, onBack: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable { onBack() }
-            .padding(start = 12.dp, end = 20.dp, top = 12.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            "‹",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.width(10.dp))
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.weight(1f))
-        HintText(stringResource(R.string.tab_more))
-    }
+/** Пиктограмма режима для шапки настроек группы. */
+private fun groupIcon(group: SettingsGroup): Int? = when (group) {
+    SettingsGroup.PRAVKA -> R.drawable.ic_mode_pravka
+    SettingsGroup.ZASECHKA -> R.drawable.ic_mode_zasechka
+    SettingsGroup.DELA -> R.drawable.ic_mode_delo
+    SettingsGroup.BODY -> R.drawable.ic_mode_sport
+    else -> null
 }
 
 @Composable
@@ -489,18 +466,21 @@ private fun MainScreen(
     onFixNotifications: () -> Unit = {},
     onOpenAccessibilitySettings: () -> Unit,
 ) {
-    // Служебные вкладки живут под «Ещё». Ссылка снаружи (уведомление, меню
-    // кнопки) может показывать прямо на служебную — тогда открываем «Ещё» и
-    // сразу её.
+    // Служебные вкладки живут под «Ещё» и открываются поверх текущей. Ссылка
+    // снаружи (уведомление, меню кнопки) может показывать прямо на служебную —
+    // тогда открываем «Ещё» и сразу её.
     val service = remember { SERVICE_TABS }
     var tab by remember {
         mutableStateOf(if (initialTab in service) Tab.MORE else initialTab)
     }
-    var moreTab by remember {
-        mutableStateOf(if (initialTab in service) initialTab else null)
+    var page by remember {
+        mutableStateOf<Page?>(if (initialTab in service) Page.Service(initialTab) else null)
     }
     // Одноразовый автозапуск камеры/сканера в Теле (Е) — из меню кнопки еды.
     var foodActionPending by remember { mutableStateOf(foodAction.ifBlank { null }) }
+    // Диалоги выгрузок, которые открывают значки в шапке служебных экранов.
+    var dictationExport by remember { mutableStateOf(false) }
+    var lifeExport by remember { mutableStateOf(false) }
 
     // Открытие приложения — тоже повод посмотреть, нет ли сборки свежее:
     // служба доступности может быть выключена, а суточный тик живёт в ней.
@@ -512,10 +492,10 @@ private fun MainScreen(
         val want = tabRequest ?: return@LaunchedEffect
         if (want in service) {
             tab = Tab.MORE
-            moreTab = want
+            page = Page.Service(want)
         } else {
             tab = want
-            moreTab = null
+            page = null
         }
         onTabRequestHandled()
     }
@@ -524,6 +504,8 @@ private fun MainScreen(
         foodActionPending = foodActionRequest
         onFoodActionHandled()
     }
+    // Системное «назад» закрывает верхний экран, а не приложение.
+    BackHandler(enabled = page != null) { page = null }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -531,53 +513,54 @@ private fun MainScreen(
             // Шесть кнопок — порядок и подписи владельца: Правка, Засечка,
             // Дело, Тело (С), Тело (Е), Ещё. Пиктограммы те же, что могут
             // встать на плавающие кнопки: перо, часы, галочка, гантеля,
-            // тарелка — один язык на всё приложение.
+            // тарелка — один язык на всё приложение. Тап по кнопке закрывает
+            // и верхний экран: владелец хочет вкладку, а не то, что над ней.
             NavigationBar {
                 NavigationBarItem(
-                    selected = tab == Tab.PRAVKA,
-                    onClick = { tab = Tab.PRAVKA },
+                    selected = tab == Tab.PRAVKA && page == null,
+                    onClick = { tab = Tab.PRAVKA; page = null },
                     icon = {
                         Icon(painterResource(R.drawable.ic_mode_pravka), contentDescription = null)
                     },
                     label = { Text(stringResource(Tab.PRAVKA.titleRes)) },
                 )
                 NavigationBarItem(
-                    selected = tab == Tab.ZASECHKA,
-                    onClick = { tab = Tab.ZASECHKA },
+                    selected = tab == Tab.ZASECHKA && page == null,
+                    onClick = { tab = Tab.ZASECHKA; page = null },
                     icon = {
                         Icon(painterResource(R.drawable.ic_mode_zasechka), contentDescription = null)
                     },
                     label = { Text(stringResource(Tab.ZASECHKA.titleRes)) },
                 )
                 NavigationBarItem(
-                    selected = tab == Tab.TODOIST,
-                    onClick = { tab = Tab.TODOIST },
+                    selected = tab == Tab.TODOIST && page == null,
+                    onClick = { tab = Tab.TODOIST; page = null },
                     icon = {
                         Icon(painterResource(R.drawable.ic_mode_delo), contentDescription = null)
                     },
                     label = { Text(stringResource(Tab.TODOIST.titleRes)) },
                 )
                 NavigationBarItem(
-                    selected = tab == Tab.SPORT,
-                    onClick = { tab = Tab.SPORT },
+                    selected = tab == Tab.SPORT && page == null,
+                    onClick = { tab = Tab.SPORT; page = null },
                     icon = {
                         Icon(painterResource(R.drawable.ic_mode_sport), contentDescription = null)
                     },
                     label = { Text(stringResource(Tab.SPORT.titleRes)) },
                 )
                 NavigationBarItem(
-                    selected = tab == Tab.FOOD,
-                    onClick = { tab = Tab.FOOD },
+                    selected = tab == Tab.FOOD && page == null,
+                    onClick = { tab = Tab.FOOD; page = null },
                     icon = {
                         Icon(painterResource(R.drawable.ic_mode_food), contentDescription = null)
                     },
                     label = { Text(stringResource(Tab.FOOD.titleRes)) },
                 )
                 NavigationBarItem(
-                    selected = tab == Tab.MORE,
+                    selected = tab == Tab.MORE || page != null,
                     // Повторный тап по «Ещё» возвращает список: иначе из
                     // Логов обратно к списку пришлось бы жать «назад».
-                    onClick = { tab = Tab.MORE; moreTab = null },
+                    onClick = { tab = Tab.MORE; page = null },
                     icon = { Icon(Icons.Filled.MoreVert, contentDescription = null) },
                     label = { Text(stringResource(Tab.MORE.titleRes)) },
                 )
@@ -588,45 +571,150 @@ private fun MainScreen(
             // Пуши выключены — говорим сверху, а не в глубине настроек
             // автопилота: без них молчат автопилот, напоминания и обновления.
             if (!notifEnabled) NotificationsBanner(onFixNotifications)
-            val open = moreTab
-            if (tab == Tab.MORE && open == null) {
-                MoreList(onOpen = { moreTab = it })
-            } else {
-                val shown = if (tab == Tab.MORE) open!! else tab
-                if (tab == Tab.MORE) {
-                    MoreHeader(
-                        title = stringResource(shown.titleRes),
-                        onBack = { moreTab = null },
-                    )
+            val openCost = { page = Page.Cost }
+            val openReport = { page = Page.Service(Tab.REPORT) }
+            val p = page
+            when {
+                p != null -> ModeFrame(ModeDecor.SERVICE) {
+                    Column {
+                        when (p) {
+                            is Page.Cost -> {
+                                TabHeader(title = stringResource(R.string.stats_header), onBack = { page = null })
+                                CostScreen(app)
+                            }
+                            is Page.ModeSettings -> {
+                                TabHeader(
+                                    title = "Настройки · ${p.group.title}",
+                                    icon = groupIcon(p.group)?.let { painterResource(it) },
+                                    onBack = { page = null },
+                                    actions = { CostAction(openCost) },
+                                )
+                                ModeSettingsScreen(app, p.group, serviceEnabled)
+                            }
+                            is Page.Service -> {
+                                TabHeader(
+                                    title = stringResource(p.tab.titleRes),
+                                    onBack = { page = null },
+                                    actions = {
+                                        when (p.tab) {
+                                            Tab.REPORT -> ExportAction { lifeExport = true }
+                                            Tab.STATS -> ExportAction { dictationExport = true }
+                                            else -> Unit
+                                        }
+                                        CostAction(openCost)
+                                    },
+                                )
+                                when (p.tab) {
+                                    Tab.REPORT -> ReportTab(app)
+                                    Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings)
+                                    Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
+                                    Tab.PROMPTS -> PromptsTab(promptStore)
+                                    Tab.LEARNING -> LearningTab(app)
+                                    Tab.LOGS -> LogsTab(app)
+                                    Tab.STATS -> DictationStatsTab(
+                                        app,
+                                        exportRequested = dictationExport,
+                                        onExportHandled = { dictationExport = false },
+                                    )
+                                    else -> Unit
+                                }
+                            }
+                        }
+                    }
                 }
-                // Из любой вкладки — в её группу настроек одним тапом.
-                val openSettings = { tab = Tab.MORE; moreTab = Tab.SETTINGS }
-                when (shown) {
-                    Tab.PRAVKA -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
-                    Tab.ZASECHKA -> ZasechkaTab(app, openSettings)
-                    Tab.TODOIST -> TodoistTab(app, openSettings)
-                    Tab.SPORT -> SportTab(app, openSettings)
-                    Tab.FOOD -> FoodTab(
-                        app, openSettings,
-                        autoAction = foodActionPending,
-                        onAutoConsumed = { foodActionPending = null },
-                    )
-                    Tab.REPORT -> ReportTab(app)
-                    Tab.ITOGI -> ItogiTab(app)
-                    Tab.EXPORT -> ExportTab(app)
-                    Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings)
-                    Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
-                    Tab.PROMPTS -> PromptsTab(promptStore)
-                    Tab.TRANSCRIPTS -> TranscriptsTab(transcriptionLog, liveDraft, eventLog)
-                    Tab.LEARNING -> LearningTab(app)
-                    Tab.LOGS -> LogsTab(app)
-                    Tab.STATS -> StatsTab(stats, historyLog)
-                    // «Ещё» без выбранной вкладки уже обработано выше.
-                    Tab.MORE -> Unit
+                tab == Tab.MORE -> ModeFrame(ModeDecor.SERVICE) {
+                    Column {
+                        TabHeader(
+                            title = stringResource(R.string.tab_more),
+                            actions = { CostAction(openCost) },
+                        )
+                        MoreList(onOpen = { page = Page.Service(it) })
+                    }
+                }
+                else -> {
+                    val decor = when (tab) {
+                        Tab.PRAVKA -> ModeDecor.PRAVKA
+                        Tab.ZASECHKA -> ModeDecor.ZASECHKA
+                        Tab.TODOIST -> ModeDecor.DELA
+                        Tab.SPORT -> ModeDecor.SPORT
+                        else -> ModeDecor.FOOD
+                    }
+                    ModeFrame(decor) {
+                        Column {
+                            when (tab) {
+                                Tab.PRAVKA -> {
+                                    TabHeader(
+                                        title = stringResource(R.string.tab_pravka),
+                                        icon = painterResource(R.drawable.ic_mode_pravka),
+                                        actions = {
+                                            StatsAction { page = Page.Service(Tab.STATS) }
+                                            CostAction(openCost)
+                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.PRAVKA) }
+                                        },
+                                    )
+                                    PravkaTab(app, serviceEnabled)
+                                }
+                                Tab.ZASECHKA -> {
+                                    TabHeader(
+                                        title = stringResource(R.string.tab_zasechka),
+                                        icon = painterResource(R.drawable.ic_mode_zasechka),
+                                        actions = {
+                                            StatsAction(openReport)
+                                            CostAction(openCost)
+                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.ZASECHKA) }
+                                        },
+                                    )
+                                    ZasechkaTab(app)
+                                }
+                                Tab.TODOIST -> {
+                                    TabHeader(
+                                        title = "Дела",
+                                        icon = painterResource(R.drawable.ic_mode_delo),
+                                        actions = {
+                                            StatsAction(openReport)
+                                            CostAction(openCost)
+                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.DELA) }
+                                        },
+                                    )
+                                    TodoistTab(app)
+                                }
+                                Tab.SPORT -> {
+                                    TabHeader(
+                                        title = "Тело · спорт",
+                                        icon = painterResource(R.drawable.ic_mode_sport),
+                                        actions = {
+                                            StatsAction(openReport)
+                                            CostAction(openCost)
+                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.BODY) }
+                                        },
+                                    )
+                                    SportTab(app)
+                                }
+                                else -> {
+                                    TabHeader(
+                                        title = "Тело · еда",
+                                        icon = painterResource(R.drawable.ic_mode_food),
+                                        actions = {
+                                            StatsAction(openReport)
+                                            CostAction(openCost)
+                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.BODY) }
+                                        },
+                                    )
+                                    FoodTab(
+                                        app,
+                                        autoAction = foodActionPending,
+                                        onAutoConsumed = { foodActionPending = null },
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+
+    if (lifeExport) LifeExportDialog(app, onDismiss = { lifeExport = false })
 }
 
 /**
@@ -915,15 +1003,6 @@ private fun LearningTab(app: PravkaApp) {
         pending = app.learnStore.all()
         rules = app.rulesStore.all()
     }
-    // The SERVICE adds pending suggestions on its own schedule (auto batches);
-    // without this the open tab never noticed them until a manual "Обновить".
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(5000)
-            loadTick++
-        }
-    }
-
     fun refresh() { loadTick++ }
 
     suspend fun accept(sug: ru.zf.pravka.data.LearnStore.Suggestion) {
@@ -952,15 +1031,10 @@ private fun LearningTab(app: PravkaApp) {
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        ScreenTitle(stringResource(R.string.tab_learning))
-        HintText(
-            "Правка учится на твоих правках: авто-снимки разбираются Опусом " +
-                "по периоду, выбранному ниже, «Обучить» в меню кнопки — сразу. " +
-                "Словарные находки (имена, термины) добавляются в словарь сами, " +
-                "с пометкой «авто-обучение». Правила — только с твоего одобрения."
-        )
-
-        SectionCard(label = "Автообучение — что происходит сейчас") {
+        // Автообучения больше нет (владелец, 15.09.2026: «он уже обучился
+        // достаточно, оставить только по кнопке»): ни слежки за полями, ни
+        // авторазбора по расписанию. Разбор — только отсюда и из меню «П».
+        SectionCard(label = "Разбор по кнопке") {
             var watch by remember { mutableStateOf<List<ru.zf.pravka.data.EditWatchStore.Entry>>(emptyList()) }
             var watchTick by remember { mutableStateOf(0) }
             var lastBatch by remember { mutableStateOf(0L) }
@@ -975,11 +1049,8 @@ private fun LearningTab(app: PravkaApp) {
             val fmt = remember { java.text.SimpleDateFormat("dd.MM HH:mm", Locale.forLanguageTag("ru")) }
             val edited = watch.count { it.editedTs > 0 }
             Text(
-                "Наблюдается текстов: ${watch.size}, из них ты правил: $edited." +
-                    (watch.filter { it.editedTs > 0 }.minOfOrNull { it.editedTs }
-                        ?.let { "\nБлижайшая правка созреет: " + fmt.format(java.util.Date(it + ru.zf.pravka.data.EditWatchStore.RIPE_QUIET_MS)) + "." } ?: "") +
-                    (if (lastBatch > 0) "\nПоследний авторазбор: " + fmt.format(java.util.Date(lastBatch)) + "."
-                    else "\nАвторазбор ещё не запускался."),
+                "В наблюдении текстов: ${watch.size}, из них правленых: $edited." +
+                    (if (lastBatch > 0) "\nПоследний разбор: " + fmt.format(java.util.Date(lastBatch)) + "." else ""),
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(8.dp))
@@ -1023,46 +1094,10 @@ private fun LearningTab(app: PravkaApp) {
                     Feedback.toast(ctx, "Обновлено")
                 }) { Text("Обновить") }
             }
-            Spacer(Modifier.height(10.dp))
-            val autoCapture by app.settings.learnAutoFlow.collectAsState(initial = false)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = autoCapture,
-                    onCheckedChange = { app.appScope.launch { app.settings.setLearnAuto(it) } },
-                )
-                Text(
-                    "Ловить правки автоматически",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(start = 8.dp),
-                )
-            }
+            Spacer(Modifier.height(8.dp))
             HintText(
-                if (autoCapture)
-                    "Служба следит за текстовыми полями во всех приложениях, чтобы заметить " +
-                        "твои правки. Это события на каждое нажатие клавиши — держи выключенным, " +
-                        "если правила уже собраны."
-                else
-                    "Выключено: служба не смотрит за полями вообще (событий текста ей больше " +
-                        "не присылают). Кнопка «Обучить» в меню «П» и «Разобрать сейчас» работают."
-            )
-            Spacer(Modifier.height(10.dp))
-            val period by app.settings.learnPeriodHoursFlow.collectAsState(initial = 3)
-            HintText("Период авторазбора")
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (h in listOf(1, 3, 12)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = period == h,
-                            onClick = { app.appScope.launch { app.settings.setLearnPeriodHours(h) } },
-                        )
-                        Text("$h ч", style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
-            HintText(
-                "Авторазбор идёт Опусом: сам — не чаще выбранного периода и через " +
-                    "10 минут после правки; «Разобрать сейчас» — без ожиданий. " +
-                    "Каждый шаг виден в Логи → Обучение."
+                "«Обучить» в меню «П» разбирает текст под курсором сразу; здесь — " +
+                    "накопленные правки. Находки уходят в словарь с пометкой «авто-обучение»."
             )
         }
 
@@ -1281,7 +1316,6 @@ private fun LogsTab(app: PravkaApp) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ScreenTitle(stringResource(R.string.tab_logs))
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = { loadTick++ }) { Text("Обновить") }
         }
@@ -1492,12 +1526,11 @@ private fun DictionaryTab(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(20.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ScreenTitle(stringResource(R.string.tab_dictionary))
                 Spacer(Modifier.weight(1f))
                 Button(onClick = { showAddDialog = true }) { Text(stringResource(R.string.dict_add)) }
             }
@@ -1790,7 +1823,6 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.TRAINER to R.string.prompt_title_trainer,
     PromptStore.PromptId.BODY to R.string.prompt_title_body,
     PromptStore.PromptId.RULES to R.string.prompt_title_rules,
-    PromptStore.PromptId.PATTERNS to R.string.prompt_title_patterns,
 )
 
 @Composable
@@ -1813,9 +1845,6 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        ScreenTitle(stringResource(R.string.prompts_header))
-        HintText(stringResource(R.string.prompts_subheader))
-
         // Business-season workflow: Whisper transcribes meetings on the
         // owner's computer; this assembles the MEETING prompt + the FULL
         // current dictionary + the approved rules into one clipboard-ready
@@ -1859,7 +1888,9 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
             }) { Text("Скопировать промпт для встречи") }
         }
 
-        for (id in PromptStore.PromptId.entries) {
+        // Промпт ночного поиска паттернов не показываем: поиск снят (15.09.2026),
+        // а сам текст остался в заводских на случай сохранённой правки.
+        for (id in PromptStore.PromptId.entries.filter { it != PromptStore.PromptId.PATTERNS }) {
             val override by promptStore.overrideFlow(id).collectAsState(initial = null)
             val effective = override ?: promptStore.factory(id)
             Card(onClick = { onOpen(id) }, modifier = Modifier.fillMaxWidth()) {
@@ -2010,260 +2041,3 @@ private fun PromptEditor(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Statistics
-// ---------------------------------------------------------------------------
-
-// Full text of every fix/dictation, newest first - tap a card to copy its
-// result to the clipboard (owner's request, Wispr-style history).
-@Composable
-private fun TranscriptsTab(
-    transcriptionLog: ru.zf.pravka.data.TranscriptionLog,
-    liveDraft: ru.zf.pravka.data.LiveDraft,
-    eventLog: ru.zf.pravka.data.EventLog,
-) {
-    val context = LocalContext.current
-    // Reading (and JSON-parsing) these files is real disk work; doing it during
-    // composition blocked the first frame of the tab.
-    var log by remember { mutableStateOf<List<ru.zf.pravka.data.TranscriptionLog.Entry>>(emptyList()) }
-    var draft by remember { mutableStateOf<String?>(null) }
-    var hasExports by remember { mutableStateOf(false) }
-    var hasEventLog by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        data class Loaded(
-            val entries: List<ru.zf.pravka.data.TranscriptionLog.Entry>,
-            val draft: String?,
-            val exports: Boolean,
-            val events: Boolean,
-        )
-        val loaded = withContext(Dispatchers.IO) {
-            Loaded(
-                entries = transcriptionLog.readLast(200),
-                draft = liveDraft.read(),
-                exports = transcriptionLog.exists(),
-                events = eventLog.exists(),
-            )
-        }
-        log = loaded.entries
-        draft = loaded.draft
-        hasExports = loaded.exports
-        hasEventLog = loaded.events
-    }
-    val ruLoc = remember { Locale.forLanguageTag("ru") }
-
-    fun copy(text: String) {
-        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        cm.setPrimaryClip(android.content.ClipData.newPlainText("Правка", text))
-        Feedback.toast(context, context.getString(R.string.transcript_copied))
-    }
-
-    fun share(intent: android.content.Intent, chooserRes: Int) {
-        runCatching {
-            context.startActivity(
-                android.content.Intent.createChooser(intent, context.getString(chooserRes))
-            )
-        }.onFailure { Feedback.toast(context, context.getString(R.string.transcripts_empty)) }
-    }
-
-    fun engineLabel(engine: String): String = when (engine) {
-        Settings.SPEECH_GOOGLE -> "Google"
-        Settings.SPEECH_WHISPER_SMALL -> "Whisper small"
-        Settings.SPEECH_WHISPER_BASE -> "Whisper base"
-        else -> engine
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        ScreenTitle(stringResource(R.string.tab_transcripts))
-        HintText(stringResource(R.string.transcripts_hint))
-
-        // Recovery: text from a Google take that was interrupted before it
-        // could be inserted (phone died / app killed mid-dictation).
-        draft?.let { d ->
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-            ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(
-                        stringResource(R.string.draft_header),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(d, style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(6.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { copy(d) }) { Text(stringResource(R.string.draft_copy)) }
-                        TextButton(onClick = { liveDraft.clear(); draft = null }) {
-                            Text(stringResource(R.string.draft_delete), color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-            }
-        }
-
-        if (hasExports) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {
-                    share(transcriptionLog.shareJsonIntent(), R.string.transcripts_export_json)
-                }) { Text(stringResource(R.string.transcripts_export_json)) }
-                OutlinedButton(onClick = {
-                    share(transcriptionLog.shareMetricsCsvIntent(), R.string.transcripts_export_csv)
-                }) { Text(stringResource(R.string.transcripts_export_csv)) }
-            }
-        }
-        if (hasEventLog) {
-            OutlinedButton(onClick = {
-                share(eventLog.shareIntent(), R.string.transcripts_export_log)
-            }) { Text(stringResource(R.string.transcripts_export_log)) }
-        }
-
-        if (log.isEmpty()) {
-            Text(stringResource(R.string.transcripts_empty), style = MaterialTheme.typography.bodyMedium)
-        }
-        for (entry in log) {
-            Card(
-                onClick = { if (entry.text.isNotBlank()) copy(entry.text) },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(14.dp)) {
-                    // Metrics line: engine · audio · transcription time · chars.
-                    val meta = buildString {
-                        append(engineLabel(entry.engine))
-                        append(" · ")
-                        append(String.format(ruLoc, "%.1f", entry.audioMs / 1000.0)).append(" с аудио")
-                        // Whisper reports its transcription time; the Google
-                        // live engine is realtime, so it logs 0 - skip it there.
-                        if (entry.transcribeMs > 0) {
-                            append(" · ")
-                            append(String.format(ruLoc, "%.1f", entry.transcribeMs / 1000.0)).append(" с расшифровка")
-                        }
-                        append(" · ")
-                        append(entry.chars).append(" симв.")
-                        if (entry.realtimeFactor > 0) {
-                            append(" · ×")
-                            append(String.format(ruLoc, "%.2f", entry.realtimeFactor))
-                        }
-                    }
-                    Text(
-                        meta,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (!entry.ok) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        entry.ts.replace('T', ' ').take(16),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    entry.error?.let {
-                        Spacer(Modifier.height(4.dp))
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    }
-                    if (entry.text.isNotBlank()) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(entry.text, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StatsTab(stats: Stats, historyLog: HistoryLog) {
-    val context = LocalContext.current
-    val snapshot by stats.snapshotFlow.collectAsState(initial = null)
-    val ru = remember { Locale.forLanguageTag("ru") }
-    // Was a file stat on every recomposition.
-    var hasHistory by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        hasHistory = withContext(Dispatchers.IO) { historyLog.exists() }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-    ) {
-        ScreenTitle(stringResource(R.string.stats_header))
-
-        snapshot?.let { s ->
-            SectionCard(label = stringResource(R.string.stats_cost_header)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        "$%.4f".format(Locale.US, s.costTodayUsd),
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        stringResource(R.string.stats_cost_today).lowercase(ru),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                StatRow(R.string.stats_cost_week, "$%.4f".format(Locale.US, s.costWeekUsd))
-                StatRow(R.string.stats_cost_month, "$%.4f".format(Locale.US, s.costMonthUsd))
-                StatRow(R.string.stats_cost_total, "$%.4f".format(Locale.US, s.costTotalUsd))
-            }
-
-            SectionCard(label = stringResource(R.string.stats_total)) {
-                StatRow(R.string.stats_total, s.total.toString())
-                StatRow(R.string.stats_clean, s.clean.toString())
-                StatRow(R.string.stats_business, s.business.toString())
-                StatRow(R.string.stats_soften, s.soften.toString())
-                StatRow(R.string.stats_unchanged, s.unchanged.toString())
-                StatRow(R.string.stats_errors, s.errors.toString())
-                StatRow(R.string.stats_chars, "%,d".format(ru, s.charsProcessed))
-                StatRow(R.string.stats_tokens, "%,d / %,d".format(ru, s.tokensIn, s.tokensOut))
-                StatRow(
-                    R.string.stats_latency,
-                    String.format(ru, "%.1f с", s.averageLatencyMs / 1000.0),
-                )
-            }
-        }
-
-        Column {
-            OutlinedButton(
-                onClick = {
-                    runCatching {
-                        context.startActivity(
-                            android.content.Intent.createChooser(
-                                historyLog.shareIntent(),
-                                context.getString(R.string.stats_share_history),
-                            )
-                        )
-                    }.onFailure { Feedback.toast(context, context.getString(R.string.stats_history_empty)) }
-                },
-                enabled = hasHistory,
-            ) {
-                Text(stringResource(R.string.stats_share_history))
-            }
-            HintText(stringResource(R.string.stats_history_hint))
-        }
-    }
-}
-
-@Composable
-private fun StatRow(labelRes: Int, value: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-        Text(
-            stringResource(labelRes),
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-    }
-}

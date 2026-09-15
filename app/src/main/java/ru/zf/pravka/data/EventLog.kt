@@ -70,4 +70,34 @@ class EventLog(
     }.getOrDefault(emptyList())
 
     fun shareIntent(): Intent = shareFileIntent(context, file, "text/plain")
+
+    /**
+     * Лог за период [fromMs, toMs). У строк нет года — только «MM-dd HH:mm:ss»;
+     * год берётся текущий, а дата из будущего читается как прошлогодняя (лог
+     * живёт неделями, а не годами, так что двусмысленности нет).
+     */
+    fun shareRangeIntent(fromMs: Long, toMs: Long): Intent {
+        val cal = java.util.Calendar.getInstance()
+        val year = cal.get(java.util.Calendar.YEAR)
+        val now = System.currentTimeMillis()
+        val parser = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+        fun lineMs(line: String): Long {
+            if (line.length < 17) return -1L
+            val stamp = line.substring(0, 14)   // "MM-dd HH:mm:ss"
+            var t = runCatching { parser.parse("$year-$stamp")?.time ?: -1L }.getOrDefault(-1L)
+            if (t > now + 86_400_000L) {
+                t = runCatching { parser.parse("${year - 1}-$stamp")?.time ?: -1L }.getOrDefault(-1L)
+            }
+            return t
+        }
+        val lines = runCatching { if (file.exists()) file.readLines() else emptyList() }.getOrDefault(emptyList())
+        val out = File(context.cacheDir, "pravka-events.log")
+        out.bufferedWriter().use { w ->
+            for (line in lines) {
+                val t = lineMs(line)
+                if (t in fromMs until toMs) { w.write(line); w.write("\n") }
+            }
+        }
+        return shareFileIntent(context, out, "text/plain")
+    }
 }

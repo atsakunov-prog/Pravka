@@ -34,12 +34,15 @@ private val Wave = Color(0xFF0E7490)
 private val WavePale = Color(0xFFD3ECF4)
 private val WaveDeep = Color(0xFF0F4C5C)
 
-private val NightBg = Color(0xFF181511)
-private val NightCard = Color(0xFF231F19)
-private val NightCardHigh = Color(0xFF2A251E)
+// Ночь: фон — тёмно-серый с тёплым подтоном, чуть светлее прежней «черноты»
+// (владелец, 15.09: «такой же тёмный, но чуть посветлее»). Плашки-карточки
+// на нём на два тона светлее — текст живёт в них, фон только держит рисунок.
+private val NightBg = Color(0xFF1F1D1A)
+private val NightCard = Color(0xFF2B2824)
+private val NightCardHigh = Color(0xFF35312C)
 private val NightText = Color(0xFFECE5D8)
 private val NightTextSoft = Color(0xFFA79D8C)
-private val NightLine = Color(0xFF3B342A)
+private val NightLine = Color(0xFF443E35)
 private val WaveBright = Color(0xFF6CC3DD)
 
 private val LightColors = lightColorScheme(
