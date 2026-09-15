@@ -52,9 +52,12 @@
   (`data/PromptStore.kt`), заводские тексты — запас.
 - **Словарь, правила, обучение:** `data/DictionaryStore.kt`, `data/RulesStore.kt`,
   `data/LearnStore.kt`, `data/EditWatchStore.kt`, `core/ProofreadEngine.kt`,
-  `core/EditDiff.kt` (правка одного слова руками → словарь без модели,
-  зовётся из `probeFieldEdits` службы перед тейком). Режим отладки —
-  `ClaudeProvider.requestLogger` → `app.requestLog`.
+  `core/EditDiff.kt` (правка одного слова руками → словарь без модели),
+  `data/CorrectionsLog.kt` (журнал правок: надиктовано → модель → владелец,
+  очередь для «Разобрать сейчас»). Захват правок — окно подписки на события
+  текста после доставки (`armCapture` / `digestEdits` в службе), не
+  постоянная подписка. Режим отладки — `ClaudeProvider.requestLogger` →
+  `app.requestLog`.
 - **Хранение и обвязка:** `data/StoreFiles.kt` (атомарная запись, `.prev`,
   `.corrupt`), `data/DiskWriter.kt`, `data/Backups.kt`, `data/Settings.kt`,
   `data/ModelRoutes.kt`, `data/EventLog.kt`, `data/Stats.kt`, `data/Updates.kt`,

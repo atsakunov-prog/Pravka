@@ -24,7 +24,16 @@ class EditWatchStore(private val context: Context) {
         val lastSeen: String,
         val createdTs: Long,
         val editedTs: Long,
-    )
+        /**
+         * Состояние поля, которое уже разобрано (ушло в словарь или в журнал
+         * правок). Следующая правка того же текста сравнивается с ним, а не с
+         * тем, что прислала модель, — иначе одна и та же замена ложилась бы в
+         * словарь дважды. Пусто — разбора ещё не было, база — [cleaned].
+         */
+        val digested: String = "",
+    ) {
+        val baseline: String get() = digested.ifEmpty { cleaned }
+    }
 
     private val mutex = Mutex()
     private var loaded = false
@@ -53,6 +62,7 @@ class EditWatchStore(private val context: Context) {
                         lastSeen = o.optString("lastSeen"),
                         createdTs = o.optLong("created"),
                         editedTs = o.optLong("edited"),
+                        digested = o.optString("digested"),
                     )
                 )
             }
@@ -75,6 +85,7 @@ class EditWatchStore(private val context: Context) {
                         put("lastSeen", e.lastSeen)
                         put("created", e.createdTs)
                         put("edited", e.editedTs)
+                        if (e.digested.isNotEmpty()) put("digested", e.digested)
                     }
                 )
             }
@@ -159,6 +170,34 @@ class EditWatchStore(private val context: Context) {
             entries.filter {
                 it.editedTs > 0 && now - it.editedTs > quietMs &&
                     it.lastSeen.trim() != it.cleaned.trim()
+            }
+        }
+    }
+
+    /**
+     * Правки, которые устоялись: владелец не трогал текст [quietMs], и он
+     * отличается от уже разобранного состояния. Это очередь локального
+     * разбора (одно слово → словарь) и журнала правок.
+     */
+    suspend fun quietEdited(quietMs: Long): List<Entry> = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            ensureLoaded()
+            val now = System.currentTimeMillis()
+            entries.filter {
+                it.editedTs > 0 && now - it.editedTs >= quietMs &&
+                    it.lastSeen.trim() != it.baseline.trim()
+            }
+        }
+    }
+
+    /** Разобранное состояние запомнено: следующая правка сравнивается уже с ним. */
+    suspend fun markDigested(id: Long, text: String) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            ensureLoaded()
+            val i = entries.indexOfFirst { it.id == id }
+            if (i >= 0) {
+                entries[i] = entries[i].copy(digested = text.take(2000))
+                persist()
             }
         }
     }

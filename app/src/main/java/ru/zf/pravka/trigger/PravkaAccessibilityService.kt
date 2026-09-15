@@ -483,7 +483,9 @@ class PravkaAccessibilityService : AccessibilityService() {
                     // text we just delivered. Throttled: at most one field read
                     // per second, and only within the watch window of a take.
                     val now = SystemClock.elapsedRealtime()
-                    if (now - lastWatchProbeAt > 1000 && now - lastDeliveryAt < ru.zf.pravka.data.EditWatchStore.WATCH_WINDOW_MS) {
+                    // Окно решает captureUntil (оно продлевается правками); здесь
+                    // только дроссель — одно чтение поля в секунду.
+                    if (now - lastWatchProbeAt > 1000) {
                         lastWatchProbeAt = now
                         val pkg = runCatching { source.packageName?.toString() }.getOrNull()
                         val current = runCatching { source.effectiveText() }.getOrDefault("")

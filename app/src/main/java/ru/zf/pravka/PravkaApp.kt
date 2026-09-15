@@ -82,6 +82,8 @@ class PravkaApp : Application() {
     val rulesStore by lazy { ru.zf.pravka.data.RulesStore(this) }
     val learnStore by lazy { ru.zf.pravka.data.LearnStore(this) }
     val editWatch by lazy { ru.zf.pravka.data.EditWatchStore(this) }
+    /** Журнал правок руками: надиктовано → модель → владелец, навсегда. */
+    val corrections by lazy { ru.zf.pravka.data.CorrectionsLog(this) }
     val evalStore by lazy { ru.zf.pravka.data.EvalStore(this) }
     val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient, rulesStore) }
     val dictMiner by lazy { DictMiner(settings, httpClient, stats) }
