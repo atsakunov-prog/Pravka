@@ -31,6 +31,7 @@ class Settings(private val context: Context) {
         private val KEY_API_KEY = stringPreferencesKey("anthropic_api_key")
         private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
         private val KEY_FAB_ALPHA = floatPreferencesKey("fab_alpha")
+        private val KEY_TICKER_WIDTH = intPreferencesKey("ticker_width_dp")
         private val KEY_SPEECH_ENGINE = stringPreferencesKey("speech_engine")
         private val KEY_SPEECH_SEGMENTED = booleanPreferencesKey("speech_segmented")
         private val KEY_SPEECH_FORMATTING = booleanPreferencesKey("speech_formatting")
@@ -111,6 +112,10 @@ class Settings(private val context: Context) {
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
+        /** Ширина бегущей строки у кнопок, dp (владелец, 15.09: «размер плашки по горизонтали — в общие настройки»). */
+        const val TICKER_WIDTH_DEFAULT = 340
+        const val TICKER_WIDTH_MIN = 160
+        const val TICKER_WIDTH_MAX = 900
 
         // Заводские цели КБЖУ: посчитаны по Миффлину-Сан-Жеору для владельца
         // (86 кг, 180 см, 1982) при умеренной активности, белок 1,8 г/кг.
@@ -758,6 +763,13 @@ class Settings(private val context: Context) {
 
     suspend fun setFabAlpha(alpha: Float) {
         context.dataStore.edit { it[KEY_FAB_ALPHA] = alpha.coerceIn(0.15f, 1f) }
+    }
+
+    // Ширина бегущей строки — одна на все четыре кнопки; на экране режется
+    // так, чтобы кнопка и поле рядом с ней остались видны.
+    val tickerWidthFlow = context.dataStore.data.map { it[KEY_TICKER_WIDTH] ?: TICKER_WIDTH_DEFAULT }
+    suspend fun setTickerWidth(dp: Int) {
+        context.dataStore.edit { it[KEY_TICKER_WIDTH] = dp.coerceIn(TICKER_WIDTH_MIN, TICKER_WIDTH_MAX) }
     }
 
     // Floating button position - free placement, stored as x/y fractions of

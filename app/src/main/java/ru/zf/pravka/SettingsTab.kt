@@ -492,6 +492,22 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
         onValueChangeFinished = { scope.launch { settings.setFabAlpha(alphaSlider) } },
         valueRange = 0.15f..1f,
     )
+    // Бегущая строка у всех четырёх кнопок — одна ширина (владелец, 15.09:
+    // «поставим в общих настройках размер плашки по горизонтали»). На экране
+    // режется так, чтобы кнопка и поле рядом оставались видны.
+    val tickerWidth by settings.tickerWidthFlow.collectAsState(initial = ru.zf.pravka.data.Settings.TICKER_WIDTH_DEFAULT)
+    var tickerSlider by remember(tickerWidth) { mutableStateOf(tickerWidth.toFloat()) }
+    Text(
+        "Ширина бегущей строки: ${tickerSlider.toInt()} dp",
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    Slider(
+        value = tickerSlider,
+        onValueChange = { tickerSlider = it },
+        onValueChangeFinished = { scope.launch { settings.setTickerWidth(tickerSlider.toInt()) } },
+        valueRange = ru.zf.pravka.data.Settings.TICKER_WIDTH_MIN.toFloat()..ru.zf.pravka.data.Settings.TICKER_WIDTH_MAX.toFloat(),
+    )
+    HintText("Одна на «П», «З», «Д» и «Т»; шире экрана не станет — кнопка рядом остаётся видна.")
 
     Spacer(Modifier.height(10.dp))
     val modeIcons by settings.modeIconsFlow.collectAsState(initial = false)

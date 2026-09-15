@@ -187,6 +187,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var cachedSegmented: Boolean = true
     @Volatile internal var cachedFormatting: Boolean = false
     @Volatile internal var cachedBiasingOn: Boolean = true
+    /** Ширина бегущей строки, dp — общая для «П», «З», «Д» и «Т» (Settings.tickerWidthFlow). */
+    @Volatile internal var cachedTickerWidthDp: Int = Settings.TICKER_WIDTH_DEFAULT
 
     internal val app: PravkaApp by lazy { application as PravkaApp }
 
@@ -224,6 +226,16 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         scope.launch {
             app.settings.speechBiasingFlow.collect { cachedBiasingOn = it }
+        }
+        scope.launch {
+            app.settings.tickerWidthFlow.collect {
+                cachedTickerWidthDp = it
+                // Открытая строка перестраивается сразу — настройку крутят, глядя на неё.
+                floatingButton?.repositionTickerIfVisible()
+                zButton?.repositionTickerIfVisible()
+                rButton?.repositionTickerIfVisible()
+                eButton?.repositionTickerIfVisible()
+            }
         }
         scope.launch {
             app.settings.convoContextFlow.collect { cachedConvoContext = it }

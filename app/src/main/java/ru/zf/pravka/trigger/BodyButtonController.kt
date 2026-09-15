@@ -49,8 +49,8 @@ class BodyButtonController(
     companion object {
         private const val LONG_PRESS_MS = 450L
         private const val TICKER_ALPHA = 0.86f
-        private const val TICKER_W_MULT = 6
-        private const val TICKER_LINES = 3
+        // Тикер — та же бегущая строка, что у «П» (MarqueeTickerView); ширина —
+        // настройка владельца, Settings.tickerWidthFlow.
         // Сколько позиций показывать в плашке: остальное — в приложении.
         private const val PLATE_ROWS = 6
 
@@ -95,7 +95,7 @@ class BodyButtonController(
     private var collectorsStarted = false
 
     private var ticker: FrameLayout? = null
-    private var tickerText: TextView? = null
+    private var tickerText: MarqueeTickerView? = null
     private var tickerParams: WindowManager.LayoutParams? = null
     private var tickerVisible = false
 
@@ -390,7 +390,7 @@ class BodyButtonController(
         if (ticker == null) createTicker()
         positionTicker()
         val t = ticker ?: return
-        tickerText?.text = ""
+        tickerText?.reset()
         lastTickerText = ""
         lastTickerAt = 0L
         runCatching { windowManager.updateViewLayout(t, tickerParams) }
@@ -402,28 +402,20 @@ class BodyButtonController(
         }
     }
 
-    private fun tickerHeightPx(): Int = dp(TICKER_LINES * 24 + 16)
+    // Одна строка высотой с кнопку, вровень с ней.
+    private fun tickerHeightPx(): Int = maxOf(buttonSize, dp(40))
 
     private var lastTickerText = ""
     private var lastTickerAt = 0L
 
     fun updateTicker(text: String) {
         val tv = tickerText ?: return
-        val tail = text.takeLast(300)
-        if (tail == lastTickerText) return
+        if (text == lastTickerText) return
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTickerAt < 120) return
+        if (now - lastTickerAt < 60) return
         lastTickerAt = now
-        lastTickerText = tail
-        tv.text = tail
-        tv.post {
-            val layout = tv.layout ?: return@post
-            if (layout.lineCount > TICKER_LINES) {
-                val cut = layout.getLineStart(layout.lineCount - TICKER_LINES)
-                val current = tv.text?.toString() ?: return@post
-                if (cut in 1 until current.length) tv.text = current.substring(cut)
-            }
-        }
+        lastTickerText = text
+        tv.setTickerText(text)
     }
 
     fun repositionTickerIfVisible() {
@@ -457,15 +449,10 @@ class BodyButtonController(
             setColor(INK)
         }
         pill.elevation = dp(4).toFloat()
+        // Дети режутся по овалу плашки: фейды бегущей строки повторяют её форму.
+        pill.clipToOutline = true
         pill.setOnClickListener { onTickerTap?.invoke() }
-        val tv = TextView(service).apply {
-            setTextColor(PAPER)
-            textSize = 16f
-            maxLines = TICKER_LINES
-            gravity = Gravity.BOTTOM or Gravity.START
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            setLineSpacing(0f, 1.05f)
-        }
+        val tv = MarqueeTickerView(service, plateColor = INK, textColor = PAPER, textSizeSp = 16f)
         tickerText = tv
         pill.addView(
             tv,
@@ -487,9 +474,10 @@ class BodyButtonController(
         pill.visibility = View.GONE
     }
 
+    // Ширина — настройка владельца (одна на все кнопки), кнопка рядом остаётся видна.
     private fun tickerWidthPx(): Int {
         val (w, _) = screenSize()
-        return (buttonSize * TICKER_W_MULT).coerceAtMost(w - dp(24))
+        return minOf(dp(service.cachedTickerWidthDp), (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
     }
 
     private fun positionTicker() {

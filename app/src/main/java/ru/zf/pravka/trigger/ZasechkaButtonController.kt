@@ -41,8 +41,8 @@ class ZasechkaButtonController(
     companion object {
         private const val LONG_PRESS_MS = 450L
         private const val TICKER_ALPHA = 0.86f
-        private const val TICKER_W_MULT = 6
-        private const val TICKER_LINES = 3
+        // Тикер — та же бегущая строка, что у «П» (MarqueeTickerView); ширина —
+        // настройка владельца, Settings.tickerWidthFlow.
 
         // Warm pair with the "П": red-orange pen there, a marker halfway
         // between orange and yellow here (owner tuned it twice - this is the
@@ -86,7 +86,7 @@ class ZasechkaButtonController(
     private var pulse: ValueAnimator? = null
 
     private var ticker: FrameLayout? = null
-    private var tickerText: TextView? = null
+    private var tickerText: MarqueeTickerView? = null
     private var tickerParams: WindowManager.LayoutParams? = null
     private var tickerVisible = false
 
@@ -382,7 +382,7 @@ class ZasechkaButtonController(
         if (ticker == null) createTicker()
         positionTicker()
         val t = ticker ?: return
-        tickerText?.text = ""
+        tickerText?.reset()
         lastTickerText = ""
         lastTickerAt = 0L
         runCatching { windowManager.updateViewLayout(t, tickerParams) }
@@ -394,30 +394,20 @@ class ZasechkaButtonController(
         }
     }
 
-    private fun tickerHeightPx(): Int = dp(TICKER_LINES * 24 + 16)
+    // Одна строка высотой с кнопку, вровень с ней.
+    private fun tickerHeightPx(): Int = maxOf(buttonSize, dp(40))
 
     private var lastTickerText = ""
     private var lastTickerAt = 0L
 
     fun updateTicker(text: String) {
         val tv = tickerText ?: return
-        val tail = text.takeLast(300)
-        if (tail == lastTickerText) return
+        if (text == lastTickerText) return
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTickerAt < 120) return
+        if (now - lastTickerAt < 60) return
         lastTickerAt = now
-        lastTickerText = tail
-        tv.text = tail
-        // Same multi-line START-ellipsize trap as the big ticker: trim leading
-        // lines after layout so the newest words stay visible.
-        tv.post {
-            val layout = tv.layout ?: return@post
-            if (layout.lineCount > TICKER_LINES) {
-                val cut = layout.getLineStart(layout.lineCount - TICKER_LINES)
-                val current = tv.text?.toString() ?: return@post
-                if (cut in 1 until current.length) tv.text = current.substring(cut)
-            }
-        }
+        lastTickerText = text
+        tv.setTickerText(text)
     }
 
     fun repositionTickerIfVisible() {
@@ -787,16 +777,9 @@ class ZasechkaButtonController(
             setColor(AMBER)
         }
         pill.elevation = dp(4).toFloat()
-        val tv = TextView(service).apply {
-            setTextColor(PAPER)
-            textSize = 17f
-            maxLines = TICKER_LINES
-            gravity = Gravity.BOTTOM or Gravity.START
-            val padH = dp(16)
-            val padV = dp(8)
-            setPadding(padH, padV, padH, padV)
-            setLineSpacing(0f, 1.05f)
-        }
+        // Дети режутся по овалу плашки: фейды бегущей строки повторяют её форму.
+        pill.clipToOutline = true
+        val tv = MarqueeTickerView(service, plateColor = AMBER, textColor = PAPER, textSizeSp = 17f)
         tickerText = tv
         pill.addView(
             tv,
@@ -822,11 +805,10 @@ class ZasechkaButtonController(
         pill.visibility = View.GONE
     }
 
-    // Narrower than before (owner: on the cover screen the 6x plate ate the
-    // whole width): 4.5 diameters, capped so the button stays visible beside.
+    // Ширина — настройка владельца (одна на все кнопки), кнопка рядом остаётся видна.
     private fun tickerWidthPx(): Int {
         val (w, _) = screenSize()
-        return minOf(buttonSize * 9 / 2, (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
+        return minOf(dp(service.cachedTickerWidthDp), (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
     }
 
     private fun positionTicker() {

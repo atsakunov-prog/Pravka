@@ -36,9 +36,8 @@ class FloatingButtonController(
     companion object {
         private const val LONG_PRESS_MS = 450L
         private const val TICKER_ALPHA = 0.82f  // near-opaque, owner found 0.6 too see-through
-        // Тикер — бегущая строка в одну линию (владелец, 15.09.2026), шире
-        // прежней четырёхстрочной плашки: слов в строке должно помещаться много.
-        private const val TICKER_W_MULT = 7     // width in button-diameters
+        // Тикер — бегущая строка в одну линию (владелец, 15.09.2026); ширина —
+        // настройка владельца, Settings.tickerWidthFlow.
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
         // orange circle, paper-white geometric "П"; deep red while recording.
@@ -540,11 +539,11 @@ class FloatingButtonController(
         pill.visibility = View.GONE
     }
 
-    // Широкая строка (владелец: «ширину плашки можно сделать больше, чтобы
-    // влезало больше слов»), но кнопка и поле рядом с ней остаются видны.
+    // Ширина — настройка владельца (Настройки → Общее, одна на все кнопки),
+    // но кнопка и поле рядом с ней остаются видны.
     private fun tickerWidthPx(): Int {
         val (w, _) = screenSize()
-        return minOf(buttonSize * TICKER_W_MULT, (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
+        return minOf(dp(service.cachedTickerWidthDp), (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
     }
 
     // Sit the pill beside the button, on the side that has room: button near
