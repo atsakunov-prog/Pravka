@@ -43,6 +43,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.TranscriptionLog
@@ -342,6 +343,7 @@ private enum class ExportWhat(val title: String) {
     METRICS("Метрики диктовки (CSV)"),
     EVENTS("Лог событий диктовки"),
     HISTORY("История правок (JSONL)"),
+    CORRECTIONS("Правки руками: надиктовано · модель · ты (CSV)"),
     REQUESTS("Запросы к Claude (отладка)"),
 }
 
@@ -420,6 +422,16 @@ private fun DictationExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
                 val r = range()
                 if (r == null) { error = "Не разобрал даты"; return@Button }
                 val (from, to) = r
+                if (what == ExportWhat.CORRECTIONS) {
+                    // shareCsvIntent — suspend: собирается в области приложения.
+                    onDismiss()
+                    app.appScope.launch {
+                        val intent = runCatching { app.corrections.shareCsvIntent(from, to) }.getOrNull()
+                        if (intent == null) Feedback.toast(context, "Не собралась")
+                        else runCatching { context.startActivity(android.content.Intent.createChooser(intent, what.title)) }
+                    }
+                    return@Button
+                }
                 val intent = runCatching {
                     when (what) {
                         ExportWhat.TAKES ->
@@ -431,6 +443,7 @@ private fun DictationExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
                             else app.eventLog.shareRangeIntent(from, to)
                         ExportWhat.HISTORY -> app.historyLog.shareIntent()
                         ExportWhat.REQUESTS -> app.requestLog.shareIntent()
+                        ExportWhat.CORRECTIONS -> throw IllegalStateException()
                     }
                 }.getOrElse { e -> error = "Не собралась: ${e.message}"; return@Button }
                 onDismiss()

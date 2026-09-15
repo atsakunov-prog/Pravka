@@ -827,8 +827,13 @@ internal fun SpeechSection(
     val isGoogle = engine == Settings.SPEECH_GOOGLE
     suspend fun statusFor(e: String): String = when {
         e == Settings.SPEECH_GOOGLE ->
-            if (ru.zf.pravka.provider.GoogleSpeechSession.isAvailable(context)) context.getString(R.string.google_ready)
-            else context.getString(R.string.google_unavailable)
+            if (ru.zf.pravka.provider.GoogleSpeechSession.isAvailable(context)) {
+                context.getString(R.string.google_ready) +
+                    // Тот же путь, что у клавиатуры, — только если модель на устройстве;
+                    // иначе распознаёт сетевой сервис, и он медленнее по определению.
+                    if (ru.zf.pravka.provider.GoogleSpeechSession.isOnDevice(context)) " · на устройстве"
+                    else " · НЕ на устройстве — медленнее клавиатуры, скачай русскую модель"
+            } else context.getString(R.string.google_unavailable)
         else -> whisperProvider.statusText(e)
     }
 
@@ -907,6 +912,21 @@ internal fun SpeechSection(
                 label = "Посегментный — перезапуск на каждой паузе",
                 selected = !segmented,
                 onSelect = { scope.launch { settings.setSpeechSegmented(false) } },
+            )
+            Spacer(Modifier.height(8.dp))
+            val biasingOn by settings.speechBiasingFlow.collectAsState(initial = true)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = biasingOn,
+                    onCheckedChange = { on -> scope.launch { settings.setSpeechBiasing(on) } },
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Подсказывать распознавателю слова словаря", style = MaterialTheme.typography.bodyMedium)
+            }
+            HintText(
+                "До 40 верных форм из словаря уходят движку подсказками. Это единственное, " +
+                    "чем вызов отличается от клавиатуры Google: кажется медленнее её — выключи и " +
+                    "сравни; в логе диктовки видно «ready +N ms» и «first partial +N ms»."
             )
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1097,9 +1117,42 @@ private fun LearningTab(app: PravkaApp) {
             }
             Spacer(Modifier.height(8.dp))
             HintText(
-                "«Обучить» в меню «П» разбирает текст под курсором сразу; здесь — " +
-                    "накопленные правки. Находки уходят в словарь с пометкой «авто-обучение»."
+                "Одно поправленное слово уходит в словарь само, без модели. Здесь — " +
+                    "сложные правки очередью для Опуса; «Обучить» в меню «П» разбирает " +
+                    "текст под курсором сразу. Находки — в словарь с пометкой «авто-обучение»."
             )
+        }
+
+        // Три столбца владельца: надиктовано → модель → он. Журнал навсегда
+        // (data/CorrectionsLog.kt), выгрузка CSV — в статистике диктовки.
+        SectionCard(label = "Правки руками") {
+            var rows by remember { mutableStateOf<List<ru.zf.pravka.data.CorrectionsLog.Entry>>(emptyList()) }
+            LaunchedEffect(loadTick) { rows = app.corrections.all().takeLast(12).asReversed() }
+            val fmtC = remember { java.text.SimpleDateFormat("dd.MM HH:mm", Locale.forLanguageTag("ru")) }
+            if (rows.isEmpty()) {
+                HintText("Пока пусто: правь текст, который прислала Правка, — правка запишется сюда.")
+            } else {
+                HintText("Надиктовано → модель → ты; справа — что с этим сделано. Все строки — CSV в выгрузке статистики диктовки.")
+                for (r in rows) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        fmtC.format(java.util.Date(r.ts)) + " · " + r.pkg.substringAfterLast('.') + " · " +
+                            when {
+                                r.result.startsWith("dict:") -> "в словарь: " + r.result.substringAfter(':').substringAfter(':')
+                                r.result == "pending" -> "ждёт «Разобрать сейчас»"
+                                r.result.startsWith("same:") -> "уже в словаре"
+                                else -> r.result
+                            },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text("🎙 " + r.dictated.take(160), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("✎ " + r.cleaned.take(160), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("✓ " + r.edited.take(160), style = MaterialTheme.typography.bodySmall)
+                }
+            }
         }
 
         SectionCard(label = "Предложения (${pending.size})") {

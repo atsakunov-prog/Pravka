@@ -34,6 +34,7 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_ENGINE = stringPreferencesKey("speech_engine")
         private val KEY_SPEECH_SEGMENTED = booleanPreferencesKey("speech_segmented")
         private val KEY_SPEECH_FORMATTING = booleanPreferencesKey("speech_formatting")
+        private val KEY_SPEECH_BIASING = booleanPreferencesKey("speech_biasing")
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
@@ -186,6 +187,15 @@ class Settings(private val context: Context) {
     val speechSegmentedFlow = context.dataStore.data.map { it[KEY_SPEECH_SEGMENTED] ?: true }
     suspend fun setSpeechSegmented(value: Boolean) {
         context.dataStore.edit { it[KEY_SPEECH_SEGMENTED] = value }
+    }
+
+    // Подсказывать распознавателю слова словаря (EXTRA_BIASING_STRINGS). Владелец
+    // (15.09.2026) сравнивает скорость с клавиатурой Google, а список
+    // подсказок — единственное, чем наш вызов того же движка отличается от
+    // неё; тумблер — чтобы проверить на слух, не он ли тормозит.
+    val speechBiasingFlow = context.dataStore.data.map { it[KEY_SPEECH_BIASING] ?: true }
+    suspend fun setSpeechBiasing(value: Boolean) {
+        context.dataStore.edit { it[KEY_SPEECH_BIASING] = value }
     }
 
     val speechFormattingFlow = context.dataStore.data.map { it[KEY_SPEECH_FORMATTING] ?: false }

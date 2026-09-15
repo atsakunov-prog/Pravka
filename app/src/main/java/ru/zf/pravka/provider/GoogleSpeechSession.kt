@@ -57,6 +57,8 @@ class GoogleSpeechSession(
     private var producedAny = false   // did this session ever start recognizing?
     private var readyFired = false
     private var segmented = false     // segmented mode confirmed working
+    private var startedAtMs = 0L      // для замера: сколько ждали готовности и первого слова
+    private var firstPartialLogged = false
     private var scoRaised = false     // канал гарнитуры подняли мы — нам и опускать
 
     private var onReady: () -> Unit = {}
@@ -106,6 +108,9 @@ class GoogleSpeechSession(
         fun isAvailable(context: Context): Boolean =
             onDeviceAvailable(context) || anyAvailable(context)
 
+        /** Работает ли распознавание на устройстве (тот же путь, что у клавиатуры Google). */
+        fun isOnDevice(context: Context): Boolean = onDeviceAvailable(context)
+
         /** Asks the system to fetch the offline language pack, if that API exists. */
         fun triggerModelDownload(context: Context, language: String = "ru-RU") {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
@@ -153,6 +158,7 @@ class GoogleSpeechSession(
             active = true
             stopping = false
             errorStreak = 0
+            startedAtMs = android.os.SystemClock.elapsedRealtime()
             onLog(
                 "start onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} " +
                     "formatting=$formatting segmentedRequested=$segmentedSession"
@@ -381,7 +387,7 @@ class GoogleSpeechSession(
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
-            onLog("ready")
+            onLog("ready +${android.os.SystemClock.elapsedRealtime() - startedAtMs} ms")
             // Fire the "you can speak now" cue once per session, not on every
             // restart (that vibrated repeatedly through a silent lead-in).
             if (!readyFired) { readyFired = true; onReady() }
@@ -393,6 +399,10 @@ class GoogleSpeechSession(
 
         override fun onPartialResults(partialResults: Bundle?) {
             val partial = firstResult(partialResults) ?: return
+            if (!firstPartialLogged) {
+                firstPartialLogged = true
+                onLog("first partial +${android.os.SystemClock.elapsedRealtime() - startedAtMs} ms")
+            }
             lastPartial = partial
             onPartial(liveText())
         }

@@ -36,8 +36,9 @@ class FloatingButtonController(
     companion object {
         private const val LONG_PRESS_MS = 450L
         private const val TICKER_ALPHA = 0.82f  // near-opaque, owner found 0.6 too see-through
-        private const val TICKER_W_MULT = 6     // width in button-diameters
-        private const val TICKER_LINES = 4      // teleprompter: up to four lines tall
+        // Тикер — бегущая строка в одну линию (владелец, 15.09.2026), шире
+        // прежней четырёхстрочной плашки: слов в строке должно помещаться много.
+        private const val TICKER_W_MULT = 7     // width in button-diameters
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
         // orange circle, paper-white geometric "П"; deep red while recording.
@@ -79,7 +80,7 @@ class FloatingButtonController(
     private val menuDismiss = Runnable { hideMenu() }
 
     private var ticker: FrameLayout? = null
-    private var tickerText: android.widget.TextView? = null
+    private var tickerText: MarqueeTickerView? = null
     private var tickerParams: WindowManager.LayoutParams? = null
     private var tickerVisible = false
 
@@ -355,7 +356,7 @@ class FloatingButtonController(
         if (ticker == null) createTicker()
         positionTicker()
         val t = ticker ?: return
-        tickerText?.text = ""
+        tickerText?.reset()
         lastTickerText = ""
         lastTickerAt = 0L
         runCatching { windowManager.updateViewLayout(t, tickerParams) }
@@ -367,41 +368,23 @@ class FloatingButtonController(
         }
     }
 
-    // Height that fits TICKER_LINES lines of the ticker text plus padding.
-    private fun tickerHeightPx(): Int = dp(TICKER_LINES * 24 + 16)
+    // Одна строка: высотой с кнопку, чтобы стоять с ней вровень.
+    private fun tickerHeightPx(): Int = maxOf(buttonSize, dp(40))
 
     private var lastTickerText = ""
     private var lastTickerAt = 0L
 
     fun updateTicker(text: String) {
         val tv = tickerText ?: return
-        // Partials arrive several times a second, and each assignment forces a
-        // full measure/layout/draw of a 4-line START-ellipsized TextView. Cap the
-        // refresh rate and skip identical text (the recognizer re-emits the same
-        // partial often), so the overlay stops competing with recognition for the
-        // main thread.
-        val tail = text.takeLast(400)
-        if (tail == lastTickerText) return
+        // Partials arrive several times a second; the marquee measures the text
+        // on each set, so skip identical text and cap the rate lightly - the
+        // motion itself is smoothed per frame inside the view.
+        if (text == lastTickerText) return
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTickerAt < 120) return
+        if (now - lastTickerAt < 60) return
         lastTickerAt = now
-        lastTickerText = tail
-        // Steady, bottom-anchored tail (teleprompter): newest words sit on the
-        // bottom line, older lines ride up and off the top. No per-update
-        // animation (the earlier "settle" nudge read as a jump-down).
-        tv.text = tail
-        // ellipsize=START is silently ignored on a multi-line TextView, so once
-        // the text exceeded 4 lines the view showed the FIRST 4 lines forever -
-        // the newest words never appeared (read as huge recognition lag). Trim
-        // leading lines after layout so the tail is what stays visible.
-        tv.post {
-            val layout = tv.layout ?: return@post
-            if (layout.lineCount > TICKER_LINES) {
-                val cut = layout.getLineStart(layout.lineCount - TICKER_LINES)
-                val current = tv.text?.toString() ?: return@post
-                if (cut in 1 until current.length) tv.text = current.substring(cut)
-            }
-        }
+        lastTickerText = text
+        tv.setTickerText(text)
     }
 
     /** Keep the pill glued to the button while it's dragged / on rotate. */
@@ -529,18 +512,9 @@ class FloatingButtonController(
             setColor(ACCENT)
         }
         pill.elevation = dp(4).toFloat()
-        val tv = android.widget.TextView(service).apply {
-            setTextColor(PAPER)
-            textSize = 17f
-            maxLines = TICKER_LINES
-            // NOTE: TruncateAt.START is ignored on multi-line TextViews - the
-            // tail-trimming in updateTicker() is what keeps new words visible.
-            gravity = Gravity.BOTTOM or Gravity.START
-            val padH = dp(16)
-            val padV = dp(8)
-            setPadding(padH, padV, padH, padV)
-            setLineSpacing(0f, 1.05f)
-        }
+        // Бегущая строка: рисует сама, без TextView и его перекладки на
+        // каждый частичный результат (см. MarqueeTickerView).
+        val tv = MarqueeTickerView(service, plateColor = ACCENT, textColor = PAPER, textSizeSp = 17f)
         tickerText = tv
         pill.addView(
             tv,
@@ -563,12 +537,11 @@ class FloatingButtonController(
         pill.visibility = View.GONE
     }
 
-    // Narrower than the button row (owner: on the cover screen the old 6x
-    // plate ate the whole width): 4.5 diameters, capped so the button and a
-    // margin always stay visible beside it.
+    // Широкая строка (владелец: «ширину плашки можно сделать больше, чтобы
+    // влезало больше слов»), но кнопка и поле рядом с ней остаются видны.
     private fun tickerWidthPx(): Int {
         val (w, _) = screenSize()
-        return minOf(buttonSize * 9 / 2, (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
+        return minOf(buttonSize * TICKER_W_MULT, (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
     }
 
     // Sit the pill beside the button, on the side that has room: button near

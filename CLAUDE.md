@@ -34,6 +34,7 @@
   `data/LiveDraft.kt`, `trigger/DictationService.kt`, `core/VoiceCommands.kt`.
   Пока микрофон наш, экран не гаснет: `DictationService` зовёт
   `PravkaAccessibilityService.keepScreenOn` (окно 1×1 с `FLAG_KEEP_SCREEN_ON`).
+  Тикер диктовки — бегущая строка `trigger/MarqueeTickerView.kt`.
   Кто слушает — телефон или Bluetooth-гарнитура — выбирает владелец значком
   между «П» и «З» (`trigger/MicSourceController.kt`, состояние —
   `settings.phoneMicOnlyFlow`); канал SCO поднимает и опускает

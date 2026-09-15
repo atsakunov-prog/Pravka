@@ -68,32 +68,44 @@ enum class ModeDecor(val glyphs: List<String>) {
 val LocalModeDecor = compositionLocalOf<ModeDecor?> { null }
 
 /**
- * Узор знаков режима под содержимым плашки: плотная решётка со сдвигом
- * чётных рядов и лёгким поворотом, цветом текста на пять сотых
- * прозрачности — разница с плашкой минимальная, глазом читается как
- * фактура бумаги, не как рисунок. Рисуется в drawBehind, без композиции:
- * знаки промерены один раз на плашку.
+ * Узор знаков режима под содержимым плашки. Владелец (15.09, третий заход):
+ * «не ровная сетка — сами пиктограммы сильно больше, повёрнуты в разные
+ * стороны, как будто развалины, и чтобы было понятно, что это». Поэтому
+ * знаки крупные (трёх размеров), разбросаны по редкой решётке со сдвигом и
+ * большим случайным смещением, повёрнуты на ±45°, а цвет — цвет текста на
+ * семь сотых прозрачности: контур читается, яркость почти как у плашки.
+ * Разброс детерминирован (хеш от ряда и колонки): плашка не мерцает при
+ * перерисовке. Рисуется в drawBehind, знаки промерены один раз на плашку.
  */
 @Composable
 fun Modifier.glyphPattern(decor: ModeDecor): Modifier {
     val measurer = rememberTextMeasurer()
-    val ink = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.055f)
-    val style = TextStyle(fontSize = 17.sp, color = ink)
-    val layouts = remember(decor, ink) { decor.glyphs.map { measurer.measure(it, style) } }
+    val ink = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
+    val sizesSp = listOf(30, 42, 56)
+    val layouts = remember(decor, ink) {
+        sizesSp.map { sp -> decor.glyphs.map { measurer.measure(it, TextStyle(fontSize = sp.sp, color = ink)) } }
+    }
     return this.drawBehind {
-        val cellW = 44.dp.toPx()
-        val cellH = 38.dp.toPx()
+        val cellW = 104.dp.toPx()
+        val cellH = 92.dp.toPx()
+        fun hash(r: Int, c: Int, salt: Int): Float {
+            var h = (r * 73856093) xor (c * 19349663) xor (salt * 83492791)
+            h = h xor (h ushr 13); h *= 0x5bd1e995.toInt(); h = h xor (h ushr 15)
+            return (h and 0x7fffffff) % 10007 / 10007f
+        }
         var row = 0
-        var y = -cellH * 0.35f
-        while (y < size.height) {
-            val shift = if (row % 2 == 0) 0f else cellW / 2f
+        var y = -cellH * 0.45f
+        while (y < size.height + cellH * 0.2f) {
             var col = 0
-            var x = -cellW * 0.4f + shift
-            while (x < size.width) {
-                val layout = layouts[(row * 5 + col * 3) % layouts.size]
-                val rot = ((row * 13 + col * 7) % 5 - 2) * 7f
-                val pivot = Offset(x + layout.size.width / 2f, y + layout.size.height / 2f)
-                rotate(rot, pivot) { drawText(layout, topLeft = Offset(x, y)) }
+            var x = -cellW * 0.45f + (if (row % 2 == 0) 0f else cellW * 0.5f)
+            while (x < size.width + cellW * 0.2f) {
+                val sizeIdx = (hash(row, col, 1) * sizesSp.size).toInt().coerceIn(0, sizesSp.lastIndex)
+                val glyph = layouts[sizeIdx][(hash(row, col, 2) * decor.glyphs.size).toInt().coerceIn(0, decor.glyphs.lastIndex)]
+                val left = x + (hash(row, col, 3) - 0.5f) * cellW * 0.6f
+                val top = y + (hash(row, col, 4) - 0.5f) * cellH * 0.6f
+                val rot = (hash(row, col, 5) - 0.5f) * 90f
+                val pivot = Offset(left + glyph.size.width / 2f, top + glyph.size.height / 2f)
+                rotate(rot, pivot) { drawText(glyph, topLeft = Offset(left, top)) }
                 x += cellW
                 col++
             }

@@ -65,6 +65,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         const val PREFS_INTERNAL = "pravka_internal"
         const val KEY_LAST_LEARN_BATCH = "last_learn_batch"
 
+        /** Окно захвата правок после доставки и его продление на каждую правку. */
+        const val CAPTURE_MS = 10L * 60 * 1000
+        const val CAPTURE_EXTEND_MS = 5L * 60 * 1000
+        /** Тишина после последней правки, после которой её разбирают. */
+        const val DIGEST_QUIET_MS = 30L * 1000
+
         // Засечка reminder anti-spam: one morning/evening nudge per day, one
         // gap nudge per distinct gap.
         internal const val KEY_Z_MORNING_DAY = "z_morning_day"
@@ -180,6 +186,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     // the tap -> listening path touches no storage.
     @Volatile internal var cachedSegmented: Boolean = true
     @Volatile internal var cachedFormatting: Boolean = false
+    @Volatile internal var cachedBiasingOn: Boolean = true
 
     internal val app: PravkaApp by lazy { application as PravkaApp }
 
@@ -214,6 +221,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         scope.launch {
             app.settings.speechFormattingFlow.collect { cachedFormatting = it }
+        }
+        scope.launch {
+            app.settings.speechBiasingFlow.collect { cachedBiasingOn = it }
         }
         scope.launch {
             app.settings.convoContextFlow.collect { cachedConvoContext = it }
@@ -473,34 +483,23 @@ class PravkaAccessibilityService : AccessibilityService() {
                 if (source.isEditable) cachedFocus = WeakReference(source)
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
-                // Only the learning auto-capture needs these; without it the
-                // whole branch (and its binder call for event.source) is dead.
-                if (!cachedLearnAuto) return
+                // События текста приходят только в окне захвата после доставки
+                // (armCapture) — вне его служба на них даже не подписана.
+                if (SystemClock.elapsedRealtime() > captureUntil) return
                 val source = event.source ?: return
                 if (source.isEditable) {
                     cachedFocus = WeakReference(source)
-                    // Learning auto-capture: the owner may be hand-editing a
-                    // text we just delivered. Throttled: at most one field read
-                    // per second, and only within the watch window of a take.
+                    // Владелец правит и сразу шлёт (15.09: «лаг всего одна секунда,
+                    // иначе я просто правил и отправлял»): читаем поле почти на
+                    // каждое нажатие (раз в 300 мс) и ещё раз через 300 мс после
+                    // последнего — последнее состояние перед отправкой должно быть
+                    // увидено. Опустевшее поле — это отправка: разбор сразу.
                     val now = SystemClock.elapsedRealtime()
-                    // Окно решает captureUntil (оно продлевается правками); здесь
-                    // только дроссель — одно чтение поля в секунду.
-                    if (now - lastWatchProbeAt > 1000) {
+                    ripenessHandler.removeCallbacks(trailingProbe)
+                    ripenessHandler.postDelayed(trailingProbe, 300)
+                    if (now - lastWatchProbeAt > 300) {
                         lastWatchProbeAt = now
-                        val pkg = runCatching { source.packageName?.toString() }.getOrNull()
-                        val current = runCatching { source.effectiveText() }.getOrDefault("")
-                        if (!pkg.isNullOrBlank() && current.isNotBlank()) {
-                            scope.launch {
-                                val firstEdit = app.editWatch.onFieldText(pkg, current, ::wordOverlap)
-                                if (firstEdit) {
-                                    app.learnLog.add(
-                                        "правка замечена: поле в $pkg, ${current.length} зн. — созреет через " +
-                                            "${ru.zf.pravka.data.EditWatchStore.RIPE_QUIET_MS / 60000} мин"
-                                    )
-
-                                }
-                            }
-                        }
+                        probeWatchedField(source)
                     }
                 }
             }
@@ -627,15 +626,22 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    // Names/terms/brands the recognizer should be biased toward - the owner's
-    // dictionary (both protected forms and the correct sides of replacements).
+    // Names/terms/brands the recognizer should be biased toward: ТОЛЬКО верные
+    // формы — защищённые слова и правые части замен и подсказок. Раньше в
+    // список шли и левые части замен, то есть ослышки («стаф джет»): подсказывать
+    // распознавателю ослышку — учить его ошибаться. Список короткий (40):
+    // владелец сравнивает скорость с клавиатурой Google, а длинный список
+    // подсказок — единственное, чем наш вызов того же движка от неё отличается.
     private suspend fun collectBiasing(): List<String> = runCatching {
+        val entries = app.dictionaryStore.all().filter { it.enabled }
         val words = LinkedHashSet<String>()
-        for (e in app.dictionaryStore.all()) {
+        for (e in entries.filter { it.mode == ru.zf.pravka.core.DictMode.PROTECT }) {
             e.from.takeIf { it.isNotBlank() }?.let { words.add(it) }
+        }
+        for (e in entries.filter { it.mode != ru.zf.pravka.core.DictMode.PROTECT }.sortedByDescending { it.hits }) {
             e.to.takeIf { it.isNotBlank() }?.let { words.add(it) }
         }
-        words.toList()
+        words.take(40)
     }.getOrDefault(emptyList())
 
     fun startRecordingNow() {
@@ -660,7 +666,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         discardTake = false
         val session = GoogleSpeechSession(
             this,
-            biasing = cachedBiasing,
+            biasing = if (cachedBiasingOn) cachedBiasing else emptyList(),
             formatting = cachedFormatting,
             segmentedSession = cachedSegmented,
         )
@@ -1264,6 +1270,111 @@ class PravkaAccessibilityService : AccessibilityService() {
         ripenessHandler.postDelayed(ripenessCheck, 11L * 60 * 1000)
     }
 
+    // ---- Захват правок владельца: окно после доставки, разбор по тишине ----
+    //
+    // Владелец (15.09.2026): «как именно он следит за тем, что я правлю? там
+    // раньше был крутой механизм». Механизм тот же — EditWatchStore помнит
+    // доставленное и ловит правку по событиям текста, — но подписка на события
+    // теперь НЕ постоянная (постоянная стоила плавности при складывании и по
+    // умолчанию была выключена, то есть не работала): служба подписывается
+    // ровно после доставки, на CAPTURE_MS, продлевает окно, пока владелец
+    // правит, и отписывается тишиной. Разбор — не Опусом по расписанию, а
+    // локально: через DIGEST_QUIET_MS после последней правки или сразу, как
+    // только поле опустело (сообщение отправлено). Одно слово → в словарь
+    // (core/EditDiff.kt), сложнее → в журнал правок очередью для «Разобрать
+    // сейчас». Разбор идёт по сохранённому состоянию поля, само поле к этому
+    // моменту может быть уже пустым.
+    @Volatile internal var captureUntil = 0L
+    private val disarmCapture = object : Runnable {
+        override fun run() {
+            val left = captureUntil - SystemClock.elapsedRealtime()
+            if (left <= 0) applyEventSubscription(false)
+            else ripenessHandler.postDelayed(this, left + 500)
+        }
+    }
+    private val digestRunnable = Runnable { digestEdits(DIGEST_QUIET_MS) }
+
+    internal fun armCapture() {
+        captureUntil = SystemClock.elapsedRealtime() + CAPTURE_MS
+        applyEventSubscription(true)
+        ripenessHandler.removeCallbacks(disarmCapture)
+        ripenessHandler.postDelayed(disarmCapture, CAPTURE_MS + 500)
+    }
+
+    internal fun scheduleDigest() {
+        ripenessHandler.removeCallbacks(digestRunnable)
+        ripenessHandler.postDelayed(digestRunnable, DIGEST_QUIET_MS + 500)
+    }
+
+    /** Дочитать поле через паузу после последнего события — хвост правки. */
+    private val trailingProbe = Runnable { cachedFocus?.get()?.let { probeWatchedField(it) } }
+
+    /**
+     * Одно чтение поля в окне захвата: непустое — сравнить с доставленным и
+     * запомнить как последнее состояние; пустое — сообщение отправлено, правка
+     * устоялась, разбираем немедленно по сохранённому состоянию.
+     */
+    private fun probeWatchedField(source: AccessibilityNodeInfo) {
+        val pkg = runCatching { source.packageName?.toString() }.getOrNull() ?: return
+        val current = runCatching { source.effectiveText() }.getOrDefault("")
+        if (current.isBlank()) {
+            digestEdits(0L)
+            return
+        }
+        scope.launch {
+            val firstEdit = app.editWatch.onFieldText(pkg, current, ::wordOverlap)
+            if (firstEdit) app.learnLog.add("правка замечена: поле в $pkg, ${current.length} зн.")
+            // Пока правит — окно захвата продлевается, а разбор ждёт тишины.
+            captureUntil = SystemClock.elapsedRealtime() + CAPTURE_EXTEND_MS
+            scheduleDigest()
+        }
+    }
+
+    /**
+     * Разбор устоявшихся правок: одно слово → словарь без модели, остальное → в
+     * журнал правок очередью для Опуса по кнопке. Зовётся по тишине после
+     * правки, по опустевшему полю и перед каждым новым тейком.
+     */
+    private fun digestEdits(quietMs: Long) {
+        scope.launch(Dispatchers.Default) {
+            runCatching {
+                val quiet = app.editWatch.quietEdited(quietMs)
+                for (entry in quiet) {
+                    val edited = entry.lastSeen
+                    val sub = ru.zf.pravka.core.EditDiff.singleSubstitution(entry.baseline, edited)
+                    val known = app.dictionaryStore.all()
+                    when {
+                        sub != null && known.any { it.from.equals(sub.from, ignoreCase = true) } -> {
+                            app.corrections.append(entry.pkg, entry.dictated, entry.cleaned, edited, "same:${sub.from}", done = true)
+                        }
+                        sub != null -> {
+                            val mode = if (sub.similar) ru.zf.pravka.core.DictMode.HARD else ru.zf.pravka.core.DictMode.HINT
+                            app.dictionaryStore.add(
+                                sub.from, sub.to, mode,
+                                if (mode == ru.zf.pravka.core.DictMode.HINT) "владелец предпочитает это слово" else "правка руками",
+                            )
+                            app.corrections.append(
+                                entry.pkg, entry.dictated, entry.cleaned, edited,
+                                "dict:$mode:${sub.from}→${sub.to}", done = true,
+                            )
+                            app.learnLog.add("В СЛОВАРЬ из правки руками: ${sub.from} → ${sub.to} [$mode]")
+                            app.eventLog.add("edit→dict: ${sub.from} → ${sub.to} [$mode]")
+                            cachedBiasing = collectBiasing()
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                Feedback.toast(this@PravkaAccessibilityService, "Словарь: «${sub.from}» → «${sub.to}»")
+                            }
+                        }
+                        else -> {
+                            app.corrections.append(entry.pkg, entry.dictated, entry.cleaned, edited, "pending", done = false)
+                            app.learnLog.add("правка руками сложнее одного слова — в очередь «Разобрать сейчас» (${entry.pkg})")
+                        }
+                    }
+                    app.editWatch.markDigested(entry.id, edited)
+                }
+            }.onFailure { app.eventLog.add("digest edits failed: ${it.message}") }
+        }
+    }
+
     /** The learning tab's "Разобрать сейчас": no 12h gate, no quiet wait. */
     fun runLearnBatchNow() = maybeRunLearnBatch(force = true)
 
@@ -1279,29 +1390,33 @@ class PravkaAccessibilityService : AccessibilityService() {
                 val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
                 val last = internal.getLong(KEY_LAST_LEARN_BATCH, 0L)
                 if (!force && System.currentTimeMillis() - last < cachedLearnPeriodH * 3600_000L) return@launch
-                val ripe = app.editWatch.ripe(quietMs = if (force) 0L else ru.zf.pravka.data.EditWatchStore.RIPE_QUIET_MS)
-                if (ripe.isEmpty()) {
+                // Очередь — сложные правки из журнала (CorrectionsLog): одно
+                // слово в словарь уходит само, Опусу достаётся то, что диффом
+                // не разобрать. Устоявшиеся, но ещё не разобранные — досыпаем
+                // прямо здесь, не дожидаясь таймера тишины.
+                if (app.editWatch.quietEdited(0L).isNotEmpty()) {
+                    digestEdits(0L)
+                    kotlinx.coroutines.delay(1500)
+                }
+                val pending = app.corrections.pending().takeLast(8)
+                if (pending.isEmpty()) {
                     if (force) {
-                        val watched = app.editWatch.all()
-                        app.learnLog.add(
-                            "разбор вручную: зрелых правок нет (в наблюдении ${watched.size}, " +
-                                "изменённых ${watched.count { it.editedTs > 0 }})"
-                        )
-                        Feedback.toast(this@PravkaAccessibilityService, "Разбирать нечего: изменённых текстов нет.")
+                        app.learnLog.add("разбор вручную: сложных правок в очереди нет")
+                        Feedback.toast(this@PravkaAccessibilityService, "Разбирать нечего: сложных правок нет, одиночные уже в словаре.")
                     }
                     return@launch
                 }
-                val cases = ripe.take(5).map { Triple(it.dictated, it.cleaned, it.lastSeen) }
+                val cases = pending.map { Triple(it.dictated, it.cleaned, it.edited) }
                 app.eventLog.add("learn batch: ${cases.size} edits")
                 app.learnLog.add("батч-анализ: правок к разбору — ${cases.size}")
                 if (force) Feedback.toast(this@PravkaAccessibilityService, "Разбираю правок: ${cases.size} (Опус)…")
                 val result = app.claudeProvider.learnBatch(cases, app.dictionaryStore.all())
                 result.onSuccess { proposals ->
                     internal.edit().putLong(KEY_LAST_LEARN_BATCH, System.currentTimeMillis()).apply()
-                    app.editWatch.remove(ripe.take(5).map { it.id })
                     app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
                     app.learnLog.add("батч-анализ стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
                     val added = queueProposals(proposals)
+                    app.corrections.markDone(pending.map { it.id }, "opus: в словарь $added")
                     app.eventLog.add("learn batch: dict=${proposals.dict.size} added=$added")
                     // Тишина после «Разобрать сейчас» читается как поломка —
                     // пустой результат тоже называется словами.
@@ -1440,6 +1555,8 @@ class PravkaAccessibilityService : AccessibilityService() {
                 app.learnLog.add("разбор стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
                 val added = queueProposals(proposals)
                 app.eventLog.add("learn: dict=${proposals.dict.size} added=$added")
+                val pkgNow = runCatching { node?.packageName?.toString() }.getOrNull().orEmpty()
+                app.corrections.append(pkgNow, match.first, match.second, current, "opus («Обучить»): в словарь $added", done = true)
                 // This edit is analyzed - close its auto-watch so the batch
                 // doesn't re-analyze the same text later.
                 val closed = app.editWatch.all()
@@ -1481,28 +1598,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             val current = runCatching { node.effectiveText() }.getOrDefault("")
             if (current.isBlank()) return@launch
             runCatching {
+                // Правка, сделанная без событий (окно захвата истекло, служба
+                // перезапускалась): поле сравнивается с доставленным здесь; сам
+                // разбор общий, и тишины он уже не ждёт — правка устоялась.
                 app.editWatch.onFieldText(pkg, current, ::wordOverlap, windowMs = 6L * 3600 * 1000)
-                val entry = app.editWatch.all().lastOrNull {
-                    it.pkg == pkg && it.editedTs > 0 && it.lastSeen == current.take(2000)
-                } ?: return@launch
-                val sub = ru.zf.pravka.core.EditDiff.singleSubstitution(entry.cleaned, entry.lastSeen)
-                    ?: return@launch
-                if (app.dictionaryStore.all().any { it.from.equals(sub.from, ignoreCase = true) }) {
-                    app.editWatch.remove(listOf(entry.id))
-                    return@launch
-                }
-                val mode = if (sub.similar) ru.zf.pravka.core.DictMode.HARD else ru.zf.pravka.core.DictMode.HINT
-                app.dictionaryStore.add(
-                    sub.from, sub.to, mode,
-                    if (mode == ru.zf.pravka.core.DictMode.HINT) "владелец предпочитает это слово" else "правка руками",
-                )
-                app.editWatch.remove(listOf(entry.id))
-                app.learnLog.add("В СЛОВАРЬ из правки руками: ${sub.from} → ${sub.to} [$mode]")
-                app.eventLog.add("edit→dict: ${sub.from} → ${sub.to} [$mode]")
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                    Feedback.toast(this@PravkaAccessibilityService, "Словарь: «${sub.from}» → «${sub.to}»")
-                }
             }.onFailure { app.eventLog.add("edit probe failed: ${it.message}") }
+            if (app.editWatch.quietEdited(0L).isNotEmpty()) digestEdits(0L)
         }
     }
 
@@ -1691,9 +1792,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                     app.editWatch.watch(pkg, watchDictated, outcome.result.text)
                     lastDeliveryAt = SystemClock.elapsedRealtime()
                     convoUpdateLast(pkg, outcome.result.text)
+                    // Окно захвата: события текста только теперь и только на время.
+                    armCapture()
                 }
             }
-            // Авторазбора после чистки больше нет: батч идёт только по кнопке.
+            // Авторазбора Опусом после чистки больше нет: батч идёт только по кнопке.
             // The post-fix result bar is gone (owner: it covered the keyboard).
             // Undo lives in the long-press FAB menu; the word diff and quick
             // add-to-dictionary went with the bar.
@@ -2181,6 +2284,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         instance = null
         runCatching { autoPilot.stop() }
         ripenessHandler.removeCallbacks(ripenessCheck)
+        ripenessHandler.removeCallbacks(digestRunnable)
+        ripenessHandler.removeCallbacks(disarmCapture)
+        ripenessHandler.removeCallbacks(trailingProbe)
         zReminderHandler.removeCallbacks(zReminderTick)
         chromeHandler.removeCallbacks(chromeTicker)
         lagHandler.removeCallbacks(lagTick)
