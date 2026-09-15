@@ -512,6 +512,9 @@ class FloatingButtonController(
             setColor(ACCENT)
         }
         pill.elevation = dp(4).toFloat()
+        // Дети режутся по овалу плашки: иначе фейд бегущей строки ложится
+        // квадратом поверх круглых концов пилюли.
+        pill.clipToOutline = true
         // Бегущая строка: рисует сама, без TextView и его перекладки на
         // каждый частичный результат (см. MarqueeTickerView).
         val tv = MarqueeTickerView(service, plateColor = ACCENT, textColor = PAPER, textSizeSp = 17f)
