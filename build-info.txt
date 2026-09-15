@@ -1,0 +1,7 @@
+pravka=2.0.415
+versionName=2.0.415
+apk=pravka-debug.apk
+versionCode=415
+commit=4341aaf9911f29a40f76295fadb2dbae66d2ad78
+branch=pravka
+builtAt=2026-09-15T12:11Z
