@@ -1255,7 +1255,7 @@ private fun LearningTab(app: PravkaApp) {
 
         SectionCard(label = "Принятые правила (${rules.size})") {
             if (rules.isEmpty()) {
-                HintText("Принятые правила появятся здесь и будут уходить в каждый запрос чистки.")
+                HintText("Принятые правила появятся здесь; в запрос чистки они уходят, если включён тумблер «Постоянные правила в промпте» в настройках Правки.")
             } else {
                 HintText(
                     "Набор правится только руками: новых правил разбор не предлагает, " +
@@ -1325,6 +1325,10 @@ private fun LearningTab(app: PravkaApp) {
                         },
                     )
                 }
+                // Что реально уезжает в промпт: потолок RulesStore.PROMPT_CAP по
+                // порядку. Владелец видел 54 одобренных правила и думал, что
+                // работают все; работали первые восемь (16.09.2026).
+                val fit = remember(rules) { ru.zf.pravka.data.RulesStore.fitsInPrompt(rules) }
                 rules.forEachIndexed { i, rule ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1332,6 +1336,13 @@ private fun LearningTab(app: PravkaApp) {
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text("${i + 1}. ${rule.text}", style = MaterialTheme.typography.bodyMedium)
+                            if (rule.enabled && !rule.pending && rule.id !in fit) {
+                                Text(
+                                    "в промпт не попадает: потолок ${ru.zf.pravka.data.RulesStore.PROMPT_CAP} знаков исчерпан правилами выше",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
                             if (rule.exampleBefore.isNotBlank() && rule.exampleAfter.isNotBlank()) {
                                 Text(
                                     "«${rule.exampleBefore}» → «${rule.exampleAfter}»",

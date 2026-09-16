@@ -35,6 +35,30 @@ class RulesStore(
         val pending: Boolean = false,
     )
 
+    companion object {
+        /** Потолок блока правил в промпте, знаков: длинный набор не должен вытеснять сам текст. */
+        const val PROMPT_CAP = 2000
+
+        /**
+         * Какие правила реально уедут в промпт: включённые и одобренные, по
+         * порядку, пока хватает потолка. Раньше это знал только enabledBlock, и
+         * владелец одобрял правило №40, не видя, что в запрос попадают лишь
+         * первые восемь (16.09.2026: 46 из 54 правил молча не доезжали).
+         */
+        fun fitsInPrompt(rules: List<Rule>): Set<Long> {
+            val out = HashSet<Long>()
+            var used = 0
+            for (r in rules) {
+                if (!r.enabled || r.pending) continue
+                val cost = r.text.length + r.exampleBefore.length + r.exampleAfter.length
+                if (used + cost > PROMPT_CAP) break
+                used += cost
+                out.add(r.id)
+            }
+            return out
+        }
+    }
+
     private val mutex = Mutex()
     private var loaded = false
     private val rules = mutableListOf<Rule>()
@@ -186,21 +210,18 @@ class RulesStore(
             ensureLoaded()
             // Непросуженное в промпт не идёт: правило начинает работать
             // только после того, как владелец его одобрил.
-            val active = rules.filter { it.enabled && !it.pending }
+            val fit = fitsInPrompt(rules)
+            val active = rules.filter { it.id in fit }
             if (active.isEmpty()) return@withLock ""
             val sb = StringBuilder("Постоянные правила владельца (соблюдай):\n")
-            var used = 0
             // Numbered (owner's request): the optimized core reads as a list -
             // "1., 2., 3. ..." - both here and on the Learning tab.
             for ((i, r) in active.withIndex()) {
-                val cost = r.text.length + r.exampleBefore.length + r.exampleAfter.length
-                if (used + cost > 2000) break
                 sb.append(i + 1).append(". ").append(r.text).append('\n')
                 if (r.exampleBefore.isNotBlank() && r.exampleAfter.isNotBlank()) {
                     sb.append("  Пример: «").append(r.exampleBefore).append("» → «")
                         .append(r.exampleAfter).append("»\n")
                 }
-                used += cost
             }
             sb.toString().trim()
         }

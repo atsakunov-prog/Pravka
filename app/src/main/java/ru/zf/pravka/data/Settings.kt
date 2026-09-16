@@ -43,6 +43,7 @@ class Settings(private val context: Context) {
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
+        private val KEY_RULES_IN_PROMPT = booleanPreferencesKey("rules_in_prompt")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
         private val KEY_LEARN_AUTO = booleanPreferencesKey("learn_auto_capture")
@@ -240,6 +241,17 @@ class Settings(private val context: Context) {
 
     // Formatting rules are usually message-oriented and would fight the prose
     // directive - off in prose mode unless the owner flips this.
+    // Постоянные правила владельца в промпте CLEAN (16.09.2026). Выключено:
+    // разбор 1200 чисток до и после появления правил (29.08) не показал
+    // разницы в пунктуации и длине предложений, а из 54 правил в запрос
+    // попадали только первые восемь — потолок RulesStore.PROMPT_CAP — и они
+    // повторяют сам промпт. Единственный видимый эффект — приветствие с «!».
+    // Тумблер в настройках Правки возвращает блок целиком.
+    val rulesInPromptFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROMPT] ?: false }
+    suspend fun setRulesInPrompt(value: Boolean) {
+        context.dataStore.edit { it[KEY_RULES_IN_PROMPT] = value }
+    }
+
     val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }
     suspend fun setRulesInProse(value: Boolean) {
         context.dataStore.edit { it[KEY_RULES_IN_PROSE] = value }

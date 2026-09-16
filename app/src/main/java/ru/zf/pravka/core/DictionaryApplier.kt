@@ -74,7 +74,12 @@ class DictionaryApplier(private val store: DictionaryStore) {
         fun boundaryRegex(from: String, withRussianEndings: Boolean): Regex? {
             val trimmed = from.trim()
             if (trimmed.isEmpty()) return null
-            val suffix = if (withRussianEndings && trimmed.last().isCyrillic()) "[а-яёА-ЯЁ]{0,3}" else ""
+            // Хвост окончаний — только для слов от трёх букв: у «та» он ловил
+            // «так» и «там», и подсказка «та — это ТА» уезжала в промпт 753 раза
+            // (16.09.2026), у «Ви» — «вид» и «вижу».
+            val suffix =
+                if (withRussianEndings && trimmed.length >= 3 && trimmed.last().isCyrillic()) "[а-яёА-ЯЁ]{0,3}"
+                else ""
             return runCatching {
                 Regex("(?iu)(?<![\\p{L}\\p{N}])" + Regex.escape(trimmed) + suffix + "(?![\\p{L}\\p{N}])")
             }.getOrNull()

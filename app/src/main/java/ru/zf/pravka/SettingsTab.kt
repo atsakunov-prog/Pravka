@@ -601,6 +601,19 @@ private fun PravkaSettings(app: PravkaApp) {
     Spacer(Modifier.height(6.dp))
     val prose by settings.proseModeFlow.collectAsState(initial = false)
     val convo by settings.convoContextFlow.collectAsState(initial = true)
+    val rulesOn by settings.rulesInPromptFlow.collectAsState(initial = false)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(checked = rulesOn, onCheckedChange = { on -> scope.launch { settings.setRulesInPrompt(on) } })
+        Spacer(Modifier.width(8.dp))
+        Text("Постоянные правила в промпте", style = MaterialTheme.typography.bodyMedium)
+    }
+    HintText(
+        "Выключено (16.09): по журналу 1200 чисток правила не меняли пунктуацию и длину " +
+            "предложений, а в запрос из 54 попадали только первые 8 (потолок 2000 знаков) — " +
+            "и те повторяют промпт. Заметная разница одна: приветствие с «!». Включи, если " +
+            "её не хватает; во вкладке Обучение красным помечено, что в потолок не влезает."
+    )
+    Spacer(Modifier.height(10.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
         Switch(checked = prose, onCheckedChange = { on -> scope.launch { settings.setProseMode(on) } })
         Spacer(Modifier.width(8.dp))
@@ -611,7 +624,7 @@ private fun PravkaSettings(app: PravkaApp) {
             "Только ошибки распознавания, орфография и пунктуация. " +
             "Промпт режима редактируется во вкладке «Промпты»."
     )
-    if (prose) {
+    if (prose && rulesOn) {
         val rulesInProse by settings.rulesInProseFlow.collectAsState(initial = false)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(

@@ -122,8 +122,12 @@ class ClaudeProvider(
                 // dictionary block, so the cached CLEAN prefix stays byte-stable.
                 // In prose mode they are message-formatting advice fighting the
                 // prose directive - skipped unless the owner enabled them there.
+                // Since 16.09 the whole block is behind a setting (default off):
+                // measured against the history it changed nothing but greeting
+                // punctuation, while eating ~700 tokens per request.
                 val rulesBlock =
-                    if (proseOn && !settings.rulesInProseFlow.first()) ""
+                    if (!settings.rulesInPromptFlow.first()) ""
+                    else if (proseOn && !settings.rulesInProseFlow.first()) ""
                     else rulesStore.enabledBlock()
                 val dictAndRules = listOf(dictBlock, rulesBlock)
                     .filter { it.isNotBlank() }
