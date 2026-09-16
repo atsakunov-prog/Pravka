@@ -63,11 +63,12 @@ class NightReviewStore(private val context: Context) {
         val startedAt: Long,
         val fromMs: Long,
         val toMs: Long,
-        /** analysis · check · done · failed */
+        /** analysis · check · audit · done · failed */
         val stage: String,
         val manual: Boolean = false,
         val analysisBatchId: String = "",
         val checkBatchId: String = "",
+        val auditBatchId: String = "",
         /** Пакет свидетельств по измерениям — тот же уходит проверке; после done стирается. */
         val evidence: Map<String, String> = emptyMap(),
         val summary: String = "",
@@ -78,7 +79,7 @@ class NightReviewStore(private val context: Context) {
         val changes: List<Change> = emptyList(),
         val replies: List<Reply> = emptyList(),
     ) {
-        val active: Boolean get() = stage == "analysis" || stage == "check"
+        val active: Boolean get() = stage == "analysis" || stage == "check" || stage == "audit"
         fun applied() = changes.count { it.status == "applied" }
         fun proposed() = changes.count { it.status == "proposed" }
         fun rejected() = changes.count { it.status == "rejected" }
@@ -155,7 +156,8 @@ class NightReviewStore(private val context: Context) {
                     id = o.optLong("id"), kind = o.optString("kind", "daily"), startedAt = o.optLong("startedAt"),
                     fromMs = o.optLong("fromMs"), toMs = o.optLong("toMs"), stage = o.optString("stage", "failed"),
                     manual = o.optBoolean("manual"), analysisBatchId = o.optString("analysisBatchId"),
-                    checkBatchId = o.optString("checkBatchId"), evidence = ev, summary = o.optString("summary"),
+                    checkBatchId = o.optString("checkBatchId"), auditBatchId = o.optString("auditBatchId"),
+                    evidence = ev, summary = o.optString("summary"),
                     error = o.optString("error"), costUsd = o.optDouble("costUsd", 0.0),
                     finishedAt = o.optLong("finishedAt"), lastPollAt = o.optLong("lastPollAt"),
                     changes = changes, replies = replies,
@@ -171,6 +173,7 @@ class NightReviewStore(private val context: Context) {
                 put("id", r.id); put("kind", r.kind); put("startedAt", r.startedAt)
                 put("fromMs", r.fromMs); put("toMs", r.toMs); put("stage", r.stage); put("manual", r.manual)
                 put("analysisBatchId", r.analysisBatchId); put("checkBatchId", r.checkBatchId)
+                put("auditBatchId", r.auditBatchId)
                 put("evidence", JSONObject().apply { for ((k, v) in r.evidence) put(k, v) })
                 put("summary", r.summary); put("error", r.error); put("costUsd", r.costUsd)
                 put("finishedAt", r.finishedAt); put("lastPollAt", r.lastPollAt)

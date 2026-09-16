@@ -43,6 +43,13 @@ import ru.zf.pravka.ui.Feedback
 
 private val dayTime = SimpleDateFormat("EEE dd.MM HH:mm", Locale("ru"))
 
+private fun stageLabel(stage: String): String = when (stage) {
+    "analysis" -> "первый проход"
+    "check" -> "проверка"
+    "audit" -> "согласование"
+    else -> stage
+}
+
 @Composable
 internal fun NightReviewSection(app: PravkaApp) {
     val context = LocalContext.current
@@ -63,11 +70,13 @@ internal fun NightReviewSection(app: PravkaApp) {
         Text("Разбирать журналы каждую ночь", style = MaterialTheme.typography.bodyMedium)
     }
     HintText(
-        "Fable 5.1 батчем (вдвое дешевле обычного запроса) читает расшифровки, чистки, правки " +
-            "руками, словарь и правила за сутки; второй такой же проход проверяет находки. " +
-            "Высоковероятное и подтверждённое применяется само, остальное лежит предложениями. " +
-            "Отчёт каждое утро, по пятницам — за неделю. Промпт разбор не трогает, только пишет " +
-            "заметки. Модели и усилие — в группе «Модели»."
+        "Три прохода Fable 5.1 батчем (вдвое дешевле обычного запроса): первый читает " +
+            "чистки и правки руками за сутки плюс счётчики повторов за неделю, словарь и правила " +
+            "целиком; второй проверяет каждую находку; третий смотрит на итог целиком против " +
+            "прошлых решений — что применяли, что ты возвращал. Высоковероятное, подтверждённое и " +
+            "согласованное применяется само, остальное лежит предложениями. Отчёт каждое утро, " +
+            "по пятницам — за неделю (тексты за 7 дней, повторы за 30). Промпт разбор не трогает. " +
+            "Модели и усилие — в группе «Модели»."
     )
     Spacer(Modifier.height(6.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -95,7 +104,7 @@ internal fun NightReviewSection(app: PravkaApp) {
     runs.firstOrNull { it.active }?.let { run ->
         Spacer(Modifier.height(4.dp))
         Text(
-            "Идёт: ${if (run.stage == "analysis") "первый проход" else "проверка"} · отправлено ${dayTime.format(Date(run.startedAt))} · статус спрашивается раз в 10 минут",
+            "Идёт: ${stageLabel(run.stage)} · отправлено ${dayTime.format(Date(run.startedAt))} · статус спрашивается раз в 10 минут",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.primary,
         )
@@ -115,8 +124,7 @@ private fun RunCard(app: PravkaApp, run: NightReviewStore.Run) {
     val kindLabel = if (run.kind == NightReviewPolicy.WEEKLY) "неделя" else "сутки"
     SectionCard(label = "${dayTime.format(Date(run.startedAt))} · $kindLabel${if (run.manual) " · вручную" else ""}") {
         val status = when (run.stage) {
-            "analysis" -> "идёт первый проход"
-            "check" -> "идёт проверка"
+            "analysis", "check", "audit" -> "идёт ${stageLabel(run.stage)}"
             "failed" -> "не удался"
             else -> "готово" + if (run.costUsd > 0) " · $" + "%.3f".format(Locale.US, run.costUsd) else ""
         }

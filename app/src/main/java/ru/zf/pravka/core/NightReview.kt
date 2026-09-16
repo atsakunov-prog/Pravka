@@ -53,6 +53,11 @@ class NightReview(
     companion object {
         /** Статус батча спрашиваем не чаще чем раз в десять минут: он идёт до часа. */
         const val POLL_MS = 10 * 60_000L
+        /** Окно счётчиков повторов: неделя у дневного прогона, месяц у недельного. */
+        const val DAILY_AGG_MS = 7 * 86_400_000L
+        const val WEEKLY_AGG_MS = 30 * 86_400_000L
+        /** Память решений, которую видят все три прохода. */
+        const val LEDGER_MS = 30 * 86_400_000L
         /** Батч живёт сутки; сутки с запасом без результата — прогон провален. */
         const val EXPIRE_MS = 26 * 3600_000L
         private val DIMS = listOf("dict", "model", "rules")
@@ -130,6 +135,11 @@ class NightReview(
         val dict = dictionary.all()
         val ruleList = rules.all()
         val weekly = kind == NightReviewPolicy.WEEKLY
+        // Повторы — за окно длиннее сырых текстов, счётчиками (см. NightReviewEvidence).
+        val aggFrom = to - if (weekly) WEEKLY_AGG_MS else DAILY_AGG_MS
+        val agg = NightReviewEvidence.aggregate(history.readEntries(aggFrom, to).map { it.input to it.output })
+        val aggBlock = NightReviewEvidence.render(agg, "ПОВТОРЫ за ${if (weekly) 30 else 7} дней (что во что модель заменяла, сколько раз)")
+        val ledger = ledgerBlock(dict)
         val period = "Период: ${date(from)}–${date(to)} (${if (weekly) "неделя" else "сутки"}). " +
             "Диктовок ${takes.size} (пустых ${takes.count { !it.ok }}), чисток моделью ${pairs.size}, правок руками ${corr.size}."
         val pairsBlock = block("ЧИСТКИ — <d> надиктовано, <m> что сделала модель", pairs, if (weekly) 90_000 else 40_000) {
@@ -149,24 +159,34 @@ class NightReview(
         out["dict"] = listOf(
             "ЗАДАЧА: словарь и ослышки. Найди ослышки распознавателя, которые модель или владелец чинят раз за разом; " +
                 "записи словаря, которые ломают живые слова или никогда не стреляют; имена и термины без защиты.",
-            period, pairsBlock, corrBlock, dictBlock,
+            period, aggBlock, ledger, pairsBlock, corrBlock, dictBlock,
         ).filter { it.isNotBlank() }.joinToString("\n\n")
         out["model"] = listOf(
             "ЗАДАЧА: поведение модели и распознавателя. По парам <d>→<m>: удаления слов (особенно «не», «нет»), " +
                 "смена рода и лица, местоимения, превращённые в имена, цепочки запятых вместо точек, выдуманные слова, " +
                 "разнобой в именах. По правкам руками — где модель промахнулась. Здесь ответ в основном заметками " +
                 "(kind note) с числами; словарные изменения — только для имён и терминов.",
-            period,
+            period, aggBlock,
             if (glitches.isBlank()) "" else "Слова со смешанным алфавитом у распознавателя: $glitches",
             pairsBlock, corrBlock,
             "ПРОМПТ CLEAN, действующий сейчас (не правь, только заметки):\n" + prompts.effective(ProofreadMode.CLEAN),
         ).filter { it.isNotBlank() }.joinToString("\n\n")
-        if (rulesBlock.isNotBlank()) out["rules"] = listOf(
+        // Правила — состояние, которое меняется редко: каждую ночь их гонять
+        // незачем, если блок в промпте выключен. Недельный смотрит всегда.
+        if (rulesBlock.isNotBlank() && (weekly || rulesOn)) out["rules"] = listOf(
             "ЗАДАЧА: правила обучения. По журналу реши, какие включённые правила выключить (вредят, противоречат " +
                 "промпту или друг другу, дублируют его) и какие выключенные — включить. Новых не сочиняй.",
-            period, rulesBlock, pairsBlock.take(30_000), corrBlock,
+            period, ledger, rulesBlock, pairsBlock.take(30_000), corrBlock,
         ).filter { it.isNotBlank() }.joinToString("\n\n")
         return out
+    }
+
+    /** Память решений для промптов: прошлые прогоны + сколько раз сработало применённое. */
+    private suspend fun ledgerBlock(dict: List<DictEntry>): String {
+        val runs = store.all()
+        val since = System.currentTimeMillis() - LEDGER_MS
+        val byId = dict.associateBy { it.id }
+        return NightReviewEvidence.ledger(runs, since, hitsSince = { id -> byId[id]?.hits })
     }
 
     private fun <T> block(title: String, items: List<T>, maxChars: Int, render: (T) -> String): String {
@@ -202,7 +222,11 @@ class NightReview(
         var r = run.copy(lastPollAt = nowMs)
         store.save(r)
         if (nowMs - r.startedAt > EXPIRE_MS) throw IllegalStateException("батч не завершился за сутки")
-        val batchId = if (r.stage == "analysis") r.analysisBatchId else r.checkBatchId
+        val batchId = when (r.stage) {
+            "analysis" -> r.analysisBatchId
+            "check" -> r.checkBatchId
+            else -> r.auditBatchId
+        }
         val st = batches.status(batchId)
         if (!st.ended) {
             log.add("ночной разбор: батч $batchId ещё идёт (в работе ${st.inFlight})")
@@ -211,12 +235,20 @@ class NightReview(
         val url = st.resultsUrl
             ?: throw IllegalStateException("батч завершён без результатов (ошибок ${st.errored}, истекло ${st.expired})")
         val items = batches.results(url)
-        val route = if (r.stage == "analysis") ModelRoute.NIGHT_REVIEW else ModelRoute.NIGHT_CHECK
+        val route = when (r.stage) {
+            "analysis" -> ModelRoute.NIGHT_REVIEW
+            "check" -> ModelRoute.NIGHT_CHECK
+            else -> ModelRoute.NIGHT_AUDIT
+        }
         val choice = settings.modelChoice(route)
         val cost = items.sumOf { Pricing.costUsd(choice.model, it.inputTokens, it.outputTokens, it.cacheWrite, it.cacheRead) } * ClaudeBatches.DISCOUNT
         stats.recordAux(cost, items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }, items.sumOf { it.outputTokens })
         r = r.copy(costUsd = r.costUsd + cost)
-        r = if (r.stage == "analysis") afterAnalysis(r, items) else afterCheck(r, items)
+        r = when (r.stage) {
+            "analysis" -> afterAnalysis(r, items)
+            "check" -> afterCheck(r, items)
+            else -> afterAudit(r, items)
+        }
         store.save(r)
     }
 
@@ -231,8 +263,16 @@ class NightReview(
                 .onSuccess { a -> if (a.summary.isNotBlank()) summaries += a.summary; changes += a.changes }
                 .onFailure { errors += "$dim: ответ не разобрался (${it.message})" }
         }
-        val toCheck = changes.filter { !it.isNote }
-        val partial = run.copy(summary = summaries.joinToString("\n\n"), error = errors.joinToString("; "), changes = changes)
+        // Память: что владелец вернул или отклонил за месяц, снова не предлагается —
+        // даже если модель не послушала промпт.
+        val blocked = NightReviewEvidence.blockedKeys(store.all(), System.currentTimeMillis() - LEDGER_MS)
+        val remembered = changes.map { c ->
+            if (!c.isNote && NightReviewEvidence.key(c) in blocked)
+                c.copy(status = "skipped", statusNote = "владелец уже вернул или отклонил такое — не предлагаю снова")
+            else c
+        }
+        val toCheck = remembered.filter { !it.isNote && it.status == "proposed" }
+        val partial = run.copy(summary = summaries.joinToString("\n\n"), error = errors.joinToString("; "), changes = remembered)
         if (toCheck.isEmpty()) return finish(partial)
         val choice = settings.modelChoice(ModelRoute.NIGHT_CHECK)
         val requests = DIMS.mapNotNull { dim ->
@@ -267,25 +307,72 @@ class NightReview(
                 .onSuccess { verdicts.putAll(it) }
                 .onFailure { errors += "${item.customId}: вердикты не разобрались (${it.message})" }
         }
+        val updated = run.changes.map { c ->
+            if (c.isNote || c.status != "proposed") c
+            else {
+                val (verdict, why) = verdicts[c.id] ?: ("unsure" to "проверка не ответила")
+                val x = c.copy(verdict = verdict, verdictWhy = why)
+                if (verdict == "reject") x.copy(status = "rejected") else x
+            }
+        }
+        val allErrors = listOf(run.error, errors.joinToString("; ")).filter { it.isNotBlank() }.joinToString("; ")
+        val partial = run.copy(changes = updated, error = allErrors)
+        val remaining = updated.filter { !it.isNote && it.status == "proposed" }
+        if (remaining.isEmpty()) return finish(partial)
+        // Третий проход — согласование: итог ночи против памяти решений и
+        // текущего состояния, одним запросом на всё.
+        val choice = settings.modelChoice(ModelRoute.NIGHT_AUDIT)
+        val dict = dictionary.all()
+        val user = listOf(
+            "ИТОГ НОЧИ — изменения с вердиктами проверки (JSON):",
+            JSONArray().apply {
+                for (c in remaining) put(changeJson(c).put("verdict", c.verdict).put("verdict_why", c.verdictWhy))
+            }.toString(),
+            "СВОДКИ ПЕРВЫХ ДВУХ ПРОХОДОВ:\n" + partial.summary,
+            ledgerBlock(dict),
+            "СЛОВАРЬ СЕЙЧАС (id|вид|from|to|срабатываний|вкл):\n" +
+                dict.joinToString("\n") { "${it.id}|${it.mode}|${it.from}|${it.to}|${it.hits}|${if (it.enabled) 1 else 0}" },
+            rules.all().takeIf { it.isNotEmpty() }?.let { list ->
+                "ПРАВИЛА СЕЙЧАС (id|вкл|текст):\n" + list.joinToString("\n") { "${it.id}|${if (it.enabled) 1 else 0}|${it.text}" }
+            }.orEmpty(),
+        ).filter { it.isNotBlank() }.joinToString("\n\n")
+        val batchId = batches.create(
+            listOf("audit" to ClaudeBatches.params(choice.model, choice.effort, OUT_TOKENS, PromptsReview.AUDIT_SYSTEM, user))
+        )
+        log.add("ночной разбор: согласование, батч $batchId, изменений ${remaining.size}")
+        return partial.copy(stage = "audit", checkBatchId = run.checkBatchId, auditBatchId = batchId)
+    }
+
+    /** После согласования: придержанное остаётся предложением, остальное high+approve применяется. */
+    private suspend fun afterAudit(run: Run, items: List<ClaudeBatches.Item>): Run {
+        val item = items.firstOrNull { it.customId == "audit" }
+        var assessment = ""
+        var holds: Map<String, String> = emptyMap()
+        var error = ""
+        if (item == null || !item.ok) error = "согласование: ${item?.failure ?: "нет ответа"}"
+        else runCatching { NightReviewPolicy.parseAudit(item.text) }
+            .onSuccess { assessment = it.assessment; holds = it.holds }
+            .onFailure { error = "согласование: ответ не разобрался (${it.message})" }
         var applied = 0
-        val updated = ArrayList<Change>()
-        for (c in run.changes) {
-            if (c.isNote) { updated += c; continue }
-            val (verdict, why) = verdicts[c.id] ?: ("unsure" to "проверка не ответила")
-            var x = c.copy(verdict = verdict, verdictWhy = why)
-            x = when {
-                verdict == "reject" -> x.copy(status = "rejected")
-                NightReviewPolicy.autoApply(x) && applied < NightReviewPolicy.AUTO_CAP -> {
-                    val done = applyChange(x, run)
+        val updated = run.changes.map { c ->
+            when {
+                c.isNote || c.status != "proposed" -> c
+                c.id in holds -> c.copy(verdict = "hold", verdictWhy = "согласование: ${holds[c.id]}" +
+                    (if (c.verdictWhy.isNotBlank()) " (проверка: ${c.verdictWhy})" else ""))
+                NightReviewPolicy.autoApply(c) && applied < NightReviewPolicy.AUTO_CAP -> {
+                    val done = applyChange(c, run)
                     if (done.status == "applied") applied++
                     done
                 }
-                else -> x
+                else -> c
             }
-            updated += x
         }
-        val allErrors = listOf(run.error, errors.joinToString("; ")).filter { it.isNotBlank() }.joinToString("; ")
-        return finish(run.copy(changes = updated, error = allErrors))
+        val allErrors = listOf(run.error, error).filter { it.isNotBlank() }.joinToString("; ")
+        val summary = listOf(
+            if (assessment.isNotBlank()) "Согласование: $assessment" else "",
+            run.summary,
+        ).filter { it.isNotBlank() }.joinToString("\n\n")
+        return finish(run.copy(changes = updated, error = allErrors, summary = summary))
     }
 
     private fun finish(run: Run): Run {

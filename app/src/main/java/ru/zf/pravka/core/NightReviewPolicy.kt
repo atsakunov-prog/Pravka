@@ -96,6 +96,21 @@ object NightReviewPolicy {
         return out
     }
 
+    data class Audit(val assessment: String, val holds: Map<String, String>)
+
+    /** Ответ согласования: оценка целиком и что придержать (id → почему). */
+    fun parseAudit(raw: String): Audit {
+        val o = jsonObject(raw)
+        val arr = o.optJSONArray("holds") ?: JSONArray()
+        val holds = LinkedHashMap<String, String>()
+        for (i in 0 until arr.length()) {
+            val h = arr.optJSONObject(i) ?: continue
+            val id = h.optString("id").trim()
+            if (id.isNotEmpty()) holds[id] = h.optString("why").trim()
+        }
+        return Audit(o.optString("assessment").trim(), holds)
+    }
+
     data class ReplyPlan(val actions: List<Pair<String, String>>, val answer: String)
 
     /** Ответ владельца, переведённый моделью в действия по id. */
