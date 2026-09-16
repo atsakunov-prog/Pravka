@@ -1239,6 +1239,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                         if (canUndo && !busy) undoLast()
                     },
                     FloatingButtonController.MenuItem(getString(R.string.quick_clean), red) { runProofread(ProofreadMode.CLEAN) },
+                    FloatingButtonController.MenuItem("Чистка буфера", red) { cleanClipboardIntoField() },
                     FloatingButtonController.MenuItem(getString(R.string.redo_polish), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
                     FloatingButtonController.MenuItem("Обучить", red) { learnFromField() },
                     FloatingButtonController.MenuItem("Сброс", red) { resetStuck() },
@@ -1247,6 +1248,110 @@ class PravkaAccessibilityService : AccessibilityService() {
                 ),
             )
         )
+    }
+
+    /**
+     * «Чистка буфера» из меню «П» (владелец, 16.09.2026): «брать то, что
+     * сейчас в буфере, править и вставлять в активный текстбокс».
+     *
+     * Буфер служба сама НЕ читает: с Android 10 его отдают только окну в
+     * фокусе или клавиатуре, а службе доступности в фоне приходит null.
+     * Поэтому вставляет чужое приложение — ACTION_PASTE в поле под курсором
+     * (фокус у него, ему буфер отдадут), а мы по разнице текста «до/после»
+     * (`TextSpans.insertedSpan`) находим вставленный кусок, выделяем ровно
+     * его и пускаем ту же чистку, что после диктовки: стрим прямо в поле,
+     * только по выделению, история и деньги — как обычно. Поля под курсором
+     * нет — пробуем прочитать буфер сами (вдруг фокус у нашего окна) и уйти
+     * дорогой «без поля»: буфер и уведомление.
+     */
+    private fun cleanClipboardIntoField() {
+        if (busy) return
+        busy = true
+        scope.launch {
+            val svc = this@PravkaAccessibilityService
+            val node = runCatching { focusedEditableNode() }.getOrNull()
+            if (node == null) {
+                busy = false
+                val text = runCatching { ru.zf.pravka.target.ClipboardTarget(svc).read() }
+                    .getOrNull()?.trim().orEmpty()
+                if (text.isEmpty()) {
+                    app.eventLog.add("clipboard clean: no field, clipboard unreadable or empty")
+                    Haptics.error(svc)
+                    Feedback.toast(svc, "Нет поля под курсором — поставь курсор в текстбокс и повтори.")
+                } else {
+                    app.eventLog.add("clipboard clean: no field -> clean without field len=${text.length}")
+                    cleanWithoutField(text)
+                }
+                return@launch
+            }
+            // Node calls throw when the window died — must not wedge busy.
+            val before = runCatching { Triple(node.effectiveText(), node.textSelectionStart, node.textSelectionEnd) }
+                .getOrNull()
+            if (before == null) {
+                busy = false
+                Haptics.error(svc)
+                Feedback.toast(svc, "Поле не читается — открой его заново и повтори.")
+                return@launch
+            }
+            val (existing, selStart, selEnd) = before
+            val pasted = runCatching { node.performAction(AccessibilityNodeInfo.ACTION_PASTE) }.getOrDefault(false)
+            if (!pasted) {
+                busy = false
+                app.eventLog.add("clipboard clean: paste rejected")
+                Haptics.error(svc)
+                Feedback.toast(svc, "Поле не приняло вставку из буфера.")
+                return@launch
+            }
+            // Вставляет чужой процесс, поле дорисовывается не мгновенно —
+            // ждём изменения текста до трёх раз. Узел после вставки может
+            // протухнуть (refresh() = false): тогда берём живой фокус заново,
+            // иначе прочитаем старый текст и решим, что вставки не было.
+            var live: AccessibilityNodeInfo = node
+            var after: String? = null
+            for (wait in longArrayOf(150L, 250L, 400L)) {
+                kotlinx.coroutines.delay(wait)
+                val fresh = runCatching { live.refresh() }.getOrDefault(false)
+                if (!fresh) live = runCatching { focusedEditableNode() }.getOrNull() ?: live
+                after = runCatching { live.effectiveText() }.getOrNull()
+                if (after != null && after != existing) break
+            }
+            if (after == null || after == existing) {
+                busy = false
+                app.eventLog.add("clipboard clean: nothing pasted (after==before)")
+                Haptics.error(svc)
+                Feedback.toast(svc, "В буфере нет текста — вставлять нечего.")
+                return@launch
+            }
+            val span = ru.zf.pravka.core.TextSpans.insertedSpan(existing, after, selStart, selEnd)
+            if (span == null) {
+                busy = false
+                app.eventLog.add("clipboard clean: span not found existing=${existing.length} after=${after.length}")
+                Haptics.error(svc)
+                Feedback.toast(svc, "Вставил, но границы вставки не нашёл — чистку не запускал.")
+                return@launch
+            }
+            val selArgs = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, span.first)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, (span.last + 1).coerceAtMost(after.length))
+            }
+            val selected = runCatching { live.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs) }
+                .getOrDefault(false)
+            app.eventLog.add(
+                "clipboard clean: pasted existing=${existing.length} after=${after.length} " +
+                    "span=${span.first}..${span.last + 1} selected=$selected"
+            )
+            // Дальше — обычная чистка по выделению; runProofread ставит busy сам
+            // и без точки приостановки между этими двумя строками.
+            busy = false
+            // Как у диктовки: без выделения чистить можно только пустое до того
+            // поле — иначе перепишем чужие абзацы, а не вставку.
+            if (selected || existing.isEmpty()) {
+                runProofread(ProofreadMode.CLEAN, pinnedNode = live)
+            } else {
+                Haptics.error(svc)
+                Feedback.toast(svc, "Вставил, но выделить кусок не удалось — всё поле чистить не стал.")
+            }
+        }
     }
 
     /** «Открыть Правку»: приложение на экране промптов — там он их и правит. */

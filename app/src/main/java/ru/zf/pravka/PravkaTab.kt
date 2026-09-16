@@ -13,12 +13,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -45,15 +47,20 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.zf.pravka.core.ProofreadEngine
+import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.TranscriptionLog
 import ru.zf.pravka.data.dayStartMs
+import ru.zf.pravka.target.PlainTextTarget
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.PaperLabel
 
-// Вкладка «Правка»: нерасшифрованные записи сверху, восстановленный черновик,
-// последние расшифровки. Владелец (15.09.2026): «наверху над всеми
+// Вкладка «Правка»: текстбокс для чужого текста, нерасшифрованные записи,
+// восстановленный черновик, последние расшифровки. Владелец (15.09.2026):
+// «наверху над всеми
 // расшифровками должны появляться записи, которые не расшифровались — с утра
 // кнопкой расшифровать; не должно быть бесконечной ленты — последние, а внизу
 // кнопка „показать всё“; выгрузки — в статистику». Название и служебные значки
@@ -85,8 +92,7 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
     val ruLoc = remember { Locale.forLanguageTag("ru") }
 
     fun copy(text: String) {
-        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        cm.setPrimaryClip(android.content.ClipData.newPlainText("Правка", text))
+        putClipboard(context, text)
         Feedback.toast(context, context.getString(R.string.transcript_copied))
     }
 
@@ -95,8 +101,12 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Записи, которые не расшифровались: первыми, потому что это то, что
-        // ждёт действия, — «с утра кнопкой расшифровать». Пусто — раздела нет.
+        // Текстбокс для чужого текста — самым первым: владелец (16.09.2026)
+        // «наверху должен быть текстбокс… над всеми правками».
+        item { CleanBox(app) }
+
+        // Записи, которые не расшифровались: то, что ждёт действия, — «с утра
+        // кнопкой расшифровать». Пусто — раздела нет.
         item { RecordingsSection(app.recordings, serviceEnabled) }
 
         // Recovery: text from a Google take that was interrupted before it
@@ -140,6 +150,163 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
                     Text("Показать всё")
                 }
             }
+        }
+    }
+}
+
+private fun putClipboard(context: android.content.Context, text: String) {
+    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    cm.setPrimaryClip(android.content.ClipData.newPlainText("Правка", text))
+}
+
+// ---------------------------------------------------------------------------
+// Текстбокс для чужого текста. Владелец (16.09.2026): «наверху должен быть
+// текстбокс, в который можно скопировать текст, он его вычистит моделью и
+// скопирует в конце в буфер обмена». Тот же движок и тот же режим CLEAN, что
+// у кнопки «П»: словарь, история, статистика и деньги считаются как обычно;
+// цель — PlainTextTarget, и на Applied движок сам кладёт результат в буфер.
+// Состояние живёт вне композиции: запрос идёт секунды, владелец за это время
+// может уйти на другую вкладку — вернувшись, он должен увидеть результат, а
+// не пустое поле. Запрос — в appScope по той же причине: уход с экрана не
+// должен обрывать работу, за которую уже заплачено.
+// ---------------------------------------------------------------------------
+
+private object CleanBoxState {
+    val text = mutableStateOf("")
+    val result = mutableStateOf<String?>(null)
+    val streaming = mutableStateOf("")
+    val error = mutableStateOf<String?>(null)
+    val busy = mutableStateOf(false)
+}
+
+@Composable
+private fun CleanBox(app: PravkaApp) {
+    val context = LocalContext.current
+    var text by CleanBoxState.text
+    var result by CleanBoxState.result
+    var streaming by CleanBoxState.streaming
+    var error by CleanBoxState.error
+    var busy by CleanBoxState.busy
+
+    fun clipboardText(): String {
+        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        return cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+    }
+
+    fun clean() {
+        val input = text.trim()
+        if (input.isEmpty() || busy) return
+        busy = true
+        result = null
+        error = null
+        streaming = ""
+        app.appScope.launch {
+            val target = PlainTextTarget(input, explicit = true)
+            // Дельты приходят с IO-потока; состояние Compose трогаем на главном,
+            // и не чаще раза в 100 мс — пересобирать длинный текст на каждый
+            // токен незачем.
+            var lastAt = 0L
+            val outcome = runCatching {
+                app.engine.proofread(target, ProofreadMode.CLEAN, onDelta = { partial ->
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (now - lastAt >= 100) {
+                        lastAt = now
+                        app.appScope.launch { CleanBoxState.streaming.value = partial }
+                    }
+                })
+            }.getOrElse { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                ProofreadEngine.Outcome.Failed(e.message ?: "Неизвестная ошибка")
+            }
+            when (outcome) {
+                is ProofreadEngine.Outcome.Applied -> {
+                    // Буфер уже заполнил движок (clipboardFallback на Applied).
+                    result = target.result ?: input
+                    Feedback.toast(context, "Готово — результат в буфере обмена")
+                }
+                is ProofreadEngine.Outcome.CopiedToClipboard -> {
+                    result = target.result ?: input
+                    Feedback.toast(context, "Готово — результат в буфере обмена")
+                }
+                is ProofreadEngine.Outcome.Unchanged -> {
+                    // Движок на «без изменений» буфер не трогает, а владелец ждёт
+                    // текст в буфере в любом случае.
+                    result = input
+                    putClipboard(context, input)
+                    Feedback.toast(context, "Текст уже чистый — положил в буфер как есть")
+                }
+                ProofreadEngine.Outcome.Rejected -> error = "Пустой текст — причёсывать нечего."
+                is ProofreadEngine.Outcome.Failed -> error = outcome.message
+            }
+            busy = false
+        }
+    }
+
+    PaperCard(label = "причесать текст") {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 3,
+            maxLines = 12,
+            enabled = !busy,
+            placeholder = { Text("Вставь текст — причешу и положу в буфер") },
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                enabled = !busy,
+                onClick = {
+                    val fromClip = clipboardText()
+                    if (fromClip.isBlank()) {
+                        Feedback.toast(context, "Буфер обмена пуст")
+                    } else {
+                        text = fromClip
+                        result = null
+                        error = null
+                    }
+                },
+            ) { Text("Из буфера") }
+            Button(onClick = { clean() }, enabled = text.isNotBlank() && !busy) {
+                Text(if (busy) "Правлю…" else "Причесать")
+            }
+            Spacer(Modifier.weight(1f))
+            if (text.isNotEmpty() && !busy) {
+                TextButton(onClick = { text = ""; result = null; error = null; streaming = "" }) {
+                    Text("Очистить")
+                }
+            }
+        }
+        if (busy) {
+            Spacer(Modifier.height(8.dp))
+            if (streaming.isBlank()) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            } else {
+                Text(
+                    streaming,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        error?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        result?.let { r ->
+            Spacer(Modifier.height(10.dp))
+            PaperLabel("результат — уже в буфере")
+            SelectionContainer {
+                Text(r, style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(onClick = {
+                putClipboard(context, r)
+                Feedback.toast(context, context.getString(R.string.transcript_copied))
+            }) { Text("Скопировать ещё раз") }
         }
     }
 }
