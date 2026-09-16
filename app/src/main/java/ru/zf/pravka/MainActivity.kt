@@ -821,6 +821,8 @@ internal fun SpeechSection(
     // class - fixed in Learning, but these older tabs kept the old scope).
     val scope = (LocalContext.current.applicationContext as PravkaApp).appScope
     val engine by settings.speechEngineFlow.collectAsState(initial = Settings.SPEECH_GOOGLE)
+    // Путь Google: офлайн-пакет (заводское) или системный с сетью — см. Settings.
+    val network by settings.speechNetworkFlow.collectAsState(initial = false)
     var status by remember { mutableStateOf("…") }
     var downloading by remember { mutableStateOf(false) }
 
@@ -828,16 +830,20 @@ internal fun SpeechSection(
     suspend fun statusFor(e: String): String = when {
         e == Settings.SPEECH_GOOGLE ->
             if (ru.zf.pravka.provider.GoogleSpeechSession.isAvailable(context)) {
-                context.getString(R.string.google_ready) +
-                    // Тот же путь, что у клавиатуры, — только если модель на устройстве;
-                    // иначе распознаёт сетевой сервис, и он медленнее по определению.
-                    if (ru.zf.pravka.provider.GoogleSpeechSession.isOnDevice(context)) " · на устройстве"
-                    else " · НЕ на устройстве — медленнее клавиатуры, скачай русскую модель"
+                val onDevice = ru.zf.pravka.provider.GoogleSpeechSession.isOnDevice(context)
+                context.getString(R.string.google_ready) + when {
+                    // Сетевой путь — тот, каким клавиатура Google идёт на русском;
+                    // офлайн-пакет остаётся и её, и нашим запасом без сети.
+                    network && onDevice -> " · путь: сеть, офлайн-пакет — запас"
+                    network -> " · путь: сеть; офлайн-пакета нет — без сети распознавать нечем"
+                    onDevice -> " · путь: офлайн-пакет на устройстве"
+                    else -> " · офлайн-пакета нет — пока распознаёт сетевой сервис, скачай русскую модель"
+                }
             } else context.getString(R.string.google_unavailable)
         else -> whisperProvider.statusText(e)
     }
 
-    LaunchedEffect(engine, downloading) { status = statusFor(engine) }
+    LaunchedEffect(engine, downloading, network) { status = statusFor(engine) }
 
     SectionCard(label = stringResource(R.string.settings_speech_title)) {
         HintText(stringResource(R.string.speech_engine_label))
@@ -902,6 +908,25 @@ internal fun SpeechSection(
             // vs per-segment restarts - side-by-side comparison by the owner.
             val segmented by settings.speechSegmentedFlow.collectAsState(initial = true)
             val formatting by settings.speechFormattingFlow.collectAsState(initial = false)
+            HintText("Путь распознавания")
+            ModelOption(
+                label = "Офлайн-пакет на телефоне — без сети, голос не уходит (заводское)",
+                selected = !network,
+                onSelect = { scope.launch { settings.setSpeechNetwork(false) } },
+            )
+            ModelOption(
+                label = "Системный с сетью — как голосовой ввод клавиатуры Google на русском",
+                selected = network,
+                onSelect = { scope.launch { settings.setSpeechNetwork(true) } },
+            )
+            HintText(
+                "Клавиатура Google на русском распознаёт на серверах Google (пиксельная модель " +
+                    "Assistant русского не знает) — поэтому она чётче на именах, редких словах и " +
+                    "английских терминах. Сетевой путь — та же дорога; без сети сам падает на " +
+                    "офлайн-пакет. В «Расшифровках» такие тейки значатся «Google (сеть)». " +
+                    "Действует со следующей диктовки."
+            )
+            Spacer(Modifier.height(8.dp))
             HintText("Режим распознавания")
             ModelOption(
                 label = "Непрерывный — одна сессия, без перезапусков (как в сборке 55)",
@@ -924,9 +949,9 @@ internal fun SpeechSection(
                 Text("Подсказывать распознавателю слова словаря", style = MaterialTheme.typography.bodyMedium)
             }
             HintText(
-                "До 40 верных форм из словаря уходят движку подсказками. Это единственное, " +
-                    "чем вызов отличается от клавиатуры Google: кажется медленнее её — выключи и " +
-                    "сравни; в логе диктовки видно «ready +N ms» и «first partial +N ms»."
+                "До 40 верных форм из словаря уходят движку подсказками, слова владельца впереди " +
+                    "заводских. Кажется медленнее клавиатуры Google — выключи и сравни; в логе " +
+                    "диктовки видно «ready +N ms» и «first partial +N ms»."
             )
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {

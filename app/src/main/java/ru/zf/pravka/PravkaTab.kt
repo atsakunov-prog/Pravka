@@ -313,6 +313,7 @@ private fun CleanBox(app: PravkaApp) {
 
 private fun engineLabel(engine: String): String = when (engine) {
     Settings.SPEECH_GOOGLE -> "Google"
+    Settings.SPEECH_GOOGLE_NET -> "Google (сеть)"
     Settings.SPEECH_WHISPER_SMALL -> "Whisper small"
     Settings.SPEECH_WHISPER_BASE -> "Whisper base"
     else -> engine

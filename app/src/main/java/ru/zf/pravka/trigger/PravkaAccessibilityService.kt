@@ -187,6 +187,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var cachedSegmented: Boolean = true
     @Volatile internal var cachedFormatting: Boolean = false
     @Volatile internal var cachedBiasingOn: Boolean = true
+    // Путь распознавания Google: офлайн-пакет (заводское) или системный с сетью.
+    @Volatile internal var cachedNetwork: Boolean = false
     /** Ширина бегущей строки, dp — общая для «П», «З», «Д» и «Т» (Settings.tickerWidthFlow). */
     @Volatile internal var cachedTickerWidthDp: Int = Settings.TICKER_WIDTH_DEFAULT
 
@@ -226,6 +228,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         scope.launch {
             app.settings.speechBiasingFlow.collect { cachedBiasingOn = it }
+        }
+        scope.launch {
+            app.settings.speechNetworkFlow.collect { cachedNetwork = it }
         }
         scope.launch {
             app.settings.tickerWidthFlow.collect {
@@ -639,21 +644,16 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     // Names/terms/brands the recognizer should be biased toward: ТОЛЬКО верные
-    // формы — защищённые слова и правые части замен и подсказок. Раньше в
-    // список шли и левые части замен, то есть ослышки («стаф джет»): подсказывать
-    // распознавателю ослышку — учить его ошибаться. Список короткий (40):
-    // владелец сравнивает скорость с клавиатурой Google, а длинный список
-    // подсказок — единственное, чем наш вызов того же движка от неё отличается.
+    // формы — защищённые слова и правые части замен и подсказок, не больше 40
+    // (ослышки в списке учили движок ошибаться, длинный список тормозил старт).
+    // Порядок внутри сорока — `core/BiasingList.kt`: слова владельца впереди
+    // семени, латиница в хвосте. Одна строка в журнал — видно, что подсказки
+    // владельца доехали, а не вытеснены заводскими.
     private suspend fun collectBiasing(): List<String> = runCatching {
-        val entries = app.dictionaryStore.all().filter { it.enabled }
-        val words = LinkedHashSet<String>()
-        for (e in entries.filter { it.mode == ru.zf.pravka.core.DictMode.PROTECT }) {
-            e.from.takeIf { it.isNotBlank() }?.let { words.add(it) }
-        }
-        for (e in entries.filter { it.mode != ru.zf.pravka.core.DictMode.PROTECT }.sortedByDescending { it.hits }) {
-            e.to.takeIf { it.isNotBlank() }?.let { words.add(it) }
-        }
-        words.take(40)
+        val store = app.dictionaryStore
+        val built = ru.zf.pravka.core.BiasingList.build(store.all(), isSeed = store::isSeed)
+        app.eventLog.add("подсказки движку: ${built.describe()}")
+        built.strings
     }.getOrDefault(emptyList())
 
     fun startRecordingNow() {
@@ -676,11 +676,15 @@ class PravkaAccessibilityService : AccessibilityService() {
         googleStartedAt = SystemClock.elapsedRealtime()
         lastDraftAt = 0L
         discardTake = false
+        // Путь фиксируем на старте: настройку могут переключить посреди тейка,
+        // а в «Расшифровках» тейк должен значиться тем путём, которым шёл.
+        val network = cachedNetwork
         val session = GoogleSpeechSession(
             this,
             biasing = if (cachedBiasingOn) cachedBiasing else emptyList(),
             formatting = cachedFormatting,
             segmentedSession = cachedSegmented,
+            network = network,
         )
         googleSession = session
         // Start listening FIRST, then dress the UI: the button, the ticker's
@@ -703,7 +707,9 @@ class PravkaAccessibilityService : AccessibilityService() {
                 lastDraftAt = SystemClock.elapsedRealtime()
                 app.liveDraft.save(text)
             },
-            onDone = { text -> onLiveDone(Settings.SPEECH_GOOGLE, text) },
+            onDone = { text ->
+                onLiveDone(if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, text)
+            },
             onError = { msg -> onLiveError(msg) },
             onLog = { line -> app.eventLog.add(line) },
         )

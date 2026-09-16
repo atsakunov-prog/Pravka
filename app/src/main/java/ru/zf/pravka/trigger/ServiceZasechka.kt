@@ -181,6 +181,7 @@ internal fun PravkaAccessibilityService.startZasechkaGoogle() {
         biasing = (cachedBiasing + zClientsCached + zCategoriesCached).distinct(),
         formatting = cachedFormatting,
         segmentedSession = cachedSegmented,
+        network = cachedNetwork,
     )
     zSession = session
     session.start(

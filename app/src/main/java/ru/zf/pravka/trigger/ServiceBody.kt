@@ -182,6 +182,7 @@ internal fun PravkaAccessibilityService.startFoodGoogle() {
         biasing = (cachedBiasing + bodyBiasing()).distinct(),
         formatting = cachedFormatting,
         segmentedSession = cachedSegmented,
+        network = cachedNetwork,
     )
     eSession = session
     session.start(

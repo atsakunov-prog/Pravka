@@ -98,6 +98,7 @@ internal fun PravkaAccessibilityService.startRaznoskaGoogle() {
         biasing = (cachedBiasing + zClientsCached + raznBiasing()).distinct(),
         formatting = cachedFormatting,
         segmentedSession = cachedSegmented,
+        network = cachedNetwork,
     )
     rSession = session
     session.start(

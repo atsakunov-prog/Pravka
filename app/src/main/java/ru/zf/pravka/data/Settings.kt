@@ -25,6 +25,9 @@ class Settings(private val context: Context) {
 
         // Dictation engines.
         const val SPEECH_GOOGLE = "google"          // live streaming, Gboard's engine
+        // Тот же Google по сетевому пути — не выбор движка, а метка тейка в
+        // «Расшифровках», чтобы офлайн-пакет и сеть сравнивались по журналу.
+        const val SPEECH_GOOGLE_NET = "google-net"
         const val SPEECH_WHISPER_SMALL = "whisper-small"
         const val SPEECH_WHISPER_BASE = "whisper-base"
 
@@ -36,6 +39,7 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_SEGMENTED = booleanPreferencesKey("speech_segmented")
         private val KEY_SPEECH_FORMATTING = booleanPreferencesKey("speech_formatting")
         private val KEY_SPEECH_BIASING = booleanPreferencesKey("speech_biasing")
+        private val KEY_SPEECH_NETWORK = booleanPreferencesKey("speech_network")
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
@@ -201,6 +205,18 @@ class Settings(private val context: Context) {
     val speechBiasingFlow = context.dataStore.data.map { it[KEY_SPEECH_BIASING] ?: true }
     suspend fun setSpeechBiasing(value: Boolean) {
         context.dataStore.edit { it[KEY_SPEECH_BIASING] = value }
+    }
+
+    // Путь распознавания Google (16.09.2026). Заводское — офлайн-пакет на
+    // телефоне: работает без сети, голос не уходит. Сетевой путь — тот, каким
+    // идёт голосовой ввод клавиатуры Google на русском (пиксельная модель
+    // Assistant voice typing русского не знает): серверная модель чётче
+    // офлайн-пакета на именах, редких словах и английских терминах, а без
+    // сети система сама падает на пакет. Владелец сравнивает оба на своих
+    // диктовках; заводское не меняем, пока он не выбрал.
+    val speechNetworkFlow = context.dataStore.data.map { it[KEY_SPEECH_NETWORK] ?: false }
+    suspend fun setSpeechNetwork(value: Boolean) {
+        context.dataStore.edit { it[KEY_SPEECH_NETWORK] = value }
     }
 
     val speechFormattingFlow = context.dataStore.data.map { it[KEY_SPEECH_FORMATTING] ?: false }

@@ -11,11 +11,20 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
-// Live, streaming on-device speech recognition via Android's SpeechRecognizer -
-// the same fast engine Gboard uses. Realtime, never touches a file; the accepted
-// tradeoff is that no WAV is saved during a live take.
+// Live, streaming speech recognition via Android's SpeechRecognizer - the same
+// system engine (Speech Services by Google) that Gboard's voice typing uses.
+// Realtime, never touches a file; the accepted tradeoff is that no WAV is saved
+// during a live take.
 //
-// Two modes, in order of preference:
+// Two PATHS into that engine (owner's setting, 16.09.2026):
+//  - offline pack (factory default): createOnDeviceSpeechRecognizer + PREFER_OFFLINE.
+//    Works without network, audio never leaves the phone; a compact model.
+//  - network: the plain system recognizer with network allowed. This is the
+//    path Gboard takes for RUSSIAN (Pixel's Assistant voice typing has no
+//    Russian), i.e. the "clearer than us" model the owner hears on the
+//    keyboard; without network the system falls back to the pack by itself.
+//
+// Two MODES, in order of preference:
 //
 //  1. SEGMENTED SESSION (Android 13+, EXTRA_SEGMENTED_SESSION). The recognizer
 //     stays listening across pauses and streams finalized chunks via
@@ -41,6 +50,9 @@ class GoogleSpeechSession(
     // replaced went deaf on every pause and swallowed phrases mid-take; the
     // settings expose the choice for comparison, continuous is the default.
     private val segmentedSession: Boolean = true,
+    // Сетевой путь (см. шапку): системный распознаватель с разрешённой сетью
+    // вместо офлайн-пакета. Заводское — офлайн, как было.
+    private val network: Boolean = false,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
@@ -160,7 +172,8 @@ class GoogleSpeechSession(
             errorStreak = 0
             startedAtMs = android.os.SystemClock.elapsedRealtime()
             onLog(
-                "start onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} " +
+                "start путь=${if (network) "сеть" else "офлайн-пакет"} " +
+                    "onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} " +
                     "formatting=$formatting segmentedRequested=$segmentedSession"
             )
             // Системному распознавателю входное устройство не укажешь, но
@@ -212,6 +225,9 @@ class GoogleSpeechSession(
 
     private fun createRecognizer(): SpeechRecognizer? = runCatching {
         when {
+            // Сетевой путь: обычный системный распознаватель, даже когда офлайн
+            // доступен, — сеть решает он сам, пакет остаётся его запасом.
+            network && anyAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
             onDeviceAvailable(context) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
             anyAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
             else -> null
@@ -226,7 +242,9 @@ class GoogleSpeechSession(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            // Офлайн-путь: только офлайн-движок. На сетевом флаг не ставим —
+            // иначе это тот же офлайн-пакет под другим именем.
+            if (!network) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 if (segmentedSession) {
@@ -256,6 +274,10 @@ class GoogleSpeechSession(
                 // A dictation tool must not censor: by default the recognizer
                 // masks "offensive" words with asterisks.
                 putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
+                // Подсказки из контекста устройства (контакты, личный словарь) —
+                // часть того, чем клавиатура Google «понятливее». По документации
+                // распознаватель вправе флаг игнорировать; стоит он ноль.
+                putExtra(RecognizerIntent.EXTRA_ENABLE_BIASING_DEVICE_CONTEXT, true)
                 // Bias toward the owner's vocabulary (names, brands, terms).
                 if (biasing.isNotEmpty()) {
                     putStringArrayListExtra(
