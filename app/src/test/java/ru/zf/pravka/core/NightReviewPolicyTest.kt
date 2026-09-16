@@ -55,11 +55,15 @@ class NightReviewPolicyTest {
     }
 
     @Test
-    fun `само применяется только high + approve, и не HARD на короткое слово`() {
+    fun `само применяется всё high, кроме отклонённого и HARD на короткое слово`() {
         val ok = Change(id = "d-1", kind = "dict_add", mode = "PROTECT", from = "Полли", confidence = "high", verdict = "approve")
         assertTrue(NightReviewPolicy.autoApply(ok))
         assertFalse(NightReviewPolicy.autoApply(ok.copy(confidence = "low")))
-        assertFalse(NightReviewPolicy.autoApply(ok.copy(verdict = "unsure")))
+        // Владелец: «применял всё, за исключением низковероятного» — unsure проверки не мешает.
+        assertTrue(NightReviewPolicy.autoApply(ok.copy(verdict = "unsure")))
+        assertTrue(NightReviewPolicy.autoApply(ok.copy(verdict = "")))
+        assertFalse(NightReviewPolicy.autoApply(ok.copy(verdict = "reject")))
+        assertFalse(NightReviewPolicy.autoApply(ok.copy(verdict = "hold")))
         assertFalse(NightReviewPolicy.autoApply(ok.copy(kind = "note")))
         // «губ → ютуб» как HARD — только предложением, даже с двумя одобрениями.
         assertFalse(NightReviewPolicy.autoApply(ok.copy(kind = "dict_add", mode = "HARD", from = "губ", to = "ютуб")))

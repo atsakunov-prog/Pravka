@@ -15,7 +15,7 @@ object NightReviewPolicy {
     const val WEEKLY = "weekly"
 
     /** Сколько изменений один прогон применяет сам — остальное предложениями. */
-    const val AUTO_CAP = 20
+    const val AUTO_CAP = 30
 
     /** Виды, которые вообще можно применить (заметки — нет, промпт не трогаем). */
     val AUTO_KINDS = setOf("dict_add", "dict_disable", "dict_mode", "rule_disable", "rule_enable")
@@ -137,13 +137,19 @@ object NightReviewPolicy {
     }
 
     /**
-     * Применять само: уверенность high, вердикт проверки approve и вид из
-     * списка. Плюс страховка, которой не доверили ни одной модели: HARD на
-     * короткое кириллическое слово (до четырёх букв — «губ», «поле», «прод»)
-     * сам не ложится никогда, только предложением.
+     * Применять само: уверенность high и вид из списка, если проверка не
+     * отклонила (approve или unsure; reject — не применяется) и согласование
+     * не придержало (hold ставится раньше этого вызова). Владелец (17.09.2026,
+     * глядя на простыню предложений): «просто автоматом применял всё, что
+     * нашла, за исключением низковероятных вещей» — раньше требовалось ещё и
+     * явное approve, и половина высоких висела кнопками. Плюс страховка,
+     * которой не доверили ни одной модели: HARD на короткое кириллическое
+     * слово (до четырёх букв — «губ», «поле», «прод») сам не ложится никогда,
+     * только предложением.
      */
     fun autoApply(c: Change): Boolean {
-        if (c.isNote || c.confidence != "high" || c.verdict != "approve" || c.kind !in AUTO_KINDS) return false
+        if (c.isNote || c.confidence != "high" || c.kind !in AUTO_KINDS) return false
+        if (c.verdict == "reject" || c.verdict == "hold") return false
         if (c.kind == "dict_add" && c.mode == "HARD" && shortCyrillicWord(c.from)) return false
         return true
     }
