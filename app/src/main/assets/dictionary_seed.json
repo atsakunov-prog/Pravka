@@ -1279,7 +1279,387 @@
       "to": "Мариашей",
       "mode": "HARD",
       "note": ""
+    },
+    {
+      "from": "Полли",
+      "to": "",
+      "mode": "PROTECT",
+      "note": "имя, пишется так"
+    },
+    {
+      "from": "Ви",
+      "to": "",
+      "mode": "PROTECT",
+      "note": "имя, пишется так"
+    },
+    {
+      "from": "Калипсо",
+      "to": "",
+      "mode": "PROTECT",
+      "note": "имя, пишется так"
+    },
+    {
+      "from": "Каллироя",
+      "to": "",
+      "mode": "PROTECT",
+      "note": "имя, пишется так"
+    },
+    {
+      "from": "Праматерь",
+      "to": "",
+      "mode": "PROTECT",
+      "note": "имя, пишется так"
+    },
+    {
+      "from": "Цакунов",
+      "to": "",
+      "mode": "PROTECT",
+      "note": "имя, пишется так"
+    },
+    {
+      "from": "поли",
+      "to": "Полли",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "калипса",
+      "to": "Калипсо",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "колероя",
+      "to": "Каллироя",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "колироя",
+      "to": "Каллироя",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "калироя",
+      "to": "Каллироя",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "промт",
+      "to": "промпт",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "промта",
+      "to": "промпта",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "промту",
+      "to": "промпту",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "промтом",
+      "to": "промптом",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "промте",
+      "to": "промпте",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "промты",
+      "to": "промпты",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "пронт",
+      "to": "промпт",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "пронта",
+      "to": "промпта",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "пронтом",
+      "to": "промптом",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "клот",
+      "to": "Клод",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "клота",
+      "to": "Клода",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "клоту",
+      "to": "Клоду",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "клотом",
+      "to": "Клодом",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "выспер",
+      "to": "Whisper",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "уиспер",
+      "to": "Whisper",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "сонат",
+      "to": "Sonnet",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "соннет",
+      "to": "Sonnet",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ноушене",
+      "to": "Notion",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ноушена",
+      "to": "Notion",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "ноушеном",
+      "to": "Notion",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "экселе",
+      "to": "Excel",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "эксель",
+      "to": "Excel",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "экселя",
+      "to": "Excel",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "лтхр",
+      "to": "LTHR",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "опдс",
+      "to": "OPDS",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "аксес фи",
+      "to": "success fee",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "аксесфи",
+      "to": "success fee",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "саксес фи",
+      "to": "success fee",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "лайфанс",
+      "to": "OnlyFans",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "lifans",
+      "to": "OnlyFans",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "онлифанс",
+      "to": "OnlyFans",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "онли фанс",
+      "to": "OnlyFans",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "мариана",
+      "to": "Марианна",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "мариане",
+      "to": "Марианне",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "марианы",
+      "to": "Марианны",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "мариану",
+      "to": "Марианну",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "марианой",
+      "to": "Марианной",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "моряш",
+      "to": "Мариаш",
+      "mode": "HARD",
+      "note": ""
+    },
+    {
+      "from": "поле",
+      "to": "Полли",
+      "mode": "HINT",
+      "note": "в рассказах чаще всего имя Полли; «поле» как поле — по контексту"
+    },
+    {
+      "from": "более",
+      "to": "Полли",
+      "mode": "HINT",
+      "note": "в рассказах бывает ослышкой имени Полли"
+    },
+    {
+      "from": "колерой",
+      "to": "Каллироя",
+      "mode": "HINT",
+      "note": "имя героини, падеж по контексту"
+    },
+    {
+      "from": "колерою",
+      "to": "Каллироя",
+      "mode": "HINT",
+      "note": "имя героини, падеж по контексту"
+    },
+    {
+      "from": "про матери",
+      "to": "Праматерь",
+      "mode": "HINT",
+      "note": "в рассказах — Праматерь"
+    },
+    {
+      "from": "vi",
+      "to": "Ви",
+      "mode": "HINT",
+      "note": "имя героини"
+    },
+    {
+      "from": "v",
+      "to": "Ви",
+      "mode": "HINT",
+      "note": "имя героини"
+    },
+    {
+      "from": "дода",
+      "to": "Додо",
+      "mode": "HINT",
+      "note": "чаще всего Додо"
+    },
+    {
+      "from": "бак",
+      "to": "баг",
+      "mode": "HINT",
+      "note": "в разговоре про код — баг"
     }
   ],
-  "seedVersion": 2
+  "remove": [
+    {
+      "from": "Папа",
+      "to": "Пап",
+      "mode": "HARD"
+    },
+    {
+      "from": "Рубрика",
+      "to": "Рубрик",
+      "mode": "HARD"
+    },
+    {
+      "from": "следующее",
+      "to": "следующая",
+      "mode": "HARD"
+    },
+    {
+      "from": "проговорился",
+      "to": "проговорил",
+      "mode": "HARD"
+    },
+    {
+      "from": "Миха",
+      "to": "Михаи",
+      "mode": "HARD"
+    },
+    {
+      "from": "Лете1",
+      "to": "Детей накормил",
+      "mode": "HINT"
+    }
+  ],
+  "seedVersion": 3
 }

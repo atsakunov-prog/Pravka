@@ -17,9 +17,14 @@ object EditDiff {
      * ошибка распознавания (замена всегда, HARD), непохожие — предпочтение
      * слова (подсказка модели, HINT): «Стафджет → Стаффджет» и «сделать →
      * выполнить» — разные случаи, и жёсткая замена во втором испортила бы
-     * следующий текст.
+     * следующий текст. [inflection] — то же слово в другой форме («Папа →
+     * Пап», «следующее → следующая»): по буквам похоже, но это правка под
+     * контекст, а не ослышка. Первые сутки захвата (15–16.09.2026) такие
+     * правки уезжали в HARD и переписывали каждое «папа» в «пап» во всех
+     * текстах; теперь они не идут в словарь без модели — только в очередь
+     * «Разобрать сейчас», где Опус видит контекст.
      */
-    data class Substitution(val from: String, val to: String, val similar: Boolean)
+    data class Substitution(val from: String, val to: String, val similar: Boolean, val inflection: Boolean = false)
 
     private const val MAX_SIDE = 3
 
@@ -128,7 +133,28 @@ object EditDiff {
         val from = del.joinToString(" ") { it.text }
         val to = ins.joinToString(" ") { it.text }
         if (from.equals(to, ignoreCase = true)) return null
-        return Substitution(from, to, similar = similarity(from.lowercase(), to.lowercase()) >= 0.5)
+        return Substitution(
+            from, to,
+            similar = similarity(from.lowercase(), to.lowercase()) >= 0.5,
+            inflection = sameStem(from, to),
+        )
+    }
+
+    /**
+     * Одно слово в другой форме: общая основа от трёх букв, разошлись только
+     * хвосты не длиннее трёх букв с каждой стороны. «Папа/Пап», «Рубрика/Рубрик»,
+     * «следующее/следующая», «проговорился/проговорил» — да; «Стафджет/Стаффджет»
+     * (разошлись в середине) и «lifans/onlyfans» (разные начала) — нет.
+     * Словосочетания не рассматриваются: «стаф джет → Стаффджет» — склейка.
+     */
+    fun sameStem(a: String, b: String): Boolean {
+        val x = a.lowercase()
+        val y = b.lowercase()
+        if (' ' in x || ' ' in y) return false
+        var p = 0
+        while (p < x.length && p < y.length && x[p] == y[p]) p++
+        if (p < 3) return false
+        return x.length - p <= 3 && y.length - p <= 3
     }
 
     /** 1 − расстояние Левенштейна / длина длинной строки. */

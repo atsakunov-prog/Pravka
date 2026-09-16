@@ -1,6 +1,7 @@
 package ru.zf.pravka.data
 
 import android.content.Context
+import android.content.Intent
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -172,6 +173,9 @@ class RulesStore(
             if (rules.removeAll { it.id == id }) persist()
         }
     }
+
+    /** Файл правил целиком — для разбора в чате (владелец, 16.09.2026: «в промпты уходят правила — посмотри на них тоже»). */
+    fun shareIntent(): Intent = shareFileIntent(context, file(), "application/json")
 
     /**
      * The prompt block of enabled rules (empty string when none). Capped so a

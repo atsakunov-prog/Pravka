@@ -1470,6 +1470,14 @@ class PravkaAccessibilityService : AccessibilityService() {
                         sub != null && known.any { it.from.equals(sub.from, ignoreCase = true) } -> {
                             app.corrections.append(entry.pkg, entry.dictated, entry.cleaned, edited, "same:${sub.from}", done = true)
                         }
+                        // Та же основа, другое окончание («Папа → Пап») — правка под
+                        // контекст, не ослышка: HARD из неё переписывал каждое «папа»
+                        // во всех текстах (16.09). В словарь без модели не идёт —
+                        // в очередь «Разобрать сейчас», где Опус видит контекст.
+                        sub != null && sub.inflection -> {
+                            app.corrections.append(entry.pkg, entry.dictated, entry.cleaned, edited, "pending", done = false)
+                            app.learnLog.add("правка формы слова (${sub.from} → ${sub.to}) — не словарь, в очередь «Разобрать сейчас»")
+                        }
                         sub != null -> {
                             val mode = if (sub.similar) ru.zf.pravka.core.DictMode.HARD else ru.zf.pravka.core.DictMode.HINT
                             app.dictionaryStore.add(

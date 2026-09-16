@@ -1406,7 +1406,8 @@ private fun LogsTab(app: PravkaApp) {
             HintText(
                 "Файл целиком в шаринг — Drive, почта, чат. Расшифровки — сырой выход " +
                     "распознавателя; история — надиктовано и правка модели; правки руками — " +
-                    "надиктовано · модель · ты. Иной период — «За период…»."
+                    "надиктовано · модель · ты; словарь и правила — то, что уходит в промпт. " +
+                    "Иной период — «За период…»."
             )
             Spacer(Modifier.height(6.dp))
             FlowRow(
@@ -1431,6 +1432,19 @@ private fun LogsTab(app: PravkaApp) {
                 OutlinedButton(onClick = {
                     share(app.transcriptionLog.shareMetricsCsvIntent(), "Метрики диктовки")
                 }) { Text("Метрики (CSV)") }
+                OutlinedButton(onClick = {
+                    // exportJson — suspend: собирается в области приложения, файл во
+                    // временной папке, как у выгрузки во вкладке «Словарь».
+                    app.appScope.launch {
+                        val intent = runCatching {
+                            val f = File(context.cacheDir, "pravka_dictionary.json")
+                            f.writeText(app.dictionaryStore.exportJson())
+                            ru.zf.pravka.data.shareFileIntent(context, f, "application/json")
+                        }.getOrNull()
+                        if (intent == null) Feedback.toast(context, "Не собрался") else share(intent, "Словарь")
+                    }
+                }) { Text("Словарь (JSON)") }
+                OutlinedButton(onClick = { share(app.rulesStore.shareIntent(), "Правила") }) { Text("Правила (JSON)") }
                 OutlinedButton(onClick = { exportOpen = true }) { Text("За период…") }
             }
         }

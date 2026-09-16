@@ -97,4 +97,23 @@ class EditDiffTest {
     fun `совсем другой текст — ничего`() {
         assertNull(EditDiff.singleSubstitution("Один текст про работу.", "Совсем иная фраза про бег."))
     }
+
+    @Test
+    fun `та же основа, другое окончание — форма слова, не ослышка`() {
+        assertTrue(EditDiff.sameStem("Папа", "Пап"))
+        assertTrue(EditDiff.sameStem("Рубрика", "Рубрик"))
+        assertTrue(EditDiff.sameStem("следующее", "следующая"))
+        assertTrue(EditDiff.sameStem("проговорился", "проговорил"))
+        // Разошлись в середине или с начала — настоящая ослышка, HARD уместен.
+        assertFalse(EditDiff.sameStem("Стафджет", "Стаффджет"))
+        assertFalse(EditDiff.sameStem("lifans", "onlyfans"))
+        // Склейка двух слов в одно — не форма.
+        assertFalse(EditDiff.sameStem("стаф джетом", "Стаффджетом"))
+        val s = EditDiff.singleSubstitution(
+            "Папа приедет завтра к обеду.",
+            "Пап приедет завтра к обеду.",
+        )
+        assertTrue(s!!.similar)
+        assertTrue(s.inflection)
+    }
 }
