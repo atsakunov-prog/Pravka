@@ -29,11 +29,13 @@ import ru.zf.pravka.provider.Pricing
  * ты сейчас сделал: сам правил и применял то, что высоковероятно, а
  * низковероятное предлагал; и чтобы ещё один Fable его проверял».
  *
- * Конвейер на батчах: три запроса первого прохода (словарь и ослышки ·
- * поведение модели · правила), по одному на измерение; когда батч готов —
- * второй батч проверки по тем же свидетельствам; когда готов он — высокое и
- * подтверждённое применяется, остальное ложится предложениями, утром
- * владелец читает отчёт и отвечает текстом. Всё состояние — в
+ * Конвейер на батчах: первый проход одним запросом (три задачи — словарь и
+ * ослышки · поведение модели · правила — над одним пакетом свидетельств,
+ * который лежит системным блоком под часовым кэшем); когда батч готов —
+ * батч проверки по тем же свидетельствам (они читаются из кэша); затем
+ * согласование против памяти решений; потом высокое и подтверждённое
+ * применяется, остальное ложится предложениями, утром владелец читает отчёт
+ * и отвечает текстом. Всё состояние — в
  * NightReviewStore: процесс может умереть на любой стадии, тик службы
  * продолжит с того же места.
  */
@@ -60,7 +62,6 @@ class NightReview(
         const val LEDGER_MS = 30 * 86_400_000L
         /** Батч живёт сутки; сутки с запасом без результата — прогон провален. */
         const val EXPIRE_MS = 26 * 3600_000L
-        private val DIMS = listOf("dict", "model", "rules")
         private const val OUT_TOKENS = 8000
     }
 
@@ -110,18 +111,20 @@ class NightReview(
             return@runCatching empty
         }
         val choice = settings.modelChoice(ModelRoute.NIGHT_REVIEW)
-        val requests = DIMS.mapNotNull { dim ->
-            evidence[dim]?.takeIf { it.isNotBlank() }?.let { user ->
-                dim to ClaudeBatches.params(choice.model, choice.effort, OUT_TOKENS, PromptsReview.ANALYZE_SYSTEM, user)
-            }
-        }
-        val batchId = batches.create(requests)
+        // Свидетельства — системным блоком под часовым кэшем: проверка через
+        // полчаса-час читает их же из кэша (у Fable чтение — сороковая часть
+        // цены). Инструкции и специфика ночи — в пользовательском сообщении.
+        val user = listOf(PromptsReview.ANALYZE_SYSTEM, PromptsReview.ANALYZE_TASKS, evidence["specific"].orEmpty())
+            .filter { it.isNotBlank() }.joinToString("\n\n")
+        val batchId = batches.create(
+            listOf("all" to ClaudeBatches.params(choice.model, choice.effort, OUT_TOKENS, evidence["common"].orEmpty(), user, cacheSystem = true))
+        )
         val run = Run(
             id = nowMs, kind = kind, startedAt = nowMs, fromMs = from, toMs = to, stage = "analysis", manual = manual,
             analysisBatchId = batchId, evidence = evidence, lastPollAt = nowMs,
         )
         store.save(run)
-        log.add("ночной разбор ($kind): батч $batchId, запросов ${requests.size}, ${choice.model} ${choice.effort}")
+        log.add("ночной разбор ($kind): батч $batchId, ${choice.model} ${choice.effort}, свидетельств ${evidence["common"].orEmpty().length} зн.")
         run
     }
 
@@ -155,30 +158,23 @@ class NightReview(
             "ПРАВИЛА ОБУЧЕНИЯ (id|вкл|текст). Блок правил в промпт сейчас ${if (rulesOn) "ВКЛЮЧЁН" else "ВЫКЛЮЧЕН тумблером владельца"}:\n" +
                 ruleList.joinToString("\n") { "${it.id}|${if (it.enabled) 1 else 0}|${it.text}" }
         val glitches = mixedScript(takes)
-        val out = LinkedHashMap<String, String>()
-        out["dict"] = listOf(
-            "ЗАДАЧА: словарь и ослышки. Найди ослышки распознавателя, которые модель или владелец чинят раз за разом; " +
-                "записи словаря, которые ломают живые слова или никогда не стреляют; имена и термины без защиты.",
-            period, aggBlock, ledger, pairsBlock, corrBlock, dictBlock,
-        ).filter { it.isNotBlank() }.joinToString("\n\n")
-        out["model"] = listOf(
-            "ЗАДАЧА: поведение модели и распознавателя. По парам <d>→<m>: удаления слов (особенно «не», «нет»), " +
-                "смена рода и лица, местоимения, превращённые в имена, цепочки запятых вместо точек, выдуманные слова, " +
-                "разнобой в именах. По правкам руками — где модель промахнулась. Здесь ответ в основном заметками " +
-                "(kind note) с числами; словарные изменения — только для имён и терминов.",
-            period, aggBlock,
+        // Общее для первого прохода и проверки — самое большое и едет дважды,
+        // поэтому под кэш (system с часовым сроком): период, повторы, память,
+        // тексты. Специфика — словарь, правила, промпт — в пользовательском
+        // сообщении: она тоже одинаковая, но кэш держит одну точку на блок.
+        val common = listOf(
+            "СВИДЕТЕЛЬСТВА НОЧНОГО РАЗБОРА", period, aggBlock, ledger,
             if (glitches.isBlank()) "" else "Слова со смешанным алфавитом у распознавателя: $glitches",
             pairsBlock, corrBlock,
-            "ПРОМПТ CLEAN, действующий сейчас (не правь, только заметки):\n" + prompts.effective(ProofreadMode.CLEAN),
         ).filter { it.isNotBlank() }.joinToString("\n\n")
         // Правила — состояние, которое меняется редко: каждую ночь их гонять
         // незачем, если блок в промпте выключен. Недельный смотрит всегда.
-        if (rulesBlock.isNotBlank() && (weekly || rulesOn)) out["rules"] = listOf(
-            "ЗАДАЧА: правила обучения. По журналу реши, какие включённые правила выключить (вредят, противоречат " +
-                "промпту или друг другу, дублируют его) и какие выключенные — включить. Новых не сочиняй.",
-            period, ledger, rulesBlock, pairsBlock.take(30_000), corrBlock,
+        val specific = listOf(
+            dictBlock,
+            if (weekly || rulesOn) rulesBlock else "",
+            "ПРОМПТ CLEAN, действующий сейчас (не правь, только заметки):\n" + prompts.effective(ProofreadMode.CLEAN),
         ).filter { it.isNotBlank() }.joinToString("\n\n")
-        return out
+        return mapOf("common" to common, "specific" to specific)
     }
 
     /** Память решений для промптов: прошлые прогоны + сколько раз сработало применённое. */
@@ -242,8 +238,13 @@ class NightReview(
         }
         val choice = settings.modelChoice(route)
         val cost = items.sumOf { Pricing.costUsd(choice.model, it.inputTokens, it.outputTokens, it.cacheWrite, it.cacheRead) } * ClaudeBatches.DISCOUNT
-        stats.recordAux(cost, items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }, items.sumOf { it.outputTokens })
-        r = r.copy(costUsd = r.costUsd + cost)
+        val tokensIn = items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }
+        val cacheRead = items.sumOf { it.cacheRead }
+        val cacheWrite = items.sumOf { it.cacheWrite }
+        stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens })
+        stats.recordCache(cacheRead, cacheWrite)
+        log.add("ночной разбор (${r.stage}): вход $tokensIn токенов, из кэша $cacheRead, записано в кэш $cacheWrite")
+        r = r.copy(costUsd = r.costUsd + cost, inputTokens = r.inputTokens + tokensIn, cacheReadTokens = r.cacheReadTokens + cacheRead)
         r = when (r.stage) {
             "analysis" -> afterAnalysis(r, items)
             "check" -> afterCheck(r, items)
@@ -256,13 +257,11 @@ class NightReview(
         val summaries = ArrayList<String>()
         val errors = ArrayList<String>()
         val changes = ArrayList<Change>()
-        for (dim in DIMS) {
-            val item = items.firstOrNull { it.customId == dim } ?: continue
-            if (!item.ok) { errors += "$dim: ${item.failure}"; continue }
-            runCatching { NightReviewPolicy.parseAnalysis(item.text, dim) }
-                .onSuccess { a -> if (a.summary.isNotBlank()) summaries += a.summary; changes += a.changes }
-                .onFailure { errors += "$dim: ответ не разобрался (${it.message})" }
-        }
+        val item = items.firstOrNull { it.customId == "all" } ?: items.firstOrNull()
+        if (item == null || !item.ok) errors += "первый проход: ${item?.failure ?: "нет ответа"}"
+        else runCatching { NightReviewPolicy.parseAnalysis(item.text, "n") }
+            .onSuccess { a -> if (a.summary.isNotBlank()) summaries += a.summary; changes += a.changes }
+            .onFailure { errors += "первый проход: ответ не разобрался (${it.message})" }
         // Память: что владелец вернул или отклонил за месяц, снова не предлагается —
         // даже если модель не послушала промпт.
         val blocked = NightReviewEvidence.blockedKeys(store.all(), System.currentTimeMillis() - LEDGER_MS)
@@ -275,17 +274,14 @@ class NightReview(
         val partial = run.copy(summary = summaries.joinToString("\n\n"), error = errors.joinToString("; "), changes = remembered)
         if (toCheck.isEmpty()) return finish(partial)
         val choice = settings.modelChoice(ModelRoute.NIGHT_CHECK)
-        val requests = DIMS.mapNotNull { dim ->
-            val mine = toCheck.filter { it.id.startsWith("$dim-") }
-            if (mine.isEmpty()) return@mapNotNull null
-            val evidence = run.evidence[dim].orEmpty()
-            val list = JSONArray().apply { for (c in mine) put(changeJson(c)) }
-            "check-$dim" to ClaudeBatches.params(
-                choice.model, choice.effort, OUT_TOKENS, PromptsReview.CHECK_SYSTEM,
-                evidence + "\n\nПРЕДЛОЖЕНИЯ ПЕРВОГО АУДИТОРА:\n" + list.toString(),
-            )
-        }
-        val batchId = batches.create(requests)
+        val list = JSONArray().apply { for (c in toCheck) put(changeJson(c)) }
+        // Тот же системный блок свидетельств байт-в-байт — читается из кэша
+        // первого прохода, если проверка успела за час.
+        val user = listOf(PromptsReview.CHECK_SYSTEM, run.evidence["specific"].orEmpty(), "ПРЕДЛОЖЕНИЯ ПЕРВОГО АУДИТОРА:\n$list")
+            .filter { it.isNotBlank() }.joinToString("\n\n")
+        val batchId = batches.create(
+            listOf("check" to ClaudeBatches.params(choice.model, choice.effort, OUT_TOKENS, run.evidence["common"].orEmpty(), user, cacheSystem = true))
+        )
         log.add("ночной разбор: проверка, батч $batchId, изменений ${toCheck.size}")
         return partial.copy(stage = "check", checkBatchId = batchId)
     }
@@ -376,7 +372,10 @@ class NightReview(
     }
 
     private fun finish(run: Run): Run {
-        val head = NightReviewPolicy.headline(run.applied(), run.proposed(), run.rejected(), run.changes.count { it.isNote })
+        val cache = if (run.inputTokens > 0) {
+            " Вход ${run.inputTokens} токенов, из кэша ${run.cacheReadTokens} (${100 * run.cacheReadTokens / run.inputTokens}%)."
+        } else ""
+        val head = NightReviewPolicy.headline(run.applied(), run.proposed(), run.rejected(), run.changes.count { it.isNote }) + cache
         log.add("ночной разбор (${run.kind}): $head стоил $" + "%.3f".format(Locale.US, run.costUsd))
         return run.copy(
             stage = "done",

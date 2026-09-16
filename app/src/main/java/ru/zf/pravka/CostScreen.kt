@@ -77,6 +77,14 @@ internal fun CostScreen(app: PravkaApp) {
                 CostLine(stringResource(R.string.stats_cost_total), "$%.2f".format(Locale.US, s.costTotalUsd))
                 Spacer(Modifier.height(6.dp))
                 CostLine(stringResource(R.string.stats_tokens), "%,d / %,d".format(ru, s.tokensIn, s.tokensOut))
+                // Кэш промпта: сколько входа пришло из кэша. Чтение стоит десятую
+                // часть (у Fable — сороковую), запись — вдвое: доля показывает,
+                // окупается ли кэш, а не только что он «включён».
+                val cachePct = if (s.tokensIn > 0) 100.0 * s.cacheReadTokens / s.tokensIn else 0.0
+                CostLine(
+                    "Кэш промпта (прочитано / записано)",
+                    "%,d (%.0f%%) / %,d".format(ru, s.cacheReadTokens, cachePct, s.cacheWriteTokens),
+                )
             }
         }
 

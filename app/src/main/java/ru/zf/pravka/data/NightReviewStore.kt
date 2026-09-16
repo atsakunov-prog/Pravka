@@ -74,6 +74,9 @@ class NightReviewStore(private val context: Context) {
         val summary: String = "",
         val error: String = "",
         val costUsd: Double = 0.0,
+        /** Вход всех проходов и сколько из него пришло из кэша — видно, окупается ли system под кэшем. */
+        val inputTokens: Int = 0,
+        val cacheReadTokens: Int = 0,
         val finishedAt: Long = 0L,
         val lastPollAt: Long = 0L,
         val changes: List<Change> = emptyList(),
@@ -159,6 +162,7 @@ class NightReviewStore(private val context: Context) {
                     checkBatchId = o.optString("checkBatchId"), auditBatchId = o.optString("auditBatchId"),
                     evidence = ev, summary = o.optString("summary"),
                     error = o.optString("error"), costUsd = o.optDouble("costUsd", 0.0),
+                    inputTokens = o.optInt("inputTokens"), cacheReadTokens = o.optInt("cacheReadTokens"),
                     finishedAt = o.optLong("finishedAt"), lastPollAt = o.optLong("lastPollAt"),
                     changes = changes, replies = replies,
                 )
@@ -176,6 +180,7 @@ class NightReviewStore(private val context: Context) {
                 put("auditBatchId", r.auditBatchId)
                 put("evidence", JSONObject().apply { for ((k, v) in r.evidence) put(k, v) })
                 put("summary", r.summary); put("error", r.error); put("costUsd", r.costUsd)
+                put("inputTokens", r.inputTokens); put("cacheReadTokens", r.cacheReadTokens)
                 put("finishedAt", r.finishedAt); put("lastPollAt", r.lastPollAt)
                 put(
                     "changes",

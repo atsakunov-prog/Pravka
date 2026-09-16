@@ -67,14 +67,36 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
          * Параметры одного запроса Messages (внутри батча или одиночного).
          * Форма по модели и усилию — RequestPolicy: Fable размышляет всегда,
          * параметр thinking ей не передаётся, глубину задаёт effort.
+         *
+         * [cacheSystem] — точка кэша на системном блоке с часовым сроком:
+         * ночной разбор кладёт туда свидетельства ночи, одинаковые для первого
+         * прохода и проверки, — проверка через полчаса-час читает их из кэша
+         * (у Fable чтение — сороковая часть цены входа).
          */
-        fun params(model: String, effort: String, maxTokens: Int, system: String, user: String): JSONObject =
+        fun params(
+            model: String,
+            effort: String,
+            maxTokens: Int,
+            system: String,
+            user: String,
+            cacheSystem: Boolean = false,
+        ): JSONObject =
             JSONObject().apply {
                 put("model", model)
                 put("max_tokens", maxTokens + RequestPolicy.thinkingHeadroom(model, effort))
                 if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
                 if (RequestPolicy.thinkingOff(model, effort)) put("thinking", JSONObject().put("type", "disabled"))
-                if (system.isNotBlank()) put("system", system)
+                if (system.isNotBlank()) {
+                    if (cacheSystem) {
+                        put(
+                            "system",
+                            JSONArray().put(
+                                JSONObject().put("type", "text").put("text", system)
+                                    .put("cache_control", JSONObject().put("type", "ephemeral").put("ttl", "1h"))
+                            ),
+                        )
+                    } else put("system", system)
+                }
                 put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", user)))
             }
 

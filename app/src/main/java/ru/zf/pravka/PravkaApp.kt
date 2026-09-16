@@ -49,6 +49,11 @@ class PravkaApp : Application() {
                 claudeProvider.requestLogger = if (on) ({ text -> requestLog.add(text) }) else null
             }
         }
+        // Кэш промпта виден в статистике: транспорт отдаёт расход каждого ответа,
+        // сюда падают токены чтения и записи кэша со всех дорог сразу.
+        claudeProvider.usageObserver = { r ->
+            appScope.launch { stats.recordCache(r.cacheReadTokens, r.cacheWriteTokens) }
+        }
     }
 
     val settings by lazy { Settings(this) }

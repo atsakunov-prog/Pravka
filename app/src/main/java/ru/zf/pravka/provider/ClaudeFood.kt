@@ -83,15 +83,16 @@ suspend fun ClaudeProvider.parseFood(
         // Правила еды стабильны — под кэш; словарь, время и вход в хвосте.
         // Сплит по маркеру словаря: правил его шаблон может и не иметь
         // (правится в «Промптах») — тогда весь текст уезжает хвостом.
-        // Со снимком кэш не включаем: блок изображения стоит ПЕРЕД
-        // текстом и ломает префикс — платили бы за запись впустую.
+        // Со снимком кэш тоже работает: с 16.09 транспорт ставит картинку
+        // ПОСЛЕ стабильной головы, а не перед ней (раньше кадр ломал префикс,
+        // и тарелка по фото платила полную цену за те же правила).
         val cut = prompt.indexOf("Словарь владельца")
         val parts = if (cut > 0) {
             Prompts.PromptParts(
                 stablePrefix = prompt.substring(0, cut),
                 dictPart = prompt.substring(cut),
                 afterInput = "",
-                cacheStableAlways = image == null,
+                cacheStableAlways = true,
             )
         } else {
             Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")

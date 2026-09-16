@@ -610,6 +610,13 @@ $listing
      */
     data class ImagePart(val mediaType: String, val base64: String)
 
+    /**
+     * Кто смотрит на расход каждого удачного ответа (16.09.2026): PravkaApp
+     * подписывает сюда счётчики кэша в Stats — одна точка на все дороги, вместо
+     * того чтобы тащить cache_read через каждый Parse-контракт режимов.
+     */
+    internal var usageObserver: ((ApiReply) -> Unit)? = null
+
     internal fun requestWithOneRetry(
         apiKey: String,
         model: String,
@@ -626,7 +633,7 @@ $listing
         // short-backoff retry turns them from a user-visible failure into
         // nothing. A short pause before the network retry too: an instant
         // re-POST into the same dead socket just fails the same way.
-        return try {
+        val reply = try {
             request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
         } catch (e: IOException) {
             Thread.sleep(1000)
@@ -636,6 +643,8 @@ $listing
             Thread.sleep(e.retryDelayMs)
             request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
         }
+        runCatching { usageObserver?.invoke(reply) }
+        return reply
     }
 
     private fun request(
@@ -702,21 +711,6 @@ $listing
                         put(
                             "content",
                             JSONArray().apply {
-                                // Картинки первыми: так у модели сначала кадр,
-                                // потом инструкция, что с ним делать.
-                                for (img in images) put(
-                                    JSONObject().apply {
-                                        put("type", "image")
-                                        put(
-                                            "source",
-                                            JSONObject().apply {
-                                                put("type", "base64")
-                                                put("media_type", img.mediaType)
-                                                put("data", img.base64)
-                                            }
-                                        )
-                                    }
-                                )
                                 // Cache breakpoint sits on the stable template prefix
                                 // ONLY - the dict block varies per request and would
                                 // invalidate the cache on every dictation. 1h TTL:
@@ -740,6 +734,25 @@ $listing
                                                 JSONObject().put("type", "ephemeral").put("ttl", "1h"),
                                             )
                                         }
+                                    }
+                                )
+                                // Картинки — ПОСЛЕ стабильной головы, но до переменного
+                                // хвоста: голова — это свод правил, как системный промпт,
+                                // и кадр перед ней ломал кэш (разбор еды по фото платил
+                                // за запись впустую, 16.09.2026). Порядок «правила →
+                                // кадр → что с ним делать» — тот же, что у системного
+                                // промпта с картинкой в первом сообщении.
+                                for (img in images) put(
+                                    JSONObject().apply {
+                                        put("type", "image")
+                                        put(
+                                            "source",
+                                            JSONObject().apply {
+                                                put("type", "base64")
+                                                put("media_type", img.mediaType)
+                                                put("data", img.base64)
+                                            }
+                                        )
                                     }
                                 )
                                 put(

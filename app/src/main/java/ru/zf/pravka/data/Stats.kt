@@ -31,6 +31,9 @@ class Stats(private val context: Context) {
         val latencyCount: Long,
         val tokensIn: Long,
         val tokensOut: Long,
+        /** Сколько входа пришло из кэша промпта и сколько в него записано — видно, работает ли кэш. */
+        val cacheReadTokens: Long,
+        val cacheWriteTokens: Long,
         val costTodayUsd: Double,
         val costWeekUsd: Double,
         val costMonthUsd: Double,
@@ -51,6 +54,8 @@ class Stats(private val context: Context) {
         val LATENCY_COUNT = longPreferencesKey("latency_count")
         val TOKENS_IN = longPreferencesKey("tokens_in")
         val TOKENS_OUT = longPreferencesKey("tokens_out")
+        val CACHE_READ = longPreferencesKey("cache_read_tokens")
+        val CACHE_WRITE = longPreferencesKey("cache_write_tokens")
         val COST_TOTAL = longPreferencesKey("cost_total_micros")
     }
 
@@ -87,6 +92,8 @@ class Stats(private val context: Context) {
             latencyCount = p[Keys.LATENCY_COUNT] ?: 0,
             tokensIn = p[Keys.TOKENS_IN] ?: 0,
             tokensOut = p[Keys.TOKENS_OUT] ?: 0,
+            cacheReadTokens = p[Keys.CACHE_READ] ?: 0,
+            cacheWriteTokens = p[Keys.CACHE_WRITE] ?: 0,
             costTodayUsd = costMicros(0) / 1_000_000.0,
             costWeekUsd = costMicros(daysSinceMonday()) / 1_000_000.0,
             costMonthUsd = costMicros(dayOfMonth() - 1) / 1_000_000.0,
@@ -122,6 +129,20 @@ class Stats(private val context: Context) {
             p[todayKey] = (p[todayKey] ?: 0) + micros
             p[Keys.COST_TOTAL] = (p[Keys.COST_TOTAL] ?: 0) + micros
             pruneOldDayKeys(p)
+        }
+    }
+
+    /**
+     * Токены кэша промпта — отдельными счётчиками ко ВСЕМ дорогам (16.09.2026,
+     * владелец: «кэширование — супер-тема для экономии, давай сделаем везде,
+     * где эффективно»). Пишет транспорт через ClaudeProvider.usageObserver и
+     * батчи ночного разбора; на экране стоимости — доля входа из кэша.
+     */
+    suspend fun recordCache(readTokens: Int, writeTokens: Int) {
+        if (readTokens <= 0 && writeTokens <= 0) return
+        context.statsDataStore.edit { p ->
+            p[Keys.CACHE_READ] = (p[Keys.CACHE_READ] ?: 0) + readTokens
+            p[Keys.CACHE_WRITE] = (p[Keys.CACHE_WRITE] ?: 0) + writeTokens
         }
     }
 

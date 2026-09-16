@@ -23,6 +23,14 @@ class ClaudeBatchesTest {
     }
 
     @Test
+    fun `system под кэшем — блок с часовым сроком`() {
+        val p = ClaudeBatches.params(Settings.MODEL_FABLE, "high", 1000, "свидетельства", "задача", cacheSystem = true)
+        val block = p.getJSONArray("system").getJSONObject(0)
+        assertEquals("свидетельства", block.getString("text"))
+        assertEquals("1h", block.getJSONObject("cache_control").getString("ttl"))
+    }
+
+    @Test
     fun `параметры для Сонета — thinking выключен`() {
         val p = ClaudeBatches.params(Settings.MODEL_SONNET, "", 2000, "", "вопрос")
         assertEquals("disabled", p.getJSONObject("thinking").getString("type"))
