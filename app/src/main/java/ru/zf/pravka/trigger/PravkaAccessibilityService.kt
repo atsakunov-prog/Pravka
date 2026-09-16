@@ -2277,6 +2277,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             // otherwise nag about. Fire-and-forget - the check reads current data.
             scope.launch { app.phoneSweeper.sweep() }
             scope.launch { app.icuSweeper.sweep() }
+            // Ночной разбор: запустить назревший прогон или спросить статус
+            // батча. Сам себя дросселирует (раз в 10 минут), тику не мешает.
+            scope.launch {
+                runCatching { app.nightReview.tick() }
+                    .onFailure { app.eventLog.add("ночной разбор: тик упал: ${it.message}") }
+            }
             // Спорт и еда: свой кэш и своя недоставленная почта. Оба звонка
             // сами себя дросселируют (30 минут у выгрузки, «уже уехало» у
             // еды), так что пятиминутный тик может дёргать их сколько хочет.

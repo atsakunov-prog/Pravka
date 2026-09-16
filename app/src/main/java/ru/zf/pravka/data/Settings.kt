@@ -44,6 +44,8 @@ class Settings(private val context: Context) {
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
         private val KEY_RULES_IN_PROMPT = booleanPreferencesKey("rules_in_prompt")
+        private val KEY_NIGHT_REVIEW = booleanPreferencesKey("night_review_enabled")
+        private val KEY_NIGHT_REVIEW_HOUR = intPreferencesKey("night_review_hour")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
         private val KEY_LEARN_AUTO = booleanPreferencesKey("learn_auto_capture")
@@ -250,6 +252,20 @@ class Settings(private val context: Context) {
     val rulesInPromptFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROMPT] ?: false }
     suspend fun setRulesInPrompt(value: Boolean) {
         context.dataStore.edit { it[KEY_RULES_IN_PROMPT] = value }
+    }
+
+    // Ночной разбор (16.09.2026). Владелец: «ежедневный разбор… чтобы каждую
+    // ночь делал всё, что ты сейчас сделал». Включён с завода — он его и
+    // просил; час — три ночи: телефон на зарядке, никто не диктует, батч
+    // успевает к утру. Расписание и политика — core/NightReviewPolicy.kt.
+    val nightReviewEnabledFlow = context.dataStore.data.map { it[KEY_NIGHT_REVIEW] ?: true }
+    suspend fun setNightReviewEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_NIGHT_REVIEW] = value }
+    }
+
+    val nightReviewHourFlow = context.dataStore.data.map { it[KEY_NIGHT_REVIEW_HOUR] ?: 3 }
+    suspend fun setNightReviewHour(value: Int) {
+        context.dataStore.edit { it[KEY_NIGHT_REVIEW_HOUR] = value.coerceIn(0, 23) }
     }
 
     val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }

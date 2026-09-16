@@ -45,6 +45,9 @@
   с каким усилием на какой дороге — `data/ModelRoutes.kt` (каталог дорог и
   заводские) и `settings.modelChoice(ModelRoute.X)`; владелец меняет это в
   настройках, группа «Модели» (`ModelsSettings.kt`).
+  Батчи (Message Batches API) — `provider/ClaudeBatches.kt`; ночной разбор
+  Правки на них — `core/NightReview.kt` + `core/NightReviewPolicy.kt`,
+  прогоны — `data/NightReviewStore.kt`, экран — `NightReviewSettings.kt`.
   Разборы режимов — расширения того же класса рядом: `ClaudeZasechka.kt`,
   `ClaudeRaznoska.kt`, `ClaudeFood.kt`, `ClaudeBody.kt`, `ClaudeAnalysis.kt`.
   Контракты (`ClaudeProvider.XxxParse`) остаются вложенными в главный класс.

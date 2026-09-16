@@ -86,6 +86,15 @@ class PravkaApp : Application() {
     val corrections by lazy { ru.zf.pravka.data.CorrectionsLog(this) }
     val evalStore by lazy { ru.zf.pravka.data.EvalStore(this) }
     val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient, rulesStore) }
+    // Ночной разбор: батчи Anthropic, память прогонов и движок (core/NightReview.kt).
+    val claudeBatches by lazy { ru.zf.pravka.provider.ClaudeBatches(settings, httpClient) }
+    val nightReviewStore by lazy { ru.zf.pravka.data.NightReviewStore(this) }
+    val nightReview by lazy {
+        ru.zf.pravka.core.NightReview(
+            settings, claudeBatches, nightReviewStore, dictionaryStore, rulesStore, historyLog,
+            transcriptionLog, corrections, promptStore, stats, eventLog,
+        )
+    }
     val dictMiner by lazy { DictMiner(settings, httpClient, stats) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }

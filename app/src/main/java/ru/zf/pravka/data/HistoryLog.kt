@@ -88,6 +88,30 @@ class HistoryLog(private val context: Context) {
         }.getOrElse { emptyList() }
     }
 
+    /** Одна чистка: когда, что надиктовано, что сделала модель. */
+    data class Entry(val tsMs: Long, val input: String, val output: String)
+
+    /**
+     * Успешные чистки CLEAN за период [fromMs, toMs), по времени — сырьё
+     * ночного разбора (16.09.2026): пары «надиктовано → модель» за сутки или
+     * неделю, а не хвост фиксированной длины.
+     */
+    fun readEntries(fromMs: Long, toMs: Long): List<Entry> {
+        if (!file.exists()) return emptyList()
+        return runCatching {
+            file.readLines().mapNotNull { line ->
+                val o = runCatching { JSONObject(line) }.getOrNull() ?: return@mapNotNull null
+                if (o.has("error") || o.optString("mode") != "CLEAN") return@mapNotNull null
+                val t = runCatching { timestampFormat.parse(o.optString("ts"))?.time }.getOrNull()
+                    ?: return@mapNotNull null
+                if (t < fromMs || t >= toMs) return@mapNotNull null
+                val input = o.optString("input")
+                val output = o.optString("output")
+                if (input.isBlank() || output.isBlank()) null else Entry(t, input, output)
+            }
+        }.getOrElse { emptyList() }
+    }
+
     /** Что делал сам владелец в приложении: режим, день, деньги. Без текстов. */
     data class Meta(val date: String, val mode: String, val costUsd: Double, val changed: Boolean)
 
