@@ -13,8 +13,11 @@ package ru.zf.pravka.core
 //   1. слова владельца впереди семени — сам факт, что он завёл запись,
 //      сильнее любой статистики: распознаватель это слово уже не расслышал;
 //   2. защищённые слова впереди правых частей, внутри группы — по срабатываниям;
-//   3. строки одной латиницей — в хвост: русскоязычный офлайн-пакет их не
-//      выговаривает, а место в сорока они занимали («M&A», «EBITDA», «Strava»);
+//   3. латиница идёт наравне с кириллицей. Первая версия (16.09) гнала её в
+//      хвост — «офлайн-пакет её не выговаривает»; журнал 1490 тейков показал
+//      обратное: youtube, notion, garmin, telegram распознаватель отдаёт
+//      латиницей сам, а «ноушене» вместо Notion — ровно то, что подсказка и
+//      должна лечить. Отдельно только считается, чтобы было видно в журнале;
 //   4. дубли схлопываются без учёта регистра («Стаффджет» и «стаффджет» — одно).
 object BiasingList {
     const val LIMIT = 40
@@ -42,13 +45,7 @@ object BiasingList {
             .sortedWith(compareBy<Cand>({ !it.protect }, { !it.owner }, { -it.hits }))
             .toList()
         val seen = HashSet<String>()
-        val cyrillic = ArrayList<Cand>()
-        val latin = ArrayList<Cand>()
-        for (c in cands) {
-            if (!seen.add(c.word.lowercase())) continue
-            if (hasCyrillic(c.word)) cyrillic.add(c) else latin.add(c)
-        }
-        val picked = (cyrillic + latin).take(limit)
+        val picked = cands.filter { seen.add(it.word.lowercase()) }.take(limit)
         return Built(
             strings = picked.map { it.word },
             ownerCount = picked.count { it.owner },

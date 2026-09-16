@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 // Подсказки распознавателю из словаря: слова владельца впереди семени,
-// защищённые впереди правых частей, латиница в хвосте, дубли без регистра,
+// защищённые впереди правых частей, латиница наравне, дубли без регистра,
 // потолок сорок (docs/agreements.md, «Подсказки распознавателю»).
 class BiasingListTest {
 
@@ -29,23 +29,23 @@ class BiasingListTest {
         assertEquals(40, built.strings.size)
         assertTrue(built.strings.contains("Стаффджет"))
         assertTrue(built.strings.contains("Шепелина"))
-        // Латиница владельца тоже впереди семени, но в хвосте кириллицы: с
-        // 60 строками семени в сорок она не влезает — это и есть цена хвоста.
-        assertEquals(2, built.ownerCount)
+        // Латиница владельца — тоже впереди семени, наравне с кириллицей.
+        assertEquals(3, built.ownerCount)
         // Защищённое слово владельца — самое первое.
         assertEquals("Шепелина", built.strings.first())
         assertEquals("Стаффджет", built.strings[1])
+        assertEquals("Tasty Coffee", built.strings[2])
     }
 
     @Test
-    fun `латиница в хвосте и считается отдельно`() {
+    fun `латиница наравне с кириллицей и считается отдельно`() {
         val entries = listOf(
             owner("эбитда", "EBITDA", hits = 100),
             owner("эскро", "эскроу", hits = 1),
             owner("Strava", "", mode = DictMode.PROTECT, hits = 50),
         )
         val built = BiasingList.build(entries, isSeed)
-        assertEquals(listOf("эскроу", "Strava", "EBITDA"), built.strings)
+        assertEquals(listOf("Strava", "EBITDA", "эскроу"), built.strings)
         assertEquals(2, built.latinCount)
         assertEquals(3, built.ownerCount)
     }
