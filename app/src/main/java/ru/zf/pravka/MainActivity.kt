@@ -9,6 +9,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -1360,9 +1362,11 @@ private fun LearningTab(app: PravkaApp) {
 
 // The logs tab: the few logs that matter, each with copy and file export -
 // "нажал и показал" instead of hunting through screens.
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LogsTab(app: PravkaApp) {
     val context = LocalContext.current
+    var exportOpen by remember { mutableStateOf(false) }
     var eventTail by remember { mutableStateOf<List<String>>(emptyList()) }
     var learnTail by remember { mutableStateOf<List<String>>(emptyList()) }
     var loadTick by remember { mutableStateOf(0) }
@@ -1394,6 +1398,44 @@ private fun LogsTab(app: PravkaApp) {
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // Выгрузки для разбора — наверху, одной кнопкой каждая (владелец,
+        // 16.09.2026: искал расшифровки в «Логах», а они жили за значком
+        // выгрузки в «Статистике диктовки», куда из «Ещё» хода нет). Каждая
+        // кнопка отдаёт файл целиком; иной период — тем же диалогом, что там.
+        SectionCard(label = "Выгрузить для разбора") {
+            HintText(
+                "Файл целиком в шаринг — Drive, почта, чат. Расшифровки — сырой выход " +
+                    "распознавателя; история — надиктовано и правка модели; правки руками — " +
+                    "надиктовано · модель · ты. Иной период — «За период…»."
+            )
+            Spacer(Modifier.height(6.dp))
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                OutlinedButton(onClick = {
+                    share(app.transcriptionLog.shareJsonIntent(), "Расшифровки")
+                }) { Text("Расшифровки (JSON)") }
+                OutlinedButton(onClick = {
+                    share(app.historyLog.shareIntent(), "История правок")
+                }) { Text("История правок (JSONL)") }
+                OutlinedButton(onClick = {
+                    // shareCsvIntent — suspend: собирается в области приложения.
+                    app.appScope.launch {
+                        val intent = runCatching { app.corrections.shareCsvIntent() }.getOrNull()
+                        if (intent == null) Feedback.toast(context, "Не собралась")
+                        else share(intent, "Правки руками")
+                    }
+                }) { Text("Правки руками (CSV)") }
+                OutlinedButton(onClick = {
+                    share(app.transcriptionLog.shareMetricsCsvIntent(), "Метрики диктовки")
+                }) { Text("Метрики (CSV)") }
+                OutlinedButton(onClick = { exportOpen = true }) { Text("За период…") }
+            }
+        }
+        if (exportOpen) DictationExportDialog(app, onDismiss = { exportOpen = false })
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = { loadTick++ }) { Text("Обновить") }
@@ -1535,14 +1577,6 @@ private fun LogsTab(app: PravkaApp) {
                     Feedback.toast(context, "Лог запросов очищен")
                 }) { Text("Очистить", color = MaterialTheme.colorScheme.error) }
             }
-        }
-
-        SectionCard(label = "История правок") {
-            HintText("Полный журнал в JSONL — для разбора качества.")
-            Spacer(Modifier.height(6.dp))
-            OutlinedButton(onClick = {
-                share(app.historyLog.shareIntent(), "История правок")
-            }) { Text("Выгрузить JSONL") }
         }
     }
 }

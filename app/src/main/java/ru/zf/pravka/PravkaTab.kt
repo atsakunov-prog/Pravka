@@ -520,7 +520,7 @@ private enum class Period(val title: String) { DAY("Сегодня"), WEEK("7 д
 private val customDate = SimpleDateFormat("dd.MM.yyyy", Locale.US).apply { isLenient = false }
 
 @Composable
-private fun DictationExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
+internal fun DictationExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var what by remember { mutableStateOf(ExportWhat.TAKES) }
     var period by remember { mutableStateOf(Period.DAY) }
