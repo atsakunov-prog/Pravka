@@ -17,7 +17,8 @@ class ClaudeBatchesTest {
         assertEquals(Settings.MODEL_FABLE, p.getString("model"))
         assertFalse(p.has("thinking"))
         assertEquals("high", p.getJSONObject("output_config").getString("effort"))
-        assertEquals(8000 + 8000, p.getInt("max_tokens"))
+        // Батчу спешить некуда: запас под мысли Fable — 32 тысячи, а не дневные восемь.
+        assertEquals(8000 + 32_000, p.getInt("max_tokens"))
         assertEquals("система", p.getString("system"))
         assertEquals("вопрос", p.getJSONArray("messages").getJSONObject(0).getString("content"))
     }
@@ -28,6 +29,31 @@ class ClaudeBatchesTest {
         val block = p.getJSONArray("system").getJSONObject(0)
         assertEquals("свидетельства", block.getString("text"))
         assertEquals("1h", block.getJSONObject("cache_control").getString("ttl"))
+    }
+
+    @Test
+    fun `запрос чистки в батче — той же формы, что дневной`() {
+        val parts = ru.zf.pravka.core.Prompts.PromptParts(stablePrefix = "ПРАВИЛА\n\n", dictPart = "<словарь>\n</словарь>\n\n", afterInput = "")
+        val p = ClaudeBatches.cleanParams(Settings.MODEL_OPUS, "", parts, "текст диктовки", cache = true)
+        val content = p.getJSONArray("messages").getJSONObject(0).getJSONArray("content")
+        assertEquals(2, content.length())
+        assertEquals("ПРАВИЛА\n\n", content.getJSONObject(0).getString("text"))
+        assertEquals("1h", content.getJSONObject(0).getJSONObject("cache_control").getString("ttl"))
+        assertEquals("<словарь>\n</словарь>\n\nтекст диктовки", content.getJSONObject(1).getString("text"))
+        assertFalse(p.has("system"))
+        assertFalse(p.has("thinking"))
+        assertEquals(RequestPolicy.maxTokens(Settings.MODEL_OPUS, "", parts.dictPart.length + "текст диктовки".length), p.getInt("max_tokens"))
+
+        val sonnet = ClaudeBatches.cleanParams(Settings.MODEL_SONNET, "", parts, "текст", cache = false)
+        assertEquals("disabled", sonnet.getJSONObject("thinking").getString("type"))
+        assertFalse(sonnet.getJSONArray("messages").getJSONObject(0).getJSONArray("content").getJSONObject(0).has("cache_control"))
+    }
+
+    @Test
+    fun `обрезанный по длине ответ — не результат`() {
+        val cut = ClaudeBatches.parseItem(JSONObject("""{"custom_id":"all","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"{\"summary\": \"обр"}],"stop_reason":"max_tokens"}}}"""))
+        assertFalse(cut.ok)
+        assertTrue(cut.failure.contains("max_tokens"))
     }
 
     @Test

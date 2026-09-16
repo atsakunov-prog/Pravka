@@ -100,6 +100,13 @@ class PravkaApp : Application() {
             transcriptionLog, corrections, promptStore, stats, eventLog,
         )
     }
+    // Тень второй модели: те же диктовки ночью через Опус, слепой судья Fable (core/ShadowRun.kt).
+    val shadowRun by lazy {
+        ru.zf.pravka.core.ShadowRun(
+            settings, claudeBatches, nightReviewStore, historyLog, DictionaryApplier(dictionaryStore),
+            claudeProvider, stats, eventLog,
+        )
+    }
     val dictMiner by lazy { DictMiner(settings, httpClient, stats) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }

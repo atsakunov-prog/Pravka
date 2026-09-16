@@ -12,4 +12,6 @@ data class ProofreadResult(
     val costUsd: Double = 0.0,
     val cacheWriteTokens: Int = 0,
     val cacheReadTokens: Int = 0,
+    /** Шла ли директива прозы: журнал помечает такие чистки, чтобы тень повторила их той же директивой. */
+    val prose: Boolean = false,
 )

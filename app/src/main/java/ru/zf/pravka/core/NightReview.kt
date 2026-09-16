@@ -75,7 +75,8 @@ class NightReview(
         if (settings.apiKey().isBlank()) return
         if (!mutex.tryLock()) return
         try {
-            val runs = store.all()
+            // Тень второй модели живёт в том же сторе, но ведёт её ShadowRun.
+            val runs = store.all().filter { !it.isShadow }
             val active = runs.filter { it.active }
             for (run in active) {
                 if (nowMs - run.lastPollAt < POLL_MS) continue
@@ -261,7 +262,7 @@ class NightReview(
         if (item == null || !item.ok) errors += "первый проход: ${item?.failure ?: "нет ответа"}"
         else runCatching { NightReviewPolicy.parseAnalysis(item.text, "n") }
             .onSuccess { a -> if (a.summary.isNotBlank()) summaries += a.summary; changes += a.changes }
-            .onFailure { errors += "первый проход: ответ не разобрался (${it.message})" }
+            .onFailure { errors += "первый проход: ответ не разобрался (${NightReviewPolicy.shortReason(it)})" }
         // Память: что владелец вернул или отклонил за месяц, снова не предлагается —
         // даже если модель не послушала промпт.
         val blocked = NightReviewEvidence.blockedKeys(store.all(), System.currentTimeMillis() - LEDGER_MS)
@@ -301,7 +302,7 @@ class NightReview(
             if (!item.ok) { errors += "${item.customId}: ${item.failure}"; continue }
             runCatching { NightReviewPolicy.parseVerdicts(item.text) }
                 .onSuccess { verdicts.putAll(it) }
-                .onFailure { errors += "${item.customId}: вердикты не разобрались (${it.message})" }
+                .onFailure { errors += "${item.customId}: вердикты не разобрались (${NightReviewPolicy.shortReason(it)})" }
         }
         val updated = run.changes.map { c ->
             if (c.isNote || c.status != "proposed") c
@@ -348,7 +349,7 @@ class NightReview(
         if (item == null || !item.ok) error = "согласование: ${item?.failure ?: "нет ответа"}"
         else runCatching { NightReviewPolicy.parseAudit(item.text) }
             .onSuccess { assessment = it.assessment; holds = it.holds }
-            .onFailure { error = "согласование: ответ не разобрался (${it.message})" }
+            .onFailure { error = "согласование: ответ не разобрался (${NightReviewPolicy.shortReason(it)})" }
         var applied = 0
         val updated = run.changes.map { c ->
             when {

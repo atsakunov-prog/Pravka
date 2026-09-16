@@ -105,34 +105,10 @@ class ClaudeProvider(
                 val everyday = settings.modelChoice(ModelRoute.PRAVKA)
                 val choice = if (strong) settings.modelChoice(ModelRoute.PRAVKA_STRONG) else everyday
                 val model = choice.model
-                // ONE master template (CLEAN) for every mode; BUSINESS/SOFTEN
-                // are style directives riding in the uncached slot, so all
-                // modes share the same cached prefix.
-                val template = promptStore.effective(ProofreadMode.CLEAN)
-                val styleDirective = if (mode == ProofreadMode.CLEAN) "" else promptStore.effective(mode)
                 // Fiction mode (settings toggle): the PROSE directive rides on
                 // top of the plain CLEAN pass; explicit style modes win over it.
                 val proseOn = mode == ProofreadMode.CLEAN && settings.proseModeFlow.first()
-                val proseDirective =
-                    if (proseOn) promptStore.effective(PromptStore.PromptId.PROSE) else ""
-                val fullDirective = listOf(styleDirective, proseDirective, directive)
-                    .filter { it.isNotBlank() }
-                    .joinToString("\n\n")
-                // Approved learned rules ride in the same uncached slot as the
-                // dictionary block, so the cached CLEAN prefix stays byte-stable.
-                // In prose mode they are message-formatting advice fighting the
-                // prose directive - skipped unless the owner enabled them there.
-                // Since 16.09 the whole block is behind a setting (default off):
-                // measured against the history it changed nothing but greeting
-                // punctuation, while eating ~700 tokens per request.
-                val rulesBlock =
-                    if (!settings.rulesInPromptFlow.first()) ""
-                    else if (proseOn && !settings.rulesInProseFlow.first()) ""
-                    else rulesStore.enabledBlock()
-                val dictAndRules = listOf(dictBlock, rulesBlock)
-                    .filter { it.isNotBlank() }
-                    .joinToString("\n\n")
-                val parts = Prompts.assemble(template, dictAndRules, fullDirective, contextBefore, conversationContext)
+                val parts = cleanParts(mode, dictBlock, directive, contextBefore, conversationContext, proseOn)
                     // Кэш стабильного префикса — на повседневной модели: там он
                     // читается с каждой диктовки. Переделка на другой модели —
                     // другое пространство кэша, и запись за 2x ушла бы впустую;
@@ -156,9 +132,54 @@ class ClaudeProvider(
                     costUsd = costUsd(model, reply),
                     cacheWriteTokens = reply.cacheWriteTokens,
                     cacheReadTokens = reply.cacheReadTokens,
+                    prose = proseOn,
                 )
             }
         }
+
+    /**
+     * Сборка промпта чистки — одна для дневной кнопки «П» и для ночных батчей
+     * (тень второй модели, эвал золотого набора): тот же шаблон, словарь,
+     * правила и директива прозы. Иначе сравнение моделей мерило бы разницу
+     * промптов, а не моделей.
+     */
+    internal suspend fun cleanParts(
+        mode: ProofreadMode,
+        dictBlock: String,
+        directive: String,
+        contextBefore: String,
+        conversationContext: String,
+        prose: Boolean,
+    ): Prompts.PromptParts {
+        // ONE master template (CLEAN) for every mode; BUSINESS/SOFTEN
+        // are style directives riding in the uncached slot, so all
+        // modes share the same cached prefix.
+        val template = promptStore.effective(ProofreadMode.CLEAN)
+        val styleDirective = if (mode == ProofreadMode.CLEAN) "" else promptStore.effective(mode)
+        val proseDirective = if (prose) promptStore.effective(PromptStore.PromptId.PROSE) else ""
+        val fullDirective = listOf(styleDirective, proseDirective, directive)
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+        // Approved learned rules ride in the same uncached slot as the
+        // dictionary block, so the cached CLEAN prefix stays byte-stable.
+        // In prose mode they are message-formatting advice fighting the
+        // prose directive - skipped unless the owner enabled them there.
+        // Since 16.09 the whole block is behind a setting (default off):
+        // measured against the history it changed nothing but greeting
+        // punctuation, while eating ~700 tokens per request.
+        val rulesBlock =
+            if (!settings.rulesInPromptFlow.first()) ""
+            else if (prose && !settings.rulesInProseFlow.first()) ""
+            else rulesStore.enabledBlock()
+        val dictAndRules = listOf(dictBlock, rulesBlock)
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+        return Prompts.assemble(template, dictAndRules, fullDirective, contextBefore, conversationContext)
+    }
+
+    /** Промпт обычной чистки без директив и контекста — для батчей тени и эвала. */
+    suspend fun cleanPromptParts(dictBlock: String, prose: Boolean): Prompts.PromptParts =
+        cleanParts(ProofreadMode.CLEAN, dictBlock, "", "", "", prose)
 
     /**
      * Free-form assist task (summarize / reply / translate): [instruction]
@@ -671,19 +692,17 @@ $listing
         // Снимок тарелки - это ещё ~1600 токенов на картинку (1568x1568 max):
         // без этой прибавки бюджет ответа сжимается до пола и разбор еды по
         // фото обрывается на середине JSON.
-        val estimatedInputTokens =
-            (parts.dictPart.length + input.length) / 2 + 1 + images.size * 1600
         // Модели с адаптивными размышлениями считают мысли в тот же
         // max_tokens: без запаса переделка в 350 знаков сжигала бюджет на
         // мыслях и умирала с stop_reason=max_tokens, не выдав ни слова
         // (владелец видел бесконечный спиннер, 18.08.2026). Кому мысли
         // выключены — решает RequestPolicy, а не имя модели в этом файле.
         val thinkingOff = RequestPolicy.thinkingOff(model, effortOverride)
-        val thinkingHeadroom = RequestPolicy.thinkingHeadroom(model, effortOverride)
         // Оценка по длине входа врёт там, где длинный вход просит короткий
         // ответ и наоборот (разбор «Итогов»): такой вызов задаёт бюджет сам.
+        // Сама формула — в RequestPolicy: ею же считают батчи тени и эвала.
         val maxTokens = if (maxTokensOverride > 0) maxTokensOverride
-        else (estimatedInputTokens * 13 / 10 + 300 + thinkingHeadroom).coerceIn(1024, 16384)
+        else RequestPolicy.maxTokens(model, effortOverride, parts.dictPart.length + input.length, images.size)
 
         val body = JSONObject().apply {
             put("model", model)

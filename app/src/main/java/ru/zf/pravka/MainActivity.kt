@@ -284,6 +284,8 @@ internal enum class Tab(val titleRes: Int) {
     LOGS(R.string.tab_logs),
     /** Статистика диктовки — открывается значком статистики в шапке Правки, в «Ещё» её нет. */
     STATS(R.string.tab_stats),
+    /** Разборы: ночной разбор диктовок и тень второй модели — отчёты, ответ текстом (16.09.2026). */
+    REVIEWS(R.string.tab_reviews),
 }
 
 /**
@@ -298,6 +300,9 @@ internal enum class Tab(val titleRes: Int) {
 private val SERVICE_TABS = listOf(
     // «Общая статистика» в списке не нужна (владелец, 15.09): к ней ведёт
     // значок статистики в шапке Засечки, Дел, Спорта и Еды.
+    // «Разборы» — первыми: утренний отчёт ночного разбора и тени читается каждый день
+    // (владелец, 16.09: «это не в Ещё → Разборы, как я просил»).
+    Tab.REVIEWS,
     Tab.DICTIONARY,
     Tab.PROMPTS,
     Tab.LEARNING,
@@ -312,6 +317,7 @@ private fun serviceHint(tab: Tab): String = when (tab) {
     Tab.DICTIONARY -> "Как писать имена и термины: заменять, подсказывать, не трогать"
     Tab.PROMPTS -> "Тексты запросов ко всем режимам — правятся и возвращаются к заводским"
     Tab.LEARNING -> "Разбор твоих правок по кнопке и принятые правила"
+    Tab.REVIEWS -> "Ночной разбор диктовок и тень второй модели: что нашёл, что применил, ответ текстом"
     Tab.LOGS -> "Что делала служба: кнопки, свипы, выгрузки, ошибки"
     else -> ""
 }
@@ -613,6 +619,7 @@ private fun MainScreen(
                                     Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
                                     Tab.PROMPTS -> PromptsTab(promptStore)
                                     Tab.LEARNING -> LearningTab(app)
+                                    Tab.REVIEWS -> ReviewsTab(app)
                                     Tab.LOGS -> LogsTab(app)
                                     Tab.STATS -> DictationStatsTab(
                                         app,
@@ -1472,15 +1479,25 @@ private fun LogsTab(app: PravkaApp) {
             var showSet by remember { mutableStateOf(false) }
             var running by remember { mutableStateOf(ru.zf.pravka.core.EvalRunner.running) }
             var progress by remember { mutableStateOf(0 to 0) }
+            var evalStage by remember { mutableStateOf("") }
             var last by remember { mutableStateOf<org.json.JSONObject?>(null) }
             LaunchedEffect(evalTick) {
                 items = app.evalStore.all()
                 // File read off the composition pass.
                 last = withContext(Dispatchers.IO) { app.evalStore.lastRun() }
+                // Батч, отправленный до смерти процесса, дожидается здесь, а не
+                // пропадает вместе с деньгами.
+                if (!ru.zf.pravka.core.EvalRunner.running &&
+                    withContext(Dispatchers.IO) { app.evalStore.pendingBatch() } != null
+                ) {
+                    ru.zf.pravka.core.EvalRunner.start(app)
+                    running = true
+                }
             }
             LaunchedEffect(running) {
                 while (ru.zf.pravka.core.EvalRunner.running) {
                     progress = ru.zf.pravka.core.EvalRunner.done to ru.zf.pravka.core.EvalRunner.total
+                    evalStage = ru.zf.pravka.core.EvalRunner.stage
                     kotlinx.coroutines.delay(1500)
                 }
                 running = false
@@ -1488,7 +1505,8 @@ private fun LogsTab(app: PravkaApp) {
             }
             HintText(
                 "Золотой набор: вход диктовки и эталонный результат. Каждое " +
-                    "изменение промпта прогоняется по набору и меряется цифрой."
+                    "изменение промпта прогоняется по набору и меряется цифрой. " +
+                    "Прогон идёт батчем (вдвое дешевле) — обычно минуты, до часа."
             )
             Spacer(Modifier.height(6.dp))
             Text("Эталонов: ${items.size}", style = MaterialTheme.typography.bodyMedium)
@@ -1501,9 +1519,11 @@ private fun LogsTab(app: PravkaApp) {
                 )
             }
             if (running) {
-                Text("Идёт прогон: ${progress.first}/${progress.second}…",
+                Text(
+                    "Идёт прогон: ${progress.first}/${progress.second}" + (if (evalStage.isNotBlank()) " · $evalStage" else "") + "…",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary)
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -35,6 +35,16 @@ object NightReviewPolicy {
         return out
     }
 
+    /** Раз в сутки после часа запуска — тем же правилом живёт тень второй модели. */
+    fun dueDaily(nowMs: Long, hour: Int, lastStart: Long): Boolean =
+        DAILY in dueKinds(nowMs, hour, lastStart, nowMs)
+
+    /** Причина сбоя разбора ответа — коротко: JSONException тащит в message весь ответ модели. */
+    fun shortReason(e: Throwable): String {
+        val m = (e.message ?: e.javaClass.simpleName).replace(Regex("\\s+"), " ")
+        return if (m.length > 160) m.take(160) + "…" else m
+    }
+
     fun sameDay(a: Long, b: Long): Boolean {
         if (a <= 0L || b <= 0L) return false
         val ca = Calendar.getInstance().apply { timeInMillis = a }

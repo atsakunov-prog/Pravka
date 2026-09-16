@@ -37,6 +37,10 @@ class HistoryLog(private val context: Context) {
         error: String?,
         cacheWriteTokens: Int = 0,
         cacheReadTokens: Int = 0,
+        /** Чистка шла с директивой прозы — тень второй модели повторит её так же. */
+        prose: Boolean = false,
+        /** Чистка шла с директивой чипа, контекстом поля или разговором — в журнале их нет, тень такую пропускает. */
+        withContext: Boolean = false,
     ) {
         // Off the caller thread (this runs right after a proofread lands):
         // DiskWriter's single thread also provides the ordering @Synchronized
@@ -62,6 +66,8 @@ class HistoryLog(private val context: Context) {
                 put("changed", changed)
                 put("input", input)
                 put("output", output)
+                if (prose) put("prose", true)
+                if (withContext) put("ctx", true)
                 if (error != null) put("error", error)
             }
             file.appendText(entry.toString() + "\n")
@@ -88,8 +94,18 @@ class HistoryLog(private val context: Context) {
         }.getOrElse { emptyList() }
     }
 
-    /** Одна чистка: когда, что надиктовано, что сделала модель. */
-    data class Entry(val tsMs: Long, val input: String, val output: String)
+    /** Одна чистка: когда, что надиктовано, что сделала модель, чем и за сколько. */
+    data class Entry(
+        val tsMs: Long,
+        val input: String,
+        val output: String,
+        val costUsd: Double = 0.0,
+        val model: String = "",
+        /** Шла директива прозы (записи до 16.09.2026 флага не имеют — считаются без неё). */
+        val prose: Boolean = false,
+        /** Был контекст поля, разговор или директива чипа — чистка невоспроизводима по журналу. */
+        val withContext: Boolean = false,
+    )
 
     /**
      * Успешные чистки CLEAN за период [fromMs, toMs), по времени — сырьё
@@ -107,7 +123,12 @@ class HistoryLog(private val context: Context) {
                 if (t < fromMs || t >= toMs) return@mapNotNull null
                 val input = o.optString("input")
                 val output = o.optString("output")
-                if (input.isBlank() || output.isBlank()) null else Entry(t, input, output)
+                if (input.isBlank() || output.isBlank()) null
+                else Entry(
+                    t, input, output,
+                    costUsd = o.optDouble("cost_usd", 0.0), model = o.optString("model"),
+                    prose = o.optBoolean("prose"), withContext = o.optBoolean("ctx"),
+                )
             }
         }.getOrElse { emptyList() }
     }

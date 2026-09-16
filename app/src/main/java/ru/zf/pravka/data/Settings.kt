@@ -46,6 +46,7 @@ class Settings(private val context: Context) {
         private val KEY_RULES_IN_PROMPT = booleanPreferencesKey("rules_in_prompt")
         private val KEY_NIGHT_REVIEW = booleanPreferencesKey("night_review_enabled")
         private val KEY_NIGHT_REVIEW_HOUR = intPreferencesKey("night_review_hour")
+        private val KEY_SHADOW_RUN = booleanPreferencesKey("shadow_run_enabled")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
         private val KEY_LEARN_AUTO = booleanPreferencesKey("learn_auto_capture")
@@ -266,6 +267,16 @@ class Settings(private val context: Context) {
     val nightReviewHourFlow = context.dataStore.data.map { it[KEY_NIGHT_REVIEW_HOUR] ?: 3 }
     suspend fun setNightReviewHour(value: Int) {
         context.dataStore.edit { it[KEY_NIGHT_REVIEW_HOUR] = value.coerceIn(0, 23) }
+    }
+
+    // Тень второй модели (16.09.2026). Владелец: «может, ночью первой
+    // пропустим большой кусок диктовок через Opus, а дальше уже дневной; а
+    // разбирает Сонет против Опуса пускай Fable 5.1 high». Включена с завода —
+    // он её и просил; идёт в тот же час, что ночной разбор. Движок —
+    // core/ShadowRun.kt, чистая политика — core/ShadowPolicy.kt.
+    val shadowRunEnabledFlow = context.dataStore.data.map { it[KEY_SHADOW_RUN] ?: true }
+    suspend fun setShadowRunEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_SHADOW_RUN] = value }
     }
 
     val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }

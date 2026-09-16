@@ -61,6 +61,7 @@ class ProofreadEngine(
         if (input.length < MIN_INPUT_LENGTH && !target.isExplicitFragment()) return Outcome.Rejected
 
         val prepared = dictionary.prepare(input)
+        val contextBefore = target.contextBefore()
 
         // One provider; the model is the owner's setting (Sonnet by default -
         // Haiku simplified too much and the Nano experiment was a dead end).
@@ -71,7 +72,7 @@ class ProofreadEngine(
             // "seam punctuation" instruction, conversation context the
             // "tone/gender/referents" one. Merging them (the old way) put the
             // conversation under the seam instruction and neutered it.
-            contextBefore = target.contextBefore(),
+            contextBefore = contextBefore,
             strong = strong,
             conversationContext = conversationContext,
         ).getOrElse { error ->
@@ -126,6 +127,11 @@ class ProofreadEngine(
             result.changed, input, cleaned, null,
             cacheWriteTokens = result.cacheWriteTokens,
             cacheReadTokens = result.cacheReadTokens,
+            // Тени второй модели нужно знать, что повторить (директиву прозы)
+            // и что повторить нельзя (директива чипа, контекст поля, разговор —
+            // их в журнале нет): такие чистки она пропускает.
+            prose = result.prose,
+            withContext = directive.isNotBlank() || contextBefore.isNotBlank() || conversationContext.isNotBlank(),
         )
         journalScope.launch {
             stats.recordSuccess(mode, result.latencyMs, input.length, result.changed, result.inputTokens, result.outputTokens, result.costUsd)

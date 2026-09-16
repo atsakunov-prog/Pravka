@@ -32,4 +32,27 @@ object RequestPolicy {
      */
     fun thinkingHeadroom(model: String, effort: String): Int =
         if (thinkingOff(model, effort)) 0 else 8000
+
+    /**
+     * Запас под мысли в батче. Дневной запрос ограничен временем ожидания и
+     * потоком, батчу спешить некуда, а Fable на high над пакетом свидетельств
+     * за сутки думает больше восьми тысяч токенов: первый прогон ночного
+     * разбора (16.09.2026) упёрся в max_tokens и вернул JSON, обрезанный на
+     * середине, — отчёт пришёл красной простынёй вместо изменений.
+     */
+    fun batchThinkingHeadroom(model: String, effort: String): Int =
+        if (thinkingOff(model, effort)) 0 else 32_000
+
+    /**
+     * Бюджет ответа для правки текста: грубая оценка токенов входа по длине
+     * (~2,5 знака на токен у русского, считаем половину знаков) + 30 % запаса
+     * + место под мысли; снимок тарелки — ещё ~1600 токенов на картинку.
+     * Одна формула на дневной запрос и на батч (тень второй модели, эвал):
+     * обрезка по длине должна случаться в обоих одинаково, иначе сравнение
+     * моделей мерит не модель, а разницу бюджетов.
+     */
+    fun maxTokens(model: String, effort: String, variableChars: Int, images: Int = 0): Int {
+        val estimatedInputTokens = variableChars / 2 + 1 + images * 1600
+        return (estimatedInputTokens * 13 / 10 + 300 + thinkingHeadroom(model, effort)).coerceIn(1024, 16384)
+    }
 }

@@ -2283,6 +2283,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                 runCatching { app.nightReview.tick() }
                     .onFailure { app.eventLog.add("ночной разбор: тик упал: ${it.message}") }
             }
+            // Тень второй модели — тем же ритмом, своим прогоном в том же сторе.
+            scope.launch {
+                runCatching { app.shadowRun.tick() }
+                    .onFailure { app.eventLog.add("тень: тик упал: ${it.message}") }
+            }
             // Спорт и еда: свой кэш и своя недоставленная почта. Оба звонка
             // сами себя дросселируют (30 минут у выгрузки, «уже уехало» у
             // еды), так что пятиминутный тик может дёргать их сколько хочет.

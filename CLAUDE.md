@@ -12,7 +12,7 @@
 
 | Задача касается | Прочитать сначала |
 |---|---|
-| Правка текста, кнопка «П», словарь, правила, обучение, эвалы | `docs/pravka.md` |
+| Правка текста, кнопка «П», словарь, правила, обучение, эвалы, ночной разбор, тень второй модели («Ещё → Разборы») | `docs/pravka.md` |
 | Засечка: лента, категории, телефон по дням, автопилот, NFC, Sheets, напоминания | `docs/zasechka.md` |
 | Дела и Разноска: Todoist, кнопка «Д» | `docs/dela.md` |
 | Тело: план дня, силовые, зарядка, светофор, intervals, Notion (план, справочник, Дневник) | `docs/telo.md` |
@@ -47,7 +47,11 @@
   настройках, группа «Модели» (`ModelsSettings.kt`).
   Батчи (Message Batches API) — `provider/ClaudeBatches.kt`; ночной разбор
   Правки на них — `core/NightReview.kt` + `core/NightReviewPolicy.kt`,
-  прогоны — `data/NightReviewStore.kt`, экран — `NightReviewSettings.kt`.
+  тень второй модели — `core/ShadowRun.kt` + `core/ShadowPolicy.kt`, эвал
+  золотого набора — `core/EvalRunner.kt`; прогоны разбора и тени —
+  `data/NightReviewStore.kt`, экран — `ReviewsTab.kt` («Ещё → Разборы»).
+  Запрос чистки одной формы для дня и батчей: `ClaudeProvider.cleanPromptParts`
+  + `ClaudeBatches.cleanParams` + `RequestPolicy.maxTokens`.
   Разборы режимов — расширения того же класса рядом: `ClaudeZasechka.kt`,
   `ClaudeRaznoska.kt`, `ClaudeFood.kt`, `ClaudeBody.kt`, `ClaudeAnalysis.kt`.
   Контракты (`ClaudeProvider.XxxParse`) остаются вложенными в главный класс.

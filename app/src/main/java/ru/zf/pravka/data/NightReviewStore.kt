@@ -23,7 +23,12 @@ class NightReviewStore(private val context: Context) {
     /** Одно изменение, предложенное разбором. */
     data class Change(
         val id: String,
-        /** dict_add · dict_disable · dict_mode · rule_disable · rule_enable · note */
+        /**
+         * dict_add · dict_disable · dict_mode · rule_disable · rule_enable · note;
+         * shadow — пример из тени второй модели (ShadowRun): from — надиктовано,
+         * to — дневная модель, note — вторая, mode/toMode — их названия,
+         * verdict — кто лучше (название модели, same, both_bad), verdictWhy — почему.
+         */
         val kind: String,
         val mode: String = "",
         val toMode: String = "",
@@ -43,13 +48,15 @@ class NightReviewStore(private val context: Context) {
         val undo: String = "",
         val statusNote: String = "",
     ) {
-        val isNote: Boolean get() = kind == "note"
+        /** Не действие: заметка или пример тени — применять и возвращать нечего. */
+        val isNote: Boolean get() = kind == "note" || kind == "shadow"
         fun title(): String = when (kind) {
             "dict_add" -> "$mode: $from${if (to.isNotBlank()) " → $to" else ""}"
             "dict_disable" -> "выключить $mode: $from${if (to.isNotBlank()) " → $to" else ""}"
             "dict_mode" -> "$from: $mode → $toMode"
             "rule_disable" -> "выключить правило $ruleId"
             "rule_enable" -> "включить правило $ruleId"
+            "shadow" -> "пример тени"
             else -> "заметка"
         }
     }
@@ -58,12 +65,12 @@ class NightReviewStore(private val context: Context) {
 
     data class Run(
         val id: Long,
-        /** daily · weekly */
+        /** daily · weekly · shadow (тень второй модели, core/ShadowRun.kt) */
         val kind: String,
         val startedAt: Long,
         val fromMs: Long,
         val toMs: Long,
-        /** analysis · check · audit · done · failed */
+        /** analysis · check · audit · done · failed; у тени — shadow_clean · shadow_judge */
         val stage: String,
         val manual: Boolean = false,
         val analysisBatchId: String = "",
@@ -82,7 +89,8 @@ class NightReviewStore(private val context: Context) {
         val changes: List<Change> = emptyList(),
         val replies: List<Reply> = emptyList(),
     ) {
-        val active: Boolean get() = stage == "analysis" || stage == "check" || stage == "audit"
+        val active: Boolean get() = stage in ACTIVE_STAGES
+        val isShadow: Boolean get() = kind == "shadow"
         fun applied() = changes.count { it.status == "applied" }
         fun proposed() = changes.count { it.status == "proposed" }
         fun rejected() = changes.count { it.status == "rejected" }
@@ -91,6 +99,7 @@ class NightReviewStore(private val context: Context) {
     companion object {
         private const val FILE_NAME = "night-review.json"
         private const val KEEP = 40
+        val ACTIVE_STAGES = setOf("analysis", "check", "audit", "shadow_clean", "shadow_judge")
     }
 
     private val mutex = Mutex()

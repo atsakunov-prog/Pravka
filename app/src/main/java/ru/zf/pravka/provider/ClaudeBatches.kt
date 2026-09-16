@@ -9,6 +9,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import ru.zf.pravka.core.Prompts
 import ru.zf.pravka.data.Settings
 
 // Транспорт Message Batches API — для ночного разбора (16.09.2026). Владелец:
@@ -16,7 +17,8 @@ import ru.zf.pravka.data.Settings
 // возможно». Батч — те же запросы Messages, но пачкой и без ожидания ответа:
 // вдвое дешевле, результат в течение часа (максимум суток). Здесь только
 // HTTP: создать, спросить статус, забрать JSONL результатов; кто что кладёт в
-// батч и что с этим делает — core/NightReview.kt.
+// батч и что с этим делает — core/NightReview.kt (разбор журналов),
+// core/ShadowRun.kt (тень второй модели), core/EvalRunner.kt (эвал).
 class ClaudeBatches(private val settings: Settings, private val client: OkHttpClient) {
 
     class BatchException(message: String) : Exception(message)
@@ -45,11 +47,16 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
         val cacheRead: Int,
         val cacheWrite: Int,
     ) {
-        /** Fable может ответить отказом (stop_reason=refusal, HTTP 200) — это не результат. */
-        val ok: Boolean get() = type == "succeeded" && stopReason != "refusal"
+        /**
+         * Fable может ответить отказом (stop_reason=refusal, HTTP 200) — это не
+         * результат; обрезанный по длине ответ (max_tokens) — тоже: от JSON
+         * без конца или полтекста вместо текста пользы нет, а вред есть.
+         */
+        val ok: Boolean get() = type == "succeeded" && stopReason != "refusal" && stopReason != "max_tokens"
         val failure: String
             get() = when {
                 stopReason == "refusal" -> "модель отказалась отвечать (refusal)"
+                stopReason == "max_tokens" -> "ответ обрезан по длине (max_tokens): не хватило бюджета на мысли и ответ"
                 error.isNotBlank() -> error
                 type != "succeeded" -> type
                 else -> ""
@@ -83,7 +90,7 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
         ): JSONObject =
             JSONObject().apply {
                 put("model", model)
-                put("max_tokens", maxTokens + RequestPolicy.thinkingHeadroom(model, effort))
+                put("max_tokens", maxTokens + RequestPolicy.batchThinkingHeadroom(model, effort))
                 if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
                 if (RequestPolicy.thinkingOff(model, effort)) put("thinking", JSONObject().put("type", "disabled"))
                 if (system.isNotBlank()) {
@@ -99,6 +106,40 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
                 }
                 put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", user)))
             }
+
+        /**
+         * Запрос чистки в форме батча — той же формы, что дневной запрос кнопки
+         * «П» (ClaudeProvider.request): стабильная голова первым блоком
+         * пользовательского сообщения с точкой кэша на час, переменная часть
+         * вторым, бюджет ответа по той же оценке, мысли по тому же правилу.
+         * Тень и эвал сравнивают модели, а не форму запроса, поэтому форма одна;
+         * система здесь не используется — у дневного запроса её нет.
+         */
+        fun cleanParams(
+            model: String,
+            effort: String,
+            parts: Prompts.PromptParts,
+            input: String,
+            cache: Boolean,
+        ): JSONObject {
+            val variable = parts.dictPart + input + parts.afterInput
+            return JSONObject().apply {
+                put("model", model)
+                put("max_tokens", RequestPolicy.maxTokens(model, effort, parts.dictPart.length + input.length))
+                if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
+                if (RequestPolicy.thinkingOff(model, effort)) put("thinking", JSONObject().put("type", "disabled"))
+                val content = JSONArray()
+                if (parts.stablePrefix.isNotBlank()) content.put(
+                    JSONObject().apply {
+                        put("type", "text")
+                        put("text", parts.stablePrefix)
+                        if (cache) put("cache_control", JSONObject().put("type", "ephemeral").put("ttl", "1h"))
+                    }
+                )
+                content.put(JSONObject().put("type", "text").put("text", variable))
+                put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", content)))
+            }
+        }
 
         /** Строка результата батча или тело одиночного ответа — в один Item. */
         fun parseItem(o: JSONObject): Item {
