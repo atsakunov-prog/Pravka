@@ -6,20 +6,17 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.data.EvalStore
 import ru.zf.pravka.data.ModelRoute
-import ru.zf.pravka.provider.ClaudeBatches
-import ru.zf.pravka.provider.Pricing
 
 // Runs the golden set through the CURRENT effective prompt/dictionary/rules
 // and scores each output against the reference. This is how prompt changes
 // get measured instead of eyeballed. Runs on the app scope (survives leaving
 // the screen); progress is polled by the UI.
 //
-// Запрос — той же формы, что дневная чистка (ClaudeProvider.cleanPromptParts +
-// ClaudeBatches.cleanParams), иначе измерялась бы не правка промпта, а
-// разница форм. Идёт обычными запросами по одному, не батчем: батчи Опуса у
-// Anthropic простояли ночь на «0 из N» (17.09.2026), а золотой набор — это
-// десятки запросов на копейки, ждать их сутки незачем. Тот же ход — у тени
-// (ShadowRun) и у измерения промпта (PromptTuner).
+// Запрос — тем же путём, что дневная чистка (ClaudeProvider.cleanOnce: тот же
+// промпт, поток, повтор, кэш), иначе измерялась бы не правка промпта, а
+// разница форм. По одному, не батчем: батчи Опуса у Anthropic простояли ночь
+// на «0 из N» (17.09.2026), а золотой набор — десятки запросов на копейки.
+// Тот же ход — у тени (ShadowRun) и у измерения промпта (PromptTuner).
 object EvalRunner {
 
     @Volatile var running = false
@@ -71,28 +68,26 @@ object EvalRunner {
         var tokensIn = 0
         var tokensOut = 0
         var cacheRead = 0
-        var cacheWrite = 0
         stage = "чищу эталоны"
         app.nightLog.add("эвал: ${items.size} эталонов, ${choice.model} ${choice.effort}")
         for (item in items) {
             val prepared = applier.prepare(item.input)
-            val parts = app.claudeProvider.cleanPromptParts(prepared.dictBlock, prose = false)
-            val params = ClaudeBatches.cleanParams(choice.model, choice.effort, parts, prepared.text, cache = true)
-            val res = runCatching { app.claudeBatches.single(params) }.getOrNull()
+            val parts = app.claudeProvider.cleanPromptParts(prepared.dictBlock, prose = false).copy(cacheStableAlways = true)
+            val result = app.claudeProvider.cleanOnce(choice.model, choice.effort, parts, prepared.text)
             done++
-            if (res == null || !res.ok) {
+            val res = result.getOrNull()
+            if (res == null) {
                 // A transient API failure must not score as 0% - that
                 // records a catastrophic prompt regression that never
                 // happened. Skip the item and say so.
                 failures++
-                app.learnLog.add("эвал ${done}/${total}: эталон ${item.id} без ответа (${res?.failure ?: "сбой запроса"}), пропущен")
+                app.learnLog.add("эвал ${done}/${total}: эталон ${item.id} без ответа (${result.exceptionOrNull()?.message ?: "сбой запроса"}), пропущен")
                 continue
             }
-            spend += Pricing.costUsd(choice.model, res.inputTokens, res.outputTokens, res.cacheWrite, res.cacheRead)
-            tokensIn += res.inputTokens + res.cacheRead + res.cacheWrite
+            spend += res.costUsd
+            tokensIn += res.inputTokens
             tokensOut += res.outputTokens
-            cacheRead += res.cacheRead
-            cacheWrite += res.cacheWrite
+            cacheRead += res.cacheReadTokens
             // Тот же пост-процессинг, что у дневной чистки: мерим то, что
             // уехало бы в поле, а не сырой ответ.
             val actual = ResponseCleaner.clean(res.text, prepared.text) ?: res.text
@@ -102,8 +97,8 @@ object EvalRunner {
             rows.add(EvalStore.ResultRow(item.id, score, actual))
             app.learnLog.add("эвал ${done}/${total}: ${"%.0f".format(score * 100)}%")
         }
-        app.stats.recordAux(spend, tokensIn, tokensOut)
-        app.stats.recordCache(cacheRead, cacheWrite)
+        // Кэш пишет транспорт через usageObserver; здесь — деньги и токены дорогой «эвал».
+        app.stats.recordAux(spend, tokensIn, tokensOut, route = "eval")
         if (failures > 0) app.stats.recordError()
         if (rows.isEmpty()) {
             app.learnLog.add("эвал не удался: все ${failures} запросов провалились, результат не сохранён")

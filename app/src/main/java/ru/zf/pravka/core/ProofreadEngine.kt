@@ -134,7 +134,10 @@ class ProofreadEngine(
             withContext = directive.isNotBlank() || contextBefore.isNotBlank() || conversationContext.isNotBlank(),
         )
         journalScope.launch {
-            stats.recordSuccess(mode, result.latencyMs, input.length, result.changed, result.inputTokens, result.outputTokens, result.costUsd)
+            stats.recordSuccess(
+                mode, result.latencyMs, input.length, result.changed, result.inputTokens, result.outputTokens, result.costUsd,
+                route = if (strong) ru.zf.pravka.data.ModelRoute.PRAVKA_STRONG.key else ru.zf.pravka.data.ModelRoute.PRAVKA.key,
+            )
             dictionaryStore.incrementHits(prepared.firedIds)
         }
 

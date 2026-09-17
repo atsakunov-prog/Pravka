@@ -63,6 +63,8 @@ object NightBoard {
         eval: EvalSummary?,
         lastTickMs: Long,
         nowMs: Long,
+        /** Тень каждую ночь (true) или раз в неделю, в ночь на воскресенье. */
+        shadowDaily: Boolean = true,
     ): List<Line> {
         val out = ArrayList<Line>()
         // Пульс службы — первым: если она не тикает, всё остальное стоит.
@@ -77,7 +79,7 @@ object NightBoard {
         val tune = runs.filter { it.isTune }.maxByOrNull { it.startedAt }
         out += line("daily", "Разбор суток", daily, reviewOn, nextDaily(nowMs, hour), nowMs)
         out += line("weekly", "Разбор недели", weekly, reviewOn, nextWeekday(nowMs, hour, Calendar.FRIDAY), nowMs)
-        out += line("shadow", "Тень второй модели", shadow, shadowOn, nextDaily(nowMs, hour), nowMs)
+        out += line("shadow", "Тень второй модели", shadow, shadowOn, if (shadowDaily) nextDaily(nowMs, hour) else nextWeekday(nowMs, hour, Calendar.SUNDAY), nowMs)
         out += line("tune", "Правка промпта", tune, tuneOn, nextWeekday(nowMs, hour, Calendar.SATURDAY), nowMs)
         out += if (eval == null) Line("eval", "Эвал золотого набора", "none", "ещё не прогонялся", "по кнопке в Логах")
         else Line("eval", "Эвал золотого набора", "ok", "${dayTime.format(Date(eval.at))} · средний ${"%.1f".format(Locale.US, eval.avg * 100)}%, точных ${eval.exact} из ${eval.total}", "по кнопке в Логах")

@@ -90,6 +90,12 @@ class NightReview(
                 val lastWeekly = runs.filter { it.kind == NightReviewPolicy.WEEKLY }.maxOfOrNull { it.startedAt } ?: 0L
                 // Один прогон за тик: дневной и недельный в пятницу идут друг за другом.
                 NightReviewPolicy.dueKinds(nowMs, hour, lastDaily, lastWeekly).firstOrNull()?.let { kind ->
+                    // Потолок дня для автоматов: расход по приложению за сутки выше — не стартуем сами.
+                    val budget = settings.nightBudgetUsdFlow.first()
+                    if (stats.snapshotFlow.first().costTodayUsd > budget) {
+                        log.add("ночной разбор ($kind): не стартую — расход за сутки выше потолка $$budget")
+                        return@let
+                    }
                     start(kind, manual = false, nowMs = nowMs).onFailure {
                         log.add("ночной разбор: не запустился ($kind): ${it.message}")
                     }
@@ -247,7 +253,7 @@ class NightReview(
         val tokensIn = items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }
         val cacheRead = items.sumOf { it.cacheRead }
         val cacheWrite = items.sumOf { it.cacheWrite }
-        stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens })
+        stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens }, route = route.key)
         stats.recordCache(cacheRead, cacheWrite)
         log.add("ночной разбор (${r.stage}): вход $tokensIn токенов, из кэша $cacheRead, записано в кэш $cacheWrite")
         r = r.copy(costUsd = r.costUsd + cost, inputTokens = r.inputTokens + tokensIn, cacheReadTokens = r.cacheReadTokens + cacheRead)
@@ -408,9 +414,10 @@ class NightReview(
 
     /** Кнопка «Проверить сейчас» под идущим прогоном: опрос батча без десятиминутной паузы. */
     suspend fun pollNow(runId: Long): Result<String> = runCatching {
-        val run = store.get(runId) ?: error("Прогон не найден")
-        if (!run.active) return@runCatching "Прогон уже завершён"
         mutex.withLock {
+            // Читать под замком: снимок до ожидания устарел бы и повторил чужую работу.
+            val run = store.get(runId) ?: error("Прогон не найден")
+            if (!run.active) return@runCatching "Прогон уже завершён"
             runCatching { poll(run, System.currentTimeMillis()) }.onFailure { fail(run, it) }.getOrThrow()
         }
         val after = store.get(runId)
@@ -564,7 +571,7 @@ class NightReview(
         if (!item.ok) error(item.failure)
         stats.recordAux(
             Pricing.costUsd(choice.model, item.inputTokens, item.outputTokens, item.cacheWrite, item.cacheRead),
-            item.inputTokens + item.cacheRead + item.cacheWrite, item.outputTokens,
+            item.inputTokens + item.cacheRead + item.cacheWrite, item.outputTokens, route = ModelRoute.NIGHT_CHECK.key,
         )
         val plan = NightReviewPolicy.parseReply(item.text)
         var r = store.get(runId) ?: run

@@ -1283,7 +1283,7 @@ private fun LearningTab(app: PravkaApp) {
                                 val result = app.claudeProvider.optimizeRules(rules)
                                 optimizing = false
                                 result.onSuccess { opt ->
-                                    app.stats.recordAux(opt.costUsd, opt.tokensIn, opt.tokensOut)
+                                    app.stats.recordAux(opt.costUsd, opt.tokensIn, opt.tokensOut, route = ru.zf.pravka.data.ModelRoute.PRAVKA_LEARN.key)
                                     app.learnLog.add(
                                         "оптимизация правил: ${rules.size} → ${opt.rules.size}, стоила $" +
                                             "%.4f".format(java.util.Locale.US, opt.costUsd)

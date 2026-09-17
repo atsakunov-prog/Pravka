@@ -82,9 +82,11 @@ class ShadowRun(
             if (active.isEmpty()) {
                 val hour = settings.nightReviewHourFlow.first()
                 val last = runs.maxOfOrNull { it.startedAt } ?: 0L
-                if (NightReviewPolicy.dueDaily(nowMs, hour, last)) {
-                    start(manual = false, nowMs = nowMs).onFailure { log.add("тень: не запустилась: ${it.message}") }
-                }
+                // Заводское — раз в неделю, в ночь на воскресенье; каждую ночь — тумблером.
+                val due = if (settings.shadowDailyFlow.first()) NightReviewPolicy.dueDaily(nowMs, hour, last)
+                else NightReviewPolicy.dueOnWeekday(nowMs, hour, last, java.util.Calendar.SUNDAY)
+                if (due && overBudget()) log.add("тень: не стартую — расход за сутки выше потолка $${settings.nightBudgetUsdFlow.first()}")
+                else if (due) start(manual = false, nowMs = nowMs).onFailure { log.add("тень: не запустилась: ${it.message}") }
             }
         } finally {
             mutex.unlock()
@@ -155,10 +157,13 @@ class ShadowRun(
     private fun statsOf(run: Run): JSONObject = runCatching { JSONObject(run.evidence["stats"].orEmpty()) }.getOrDefault(JSONObject())
 
     /**
-     * Кусок чистки: до CHUNK недочищенных диктовок обычными запросами второй
-     * модели, тем же запросом, что днём. Сеть упала или лимит — кусок
-     * заканчивается раньше, остальное дочистит следующий тик. Когда
-     * недочищенных не осталось — пары уходят судье.
+     * Кусок чистки: до CHUNK недочищенных диктовок второй моделью тем же путём,
+     * что днём (ClaudeProvider.cleanOnce: поток, повтор, кэш). Прогон
+     * сохраняется после КАЖДОЙ диктовки: смерть процесса или второй вызов
+     * теряют одну, а не шестнадцать (17.09.2026 одни и те же шестнадцать
+     * чистились трижды — $1 впустую). Сеть, лимит, 5xx — кусок заканчивается
+     * раньше, остальное дочистит следующий тик. Когда недочищенных не
+     * осталось — пары уходят судье.
      */
     private suspend fun cleanChunk(run: Run, nowMs: Long) {
         val m = models(run)
@@ -166,71 +171,67 @@ class ShadowRun(
         val effort = m.optString("effort")
         val takes = ShadowPolicy.takesFromJson(run.evidence["takes"]).toMutableList()
         val pending = takes.filter { it.shadow.isBlank() && it.failure.isBlank() }
-        var cost = 0.0
-        var tokensIn = 0
-        var tokensOut = 0
-        var cacheRead = 0
-        var cacheWrite = 0
+        var r = run.copy(lastPollAt = nowMs)
         var done = 0
+        var chunkCost = 0.0
         var stopReason = ""
+        fun remaining() = takes.count { it.shadow.isBlank() && it.failure.isBlank() }
+        suspend fun persist(progressNote: String = "") {
+            val st = statsOf(r)
+            r = r.copy(
+                evidence = r.evidence + ("takes" to ShadowPolicy.takesToJson(takes)) + ("stats" to st.toString()),
+                progress = "почищено ${takes.size - remaining()} из ${takes.size}" +
+                    (if (progressNote.isNotBlank()) " · $progressNote" else "") + " · ${timeFmt.format(Date(System.currentTimeMillis()))}",
+            )
+            store.save(r)
+        }
         for (t in pending.take(CHUNK)) {
+            // Отмена побеждает: владелец нажал «Отменить», пока кусок шёл, — цикл
+            // останавливается на следующей диктовке и ничего не пишет поверх
+            // отменённого прогона (17.09.2026: отменённые 200 дочищались дальше).
+            if (store.get(run.id)?.active != true) { log.add("тень: прогон снят во время чистки — останавливаюсь"); return }
+            // Потолок дня: расход по приложению выше — чистка ждёт следующих суток.
+            if (overBudget()) { stopReason = "потолок дня $${settings.nightBudgetUsdFlow.first()} исчерпан — продолжу завтра"; break }
             // Словарь — сегодняшний, не тот, что был в ночь диктовки: дрейф
             // невелик, а вторая модель должна видеть то же, что видит дневная сейчас.
             val prepared = applier.prepare(t.input)
-            val parts = provider.cleanPromptParts(prepared.dictBlock, prose = t.prose)
-            // Точка кэша на стабильной голове: запросы идут подряд, голову
-            // пишет первый, остальные читают из кэша второй модели.
-            val params = ClaudeBatches.cleanParams(model, effort, parts, prepared.text, cache = true)
-            val item = try {
-                batches.single(params)
-            } catch (e: IOException) {
-                stopReason = "сеть: ${e.message ?: e.javaClass.simpleName}"
-                break
-            } catch (e: ClaudeBatches.BatchException) {
-                // 429/5xx — подождать до следующего тика; 4xx по запросу — сбой этой диктовки.
-                val msg = e.message.orEmpty()
-                if (Regex("ответил (429|5\\d\\d)").containsMatchIn(msg)) { stopReason = msg; break }
-                takes[takes.indexOfFirst { it.id == t.id }] = t.copy(prepared = prepared.text, failure = msg)
+            val parts = provider.cleanPromptParts(prepared.dictBlock, prose = t.prose).copy(cacheStableAlways = true)
+            val res = provider.cleanOnce(model, effort, parts, prepared.text)
+            val idx = takes.indexOfFirst { it.id == t.id }
+            val err = res.exceptionOrNull()
+            if (err != null) {
+                val msg = err.message ?: err.javaClass.simpleName
+                // Сеть и 429/5xx (после повтора транспорта) — пауза до следующего тика; остальное — сбой этой диктовки.
+                if (err is IOException || (err is ClaudeProvider.ApiException && err.retryable)) { stopReason = msg; break }
+                takes[idx] = t.copy(prepared = prepared.text, failure = msg)
                 done++
+                persist()
                 continue
             }
-            cost += Pricing.costUsd(model, item.inputTokens, item.outputTokens, item.cacheWrite, item.cacheRead)
-            tokensIn += item.inputTokens + item.cacheRead + item.cacheWrite
-            tokensOut += item.outputTokens
-            cacheRead += item.cacheRead
-            cacheWrite += item.cacheWrite
-            val idx = takes.indexOfFirst { it.id == t.id }
-            takes[idx] = when {
-                !item.ok -> t.copy(prepared = prepared.text, failure = item.failure)
-                else -> {
-                    // Тот же пост-процессинг, что у дневной чистки: преамбулы, мысли
-                    // вслух, ёлочки — иначе судья мерил бы то, что режет ResponseCleaner.
-                    val cleaned = ResponseCleaner.clean(item.text, prepared.text)
-                    if (cleaned == null) t.copy(prepared = prepared.text, failure = "испорченный ответ")
-                    else t.copy(prepared = prepared.text, shadow = cleaned, verdict = if (ShadowPolicy.same(cleaned, t.day)) "same" else "")
-                }
-            }
+            val out = res.getOrThrow()
+            chunkCost += out.costUsd
+            stats.recordAux(out.costUsd, out.inputTokens, out.outputTokens, route = ModelRoute.SHADOW_CLEAN.key)
+            r = r.copy(costUsd = r.costUsd + out.costUsd, inputTokens = r.inputTokens + out.inputTokens, cacheReadTokens = r.cacheReadTokens + out.cacheReadTokens)
+            val st = statsOf(r).put("shadowCost", statsOf(r).optDouble("shadowCost", 0.0) + out.costUsd)
+            r = r.copy(evidence = r.evidence + ("stats" to st.toString()))
+            // Тот же пост-процессинг, что у дневной чистки: преамбулы, мысли
+            // вслух, ёлочки — иначе судья мерил бы то, что режет ResponseCleaner.
+            val cleaned = ResponseCleaner.clean(out.text, prepared.text)
+            takes[idx] = if (cleaned == null) t.copy(prepared = prepared.text, failure = "испорченный ответ")
+            else t.copy(prepared = prepared.text, shadow = cleaned, verdict = if (ShadowPolicy.same(cleaned, t.day)) "same" else "")
             done++
+            persist()
         }
-        if (tokensIn > 0) {
-            stats.recordAux(cost, tokensIn, tokensOut)
-            stats.recordCache(cacheRead, cacheWrite)
-        }
-        val st = statsOf(run).put("shadowCost", statsOf(run).optDouble("shadowCost", 0.0) + cost)
-        val remaining = takes.count { it.shadow.isBlank() && it.failure.isBlank() }
-        var r = run.copy(
-            evidence = run.evidence + ("takes" to ShadowPolicy.takesToJson(takes)) + ("stats" to st.toString()),
-            costUsd = run.costUsd + cost, inputTokens = run.inputTokens + tokensIn, cacheReadTokens = run.cacheReadTokens + cacheRead,
-            lastPollAt = nowMs,
-            progress = "почищено ${takes.size - remaining} из ${takes.size}" +
-                (if (stopReason.isNotBlank()) " · пауза: $stopReason" else "") + " · ${timeFmt.format(Date(nowMs))}",
-        )
+        if (stopReason.isNotBlank()) persist("пауза: $stopReason")
         if (done > 0 || stopReason.isNotBlank()) {
-            log.add("тень: почищено $done за тик, осталось $remaining, стоило $" + "%.3f".format(Locale.US, cost) + (if (stopReason.isNotBlank()) "; $stopReason" else ""))
+            log.add("тень: почищено $done за тик, осталось ${remaining()}, стоило $" + "%.3f".format(Locale.US, chunkCost) + (if (stopReason.isNotBlank()) "; $stopReason" else ""))
         }
-        if (remaining == 0) r = dispatchJudge(r, takes)
-        store.save(r)
+        if (remaining() == 0 && store.get(run.id)?.active == true) store.save(dispatchJudge(r, takes))
     }
+
+    /** Расход по приложению за сутки выше потолка автоматов. */
+    private suspend fun overBudget(): Boolean =
+        stats.snapshotFlow.first().costTodayUsd > settings.nightBudgetUsdFlow.first()
 
     /** Все диктовки почищены: совпавшее посчитано, различающиеся пары — судье батчем; нечего судить — итог сразу. */
     private suspend fun dispatchJudge(run: Run, takes: List<ShadowPolicy.Take>): Run {
@@ -287,7 +288,7 @@ class ShadowRun(
         val cost = items.sumOf { Pricing.costUsd(model, it.inputTokens, it.outputTokens, it.cacheWrite, it.cacheRead) } * ClaudeBatches.DISCOUNT
         val tokensIn = items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }
         val cacheRead = items.sumOf { it.cacheRead }
-        stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens })
+        stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens }, route = if (clean) ModelRoute.SHADOW_CLEAN.key else ModelRoute.SHADOW_JUDGE.key)
         stats.recordCache(cacheRead, items.sumOf { it.cacheWrite })
         log.add("тень (${r.stage}): вход $tokensIn токенов, из кэша $cacheRead, стоило $" + "%.3f".format(Locale.US, cost))
         r = r.copy(costUsd = r.costUsd + cost, inputTokens = r.inputTokens + tokensIn, cacheReadTokens = r.cacheReadTokens + cacheRead)
@@ -372,9 +373,12 @@ class ShadowRun(
 
     /** «Проверить сейчас» под идущей тенью: кусок чистки или опрос батча без десятиминутной паузы. */
     suspend fun pollNow(runId: Long): Result<String> = runCatching {
-        val run = store.get(runId) ?: error("Прогон не найден")
-        if (!run.active) return@runCatching "Тень уже завершена"
         mutex.withLock {
+            // Прогон читается ПОД замком: снимок, взятый до ожидания, устаревает,
+            // пока идёт чужой кусок, и повторил бы его работу (17.09.2026: три
+            // нажатия «Проверить сейчас» — трижды те же шестнадцать диктовок).
+            val run = store.get(runId) ?: error("Прогон не найден")
+            if (!run.active) return@runCatching "Тень уже завершена"
             runCatching {
                 if (run.stage == ShadowPolicy.STAGE_CLEAN && run.analysisBatchId.isBlank()) cleanChunk(run, System.currentTimeMillis())
                 else poll(run, System.currentTimeMillis())

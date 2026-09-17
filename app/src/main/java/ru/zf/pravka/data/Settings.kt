@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -48,6 +49,9 @@ class Settings(private val context: Context) {
         private val KEY_NIGHT_REVIEW_HOUR = intPreferencesKey("night_review_hour")
         private val KEY_SHADOW_RUN = booleanPreferencesKey("shadow_run_enabled")
         private val KEY_PROMPT_TUNE = booleanPreferencesKey("prompt_tune_enabled")
+        private val KEY_SHADOW_DAILY = booleanPreferencesKey("shadow_daily")
+        private val KEY_NIGHT_BUDGET = intPreferencesKey("night_budget_usd")
+        private val KEY_PLAN_RULES_LAST_RUN = longPreferencesKey("plan_rules_last_run")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
         private val KEY_LEARN_AUTO = booleanPreferencesKey("learn_auto_capture")
@@ -287,6 +291,33 @@ class Settings(private val context: Context) {
     val promptTuneEnabledFlow = context.dataStore.data.map { it[KEY_PROMPT_TUNE] ?: true }
     suspend fun setPromptTuneEnabled(value: Boolean) {
         context.dataStore.edit { it[KEY_PROMPT_TUNE] = value }
+    }
+
+    // Тень каждую ночь или раз в неделю (17.09.2026). Заводское — раз в неделю,
+    // в ночь на воскресенье: сорок диктовок Опусом плюс судья — доллар-полтора
+    // за ночь, сорок пять в месяц за ответ, который уже известен после первого
+    // сравнения (17:2 в пользу Опуса). Владелец включает ежедневную сам.
+    val shadowDailyFlow = context.dataStore.data.map { it[KEY_SHADOW_DAILY] ?: false }
+    suspend fun setShadowDaily(value: Boolean) {
+        context.dataStore.edit { it[KEY_SHADOW_DAILY] = value }
+    }
+
+    // Дневной потолок для ночных автоматов (17.09.2026; владелец: «за день
+    // шесть долларов… уже восемь!»). Когда расход за сутки по всему
+    // приложению выше потолка, автоматы сами не стартуют, а идущая чистка
+    // тени или измерение промпта останавливаются до следующих суток; ручной
+    // запуск кнопкой потолок не смотрит. Заводское — $4.
+    val nightBudgetUsdFlow = context.dataStore.data.map { it[KEY_NIGHT_BUDGET] ?: 4 }
+    suspend fun setNightBudgetUsd(value: Int) {
+        context.dataStore.edit { it[KEY_NIGHT_BUDGET] = value.coerceIn(1, 50) }
+    }
+
+    // Когда последний раз читались правила блока из Notion — переживает
+    // перезапуск: в день с семью сборками правила перечитывались и разбирались
+    // Опусом семь раз (16.09.2026), потому что метка жила в памяти процесса.
+    suspend fun planRulesLastRun(): Long = context.dataStore.data.map { it[KEY_PLAN_RULES_LAST_RUN] ?: 0L }.first()
+    suspend fun setPlanRulesLastRun(ms: Long) {
+        context.dataStore.edit { it[KEY_PLAN_RULES_LAST_RUN] = ms }
     }
 
     val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }

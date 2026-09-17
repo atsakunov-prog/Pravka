@@ -26,6 +26,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.util.Locale
+import ru.zf.pravka.data.ModelChoice
+import ru.zf.pravka.data.ModelRoute
+import ru.zf.pravka.data.Models
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.SignedColumns
@@ -43,8 +46,10 @@ import ru.zf.pravka.ui.SignedColumns
 internal fun CostScreen(app: PravkaApp) {
     val snapshot by app.stats.snapshotFlow.collectAsState(initial = null)
     var daily by remember { mutableStateOf<List<Pair<String, Double>>>(emptyList()) }
+    var routes by remember { mutableStateOf<List<Pair<String, Double>>>(emptyList()) }
     LaunchedEffect(snapshot?.costTodayUsd) {
         daily = runCatching { app.stats.dailyCosts(14) }.getOrDefault(emptyList())
+        routes = runCatching { app.stats.routeCosts(7) }.getOrDefault(emptyList())
     }
     val ru = remember { Locale.forLanguageTag("ru") }
 
@@ -103,6 +108,35 @@ internal fun CostScreen(app: PravkaApp) {
                 Spacer(Modifier.height(6.dp))
                 val sum = daily.sumOf { it.second }
                 PaperHint("За 14 дней: $%.2f · в среднем $%.2f в день".format(Locale.US, sum, sum / daily.size))
+            }
+        }
+
+        // Куда уходят деньги (17.09.2026; владелец: «за день шесть долларов, и
+        // растёт каждый день — что-то не то»). Общая сумма на это не отвечает,
+        // разложенная по дорогам с моделью — отвечает: Засечка на Fable стоила
+        // две трети дня, и это было не видно ниоткуда.
+        if (routes.isNotEmpty()) {
+            PaperCard(label = "по дорогам, семь дней") {
+                val total = routes.sumOf { it.second }
+                for ((key, usd) in routes) {
+                    val route = ModelRoute.entries.firstOrNull { it.key == key }
+                    val choice = route?.let { r ->
+                        app.settings.modelChoiceFlow(r).collectAsState(initial = ModelChoice.defaultOf(r)).value
+                    }
+                    val title = route?.let { "${it.mode} · ${it.title}" } ?: when (key) {
+                        "eval" -> "Правка · Эвал золотого набора"
+                        else -> key
+                    }
+                    val model = choice?.let { " · " + Models.label(it.model) + (if (it.effort.isNotBlank()) " ${it.effort}" else "") }.orEmpty()
+                    val share = if (total > 0) " (%.0f%%)".format(Locale.US, 100 * usd / total) else ""
+                    CostLine("$title$model", "$%.2f$share".format(Locale.US, usd))
+                }
+                Spacer(Modifier.height(6.dp))
+                PaperHint(
+                    "Считается с сборки 17.09: дни до неё — только в общей сумме. Дорогая строка — " +
+                        "повод сменить модель или усилие в настройках, группа «Модели»: Fable думает всегда и " +
+                        "стоит вдвое дороже Опуса на входе и выходе."
+                )
             }
         }
 

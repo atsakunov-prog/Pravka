@@ -101,7 +101,7 @@ $samples
                     root.optJSONObject("usage")?.let { u ->
                         val tIn = u.optInt("input_tokens")
                         val tOut = u.optInt("output_tokens")
-                        stats.recordAux(Pricing.costUsd(choice.model, tIn, tOut), tIn, tOut)
+                        stats.recordAux(Pricing.costUsd(choice.model, tIn, tOut), tIn, tOut, route = ModelRoute.PRAVKA_LEARN.key)
                     }
                     val content = root.getJSONArray("content")
                     val sb = StringBuilder()

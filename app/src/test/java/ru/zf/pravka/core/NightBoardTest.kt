@@ -60,6 +60,15 @@ class NightBoardTest {
     }
 
     @Test
+    fun `тень раз в неделю — следующий в ночь на воскресенье`() {
+        val lines = NightBoard.build(emptyList(), true, true, true, hour, null, now, now, shadowDaily = false)
+        val shadow = lines.first { it.key == "shadow" }
+        assertTrue(shadow.next, shadow.next.startsWith("в ночь на воскресенье 20.09"))
+        val daily = NightBoard.build(emptyList(), true, true, true, hour, null, now, now, shadowDaily = true).first { it.key == "shadow" }
+        assertEquals("завтра в 03:00", daily.next)
+    }
+
+    @Test
     fun `следующий дневной — сегодня до часа запуска, завтра после`() {
         val early = Calendar.getInstance().apply { timeInMillis = now; set(Calendar.HOUR_OF_DAY, 1) }.timeInMillis
         assertEquals("сегодня в 03:00", NightBoard.nextDaily(early, hour))

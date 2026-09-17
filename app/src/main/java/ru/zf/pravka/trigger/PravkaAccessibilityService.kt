@@ -1544,7 +1544,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 val result = app.claudeProvider.learnBatch(cases, app.dictionaryStore.all())
                 result.onSuccess { proposals ->
                     internal.edit().putLong(KEY_LAST_LEARN_BATCH, System.currentTimeMillis()).apply()
-                    app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
+                    app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut, route = ru.zf.pravka.data.ModelRoute.PRAVKA_LEARN.key)
                     app.learnLog.add("батч-анализ стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
                     val added = queueProposals(proposals)
                     app.corrections.markDone(pending.map { it.id }, "opus: в словарь $added")
@@ -1682,7 +1682,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             busy = false
             floatingButton?.setBusy(false)
             result.onSuccess { proposals ->
-                app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
+                app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut, route = ru.zf.pravka.data.ModelRoute.PRAVKA_LEARN.key)
                 app.learnLog.add("разбор стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
                 val added = queueProposals(proposals)
                 app.eventLog.add("learn: dict=${proposals.dict.size} added=$added")
@@ -1784,7 +1784,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             floatingButton?.setBusy(false)
             busy = false
             result.onSuccess { r ->
-                app.stats.recordAux(r.costUsd, r.inputTokens, r.outputTokens)
+                app.stats.recordAux(r.costUsd, r.inputTokens, r.outputTokens, route = ru.zf.pravka.data.ModelRoute.PRAVKA.key)
                 ru.zf.pravka.target.ClipboardTarget(this@PravkaAccessibilityService).write(r.text)
                 app.historyLog.append(
                     mode = "ASSIST_" + tag.uppercase(),

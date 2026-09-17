@@ -88,7 +88,8 @@ class PromptTuner(
                 val hour = settings.nightReviewHourFlow.first()
                 val last = runs.maxOfOrNull { it.startedAt } ?: 0L
                 if (NightReviewPolicy.dueOnWeekday(nowMs, hour, last, WEEKDAY)) {
-                    start(manual = false, nowMs = nowMs).onFailure { log.add("правка промпта: не запустилась: ${it.message}") }
+                    if (overBudget()) log.add("правка промпта: не стартую — расход за сутки выше потолка $${settings.nightBudgetUsdFlow.first()}")
+                    else start(manual = false, nowMs = nowMs).onFailure { log.add("правка промпта: не запустилась: ${it.message}") }
                 }
             }
         } finally {
@@ -232,7 +233,7 @@ class PromptTuner(
         val model = settings.modelChoice(route).model
         val cost = items.sumOf { Pricing.costUsd(model, it.inputTokens, it.outputTokens, it.cacheWrite, it.cacheRead) } * ClaudeBatches.DISCOUNT
         val tokensIn = items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }
-        stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens })
+        stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens }, route = route.key)
         stats.recordCache(items.sumOf { it.cacheRead }, items.sumOf { it.cacheWrite })
         r = r.copy(costUsd = r.costUsd + cost, inputTokens = r.inputTokens + tokensIn, cacheReadTokens = r.cacheReadTokens + items.sumOf { it.cacheRead })
         r = if (propose) afterPropose(r, items) else afterJudge(r, items)
@@ -283,49 +284,52 @@ class PromptTuner(
         )
     }
 
-    /** Кусок измерения: до CHUNK диктовок новым промптом на дневной модели, обычными запросами. */
+    /** Кусок измерения: до CHUNK диктовок новым промптом на дневной модели тем же путём, что днём; сохранение после каждой. */
     private suspend fun measureChunk(run: Run, nowMs: Long) {
         val newPrompt = run.evidence["prompt_new"].orEmpty()
         val choice = settings.modelChoice(ModelRoute.PRAVKA)
         val takes = ShadowPolicy.takesFromJson(run.evidence["takes"]).toMutableList()
         val pending = takes.filter { it.shadow.isBlank() && it.failure.isBlank() }
-        var cost = 0.0; var tokensIn = 0; var tokensOut = 0; var cacheRead = 0; var cacheWrite = 0
+        var r = run.copy(lastPollAt = nowMs)
         var stopReason = ""
+        fun remaining() = takes.count { it.shadow.isBlank() && it.failure.isBlank() }
+        suspend fun persist(note: String = "") {
+            r = r.copy(
+                evidence = r.evidence + ("takes" to ShadowPolicy.takesToJson(takes)),
+                progress = "измерение: перечищено ${takes.size - remaining()} из ${takes.size}" + (if (note.isNotBlank()) " · $note" else "") + " · ${timeFmt.format(Date(System.currentTimeMillis()))}",
+            )
+            store.save(r)
+        }
         for (t in pending.take(CHUNK)) {
+            // Отмена побеждает, потолок дня — пауза до завтра.
+            if (store.get(run.id)?.active != true) { log.add("правка промпта: прогон снят во время измерения — останавливаюсь"); return }
+            if (overBudget()) { stopReason = "потолок дня $${settings.nightBudgetUsdFlow.first()} исчерпан — продолжу завтра"; break }
             val prepared = applier.prepare(t.input)
-            val parts = provider.cleanPromptParts(prepared.dictBlock, prose = t.prose, template = newPrompt)
-            val params = ClaudeBatches.cleanParams(choice.model, choice.effort, parts, prepared.text, cache = true)
-            val item = try {
-                batches.single(params)
-            } catch (e: IOException) {
-                stopReason = "сеть: ${e.message ?: e.javaClass.simpleName}"; break
-            } catch (e: ClaudeBatches.BatchException) {
-                val msg = e.message.orEmpty()
-                if (Regex("ответил (429|5\\d\\d)").containsMatchIn(msg)) { stopReason = msg; break }
-                takes[takes.indexOfFirst { it.id == t.id }] = t.copy(prepared = prepared.text, failure = msg)
+            val parts = provider.cleanPromptParts(prepared.dictBlock, prose = t.prose, template = newPrompt).copy(cacheStableAlways = true)
+            val res = provider.cleanOnce(choice.model, choice.effort, parts, prepared.text)
+            val idx = takes.indexOfFirst { it.id == t.id }
+            val err = res.exceptionOrNull()
+            if (err != null) {
+                val msg = err.message ?: err.javaClass.simpleName
+                if (err is IOException || (err is ClaudeProvider.ApiException && err.retryable)) { stopReason = msg; break }
+                takes[idx] = t.copy(prepared = prepared.text, failure = msg)
+                persist()
                 continue
             }
-            cost += Pricing.costUsd(choice.model, item.inputTokens, item.outputTokens, item.cacheWrite, item.cacheRead)
-            tokensIn += item.inputTokens + item.cacheRead + item.cacheWrite; tokensOut += item.outputTokens
-            cacheRead += item.cacheRead; cacheWrite += item.cacheWrite
-            val idx = takes.indexOfFirst { it.id == t.id }
-            takes[idx] = if (!item.ok) t.copy(prepared = prepared.text, failure = item.failure) else {
-                val cleaned = ResponseCleaner.clean(item.text, prepared.text)
-                if (cleaned == null) t.copy(prepared = prepared.text, failure = "испорченный ответ")
-                else t.copy(prepared = prepared.text, shadow = cleaned, verdict = if (ShadowPolicy.same(cleaned, t.day)) "same" else "")
-            }
+            val out = res.getOrThrow()
+            stats.recordAux(out.costUsd, out.inputTokens, out.outputTokens, route = ModelRoute.PROMPT_TUNE.key)
+            r = r.copy(costUsd = r.costUsd + out.costUsd, inputTokens = r.inputTokens + out.inputTokens, cacheReadTokens = r.cacheReadTokens + out.cacheReadTokens)
+            val cleaned = ResponseCleaner.clean(out.text, prepared.text)
+            takes[idx] = if (cleaned == null) t.copy(prepared = prepared.text, failure = "испорченный ответ")
+            else t.copy(prepared = prepared.text, shadow = cleaned, verdict = if (ShadowPolicy.same(cleaned, t.day)) "same" else "")
+            persist()
         }
-        if (tokensIn > 0) { stats.recordAux(cost, tokensIn, tokensOut); stats.recordCache(cacheRead, cacheWrite) }
-        val remaining = takes.count { it.shadow.isBlank() && it.failure.isBlank() }
-        var r = run.copy(
-            evidence = run.evidence + ("takes" to ShadowPolicy.takesToJson(takes)),
-            costUsd = run.costUsd + cost, inputTokens = run.inputTokens + tokensIn, cacheReadTokens = run.cacheReadTokens + cacheRead,
-            lastPollAt = nowMs,
-            progress = "измерение: перечищено ${takes.size - remaining} из ${takes.size}" + (if (stopReason.isNotBlank()) " · пауза: $stopReason" else "") + " · ${timeFmt.format(Date(nowMs))}",
-        )
-        if (remaining == 0) r = dispatchJudge(r, takes)
-        store.save(r)
+        if (stopReason.isNotBlank()) persist("пауза: $stopReason")
+        if (remaining() == 0 && store.get(run.id)?.active == true) store.save(dispatchJudge(r, takes))
     }
+
+    private suspend fun overBudget(): Boolean =
+        stats.snapshotFlow.first().costTodayUsd > settings.nightBudgetUsdFlow.first()
 
     private suspend fun dispatchJudge(run: Run, takes: List<ShadowPolicy.Take>): Run {
         val differing = takes.filter { it.failure.isBlank() && it.verdict.isBlank() }
@@ -412,9 +416,10 @@ class PromptTuner(
     }
 
     suspend fun pollNow(runId: Long): Result<String> = runCatching {
-        val run = store.get(runId) ?: error("Прогон не найден")
-        if (!run.active) return@runCatching "Уже завершено"
         mutex.withLock {
+            // Читать под замком: снимок до ожидания устарел бы и повторил чужую работу.
+            val run = store.get(runId) ?: error("Прогон не найден")
+            if (!run.active) return@runCatching "Уже завершено"
             runCatching {
                 if (run.stage == PromptTunePolicy.STAGE_MEASURE) measureChunk(run, System.currentTimeMillis()) else poll(run, System.currentTimeMillis())
             }.onFailure { fail(run, it) }.getOrThrow()

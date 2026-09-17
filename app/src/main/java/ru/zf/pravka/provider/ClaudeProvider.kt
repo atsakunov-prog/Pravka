@@ -184,6 +184,36 @@ class ClaudeProvider(
         cleanParts(ProofreadMode.CLEAN, dictBlock, "", "", "", prose, template)
 
     /**
+     * Одна чистка заданной моделью тем же путём, что дневная кнопка «П»: SSE-поток,
+     * один повтор на сбой сети и 429/5xx, точка кэша, учёт кэша через
+     * usageObserver. Для тени, эвала и измерения промпта-кандидата. Без потока
+     * (ClaudeBatches.single) длинный ответ Опуса с мыслями рвался посреди:
+     * «stream was reset: CANCEL» на семнадцатой диктовке трижды подряд (17.09.2026).
+     */
+    suspend fun cleanOnce(model: String, effort: String, parts: Prompts.PromptParts, input: String): Result<ProofreadResult> =
+        withContext(Dispatchers.IO) {
+            runCatchingApi {
+                val apiKey = settings.apiKey()
+                if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+                val started = System.currentTimeMillis()
+                val reply = requestWithOneRetry(apiKey, model, parts, input, onDelta = null, effortOverride = effort)
+                ProofreadResult(
+                    text = reply.text,
+                    providerId = id,
+                    latencyMs = System.currentTimeMillis() - started,
+                    changed = reply.text.trim() != input.trim(),
+                    appliedDictEntries = emptyList(),
+                    modelId = model,
+                    inputTokens = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                    outputTokens = reply.outputTokens,
+                    costUsd = costUsd(model, reply),
+                    cacheWriteTokens = reply.cacheWriteTokens,
+                    cacheReadTokens = reply.cacheReadTokens,
+                )
+            }
+        }
+
+    /**
      * Free-form assist task (summarize / reply / translate): [instruction]
      * plus [content] in tags, NO CLEAN template. Returns a ProofreadResult so
      * the history journal and cost accounting reuse the same shape.

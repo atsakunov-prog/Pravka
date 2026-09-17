@@ -162,6 +162,15 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             Text("Тень: вторая модель чистит те же диктовки, судья сравнивает слепо", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         }
         HintText("Ничего не меняет — только счёт, изъяны и деньги. Модели — в настройках, группа «Модели».")
+        val shadowDaily by settings.shadowDailyFlow.collectAsState(initial = false)
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 12.dp)) {
+            Switch(checked = shadowDaily, onCheckedChange = { on -> scope.launch { settings.setShadowDaily(on) } })
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (shadowDaily) "каждую ночь (≈ $1–1.5 за ночь)" else "раз в неделю, в ночь на воскресенье (≈ $1–1.5 за неделю)",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f),
+            )
+        }
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = tuneOn, onCheckedChange = { on -> scope.launch { settings.setPromptTuneEnabled(on) } })
@@ -169,6 +178,16 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             Text("Правка промпта раз в неделю: Fable по идеям недели, с измерением", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         }
         HintText("В ночь на субботу. Новый промпт перечищает диктовки недели, слепой судья сравнивает с прежним; принимается только заметный перевес; через неделю откат, если правок руками стало больше.")
+        Spacer(Modifier.height(6.dp))
+        val budget by settings.nightBudgetUsdFlow.collectAsState(initial = 4)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Потолок дня для автоматов: $$budget", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { scope.launch { settings.setNightBudgetUsd(budget - 1) } }) { Text("−") }
+            Spacer(Modifier.width(4.dp))
+            OutlinedButton(onClick = { scope.launch { settings.setNightBudgetUsd(budget + 1) } }) { Text("+") }
+        }
+        HintText("Расход по приложению за сутки выше потолка — разбор, тень и правка промпта сами не стартуют, идущая чистка ждёт завтра. Кнопки потолок не смотрят.")
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Запуск в ${"%02d".format(hour)}:00", style = MaterialTheme.typography.bodyMedium)
@@ -215,7 +234,7 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
         }
         // Большой кусок (месяц, до 200) — только по явной просьбе: сам он идёт один раз, при первом запуске.
         Row {
-            TextButton(enabled = !busy && !shadowRunning, onClick = { launchShadow(big = true) }) { Text("Тень за месяц (до 200 диктовок)") }
+            TextButton(enabled = !busy && !shadowRunning, onClick = { launchShadow(big = true) }) { Text("Тень за месяц (до 200 диктовок, ≈ $6)") }
         }
         val month = runs.filter { it.stage == "done" && it.startedAt > System.currentTimeMillis() - 30 * 86_400_000L }
         if (month.isNotEmpty()) {
@@ -265,6 +284,7 @@ private fun exportLog(context: Context, app: PravkaApp, runs: List<NightReviewSt
                     all, app.settings.nightReviewEnabledFlow.first(), app.settings.shadowRunEnabledFlow.first(),
                     app.settings.promptTuneEnabledFlow.first(), app.settings.nightReviewHourFlow.first(),
                     withContext(Dispatchers.IO) { evalSummary(app) }, app.lastNightTickMs, System.currentTimeMillis(),
+                    app.settings.shadowDailyFlow.first(),
                 )
             )
             val journal = withContext(Dispatchers.IO) { app.nightLog.readLast(120) }
@@ -657,7 +677,8 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
         eval = withContext(Dispatchers.IO) { evalSummary(app) }
         journal = withContext(Dispatchers.IO) { app.nightLog.readLast(40) }
     }
-    val lines = NightBoard.build(runs, reviewOn, shadowOn, tuneOn, hour, eval, app.lastNightTickMs, System.currentTimeMillis())
+    val shadowDaily by settings.shadowDailyFlow.collectAsState(initial = false)
+    val lines = NightBoard.build(runs, reviewOn, shadowOn, tuneOn, hour, eval, app.lastNightTickMs, System.currentTimeMillis(), shadowDaily)
     SectionCard(label = "Что работает") {
         for (l in lines) {
             val color = when (l.state) {

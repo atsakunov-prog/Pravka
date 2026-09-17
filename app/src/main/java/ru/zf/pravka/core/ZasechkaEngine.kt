@@ -134,7 +134,7 @@ class ZasechkaEngine(
 
         return parsed.fold(
             onSuccess = { p0 ->
-                stats.recordAux(p0.costUsd, p0.tokensIn, p0.tokensOut)
+                stats.recordAux(p0.costUsd, p0.tokensIn, p0.tokensOut, route = ru.zf.pravka.data.ModelRoute.ZASECHKA.key)
                 // Поправка из редактора: модель могла ответить «new» — это всё
                 // равно правка открытой записи, новое дело здесь не заводится.
                 val p = if (editTarget != null && editIndex > 0 && (p0.action == "new" || p0.action == "insert")) {

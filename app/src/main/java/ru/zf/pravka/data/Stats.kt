@@ -70,6 +70,37 @@ class Stats(private val context: Context) {
         )
     }
 
+    /**
+     * Ведро дороги за день: route_<дорога>_YYYYMMDD, микродоллары, живёт 62 дня,
+     * как и cost_. Владелец (17.09.2026): «за день шесть долларов, и растёт
+     * каждый день — что-то не то»; общая сумма на это не отвечает, а разложенная
+     * по дорогам — отвечает сразу (Засечка на Fable — две трети дня).
+     */
+    private fun routeKey(route: String, daysAgo: Int = 0): String =
+        "route_" + route + "_" + dayKey(daysAgo).removePrefix("cost_")
+
+    private fun MutablePreferences.addRoute(route: String, micros: Long) {
+        if (route.isBlank() || micros == 0L) return
+        val k = longPreferencesKey(routeKey(route))
+        this[k] = (this[k] ?: 0) + micros
+    }
+
+    /** Деньги по дорогам за [days] дней, дороже — первыми: ответ на «куда уходят деньги». */
+    suspend fun routeCosts(days: Int): List<Pair<String, Double>> {
+        val prefs = context.statsDataStore.data.first()
+        val from = dayKey(days.coerceIn(1, 62) - 1).removePrefix("cost_")
+        val sums = HashMap<String, Long>()
+        for ((k, v) in prefs.asMap()) {
+            val name = k.name
+            if (!name.startsWith("route_") || name.length < 16) continue
+            val date = name.takeLast(8)
+            if (date < from) continue
+            val route = name.substring(6, name.length - 9)
+            sums[route] = (sums[route] ?: 0L) + ((v as? Long) ?: 0L)
+        }
+        return sums.entries.sortedByDescending { it.value }.map { it.key to it.value / 1_000_000.0 }
+    }
+
     private fun daysSinceMonday(): Int {
         val dow = Calendar.getInstance().get(Calendar.DAY_OF_WEEK)
         return (dow + 5) % 7  // Monday -> 0, Sunday -> 6
@@ -109,6 +140,8 @@ class Stats(private val context: Context) {
         tokensIn: Int,
         tokensOut: Int,
         costUsd: Double,
+        /** Ключ дороги (ModelRoute.key) — для разложения денег по дорогам. */
+        route: String = "",
     ) {
         context.statsDataStore.edit { p ->
             p[Keys.TOTAL] = (p[Keys.TOTAL] ?: 0) + 1
@@ -128,6 +161,7 @@ class Stats(private val context: Context) {
             val todayKey = longPreferencesKey(dayKey(0))
             p[todayKey] = (p[todayKey] ?: 0) + micros
             p[Keys.COST_TOTAL] = (p[Keys.COST_TOTAL] ?: 0) + micros
+            p.addRoute(route, micros)
             pruneOldDayKeys(p)
         }
     }
@@ -149,7 +183,7 @@ class Stats(private val context: Context) {
     /** Cost/token accounting for non-proofread API calls: assist actions,
      *  learning (Opus), the dictionary miner and eval runs. Money and tokens
      *  land in the same counters the owner reads in Статистика. */
-    suspend fun recordAux(costUsd: Double, tokensIn: Int, tokensOut: Int) {
+    suspend fun recordAux(costUsd: Double, tokensIn: Int, tokensOut: Int, route: String = "") {
         context.statsDataStore.edit { p ->
             p[Keys.TOKENS_IN] = (p[Keys.TOKENS_IN] ?: 0) + tokensIn
             p[Keys.TOKENS_OUT] = (p[Keys.TOKENS_OUT] ?: 0) + tokensOut
@@ -157,6 +191,7 @@ class Stats(private val context: Context) {
             val todayKey = longPreferencesKey(dayKey(0))
             p[todayKey] = (p[todayKey] ?: 0) + micros
             p[Keys.COST_TOTAL] = (p[Keys.COST_TOTAL] ?: 0) + micros
+            p.addRoute(route, micros)
             pruneOldDayKeys(p)
         }
     }
@@ -170,8 +205,12 @@ class Stats(private val context: Context) {
         if (p[marker] == today) return
         p[marker] = today
         val cutoff = dayKey(62)
+        val cutoffDate = cutoff.removePrefix("cost_")
         p.asMap().keys
-            .filter { it.name.length == cutoff.length && it.name.startsWith("cost_2") && it.name < cutoff }
+            .filter {
+                (it.name.length == cutoff.length && it.name.startsWith("cost_2") && it.name < cutoff) ||
+                    (it.name.startsWith("route_") && it.name.length >= 16 && it.name.takeLast(8) < cutoffDate)
+            }
             .forEach { p.remove(longPreferencesKey(it.name)) }
     }
 

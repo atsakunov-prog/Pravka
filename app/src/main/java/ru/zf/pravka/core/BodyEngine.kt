@@ -128,7 +128,7 @@ class BodyEngine(
             return Result.failure(e)
         }
         runCatching { dictionaryStore.incrementHits(prepared.firedIds) }
-        runCatching { stats.recordAux(parse.costUsd, parse.tokensIn, parse.tokensOut) }
+        runCatching { stats.recordAux(parse.costUsd, parse.tokensIn, parse.tokensOut, route = ru.zf.pravka.data.ModelRoute.BODY.key) }
 
         var outcome = Outcome(
             kind = parse.kind,
