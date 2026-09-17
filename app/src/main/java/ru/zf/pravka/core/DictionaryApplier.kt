@@ -60,9 +60,16 @@ class DictionaryApplier(private val store: DictionaryStore) {
                 }
             }
             if (protects.isNotEmpty()) {
-                append("Не исправляй эти слова, они написаны верно:\n")
-                append(protects.joinToString(", ") { it.from })
-                append("\n")
+                // Словарь задаёт написание, не падеж: PROTECT «Марианн» ловил
+                // «Марианны» (допуск окончаний) и модель писала «самой Марианн»
+                // (лог ночного разбора 17.09.2026, 55 срабатываний).
+                append("Эти имена и термины написаны верно — не исправляй их на созвучные; ")
+                append("падеж, в котором слово стоит в тексте, сохраняй (словарь задаёт написание, а не форму):\n")
+                for (pr in protects) {
+                    append("- ").append(pr.from)
+                    if (pr.note.isNotBlank()) append(" (").append(pr.note).append(")")
+                    append("\n")
+                }
             }
         }.trim()
     }
