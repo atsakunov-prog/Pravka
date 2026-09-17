@@ -65,7 +65,7 @@ class NightReviewStore(private val context: Context) {
 
     data class Run(
         val id: Long,
-        /** daily · weekly · shadow (тень второй модели, core/ShadowRun.kt) */
+        /** daily · weekly · shadow (тень второй модели, core/ShadowRun.kt) · tune (правка промпта, core/PromptTuner.kt) */
         val kind: String,
         val startedAt: Long,
         val fromMs: Long,
@@ -93,6 +93,9 @@ class NightReviewStore(private val context: Context) {
     ) {
         val active: Boolean get() = stage in ACTIVE_STAGES
         val isShadow: Boolean get() = kind == "shadow"
+        val isTune: Boolean get() = kind == "tune"
+        /** Прогон самого ночного разбора журналов — не тень и не правка промпта. */
+        val isReview: Boolean get() = !isShadow && !isTune
         fun applied() = changes.count { it.status == "applied" }
         fun proposed() = changes.count { it.status == "proposed" }
         fun rejected() = changes.count { it.status == "rejected" }
@@ -101,7 +104,7 @@ class NightReviewStore(private val context: Context) {
     companion object {
         private const val FILE_NAME = "night-review.json"
         private const val KEEP = 40
-        val ACTIVE_STAGES = setOf("analysis", "check", "audit", "shadow_clean", "shadow_judge")
+        val ACTIVE_STAGES = setOf("analysis", "check", "audit", "shadow_clean", "shadow_judge", "tune_propose", "tune_measure", "tune_judge")
     }
 
     private val mutex = Mutex()

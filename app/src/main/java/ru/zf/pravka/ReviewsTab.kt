@@ -51,8 +51,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.core.NightReviewPolicy
+import ru.zf.pravka.core.PromptTunePolicy
 import ru.zf.pravka.core.ShadowPolicy
 import ru.zf.pravka.data.NightReviewStore
+import ru.zf.pravka.data.PromptVersions
 import ru.zf.pravka.data.StoreFiles
 import ru.zf.pravka.data.shareFileIntent
 import ru.zf.pravka.ui.Feedback
@@ -75,10 +77,14 @@ private fun stageLabel(stage: String): String = when (stage) {
     "audit" -> "согласование"
     ShadowPolicy.STAGE_CLEAN -> "вторая модель чистит"
     ShadowPolicy.STAGE_JUDGE -> "судья сравнивает"
+    PromptTunePolicy.STAGE_PROPOSE -> "Fable предлагает правку"
+    PromptTunePolicy.STAGE_MEASURE -> "новый промпт перечищает диктовки недели"
+    PromptTunePolicy.STAGE_JUDGE -> "судья сравнивает промпты"
     else -> stage
 }
 
 private fun kindLabel(run: NightReviewStore.Run): String = when {
+    run.isTune -> "промпт"
     run.isShadow -> "тень"
     run.kind == NightReviewPolicy.WEEKLY -> "неделя"
     else -> "сутки"
@@ -90,10 +96,11 @@ internal fun ReviewsTab(app: PravkaApp) {
     LaunchedEffect(Unit) { app.nightReviewStore.all() }
     var openHistory by remember { mutableStateOf(setOf<Long>()) }
 
-    val daily = runs.filter { !it.isShadow && it.kind == NightReviewPolicy.DAILY }.maxByOrNull { it.startedAt }
-    val weekly = runs.filter { !it.isShadow && it.kind == NightReviewPolicy.WEEKLY }.maxByOrNull { it.startedAt }
+    val daily = runs.filter { it.isReview && it.kind == NightReviewPolicy.DAILY }.maxByOrNull { it.startedAt }
+    val weekly = runs.filter { it.isReview && it.kind == NightReviewPolicy.WEEKLY }.maxByOrNull { it.startedAt }
     val shadow = runs.filter { it.isShadow }.maxByOrNull { it.startedAt }
-    val shown = setOfNotNull(daily?.id, weekly?.id, shadow?.id)
+    val tune = runs.filter { it.isTune }.maxByOrNull { it.startedAt }
+    val shown = setOfNotNull(daily?.id, weekly?.id, shadow?.id, tune?.id)
     val history = runs.filter { it.id !in shown }.sortedByDescending { it.startedAt }
 
     Column(
@@ -110,6 +117,7 @@ internal fun ReviewsTab(app: PravkaApp) {
         else SectionCard(label = "Неделя") { HintText("Недельный разбор идёт в ночь на пятницу; вручную — «Неделю».") }
         if (shadow != null) ShadowCard(shadow)
         else SectionCard(label = "Тень") { HintText("Тени ещё не было: первая ночь возьмёт до 200 диктовок за месяц.") }
+        TuneCard(app, tune)
         if (history.isNotEmpty()) {
             SectionCard(label = "История") {
                 for (run in history) {
@@ -127,13 +135,18 @@ internal fun ReviewsTab(app: PravkaApp) {
                 }
             }
             for (run in history.filter { it.id in openHistory }) {
-                if (run.isShadow) ShadowCard(run) else ReviewCard(app, if (run.kind == NightReviewPolicy.WEEKLY) "Неделя" else "День", run)
+                when {
+                    run.isShadow -> ShadowCard(run)
+                    run.isTune -> TuneCard(app, run)
+                    else -> ReviewCard(app, if (run.kind == NightReviewPolicy.WEEKLY) "Неделя" else "День", run)
+                }
             }
         }
     }
 }
 
 /** Тумблеры, ручной запуск, идущие прогоны с прогрессом и кнопками; лог за месяц. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
     val context = LocalContext.current
@@ -141,10 +154,12 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
     val settings = app.settings
     val enabled by settings.nightReviewEnabledFlow.collectAsState(initial = true)
     val shadowOn by settings.shadowRunEnabledFlow.collectAsState(initial = true)
+    val tuneOn by settings.promptTuneEnabledFlow.collectAsState(initial = true)
     val hour by settings.nightReviewHourFlow.collectAsState(initial = 3)
     var busy by remember { mutableStateOf(false) }
-    val reviewRunning = runs.any { it.active && !it.isShadow }
+    val reviewRunning = runs.any { it.active && it.isReview }
     val shadowRunning = runs.any { it.active && it.isShadow }
+    val tuneRunning = runs.any { it.active && it.isTune }
 
     SectionCard(label = "Ночью") {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -160,6 +175,13 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             Text("Тень: вторая модель чистит те же диктовки, судья сравнивает слепо", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         }
         HintText("Ничего не меняет — только счёт, изъяны и деньги. Модели — в настройках, группа «Модели».")
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = tuneOn, onCheckedChange = { on -> scope.launch { settings.setPromptTuneEnabled(on) } })
+            Spacer(Modifier.width(8.dp))
+            Text("Правка промпта раз в неделю: Fable по идеям недели, с измерением", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        }
+        HintText("В ночь на субботу. Новый промпт перечищает диктовки недели, слепой судья сравнивает с прежним; принимается только заметный перевес; через неделю откат, если правок руками стало больше.")
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Запуск в ${"%02d".format(hour)}:00", style = MaterialTheme.typography.bodyMedium)
@@ -178,7 +200,7 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                 busy = false
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             fun launchReview(kind: String) {
                 busy = true
                 scope.launch {
@@ -191,6 +213,18 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             Button(enabled = !busy && !reviewRunning, onClick = { launchReview(NightReviewPolicy.DAILY) }) { Text("Сутки") }
             OutlinedButton(enabled = !busy && !reviewRunning, onClick = { launchReview(NightReviewPolicy.WEEKLY) }) { Text("Неделю") }
             OutlinedButton(enabled = !busy && !shadowRunning, onClick = { launchShadow(big = false) }) { Text("Тень") }
+            OutlinedButton(
+                enabled = !busy && !tuneRunning,
+                onClick = {
+                    busy = true
+                    scope.launch {
+                        app.promptTuner.start(manual = true)
+                            .onSuccess { Feedback.toast(context, if (it.active) "Отправлено: предложение, измерение, судья — час-два" else it.summary) }
+                            .onFailure { Feedback.toast(context, "Не запустилась: ${it.message}") }
+                        busy = false
+                    }
+                },
+            ) { Text("Промпт") }
         }
         // Большой кусок (месяц, до 200) — только по явной просьбе: сам он идёт один раз, при первом запуске.
         Row {
@@ -210,13 +244,21 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             Row {
                 TextButton(onClick = {
                     scope.launch {
-                        val r = if (run.isShadow) app.shadowRun.pollNow(run.id) else app.nightReview.pollNow(run.id)
+                        val r = when {
+                            run.isShadow -> app.shadowRun.pollNow(run.id)
+                            run.isTune -> app.promptTuner.pollNow(run.id)
+                            else -> app.nightReview.pollNow(run.id)
+                        }
                         r.onSuccess { Feedback.toast(context, it) }.onFailure { Feedback.toast(context, "Опрос не прошёл: ${it.message}") }
                     }
                 }) { Text("Проверить сейчас") }
                 TextButton(onClick = {
                     scope.launch {
-                        val r = if (run.isShadow) app.shadowRun.cancel(run.id) else app.nightReview.cancel(run.id)
+                        val r = when {
+                            run.isShadow -> app.shadowRun.cancel(run.id)
+                            run.isTune -> app.promptTuner.cancel(run.id)
+                            else -> app.nightReview.cancel(run.id)
+                        }
                         r.onSuccess { Feedback.toast(context, "Отменено") }.onFailure { Feedback.toast(context, "Не отменилось: ${it.message}") }
                     }
                 }) { Text("Отменить", color = MaterialTheme.colorScheme.error) }
@@ -235,7 +277,7 @@ private fun statusLine(run: NightReviewStore.Run): String {
     if (run.active) return "идёт ${stageLabel(run.stage)}"
     if (run.stage == "failed") return "не удался"
     val money = if (run.costUsd > 0) " · $" + "%.2f".format(Locale.US, run.costUsd) else ""
-    if (run.isShadow) return "готово$money"
+    if (run.isShadow || run.isTune) return "готово$money"
     val parts = ArrayList<String>()
     parts += "применено ${run.applied()}"
     val waiting = run.changes.count { it.status == "proposed" || it.status == "reverted" }
@@ -531,4 +573,92 @@ private fun ShadowRow(c: NightReviewStore.Change) {
             Text("${c.toMode}: ${c.note}", style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+/**
+ * Плашка «Промпт»: какая версия CLEAN действует и как принималась, последний
+ * прогон недельной правки с примерами судьи, кнопка «Вернуть прежний промпт».
+ */
+@Composable
+private fun TuneCard(app: PravkaApp, run: NightReviewStore.Run?) {
+    val context = LocalContext.current
+    val versions by app.promptVersions.flow.collectAsState()
+    LaunchedEffect(Unit) { app.promptVersions.all() }
+    val active = versions.firstOrNull { it.status == "active" }
+    SectionCard(label = "Промпт" + (run?.let { " · ${dayTime.format(Date(it.startedAt))}${if (it.manual) " · вручную" else ""}" } ?: "")) {
+        if (active == null) {
+            Text("Действует заводской промпт CLEAN из сборки.", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            Text(
+                "Действует версия подбора от ${dayTime.format(Date(active.at))}: ${active.note}",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            val metrics = buildString {
+                append("Принята: судья ${active.judgeBetter}:${active.judgeWorse} (равноценных ${active.judgeTie})")
+                if (active.ownerPairs > 0) append(", к правкам владельца ${PromptTunePolicy.pct(active.simNew)} против ${PromptTunePolicy.pct(active.simOld)}")
+                if (active.corrAfter >= 0) append(". Правок руками после: ${PromptTunePolicy.pct(active.corrAfter)} чисток против ${PromptTunePolicy.pct(active.corrBefore)} до")
+                else append(". Доля правок руками сверится через неделю")
+                append('.')
+            }
+            Text(metrics, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row {
+                TextButton(onClick = {
+                    app.appScope.launch {
+                        app.promptTuner.revertActive()
+                            .onSuccess { Feedback.toast(context, it) }
+                            .onFailure { Feedback.toast(context, "Не получилось: ${it.message}") }
+                    }
+                }) { Text("Вернуть прежний промпт", color = MaterialTheme.colorScheme.error) }
+            }
+        }
+        if (run == null) {
+            HintText("Правки промпта ещё не было: в ночь на субботу или кнопкой «Промпт». Без идей за неделю промпт не трогается.")
+            return@SectionCard
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            statusLine(run) + (if (run.active && run.progress.isNotBlank()) " · ${run.progress}" else ""),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (run.error.isNotBlank()) Text(run.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        if (run.summary.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(run.summary, style = MaterialTheme.typography.bodyMedium)
+        }
+        val examples = run.changes.filter { it.kind == ShadowPolicy.KIND }
+        if (examples.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("Примеры судьи", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            for (c in examples) ShadowRow(c)
+        }
+        val history = versions.filter { it.status != "active" }.sortedByDescending { it.at }.take(6)
+        if (history.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("Прежние версии", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            for (v in history) VersionRow(v)
+        }
+        if (run.stage == "done") Row {
+            TextButton(onClick = { exportLog(context, app, listOf(run), "Лог правки промпта") }) { Text("Лог для Claude Code") }
+        }
+    }
+}
+
+@Composable
+private fun VersionRow(v: PromptVersions.Version) {
+    val status = when (v.status) {
+        "superseded" -> "сменена"
+        "reverted" -> "возвращена"
+        "rejected" -> "отклонена"
+        else -> v.status
+    }
+    Text(
+        "· ${dayTime.format(Date(v.at))} · $status · ${v.note}" + (if (v.statusNote.isNotBlank()) " — ${v.statusNote}" else ""),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 3,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(vertical = 2.dp),
+    )
 }

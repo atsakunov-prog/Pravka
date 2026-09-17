@@ -37,6 +37,8 @@ class ModelRoutesTest {
         assertEquals("", ModelRoute.SHADOW_CLEAN.defaultEffort)
         assertEquals(Settings.MODEL_FABLE, ModelRoute.SHADOW_JUDGE.defaultModel)
         assertEquals("high", ModelRoute.SHADOW_JUDGE.defaultEffort)
+        assertEquals(Settings.MODEL_FABLE, ModelRoute.PROMPT_TUNE.defaultModel)
+        assertEquals("high", ModelRoute.PROMPT_TUNE.defaultEffort)
         assertEquals("medium", ModelRoute.PATTERNS_DUPES.defaultEffort)
     }
 

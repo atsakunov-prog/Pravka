@@ -47,8 +47,10 @@
   настройках, группа «Модели» (`ModelsSettings.kt`).
   Батчи (Message Batches API) — `provider/ClaudeBatches.kt`; ночной разбор
   Правки на них — `core/NightReview.kt` + `core/NightReviewPolicy.kt`,
-  тень второй модели — `core/ShadowRun.kt` + `core/ShadowPolicy.kt`, эвал
-  золотого набора — `core/EvalRunner.kt`; прогоны разбора и тени —
+  тень второй модели — `core/ShadowRun.kt` + `core/ShadowPolicy.kt`,
+  недельная правка промпта — `core/PromptTuner.kt` + `core/PromptTunePolicy.kt`
+  (версии — `data/PromptVersions.kt`), эвал золотого набора —
+  `core/EvalRunner.kt`; прогоны разбора, тени и правки —
   `data/NightReviewStore.kt`, экран — `ReviewsTab.kt` («Ещё → Разборы»).
   Запрос чистки одной формы для дня и батчей: `ClaudeProvider.cleanPromptParts`
   + `ClaudeBatches.cleanParams` + `RequestPolicy.maxTokens`.

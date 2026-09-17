@@ -77,8 +77,8 @@ class NightReview(
         if (settings.apiKey().isBlank()) return
         if (!mutex.tryLock()) return
         try {
-            // Тень второй модели живёт в том же сторе, но ведёт её ShadowRun.
-            val runs = store.all().filter { !it.isShadow }
+            // Тень и правка промпта живут в том же сторе, но ведут их ShadowRun и PromptTuner.
+            val runs = store.all().filter { it.isReview }
             val active = runs.filter { it.active }
             for (run in active) {
                 if (nowMs - run.lastPollAt < POLL_MS) continue

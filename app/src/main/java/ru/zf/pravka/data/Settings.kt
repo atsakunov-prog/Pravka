@@ -47,6 +47,7 @@ class Settings(private val context: Context) {
         private val KEY_NIGHT_REVIEW = booleanPreferencesKey("night_review_enabled")
         private val KEY_NIGHT_REVIEW_HOUR = intPreferencesKey("night_review_hour")
         private val KEY_SHADOW_RUN = booleanPreferencesKey("shadow_run_enabled")
+        private val KEY_PROMPT_TUNE = booleanPreferencesKey("prompt_tune_enabled")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
         private val KEY_LEARN_AUTO = booleanPreferencesKey("learn_auto_capture")
@@ -277,6 +278,15 @@ class Settings(private val context: Context) {
     val shadowRunEnabledFlow = context.dataStore.data.map { it[KEY_SHADOW_RUN] ?: true }
     suspend fun setShadowRunEnabled(value: Boolean) {
         context.dataStore.edit { it[KEY_SHADOW_RUN] = value }
+    }
+
+    // Недельная правка промпта (17.09.2026): в ночь на субботу Fable читает
+    // идеи недели, предлагает правку CLEAN, новый промпт измеряется и
+    // принимается только если лучше; через неделю — откат, если правок руками
+    // стало больше. Движок — core/PromptTuner.kt, политика — core/PromptTunePolicy.kt.
+    val promptTuneEnabledFlow = context.dataStore.data.map { it[KEY_PROMPT_TUNE] ?: true }
+    suspend fun setPromptTuneEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_PROMPT_TUNE] = value }
     }
 
     val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }

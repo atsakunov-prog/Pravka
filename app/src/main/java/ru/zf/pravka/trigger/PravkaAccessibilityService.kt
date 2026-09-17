@@ -2288,6 +2288,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                 runCatching { app.shadowRun.tick() }
                     .onFailure { app.eventLog.add("тень: тик упал: ${it.message}") }
             }
+            // Недельная правка промпта — в ночь на субботу, тем же тиком.
+            scope.launch {
+                runCatching { app.promptTuner.tick() }
+                    .onFailure { app.eventLog.add("правка промпта: тик упал: ${it.message}") }
+            }
             // Спорт и еда: свой кэш и своя недоставленная почта. Оба звонка
             // сами себя дросселируют (30 минут у выгрузки, «уже уехало» у
             // еды), так что пятиминутный тик может дёргать их сколько хочет.

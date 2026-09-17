@@ -40,6 +40,13 @@ object NightReviewPolicy {
     fun dueDaily(nowMs: Long, hour: Int, lastStart: Long): Boolean =
         DAILY in dueKinds(nowMs, hour, lastStart, nowMs)
 
+    /** Раз в неделю в заданный день недели (Calendar.SATURDAY…) после часа запуска — правка промпта. */
+    fun dueOnWeekday(nowMs: Long, hour: Int, lastStart: Long, weekday: Int): Boolean {
+        val now = Calendar.getInstance().apply { timeInMillis = nowMs }
+        if (now.get(Calendar.DAY_OF_WEEK) != weekday || now.get(Calendar.HOUR_OF_DAY) < hour) return false
+        return !sameDay(lastStart, nowMs) && nowMs - lastStart > 6 * 86_400_000L
+    }
+
     /** Причина сбоя разбора ответа — коротко: JSONException тащит в message весь ответ модели. */
     fun shortReason(e: Throwable): String {
         val m = (e.message ?: e.javaClass.simpleName).replace(Regex("\\s+"), " ")

@@ -107,6 +107,14 @@ class PravkaApp : Application() {
             claudeProvider, stats, eventLog,
         )
     }
+    // Недельная правка промпта: идеи недели → предложение → измерение → принять или нет (core/PromptTuner.kt).
+    val promptVersions by lazy { ru.zf.pravka.data.PromptVersions(this) }
+    val promptTuner by lazy {
+        ru.zf.pravka.core.PromptTuner(
+            settings, claudeBatches, nightReviewStore, promptVersions, promptStore, historyLog, corrections,
+            DictionaryApplier(dictionaryStore), claudeProvider, stats, eventLog,
+        )
+    }
     val dictMiner by lazy { DictMiner(settings, httpClient, stats) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }

@@ -150,11 +150,13 @@ class ClaudeProvider(
         contextBefore: String,
         conversationContext: String,
         prose: Boolean,
+        /** Другой шаблон CLEAN — для измерения промпта-кандидата (PromptTuner); null — действующий. */
+        template: String? = null,
     ): Prompts.PromptParts {
         // ONE master template (CLEAN) for every mode; BUSINESS/SOFTEN
         // are style directives riding in the uncached slot, so all
         // modes share the same cached prefix.
-        val template = promptStore.effective(ProofreadMode.CLEAN)
+        val template = template ?: promptStore.effective(ProofreadMode.CLEAN)
         val styleDirective = if (mode == ProofreadMode.CLEAN) "" else promptStore.effective(mode)
         val proseDirective = if (prose) promptStore.effective(PromptStore.PromptId.PROSE) else ""
         val fullDirective = listOf(styleDirective, proseDirective, directive)
@@ -177,9 +179,9 @@ class ClaudeProvider(
         return Prompts.assemble(template, dictAndRules, fullDirective, contextBefore, conversationContext)
     }
 
-    /** Промпт обычной чистки без директив и контекста — для батчей тени и эвала. */
-    suspend fun cleanPromptParts(dictBlock: String, prose: Boolean): Prompts.PromptParts =
-        cleanParts(ProofreadMode.CLEAN, dictBlock, "", "", "", prose)
+    /** Промпт обычной чистки без директив и контекста — для тени, эвала и измерения промпта-кандидата. */
+    suspend fun cleanPromptParts(dictBlock: String, prose: Boolean, template: String? = null): Prompts.PromptParts =
+        cleanParts(ProofreadMode.CLEAN, dictBlock, "", "", "", prose, template)
 
     /**
      * Free-form assist task (summarize / reply / translate): [instruction]

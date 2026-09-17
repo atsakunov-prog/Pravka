@@ -60,6 +60,8 @@ object ShadowPolicy {
         val flip: Boolean,
         /** Шла директива прозы — вторая модель получает её так же. */
         val prose: Boolean = false,
+        /** Как поправил владелец руками (эталон для измерения промпта); пусто — правки не было. */
+        val owner: String = "",
         val shadow: String = "",
         val failure: String = "",
         /** «same» — совпало (без судьи); название модели — кто лучше; both_bad; unjudged. */
@@ -263,6 +265,7 @@ object ShadowPolicy {
                 put("id", t.id); put("ts", t.tsMs); put("in", t.input); put("prep", t.prepared)
                 put("day", t.day); put("cost", t.dayCostUsd); put("flip", t.flip)
                 if (t.prose) put("prose", true)
+                if (t.owner.isNotBlank()) put("own", t.owner)
                 if (t.shadow.isNotBlank()) put("sh", t.shadow)
                 if (t.failure.isNotBlank()) put("fail", t.failure)
                 if (t.verdict.isNotBlank()) put("v", t.verdict)
@@ -284,7 +287,8 @@ object ShadowPolicy {
                 Take(
                     id = o.optString("id"), tsMs = o.optLong("ts"), input = o.optString("in"),
                     prepared = o.optString("prep"), day = o.optString("day"), dayCostUsd = o.optDouble("cost", 0.0),
-                    flip = o.optBoolean("flip"), prose = o.optBoolean("prose"), shadow = o.optString("sh"), failure = o.optString("fail"),
+                    flip = o.optBoolean("flip"), prose = o.optBoolean("prose"), owner = o.optString("own"),
+                    shadow = o.optString("sh"), failure = o.optString("fail"),
                     verdict = o.optString("v"), why = o.optString("why"), flaws = flaws,
                 )
             )

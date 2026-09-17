@@ -55,6 +55,21 @@ class NightReviewPolicyTest {
     }
 
     @Test
+    fun `раз в неделю в свой день недели, не раньше чем через шесть дней`() {
+        val cal = java.util.Calendar.getInstance()
+        // Ближайшая суббота, 04:00.
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 4); cal.set(java.util.Calendar.MINUTE, 0)
+        while (cal.get(java.util.Calendar.DAY_OF_WEEK) != java.util.Calendar.SATURDAY) cal.add(java.util.Calendar.DAY_OF_MONTH, 1)
+        val sat = cal.timeInMillis
+        assertTrue(NightReviewPolicy.dueOnWeekday(sat, 3, 0L, java.util.Calendar.SATURDAY))
+        assertFalse(NightReviewPolicy.dueOnWeekday(sat, 5, 0L, java.util.Calendar.SATURDAY))
+        assertFalse(NightReviewPolicy.dueOnWeekday(sat + 86_400_000L, 3, 0L, java.util.Calendar.SATURDAY))
+        // Запускали вручную в четверг — в субботу рано.
+        assertFalse(NightReviewPolicy.dueOnWeekday(sat, 3, sat - 2 * 86_400_000L, java.util.Calendar.SATURDAY))
+        assertTrue(NightReviewPolicy.dueOnWeekday(sat, 3, sat - 7 * 86_400_000L, java.util.Calendar.SATURDAY))
+    }
+
+    @Test
     fun `совет заметки читается из advice, слово ищется целиком`() {
         val a = NightReviewPolicy.parseAnalysis(
             """{"summary": "s", "changes": [
