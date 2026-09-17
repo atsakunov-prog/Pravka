@@ -51,6 +51,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.zf.pravka.core.ComparePolicy
 import ru.zf.pravka.core.NightBoard
 import ru.zf.pravka.core.NightReviewPolicy
 import ru.zf.pravka.core.PromptTunePolicy
@@ -61,8 +62,9 @@ import ru.zf.pravka.data.StoreFiles
 import ru.zf.pravka.data.shareFileIntent
 import ru.zf.pravka.ui.Feedback
 
-// «Ещё → Разборы» (16–18.09.2026): ночной разбор диктовок и правка промпта;
-// тень второй модели снята 18.09 (её старые прогоны остались в истории). Владелец, глядя на первые две версии (простыня изменений, потом
+// «Ещё → Разборы» (16–18.09.2026): ночной разбор диктовок, правка промпта и
+// ручное сравнение моделей (CompareCard); ночная тень снята 18.09, её старые
+// прогоны остались в истории. Владелец, глядя на первые две версии (простыня изменений, потом
 // группы по видам): «в самой плашке день сделаем овальные кнопки наверху:
 // применено, предложено, идеи; в каждой можно отменять решение модели или
 // принимать, причём если я принял — оно пропадает. Применено: у каждого
@@ -85,7 +87,8 @@ internal fun ReviewsTab(app: PravkaApp) {
     val daily = runs.filter { it.isReview && it.kind == NightReviewPolicy.DAILY }.maxByOrNull { it.startedAt }
     val weekly = runs.filter { it.isReview && it.kind == NightReviewPolicy.WEEKLY }.maxByOrNull { it.startedAt }
     val tune = runs.filter { it.isTune }.maxByOrNull { it.startedAt }
-    val shown = setOfNotNull(daily?.id, weekly?.id, tune?.id)
+    val compare = runs.filter { it.isCompare }.maxByOrNull { it.startedAt }
+    val shown = setOfNotNull(daily?.id, weekly?.id, tune?.id, compare?.id)
     val history = runs.filter { it.id !in shown }.sortedByDescending { it.startedAt }
 
     Column(
@@ -102,6 +105,7 @@ internal fun ReviewsTab(app: PravkaApp) {
         if (weekly != null) ReviewCard(app, "Неделя", weekly)
         else SectionCard(label = "Неделя") { HintText("Недельный разбор идёт в ночь на пятницу; вручную — «Неделю».") }
         TuneCard(app, tune)
+        CompareCard(app, compare)
         if (history.isNotEmpty()) {
             SectionCard(label = "История") {
                 for (run in history) {
@@ -122,6 +126,7 @@ internal fun ReviewsTab(app: PravkaApp) {
                 when {
                     run.isShadow -> ShadowCard(run)
                     run.isTune -> TuneCard(app, run)
+                    run.isCompare -> CompareHistoryCard(app, run)
                     else -> ReviewCard(app, if (run.kind == NightReviewPolicy.WEEKLY) "Неделя" else "День", run)
                 }
             }
@@ -227,7 +232,7 @@ private fun statusLine(run: NightReviewStore.Run): String {
     if (run.active) return "идёт ${stageLabel(run.stage)}"
     if (run.stage == "failed") return "не удался"
     val money = if (run.costUsd > 0) " · $" + "%.2f".format(Locale.US, run.costUsd) else ""
-    if (run.isShadow || run.isTune) return "готово$money"
+    if (run.isShadow || run.isTune || run.isCompare) return "готово$money"
     val parts = ArrayList<String>()
     parts += "применено ${run.applied()}"
     val waiting = run.changes.count { it.status == "proposed" || it.status == "reverted" }
@@ -536,6 +541,147 @@ private fun ShadowRow(c: NightReviewStore.Change) {
 }
 
 /**
+ * Плашка «Сравнение моделей» (18.09.2026) — ручная тень. Владелец: «вернём
+ * тень, но без этих 200 сообщений и без автостарта; я буду сам запускать и
+ * смотреть; сравнивай всегда Сонет и Опус на обыкновенном режиме и Опус на
+ * low; период будем выбирать». Период и потолок диктовок — чипами, ориентир
+ * цены до запуска, кнопка «Сравнить»; ниже — последний прогон: ход, сводка,
+ * примеры с тремя текстами по тапу. Автостарта нет: тик службы только
+ * докручивает начатое.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CompareCard(app: PravkaApp, run: NightReviewStore.Run?) {
+    val context = LocalContext.current
+    val scope = app.appScope
+    var days by remember { mutableStateOf(1) }
+    var cap by remember { mutableStateOf(20) }
+    var busy by remember { mutableStateOf(false) }
+    val running = run?.active == true
+    SectionCard(label = "Сравнение моделей") {
+        HintText(
+            "Три плеча чистят одни и те же диктовки периода тем же промптом и словарём, что кнопка «П»: " +
+                ComparePolicy.ARMS.joinToString(", ") { it.label } + ". Судья слепой (дорога «Судья правки промпта»). Само не запускается, ничего не меняет.",
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Период", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.width(8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (d in ComparePolicy.DAYS) FilterChip(selected = days == d, onClick = { days = d }, label = { Text(daysLabel(d)) })
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Диктовок", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.width(8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (n in ComparePolicy.CAPS) FilterChip(selected = cap == n, onClick = { cap = n }, label = { Text("до $n") })
+            }
+        }
+        HintText(
+            "Берутся последние чистки периода без контекста поля. Ориентир цены: около $" +
+                "%.2f".format(Locale.US, cap * ComparePolicy.USD_PER_ITEM) + " за $cap диктовок — три чистки и судья. Потолок дня кнопка не смотрит.",
+        )
+        Spacer(Modifier.height(4.dp))
+        Button(
+            enabled = !busy && !running,
+            onClick = {
+                busy = true
+                scope.launch {
+                    val started = app.modelCompare.start(days, cap)
+                        .onSuccess { Feedback.toast(context, if (it.active) "Пошло: ${it.progress}" else it.summary) }
+                        .onFailure { Feedback.toast(context, "Не запустилось: ${it.message}") }
+                        .getOrNull()
+                    busy = false
+                    // Первый кусок — сразу, не дожидаясь пятиминутного тика службы; прогресс виден в карточке.
+                    if (started?.active == true) app.modelCompare.pollNow(started.id)
+                }
+            },
+        ) { Text(if (running) "Идёт…" else "Сравнить") }
+        if (run != null) {
+            Spacer(Modifier.height(8.dp))
+            Text("Последнее · ${dayTime.format(Date(run.startedAt))}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            CompareBody(app, run)
+        }
+    }
+}
+
+private fun daysLabel(d: Int): String = when (d) {
+    1 -> "сутки"
+    7 -> "неделя"
+    else -> "$d дня"
+}
+
+/** Прогон сравнения из «Истории». */
+@Composable
+private fun CompareHistoryCard(app: PravkaApp, run: NightReviewStore.Run) {
+    SectionCard(label = "Сравнение моделей · ${dayTime.format(Date(run.startedAt))}") { CompareBody(app, run) }
+}
+
+/** Тело прогона сравнения: ход с кнопками, сбой, сводка, примеры, лог. */
+@Composable
+private fun CompareBody(app: PravkaApp, run: NightReviewStore.Run) {
+    val context = LocalContext.current
+    Text(
+        statusLine(run) + (if (run.active && run.progress.isNotBlank()) " · ${run.progress}" else ""),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (run.active) Row {
+        TextButton(onClick = {
+            app.appScope.launch {
+                app.modelCompare.pollNow(run.id)
+                    .onSuccess { Feedback.toast(context, it) }.onFailure { Feedback.toast(context, "Не прошло: ${it.message}") }
+            }
+        }) { Text("Продолжить сейчас") }
+        TextButton(onClick = {
+            app.appScope.launch {
+                app.modelCompare.cancel(run.id)
+                    .onSuccess { Feedback.toast(context, "Отменено") }.onFailure { Feedback.toast(context, "Не отменилось: ${it.message}") }
+            }
+        }) { Text("Отменить", color = MaterialTheme.colorScheme.error) }
+    }
+    if (run.error.isNotBlank()) {
+        Text(run.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+    }
+    if (run.summary.isNotBlank()) {
+        Spacer(Modifier.height(4.dp))
+        Text(run.summary, style = MaterialTheme.typography.bodyMedium)
+    }
+    val examples = run.changes.filter { it.kind == ComparePolicy.KIND }
+    if (examples.isNotEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        Text("Примеры", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        for (c in examples) CompareRow(c)
+    }
+    if (run.stage == "done") Row {
+        TextButton(onClick = { exportLog(context, app, listOf(run), "Лог сравнения моделей") }) { Text("Лог для Claude Code") }
+    }
+}
+
+/** Пример сравнения: лучшее и худшее плечо, почему; надиктовка и три текста — по тапу. */
+@Composable
+private fun CompareRow(c: NightReviewStore.Change) {
+    var open by remember(c.id) { mutableStateOf(false) }
+    val head = (if (c.verdict.isBlank()) "без вердикта" else "лучше ${c.verdict}") + (if (c.note.isNotBlank()) ", хуже ${c.note}" else "")
+    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable { open = !open }) {
+        Text(
+            "$head — ${c.verdictWhy}" + (if (c.why.isNotBlank()) " (${c.why})" else ""),
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = if (open) Int.MAX_VALUE else 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (open) {
+            Text("Надиктовано: ${c.from}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            for ((label, text) in ComparePolicy.armTexts(c.to)) {
+                Spacer(Modifier.height(3.dp))
+                Text("$label: $text", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+/**
  * Плашка «Промпт»: какая версия CLEAN действует и как принималась, последний
  * прогон недельной правки с примерами судьи, кнопка «Вернуть прежний промпт».
  */
@@ -676,6 +822,7 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                         app.appScope.launch {
                             val r = when {
                                 run.isTune -> app.promptTuner.pollNow(run.id)
+                                run.isCompare -> app.modelCompare.pollNow(run.id)
                                 else -> app.nightReview.pollNow(run.id)
                             }
                             r.onSuccess { Feedback.toast(context, it) }.onFailure { Feedback.toast(context, "Опрос не прошёл: ${it.message}") }
@@ -686,6 +833,7 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                         app.appScope.launch {
                             val r = when {
                                 run.isTune -> app.promptTuner.cancel(run.id)
+                                run.isCompare -> app.modelCompare.cancel(run.id)
                                 else -> app.nightReview.cancel(run.id)
                             }
                             r.onSuccess { Feedback.toast(context, "Отменено") }.onFailure { Feedback.toast(context, "Не отменилось: ${it.message}") }

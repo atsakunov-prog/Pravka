@@ -25,9 +25,13 @@ class NightReviewStore(private val context: Context) {
         val id: String,
         /**
          * dict_add · dict_disable · dict_mode · rule_disable · rule_enable · note;
-         * shadow — пример из тени второй модели (ShadowRun): from — надиктовано,
-         * to — дневная модель, note — вторая, mode/toMode — их названия,
-         * verdict — кто лучше (название модели, same, both_bad), verdictWhy — почему.
+         * shadow — пример слепого сравнения двух чисток (правка промпта, раньше
+         * тень): from — надиктовано, to — дневная модель, note — вторая,
+         * mode/toMode — их названия, verdict — кто лучше (название, same,
+         * both_bad), verdictWhy — почему;
+         * compare — пример сравнения трёх моделей (ModelCompare): from —
+         * надиктовано, to — JSON {название плеча: текст}, verdict — лучшее плечо,
+         * note — худшее, verdictWhy — почему, why — изъяны худшего словами.
          */
         val kind: String,
         val mode: String = "",
@@ -48,15 +52,16 @@ class NightReviewStore(private val context: Context) {
         val undo: String = "",
         val statusNote: String = "",
     ) {
-        /** Не действие: заметка или пример тени — применять и возвращать нечего. */
-        val isNote: Boolean get() = kind == "note" || kind == "shadow"
+        /** Не действие: заметка или пример сравнения — применять и возвращать нечего. */
+        val isNote: Boolean get() = kind == "note" || kind == "shadow" || kind == "compare"
         fun title(): String = when (kind) {
             "dict_add" -> "$mode: $from${if (to.isNotBlank()) " → $to" else ""}"
             "dict_disable" -> "выключить $mode: $from${if (to.isNotBlank()) " → $to" else ""}"
             "dict_mode" -> "$from: $mode → $toMode"
             "rule_disable" -> "выключить правило $ruleId"
             "rule_enable" -> "включить правило $ruleId"
-            "shadow" -> "пример тени"
+            "shadow" -> "пример сравнения промптов"
+            "compare" -> "пример сравнения моделей"
             else -> "заметка"
         }
     }
@@ -65,12 +70,16 @@ class NightReviewStore(private val context: Context) {
 
     data class Run(
         val id: Long,
-        /** daily · weekly · shadow (тень второй модели, core/ShadowRun.kt) · tune (правка промпта, core/PromptTuner.kt) */
+        /**
+         * daily · weekly · shadow (тень второй модели, снята 18.09) · tune (правка
+         * промпта, core/PromptTuner.kt) · compare (ручное сравнение трёх моделей,
+         * core/ModelCompare.kt)
+         */
         val kind: String,
         val startedAt: Long,
         val fromMs: Long,
         val toMs: Long,
-        /** analysis · check · audit · done · failed; у тени — shadow_clean · shadow_judge */
+        /** analysis · check · audit · done · failed; у правки промпта — tune_*; у сравнения — compare_clean · compare_judge */
         val stage: String,
         val manual: Boolean = false,
         val analysisBatchId: String = "",
@@ -94,8 +103,9 @@ class NightReviewStore(private val context: Context) {
         val active: Boolean get() = stage in ACTIVE_STAGES
         val isShadow: Boolean get() = kind == "shadow"
         val isTune: Boolean get() = kind == "tune"
-        /** Прогон самого ночного разбора журналов — не тень и не правка промпта. */
-        val isReview: Boolean get() = !isShadow && !isTune
+        val isCompare: Boolean get() = kind == "compare"
+        /** Прогон самого ночного разбора журналов — не тень, не правка промпта, не сравнение моделей. */
+        val isReview: Boolean get() = !isShadow && !isTune && !isCompare
         fun applied() = changes.count { it.status == "applied" }
         fun proposed() = changes.count { it.status == "proposed" }
         fun rejected() = changes.count { it.status == "rejected" }
@@ -104,7 +114,7 @@ class NightReviewStore(private val context: Context) {
     companion object {
         private const val FILE_NAME = "night-review.json"
         private const val KEEP = 40
-        val ACTIVE_STAGES = setOf("analysis", "check", "audit", "shadow_clean", "shadow_judge", "tune_propose", "tune_measure", "tune_judge")
+        val ACTIVE_STAGES = setOf("analysis", "check", "audit", "shadow_clean", "shadow_judge", "tune_propose", "tune_measure", "tune_judge", "compare_clean", "compare_judge")
     }
 
     private val mutex = Mutex()

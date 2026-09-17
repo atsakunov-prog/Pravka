@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 import ru.zf.pravka.data.ModelChoice
+import ru.zf.pravka.core.ModelCompare
 import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.Models
 import ru.zf.pravka.ui.PaperCard
@@ -125,6 +126,7 @@ internal fun CostScreen(app: PravkaApp) {
                     }
                     val title = route?.let { "${it.mode} · ${it.title}" } ?: when (key) {
                         "eval" -> "Правка · Эвал золотого набора"
+                        ModelCompare.ROUTE -> "Правка · Сравнение моделей"
                         else -> key
                     }
                     val model = choice?.let { " · " + Models.label(it.model) + (if (it.effort.isNotBlank()) " ${it.effort}" else "") }.orEmpty()

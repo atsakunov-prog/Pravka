@@ -229,13 +229,34 @@ object NightReviewPolicy {
         for (run in runs.sortedByDescending { it.startedAt }) {
             val kind = when {
                 run.isShadow -> "тень второй модели"
+                run.isTune -> "правка промпта"
+                run.isCompare -> "сравнение моделей"
                 run.kind == WEEKLY -> "неделя"
                 else -> "сутки"
             }
             sb.append("## ").append(dateOf(run.startedAt)).append(" · ").append(kind)
             sb.append(" · период ").append(dateOf(run.fromMs)).append("–").append(dateOf(run.toMs)).append("\n")
             if (run.error.isNotBlank()) sb.append("Сбой: ").append(run.error).append("\n")
-            if (run.isShadow) {
+            if (run.isCompare) {
+                sb.append(run.summary).append("\n\n")
+                val ex = run.changes.filter { it.kind == ComparePolicy.KIND }
+                if (ex.isNotEmpty()) {
+                    sb.append("### Примеры\n")
+                    for (c in ex) {
+                        sb.append("- ").append(if (c.verdict.isBlank()) "без вердикта" else "лучше ${c.verdict}")
+                        if (c.note.isNotBlank()) sb.append(", хуже ").append(c.note)
+                        sb.append(": ").append(c.verdictWhy)
+                        if (c.why.isNotBlank()) sb.append(" [").append(c.why).append("]")
+                        sb.append("\n  - надиктовано: ").append(c.from.replace("\n", " "))
+                        for ((label, text) in ComparePolicy.armTexts(c.to)) sb.append("\n  - ").append(label).append(": ").append(text.replace("\n", " "))
+                        sb.append("\n")
+                    }
+                }
+                sb.append("\n")
+                continue
+            }
+            // Правка промпта хранит примеры судьи тем же видом shadow — выгружается как тень.
+            if (run.isShadow || run.isTune) {
                 sb.append(run.summary).append("\n\n")
                 val ex = run.changes.filter { it.kind == "shadow" }
                 if (ex.isNotEmpty()) {

@@ -10,7 +10,7 @@ import ru.zf.pravka.data.NightReviewStore.Run
  * «Что работает, что нет» (17.09.2026; владелец: «давай всё это засунем в
  * единый лог, который будет показывать, что работает, что нет»). Одна строка на
  * каждый ночной автомат — разбор суток, разбор недели, правка промпта,
- * эвал — плюс пульс службы: последний прогон, чем кончился или на какой
+ * ручное сравнение моделей, эвал — плюс пульс службы: последний прогон, чем кончился или на какой
  * стадии стоит, когда следующий. Считается из прогонов и настроек, без сети;
  * тот же текст уходит в лог для Claude Code. Молчаливая механика читается как
  * поломка (правило 6) — здесь она обязана говорить словами.
@@ -39,11 +39,14 @@ object NightBoard {
         PromptTunePolicy.STAGE_PROPOSE -> "Fable предлагает правку"
         PromptTunePolicy.STAGE_MEASURE -> "новый промпт перечищает диктовки недели"
         PromptTunePolicy.STAGE_JUDGE -> "судья сравнивает промпты"
+        ComparePolicy.STAGE_CLEAN -> "три модели чистят"
+        ComparePolicy.STAGE_JUDGE -> "судья сравнивает тройки"
         else -> stage
     }
 
     fun kindLabel(run: Run): String = when {
         run.isTune -> "промпт"
+        run.isCompare -> "сравнение"
         run.isShadow -> "тень"
         run.kind == NightReviewPolicy.WEEKLY -> "неделя"
         else -> "сутки"
@@ -76,6 +79,9 @@ object NightBoard {
         out += line("daily", "Разбор суток", daily, reviewOn, nextDaily(nowMs, hour), nowMs)
         out += line("weekly", "Разбор недели", weekly, reviewOn, nextWeekday(nowMs, hour, Calendar.FRIDAY), nowMs)
         out += line("tune", "Правка промпта", tune, tuneOn, nextWeekday(nowMs, hour, Calendar.SATURDAY), nowMs)
+        // Сравнение моделей автостарта не имеет — «следующий» всегда «по кнопке».
+        val compare = runs.filter { it.isCompare }.maxByOrNull { it.startedAt }
+        out += line("compare", "Сравнение моделей", compare, true, "по кнопке в Разборах", nowMs)
         out += if (eval == null) Line("eval", "Эвал золотого набора", "none", "ещё не прогонялся", "по кнопке в Логах")
         else Line("eval", "Эвал золотого набора", "ok", "${dayTime.format(Date(eval.at))} · средний ${"%.1f".format(Locale.US, eval.avg * 100)}%, точных ${eval.exact} из ${eval.total}", "по кнопке в Логах")
         return out
@@ -103,7 +109,7 @@ object NightBoard {
 
     /** Итог завершённого прогона одной строкой. */
     fun outcome(run: Run): String {
-        if (run.isShadow || run.isTune) {
+        if (run.isShadow || run.isTune || run.isCompare) {
             val first = run.summary.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
             return (if (first.length > 160) first.take(160) + "…" else first).ifBlank { "готово" } +
                 (if (run.costUsd > 0) " · $" + "%.2f".format(Locale.US, run.costUsd) else "")

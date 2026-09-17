@@ -49,10 +49,13 @@
   Правки на них — `core/NightReview.kt` + `core/NightReviewPolicy.kt`,
   недельная правка промпта — `core/PromptTuner.kt` + `core/PromptTunePolicy.kt`
   (версии — `data/PromptVersions.kt`; слепой судья двух чисток —
-  `core/ShadowPolicy.kt`; тень второй модели снята 18.09), эвал золотого
+  `core/ShadowPolicy.kt`; ночная тень второй модели снята 18.09), ручное
+  сравнение трёх моделей (Сонет · Опус · Опус low, только кнопкой) —
+  `core/ModelCompare.kt` + `core/ComparePolicy.kt`, эвал золотого
   набора — `core/EvalRunner.kt`; уборка на старте (прогоны тени, осиротевшие
-  батчи у Anthropic) — `core/NightSweep.kt`; прогоны разбора и правки —
-  `data/NightReviewStore.kt`, экран — `ReviewsTab.kt` («Ещё → Разборы»);
+  батчи у Anthropic) — `core/NightSweep.kt`; прогоны разбора, правки и
+  сравнения — `data/NightReviewStore.kt`, экран — `ReviewsTab.kt` («Ещё →
+  Разборы»);
   табло «что работает» и журнал автоматов `night.log` — `core/NightBoard.kt`,
   `app.nightLog` (автоматы пишут туда, не в общий лог службы).
   Запрос чистки одной формы для дня и батчей: `ClaudeProvider.cleanPromptParts`

@@ -20,13 +20,16 @@ class NightBoardTest {
     @Test
     fun `пустое табло — служба не тикала, автоматов не было, эвала не было`() {
         val lines = NightBoard.build(emptyList(), true, true, hour, null, 0L, now)
-        assertEquals(listOf("tick", "daily", "weekly", "tune", "eval"), lines.map { it.key })
+        assertEquals(listOf("tick", "daily", "weekly", "tune", "compare", "eval"), lines.map { it.key })
         assertEquals("stale", lines[0].state)
         assertEquals("none", lines[1].state)
         assertEquals("завтра в 03:00", lines[1].next)
         assertTrue(lines[2].next, lines[2].next.startsWith("в ночь на пятницу 18.09"))
         assertTrue(lines[3].next, lines[3].next.startsWith("в ночь на субботу 19.09"))
+        // Сравнение моделей автостарта не имеет — «следующий» всегда по кнопке.
         assertEquals("none", lines[4].state)
+        assertEquals("по кнопке в Разборах", lines[4].next)
+        assertEquals("none", lines[5].state)
     }
 
     @Test

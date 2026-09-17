@@ -124,6 +124,12 @@ class PravkaApp : Application() {
             DictionaryApplier(dictionaryStore), claudeProvider, stats, nightLog,
         )
     }
+    // Ручное сравнение трёх моделей (Сонет · Опус · Опус low) на диктовках периода — только кнопкой (core/ModelCompare.kt).
+    val modelCompare by lazy {
+        ru.zf.pravka.core.ModelCompare(
+            settings, claudeBatches, nightReviewStore, historyLog, DictionaryApplier(dictionaryStore), claudeProvider, stats, nightLog,
+        )
+    }
     val dictMiner by lazy { DictMiner(settings, httpClient, stats) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }

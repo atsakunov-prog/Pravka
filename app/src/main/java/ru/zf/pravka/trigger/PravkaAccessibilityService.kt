@@ -2290,6 +2290,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                 runCatching { app.promptTuner.tick() }
                     .onFailure { app.nightLog.add("правка промпта: тик упал: ${it.message}") }
             }
+            // Сравнение моделей само не стартует — тик только докручивает начатое кнопкой.
+            scope.launch {
+                runCatching { app.modelCompare.tick() }
+                    .onFailure { app.nightLog.add("сравнение: тик упал: ${it.message}") }
+            }
             // Спорт и еда: свой кэш и своя недоставленная почта. Оба звонка
             // сами себя дросселируют (30 минут у выгрузки, «уже уехало» у
             // еды), так что пятиминутный тик может дёргать их сколько хочет.
