@@ -124,6 +124,8 @@ class BodyButtonController(
             hidePlate()
             hideMenu()
             hideInput()
+            hideCancelBubble()
+            follower.stop()
             button?.let { runCatching { windowManager.removeView(it) } }
             attached = false
             button = null
@@ -208,6 +210,7 @@ class BodyButtonController(
             applyPosition(p, xFraction, yFraction)
             button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
             repositionTickerIfVisible()
+            repositionCancelBubble()
         }
     }
 
@@ -316,46 +319,39 @@ class BodyButtonController(
 
     fun buttonSizePx(): Int = buttonSize
 
-    private var followTargetX = 0
-    private var followTargetY = 0
-    private var followSettle = false
-    private var following = false
-    private val followStep = object : Runnable {
-        override fun run() {
-            val p = params ?: return
-            val view = button ?: return
-            val dx = followTargetX - p.x
-            val dy = followTargetY - p.y
-            if (abs(dx) <= 2 && abs(dy) <= 2) {
-                p.x = followTargetX
-                p.y = followTargetY
-                runCatching { windowManager.updateViewLayout(view, p) }
-                repositionTickerIfVisible()
-                following = false
-                if (followSettle) savePosition(view, p)
-                return
-            }
-            p.x += followInc(dx)
-            p.y += followInc(dy)
+    /** Каждый кадр догонялки: ручка и шестерёнка едут за бусами (служба ставит refreshHandles). */
+    var onFrame: (() -> Unit)? = null
+
+    // Пружина вместо «30 % пути за кадр»: у бусины есть скорость, она
+    // догоняет, чуть проскакивает и успокаивается; звено дальше от пальца —
+    // мягче (`core/ChainPhysics.kt`, под тестами). Цикл общий на четыре
+    // кнопки — `ChainFollower` в `BubbleMotion.kt`.
+    private val follower = ChainFollower(
+        apply = frame@{ x, y ->
+            val p = params ?: return@frame
+            val view = button ?: return@frame
+            p.x = x
+            p.y = y
             runCatching { windowManager.updateViewLayout(view, p) }
             repositionTickerIfVisible()
-            view.postDelayed(this, 16)
-        }
-    }
+            repositionCancelBubble()
+            onFrame?.invoke()
+        },
+        onSettled = settled@{ settle ->
+            val p = params ?: return@settled
+            val view = button ?: return@settled
+            if (settle) savePosition(view, p)
+        },
+    )
 
-    private fun followInc(d: Int): Int {
-        val step = (d * 0.30f).toInt()
-        return if (step != 0) step else if (d > 0) 1 else -1
-    }
-
-    fun followTo(x: Int, y: Int, settle: Boolean) {
+    /** Ехать к ([x], [y]); [link] — через сколько бусин от той, что тянут. */
+    fun followTo(x: Int, y: Int, settle: Boolean, link: Int = 1) {
         if (!enabled) return
         val view = button ?: return
         val p = params ?: return
         val (w, h) = screenSize()
-        followTargetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
-        followTargetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
-        followSettle = settle
+        val targetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
+        val targetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
         // ОТКРЕПЛЁННОЕ окно догонять нечем: view.post у view без окна не
         // выполняется вовсе — он ждёт следующего прикрепления. Владелец
         // увидел это так: убрал всё в три точки, оттащил их, и через пару
@@ -366,19 +362,14 @@ class BodyButtonController(
         // Поэтому спрятанная кнопка встаёт на место сразу, без резинки:
         // догонять всё равно некому, а координаты обязаны быть настоящими.
         if (!attached) {
-            following = false
-            view.removeCallbacks(followStep)
-            p.x = followTargetX
-            p.y = followTargetY
+            follower.stop()
+            p.x = targetX
+            p.y = targetY
             runCatching { windowManager.updateViewLayout(view, p) }
             if (settle) savePosition(view, p)
             return
         }
-        if (!following) {
-            following = true
-            view.removeCallbacks(followStep)
-            view.post(followStep)
-        }
+        follower.follow(p.x, p.y, targetX, targetY, link, settle)
     }
 
     // ---- Тикер: живые слова, пока владелец говорит, что съел ----
@@ -1053,12 +1044,35 @@ class BodyButtonController(
         p.x = p.x.coerceIn(0, (w - plateW).coerceAtLeast(0))
     }
 
+    // ---- Серая «отмена» у идущей записи: как на «П» (владелец, 18.09.2026) ----
+    // Общая на четыре кнопки (`CancelBubble.kt`): под ближним концом бегущей
+    // строки, а не под кнопкой — под кнопкой стоит следующая кнопка стопки;
+    // прозрачность — как у кнопок.
+
+    private val cancelBubble = CancelBubble(service, windowManager)
+
+    fun showCancelBubble(onCancel: () -> Unit) {
+        cancelBubble.show(idleAlpha, onCancel)
+        repositionCancelBubble()
+    }
+
+    /** Пилюля едет за кнопкой: тащат, догоняет, повернули экран. */
+    fun repositionCancelBubble() {
+        if (!cancelBubble.shown) return
+        val bp = params ?: return
+        val (w, h) = screenSize()
+        cancelBubble.place(bp.x, bp.y, buttonSize, w, h)
+    }
+
+    fun hideCancelBubble() = cancelBubble.hide()
+
     /** Диагностика: сколько окон эта кнопка держит прямо сейчас. */
     fun windowCount(): Int =
         // Именно attached, а не «button != null»: спрятанная кнопка держит
         // свой View, но окна в WindowManager у неё нет — и в перепись,
         // которой меряют цену складывания, она входить не должна.
         (if (attached) 1 else 0) + (if (ticker != null) 1 else 0) +
+            (if (cancelBubble.shown) 1 else 0) +
             (if (menu != null) 1 else 0) + (if (plate != null) 1 else 0) +
             (if (input != null) 1 else 0)
 
@@ -1067,6 +1081,8 @@ class BodyButtonController(
         hideMenu()
         hidePlate()
         hideInput()
+        hideCancelBubble()
+        follower.stop()
         button?.let { runCatching { windowManager.removeView(it) } }
         attached = false
         button = null
@@ -1173,6 +1189,7 @@ class BodyButtonController(
             scope.launch {
                 settings.fabAlphaFlow.collect { alpha ->
                     idleAlpha = alpha
+                    cancelBubble.setAlpha(alpha)
                     if (!busy && !recording) {
                         button?.alpha = idleAlpha
                     }
@@ -1196,8 +1213,10 @@ class BodyButtonController(
         private var startY = 0
         private var dragging = false
         private var longPressFired = false
+        private var pressed: View? = null
         private val longPressRunnable = Runnable {
             longPressFired = true
+            pressed?.let { BubbleMotion.nod(it) }
             if (!busy && !recording) onLongPress()
         }
 
@@ -1214,7 +1233,10 @@ class BodyButtonController(
                     startY = p.y
                     dragging = false
                     longPressFired = false
+                    pressed = view
                     view.alpha = 1f
+                    // Сжалась под пальцем (`BubbleMotion`): кнопка отвечает на касание телом.
+                    BubbleMotion.press(view)
                     view.postDelayed(longPressRunnable, LONG_PRESS_MS)
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -1223,17 +1245,21 @@ class BodyButtonController(
                     if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
                         dragging = true
                         view.removeCallbacks(longPressRunnable)
+                        BubbleMotion.lift(view)
                     }
                     if (dragging && !longPressFired) {
                         p.x = startX + dx.toInt()
                         p.y = startY + dy.toInt()
                         runCatching { windowManager.updateViewLayout(view, p) }
                         repositionTickerIfVisible()
+                        repositionCancelBubble()
                         onDragged?.invoke(p.x, p.y, false)
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     view.removeCallbacks(longPressRunnable)
+                    pressed = null
+                    BubbleMotion.release(view)
                     applyFace()
                     if (dragging) {
                         savePosition(view, p)

@@ -126,6 +126,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     /** Запись, которую правит ближайший тейк «З» (микрофон в редакторе записи); 0 — обычный тап. */
     @Volatile internal var zEditTargetId = 0L
     @Volatile internal var zAnchorSetAt = 0L
+    /** Серая «отмена» у «З»: ближайший итог тейка выбрасывается. */
+    @Volatile internal var zDiscard = false
     @Volatile internal var cachedZEnabled = true
     @Volatile internal var cachedStackIdle = true
     @Volatile internal var cachedZGapMin = 45
@@ -141,6 +143,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal var rSession: GoogleSpeechSession? = null
     @Volatile internal var rWhisperRecording = false
     @Volatile internal var rTypeInstead = false
+    /** Серая «отмена» у «Д»: ближайший итог тейка выбрасывается. */
+    @Volatile internal var rDiscard = false
     @Volatile internal var cachedREnabled = true
     internal var micRequestForRaznoska = false
 
@@ -151,13 +155,18 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal var eButton: BodyButtonController? = null
     /** Ручка под хвостом: галочка, выпускает и убирает «Д» и «Е». */
     internal var tailHandle: StackHandleController? = null
-    /** Ручка над «П»: многоточие, убирает и возвращает ВСЕ четыре кнопки. */
-    internal var topHandle: StackHandleController? = null
-    /** Плашка между «П» и «З»: кто слушает — телефон или гарнитура; тап переключает. */
-    internal var micToggle: MicSourceController? = null
+    /**
+     * Шестерёнка над «П» с веером быстрых настроек (модель чистки, микрофон,
+     * обновления, «спрятать всё») и красная точка, в которую всё сжимается.
+     * Заменила верхнюю ручку с многоточием и плашку микрофона между «П» и «З»
+     * (владелец, 18.09.2026: «убираем грязь из стекла кнопок»).
+     */
+    internal var stackSettings: StackSettingsController? = null
     internal var eSession: GoogleSpeechSession? = null
     @Volatile internal var eWhisperRecording = false
     @Volatile internal var eTypeInstead = false
+    /** Серая «отмена» у «Т»: ближайший итог тейка выбрасывается. */
+    @Volatile internal var eDiscard = false
     @Volatile internal var cachedEEnabled = true
     internal var micRequestForFood = false
     // Отдых между подходами: дедлайн на диске не нужен - это минуты, и
@@ -283,94 +292,85 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
         eButton?.onTickerTap = ::onFoodTickerTap
 
-        // Две серые ручки. Нижняя, с галочкой, выпускает «Д» и «Е»; верхняя,
-        // с многоточием, убирает и возвращает всё разом — владелец: «наверху
-        // над плашкой ещё одну серую штучку маленькую, куда я буду нажимать,
-        // и все кнопки будут в неё убираться».
-        tailHandle = StackHandleController(this, dots = false).also { h ->
+        // Серая ручка под хвостом, с галочкой: выпускает и убирает «Д» и «Е».
+        tailHandle = StackHandleController(this, scope, app.settings).also { h ->
             h.onTap = {
                 touched()
                 if (stacked) expandButtons() else collapseButtons()
             }
         }
-        topHandle = StackHandleController(this, dots = true).also { h ->
-            h.onTap = {
-                touched()
-                setAllHidden(!allHidden)
-            }
-            // Ручку таскают, как кнопку, и за ней едет вся цепочка. Иначе,
-            // когда всё убрано, она единственная на экране — и приросла бы
-            // к месту навсегда.
-            h.onDragged = { hx, hy, dropped ->
+
+        // Шестерёнка над «П» (StackSettingsController): веер быстрых
+        // настроек и точка «всё убрано». Заменила верхнюю ручку с
+        // многоточием и плашку микрофона — владелец: «убираем грязь из стекла
+        // кнопок: наушники и верхнюю с тремя точками». Ставит её на место
+        // refreshHandles.
+        stackSettings = StackSettingsController(this, scope, app.settings).also { s ->
+            s.onTouched = { touched() }
+            s.onHideAll = { setAllHidden(true) }
+            s.onShowAll = { setAllHidden(false) }
+            // Голову таскают, как кнопку, и за ней едет вся цепочка. Иначе,
+            // когда всё убрано, точка единственная на экране — и приросла бы
+            // к месту навсегда. Координаты «П» считает сама шестерёнка,
+            // ровно обратно своему moveTo: после броска голова остаётся там,
+            // где палец её отпустил, без доводки и прыжка.
+            s.onDragged = { hx, hy, dropped ->
                 touched()
                 val size = floatingButton?.buttonSizePx() ?: 0
-                val lift = h.sizePx + (5 * resources.displayMetrics.density).toInt()
-                // Ровно обратное тому, что делает moveTo(above = true): так
-                // ручка после броска остаётся там же, где палец её отпустил,
-                // без доводки и прыжка.
-                val px = hx - (size - h.sizePx) / 2
-                val py = hy + lift
-                floatingButton?.followTo(px, py, dropped)
-                zButton?.followTo(px, py + slotOffset(1), dropped)
+                val (px, py) = s.buttonOrigin(hx, hy, size)
+                floatingButton?.followTo(px, py, dropped, link = 1)
+                zButton?.followTo(px, py + slotOffset(1), dropped, link = 2)
                 // Спрятанные ставим под «З»: оттуда они и выезжают.
-                rButton?.followTo(px, py + slotOffset(if (stacked) 1 else 2), dropped)
-                eButton?.followTo(px, py + slotOffset(if (stacked) 1 else 3), dropped)
-                val slot = when {
-                    stacked -> 1
-                    cachedEEnabled -> 3
-                    else -> 2
-                }
-                tailHandle?.moveTo(px, py + slotOffset(slot), size, above = false)
-                micToggle?.moveTo(px, py, size)
+                rButton?.followTo(px, py + slotOffset(if (stacked) 1 else 2), dropped, link = 3)
+                eButton?.followTo(px, py + slotOffset(if (stacked) 1 else 3), dropped, link = 4)
+                refreshHandles()
             }
-        }
-
-        // Плашка микрофона между «П» и «З» (MicSourceController): состояние
-        // держит настройка, плашка её показывает и переключает; стопке от
-        // неё нужен только отсчёт простоя. Ставит её на место refreshHandles.
-        micToggle = MicSourceController(this, scope, app.settings).also { t ->
-            t.onTap = { touched() }
         }
 
         // The linked chain (owner's design): drag any bubble and the others
-        // trail behind on a rubber band, in order "П" - "З" - "Д" - "Т"; между
-        // «П» и «З» — слот плашки микрофона, поэтому смещения считает slotOffset.
-        val pairGap = (8 * resources.displayMetrics.density).toInt()
+        // trail behind, in order "П" - "З" - "Д" - "Т". Бусы, а не строй:
+        // каждая едет на своей пружине, и чем дальше звено от пальца
+        // (`link`), тем мягче пружина — хвост приезжает последним
+        // (`core/ChainPhysics.kt`). Смещения считает slotOffset.
         // Перетаскивание больше НЕ разворачивает стопку: спрятанное должно
         // оставаться спрятанным, куда бы связку ни увезли. Раньше здесь
         // стоял expandButtons(), и «Д» с «Е» выскакивали от любого сдвига
         // пальцем — то есть спрятать их надолго было попросту нельзя.
         floatingButton?.onDragged = { x, y, dropped ->
             touched()
-            zButton?.followTo(x, y + slotOffset(1), dropped)
-            rButton?.followTo(x, y + slotOffset(if (stacked) 1 else 2), dropped)
-            eButton?.followTo(x, y + slotOffset(if (stacked) 1 else 3), dropped)
+            zButton?.followTo(x, y + slotOffset(1), dropped, link = 1)
+            rButton?.followTo(x, y + slotOffset(if (stacked) 1 else 2), dropped, link = 2)
+            eButton?.followTo(x, y + slotOffset(if (stacked) 1 else 3), dropped, link = 3)
             refreshHandles()
         }
         zButton?.onDragged = { x, y, dropped ->
             touched()
-            val size = floatingButton?.buttonSizePx() ?: 0
-            floatingButton?.followTo(x, y - slotOffset(1), dropped)
-            rButton?.followTo(x, y + (if (stacked) 0 else 1) * (size + pairGap), dropped)
-            eButton?.followTo(x, y + (if (stacked) 0 else 2) * (size + pairGap), dropped)
+            floatingButton?.followTo(x, y - slotOffset(1), dropped, link = 1)
+            rButton?.followTo(x, y + (if (stacked) 0 else slotOffset(1)), dropped, link = 1)
+            eButton?.followTo(x, y + (if (stacked) 0 else slotOffset(2)), dropped, link = 2)
             refreshHandles()
         }
         rButton?.onDragged = { x, y, dropped ->
             touched()
-            val size = floatingButton?.buttonSizePx() ?: 0
-            zButton?.followTo(x, y - size - pairGap, dropped)
-            floatingButton?.followTo(x, y - slotOffset(2), dropped)
-            eButton?.followTo(x, y + size + pairGap, dropped)
+            zButton?.followTo(x, y - slotOffset(1), dropped, link = 1)
+            floatingButton?.followTo(x, y - slotOffset(2), dropped, link = 2)
+            eButton?.followTo(x, y + slotOffset(1), dropped, link = 1)
             refreshHandles()
         }
         eButton?.onDragged = { x, y, dropped ->
             touched()
-            val size = floatingButton?.buttonSizePx() ?: 0
-            rButton?.followTo(x, y - size - pairGap, dropped)
-            zButton?.followTo(x, y - 2 * (size + pairGap), dropped)
-            floatingButton?.followTo(x, y - slotOffset(3), dropped)
+            rButton?.followTo(x, y - slotOffset(1), dropped, link = 1)
+            zButton?.followTo(x, y - slotOffset(2), dropped, link = 2)
+            floatingButton?.followTo(x, y - slotOffset(3), dropped, link = 3)
             refreshHandles()
         }
+        // Пока бусы догоняют, ручка и шестерёнка едут за ними кадр в кадр —
+        // иначе галочка встала бы на будущее место хвоста раньше него.
+        val chainFrame: () -> Unit = { refreshHandles() }
+        floatingButton?.onFrame = chainFrame
+        zButton?.onFrame = chainFrame
+        rButton?.onFrame = chainFrame
+        eButton?.onFrame = chainFrame
         floatingButton?.pairAnchor = anchor@{
             if (!cachedZEnabled) return@anchor null
             val (zx, zy) = zButton?.currentPosition() ?: return@anchor null
@@ -659,7 +659,11 @@ class PravkaAccessibilityService : AccessibilityService() {
     fun startRecordingNow() {
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
         probeFieldEdits(dictationTarget?.get())
+        discardTake = false
         floatingButton?.setRecording(true)
+        // Серая «отмена» — и у записи через Whisper: файл выбрасывается
+        // нерасшифрованным.
+        floatingButton?.showCancelBubble { cancelLiveDictation() }
         Haptics.start(this)
         startDictation()
     }
@@ -825,10 +829,20 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var discardTake = false
 
     fun cancelLiveDictation() {
-        if (googleSession == null) return
-        discardTake = true
-        app.eventLog.add("cancel requested")
-        stopLiveDictation()
+        when {
+            googleSession != null -> {
+                discardTake = true
+                app.eventLog.add("cancel requested")
+                stopLiveDictation()
+            }
+            // Запись «П» через Whisper: чужие флаги не стоят, значит файл наш.
+            DictationService.recording && !zWhisperRecording && !rWhisperRecording && !eWhisperRecording -> {
+                discardTake = true
+                app.eventLog.add("cancel requested (whisper)")
+                floatingButton?.setBusy(true)
+                stopDictation()  // -> onRecordingSaved выбросит файл
+            }
+        }
     }
 
     /** Second tap or the notification's Stop button: finalize the live take. */
@@ -907,6 +921,23 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (zWhisperRecording) {
             zWhisperRecording = false
             zButton?.setRecording(false)
+            zButton?.hideCancelBubble()
+            // Серая «отмена»: файл выбрасывается нерасшифрованным, якоря и
+            // адресат комментария сбрасываются — следующая фраза уже не про них.
+            if (zDiscard) {
+                zDiscard = false
+                zTypeInstead = false
+                zCommentFor = 0L
+                zAnchorStart = 0L
+                zAnchorEnd = 0L
+                zEditTargetId = 0L
+                file?.let { app.recordings.delete(it.name) }
+                zButton?.hideTicker()
+                zButton?.setBusy(false)
+                app.eventLog.add("засечка: наговор отменён (whisper)")
+                Feedback.toast(this, "Отменено")
+                return
+            }
             // Plate tap mid-take: the audio is discarded UNTRANSCRIBED (the
             // whole point is confidentiality) and the type-in box opens.
             if (zTypeInstead) {
@@ -951,6 +982,17 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (rWhisperRecording) {
             rWhisperRecording = false
             rButton?.setRecording(false)
+            rButton?.hideCancelBubble()
+            if (rDiscard) {
+                rDiscard = false
+                rTypeInstead = false
+                file?.let { app.recordings.delete(it.name) }
+                rButton?.hideTicker()
+                rButton?.setBusy(false)
+                app.eventLog.add("разноска: наговор отменён (whisper)")
+                Feedback.toast(this, "Отменено")
+                return
+            }
             if (rTypeInstead) {
                 rTypeInstead = false
                 file?.let { app.recordings.delete(it.name) }
@@ -988,6 +1030,17 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (eWhisperRecording) {
             eWhisperRecording = false
             eButton?.setRecording(false)
+            eButton?.hideCancelBubble()
+            if (eDiscard) {
+                eDiscard = false
+                eTypeInstead = false
+                file?.let { app.recordings.delete(it.name) }
+                eButton?.hideTicker()
+                eButton?.setBusy(false)
+                app.eventLog.add("еда: наговор отменён (whisper)")
+                Feedback.toast(this, "Отменено")
+                return
+            }
             if (eTypeInstead) {
                 eTypeInstead = false
                 file?.let { app.recordings.delete(it.name) }
@@ -1021,6 +1074,17 @@ class PravkaAccessibilityService : AccessibilityService() {
             return
         }
         floatingButton?.setRecording(false)
+        floatingButton?.hideCancelBubble()
+        if (discardTake) {
+            // Серая «отмена» у записи через Whisper: файл выбрасывается
+            // нерасшифрованным, в поле ничего не идёт.
+            discardTake = false
+            file?.let { app.recordings.delete(it.name) }
+            floatingButton?.setBusy(false)
+            app.eventLog.add("take discarded (whisper)")
+            Feedback.toast(this, "Отменено")
+            return
+        }
         if (file == null) {
             floatingButton?.setBusy(false)
             Haptics.error(this)
@@ -2122,6 +2186,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (allHidden == hidden) return
         allHidden = hidden
         if (hidden) {
+            stackSettings?.hideFan()
             floatingButton?.setStacked(true)
             zButton?.setStacked(true)
             rButton?.setStacked(true)
@@ -2129,11 +2194,15 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Значки и плашки привязаны к кнопкам: без них они висели бы
             // посреди экрана сами по себе. Убрать — значит убрать всё.
             floatingButton?.hideLearnBadge()
+            floatingButton?.hideCancelBubble()
             zButton?.hideTicker()
+            zButton?.hideCancelBubble()
             rButton?.hideTicker()
             rButton?.hidePlate()
+            rButton?.hideCancelBubble()
             eButton?.hideTicker()
             eButton?.hidePlate()
+            eButton?.hideCancelBubble()
             stacked = true
         } else {
             stacked = true      // чтобы expandButtons развёз все четыре
@@ -2145,10 +2214,13 @@ class PravkaAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Ручки на местах. Нижняя — под ХВОСТОМ: сложено, значит под «З»,
-     * разложено — под последней включённой кнопкой. Верхняя — над «П», и
-     * когда всё убрано, она остаётся единственным, что видно на экране:
-     * иначе кнопки было бы не вернуть.
+     * Ручка и шестерёнка на местах. Ручка — под ХВОСТОМ: сложено, значит под
+     * «З», разложено — под последней включённой кнопкой; причём под её
+     * ТЕКУЩИМ местом, а не расчётным: пока бусы догоняют палец, хвост ещё в
+     * пути, и галочка, вставшая на его будущее место раньше него, читалась бы
+     * как чужая. Шестерёнка — над «П»; когда всё убрано, на её месте красная
+     * точка — единственное, что видно на экране: иначе кнопки было бы не
+     * вернуть.
      *
      * Нечего прятать — ручки нет: ручка от ящика, которого не существует,
      * хуже, чем её отсутствие.
@@ -2158,20 +2230,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         val (x, y) = floatingButton?.currentPosition() ?: return
         val size = floatingButton?.buttonSizePx() ?: return
 
-        topHandle?.let { h ->
-            h.show(allHidden)
-            h.moveTo(x, y, size, above = true)
-        }
-
-        // Плашка микрофона — сразу под «П», в своём слоте. Убрано всё — убрана
-        // и она: плашка без кнопок висела бы посреди экрана сама по себе.
-        micToggle?.let { t ->
-            if (allHidden) {
-                t.hide()
-            } else {
-                t.show()
-                t.moveTo(x, y, size)
-            }
+        stackSettings?.let { s ->
+            s.show(dot = allHidden)
+            s.moveTo(x, y, size)
         }
 
         val tail = tailHandle ?: return
@@ -2179,26 +2240,25 @@ class PravkaAccessibilityService : AccessibilityService() {
             tail.hide()
             return
         }
-        val slot = when {
-            stacked -> 1
-            cachedEEnabled -> 3
-            else -> 2
+        val last = when {
+            stacked -> zButton?.currentPosition()
+            cachedEEnabled -> eButton?.currentPosition()
+            else -> rButton?.currentPosition()
         }
+        val (lx, ly) = last ?: (x to (y + slotOffset(if (stacked) 1 else if (cachedEEnabled) 3 else 2)))
         tail.show(stacked)
-        tail.moveTo(x, y + slotOffset(slot), size, above = false)
+        tail.moveTo(lx, ly, size, above = false)
     }
 
     /**
      * Смещение верха слота стопки от верха «П»: 1 — «З», 2 — «Д», 3 — «Т».
-     * Между «П» и «З» стоит плашка микрофона в своём слоте (половина высоты
-     * кнопки и поля), дальше — обычный просвет; арифметика одна на всех —
+     * Просвет между кнопками одинаковый; арифметика одна на всех —
      * `core/StackGeometry.kt`, под тестами.
      */
     internal fun slotOffset(slot: Int): Int {
         val size = floatingButton?.buttonSizePx() ?: 0
         val gap = (8 * resources.displayMetrics.density).toInt()
-        val zGap = micToggle?.slotPx(size) ?: gap
-        return StackGeometry.slotOffset(slot, size, gap, zGap)
+        return StackGeometry.slotOffset(slot, size, gap)
     }
 
     /**
@@ -2374,8 +2434,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // складывание уже прошло; полсекунды без ручки никто не заметит.
         folding = true
         tailHandle?.hide()
-        topHandle?.hide()
-        micToggle?.hide()
+        stackSettings?.hideAll()
         // И сами кнопки. Владелец показал, где ответ: «если все кнопки
         // сложить в три точки, то никаких проблем нет, складывается всё
         // отлично» — в журнале при этом «наших окон 0». Значит дело не в том,
@@ -2395,8 +2454,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         runCatching {
             val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0) +
                 (rButton?.windowCount() ?: 0) + (eButton?.windowCount() ?: 0) +
-                (tailHandle?.windowCount() ?: 0) + (topHandle?.windowCount() ?: 0) +
-                (micToggle?.windowCount() ?: 0) + (if (screenKeeper != null) 1 else 0)
+                (tailHandle?.windowCount() ?: 0) + (stackSettings?.windowCount() ?: 0) +
+                (if (screenKeeper != null) 1 else 0)
             app.eventLog.add("смена конфигурации: наших окон $n")
         }
     }
@@ -2461,10 +2520,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         eButton = null
         tailHandle?.hide()
         tailHandle = null
-        topHandle?.hide()
-        topHandle = null
-        micToggle?.hide()
-        micToggle = null
+        stackSettings?.destroy()
+        stackSettings = null
         scope.cancel()
         super.onDestroy()
     }

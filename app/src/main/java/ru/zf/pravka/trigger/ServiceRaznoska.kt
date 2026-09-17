@@ -62,6 +62,7 @@ fun PravkaAccessibilityService.onRaznoskaTap() {
 internal fun PravkaAccessibilityService.startRaznoskaCapture() {
     rButton?.hideInput()
     rButton?.hidePlate()
+    rDiscard = false
     if (cachedEngine.startsWith("whisper")) {
         rWhisperRecording = true
         rButton?.setRecording(true)
@@ -69,6 +70,7 @@ internal fun PravkaAccessibilityService.startRaznoskaCapture() {
         // «набрать текстом».
         rButton?.showTicker()
         rButton?.updateTicker("🎙 наговори дела… (тап сюда — набрать текстом)")
+        rButton?.showCancelBubble { cancelRaznoskaTake() }
         Haptics.start(this)
         startDictation()
     } else {
@@ -114,8 +116,26 @@ internal fun PravkaAccessibilityService.startRaznoskaGoogle() {
     rButton?.setRecording(true)
     rButton?.showTicker()
     rButton?.updateTicker("🎙 наговори дела… (тап сюда — набрать текстом)")
+    rButton?.showCancelBubble { cancelRaznoskaTake() }
     Haptics.start(this)
     runCatching { startMicHold() }
+}
+
+/** Серая «отмена» у «Д»: наговор выбрасывается, ни одного дела в Todoist не уйдёт. */
+internal fun PravkaAccessibilityService.cancelRaznoskaTake() {
+    when {
+        rSession != null -> {
+            rDiscard = true
+            app.eventLog.add("разноска: отмена наговора")
+            stopRaznoskaLive()
+        }
+        rWhisperRecording && DictationService.recording -> {
+            rDiscard = true
+            rButton?.setBusy(true)
+            app.eventLog.add("разноска: отмена наговора")
+            stopDictation()
+        }
+    }
 }
 
 internal fun PravkaAccessibilityService.stopRaznoskaLive() {
@@ -151,7 +171,16 @@ internal fun PravkaAccessibilityService.onRaznoskaLiveDone(text: String) {
     rSession = null
     runCatching { stopMicHold() }
     runCatching { rButton?.hideTicker() }
+    runCatching { rButton?.hideCancelBubble() }
     rButton?.setRecording(false)
+    if (rDiscard) {
+        rDiscard = false
+        rTypeInstead = false
+        rButton?.setBusy(false)
+        app.eventLog.add("разноска: наговор отменён (${text.length} зн.)")
+        Feedback.toast(this, "Отменено")
+        return
+    }
     if (rTypeInstead) {
         rTypeInstead = false
         rButton?.setBusy(false)
@@ -163,8 +192,10 @@ internal fun PravkaAccessibilityService.onRaznoskaLiveDone(text: String) {
 
 internal fun PravkaAccessibilityService.onRaznoskaLiveError(msg: String) {
     rSession = null
+    rDiscard = false
     runCatching { stopMicHold() }
     rButton?.hideTicker()
+    rButton?.hideCancelBubble()
     rButton?.setRecording(false)
     rButton?.setBusy(false)
     Haptics.error(this)

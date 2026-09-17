@@ -741,9 +741,9 @@ class Settings(private val context: Context) {
      * машины и наушники диктовку не перехватывают (владелец: «когда еду в
      * машине, Правка меня не слышит» — салонный микрофон далеко и глухо).
      * false — Bluetooth-гарнитура: перед тейком поднимается SCO и слушает её
-     * микрофон (`provider/MicRouting.kt`). Переключается значком между «П» и
-     * «З» (`trigger/MicSourceController.kt`) и тумблером в Общих — это одно
-     * и то же состояние.
+     * микрофон (`provider/MicRouting.kt`). Переключается кружком в веере
+     * шестерёнки над «П» (`trigger/StackSettingsController.kt`) и тумблером
+     * в Общих — это одно и то же состояние.
      */
     val phoneMicOnlyFlow = context.dataStore.data.map { it[KEY_PHONE_MIC_ONLY] ?: true }
     suspend fun setPhoneMicOnly(value: Boolean) {

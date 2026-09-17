@@ -44,7 +44,6 @@ class FloatingButtonController(
         val ACCENT = 0xFFEA580C.toInt()
         val REC_RED = 0xFFD8342A.toInt()
         private val PAPER = 0xFFF7F3EA.toInt()
-        private val GRAY = 0xFF6E6659.toInt()  // ink-soft: the cancel bubble
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -237,53 +236,43 @@ class FloatingButtonController(
 
     fun buttonSizePx(): Int = buttonSize
 
-    private var followTargetX = 0
-    private var followTargetY = 0
-    private var followSettle = false
-    private var following = false
-    private val followStep = object : Runnable {
-        override fun run() {
-            val p = params ?: return
-            val view = button ?: return
-            val dx = followTargetX - p.x
-            val dy = followTargetY - p.y
-            if (abs(dx) <= 2 && abs(dy) <= 2) {
-                p.x = followTargetX
-                p.y = followTargetY
-                runCatching { windowManager.updateViewLayout(view, p) }
-                repositionTickerIfVisible()
-                repositionLearnBadge()
-                following = false
-                if (followSettle) savePosition(view, p)
-                return
-            }
-            p.x += followInc(dx)
-            p.y += followInc(dy)
+    /** Каждый кадр догонялки: ручка и шестерёнка едут за бусами (служба ставит refreshHandles). */
+    var onFrame: (() -> Unit)? = null
+
+    // Пружина вместо «30 % пути за кадр»: у бусины есть скорость, она
+    // догоняет, чуть проскакивает и успокаивается; звено дальше от пальца —
+    // мягче (`core/ChainPhysics.kt`, под тестами).
+    private val follower = ChainFollower(
+        apply = frame@{ x, y ->
+            val p = params ?: return@frame
+            val view = button ?: return@frame
+            p.x = x
+            p.y = y
             runCatching { windowManager.updateViewLayout(view, p) }
             repositionTickerIfVisible()
             repositionLearnBadge()
-            view.postDelayed(this, 16)
-        }
-    }
-
-    // ~30% of the remaining distance per frame - the rubber-band feel.
-    private fun followInc(d: Int): Int {
-        val step = (d * 0.30f).toInt()
-        return if (step != 0) step else if (d > 0) 1 else -1
-    }
+            repositionCancelBubble()
+            onFrame?.invoke()
+        },
+        onSettled = settled@{ settle ->
+            val p = params ?: return@settled
+            val view = button ?: return@settled
+            if (settle) savePosition(view, p)
+        },
+    )
 
     /**
      * Hidden "П" (no text field focused - most of the time) still keeps
      * formation: it snaps to the target silently, so the next time it
      * appears it is already docked where the "З" dropped it. Visible "П"
-     * chases on the rubber band.
+     * chases on the spring; [link] — how many beads away the dragged one is.
      */
-    fun followTo(x: Int, y: Int, settle: Boolean) {
+    fun followTo(x: Int, y: Int, settle: Boolean, link: Int = 1) {
         val view = button ?: return
         val p = params ?: return
         val (w, h) = screenSize()
-        followTargetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
-        followTargetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
+        val targetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
+        val targetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
         // ОТКРЕПЛЁННОЕ окно догонять нечем: view.post у view без окна не
         // выполняется вовсе — он ждёт следующего прикрепления. Владелец
         // увидел это так: убрал всё в три точки, оттащил их, и через пару
@@ -294,20 +283,14 @@ class FloatingButtonController(
         // Поэтому спрятанная кнопка встаёт на место сразу, без резинки:
         // догонять всё равно некому, а координаты обязаны быть настоящими.
         if (!attached) {
-            following = false
-            view.removeCallbacks(followStep)
-            p.x = followTargetX
-            p.y = followTargetY
+            follower.stop()
+            p.x = targetX
+            p.y = targetY
             runCatching { windowManager.updateViewLayout(view, p) }
             if (settle) savePosition(view, p)
             return
         }
-        followSettle = settle
-        if (!following) {
-            following = true
-            view.removeCallbacks(followStep)
-            view.post(followStep)
-        }
+        follower.follow(p.x, p.y, targetX, targetY, link, settle)
     }
 
     fun hide() {
@@ -346,6 +329,7 @@ class FloatingButtonController(
             button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
             repositionTickerIfVisible()
             repositionLearnBadge()
+            repositionCancelBubble()
         }
     }
 
@@ -615,45 +599,26 @@ class FloatingButtonController(
     }
 
     // ---- The gray "отмена" bubble, shown only while recording ----
+    // Общая на четыре кнопки (`CancelBubble.kt`): под ближним концом бегущей
+    // строки, а не под кнопкой — под кнопкой стоит «З»; прозрачность — как у
+    // кнопок.
 
-    private var cancelBubble: android.widget.TextView? = null
+    private val cancelBubble = CancelBubble(service, windowManager)
 
     fun showCancelBubble(onCancel: () -> Unit) {
-        hideCancelBubble()
-        val bp = params ?: return
-        val pill = android.widget.TextView(service).apply {
-            text = "отмена"
-            setTextColor(PAPER)
-            textSize = 13f
-            background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
-                setColor(GRAY)
-            }
-            alpha = 0.9f
-            setPadding(dp(14), dp(7), dp(14), dp(7))
-            setOnClickListener { onCancel() }
-        }
-        val p = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            val (w, h) = screenSize()
-            // Right under the button, clamped on screen.
-            x = bp.x.coerceIn(0, (w - dp(90)).coerceAtLeast(0))
-            y = (bp.y + buttonSize + dp(8)).coerceAtMost(h - dp(44))
-        }
-        cancelBubble = pill
-        runCatching { windowManager.addView(pill, p) }
+        cancelBubble.show(idleAlpha, onCancel)
+        repositionCancelBubble()
     }
 
-    fun hideCancelBubble() {
-        cancelBubble?.let { runCatching { windowManager.removeView(it) } }
-        cancelBubble = null
+    /** Пилюля едет за кнопкой: тащат, догоняет, повернули экран. */
+    fun repositionCancelBubble() {
+        if (!cancelBubble.shown) return
+        val bp = params ?: return
+        val (w, h) = screenSize()
+        cancelBubble.place(bp.x, bp.y, buttonSize, w, h)
     }
+
+    fun hideCancelBubble() = cancelBubble.hide()
 
     /** How many overlay windows this controller currently holds. */
     fun windowCount(): Int =
@@ -661,7 +626,7 @@ class FloatingButtonController(
         // свой View, но окна в WindowManager у неё нет — и в перепись,
         // которой меряют цену складывания, она входить не должна.
         (if (attached) 1 else 0) + (if (ticker != null) 1 else 0) +
-            (if (learnBadge != null) 1 else 0) + (if (cancelBubble != null) 1 else 0) +
+            (if (learnBadge != null) 1 else 0) + (if (cancelBubble.shown) 1 else 0) +
             (if (menu != null) 1 else 0)
 
     fun destroy() {
@@ -669,6 +634,7 @@ class FloatingButtonController(
         learnBadge = null
         hideCancelBubble()
         hideMenu()
+        follower.stop()
         button?.let { runCatching { windowManager.removeView(it) } }
         attached = false
         button = null
@@ -754,6 +720,7 @@ class FloatingButtonController(
             settings.fabAlphaFlow.collect { alpha ->
                 idleAlpha = alpha
                 if (!busy && !recording) container.alpha = idleAlpha
+                cancelBubble.setAlpha(alpha)
             }
         }
 
@@ -773,8 +740,10 @@ class FloatingButtonController(
         private var startY = 0
         private var dragging = false
         private var longPressFired = false
+        private var pressed: View? = null
         private val longPressRunnable = Runnable {
             longPressFired = true
+            pressed?.let { BubbleMotion.nod(it) }
             // Long press = fix the field; not available while recording.
             if (!busy && !recording) onLongPress()
         }
@@ -793,7 +762,10 @@ class FloatingButtonController(
                     startY = p.y
                     dragging = false
                     longPressFired = false
+                    pressed = view
                     view.alpha = 1f
+                    // Сжалась под пальцем (`BubbleMotion`): кнопка отвечает на касание телом.
+                    BubbleMotion.press(view)
                     view.postDelayed(longPressRunnable, LONG_PRESS_MS)
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -802,6 +774,7 @@ class FloatingButtonController(
                     if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
                         dragging = true
                         view.removeCallbacks(longPressRunnable)
+                        BubbleMotion.lift(view)
                     }
                     if (dragging && !longPressFired) {
                         p.x = startX + dx.toInt()
@@ -809,11 +782,14 @@ class FloatingButtonController(
                         runCatching { windowManager.updateViewLayout(view, p) }
                         repositionTickerIfVisible()  // the pill rides along
                         repositionLearnBadge()
+                        repositionCancelBubble()
                         onDragged?.invoke(p.x, p.y, false)
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     view.removeCallbacks(longPressRunnable)
+                    pressed = null
+                    BubbleMotion.release(view)
                     if (!busy && !recording) view.alpha = idleAlpha
                     if (dragging) {
                         savePosition(view, p)

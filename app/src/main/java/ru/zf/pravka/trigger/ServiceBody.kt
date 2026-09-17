@@ -148,11 +148,13 @@ fun PravkaAccessibilityService.onFoodTap() {
 internal fun PravkaAccessibilityService.startFoodCapture() {
     eButton?.hideInput()
     eButton?.hidePlate()
+    eDiscard = false
     if (cachedEngine.startsWith("whisper")) {
         eWhisperRecording = true
         eButton?.setRecording(true)
         eButton?.showTicker()
         eButton?.updateTicker("🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)")
+        eButton?.showCancelBubble { cancelFoodTake() }
         Haptics.start(this)
         startDictation()
     } else {
@@ -198,8 +200,26 @@ internal fun PravkaAccessibilityService.startFoodGoogle() {
     eButton?.setRecording(true)
     eButton?.showTicker()
     eButton?.updateTicker("🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)")
+    eButton?.showCancelBubble { cancelFoodTake() }
     Haptics.start(this)
     runCatching { startMicHold() }
+}
+
+/** Серая «отмена» у «Т»: наговор выбрасывается — ни в дневник, ни в подходы, ни в ленту. */
+internal fun PravkaAccessibilityService.cancelFoodTake() {
+    when {
+        eSession != null -> {
+            eDiscard = true
+            app.eventLog.add("еда: отмена наговора")
+            stopFoodLive()
+        }
+        eWhisperRecording && DictationService.recording -> {
+            eDiscard = true
+            eButton?.setBusy(true)
+            app.eventLog.add("еда: отмена наговора")
+            stopDictation()
+        }
+    }
 }
 
 internal fun PravkaAccessibilityService.stopFoodLive() {
@@ -235,7 +255,16 @@ internal fun PravkaAccessibilityService.onFoodLiveDone(text: String) {
     eSession = null
     runCatching { stopMicHold() }
     runCatching { eButton?.hideTicker() }
+    runCatching { eButton?.hideCancelBubble() }
     eButton?.setRecording(false)
+    if (eDiscard) {
+        eDiscard = false
+        eTypeInstead = false
+        eButton?.setBusy(false)
+        app.eventLog.add("еда: наговор отменён (${text.length} зн.)")
+        Feedback.toast(this, "Отменено")
+        return
+    }
     if (eTypeInstead) {
         eTypeInstead = false
         eButton?.setBusy(false)
@@ -247,8 +276,10 @@ internal fun PravkaAccessibilityService.onFoodLiveDone(text: String) {
 
 internal fun PravkaAccessibilityService.onFoodLiveError(msg: String) {
     eSession = null
+    eDiscard = false
     runCatching { stopMicHold() }
     eButton?.hideTicker()
+    eButton?.hideCancelBubble()
     eButton?.setRecording(false)
     eButton?.setBusy(false)
     Haptics.error(this)

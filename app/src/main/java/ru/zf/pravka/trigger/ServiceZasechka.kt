@@ -151,6 +151,7 @@ internal fun PravkaAccessibilityService.zTickerPrompt(): String =
 internal fun PravkaAccessibilityService.startZasechkaCapture() {
     zButton?.hideInput()
     zButton?.hideAsk()
+    zDiscard = false
     if (cachedEngine.startsWith("whisper")) {
         zWhisperRecording = true
         zButton?.setRecording(true)
@@ -158,6 +159,7 @@ internal fun PravkaAccessibilityService.startZasechkaCapture() {
         // is also the "type instead" tap target (confidential takes).
         zButton?.showTicker()
         zButton?.updateTicker(zTickerPrompt())
+        zButton?.showCancelBubble { cancelZasechkaTake() }
         Haptics.start(this)
         startDictation()
     } else {
@@ -197,8 +199,32 @@ internal fun PravkaAccessibilityService.startZasechkaGoogle() {
     zButton?.setRecording(true)
     zButton?.showTicker()
     zButton?.updateTicker(zTickerPrompt())
+    zButton?.showCancelBubble { cancelZasechkaTake() }
     Haptics.start(this)
     runCatching { startMicHold() }
+}
+
+/**
+ * Серая «отмена» у «З» (владелец, 18.09.2026: «на каждом баббле должна быть
+ * отмена, как на правке»): наговор выбрасывается — ни в ленту, ни в
+ * комментарий, ни в поле ввода. Google-сессия дослушивается и её текст
+ * отбрасывается в onZasechkaLiveDone; файл Whisper удаляется нерасшифрованным
+ * в onRecordingSaved.
+ */
+internal fun PravkaAccessibilityService.cancelZasechkaTake() {
+    when {
+        zSession != null -> {
+            zDiscard = true
+            app.eventLog.add("засечка: отмена наговора")
+            stopZasechkaLive()
+        }
+        zWhisperRecording && DictationService.recording -> {
+            zDiscard = true
+            zButton?.setBusy(true)
+            app.eventLog.add("засечка: отмена наговора")
+            stopDictation()
+        }
+    }
 }
 
 internal fun PravkaAccessibilityService.stopZasechkaLive() {
@@ -251,7 +277,22 @@ internal fun PravkaAccessibilityService.onZasechkaLiveDone(text: String) {
     zSession = null
     runCatching { stopMicHold() }
     runCatching { zButton?.hideTicker() }
+    runCatching { zButton?.hideCancelBubble() }
     zButton?.setRecording(false)
+    if (zDiscard) {
+        // Серая «отмена»: сказанное не идёт никуда, якоря и адресат
+        // комментария сбрасываются — следующая фраза уже не про них.
+        zDiscard = false
+        zTypeInstead = false
+        zCommentFor = 0L
+        zAnchorStart = 0L
+        zAnchorEnd = 0L
+        zEditTargetId = 0L
+        zButton?.setBusy(false)
+        app.eventLog.add("засечка: наговор отменён (${text.length} зн.)")
+        Feedback.toast(this, "Отменено")
+        return
+    }
     if (zTypeInstead) {
         zTypeInstead = false
         zButton?.setBusy(false)
@@ -327,8 +368,10 @@ internal fun PravkaAccessibilityService.onZasechkaCommentText(raw: String) {
 internal fun PravkaAccessibilityService.onZasechkaLiveError(msg: String) {
     zSession = null
     zCommentFor = 0L
+    zDiscard = false
     runCatching { stopMicHold() }
     zButton?.hideTicker()
+    zButton?.hideCancelBubble()
     zButton?.setRecording(false)
     zButton?.setBusy(false)
     Haptics.error(this)
