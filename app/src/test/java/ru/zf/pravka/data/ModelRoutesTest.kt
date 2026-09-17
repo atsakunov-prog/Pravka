@@ -26,7 +26,8 @@ class ModelRoutesTest {
 
     @Test
     fun `заводские — как было зашито до настроек`() {
-        assertEquals(Settings.MODEL_SONNET, ModelRoute.PRAVKA.defaultModel)
+        // Опус с 18.09.2026: тень 17.09 — 17:2 против Сонета.
+        assertEquals(Settings.MODEL_OPUS, ModelRoute.PRAVKA.defaultModel)
         assertEquals(Settings.MODEL_OPUS, ModelRoute.PRAVKA_STRONG.defaultModel)
         assertEquals(Settings.MODEL_OPUS, ModelRoute.ZASECHKA.defaultModel)
         assertEquals(Settings.MODEL_OPUS, ModelRoute.BODY.defaultModel)
@@ -60,7 +61,7 @@ class ModelRoutesTest {
     @Test
     fun `модель не из каталога откатывается к заводской, а не уезжает в запрос`() {
         val c = ModelChoice.of(ModelRoute.PRAVKA, "claude-3-opus-20240229", "turbo")
-        assertEquals(Settings.MODEL_SONNET, c.model)
+        assertEquals(Settings.MODEL_OPUS, c.model)
         assertEquals("", c.effort)
     }
 

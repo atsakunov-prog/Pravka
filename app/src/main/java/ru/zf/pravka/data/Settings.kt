@@ -51,6 +51,7 @@ class Settings(private val context: Context) {
         private val KEY_PROMPT_TUNE = booleanPreferencesKey("prompt_tune_enabled")
         private val KEY_SHADOW_DAILY = booleanPreferencesKey("shadow_daily")
         private val KEY_NIGHT_BUDGET = intPreferencesKey("night_budget_usd")
+        private val KEY_MIGRATED_OPUS = booleanPreferencesKey("migrated_pravka_opus_1")
         private val KEY_PLAN_RULES_LAST_RUN = longPreferencesKey("plan_rules_last_run")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
@@ -279,7 +280,11 @@ class Settings(private val context: Context) {
     // разбирает Сонет против Опуса пускай Fable 5.1 high». Включена с завода —
     // он её и просил; идёт в тот же час, что ночной разбор. Движок —
     // core/ShadowRun.kt, чистая политика — core/ShadowPolicy.kt.
-    val shadowRunEnabledFlow = context.dataStore.data.map { it[KEY_SHADOW_RUN] ?: true }
+    // Выключена с завода с 18.09 (владелец: «тень давай вырубим по умолчанию, и
+    // так уже на неё сколько потратили»): ответ она дала — Опус лучше 17:2 — и
+    // стал заводской моделью чистки. Включается тумблером, когда появится новая
+    // модель для сравнения.
+    val shadowRunEnabledFlow = context.dataStore.data.map { it[KEY_SHADOW_RUN] ?: false }
     suspend fun setShadowRunEnabled(value: Boolean) {
         context.dataStore.edit { it[KEY_SHADOW_RUN] = value }
     }
@@ -310,6 +315,22 @@ class Settings(private val context: Context) {
     val nightBudgetUsdFlow = context.dataStore.data.map { it[KEY_NIGHT_BUDGET] ?: 4 }
     suspend fun setNightBudgetUsd(value: Int) {
         context.dataStore.edit { it[KEY_NIGHT_BUDGET] = value.coerceIn(1, 50) }
+    }
+
+    /**
+     * Разовая миграция 18.09.2026: чистка — на Опус. Заводское поменялось в
+     * ModelRoutes, но у дороги мог стоять явный выбор «Сонет» с прошлых сборок —
+     * владелец просил включить Опус, а не оставить как было. Явный Fable или
+     * уже Опус не трогаем. Метка — чтобы миграция не спорила с его будущим
+     * возвратом на Сонет.
+     */
+    suspend fun migratePravkaToOpus() {
+        context.dataStore.edit { p ->
+            if (p[KEY_MIGRATED_OPUS] == true) return@edit
+            p[KEY_MIGRATED_OPUS] = true
+            val key = modelKey(ModelRoute.PRAVKA)
+            if (p[key] == null || p[key] == MODEL_SONNET) p[key] = MODEL_OPUS
+        }
     }
 
     // Когда последний раз читались правила блока из Notion — переживает

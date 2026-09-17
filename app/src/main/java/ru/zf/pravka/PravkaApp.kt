@@ -42,6 +42,8 @@ class PravkaApp : Application() {
         // (и единственный, если служба доступности почему-то выключена).
         ru.zf.pravka.data.Backups.tick(this) { line -> eventLog.add(line) }
         appScope.launch { settings.phoneMicOnlyFlow.collect { phoneMicOnly = it } }
+        // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет.
+        appScope.launch { runCatching { settings.migratePravkaToOpus() } }
         // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
         // свой лог, пока тумблер включён (Настройки → Общее).
         appScope.launch {
