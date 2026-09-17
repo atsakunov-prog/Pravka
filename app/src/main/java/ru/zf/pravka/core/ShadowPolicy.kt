@@ -34,10 +34,16 @@ object ShadowPolicy {
 
     data class Window(val fromMs: Long, val toMs: Long, val cap: Int, val first: Boolean)
 
-    /** Окно тени: первая ночь — месяц с потолком; потом — с конца прошлого прогона, не глубже недели. */
-    fun window(nowMs: Long, lastDoneTo: Long?): Window =
-        if (lastDoneTo == null) Window(nowMs - FIRST_WINDOW_MS, nowMs, FIRST_CAP, first = true)
-        else Window(maxOf(lastDoneTo, nowMs - CATCH_UP_MS), nowMs, DAILY_CAP, first = false)
+    /**
+     * Окно тени. Большой кусок ([big]) — месяц с потолком 200: только для самого
+     * первого запуска, когда прогонов тени ещё не было, или по кнопке «за
+     * месяц». Всё остальное — сутки: с конца последнего удачного прогона, не
+     * глубже недели (владелец, 17.09: «потом он делает не 200, а только за
+     * 1 день» — застрявший первый батч не должен повторяться сам).
+     */
+    fun window(nowMs: Long, lastDoneTo: Long?, big: Boolean): Window =
+        if (big) Window(nowMs - FIRST_WINDOW_MS, nowMs, FIRST_CAP, first = true)
+        else Window(lastDoneTo?.coerceAtLeast(nowMs - CATCH_UP_MS) ?: (nowMs - 86_400_000L), nowMs, DAILY_CAP, first = false)
 
     /** Одна диктовка в сравнении. */
     data class Take(

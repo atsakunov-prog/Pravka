@@ -169,6 +169,15 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             OutlinedButton(onClick = { scope.launch { settings.setNightReviewHour((hour + 1) % 24) } }) { Text("+") }
         }
         Spacer(Modifier.height(6.dp))
+        fun launchShadow(big: Boolean) {
+            busy = true
+            scope.launch {
+                app.shadowRun.start(manual = true, big = big)
+                    .onSuccess { Feedback.toast(context, if (it.active) "Отправлено: сначала чистка, потом судья — час-два" else it.summary) }
+                    .onFailure { Feedback.toast(context, "Не запустилась: ${it.message}") }
+                busy = false
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             fun launchReview(kind: String) {
                 busy = true
@@ -181,23 +190,19 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             }
             Button(enabled = !busy && !reviewRunning, onClick = { launchReview(NightReviewPolicy.DAILY) }) { Text("Сутки") }
             OutlinedButton(enabled = !busy && !reviewRunning, onClick = { launchReview(NightReviewPolicy.WEEKLY) }) { Text("Неделю") }
-            OutlinedButton(
-                enabled = !busy && !shadowRunning,
-                onClick = {
-                    busy = true
-                    scope.launch {
-                        app.shadowRun.start(manual = true)
-                            .onSuccess { Feedback.toast(context, if (it.active) "Отправлено: сначала чистка, потом судья — час-два" else it.summary) }
-                            .onFailure { Feedback.toast(context, "Не запустилась: ${it.message}") }
-                        busy = false
-                    }
-                },
-            ) { Text("Тень") }
+            OutlinedButton(enabled = !busy && !shadowRunning, onClick = { launchShadow(big = false) }) { Text("Тень") }
+        }
+        // Большой кусок (месяц, до 200) — только по явной просьбе: сам он идёт один раз, при первом запуске.
+        Row {
+            TextButton(enabled = !busy && !shadowRunning, onClick = { launchShadow(big = true) }) { Text("Тень за месяц (до 200 диктовок)") }
         }
         for (run in runs.filter { it.active }.sortedBy { it.startedAt }) {
             Spacer(Modifier.height(6.dp))
+            // Возраст батча цифрой: «застряла» или «идёт» решается по нему, а не по ощущению.
+            val ageMin = ((System.currentTimeMillis() - run.startedAt) / 60_000L).coerceAtLeast(0)
+            val age = if (ageMin < 60) "$ageMin мин" else "${ageMin / 60} ч ${ageMin % 60} мин"
             Text(
-                "Идёт ${kindLabel(run)}: ${stageLabel(run.stage)} · " +
+                "Идёт ${kindLabel(run)}: ${stageLabel(run.stage)} · уже $age · " +
                     run.progress.ifBlank { "отправлено ${dayTime.format(Date(run.startedAt))}, статус раз в 10 минут" },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,

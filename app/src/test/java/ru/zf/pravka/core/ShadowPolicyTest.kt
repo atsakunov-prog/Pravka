@@ -12,20 +12,24 @@ class ShadowPolicyTest {
     private val day = 86_400_000L
 
     @Test
-    fun `первая ночь — месяц и потолок 200, дальше — от конца прошлого прогона`() {
+    fun `большой кусок — только когда просят, иначе сутки от конца прошлого прогона`() {
         val now = 100 * day
-        val first = ShadowPolicy.window(now, null)
+        val first = ShadowPolicy.window(now, null, big = true)
         assertTrue(first.first)
         assertEquals(now - 30 * day, first.fromMs)
         assertEquals(ShadowPolicy.FIRST_CAP, first.cap)
 
-        val next = ShadowPolicy.window(now, now - day)
-        assertFalse(next.first)
+        // Удачных прогонов ещё нет, но большой не просили (первый застрял) — сутки.
+        val plain = ShadowPolicy.window(now, null, big = false)
+        assertFalse(plain.first)
+        assertEquals(now - day, plain.fromMs)
+        assertEquals(ShadowPolicy.DAILY_CAP, plain.cap)
+
+        val next = ShadowPolicy.window(now, now - day, big = false)
         assertEquals(now - day, next.fromMs)
-        assertEquals(ShadowPolicy.DAILY_CAP, next.cap)
 
         // Телефон лежал выключенным две недели — глубже недели не лезем.
-        val late = ShadowPolicy.window(now, now - 14 * day)
+        val late = ShadowPolicy.window(now, now - 14 * day, big = false)
         assertEquals(now - 7 * day, late.fromMs)
     }
 

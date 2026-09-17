@@ -82,10 +82,15 @@ class ShadowRun(
         }
     }
 
-    /** Запуск: собрать диктовки окна, отправить батч второй модели. */
-    suspend fun start(manual: Boolean, nowMs: Long = System.currentTimeMillis()): Result<Run> = runCatching {
-        val lastDoneTo = store.all().filter { it.isShadow && it.stage == "done" }.maxOfOrNull { it.toMs }
-        val w = ShadowPolicy.window(nowMs, lastDoneTo)
+    /**
+     * Запуск: собрать диктовки окна, отправить батч второй модели. Большой
+     * кусок ([big]) — один раз: сам, когда прогонов тени ещё не было вовсе,
+     * или по кнопке «за месяц»; иначе сутки.
+     */
+    suspend fun start(manual: Boolean, big: Boolean = false, nowMs: Long = System.currentTimeMillis()): Result<Run> = runCatching {
+        val shadows = store.all().filter { it.isShadow }
+        val lastDoneTo = shadows.filter { it.stage == "done" }.maxOfOrNull { it.toMs }
+        val w = ShadowPolicy.window(nowMs, lastDoneTo, big = big || shadows.isEmpty())
         val day = settings.modelChoice(ModelRoute.PRAVKA)
         val shadow = settings.modelChoice(ModelRoute.SHADOW_CLEAN)
         fun doneRun(summary: String) = Run(
