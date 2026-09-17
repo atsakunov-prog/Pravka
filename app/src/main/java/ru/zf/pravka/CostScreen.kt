@@ -129,7 +129,9 @@ internal fun CostScreen(app: PravkaApp) {
                     }
                     val model = choice?.let { " · " + Models.label(it.model) + (if (it.effort.isNotBlank()) " ${it.effort}" else "") }.orEmpty()
                     val share = if (total > 0) " (%.0f%%)".format(Locale.US, 100 * usd / total) else ""
-                    CostLine("$title$model", "$%.2f$share".format(Locale.US, usd))
+                    // Доля — отдельной строкой, не внутрь формата: «(67%)» в шаблоне
+                    // читается как спецификатор «%)» и роняет экран (18.09.2026).
+                    CostLine("$title$model", "$%.2f".format(Locale.US, usd) + share)
                 }
                 Spacer(Modifier.height(6.dp))
                 PaperHint(
