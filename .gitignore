@@ -14,3 +14,9 @@ local.properties
 
 # adb Wi-Fi saved address (machine-specific)
 scripts/.adb-address
+
+# Правка на компе (tools/pravka_comp.py): настройки, журнал и файл с телефона — на компьютере владельца
+tools/pravka_comp.json
+tools/pravka_comp_history.jsonl
+tools/pravka-comp*.json
+tools/__pycache__/

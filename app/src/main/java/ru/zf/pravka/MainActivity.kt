@@ -1775,6 +1775,28 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
             }) { Text("Скопировать промпт для встречи") }
         }
 
+        // Правка на компе: утилита tools/pravka_comp.py причёсывает текст в
+        // любом поле на компьютере тем же промптом, словарём и правилами.
+        // Телефон — хозяин данных, комп читает этот файл (data/CompBundle.kt,
+        // docs/pravka.md «Правка на компе»).
+        SectionCard(label = "Для компа") {
+            val ctx = LocalContext.current
+            val app = ctx.applicationContext as PravkaApp
+            HintText(
+                "Один файл для утилиты «Правка на компе»: промпты, словарь, принятые " +
+                    "правила и выбор моделей. Уходит через «Поделиться» — себе в Telegram " +
+                    "или на диск; утилита сама берёт самый свежий из Загрузок."
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = {
+                app.appScope.launch {
+                    val note = runCatching { ru.zf.pravka.data.CompBundle.share(ctx, app) }
+                        .getOrElse { "Не собрал файл для компа: ${it.message}" }
+                    Feedback.toast(ctx, note, long = true)
+                }
+            }) { Text("Файл для компа") }
+        }
+
         for (id in PromptStore.PromptId.entries) {
             val override by promptStore.overrideFlow(id).collectAsState(initial = null)
             val effective = override ?: promptStore.factory(id)

@@ -1,0 +1,17 @@
+{
+  "_": "Скопируй в pravka_comp.json рядом с утилитой и поправь под себя. Клавиши — по физической клавише, раскладка не важна. Режимы: clean, strong, shorter, longer, polish, business, soften, prose.",
+  "hotkeys": {
+    "ctrl+alt+p": "clean",
+    "ctrl+alt+shift+p": "strong",
+    "ctrl+alt+k": "shorter",
+    "ctrl+alt+o": "polish"
+  },
+  "quit_hotkey": "ctrl+alt+shift+q",
+  "bundle": "",
+  "search_dirs": [".", "~/Downloads", "~/Загрузки"],
+  "api_key": "",
+  "copy_wait_ms": 400,
+  "paste_delay_ms": 80,
+  "history": "pravka_comp_history.jsonl",
+  "pill": true
+}

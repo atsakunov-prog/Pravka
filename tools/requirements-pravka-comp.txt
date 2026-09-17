@@ -1,0 +1,5 @@
+# Правка на компе (tools/pravka_comp.py). Установка: pip install -r requirements-pravka-comp.txt
+# Ядро (pravka_comp_core.py) и его тесты зависимостей не имеют.
+anthropic>=1.0
+pynput>=1.7
+pyperclip>=1.8
