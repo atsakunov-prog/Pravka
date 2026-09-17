@@ -55,6 +55,47 @@ class NightReviewPolicyTest {
     }
 
     @Test
+    fun `совет заметки читается из advice, слово ищется целиком`() {
+        val a = NightReviewPolicy.parseAnalysis(
+            """{"summary": "s", "changes": [
+              {"kind": "note", "why": "модель теряет «не»", "advice": "усилить правило 6 промпта CLEAN", "confidence": "low"},
+              {"kind": "dict_add", "mode": "HINT", "from": "поле", "to": "Полли", "note": "в рассказах", "why": "w", "confidence": "high"}]}""",
+            "n",
+        )
+        assertEquals("усилить правило 6 промпта CLEAN", a.changes[0].note)
+        assertEquals("в рассказах", a.changes[1].note)
+
+        val texts = "<d>сказал Мора и ушёл</d>\n<m>Сказал Мора и ушёл.</m>"
+        assertTrue(NightReviewPolicy.mentioned("мора", texts))
+        assertFalse(NightReviewPolicy.mentioned("Мор", texts))
+        assertFalse(NightReviewPolicy.mentioned("Ви", texts))
+        assertFalse(NightReviewPolicy.mentioned("", texts))
+    }
+
+    @Test
+    fun `лог для Claude Code — идеи с советами, применённое, предложенное, возвращённое`() {
+        val run = ru.zf.pravka.data.NightReviewStore.Run(
+            id = 1L, kind = NightReviewPolicy.DAILY, startedAt = 1000L, fromMs = 0L, toMs = 1000L, stage = "done", costUsd = 0.5,
+            summary = "Применено 1, предложено 1.\n\nМодель путает род.",
+            changes = listOf(
+                Change(id = "n-1", kind = "note", why = "теряет «не»", note = "усилить правило 6", status = "note"),
+                Change(id = "n-2", kind = "dict_add", mode = "HARD", from = "ебитда", to = "EBITDA", why = "5 раз", status = "applied"),
+                Change(id = "n-3", kind = "dict_mode", mode = "HARD", toMode = "HINT", from = "губ", why = "живое слово", verdictWhy = "спорно", status = "proposed"),
+                Change(id = "n-4", kind = "dict_add", mode = "HINT", from = "поле", to = "Полли", why = "w", status = "reverted"),
+                Change(id = "n-5", kind = "dict_add", mode = "HINT", from = "x", to = "y", why = "w", status = "dropped"),
+            ),
+        )
+        val log = NightReviewPolicy.exportLog(listOf(run), { "д$it" }, nowMs = 2000L)
+        assertTrue(log, log.contains("### Идеи по приложению\n- теряет «не»\n  - Совет: усилить правило 6"))
+        assertTrue(log, log.contains("### Применено\n- HARD: ебитда → EBITDA — 5 раз"))
+        assertTrue(log, log.contains("### Предложено (владелец не решил)\n- губ: HARD → HINT — живое слово [спорно]"))
+        assertTrue(log, log.contains("### Вернул владелец\n- HINT: поле → Полли"))
+        assertTrue(log, log.contains("### Сводка разбора\nМодель путает род."))
+        assertFalse(log, log.contains("x → y"))
+        assertTrue(log, log.contains("отброшено низких 1"))
+    }
+
+    @Test
     fun `само применяется всё high, кроме отклонённого и HARD на короткое слово`() {
         val ok = Change(id = "d-1", kind = "dict_add", mode = "PROTECT", from = "Полли", confidence = "high", verdict = "approve")
         assertTrue(NightReviewPolicy.autoApply(ok))

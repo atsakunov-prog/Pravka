@@ -4,6 +4,7 @@ import java.util.Calendar
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.data.NightReviewStore.Change
+import ru.zf.pravka.data.NightReviewStore.Run
 
 /**
  * Ночной разбор: расписание, разбор ответов модели и правило «применять
@@ -79,7 +80,9 @@ object NightReviewPolicy {
                 toMode = c.optString("to_mode").trim().uppercase(),
                 from = from,
                 to = c.optString("to").trim(),
-                note = c.optString("note").trim(),
+                // У заметки поле note — совет разработчику (владелец, 17.09: «по
+                // каждому внизу должен быть совет»), у записи словаря — условие HINT.
+                note = (if (kind == "note") c.optString("advice") else c.optString("note")).trim(),
                 ruleId = c.optLong("rule_id"),
                 why = c.optString("why").trim(),
                 confidence = confidence,
@@ -167,11 +170,99 @@ object NightReviewPolicy {
         return JSONObject(raw.substring(s, e + 1))
     }
 
-    fun headline(applied: Int, proposed: Int, rejected: Int, notes: Int): String = buildString {
+    fun headline(applied: Int, proposed: Int, rejected: Int, notes: Int, dropped: Int = 0): String = buildString {
         append("Применено ").append(applied)
         append(", предложено ").append(proposed)
         if (rejected > 0) append(", отклонено проверкой ").append(rejected)
-        if (notes > 0) append(", заметок ").append(notes)
+        if (dropped > 0) append(", отброшено низких ").append(dropped)
+        if (notes > 0) append(", идей ").append(notes)
         append('.')
+    }
+
+    /**
+     * Встречается ли слово в текстах окна как отдельное слово (без учёта
+     * регистра). Дневной прогон правит существующую запись словаря, только
+     * если её слово вообще было в этот день: иначе каждую ночь всплывали
+     * записи годовой давности («Ви», «Мора» — владелец, 17.09: «взял очень
+     * большой объём»). Полная ревизия словаря — дело недельного.
+     */
+    fun mentioned(word: String, texts: String): Boolean {
+        val w = word.trim()
+        if (w.isEmpty() || texts.isEmpty()) return false
+        val re = Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(w) + "(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE)
+        return re.containsMatchIn(texts)
+    }
+
+    /** Строка изменения для лога и экрана: вид и слово. */
+    fun line(c: Change): String = when (c.kind) {
+        "dict_add" -> "${c.mode}: ${c.from}${if (c.to.isNotBlank()) " → ${c.to}" else ""}${if (c.note.isNotBlank()) " (когда: ${c.note})" else ""}"
+        else -> c.title()
+    }
+
+    /**
+     * Лог для Claude Code (владелец, 17.09.2026: «эти советы вместе с
+     * предложениями можно будет выгружать в виде лога и отправлять в Клод
+     * код, чтобы он правил»). Markdown по прогонам: идеи с советами,
+     * применённое, предложенное, что владелец вернул и отклонил, сводка.
+     */
+    fun exportLog(runs: List<Run>, dateOf: (Long) -> String, nowMs: Long = System.currentTimeMillis()): String {
+        val sb = StringBuilder("# Ночной разбор Правки — лог для Claude Code\n\n")
+        sb.append("Выгружено ").append(dateOf(nowMs)).append(". Прогонов: ").append(runs.size).append(".\n")
+        sb.append("Статусы: применено — легло в словарь само или по кнопке; предложено — ждёт решения владельца; ")
+        sb.append("вернул / отклонил владелец — сигнал, что автомат ошибся.\n\n")
+        for (run in runs.sortedByDescending { it.startedAt }) {
+            val kind = when {
+                run.isShadow -> "тень второй модели"
+                run.kind == WEEKLY -> "неделя"
+                else -> "сутки"
+            }
+            sb.append("## ").append(dateOf(run.startedAt)).append(" · ").append(kind)
+            sb.append(" · период ").append(dateOf(run.fromMs)).append("–").append(dateOf(run.toMs)).append("\n")
+            if (run.error.isNotBlank()) sb.append("Сбой: ").append(run.error).append("\n")
+            if (run.isShadow) {
+                sb.append(run.summary).append("\n\n")
+                val ex = run.changes.filter { it.kind == "shadow" }
+                if (ex.isNotEmpty()) {
+                    sb.append("### Примеры\n")
+                    for (c in ex) {
+                        sb.append("- ").append(if (c.verdict == "tie" || c.verdict == "same") "равноценно" else if (c.verdict == "both_bad") "оба плохо" else "лучше ${c.verdict}")
+                        sb.append(": ").append(c.verdictWhy)
+                        if (c.why.isNotBlank()) sb.append(" [").append(c.why).append("]")
+                        sb.append("\n  - надиктовано: ").append(c.from.replace("\n", " "))
+                        sb.append("\n  - ").append(c.mode).append(": ").append(c.to.replace("\n", " "))
+                        sb.append("\n  - ").append(c.toMode).append(": ").append(c.note.replace("\n", " ")).append("\n")
+                    }
+                }
+                sb.append("\n")
+                continue
+            }
+            val notes = run.changes.filter { it.kind == "note" }
+            val applied = run.changes.filter { it.status == "applied" }
+            val proposed = run.changes.filter { it.status == "proposed" }
+            val reverted = run.changes.filter { it.status == "reverted" }
+            val rejectedByOwner = run.changes.filter { it.status == "rejected" && "владелец" in it.statusNote }
+            sb.append(headline(applied.size, proposed.size, run.changes.count { it.status == "rejected" }, notes.size, run.changes.count { it.status == "dropped" }))
+            if (run.costUsd > 0) sb.append(" Стоил $").append("%.2f".format(java.util.Locale.US, run.costUsd)).append('.')
+            sb.append("\n\n")
+            fun section(title: String, list: List<Change>, render: (Change) -> String) {
+                if (list.isEmpty()) return
+                sb.append("### ").append(title).append("\n")
+                for (c in list) sb.append("- ").append(render(c)).append("\n")
+                sb.append("\n")
+            }
+            section("Идеи по приложению", notes) { c ->
+                c.why + if (c.note.isNotBlank()) "\n  - Совет: ${c.note}" else ""
+            }
+            section("Применено", applied) { c -> line(c) + " — " + c.why }
+            section("Предложено (владелец не решил)", proposed) { c ->
+                line(c) + " — " + c.why + if (c.verdictWhy.isNotBlank()) " [${c.verdictWhy}]" else ""
+            }
+            section("Вернул владелец", reverted) { c -> line(c) + " — " + c.why }
+            section("Отклонил владелец", rejectedByOwner) { c -> line(c) + " — " + c.why }
+            val body = run.summary.split("\n\n").filterIndexed { i, p -> !(i == 0 && p.startsWith("Применено ")) }.joinToString("\n\n").trim()
+            if (body.isNotBlank()) sb.append("### Сводка разбора\n").append(body).append("\n\n")
+            for (r in run.replies) sb.append("Владелец: ").append(r.text).append("\nРазбор: ").append(r.result).append("\n\n")
+        }
+        return sb.toString().trimEnd() + "\n"
     }
 }

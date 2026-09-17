@@ -42,7 +42,7 @@ class NightReviewStore(private val context: Context) {
         /** approve · reject · unsure · пусто (проверка не дошла). */
         val verdict: String = "",
         val verdictWhy: String = "",
-        /** proposed · applied · rejected · reverted · failed · skipped · note */
+        /** proposed · applied · rejected · reverted · failed · skipped · dropped (низкая уверенность) · note */
         val status: String = "proposed",
         /** JSON обратного действия для применённого изменения. */
         val undo: String = "",
@@ -86,6 +86,8 @@ class NightReviewStore(private val context: Context) {
         val cacheReadTokens: Int = 0,
         val finishedAt: Long = 0L,
         val lastPollAt: Long = 0L,
+        /** Что ответил последний опрос статуса батча — словами, для строки «идёт…» (владелец: «тень, кажется, застряла»). */
+        val progress: String = "",
         val changes: List<Change> = emptyList(),
         val replies: List<Reply> = emptyList(),
     ) {
@@ -173,7 +175,7 @@ class NightReviewStore(private val context: Context) {
                     error = o.optString("error"), costUsd = o.optDouble("costUsd", 0.0),
                     inputTokens = o.optInt("inputTokens"), cacheReadTokens = o.optInt("cacheReadTokens"),
                     finishedAt = o.optLong("finishedAt"), lastPollAt = o.optLong("lastPollAt"),
-                    changes = changes, replies = replies,
+                    progress = o.optString("progress"), changes = changes, replies = replies,
                 )
             )
         }
@@ -190,7 +192,7 @@ class NightReviewStore(private val context: Context) {
                 put("evidence", JSONObject().apply { for ((k, v) in r.evidence) put(k, v) })
                 put("summary", r.summary); put("error", r.error); put("costUsd", r.costUsd)
                 put("inputTokens", r.inputTokens); put("cacheReadTokens", r.cacheReadTokens)
-                put("finishedAt", r.finishedAt); put("lastPollAt", r.lastPollAt)
+                put("finishedAt", r.finishedAt); put("lastPollAt", r.lastPollAt); put("progress", r.progress)
                 put(
                     "changes",
                     JSONArray().apply {

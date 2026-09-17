@@ -142,7 +142,8 @@ object NightReviewEvidence {
         val lines = ArrayList<String>()
         for (run in runs.filter { it.startedAt >= sinceMs && it.stage == "done" }.sortedByDescending { it.startedAt }) {
             for (c in run.changes) {
-                if (c.isNote) continue
+                // Отброшенное и пропущенное — не решение, памяти не нужно.
+                if (c.isNote || c.status == "dropped" || c.status == "skipped") continue
                 val hits = undoId(c)?.let(hitsSince)
                 val tail = when (c.status) {
                     "applied" -> "применено" + (hits?.let { " (сработало $it раз)" } ?: "")

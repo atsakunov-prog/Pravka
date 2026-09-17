@@ -220,6 +220,17 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
         }
     }
 
+    /** Отменить батч (кнопка «Отменить» под застрявшим прогоном). Уже завершённый отменять нечего — API ответит 4xx, это не ошибка владельца. */
+    suspend fun cancel(batchId: String) = withContext(Dispatchers.IO) {
+        val key = apiKey()
+        client.newCall(
+            builder("$BATCHES/$batchId/cancel", key).post("".toRequestBody("application/json".toMediaType())).build()
+        ).execute().use { r ->
+            val text = r.body?.string().orEmpty()
+            if (!r.isSuccessful) fail(r.code, text)
+        }
+    }
+
     /** JSONL результатов: строка на запрос, порядок произвольный — сопоставлять по custom_id. */
     suspend fun results(resultsUrl: String): List<Item> = withContext(Dispatchers.IO) {
         val key = apiKey()

@@ -5,6 +5,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.core.prompts.PromptsReview
@@ -67,6 +68,7 @@ class NightReview(
 
     private val mutex = Mutex()
     private val dayFmt = SimpleDateFormat("dd.MM", Locale.US)
+    private val timeFmt = SimpleDateFormat("HH:mm", Locale.US)
     private fun date(ms: Long) = dayFmt.format(Date(ms))
 
     /** Тик службы, раз в несколько минут: продвинуть активный прогон или запустить назревший. */
@@ -175,7 +177,9 @@ class NightReview(
             if (weekly || rulesOn) rulesBlock else "",
             "ПРОМПТ CLEAN, действующий сейчас (не правь, только заметки):\n" + prompts.effective(ProofreadMode.CLEAN),
         ).filter { it.isNotBlank() }.joinToString("\n\n")
-        return mapOf("common" to common, "specific" to specific)
+        // Тексты окна отдельно — по ним дневной прогон отсеивает правки записей
+        // словаря, чьих слов в этот день не было (NightReviewPolicy.mentioned).
+        return mapOf("common" to common, "specific" to specific, "texts" to pairsBlock + "\n" + corrBlock)
     }
 
     /** Память решений для промптов: прошлые прогоны + сколько раз сработало применённое. */
@@ -227,6 +231,7 @@ class NightReview(
         val st = batches.status(batchId)
         if (!st.ended) {
             log.add("ночной разбор: батч $batchId ещё идёт (в работе ${st.inFlight})")
+            store.save(r.copy(progress = "батч у Anthropic: ${if (st.inFlight > 0) "в работе" else st.processing} · опрос ${timeFmt.format(Date(nowMs))}"))
             return
         }
         val url = st.resultsUrl
@@ -266,10 +271,22 @@ class NightReview(
         // Память: что владелец вернул или отклонил за месяц, снова не предлагается —
         // даже если модель не послушала промпт.
         val blocked = NightReviewEvidence.blockedKeys(store.all(), System.currentTimeMillis() - LEDGER_MS)
+        val daily = run.kind == NightReviewPolicy.DAILY
+        val texts = run.evidence["texts"].orEmpty()
         val remembered = changes.map { c ->
-            if (!c.isNote && NightReviewEvidence.key(c) in blocked)
-                c.copy(status = "skipped", statusNote = "владелец уже вернул или отклонил такое — не предлагаю снова")
-            else c
+            when {
+                c.isNote -> c
+                NightReviewEvidence.key(c) in blocked ->
+                    c.copy(status = "skipped", statusNote = "владелец уже вернул или отклонил такое — не предлагаю снова")
+                // Владелец (17.09): «низковероятные просто отбрасывай, иначе каша».
+                // Отброшенное до проверки — ещё и не стоит токенов второго прохода.
+                c.confidence != "high" -> c.copy(status = "dropped", statusNote = "низкая уверенность — отброшено")
+                // Дневной прогон — про день: запись словаря правится, только если
+                // её слово было в текстах окна; остальное — недельному.
+                daily && (c.kind == "dict_disable" || c.kind == "dict_mode") && !NightReviewPolicy.mentioned(c.from, texts) ->
+                    c.copy(status = "skipped", statusNote = "за сутки слово не встречалось — оставлено недельному разбору")
+                else -> c
+            }
         }
         val toCheck = remembered.filter { !it.isNote && it.status == "proposed" }
         val partial = run.copy(summary = summaries.joinToString("\n\n"), error = errors.joinToString("; "), changes = remembered)
@@ -376,14 +393,42 @@ class NightReview(
         val cache = if (run.inputTokens > 0) {
             " Вход ${run.inputTokens} токенов, из кэша ${run.cacheReadTokens} (${100 * run.cacheReadTokens / run.inputTokens}%)."
         } else ""
-        val head = NightReviewPolicy.headline(run.applied(), run.proposed(), run.rejected(), run.changes.count { it.isNote }) + cache
+        val head = NightReviewPolicy.headline(
+            run.applied(), run.proposed(), run.rejected(), run.changes.count { it.isNote }, run.changes.count { it.status == "dropped" },
+        ) + cache
         log.add("ночной разбор (${run.kind}): $head стоил $" + "%.3f".format(Locale.US, run.costUsd))
         return run.copy(
             stage = "done",
             finishedAt = System.currentTimeMillis(),
             evidence = emptyMap(),
+            progress = "",
             summary = listOf(head, run.summary).filter { it.isNotBlank() }.joinToString("\n\n"),
         )
+    }
+
+    /** Кнопка «Проверить сейчас» под идущим прогоном: опрос батча без десятиминутной паузы. */
+    suspend fun pollNow(runId: Long): Result<String> = runCatching {
+        val run = store.get(runId) ?: error("Прогон не найден")
+        if (!run.active) return@runCatching "Прогон уже завершён"
+        mutex.withLock {
+            runCatching { poll(run, System.currentTimeMillis()) }.onFailure { fail(run, it) }.getOrThrow()
+        }
+        val after = store.get(runId)
+        if (after == null || !after.active) "Готово" else after.progress.ifBlank { "Ещё идёт" }
+    }
+
+    /** Кнопка «Отменить»: батч отменяется у Anthropic (что успел — оплачено), прогон закрывается с причиной. */
+    suspend fun cancel(runId: Long): Result<Unit> = runCatching {
+        val run = store.get(runId) ?: error("Прогон не найден")
+        if (!run.active) return@runCatching
+        val batchId = when (run.stage) {
+            "analysis" -> run.analysisBatchId
+            "check" -> run.checkBatchId
+            else -> run.auditBatchId
+        }
+        runCatching { batches.cancel(batchId) }.onFailure { log.add("ночной разбор: отмена батча $batchId не прошла: ${it.message}") }
+        store.save(run.copy(stage = "failed", error = "отменено владельцем", finishedAt = System.currentTimeMillis(), evidence = emptyMap(), progress = ""))
+        log.add("ночной разбор (${run.kind}): отменён владельцем на стадии ${run.stage}")
     }
 
     private suspend fun fail(run: Run, e: Throwable) {
@@ -473,14 +518,39 @@ class NightReview(
     suspend fun act(runId: Long, changeId: String, action: String): Result<Unit> = runCatching {
         val run = store.get(runId) ?: error("Прогон не найден")
         val c = run.changes.firstOrNull { it.id == changeId } ?: error("Изменение не найдено")
-        val updated = when (action) {
-            "apply" -> if (c.status == "proposed" || c.status == "rejected") applyChange(c, run) else c
-            "reject" -> if (c.status == "proposed") c.copy(status = "rejected", statusNote = "отклонил владелец") else c
-            "revert" -> if (c.status == "applied") revertChange(c) else c
-            else -> c
-        }
+        val updated = ownerAction(c, run, action)
         store.save(run.copy(changes = run.changes.map { if (it.id == changeId) updated else it }))
         log.add("ночной разбор: владелец — $action ${c.title()} → ${updated.status}")
+    }
+
+    /**
+     * Действие владельца над изменением. Принять можно предложенное, отклонённое
+     * и ВОЗВРАЩЁННОЕ (17.09: «нажимаю принять, потом вернуть — снова принять не
+     * даёт»); отклонить — предложенное и возвращённое; вернуть — применённое.
+     */
+    private suspend fun ownerAction(c: Change, run: Run, action: String): Change = when (action) {
+        "apply" -> if (c.status in APPLICABLE) applyChange(c, run) else c
+        "reject" -> if (c.status == "proposed" || c.status == "reverted") c.copy(status = "rejected", statusNote = "отклонил владелец") else c
+        "revert" -> if (c.status == "applied") revertChange(c) else c
+        else -> c
+    }
+
+    private val APPLICABLE = setOf("proposed", "rejected", "reverted")
+
+    /** «Принять все»: всё предложенное и возвращённое прогона — в словарь. */
+    suspend fun applyAll(runId: Long): Result<Int> = runCatching {
+        val run = store.get(runId) ?: error("Прогон не найден")
+        var n = 0
+        val changes = run.changes.map { c ->
+            if (!c.isNote && (c.status == "proposed" || c.status == "reverted")) {
+                val done = applyChange(c, run)
+                if (done.status == "applied") n++
+                done
+            } else c
+        }
+        store.save(run.copy(changes = changes))
+        log.add("ночной разбор: владелец принял всё предложенное → $n")
+        n
     }
 
     /** Ответ владельца обычным языком: модель переводит в действия, мы их выполняем. */
@@ -501,12 +571,8 @@ class NightReview(
         var did = 0
         for ((id, action) in plan.actions) {
             val c = r.changes.firstOrNull { it.id == id } ?: continue
-            val updated = when (action) {
-                "revert" -> if (c.status == "applied") revertChange(c) else null
-                "apply" -> if (c.status == "proposed" || c.status == "rejected") applyChange(c, r) else null
-                "reject" -> if (c.status == "proposed") c.copy(status = "rejected", statusNote = "отклонил владелец") else null
-                else -> null
-            } ?: continue
+            val updated = ownerAction(c, r, action)
+            if (updated === c) continue
             r = r.copy(changes = r.changes.map { if (it.id == id) updated else it })
             did++
         }

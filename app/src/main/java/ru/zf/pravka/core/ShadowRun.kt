@@ -1,9 +1,12 @@
 package ru.zf.pravka.core
 
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import ru.zf.pravka.core.prompts.PromptsReview
@@ -53,6 +56,7 @@ class ShadowRun(
     }
 
     private val mutex = Mutex()
+    private val timeFmt = SimpleDateFormat("HH:mm", Locale.US)
 
     /** Тик службы: продвинуть активный прогон тени или запустить назревший (раз в сутки после часа разбора). */
     suspend fun tick(nowMs: Long = System.currentTimeMillis()) {
@@ -146,6 +150,10 @@ class ShadowRun(
         val st = batches.status(batchId)
         if (!st.ended) {
             log.add("тень: батч $batchId ещё идёт (в работе ${st.inFlight}, готово ${st.succeeded})")
+            val total = st.succeeded + st.errored + st.inFlight + st.expired + st.canceled
+            store.save(
+                r.copy(progress = "готово ${st.succeeded} из $total" + (if (st.errored > 0) ", ошибок ${st.errored}" else "") + " · опрос ${timeFmt.format(Date(nowMs))}")
+            )
             return
         }
         val url = st.resultsUrl
@@ -249,9 +257,30 @@ class ShadowRun(
         val cache = if (run.inputTokens > 0) " Вход ${run.inputTokens} токенов, из кэша ${run.cacheReadTokens} (${100 * run.cacheReadTokens / run.inputTokens}%)." else ""
         log.add("тень: ${tally.total} диктовок, лучше $shadowLabel ${tally.shadowBetter}, лучше $dayLabel ${tally.dayBetter}, совпало ${tally.same}; стоила $" + "%.3f".format(Locale.US, run.costUsd))
         return run.copy(
-            stage = "done", finishedAt = System.currentTimeMillis(), evidence = emptyMap(),
+            stage = "done", finishedAt = System.currentTimeMillis(), evidence = emptyMap(), progress = "",
             summary = summary + cache, error = error, changes = examples,
         )
+    }
+
+    /** «Проверить сейчас» под идущей тенью — опрос без десятиминутной паузы. */
+    suspend fun pollNow(runId: Long): Result<String> = runCatching {
+        val run = store.get(runId) ?: error("Прогон не найден")
+        if (!run.active) return@runCatching "Тень уже завершена"
+        mutex.withLock {
+            runCatching { poll(run, System.currentTimeMillis()) }.onFailure { fail(run, it) }.getOrThrow()
+        }
+        val after = store.get(runId)
+        if (after == null || !after.active) "Готово" else after.progress.ifBlank { "Ещё идёт" }
+    }
+
+    /** «Отменить»: батч отменяется у Anthropic, тень закрывается с причиной. */
+    suspend fun cancel(runId: Long): Result<Unit> = runCatching {
+        val run = store.get(runId) ?: error("Прогон не найден")
+        if (!run.active) return@runCatching
+        val batchId = if (run.stage == ShadowPolicy.STAGE_CLEAN) run.analysisBatchId else run.checkBatchId
+        runCatching { batches.cancel(batchId) }.onFailure { log.add("тень: отмена батча $batchId не прошла: ${it.message}") }
+        store.save(run.copy(stage = "failed", error = "отменено владельцем", finishedAt = System.currentTimeMillis(), evidence = emptyMap(), progress = ""))
+        log.add("тень: отменена владельцем на стадии ${run.stage}")
     }
 
     private suspend fun fail(run: Run, e: Throwable) {
