@@ -212,11 +212,20 @@ object NightReviewPolicy {
      * код, чтобы он правил»). Markdown по прогонам: идеи с советами,
      * применённое, предложенное, что владелец вернул и отклонил, сводка.
      */
-    fun exportLog(runs: List<Run>, dateOf: (Long) -> String, nowMs: Long = System.currentTimeMillis()): String {
+    fun exportLog(
+        runs: List<Run>,
+        dateOf: (Long) -> String,
+        nowMs: Long = System.currentTimeMillis(),
+        /** Табло «что работает» (NightBoard.render) — первым разделом. */
+        board: String = "",
+        /** Хвост журнала ночных автоматов (night.log) — последним разделом. */
+        journal: List<String> = emptyList(),
+    ): String {
         val sb = StringBuilder("# Ночной разбор Правки — лог для Claude Code\n\n")
         sb.append("Выгружено ").append(dateOf(nowMs)).append(". Прогонов: ").append(runs.size).append(".\n")
         sb.append("Статусы: применено — легло в словарь само или по кнопке; предложено — ждёт решения владельца; ")
         sb.append("вернул / отклонил владелец — сигнал, что автомат ошибся.\n\n")
+        if (board.isNotBlank()) sb.append("## Что работает, что нет\n").append(board.trimEnd()).append("\n\n")
         for (run in runs.sortedByDescending { it.startedAt }) {
             val kind = when {
                 run.isShadow -> "тень второй модели"
@@ -269,6 +278,11 @@ object NightReviewPolicy {
             val body = run.summary.split("\n\n").filterIndexed { i, p -> !(i == 0 && p.startsWith("Применено ")) }.joinToString("\n\n").trim()
             if (body.isNotBlank()) sb.append("### Сводка разбора\n").append(body).append("\n\n")
             for (r in run.replies) sb.append("Владелец: ").append(r.text).append("\nРазбор: ").append(r.result).append("\n\n")
+        }
+        if (journal.isNotEmpty()) {
+            sb.append("## Журнал ночных автоматов (последние ${journal.size} строк)\n```\n")
+            for (l in journal) sb.append(l).append('\n')
+            sb.append("```\n")
         }
         return sb.toString().trimEnd() + "\n"
     }

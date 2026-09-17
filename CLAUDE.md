@@ -51,7 +51,9 @@
   недельная правка промпта — `core/PromptTuner.kt` + `core/PromptTunePolicy.kt`
   (версии — `data/PromptVersions.kt`), эвал золотого набора —
   `core/EvalRunner.kt`; прогоны разбора, тени и правки —
-  `data/NightReviewStore.kt`, экран — `ReviewsTab.kt` («Ещё → Разборы»).
+  `data/NightReviewStore.kt`, экран — `ReviewsTab.kt` («Ещё → Разборы»);
+  табло «что работает» и журнал автоматов `night.log` — `core/NightBoard.kt`,
+  `app.nightLog` (автоматы пишут туда, не в общий лог службы).
   Запрос чистки одной формы для дня и батчей: `ClaudeProvider.cleanPromptParts`
   + `ClaudeBatches.cleanParams` + `RequestPolicy.maxTokens`.
   Разборы режимов — расширения того же класса рядом: `ClaudeZasechka.kt`,

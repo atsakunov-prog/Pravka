@@ -48,8 +48,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.zf.pravka.core.NightBoard
 import ru.zf.pravka.core.NightReviewPolicy
 import ru.zf.pravka.core.PromptTunePolicy
 import ru.zf.pravka.core.ShadowPolicy
@@ -71,24 +73,8 @@ import ru.zf.pravka.ui.Feedback
 
 private val dayTime = SimpleDateFormat("EEE dd.MM HH:mm", Locale("ru"))
 
-private fun stageLabel(stage: String): String = when (stage) {
-    "analysis" -> "первый проход"
-    "check" -> "проверка"
-    "audit" -> "согласование"
-    ShadowPolicy.STAGE_CLEAN -> "вторая модель чистит"
-    ShadowPolicy.STAGE_JUDGE -> "судья сравнивает"
-    PromptTunePolicy.STAGE_PROPOSE -> "Fable предлагает правку"
-    PromptTunePolicy.STAGE_MEASURE -> "новый промпт перечищает диктовки недели"
-    PromptTunePolicy.STAGE_JUDGE -> "судья сравнивает промпты"
-    else -> stage
-}
-
-private fun kindLabel(run: NightReviewStore.Run): String = when {
-    run.isTune -> "промпт"
-    run.isShadow -> "тень"
-    run.kind == NightReviewPolicy.WEEKLY -> "неделя"
-    else -> "сутки"
-}
+private fun stageLabel(stage: String): String = NightBoard.stageLabel(stage)
+private fun kindLabel(run: NightReviewStore.Run): String = NightBoard.kindLabel(run)
 
 @Composable
 internal fun ReviewsTab(app: PravkaApp) {
@@ -110,6 +96,7 @@ internal fun ReviewsTab(app: PravkaApp) {
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        BoardCard(app, runs)
         ControlsCard(app, runs)
         if (daily != null) ReviewCard(app, "День", daily)
         else SectionCard(label = "День") { HintText("Разбора ещё не было: ночью в назначенный час или кнопкой «Сутки».") }
@@ -230,40 +217,6 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
         Row {
             TextButton(enabled = !busy && !shadowRunning, onClick = { launchShadow(big = true) }) { Text("Тень за месяц (до 200 диктовок)") }
         }
-        for (run in runs.filter { it.active }.sortedBy { it.startedAt }) {
-            Spacer(Modifier.height(6.dp))
-            // Возраст батча цифрой: «застряла» или «идёт» решается по нему, а не по ощущению.
-            val ageMin = ((System.currentTimeMillis() - run.startedAt) / 60_000L).coerceAtLeast(0)
-            val age = if (ageMin < 60) "$ageMin мин" else "${ageMin / 60} ч ${ageMin % 60} мин"
-            Text(
-                "Идёт ${kindLabel(run)}: ${stageLabel(run.stage)} · уже $age · " +
-                    run.progress.ifBlank { "отправлено ${dayTime.format(Date(run.startedAt))}, статус раз в 10 минут" },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Row {
-                TextButton(onClick = {
-                    scope.launch {
-                        val r = when {
-                            run.isShadow -> app.shadowRun.pollNow(run.id)
-                            run.isTune -> app.promptTuner.pollNow(run.id)
-                            else -> app.nightReview.pollNow(run.id)
-                        }
-                        r.onSuccess { Feedback.toast(context, it) }.onFailure { Feedback.toast(context, "Опрос не прошёл: ${it.message}") }
-                    }
-                }) { Text("Проверить сейчас") }
-                TextButton(onClick = {
-                    scope.launch {
-                        val r = when {
-                            run.isShadow -> app.shadowRun.cancel(run.id)
-                            run.isTune -> app.promptTuner.cancel(run.id)
-                            else -> app.nightReview.cancel(run.id)
-                        }
-                        r.onSuccess { Feedback.toast(context, "Отменено") }.onFailure { Feedback.toast(context, "Не отменилось: ${it.message}") }
-                    }
-                }) { Text("Отменить", color = MaterialTheme.colorScheme.error) }
-            }
-        }
         val month = runs.filter { it.stage == "done" && it.startedAt > System.currentTimeMillis() - 30 * 86_400_000L }
         if (month.isNotEmpty()) {
             Row {
@@ -305,7 +258,17 @@ private val groupOrder = listOf("HARD", "HINT", "PROTECT", "Выключено",
 private fun exportLog(context: Context, app: PravkaApp, runs: List<NightReviewStore.Run>, title: String) {
     app.appScope.launch {
         runCatching {
-            val text = NightReviewPolicy.exportLog(runs, dateOf = { dayTime.format(Date(it)) })
+            // Табло и хвост журнала — в каждый лог: чтобы по нему было видно не только находки, но и что работает.
+            val all = app.nightReviewStore.all()
+            val board = NightBoard.render(
+                NightBoard.build(
+                    all, app.settings.nightReviewEnabledFlow.first(), app.settings.shadowRunEnabledFlow.first(),
+                    app.settings.promptTuneEnabledFlow.first(), app.settings.nightReviewHourFlow.first(),
+                    withContext(Dispatchers.IO) { evalSummary(app) }, app.lastNightTickMs, System.currentTimeMillis(),
+                )
+            )
+            val journal = withContext(Dispatchers.IO) { app.nightLog.readLast(120) }
+            val text = NightReviewPolicy.exportLog(runs, dateOf = { dayTime.format(Date(it)) }, board = board, journal = journal)
             val file = File(context.filesDir, "night-review-log.md")
             withContext(Dispatchers.IO) { StoreFiles.writeAtomic(file, text) }
             context.startActivity(Intent.createChooser(shareFileIntent(context, file, "text/markdown"), title))
@@ -661,4 +624,105 @@ private fun VersionRow(v: PromptVersions.Version) {
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.padding(vertical = 2.dp),
     )
+}
+
+/** Последний эвал из файла результатов — для табло (читать не на главном потоке). */
+private fun evalSummary(app: PravkaApp): NightBoard.EvalSummary? =
+    app.evalStore.lastRun()?.let { o ->
+        NightBoard.EvalSummary(o.optLong("at"), o.optDouble("avg", 0.0), o.optInt("exact"), o.optInt("total"))
+    }
+
+/**
+ * Плашка «Что работает»: по строке на автомат — пульс службы, разбор суток и
+ * недели, тень, правка промпта, эвал; под идущими — «Проверить сейчас» и
+ * «Отменить». Ниже — журнал ночных автоматов (night.log): последние строки,
+ * сбои красным. Владелец (17.09): «единый лог, который будет показывать, что
+ * работает, что нет».
+ */
+@Composable
+private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
+    val context = LocalContext.current
+    val settings = app.settings
+    val reviewOn by settings.nightReviewEnabledFlow.collectAsState(initial = true)
+    val shadowOn by settings.shadowRunEnabledFlow.collectAsState(initial = true)
+    val tuneOn by settings.promptTuneEnabledFlow.collectAsState(initial = true)
+    val hour by settings.nightReviewHourFlow.collectAsState(initial = 3)
+    var eval by remember { mutableStateOf<NightBoard.EvalSummary?>(null) }
+    var journal by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showJournal by remember { mutableStateOf(false) }
+    var tick by remember { mutableStateOf(0) }
+    // Перечитывать при каждом движении прогонов и по кнопке «Обновить»; файлы — не на главном потоке.
+    val stamp = runs.joinToString("|") { "${it.id}:${it.stage}:${it.progress}" }
+    LaunchedEffect(stamp, tick) {
+        eval = withContext(Dispatchers.IO) { evalSummary(app) }
+        journal = withContext(Dispatchers.IO) { app.nightLog.readLast(40) }
+    }
+    val lines = NightBoard.build(runs, reviewOn, shadowOn, tuneOn, hour, eval, app.lastNightTickMs, System.currentTimeMillis())
+    SectionCard(label = "Что работает") {
+        for (l in lines) {
+            val color = when (l.state) {
+                "fail" -> MaterialTheme.colorScheme.error
+                "stale" -> MaterialTheme.colorScheme.error
+                "running" -> MaterialTheme.colorScheme.primary
+                "off", "none" -> MaterialTheme.colorScheme.onSurfaceVariant
+                else -> MaterialTheme.colorScheme.onSurface
+            }
+            val mark = when (l.state) { "ok" -> "✓"; "fail" -> "✗"; "running" -> "●"; "stale" -> "!"; "off" -> "—"; else -> "·" }
+            Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                Text("$mark ${l.title}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = color)
+                Text(l.text, style = MaterialTheme.typography.bodySmall, color = color)
+                if (l.next.isNotBlank()) {
+                    Text("следующий: ${l.next}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                val run = runs.firstOrNull { it.id == l.runId && it.active }
+                if (run != null) Row {
+                    TextButton(onClick = {
+                        app.appScope.launch {
+                            val r = when {
+                                run.isShadow -> app.shadowRun.pollNow(run.id)
+                                run.isTune -> app.promptTuner.pollNow(run.id)
+                                else -> app.nightReview.pollNow(run.id)
+                            }
+                            r.onSuccess { Feedback.toast(context, it) }.onFailure { Feedback.toast(context, "Опрос не прошёл: ${it.message}") }
+                            tick++
+                        }
+                    }) { Text("Проверить сейчас") }
+                    TextButton(onClick = {
+                        app.appScope.launch {
+                            val r = when {
+                                run.isShadow -> app.shadowRun.cancel(run.id)
+                                run.isTune -> app.promptTuner.cancel(run.id)
+                                else -> app.nightReview.cancel(run.id)
+                            }
+                            r.onSuccess { Feedback.toast(context, "Отменено") }.onFailure { Feedback.toast(context, "Не отменилось: ${it.message}") }
+                            tick++
+                        }
+                    }) { Text("Отменить", color = MaterialTheme.colorScheme.error) }
+                }
+            }
+        }
+        Row {
+            TextButton(onClick = { showJournal = !showJournal }) {
+                val fails = journal.count { NightBoard.isFailureLine(it) }
+                Text((if (showJournal) "Скрыть журнал" else "Журнал") + (if (fails > 0) " · сбоев $fails" else ""), color = if (fails > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+            }
+            TextButton(onClick = { tick++ }) { Text("Обновить") }
+            TextButton(onClick = {
+                runCatching { context.startActivity(Intent.createChooser(app.nightLog.shareIntent(), "Журнал ночных автоматов")) }
+                    .onFailure { Feedback.toast(context, "Журнала ещё нет") }
+            }) { Text("Весь журнал") }
+        }
+        if (showJournal) {
+            if (journal.isEmpty()) HintText("Журнал пуст: автоматы ещё ничего не писали.")
+            for (line in journal.asReversed()) {
+                val fail = NightBoard.isFailureLine(line)
+                Text(
+                    line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (fail) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 1.dp),
+                )
+            }
+        }
+    }
 }

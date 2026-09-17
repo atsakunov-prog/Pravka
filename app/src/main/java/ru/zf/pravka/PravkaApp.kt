@@ -94,17 +94,26 @@ class PravkaApp : Application() {
     // Ночной разбор: батчи Anthropic, память прогонов и движок (core/NightReview.kt).
     val claudeBatches by lazy { ru.zf.pravka.provider.ClaudeBatches(settings, httpClient) }
     val nightReviewStore by lazy { ru.zf.pravka.data.NightReviewStore(this) }
+    /**
+     * Единый журнал ночных автоматов (17.09.2026; владелец: «единый лог,
+     * который будет показывать, что работает, что нет»): разбор, тень, правка
+     * промпта и эвал пишут сюда, а не в общий лог службы, — читается в
+     * «Разборах» и уходит в лог для Claude Code.
+     */
+    val nightLog by lazy { EventLog(this, "night.log") }
+    /** Когда служба последний раз запускала ночные тики: нет тика двадцать минут — автоматы стоят, табло скажет. */
+    @Volatile var lastNightTickMs: Long = 0L
     val nightReview by lazy {
         ru.zf.pravka.core.NightReview(
             settings, claudeBatches, nightReviewStore, dictionaryStore, rulesStore, historyLog,
-            transcriptionLog, corrections, promptStore, stats, eventLog,
+            transcriptionLog, corrections, promptStore, stats, nightLog,
         )
     }
     // Тень второй модели: те же диктовки ночью через Опус, слепой судья Fable (core/ShadowRun.kt).
     val shadowRun by lazy {
         ru.zf.pravka.core.ShadowRun(
             settings, claudeBatches, nightReviewStore, historyLog, DictionaryApplier(dictionaryStore),
-            claudeProvider, stats, eventLog,
+            claudeProvider, stats, nightLog,
         )
     }
     // Недельная правка промпта: идеи недели → предложение → измерение → принять или нет (core/PromptTuner.kt).
@@ -112,7 +121,7 @@ class PravkaApp : Application() {
     val promptTuner by lazy {
         ru.zf.pravka.core.PromptTuner(
             settings, claudeBatches, nightReviewStore, promptVersions, promptStore, historyLog, corrections,
-            DictionaryApplier(dictionaryStore), claudeProvider, stats, eventLog,
+            DictionaryApplier(dictionaryStore), claudeProvider, stats, nightLog,
         )
     }
     val dictMiner by lazy { DictMiner(settings, httpClient, stats) }

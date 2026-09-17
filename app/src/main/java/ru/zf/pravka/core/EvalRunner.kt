@@ -48,6 +48,7 @@ object EvalRunner {
             } catch (e: Exception) {
                 // Правило 6: причина целиком.
                 app.learnLog.add("эвал не удался: ${e.message ?: e.javaClass.simpleName}")
+                app.nightLog.add("эвал НЕ УДАЛСЯ: ${e.message ?: e.javaClass.simpleName}")
                 app.stats.recordError()
             } finally {
                 running = false
@@ -72,6 +73,7 @@ object EvalRunner {
         var cacheRead = 0
         var cacheWrite = 0
         stage = "чищу эталоны"
+        app.nightLog.add("эвал: ${items.size} эталонов, ${choice.model} ${choice.effort}")
         for (item in items) {
             val prepared = applier.prepare(item.input)
             val parts = app.claudeProvider.cleanPromptParts(prepared.dictBlock, prose = false)
@@ -105,14 +107,15 @@ object EvalRunner {
         if (failures > 0) app.stats.recordError()
         if (rows.isEmpty()) {
             app.learnLog.add("эвал не удался: все ${failures} запросов провалились, результат не сохранён")
+            app.nightLog.add("эвал НЕ УДАЛСЯ: все ${failures} запросов провалились")
         } else {
             val avg = sum / rows.size
             app.evalStore.saveRun("текущий", avg, exact, rows.size, rows.sortedBy { it.score })
             val failNote = if (failures > 0) ", сбоев: $failures (не в счёте)" else ""
-            app.learnLog.add(
-                "эвал завершён: средний ${"%.1f".format(avg * 100)}%, точных $exact из ${rows.size}$failNote, " +
-                    "стоил $" + "%.4f".format(java.util.Locale.US, spend) + " (из кэша $cacheRead токенов)"
-            )
+            val line = "эвал завершён: средний ${"%.1f".format(avg * 100)}%, точных $exact из ${rows.size}$failNote, " +
+                "стоил $" + "%.4f".format(java.util.Locale.US, spend) + " (из кэша $cacheRead токенов)"
+            app.learnLog.add(line)
+            app.nightLog.add(line)
         }
     }
 

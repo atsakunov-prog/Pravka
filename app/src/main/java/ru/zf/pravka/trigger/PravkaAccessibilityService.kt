@@ -2279,19 +2279,21 @@ class PravkaAccessibilityService : AccessibilityService() {
             scope.launch { app.icuSweeper.sweep() }
             // Ночной разбор: запустить назревший прогон или спросить статус
             // батча. Сам себя дросселирует (раз в 10 минут), тику не мешает.
+            // Отметка тика — пульс для табло «что работает»: нет тика — стоят все.
+            app.lastNightTickMs = System.currentTimeMillis()
             scope.launch {
                 runCatching { app.nightReview.tick() }
-                    .onFailure { app.eventLog.add("ночной разбор: тик упал: ${it.message}") }
+                    .onFailure { app.nightLog.add("ночной разбор: тик упал: ${it.message}") }
             }
             // Тень второй модели — тем же ритмом, своим прогоном в том же сторе.
             scope.launch {
                 runCatching { app.shadowRun.tick() }
-                    .onFailure { app.eventLog.add("тень: тик упал: ${it.message}") }
+                    .onFailure { app.nightLog.add("тень: тик упал: ${it.message}") }
             }
             // Недельная правка промпта — в ночь на субботу, тем же тиком.
             scope.launch {
                 runCatching { app.promptTuner.tick() }
-                    .onFailure { app.eventLog.add("правка промпта: тик упал: ${it.message}") }
+                    .onFailure { app.nightLog.add("правка промпта: тик упал: ${it.message}") }
             }
             // Спорт и еда: свой кэш и своя недоставленная почта. Оба звонка
             // сами себя дросселируют (30 минут у выгрузки, «уже уехало» у
