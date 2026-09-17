@@ -47,9 +47,7 @@ class Settings(private val context: Context) {
         private val KEY_RULES_IN_PROMPT = booleanPreferencesKey("rules_in_prompt")
         private val KEY_NIGHT_REVIEW = booleanPreferencesKey("night_review_enabled")
         private val KEY_NIGHT_REVIEW_HOUR = intPreferencesKey("night_review_hour")
-        private val KEY_SHADOW_RUN = booleanPreferencesKey("shadow_run_enabled")
         private val KEY_PROMPT_TUNE = booleanPreferencesKey("prompt_tune_enabled")
-        private val KEY_SHADOW_DAILY = booleanPreferencesKey("shadow_daily")
         private val KEY_NIGHT_BUDGET = intPreferencesKey("night_budget_usd")
         private val KEY_MIGRATED_OPUS = booleanPreferencesKey("migrated_pravka_opus_1")
         private val KEY_PLAN_RULES_LAST_RUN = longPreferencesKey("plan_rules_last_run")
@@ -275,20 +273,6 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_NIGHT_REVIEW_HOUR] = value.coerceIn(0, 23) }
     }
 
-    // Тень второй модели (16.09.2026). Владелец: «может, ночью первой
-    // пропустим большой кусок диктовок через Opus, а дальше уже дневной; а
-    // разбирает Сонет против Опуса пускай Fable 5.1 high». Включена с завода —
-    // он её и просил; идёт в тот же час, что ночной разбор. Движок —
-    // core/ShadowRun.kt, чистая политика — core/ShadowPolicy.kt.
-    // Выключена с завода с 18.09 (владелец: «тень давай вырубим по умолчанию, и
-    // так уже на неё сколько потратили»): ответ она дала — Опус лучше 17:2 — и
-    // стал заводской моделью чистки. Включается тумблером, когда появится новая
-    // модель для сравнения.
-    val shadowRunEnabledFlow = context.dataStore.data.map { it[KEY_SHADOW_RUN] ?: false }
-    suspend fun setShadowRunEnabled(value: Boolean) {
-        context.dataStore.edit { it[KEY_SHADOW_RUN] = value }
-    }
-
     // Недельная правка промпта (17.09.2026): в ночь на субботу Fable читает
     // идеи недели, предлагает правку CLEAN, новый промпт измеряется и
     // принимается только если лучше; через неделю — откат, если правок руками
@@ -296,15 +280,6 @@ class Settings(private val context: Context) {
     val promptTuneEnabledFlow = context.dataStore.data.map { it[KEY_PROMPT_TUNE] ?: true }
     suspend fun setPromptTuneEnabled(value: Boolean) {
         context.dataStore.edit { it[KEY_PROMPT_TUNE] = value }
-    }
-
-    // Тень каждую ночь или раз в неделю (17.09.2026). Заводское — раз в неделю,
-    // в ночь на воскресенье: сорок диктовок Опусом плюс судья — доллар-полтора
-    // за ночь, сорок пять в месяц за ответ, который уже известен после первого
-    // сравнения (17:2 в пользу Опуса). Владелец включает ежедневную сам.
-    val shadowDailyFlow = context.dataStore.data.map { it[KEY_SHADOW_DAILY] ?: false }
-    suspend fun setShadowDaily(value: Boolean) {
-        context.dataStore.edit { it[KEY_SHADOW_DAILY] = value }
     }
 
     // Дневной потолок для ночных автоматов (17.09.2026; владелец: «за день

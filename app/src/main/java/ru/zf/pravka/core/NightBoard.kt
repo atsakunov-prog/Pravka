@@ -9,7 +9,7 @@ import ru.zf.pravka.data.NightReviewStore.Run
 /**
  * «Что работает, что нет» (17.09.2026; владелец: «давай всё это засунем в
  * единый лог, который будет показывать, что работает, что нет»). Одна строка на
- * каждый ночной автомат — разбор суток, разбор недели, тень, правка промпта,
+ * каждый ночной автомат — разбор суток, разбор недели, правка промпта,
  * эвал — плюс пульс службы: последний прогон, чем кончился или на какой
  * стадии стоит, когда следующий. Считается из прогонов и настроек, без сети;
  * тот же текст уходит в лог для Claude Code. Молчаливая механика читается как
@@ -57,14 +57,11 @@ object NightBoard {
     fun build(
         runs: List<Run>,
         reviewOn: Boolean,
-        shadowOn: Boolean,
         tuneOn: Boolean,
         hour: Int,
         eval: EvalSummary?,
         lastTickMs: Long,
         nowMs: Long,
-        /** Тень каждую ночь (true) или раз в неделю, в ночь на воскресенье. */
-        shadowDaily: Boolean = true,
     ): List<Line> {
         val out = ArrayList<Line>()
         // Пульс службы — первым: если она не тикает, всё остальное стоит.
@@ -75,11 +72,9 @@ object NightBoard {
         }
         val daily = runs.filter { it.isReview && it.kind == NightReviewPolicy.DAILY }.maxByOrNull { it.startedAt }
         val weekly = runs.filter { it.isReview && it.kind == NightReviewPolicy.WEEKLY }.maxByOrNull { it.startedAt }
-        val shadow = runs.filter { it.isShadow }.maxByOrNull { it.startedAt }
         val tune = runs.filter { it.isTune }.maxByOrNull { it.startedAt }
         out += line("daily", "Разбор суток", daily, reviewOn, nextDaily(nowMs, hour), nowMs)
         out += line("weekly", "Разбор недели", weekly, reviewOn, nextWeekday(nowMs, hour, Calendar.FRIDAY), nowMs)
-        out += line("shadow", "Тень второй модели", shadow, shadowOn, if (shadowDaily) nextDaily(nowMs, hour) else nextWeekday(nowMs, hour, Calendar.SUNDAY), nowMs)
         out += line("tune", "Правка промпта", tune, tuneOn, nextWeekday(nowMs, hour, Calendar.SATURDAY), nowMs)
         out += if (eval == null) Line("eval", "Эвал золотого набора", "none", "ещё не прогонялся", "по кнопке в Логах")
         else Line("eval", "Эвал золотого набора", "ok", "${dayTime.format(Date(eval.at))} · средний ${"%.1f".format(Locale.US, eval.avg * 100)}%, точных ${eval.exact} из ${eval.total}", "по кнопке в Логах")

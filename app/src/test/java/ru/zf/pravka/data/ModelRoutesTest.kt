@@ -33,9 +33,7 @@ class ModelRoutesTest {
         assertEquals(Settings.MODEL_OPUS, ModelRoute.BODY.defaultModel)
         assertEquals(Settings.MODEL_SONNET, ModelRoute.BODY_LIGHT.defaultModel)
         assertEquals(Settings.MODEL_FABLE, ModelRoute.PATTERNS_DUPES.defaultModel)
-        // Тень: вторая модель — Опус без усилия, как у дневной; судья — Fable high.
-        assertEquals(Settings.MODEL_OPUS, ModelRoute.SHADOW_CLEAN.defaultModel)
-        assertEquals("", ModelRoute.SHADOW_CLEAN.defaultEffort)
+        // Судья слепого сравнения — Fable high.
         assertEquals(Settings.MODEL_FABLE, ModelRoute.SHADOW_JUDGE.defaultModel)
         assertEquals("high", ModelRoute.SHADOW_JUDGE.defaultEffort)
         assertEquals(Settings.MODEL_FABLE, ModelRoute.PROMPT_TUNE.defaultModel)

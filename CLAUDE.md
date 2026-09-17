@@ -12,7 +12,7 @@
 
 | Задача касается | Прочитать сначала |
 |---|---|
-| Правка текста, кнопка «П», словарь, правила, обучение, эвалы, ночной разбор, тень второй модели («Ещё → Разборы») | `docs/pravka.md` |
+| Правка текста, кнопка «П», словарь, правила, обучение, эвалы, ночной разбор, правка промпта («Ещё → Разборы») | `docs/pravka.md` |
 | Засечка: лента, категории, телефон по дням, автопилот, NFC, Sheets, напоминания | `docs/zasechka.md` |
 | Дела и Разноска: Todoist, кнопка «Д» | `docs/dela.md` |
 | Тело: план дня, силовые, зарядка, светофор, intervals, Notion (план, справочник, Дневник) | `docs/telo.md` |
@@ -47,10 +47,11 @@
   настройках, группа «Модели» (`ModelsSettings.kt`).
   Батчи (Message Batches API) — `provider/ClaudeBatches.kt`; ночной разбор
   Правки на них — `core/NightReview.kt` + `core/NightReviewPolicy.kt`,
-  тень второй модели — `core/ShadowRun.kt` + `core/ShadowPolicy.kt`,
   недельная правка промпта — `core/PromptTuner.kt` + `core/PromptTunePolicy.kt`
-  (версии — `data/PromptVersions.kt`), эвал золотого набора —
-  `core/EvalRunner.kt`; прогоны разбора, тени и правки —
+  (версии — `data/PromptVersions.kt`; слепой судья двух чисток —
+  `core/ShadowPolicy.kt`; тень второй модели снята 18.09), эвал золотого
+  набора — `core/EvalRunner.kt`; уборка на старте (прогоны тени, осиротевшие
+  батчи у Anthropic) — `core/NightSweep.kt`; прогоны разбора и правки —
   `data/NightReviewStore.kt`, экран — `ReviewsTab.kt` («Ещё → Разборы»);
   табло «что работает» и журнал автоматов `night.log` — `core/NightBoard.kt`,
   `app.nightLog` (автоматы пишут туда, не в общий лог службы).

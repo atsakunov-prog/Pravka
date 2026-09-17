@@ -44,6 +44,11 @@ class PravkaApp : Application() {
         appScope.launch { settings.phoneMicOnlyFlow.collect { phoneMicOnly = it } }
         // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет.
         appScope.launch { runCatching { settings.migratePravkaToOpus() } }
+        // Тень снята (18.09.2026; владелец: «убери эту тень, она снова запустилась
+        // и ест деньги»): её прогоны, застрявшие активными, закрываются, движка
+        // больше нет. Затем — ревизия батчей у Anthropic: всё идущее, за чем в
+        // приложении нет живого прогона, гасится.
+        appScope.launch { runCatching { ru.zf.pravka.core.NightSweep.onStart(this@PravkaApp) } }
         // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
         // свой лог, пока тумблер включён (Настройки → Общее).
         appScope.launch {
@@ -109,13 +114,6 @@ class PravkaApp : Application() {
         ru.zf.pravka.core.NightReview(
             settings, claudeBatches, nightReviewStore, dictionaryStore, rulesStore, historyLog,
             transcriptionLog, corrections, promptStore, stats, nightLog,
-        )
-    }
-    // Тень второй модели: те же диктовки ночью через Опус, слепой судья Fable (core/ShadowRun.kt).
-    val shadowRun by lazy {
-        ru.zf.pravka.core.ShadowRun(
-            settings, claudeBatches, nightReviewStore, historyLog, DictionaryApplier(dictionaryStore),
-            claudeProvider, stats, nightLog,
         )
     }
     // Недельная правка промпта: идеи недели → предложение → измерение → принять или нет (core/PromptTuner.kt).

@@ -2285,11 +2285,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                 runCatching { app.nightReview.tick() }
                     .onFailure { app.nightLog.add("ночной разбор: тик упал: ${it.message}") }
             }
-            // Тень второй модели — тем же ритмом, своим прогоном в том же сторе.
-            scope.launch {
-                runCatching { app.shadowRun.tick() }
-                    .onFailure { app.nightLog.add("тень: тик упал: ${it.message}") }
-            }
             // Недельная правка промпта — в ночь на субботу, тем же тиком.
             scope.launch {
                 runCatching { app.promptTuner.tick() }

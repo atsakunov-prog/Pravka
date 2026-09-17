@@ -61,8 +61,8 @@ import ru.zf.pravka.data.StoreFiles
 import ru.zf.pravka.data.shareFileIntent
 import ru.zf.pravka.ui.Feedback
 
-// «Ещё → Разборы» (16–17.09.2026): ночной разбор диктовок и тень второй
-// модели. Владелец, глядя на первые две версии (простыня изменений, потом
+// «Ещё → Разборы» (16–18.09.2026): ночной разбор диктовок и правка промпта;
+// тень второй модели снята 18.09 (её старые прогоны остались в истории). Владелец, глядя на первые две версии (простыня изменений, потом
 // группы по видам): «в самой плашке день сделаем овальные кнопки наверху:
 // применено, предложено, идеи; в каждой можно отменять решение модели или
 // принимать, причём если я принял — оно пропадает. Применено: у каждого
@@ -84,9 +84,8 @@ internal fun ReviewsTab(app: PravkaApp) {
 
     val daily = runs.filter { it.isReview && it.kind == NightReviewPolicy.DAILY }.maxByOrNull { it.startedAt }
     val weekly = runs.filter { it.isReview && it.kind == NightReviewPolicy.WEEKLY }.maxByOrNull { it.startedAt }
-    val shadow = runs.filter { it.isShadow }.maxByOrNull { it.startedAt }
     val tune = runs.filter { it.isTune }.maxByOrNull { it.startedAt }
-    val shown = setOfNotNull(daily?.id, weekly?.id, shadow?.id, tune?.id)
+    val shown = setOfNotNull(daily?.id, weekly?.id, tune?.id)
     val history = runs.filter { it.id !in shown }.sortedByDescending { it.startedAt }
 
     Column(
@@ -102,8 +101,6 @@ internal fun ReviewsTab(app: PravkaApp) {
         else SectionCard(label = "День") { HintText("Разбора ещё не было: ночью в назначенный час или кнопкой «Сутки».") }
         if (weekly != null) ReviewCard(app, "Неделя", weekly)
         else SectionCard(label = "Неделя") { HintText("Недельный разбор идёт в ночь на пятницу; вручную — «Неделю».") }
-        if (shadow != null) ShadowCard(shadow)
-        else SectionCard(label = "Тень") { HintText("Тени ещё не было: первая ночь возьмёт до 200 диктовок за месяц.") }
         TuneCard(app, tune)
         if (history.isNotEmpty()) {
             SectionCard(label = "История") {
@@ -140,12 +137,10 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
     val scope = app.appScope
     val settings = app.settings
     val enabled by settings.nightReviewEnabledFlow.collectAsState(initial = true)
-    val shadowOn by settings.shadowRunEnabledFlow.collectAsState(initial = true)
     val tuneOn by settings.promptTuneEnabledFlow.collectAsState(initial = true)
     val hour by settings.nightReviewHourFlow.collectAsState(initial = 3)
     var busy by remember { mutableStateOf(false) }
     val reviewRunning = runs.any { it.active && it.isReview }
-    val shadowRunning = runs.any { it.active && it.isShadow }
     val tuneRunning = runs.any { it.active && it.isTune }
 
     SectionCard(label = "Ночью") {
@@ -156,21 +151,6 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
         }
         HintText("Высоковероятное применяется само (кроме отклонённого проверкой), низковероятное отбрасывается. Промпт не трогает.")
         Spacer(Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = shadowOn, onCheckedChange = { on -> scope.launch { settings.setShadowRunEnabled(on) } })
-            Spacer(Modifier.width(8.dp))
-            Text("Тень: вторая модель чистит те же диктовки, судья сравнивает слепо", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        }
-        HintText("Ничего не меняет — только счёт, изъяны и деньги. Модели — в настройках, группа «Модели».")
-        val shadowDaily by settings.shadowDailyFlow.collectAsState(initial = false)
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 12.dp)) {
-            Switch(checked = shadowDaily, onCheckedChange = { on -> scope.launch { settings.setShadowDaily(on) } })
-            Spacer(Modifier.width(8.dp))
-            Text(
-                if (shadowDaily) "каждую ночь (≈ $1–1.5 за ночь)" else "раз в неделю, в ночь на воскресенье (≈ $1–1.5 за неделю)",
-                style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f),
-            )
-        }
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = tuneOn, onCheckedChange = { on -> scope.launch { settings.setPromptTuneEnabled(on) } })
@@ -187,7 +167,7 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             Spacer(Modifier.width(4.dp))
             OutlinedButton(onClick = { scope.launch { settings.setNightBudgetUsd(budget + 1) } }) { Text("+") }
         }
-        HintText("Расход по приложению за сутки выше потолка — разбор, тень и правка промпта сами не стартуют, идущая чистка ждёт завтра. Кнопки потолок не смотрят.")
+        HintText("Расход по приложению за сутки выше потолка — разбор и правка промпта сами не стартуют, идущее измерение ждёт завтра. Кнопки потолок не смотрят.")
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Запуск в ${"%02d".format(hour)}:00", style = MaterialTheme.typography.bodyMedium)
@@ -197,15 +177,6 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             OutlinedButton(onClick = { scope.launch { settings.setNightReviewHour((hour + 1) % 24) } }) { Text("+") }
         }
         Spacer(Modifier.height(6.dp))
-        fun launchShadow(big: Boolean) {
-            busy = true
-            scope.launch {
-                app.shadowRun.start(manual = true, big = big)
-                    .onSuccess { Feedback.toast(context, if (it.active) "Отправлено: сначала чистка, потом судья — час-два" else it.summary) }
-                    .onFailure { Feedback.toast(context, "Не запустилась: ${it.message}") }
-                busy = false
-            }
-        }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             fun launchReview(kind: String) {
                 busy = true
@@ -218,7 +189,6 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             }
             Button(enabled = !busy && !reviewRunning, onClick = { launchReview(NightReviewPolicy.DAILY) }) { Text("Сутки") }
             OutlinedButton(enabled = !busy && !reviewRunning, onClick = { launchReview(NightReviewPolicy.WEEKLY) }) { Text("Неделю") }
-            OutlinedButton(enabled = !busy && !shadowRunning, onClick = { launchShadow(big = false) }) { Text("Тень") }
             OutlinedButton(
                 enabled = !busy && !tuneRunning,
                 onClick = {
@@ -232,9 +202,17 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                 },
             ) { Text("Промпт") }
         }
-        // Большой кусок (месяц, до 200) — только по явной просьбе: сам он идёт один раз, при первом запуске.
+        // Ревизия батчей у Anthropic по кнопке: то же, что делает старт приложения.
         Row {
-            TextButton(enabled = !busy && !shadowRunning, onClick = { launchShadow(big = true) }) { Text("Тень за месяц (до 200 диктовок, ≈ $6)") }
+            TextButton(enabled = !busy, onClick = {
+                busy = true
+                scope.launch {
+                    val closed = runCatching { ru.zf.pravka.core.NightSweep.closeShadowRuns(app) }.getOrDefault(0)
+                    val r = ru.zf.pravka.core.NightSweep.sweepBatches(app)
+                    Feedback.toast(context, (if (closed > 0) "закрыто прогонов тени $closed; " else "") + r)
+                    busy = false
+                }
+            }) { Text("Проверить батчи у Anthropic") }
         }
         val month = runs.filter { it.stage == "done" && it.startedAt > System.currentTimeMillis() - 30 * 86_400_000L }
         if (month.isNotEmpty()) {
@@ -281,10 +259,9 @@ private fun exportLog(context: Context, app: PravkaApp, runs: List<NightReviewSt
             val all = app.nightReviewStore.all()
             val board = NightBoard.render(
                 NightBoard.build(
-                    all, app.settings.nightReviewEnabledFlow.first(), app.settings.shadowRunEnabledFlow.first(),
+                    all, app.settings.nightReviewEnabledFlow.first(),
                     app.settings.promptTuneEnabledFlow.first(), app.settings.nightReviewHourFlow.first(),
                     withContext(Dispatchers.IO) { evalSummary(app) }, app.lastNightTickMs, System.currentTimeMillis(),
-                    app.settings.shadowDailyFlow.first(),
                 )
             )
             val journal = withContext(Dispatchers.IO) { app.nightLog.readLast(120) }
@@ -664,7 +641,6 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
     val context = LocalContext.current
     val settings = app.settings
     val reviewOn by settings.nightReviewEnabledFlow.collectAsState(initial = true)
-    val shadowOn by settings.shadowRunEnabledFlow.collectAsState(initial = true)
     val tuneOn by settings.promptTuneEnabledFlow.collectAsState(initial = true)
     val hour by settings.nightReviewHourFlow.collectAsState(initial = 3)
     var eval by remember { mutableStateOf<NightBoard.EvalSummary?>(null) }
@@ -677,8 +653,7 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
         eval = withContext(Dispatchers.IO) { evalSummary(app) }
         journal = withContext(Dispatchers.IO) { app.nightLog.readLast(40) }
     }
-    val shadowDaily by settings.shadowDailyFlow.collectAsState(initial = false)
-    val lines = NightBoard.build(runs, reviewOn, shadowOn, tuneOn, hour, eval, app.lastNightTickMs, System.currentTimeMillis(), shadowDaily)
+    val lines = NightBoard.build(runs, reviewOn, tuneOn, hour, eval, app.lastNightTickMs, System.currentTimeMillis())
     SectionCard(label = "Что работает") {
         for (l in lines) {
             val color = when (l.state) {
@@ -700,7 +675,6 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                     TextButton(onClick = {
                         app.appScope.launch {
                             val r = when {
-                                run.isShadow -> app.shadowRun.pollNow(run.id)
                                 run.isTune -> app.promptTuner.pollNow(run.id)
                                 else -> app.nightReview.pollNow(run.id)
                             }
@@ -711,7 +685,6 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                     TextButton(onClick = {
                         app.appScope.launch {
                             val r = when {
-                                run.isShadow -> app.shadowRun.cancel(run.id)
                                 run.isTune -> app.promptTuner.cancel(run.id)
                                 else -> app.nightReview.cancel(run.id)
                             }

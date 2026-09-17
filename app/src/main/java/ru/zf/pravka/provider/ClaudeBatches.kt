@@ -220,6 +220,39 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
         }
     }
 
+    /** Батч в списке Anthropic: id, состояние, когда создан, счётчики. */
+    data class Summary(val id: String, val processing: String, val createdAt: String, val inFlight: Int, val succeeded: Int)
+
+    /** Последние батчи аккаунта (до 50) — чтобы найти и погасить осиротевшие. */
+    suspend fun list(): List<Summary> = withContext(Dispatchers.IO) {
+        val key = apiKey()
+        client.newCall(builder("$BATCHES?limit=50", key).get().build()).execute().use { r ->
+            val text = r.body?.string().orEmpty()
+            if (!r.isSuccessful) fail(r.code, text)
+            val arr = JSONObject(text).optJSONArray("data") ?: JSONArray()
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val c = o.optJSONObject("request_counts") ?: JSONObject()
+                Summary(o.optString("id"), o.optString("processing_status"), o.optString("created_at"), c.optInt("processing"), c.optInt("succeeded"))
+            }
+        }
+    }
+
+    /**
+     * Погасить все идущие батчи, кроме [keep] (владелец, 18.09.2026: «пускай
+     * следующая сборка проверит, какие батчи есть, и убьёт все»). Осиротевший
+     * батч — тот, что идёт у Anthropic, а прогона в приложении за ним нет:
+     * отменённая тень, снятая сборка, умерший процесс. Возвращает id отменённых.
+     */
+    suspend fun cancelOrphans(keep: Set<String>): List<String> {
+        val out = ArrayList<String>()
+        for (b in list()) {
+            if (b.processing != "in_progress" || b.id in keep) continue
+            runCatching { cancel(b.id) }.onSuccess { out.add(b.id) }
+        }
+        return out
+    }
+
     /** Отменить батч (кнопка «Отменить» под застрявшим прогоном). Уже завершённый отменять нечего — API ответит 4xx, это не ошибка владельца. */
     suspend fun cancel(batchId: String) = withContext(Dispatchers.IO) {
         val key = apiKey()
