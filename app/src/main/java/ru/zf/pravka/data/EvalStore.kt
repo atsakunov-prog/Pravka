@@ -24,7 +24,6 @@ class EvalStore(private val context: Context) {
 
     private fun file() = File(context.filesDir, "pravka-eval.jsonl")
     private fun resultsFile() = File(context.filesDir, "pravka-eval-results.json")
-    private fun pendingFile() = File(context.filesDir, "pravka-eval-batch.json")
 
     private fun ensureLoaded() {
         if (loaded) return
@@ -116,38 +115,4 @@ class EvalStore(private val context: Context) {
     fun lastRun(): JSONObject? = runCatching {
         resultsFile().takeIf { it.exists() }?.let { JSONObject(it.readText()) }
     }.getOrNull()
-
-    // ---- батч в пути ----
-
-    /**
-     * Отправленный, но не разобранный батч эвала (16.09.2026): id, модель, когда,
-     * и снимок эталонов на момент отправки — считать надо по нему, а не по
-     * набору, который владелец мог поправить, пока батч шёл.
-     */
-    data class PendingBatch(val batchId: String, val model: String, val at: Long, val items: List<Item>)
-
-    fun savePending(p: PendingBatch) {
-        runCatching {
-            val o = JSONObject().put("batchId", p.batchId).put("model", p.model).put("at", p.at)
-                .put("items", org.json.JSONArray().also { arr ->
-                    p.items.forEach { i -> arr.put(JSONObject().put("id", i.id).put("input", i.input).put("expected", i.expected)) }
-                })
-            StoreFiles.writeAtomic(pendingFile(), o.toString())
-        }
-    }
-
-    fun pendingBatch(): PendingBatch? = runCatching {
-        val f = pendingFile().takeIf { it.exists() } ?: return null
-        val o = JSONObject(f.readText())
-        val arr = o.optJSONArray("items") ?: org.json.JSONArray()
-        val items = (0 until arr.length()).mapNotNull { i ->
-            arr.optJSONObject(i)?.let { Item(it.optLong("id"), it.optString("input"), it.optString("expected")) }
-        }
-        val id = o.optString("batchId")
-        if (id.isBlank()) null else PendingBatch(id, o.optString("model"), o.optLong("at"), items)
-    }.getOrNull()
-
-    fun clearPending() {
-        runCatching { pendingFile().delete() }
-    }
 }

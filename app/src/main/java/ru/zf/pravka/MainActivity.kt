@@ -1485,14 +1485,6 @@ private fun LogsTab(app: PravkaApp) {
                 items = app.evalStore.all()
                 // File read off the composition pass.
                 last = withContext(Dispatchers.IO) { app.evalStore.lastRun() }
-                // Батч, отправленный до смерти процесса, дожидается здесь, а не
-                // пропадает вместе с деньгами.
-                if (!ru.zf.pravka.core.EvalRunner.running &&
-                    withContext(Dispatchers.IO) { app.evalStore.pendingBatch() } != null
-                ) {
-                    ru.zf.pravka.core.EvalRunner.start(app)
-                    running = true
-                }
             }
             LaunchedEffect(running) {
                 while (ru.zf.pravka.core.EvalRunner.running) {
@@ -1506,7 +1498,7 @@ private fun LogsTab(app: PravkaApp) {
             HintText(
                 "Золотой набор: вход диктовки и эталонный результат. Каждое " +
                     "изменение промпта прогоняется по набору и меряется цифрой. " +
-                    "Прогон идёт батчем (вдвое дешевле) — обычно минуты, до часа."
+                    "Запросы той же формы, что дневная чистка, по одному — минута-две."
             )
             Spacer(Modifier.height(6.dp))
             Text("Эталонов: ${items.size}", style = MaterialTheme.typography.bodyMedium)

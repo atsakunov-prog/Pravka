@@ -58,6 +58,8 @@ object ShadowPolicy {
         val dayCostUsd: Double,
         /** Сторона A — вторая модель, а не дневная: судья не знает, где чья. */
         val flip: Boolean,
+        /** Шла директива прозы — вторая модель получает её так же. */
+        val prose: Boolean = false,
         val shadow: String = "",
         val failure: String = "",
         /** «same» — совпало (без судьи); название модели — кто лучше; both_bad; unjudged. */
@@ -197,8 +199,7 @@ object ShadowPolicy {
         shadowEffort: String,
         judgeLabel: String,
         dayCostUsd: Double,
-        shadowBatchCostUsd: Double,
-        shadowDayCostUsd: Double,
+        shadowCostUsd: Double,
         judgeNotes: List<String>,
         first: Boolean,
     ): String {
@@ -223,12 +224,11 @@ object ShadowPolicy {
         }
         flaws(dayLabel, t.dayFlaws)
         flaws(shadowLabel, t.shadowFlaws)
-        if (dayCostUsd > 0 || shadowDayCostUsd > 0) {
+        if (dayCostUsd > 0 || shadowCostUsd > 0) {
             sb.append("\nДеньги: $dayLabel за эти диктовки — $").append(money(dayCostUsd))
-            sb.append("; $shadowLabel в батче — $").append(money(shadowBatchCostUsd))
-            sb.append(", днём было бы ≈ $").append(money(shadowDayCostUsd))
-            if (dayCostUsd > 0 && shadowDayCostUsd > 0) {
-                sb.append(" (в ${"%.1f".format(Locale.US, shadowDayCostUsd / dayCostUsd)} раза ${if (shadowDayCostUsd >= dayCostUsd) "дороже" else "дешевле"})")
+            sb.append("; $shadowLabel за те же — $").append(money(shadowCostUsd))
+            if (dayCostUsd > 0 && shadowCostUsd > 0) {
+                sb.append(" (в ${"%.1f".format(Locale.US, shadowCostUsd / dayCostUsd)} раза ${if (shadowCostUsd >= dayCostUsd) "дороже" else "дешевле"})")
             }
             sb.append('.')
         }
@@ -262,6 +262,7 @@ object ShadowPolicy {
             JSONObject().apply {
                 put("id", t.id); put("ts", t.tsMs); put("in", t.input); put("prep", t.prepared)
                 put("day", t.day); put("cost", t.dayCostUsd); put("flip", t.flip)
+                if (t.prose) put("prose", true)
                 if (t.shadow.isNotBlank()) put("sh", t.shadow)
                 if (t.failure.isNotBlank()) put("fail", t.failure)
                 if (t.verdict.isNotBlank()) put("v", t.verdict)
@@ -283,7 +284,7 @@ object ShadowPolicy {
                 Take(
                     id = o.optString("id"), tsMs = o.optLong("ts"), input = o.optString("in"),
                     prepared = o.optString("prep"), day = o.optString("day"), dayCostUsd = o.optDouble("cost", 0.0),
-                    flip = o.optBoolean("flip"), shadow = o.optString("sh"), failure = o.optString("fail"),
+                    flip = o.optBoolean("flip"), prose = o.optBoolean("prose"), shadow = o.optString("sh"), failure = o.optString("fail"),
                     verdict = o.optString("v"), why = o.optString("why"), flaws = flaws,
                 )
             )

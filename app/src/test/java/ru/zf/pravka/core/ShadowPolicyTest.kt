@@ -107,7 +107,7 @@ class ShadowPolicyTest {
         // Изъяны Сонета — там, где выиграл Опус: пунктуация дважды, падежи один раз.
         assertEquals(listOf("punctuation" to 2, "grammar" to 1), t.dayFlaws.entries.map { it.key to it.value })
         assertEquals(mapOf("extra" to 1), t.shadowFlaws)
-        val s = ShadowPolicy.summary(t, 0L, day, "Сонет 5", "Опус 5", "", "Fable 5.1", 0.10, 0.06, 0.25, listOf("Заметка."), first = true)
+        val s = ShadowPolicy.summary(t, 0L, day, "Сонет 5", "Опус 5", "", "Fable 5.1", 0.10, 0.25, listOf("Заметка."), first = true)
         assertTrue(s, s.contains("лучше Опус 5 — 2, лучше Сонет 5 — 1"))
         assertTrue(s, s.contains("пунктуация и членение 2"))
         assertTrue(s, s.contains("в 2.5 раза дороже"))
@@ -134,7 +134,7 @@ class ShadowPolicyTest {
 
     @Test
     fun `диктовки прогона переживают JSON`() {
-        val takes = listOf(take("s-1", true).copy(verdict = "Опус 5", why = "лучше", flaws = listOf("lost")), take("s-2", false).copy(failure = "нет ответа"))
+        val takes = listOf(take("s-1", true).copy(verdict = "Опус 5", why = "лучше", flaws = listOf("lost"), prose = true), take("s-2", false).copy(failure = "нет ответа"))
         val back = ShadowPolicy.takesFromJson(ShadowPolicy.takesToJson(takes))
         assertEquals(takes, back)
     }
