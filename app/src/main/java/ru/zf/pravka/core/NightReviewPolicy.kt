@@ -29,13 +29,16 @@ object NightReviewPolicy {
      * недели, а второй прогон той же ночью — лишние деньги и вторая карточка
      * утром (18.09.2026: ночь на пятницу стоила как три обычные).
      * Ручные запуски тоже считаются: разобрали сутки днём — ночью не повторяем.
+     * [dailyEnabled] — тумблер «сутки каждую ночь» (заводское выключен, 18.09:
+     * владелец — «может, оставить только недельный?»); недельный идёт всегда.
      */
-    fun dueKinds(nowMs: Long, hour: Int, lastDailyStart: Long, lastWeeklyStart: Long): List<String> {
+    fun dueKinds(nowMs: Long, hour: Int, lastDailyStart: Long, lastWeeklyStart: Long, dailyEnabled: Boolean = true): List<String> {
         val now = Calendar.getInstance().apply { timeInMillis = nowMs }
         if (now.get(Calendar.HOUR_OF_DAY) < hour) return emptyList()
         if (now.get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY) {
             return if (sameDay(lastWeeklyStart, nowMs)) emptyList() else listOf(WEEKLY)
         }
+        if (!dailyEnabled) return emptyList()
         return if (sameDay(lastDailyStart, nowMs)) emptyList() else listOf(DAILY)
     }
 

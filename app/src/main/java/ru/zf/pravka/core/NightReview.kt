@@ -97,7 +97,8 @@ class NightReview(
                 val lastDaily = runs.filter { it.kind == NightReviewPolicy.DAILY }.maxOfOrNull { it.startedAt } ?: 0L
                 val lastWeekly = runs.filter { it.kind == NightReviewPolicy.WEEKLY }.maxOfOrNull { it.startedAt } ?: 0L
                 // Один прогон за тик; в пятницу идёт только недельный — сутки в нём и так есть.
-                NightReviewPolicy.dueKinds(nowMs, hour, lastDaily, lastWeekly).firstOrNull()?.let { kind ->
+                val dailyOn = settings.nightDailyEnabledFlow.first()
+                NightReviewPolicy.dueKinds(nowMs, hour, lastDaily, lastWeekly, dailyOn).firstOrNull()?.let { kind ->
                     // Потолок дня для автоматов: расход по приложению за сутки выше — не
                     // стартуем сами. Сутки — вчера или сегодня, не «с полуночи»: в три
                     // ночи сегодняшний счёт пуст, и потолок не ловил ничего.

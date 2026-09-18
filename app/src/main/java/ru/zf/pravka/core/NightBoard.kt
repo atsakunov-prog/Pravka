@@ -65,6 +65,8 @@ object NightBoard {
         eval: EvalSummary?,
         lastTickMs: Long,
         nowMs: Long,
+        /** Тумблер «сутки каждую ночь»: без него строка суток — «по кнопке», не «завтра в 03:00». */
+        dailyOn: Boolean = true,
     ): List<Line> {
         val out = ArrayList<Line>()
         // Пульс службы — первым: если она не тикает, всё остальное стоит.
@@ -76,7 +78,7 @@ object NightBoard {
         val daily = runs.filter { it.isReview && it.kind == NightReviewPolicy.DAILY }.maxByOrNull { it.startedAt }
         val weekly = runs.filter { it.isReview && it.kind == NightReviewPolicy.WEEKLY }.maxByOrNull { it.startedAt }
         val tune = runs.filter { it.isTune }.maxByOrNull { it.startedAt }
-        out += line("daily", "Разбор суток", daily, reviewOn, nextDaily(nowMs, hour), nowMs)
+        out += line("daily", "Разбор суток", daily, reviewOn, if (dailyOn) nextDaily(nowMs, hour) else "по кнопке «Сутки» (каждую ночь выключено)", nowMs)
         out += line("weekly", "Разбор недели", weekly, reviewOn, nextWeekday(nowMs, hour, Calendar.FRIDAY), nowMs)
         out += line("tune", "Правка промпта", tune, tuneOn, nextWeekday(nowMs, hour, Calendar.SATURDAY), nowMs)
         // Сравнение моделей автостарта не имеет — «следующий» всегда «по кнопке».

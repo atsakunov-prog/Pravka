@@ -27,6 +27,9 @@ class NightReviewPolicyTest {
         assertEquals(listOf("daily"), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, at(2026, 9, 16, 3), 0L))
         // Сегодняшний дневной уже был (в том числе вручную) — ночью не повторяем.
         assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, at(2026, 9, 17, 3), 0L))
+        // Тумблер суток выключен (заводское): в четверг ничего, в пятницу недельный как обычно.
+        assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, 0L, 0L, dailyEnabled = false))
+        assertEquals(listOf("weekly"), NightReviewPolicy.dueKinds(fri, 3, 0L, 0L, dailyEnabled = false))
     }
 
     @Test

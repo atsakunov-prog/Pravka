@@ -46,6 +46,7 @@ class Settings(private val context: Context) {
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
         private val KEY_RULES_IN_PROMPT = booleanPreferencesKey("rules_in_prompt")
         private val KEY_NIGHT_REVIEW = booleanPreferencesKey("night_review_enabled")
+        private val KEY_NIGHT_DAILY = booleanPreferencesKey("night_daily_enabled")
         private val KEY_NIGHT_REVIEW_HOUR = intPreferencesKey("night_review_hour")
         private val KEY_PROMPT_TUNE = booleanPreferencesKey("prompt_tune_enabled")
         private val KEY_NIGHT_BUDGET = intPreferencesKey("night_budget_usd")
@@ -266,6 +267,18 @@ class Settings(private val context: Context) {
     val nightReviewEnabledFlow = context.dataStore.data.map { it[KEY_NIGHT_REVIEW] ?: true }
     suspend fun setNightReviewEnabled(value: Boolean) {
         context.dataStore.edit { it[KEY_NIGHT_REVIEW] = value }
+    }
+
+    /**
+     * Разбор суток каждую ночь — отдельно от недельного (18.09.2026; владелец:
+     * «может, нам оставить только недельный?»). Заводское — выключен: ослышка
+     * становится словарной, когда повторяется, а за сутки она редко повторится;
+     * шесть ночей по $0,6–0,7 давали в основном ту же картину, что одна
+     * недельная. Кнопка «Сутки» в плашке «Ночью» работает независимо от тумблера.
+     */
+    val nightDailyEnabledFlow = context.dataStore.data.map { it[KEY_NIGHT_DAILY] ?: false }
+    suspend fun setNightDailyEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_NIGHT_DAILY] = value }
     }
 
     val nightReviewHourFlow = context.dataStore.data.map { it[KEY_NIGHT_REVIEW_HOUR] ?: 3 }

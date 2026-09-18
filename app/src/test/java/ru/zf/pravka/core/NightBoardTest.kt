@@ -57,6 +57,10 @@ class NightBoardTest {
         assertEquals("fail", lines[0].state)
         assertEquals("off", lines[1].state)
         assertEquals("выключен тумблером", lines[1].next)
+        // Разбор включён, но сутки каждую ночь — нет: строка суток говорит «по кнопке», недельный — как обычно.
+        val weeklyOnly = NightBoard.build(emptyList(), true, true, hour, null, now, now, dailyOn = false)
+        assertTrue(weeklyOnly[1].next, weeklyOnly[1].next.startsWith("по кнопке"))
+        assertTrue(weeklyOnly[2].next, weeklyOnly[2].next.startsWith("в ночь на пятницу"))
     }
 
     @Test

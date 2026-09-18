@@ -154,8 +154,15 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             Spacer(Modifier.width(8.dp))
             Text("Разбор журналов батчем: разбор и проверка моделью, согласование — в коде", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         }
-        HintText("Высоковероятное применяется само (кроме отклонённого проверкой и придержанного согласованием), низковероятное отбрасывается. Промпт не трогает. В ночь на пятницу вместо суток — неделя. Модель и усилие — в настройках, группа «Модели».")
+        HintText("Высоковероятное применяется само (кроме отклонённого проверкой и придержанного согласованием), низковероятное отбрасывается. Промпт не трогает. Недельный — в ночь на пятницу, всегда. Модель и усилие — в настройках, группа «Модели».")
         Spacer(Modifier.height(4.dp))
+        val dailyOn by settings.nightDailyEnabledFlow.collectAsState(initial = false)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = dailyOn, enabled = enabled, onCheckedChange = { on -> scope.launch { settings.setNightDailyEnabled(on) } })
+            Spacer(Modifier.width(8.dp))
+            Text("Сутки каждую ночь", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        }
+        HintText("Выключено с завода: ослышка становится словарной, когда повторяется, а за сутки она редко повторится — шесть ночей по $0,6–0,7 давали ту же картину, что одна недельная. Кнопка «Сутки» ниже работает и так.")
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = tuneOn, onCheckedChange = { on -> scope.launch { settings.setPromptTuneEnabled(on) } })
@@ -267,6 +274,7 @@ private fun exportLog(context: Context, app: PravkaApp, runs: List<NightReviewSt
                     all, app.settings.nightReviewEnabledFlow.first(),
                     app.settings.promptTuneEnabledFlow.first(), app.settings.nightReviewHourFlow.first(),
                     withContext(Dispatchers.IO) { evalSummary(app) }, app.lastNightTickMs, System.currentTimeMillis(),
+                    dailyOn = app.settings.nightDailyEnabledFlow.first(),
                 )
             )
             val journal = withContext(Dispatchers.IO) { app.nightLog.readLast(120) }
@@ -789,6 +797,7 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
     val context = LocalContext.current
     val settings = app.settings
     val reviewOn by settings.nightReviewEnabledFlow.collectAsState(initial = true)
+    val dailyOn by settings.nightDailyEnabledFlow.collectAsState(initial = false)
     val tuneOn by settings.promptTuneEnabledFlow.collectAsState(initial = true)
     val hour by settings.nightReviewHourFlow.collectAsState(initial = 3)
     var eval by remember { mutableStateOf<NightBoard.EvalSummary?>(null) }
@@ -801,7 +810,7 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
         eval = withContext(Dispatchers.IO) { evalSummary(app) }
         journal = withContext(Dispatchers.IO) { app.nightLog.readLast(40) }
     }
-    val lines = NightBoard.build(runs, reviewOn, tuneOn, hour, eval, app.lastNightTickMs, System.currentTimeMillis())
+    val lines = NightBoard.build(runs, reviewOn, tuneOn, hour, eval, app.lastNightTickMs, System.currentTimeMillis(), dailyOn = dailyOn)
     SectionCard(label = "Что работает") {
         for (l in lines) {
             val color = when (l.state) {
