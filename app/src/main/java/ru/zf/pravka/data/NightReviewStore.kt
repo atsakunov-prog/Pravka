@@ -79,7 +79,7 @@ class NightReviewStore(private val context: Context) {
         val startedAt: Long,
         val fromMs: Long,
         val toMs: Long,
-        /** analysis · check · audit · done · failed; у правки промпта — tune_*; у сравнения — compare_clean · compare_judge */
+        /** analysis · check · done · failed (audit — согласование моделью, снято 18.09, у прогонов прежних сборок); у правки промпта — tune_*; у сравнения — compare_clean · compare_judge */
         val stage: String,
         val manual: Boolean = false,
         val analysisBatchId: String = "",

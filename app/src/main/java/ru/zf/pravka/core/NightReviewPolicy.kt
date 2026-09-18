@@ -25,20 +25,19 @@ object NightReviewPolicy {
      * Что пора запускать. Дневной — раз в сутки, начиная с часа запуска;
      * недельный — по пятницам: владелец («дневные утром, а недельные в
      * пятницу») читает его утром пятницы, значит идёт он в ночь на пятницу.
+     * В пятницу дневного нет вовсе: недельный смотрит те же сутки в составе
+     * недели, а второй прогон той же ночью — лишние деньги и вторая карточка
+     * утром (18.09.2026: ночь на пятницу стоила как три обычные).
      * Ручные запуски тоже считаются: разобрали сутки днём — ночью не повторяем.
      */
     fun dueKinds(nowMs: Long, hour: Int, lastDailyStart: Long, lastWeeklyStart: Long): List<String> {
         val now = Calendar.getInstance().apply { timeInMillis = nowMs }
         if (now.get(Calendar.HOUR_OF_DAY) < hour) return emptyList()
-        val out = mutableListOf<String>()
-        if (!sameDay(lastDailyStart, nowMs)) out += DAILY
-        if (now.get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY && !sameDay(lastWeeklyStart, nowMs)) out += WEEKLY
-        return out
+        if (now.get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY) {
+            return if (sameDay(lastWeeklyStart, nowMs)) emptyList() else listOf(WEEKLY)
+        }
+        return if (sameDay(lastDailyStart, nowMs)) emptyList() else listOf(DAILY)
     }
-
-    /** Раз в сутки после часа запуска — тем же правилом живёт тень второй модели. */
-    fun dueDaily(nowMs: Long, hour: Int, lastStart: Long): Boolean =
-        DAILY in dueKinds(nowMs, hour, lastStart, nowMs)
 
     /** Раз в неделю в заданный день недели (Calendar.SATURDAY…) после часа запуска — правка промпта. */
     fun dueOnWeekday(nowMs: Long, hour: Int, lastStart: Long, weekday: Int): Boolean {
@@ -116,21 +115,6 @@ object NightReviewPolicy {
         return out
     }
 
-    data class Audit(val assessment: String, val holds: Map<String, String>)
-
-    /** Ответ согласования: оценка целиком и что придержать (id → почему). */
-    fun parseAudit(raw: String): Audit {
-        val o = jsonObject(raw)
-        val arr = o.optJSONArray("holds") ?: JSONArray()
-        val holds = LinkedHashMap<String, String>()
-        for (i in 0 until arr.length()) {
-            val h = arr.optJSONObject(i) ?: continue
-            val id = h.optString("id").trim()
-            if (id.isNotEmpty()) holds[id] = h.optString("why").trim()
-        }
-        return Audit(o.optString("assessment").trim(), holds)
-    }
-
     data class ReplyPlan(val actions: List<Pair<String, String>>, val answer: String)
 
     /** Ответ владельца, переведённый моделью в действия по id. */
@@ -162,6 +146,35 @@ object NightReviewPolicy {
         if (c.verdict == "reject" || c.verdict == "hold") return false
         if (c.kind == "dict_add" && c.mode == "HARD" && shortCyrillicWord(c.from)) return false
         return true
+    }
+
+    /**
+     * Согласование в коде (18.09.2026). Третий проход — Fable над итогом ночи —
+     * стоил как треть разбора и отвечал на вопросы к НАБОРУ, а не к
+     * свидетельствам; такие вопросы считаются без модели: одно слово в двух
+     * изменениях (PROTECT и HARD на одно и то же, добавить и выключить), одно
+     * правило и включить, и выключить, выключение или смена вида у записи,
+     * которую разбор сам положил на этой неделе ([recentNightAdds] — слова в
+     * нижнем регистре). Спорное придерживается: verdict «hold», остаётся
+     * предложением владельцу и в проверку не уходит. Заметки и уже решённое
+     * (dropped, skipped) не трогаются.
+     */
+    fun consistencyHolds(changes: List<Change>, recentNightAdds: Set<String>): List<Change> {
+        val live = changes.filter { !it.isNote && it.status == "proposed" }
+        val byWord = live.filter { it.kind.startsWith("dict") }.groupBy { it.from.trim().lowercase() }
+        val byRule = live.filter { it.kind.startsWith("rule") }.groupBy { it.ruleId }
+        return changes.map { c ->
+            if (c.isNote || c.status != "proposed") return@map c
+            val word = c.from.trim().lowercase()
+            val why = when {
+                c.kind.startsWith("dict") && (byWord[word]?.size ?: 0) > 1 -> "одно слово в нескольких изменениях за ночь"
+                c.kind.startsWith("rule") && (byRule[c.ruleId]?.map { it.kind }?.toSet()?.size ?: 0) > 1 -> "правило за ночь и включается, и выключается"
+                (c.kind == "dict_disable" || c.kind == "dict_mode") && word in recentNightAdds ->
+                    "отменяет то, что разбор сам положил на этой неделе — решает владелец"
+                else -> return@map c
+            }
+            c.copy(verdict = "hold", verdictWhy = "согласование: $why")
+        }
     }
 
     fun shortCyrillicWord(s: String): Boolean {

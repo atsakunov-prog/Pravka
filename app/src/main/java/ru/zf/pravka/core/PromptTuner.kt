@@ -328,8 +328,9 @@ class PromptTuner(
         if (remaining() == 0 && store.get(run.id)?.active == true) store.save(dispatchJudge(r, takes))
     }
 
+    // Сутки — вчера или сегодня (Stats.costRecentDayUsd), не «с полуночи»: ночью счёт дня пуст.
     private suspend fun overBudget(): Boolean =
-        stats.snapshotFlow.first().costTodayUsd > settings.nightBudgetUsdFlow.first()
+        stats.costRecentDayUsd() > settings.nightBudgetUsdFlow.first()
 
     private suspend fun dispatchJudge(run: Run, takes: List<ShadowPolicy.Take>): Run {
         val differing = takes.filter { it.failure.isBlank() && it.verdict.isBlank() }

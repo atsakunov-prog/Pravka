@@ -152,9 +152,9 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = enabled, onCheckedChange = { on -> scope.launch { settings.setNightReviewEnabled(on) } })
             Spacer(Modifier.width(8.dp))
-            Text("Разбор журналов: Fable 5.1 батчем, три прохода", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text("Разбор журналов батчем: разбор и проверка моделью, согласование — в коде", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         }
-        HintText("Высоковероятное применяется само (кроме отклонённого проверкой), низковероятное отбрасывается. Промпт не трогает.")
+        HintText("Высоковероятное применяется само (кроме отклонённого проверкой и придержанного согласованием), низковероятное отбрасывается. Промпт не трогает. В ночь на пятницу вместо суток — неделя. Модель и усилие — в настройках, группа «Модели».")
         Spacer(Modifier.height(4.dp))
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -172,7 +172,7 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
             Spacer(Modifier.width(4.dp))
             OutlinedButton(onClick = { scope.launch { settings.setNightBudgetUsd(budget + 1) } }) { Text("+") }
         }
-        HintText("Расход по приложению за сутки выше потолка — разбор и правка промпта сами не стартуют, идущее измерение ждёт завтра. Кнопки потолок не смотрят.")
+        HintText("Расход по приложению за вчера или за сегодня выше потолка — разбор и правка промпта сами не стартуют, идущее измерение ждёт завтра. Кнопки потолок не смотрят.")
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Запуск в ${"%02d".format(hour)}:00", style = MaterialTheme.typography.bodyMedium)
@@ -445,6 +445,8 @@ private fun ChangeRow(app: PravkaApp, run: NightReviewStore.Run, c: NightReviewS
                 if (c.status == "reverted") "ты вернул — принять снова или отклонить" else "",
                 c.why,
                 if (c.verdict == "hold") "согласование придержало: ${c.verdictWhy}" else "",
+                // Вердикта нет, а причина есть — проверка не ответила: это видно сразу, не по тапу.
+                if (c.verdict.isBlank() && c.verdictWhy.isNotBlank()) c.verdictWhy else "",
                 if (open && c.verdict.isNotBlank() && c.verdict != "hold") "проверка: ${c.verdict}${if (c.verdictWhy.isNotBlank()) " — ${c.verdictWhy}" else ""}" else "",
             ).filter { it.isNotBlank() }.joinToString(" · ")
             if (details.isNotBlank()) {

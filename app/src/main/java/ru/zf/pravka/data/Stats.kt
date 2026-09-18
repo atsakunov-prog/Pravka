@@ -231,6 +231,15 @@ class Stats(private val context: Context) {
         }
     }
 
+    /**
+     * Потолок дня для ночных автоматов сравнивают с этим, а не с costTodayUsd:
+     * в три ночи «сегодня» — три часа и ноль долларов, и потолок не ловил ничего
+     * (18.09.2026: день на $11,58 — и разбор ночью стартовал как ни в чём не
+     * бывало). Максимум из вчера и сегодня: ночью это вчерашний день, днём —
+     * текущий.
+     */
+    suspend fun costRecentDayUsd(): Double = dailyCosts(2).maxOf { it.second }
+
     suspend fun recordError() {
         context.statsDataStore.edit { p ->
             p[Keys.ERRORS] = (p[Keys.ERRORS] ?: 0) + 1

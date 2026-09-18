@@ -15,15 +15,18 @@ class NightReviewPolicyTest {
         Calendar.getInstance().apply { clear(); set(year, month - 1, day, hour, 0) }.timeInMillis
 
     @Test
-    fun `дневной раз в сутки после часа запуска, недельный — по пятницам`() {
+    fun `дневной раз в сутки после часа запуска, в пятницу — только недельный`() {
         val fri = at(2026, 9, 18, 4)  // пятница
-        assertEquals(listOf("daily", "weekly"), NightReviewPolicy.dueKinds(fri, 3, 0L, 0L))
+        // В пятницу дневного нет: недельный смотрит те же сутки в составе недели.
+        assertEquals(listOf("weekly"), NightReviewPolicy.dueKinds(fri, 3, 0L, 0L))
         // До часа запуска — ничего.
         assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 18, 2), 3, 0L, 0L))
-        // Сегодняшний дневной уже был (в том числе вручную) — только недельный.
-        assertEquals(listOf("weekly"), NightReviewPolicy.dueKinds(fri, 3, at(2026, 9, 18, 3), 0L))
-        // Четверг — недельного нет.
+        // Недельный сегодня уже был (в том числе вручную) — ничего.
+        assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(fri, 3, 0L, at(2026, 9, 18, 3)))
+        // Четверг — дневной, недельного нет.
         assertEquals(listOf("daily"), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, at(2026, 9, 16, 3), 0L))
+        // Сегодняшний дневной уже был (в том числе вручную) — ночью не повторяем.
+        assertEquals(emptyList<String>(), NightReviewPolicy.dueKinds(at(2026, 9, 17, 5), 3, at(2026, 9, 17, 3), 0L))
     }
 
     @Test

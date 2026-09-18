@@ -1,6 +1,7 @@
 package ru.zf.pravka.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.zf.pravka.data.NightReviewStore.Change
@@ -51,9 +52,32 @@ class NightReviewEvidenceTest {
     }
 
     @Test
-    fun `ответ согласования разбирается`() {
-        val a = NightReviewPolicy.parseAudit("""{"assessment":"Набор скромный и в линии.","holds":[{"id":"dict-2","why":"владелец возвращал"}]}""")
-        assertEquals("Набор скромный и в линии.", a.assessment)
-        assertEquals(mapOf("dict-2" to "владелец возвращал"), a.holds)
+    fun `согласование в коде придерживает противоречия и отмену своих недавних решений`() {
+        val changes = listOf(
+            // Одно слово в двух изменениях — оба придержаны.
+            Change(id = "n-1", kind = "dict_add", mode = "HARD", from = "Полли", to = "Полли", confidence = "high"),
+            Change(id = "n-2", kind = "dict_add", mode = "PROTECT", from = "полли", confidence = "high"),
+            // Правило и включить, и выключить.
+            Change(id = "n-3", kind = "rule_disable", ruleId = 7, confidence = "high"),
+            Change(id = "n-4", kind = "rule_enable", ruleId = 7, confidence = "high"),
+            // Выключить то, что разбор сам положил на этой неделе — решает владелец.
+            Change(id = "n-5", kind = "dict_disable", mode = "HARD", from = "Ебитда", confidence = "high"),
+            // Обычное — проходит без вердикта.
+            Change(id = "n-6", kind = "dict_add", mode = "HARD", from = "телепромутр", to = "телепромптер", confidence = "high"),
+            Change(id = "n-7", kind = "rule_disable", ruleId = 9, confidence = "high"),
+            // Заметки и уже решённое не трогаются.
+            Change(id = "n-8", kind = "note", why = "…", status = "note"),
+            Change(id = "n-9", kind = "dict_add", mode = "HARD", from = "полли", status = "dropped", confidence = "low"),
+        )
+        val out = NightReviewPolicy.consistencyHolds(changes, recentNightAdds = setOf("ебитда"))
+        val held = out.filter { it.verdict == "hold" }.map { it.id }
+        assertEquals(listOf("n-1", "n-2", "n-3", "n-4", "n-5"), held)
+        assertTrue(out.first { it.id == "n-5" }.verdictWhy.contains("сам положил"))
+        assertEquals("", out.first { it.id == "n-6" }.verdict)
+        assertEquals("", out.first { it.id == "n-7" }.verdict)
+        assertEquals("", out.first { it.id == "n-9" }.verdict)
+        // Придержанное само не применяется, а остаётся предложением.
+        assertFalse(NightReviewPolicy.autoApply(out.first { it.id == "n-1" }))
+        assertTrue(NightReviewPolicy.autoApply(out.first { it.id == "n-6" }))
     }
 }
