@@ -120,6 +120,7 @@ suspend fun ClaudeProvider.parseBody(
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.BODY.key,
         )
         parseBodyReply(reply, choice.model).copy(latencyMs = System.currentTimeMillis() - started)
     }
@@ -263,6 +264,7 @@ suspend fun ClaudeProvider.extractRules(pageText: String): Result<RulesParse> = 
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.BODY_LIGHT.key,
         )
         val o = jsonObjectOf(reply.text, "Правила блока не разобрались — модель ответила не JSON.")
         val week = mutableListOf<Pair<String, String>>()
@@ -337,6 +339,7 @@ suspend fun ClaudeProvider.coach(
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", onDelta,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.BODY.key,
         )
         CoachAnswer(
             text = reply.text.trim(),
@@ -382,6 +385,7 @@ suspend fun ClaudeProvider.trainer(
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", onDelta,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.BODY_LIGHT.key,
         )
         CoachAnswer(
             text = reply.text.trim(),

@@ -73,7 +73,7 @@ object EvalRunner {
         for (item in items) {
             val prepared = applier.prepare(item.input)
             val parts = app.claudeProvider.cleanPromptParts(prepared.dictBlock, prose = false).copy(cacheStableAlways = true)
-            val result = app.claudeProvider.cleanOnce(choice.model, choice.effort, parts, prepared.text)
+            val result = app.claudeProvider.cleanOnce(choice.model, choice.effort, parts, prepared.text, routeKey = "eval")
             done++
             val res = result.getOrNull()
             if (res == null) {

@@ -139,7 +139,7 @@ class ModelCompare(
             val parts = provider.cleanPromptParts(prepared.dictBlock, prose = item.prose).copy(cacheStableAlways = true)
             var cur = item
             for (arm in item.pendingArms) {
-                val res = provider.cleanOnce(arm.model, arm.effort, parts, prepared.text)
+                val res = provider.cleanOnce(arm.model, arm.effort, parts, prepared.text, routeKey = ROUTE)
                 val err = res.exceptionOrNull()
                 if (err != null) {
                     val msg = err.message ?: err.javaClass.simpleName

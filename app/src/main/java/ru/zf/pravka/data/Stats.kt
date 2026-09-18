@@ -85,20 +85,57 @@ class Stats(private val context: Context) {
         this[k] = (this[k] ?: 0) + micros
     }
 
+    /**
+     * Вход дороги за день и сколько из него пришло из кэша: rin_<дорога>_YYYYMMDD
+     * и rcr_<дорога>_YYYYMMDD, живут 62 дня. Владелец (18.09.2026): «надо
+     * проверить, что точно промпт кэшируется». Общая строка кэша на это не
+     * отвечает: в ней вся история до появления кэша и все дороги вперемешку.
+     * Доля по дороге за последние дни — отвечает: у чистки голова CLEAN должна
+     * давать больше половины входа из кэша, ноль — значит, префикс кто-то сломал.
+     */
+    suspend fun recordRouteUsage(route: String, inputTokens: Int, cacheReadTokens: Int) {
+        if (route.isBlank() || inputTokens <= 0) return
+        val date = dayKey(0).removePrefix("cost_")
+        context.statsDataStore.edit { p ->
+            val kin = longPreferencesKey("rin_" + route + "_" + date)
+            p[kin] = (p[kin] ?: 0) + inputTokens
+            if (cacheReadTokens > 0) {
+                val kcr = longPreferencesKey("rcr_" + route + "_" + date)
+                p[kcr] = (p[kcr] ?: 0) + cacheReadTokens
+            }
+        }
+    }
+
+    /** Дорога за период: деньги, вход в токенах и сколько входа пришло из кэша. */
+    data class RouteSpend(val route: String, val usd: Double, val inputTokens: Long, val cacheReadTokens: Long) {
+        /** Доля входа из кэша в процентах; null — вход по дороге ещё не считался (сборки до 18.09). */
+        val cacheShare: Int? get() = if (inputTokens > 0) (100 * cacheReadTokens / inputTokens).toInt() else null
+    }
+
     /** Деньги по дорогам за [days] дней, дороже — первыми: ответ на «куда уходят деньги». */
-    suspend fun routeCosts(days: Int): List<Pair<String, Double>> {
+    suspend fun routeCosts(days: Int): List<RouteSpend> {
         val prefs = context.statsDataStore.data.first()
         val from = dayKey(days.coerceIn(1, 62) - 1).removePrefix("cost_")
         val sums = HashMap<String, Long>()
+        val inputs = HashMap<String, Long>()
+        val reads = HashMap<String, Long>()
         for ((k, v) in prefs.asMap()) {
             val name = k.name
-            if (!name.startsWith("route_") || name.length < 16) continue
+            val bucket = when {
+                name.startsWith("route_") -> sums
+                name.startsWith("rin_") -> inputs
+                name.startsWith("rcr_") -> reads
+                else -> continue
+            }
+            val prefixLen = name.indexOf('_') + 1
+            if (name.length < prefixLen + 10) continue
             val date = name.takeLast(8)
             if (date < from) continue
-            val route = name.substring(6, name.length - 9)
-            sums[route] = (sums[route] ?: 0L) + ((v as? Long) ?: 0L)
+            val route = name.substring(prefixLen, name.length - 9)
+            bucket[route] = (bucket[route] ?: 0L) + ((v as? Long) ?: 0L)
         }
-        return sums.entries.sortedByDescending { it.value }.map { it.key to it.value / 1_000_000.0 }
+        return sums.entries.sortedByDescending { it.value }
+            .map { RouteSpend(it.key, it.value / 1_000_000.0, inputs[it.key] ?: 0L, reads[it.key] ?: 0L) }
     }
 
     private fun daysSinceMonday(): Int {
@@ -209,7 +246,8 @@ class Stats(private val context: Context) {
         p.asMap().keys
             .filter {
                 (it.name.length == cutoff.length && it.name.startsWith("cost_2") && it.name < cutoff) ||
-                    (it.name.startsWith("route_") && it.name.length >= 16 && it.name.takeLast(8) < cutoffDate)
+                    ((it.name.startsWith("route_") || it.name.startsWith("rin_") || it.name.startsWith("rcr_")) &&
+                        it.name.length >= 14 && it.name.takeLast(8) < cutoffDate)
             }
             .forEach { p.remove(longPreferencesKey(it.name)) }
     }

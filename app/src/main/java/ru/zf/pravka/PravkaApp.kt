@@ -59,7 +59,12 @@ class PravkaApp : Application() {
         // Кэш промпта виден в статистике: транспорт отдаёт расход каждого ответа,
         // сюда падают токены чтения и записи кэша со всех дорог сразу.
         claudeProvider.usageObserver = { r ->
-            appScope.launch { stats.recordCache(r.cacheReadTokens, r.cacheWriteTokens) }
+            appScope.launch {
+                stats.recordCache(r.cacheReadTokens, r.cacheWriteTokens)
+                // И по дороге: доля входа из кэша в строке экрана «$» — единственная
+                // проверка, что точка кэша не просто стоит в запросе, а читается.
+                stats.recordRouteUsage(r.route, r.inputTokens + r.cacheWriteTokens + r.cacheReadTokens, r.cacheReadTokens)
+            }
         }
     }
 

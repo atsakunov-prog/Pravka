@@ -269,6 +269,7 @@ class NightReview(
         val cacheWrite = items.sumOf { it.cacheWrite }
         stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens }, route = route.key)
         stats.recordCache(cacheRead, cacheWrite)
+        stats.recordRouteUsage(route.key, tokensIn, cacheRead)
         log.add("ночной разбор (${r.stage}): вход $tokensIn токенов, из кэша $cacheRead, записано в кэш $cacheWrite")
         r = r.copy(costUsd = r.costUsd + cost, inputTokens = r.inputTokens + tokensIn, cacheReadTokens = r.cacheReadTokens + cacheRead)
         r = if (r.stage == "analysis") afterAnalysis(r, items) else afterCheck(r, items)

@@ -282,6 +282,7 @@ $raw
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.ZASECHKA.key,
         )
         parseZasechka(reply.text).copy(
             costUsd = costUsd(choice.model, reply),

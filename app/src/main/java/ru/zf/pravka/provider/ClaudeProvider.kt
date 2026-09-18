@@ -81,6 +81,8 @@ class ClaudeProvider(
         val cacheWriteTokens: Int,  // billed at 2x (1h TTL cache write)
         val cacheReadTokens: Int,   // billed at 0.1x
         val outputTokens: Int,
+        /** Ключ дороги (ModelRoute.key), которой ушёл запрос — для доли кэша по дорогам на экране «$». */
+        val route: String = "",
     )
 
     override suspend fun proofread(
@@ -119,6 +121,7 @@ class ClaudeProvider(
                 val reply = requestWithOneRetry(
                     apiKey, model, parts, input, onDelta,
                     effortOverride = choice.effort,
+                    routeKey = (if (strong) ModelRoute.PRAVKA_STRONG else ModelRoute.PRAVKA).key,
                 )
                 ProofreadResult(
                     text = reply.text,
@@ -190,13 +193,20 @@ class ClaudeProvider(
      * (ClaudeBatches.single) длинный ответ Опуса с мыслями рвался посреди:
      * «stream was reset: CANCEL» на семнадцатой диктовке трижды подряд (17.09.2026).
      */
-    suspend fun cleanOnce(model: String, effort: String, parts: Prompts.PromptParts, input: String): Result<ProofreadResult> =
+    suspend fun cleanOnce(
+        model: String,
+        effort: String,
+        parts: Prompts.PromptParts,
+        input: String,
+        /** Ключ дороги для доли кэша на экране «$»: измерение промпта, сравнение, эвал. */
+        routeKey: String = "",
+    ): Result<ProofreadResult> =
         withContext(Dispatchers.IO) {
             runCatchingApi {
                 val apiKey = settings.apiKey()
                 if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
                 val started = System.currentTimeMillis()
-                val reply = requestWithOneRetry(apiKey, model, parts, input, onDelta = null, effortOverride = effort)
+                val reply = requestWithOneRetry(apiKey, model, parts, input, onDelta = null, effortOverride = effort, routeKey = routeKey)
                 ProofreadResult(
                     text = reply.text,
                     providerId = id,
@@ -237,6 +247,7 @@ class ClaudeProvider(
                 val reply = requestWithOneRetry(
                     apiKey, model, parts, "", onDelta,
                     effortOverride = choice.effort,
+                    routeKey = ModelRoute.PRAVKA.key,
                 )
                 ProofreadResult(
                     text = reply.text,
@@ -356,6 +367,7 @@ $knownBlock$casesBlock
             val reply = requestWithOneRetry(
                 apiKey, choice.model, parts, "", null,
                 effortOverride = choice.effort,
+                routeKey = ModelRoute.PRAVKA_LEARN.key,
             )
             // Rules the model returns anyway are dropped here, not queued:
             // nobody asked for them.
@@ -425,6 +437,7 @@ $listing
             val reply = requestWithOneRetry(
                 apiKey, choice.model, parts, "", null,
                 effortOverride = choice.effort,
+                routeKey = ModelRoute.PRAVKA_LEARN.key,
             )
             val parsed = parseLearn(reply.text)
             require(parsed.rules.isNotEmpty()) { "Модель не вернула правил — набор не тронут." }
@@ -680,13 +693,15 @@ $listing
         maxTokensOverride: Int = 0,
         effortOverride: String = "",
         tolerateTruncation: Boolean = false,
+        /** Ключ дороги (ModelRoute.key): уезжает в ApiReply.route для доли кэша по дорогам. */
+        routeKey: String = "",
     ): ApiReply {
         // Spec 6.1: one retry on network error or timeout; none on client 4xx.
         // Transient server blips (429/500/529 "overloaded") last seconds - one
         // short-backoff retry turns them from a user-visible failure into
         // nothing. A short pause before the network retry too: an instant
         // re-POST into the same dead socket just fails the same way.
-        val reply = try {
+        val raw = try {
             request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
         } catch (e: IOException) {
             Thread.sleep(1000)
@@ -695,6 +710,21 @@ $listing
             if (!e.retryable) throw e
             Thread.sleep(e.retryDelayMs)
             request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
+        }
+        val reply = raw.copy(route = routeKey)
+        // Ответ — в тот же лог отладки, что и запрос (владелец, 18.09.2026: «надо
+        // проверить, что точно промпт кэшируется»): единственная правда о кэше —
+        // поля usage ответа, а не наличие точки в запросе.
+        requestLogger?.let { log ->
+            runCatching {
+                val total = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens
+                val share = if (total > 0) 100 * reply.cacheReadTokens / total else 0
+                log(
+                    "=== ОТВЕТ · $model · вход $total токенов, из кэша ${reply.cacheReadTokens} ($share%), " +
+                        "записано в кэш ${reply.cacheWriteTokens} · выход ${reply.outputTokens} · $" +
+                        "%.4f".format(java.util.Locale.US, costUsd(model, reply)) + "\n"
+                )
+            }
         }
         runCatching { usageObserver?.invoke(reply) }
         return reply

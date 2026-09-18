@@ -30,6 +30,7 @@ import ru.zf.pravka.data.ModelChoice
 import ru.zf.pravka.core.ModelCompare
 import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.Models
+import ru.zf.pravka.data.Stats
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.SignedColumns
@@ -47,7 +48,7 @@ import ru.zf.pravka.ui.SignedColumns
 internal fun CostScreen(app: PravkaApp) {
     val snapshot by app.stats.snapshotFlow.collectAsState(initial = null)
     var daily by remember { mutableStateOf<List<Pair<String, Double>>>(emptyList()) }
-    var routes by remember { mutableStateOf<List<Pair<String, Double>>>(emptyList()) }
+    var routes by remember { mutableStateOf<List<Stats.RouteSpend>>(emptyList()) }
     LaunchedEffect(snapshot?.costTodayUsd) {
         daily = runCatching { app.stats.dailyCosts(14) }.getOrDefault(emptyList())
         routes = runCatching { app.stats.routeCosts(7) }.getOrDefault(emptyList())
@@ -118,8 +119,10 @@ internal fun CostScreen(app: PravkaApp) {
         // две трети дня, и это было не видно ниоткуда.
         if (routes.isNotEmpty()) {
             PaperCard(label = "по дорогам, семь дней") {
-                val total = routes.sumOf { it.second }
-                for ((key, usd) in routes) {
+                val total = routes.sumOf { it.usd }
+                for (spend in routes) {
+                    val key = spend.route
+                    val usd = spend.usd
                     val route = ModelRoute.entries.firstOrNull { it.key == key }
                     val choice = route?.let { r ->
                         app.settings.modelChoiceFlow(r).collectAsState(initial = ModelChoice.defaultOf(r)).value
@@ -136,13 +139,27 @@ internal fun CostScreen(app: PravkaApp) {
                     // Доля — отдельной строкой, не внутрь формата: «(67%)» в шаблоне
                     // читается как спецификатор «%)» и роняет экран (18.09.2026).
                     CostLine("$title$model", "$%.2f".format(Locale.US, usd) + share)
+                    // Доля входа из кэша — проверка, что точка кэша читается, а не
+                    // просто стоит в запросе (владелец, 18.09: «точно кэшируется?»).
+                    spend.cacheShare?.let { pct ->
+                        Text(
+                            "вход ${spend.inputTokens / 1000} тыс. токенов, из кэша $pct%" +
+                                (if (pct == 0 && spend.inputTokens > 20_000) " — кэш не читается" else ""),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (pct == 0 && spend.inputTokens > 20_000) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 12.dp, bottom = 2.dp),
+                        )
+                    }
                 }
                 Spacer(Modifier.height(6.dp))
                 PaperHint(
                     "Считается с сборки 17.09: дни до неё — только в общей сумме. Дорогая строка — " +
                         "повод сменить модель или усилие в настройках, группа «Модели»: Fable думает всегда и " +
                         "стоит вдвое дороже Опуса на входе и выходе. Батчи (ночной разбор, судья) показаны " +
-                        "уже со скидкой вдвое — это и есть счёт."
+                        "уже со скидкой вдвое — это и есть счёт. Доля входа из кэша считается с сборки 18.09: " +
+                        "у чистки голова промпта под часовым кэшем, ждать больше половины; ноль при большом " +
+                        "входе — префикс сломан. Помощник и обучение кэша не ставят нарочно — там ноль в порядке."
                 )
             }
         }

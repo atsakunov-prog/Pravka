@@ -100,6 +100,7 @@ suspend fun ClaudeProvider.splitTasks(
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.RAZNOSKA.key,
         )
         val (tasks, notes) = parseTasks(reply.text, knownLabels, resolveProject)
         SplitResult(

@@ -306,7 +306,7 @@ class PromptTuner(
             if (overBudget()) { stopReason = "потолок дня $${settings.nightBudgetUsdFlow.first()} исчерпан — продолжу завтра"; break }
             val prepared = applier.prepare(t.input)
             val parts = provider.cleanPromptParts(prepared.dictBlock, prose = t.prose, template = newPrompt).copy(cacheStableAlways = true)
-            val res = provider.cleanOnce(choice.model, choice.effort, parts, prepared.text)
+            val res = provider.cleanOnce(choice.model, choice.effort, parts, prepared.text, routeKey = ModelRoute.PROMPT_TUNE.key)
             val idx = takes.indexOfFirst { it.id == t.id }
             val err = res.exceptionOrNull()
             if (err != null) {
