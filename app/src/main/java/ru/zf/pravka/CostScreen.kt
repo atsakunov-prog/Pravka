@@ -134,7 +134,10 @@ internal fun CostScreen(app: PravkaApp) {
                         "night_audit" -> "Правка · Согласование ночного разбора (снято 18.09)"
                         else -> key
                     }
-                    val model = choice?.let { " · " + Models.label(it.model) + (if (it.effort.isNotBlank()) " ${it.effort}" else "") }.orEmpty()
+                    // Подпись — ТЕКУЩАЯ настройка дороги, а не то, чем деньги были потрачены:
+                    // владелец (18.09) увидел «Fable medium $2.54» после смены усилия и решил,
+                    // что разбор подорожал. Слово «сейчас» разводит настройку и счёт.
+                    val model = choice?.let { " · сейчас " + Models.label(it.model) + (if (it.effort.isNotBlank()) " ${it.effort}" else "") }.orEmpty()
                     val share = if (total > 0) " (%.0f%%)".format(Locale.US, 100 * usd / total) else ""
                     // Доля — отдельной строкой, не внутрь формата: «(67%)» в шаблоне
                     // читается как спецификатор «%)» и роняет экран (18.09.2026).
