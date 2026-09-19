@@ -17,7 +17,7 @@ class DiskGeometryTest {
     fun `кольцо - полшестерёнки, полтора просвета, полкнопки`() {
         assertEquals(17f + 12f + 24f, DiskGeometry.ringRadius(button, gear, gap), 0.01f)
         assertEquals(53f + 24f + 6f, DiskGeometry.plateRadius(button, gear, gap), 0.01f)
-        assertEquals(17 + 4, DiskGeometry.dockInset(gear, gap))
+        assertEquals(0, DiskGeometry.DOCK_INSET)
     }
 
     @Test
@@ -101,13 +101,13 @@ class DiskGeometryTest {
     }
 
     @Test
-    fun `докование - за край зашёл, к краю и прижался`() {
+    fun `докование - за край зашёл, центр встал на край`() {
         val plate = DiskGeometry.plateRadius(button, gear, gap)  // 83
-        val inset = DiskGeometry.dockInset(gear, gap)            // 21
-        // Правый край: центр в 1040 из 1080, тарелка вылезает — центр на 1080 − 21.
-        assertEquals(1059f to 500f, DiskGeometry.dock(1040f, 500f, 1080, 2000, plate, inset))
+        val inset = DiskGeometry.DOCK_INSET                       // 0: центр ровно на краю
+        // Правый край: центр в 1040 из 1080, тарелка вылезает — центр на самом краю.
+        assertEquals(1080f to 500f, DiskGeometry.dock(1040f, 500f, 1080, 2000, plate, inset))
         // Левый край.
-        assertEquals(21f to 500f, DiskGeometry.dock(30f, 500f, 1080, 2000, plate, inset))
+        assertEquals(0f to 500f, DiskGeometry.dock(30f, 500f, 1080, 2000, plate, inset))
         // Посреди экрана — где отпустили.
         assertEquals(540f to 700f, DiskGeometry.dock(540f, 700f, 1080, 2000, plate, inset))
         // По вертикали тарелка не уходит за экран.

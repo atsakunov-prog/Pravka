@@ -7,12 +7,14 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -83,6 +85,8 @@ class StackSettingsController(
         private const val NOTE_HOLD_MS = 2_200L
         /** Долгое нажатие на шестерёнку диска — после него её можно везти. Как у кнопок. */
         private const val LONG_PRESS_MS = 450L
+        /** Второй тап по шестерёнке не позже этого — двойной: всё в точку «П». */
+        private const val DOUBLE_TAP_MS = 320L
         /** Гарнитура выбрана, а её не видно среди входов — кружок бледнеет во столько. */
         private const val ABSENT_FACTOR = 0.45f
     }
@@ -139,8 +143,17 @@ class StackSettingsController(
      * настроек долго, то за неё я могу двигать диск»; короткий свайп по ней
      * ничего не делает, тап — веер. Точку везут сразу: другого жеста у неё
      * нет, а долгое нажатие по крошке — мучение.
+     *
+     * Шестерёнке на диске разрешено стоять наполовину за краем экрана
+     * (центр докованного диска — ровно на краю): флаг живёт в параметрах её
+     * окна, поэтому смена режима пересобирает голову на том же месте.
      */
     var ringMode = false
+        set(value) {
+            if (field == value) return
+            field = value
+            reattach()
+        }
 
     /**
      * На диске веер и записки раскрываются СНАРУЖИ тарелки, не поверх кнопок:
@@ -218,8 +231,12 @@ class StackSettingsController(
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = headX.coerceAtLeast(0)
-            y = headY.coerceAtLeast(0)
+            // Шестерёнка диска — за край можно (наполовину, у докованного
+            // диска); точка — нет: по ней жмут, чтобы вернуть всё.
+            val free = ringMode && !dot
+            if (free) flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            x = if (free) headX else headX.coerceAtLeast(0)
+            y = if (free) headY else headY.coerceAtLeast(0)
         }
         headParams = p
         head = frame
@@ -262,12 +279,21 @@ class StackSettingsController(
         val v = head ?: return
         val size = headSizePx()
         val (w, h) = screen()
-        p.x = x.coerceIn(0, (w - size).coerceAtLeast(0))
-        p.y = y.coerceIn(0, (h - size).coerceAtLeast(0))
+        // Шестерёнка диска стоит там, где центр диска, — у края это наполовину
+        // за экраном (владелец: «до середины кружка настроек»). Точка «всё
+        // убрано» — всегда целиком на экране.
+        val free = ringMode && !headIsDot
+        p.x = if (free) x else x.coerceIn(0, (w - size).coerceAtLeast(0))
+        p.y = if (free) y else y.coerceIn(0, (h - size).coerceAtLeast(0))
         headX = p.x
         headY = p.y
         runCatching { windowManager.updateViewLayout(v, p) }
         if (fan != null) placeFan()
+    }
+
+    /** Диск повернулся — шестерёнка крутится вместе с ним (владелец: «будет классный эффект»). */
+    fun setTurn(degrees: Float) {
+        (headGlyph as? GearGlyph)?.base = degrees
     }
 
     /**
@@ -306,6 +332,8 @@ class StackSettingsController(
         /** Диск: палец поехал раньше долгого нажатия — жест пропал: ни тапа, ни переезда. */
         private var slipped = false
         private var pressedGlyph: View? = null
+        /** Когда был прошлый тап по шестерёнке — для двойного. */
+        private var lastTapAt = 0L
         private val arm = Runnable {
             armed = true
             // Кивок и короткий отклик: «взял, можно везти».
@@ -351,8 +379,11 @@ class StackSettingsController(
                     if (dragging) {
                         val size = headSizePx()
                         val (w, h) = screen()
-                        p.x = (startX + dx.toInt()).coerceIn(0, (w - size).coerceAtLeast(0))
-                        p.y = (startY + dy.toInt()).coerceIn(0, (h - size).coerceAtLeast(0))
+                        // Шестерёнку диска к экрану не прижимать: она стартует
+                        // наполовину за краем, и прижим дёрнул бы диск на первом же движении.
+                        val free = needsLongPress()
+                        p.x = if (free) startX + dx.toInt() else (startX + dx.toInt()).coerceIn(0, (w - size).coerceAtLeast(0))
+                        p.y = if (free) startY + dy.toInt() else (startY + dy.toInt()).coerceIn(0, (h - size).coerceAtLeast(0))
                         headX = p.x
                         headY = p.y
                         runCatching { windowManager.updateViewLayout(v, p) }
@@ -367,7 +398,26 @@ class StackSettingsController(
                         onDragged?.invoke(p.x, p.y, true)
                     } else if (!slipped && !armed && event.actionMasked == MotionEvent.ACTION_UP) {
                         onTouched?.invoke()
-                        if (headIsDot) onShowAll?.invoke() else toggleFan()
+                        val now = SystemClock.uptimeMillis()
+                        when {
+                            headIsDot -> onShowAll?.invoke()
+                            // Двойной тап по шестерёнке — всё в точку «П»
+                            // (владелец, 19.09 вечер: «дабл клик на шестерёнку
+                            // и всё схлопывается до маленькой кнопочки П»).
+                            // Первый тап уже открыл веер: второй закрывает его
+                            // и убирает всё — ждать второго, задерживая веер,
+                            // значило бы тормозить каждый одиночный тап.
+                            now - lastTapAt < DOUBLE_TAP_MS -> {
+                                lastTapAt = 0L
+                                hideNote()
+                                hideFan()
+                                onHideAll?.invoke()
+                            }
+                            else -> {
+                                lastTapAt = now
+                                toggleFan()
+                            }
+                        }
                     }
                 }
             }
@@ -747,42 +797,103 @@ class StackSettingsController(
     }
 
     /**
-     * Шестерёнка: кольцо и восемь зубцов, нарисованные от центра. Не текст и
-     * не готовая иконка: глиф, нарисованный от центра вида, центрируется по
-     * построению — тот же урок, что у галочки ручки («какая-то галочка не
-     * посередине»). Открытый веер поворачивает её на четверть: видно, что
-     * она «взведена».
+     * Шестерёнка: восемь зубьев со скошенными боками, впадины между ними,
+     * отверстие в середине. Первая версия была кольцом с восемью лучами, и
+     * владелец сказал прямо: «сделаем нормальной шестерёнкой, а то сейчас это
+     * солнышко». Не текст и не готовая иконка: контур строится от центра вида
+     * и центрируется по построению — тот же урок, что у галочки ручки.
+     *
+     * Крутится вместе с диском ([base] — его поворот; владелец: «будет
+     * классный эффект»), а открытый веер доворачивает её ещё на ползуба:
+     * видно, что она «взведена». Рисунок вписан в круг, поэтому поворот
+     * квадратного вида ничего не режет.
      */
     private class GearGlyph(context: android.content.Context) : View(context) {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = PAPER
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
+        private companion object {
+            private const val TEETH = 8
+            private const val STEP = 360f / TEETH
+            /** Полширины зуба у основания и у вершины, градусов. */
+            private const val ROOT = 11f
+            private const val TIP = 6.5f
+            private const val HALF_TOOTH = STEP / 2f
         }
 
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = PAPER
+            style = Paint.Style.FILL
+        }
+        private val path = Path().apply { fillType = Path.FillType.EVEN_ODD }
+        private val oval = RectF()
+        private var builtFor = 0f
+        private var twistAnim: android.animation.ValueAnimator? = null
+
+        /** Поворот диска: шестерёнка крутится вместе с ним. */
+        var base = 0f
+            set(value) {
+                field = value
+                rotation = value + twist
+            }
+
+        /** Веер открыт — довёрнута на ползуба. */
+        private var twist = 0f
+            set(value) {
+                field = value
+                rotation = base + value
+            }
+
         fun spin(open: Boolean) {
-            animate().cancel()
-            animate().rotation(if (open) 90f else 0f).setDuration(260)
-                .setInterpolator(android.view.animation.OvershootInterpolator(1.5f)).start()
+            twistAnim?.cancel()
+            twistAnim = android.animation.ValueAnimator.ofFloat(twist, if (open) HALF_TOOTH else 0f).apply {
+                duration = 260
+                interpolator = android.view.animation.OvershootInterpolator(1.5f)
+                addUpdateListener { twist = it.animatedValue as Float }
+                start()
+            }
+        }
+
+        override fun onDetachedFromWindow() {
+            twistAnim?.cancel()
+            twistAnim = null
+            super.onDetachedFromWindow()
         }
 
         override fun onDraw(canvas: Canvas) {
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
-            val cx = w / 2f
-            val cy = h / 2f
-            paint.strokeWidth = w * 0.085f
-            canvas.drawCircle(cx, cy, w * 0.19f, paint)
-            val inner = w * 0.30f
-            val outer = w * 0.40f
-            for (i in 0 until 8) {
-                val a = Math.toRadians(i * 45.0)
-                val dx = Math.cos(a).toFloat()
-                val dy = Math.sin(a).toFloat()
-                canvas.drawLine(cx + dx * inner, cy + dy * inner, cx + dx * outer, cy + dy * outer, paint)
+            if (builtFor != w) {
+                builtFor = w
+                build(w / 2f, h / 2f, w)
             }
+            canvas.drawPath(path, paint)
         }
+
+        /**
+         * Контур по часовой: бок зуба вверх, вершина дугой по внешнему
+         * радиусу, бок вниз, впадина дугой по внутреннему — до следующего
+         * зуба. Отверстие — второй контур, EVEN_ODD делает из него дыру.
+         */
+        private fun build(cx: Float, cy: Float, w: Float) {
+            val outer = w * 0.42f
+            val inner = w * 0.31f
+            val hole = w * 0.13f
+            path.reset()
+            path.moveTo(px(cx, inner, -ROOT), py(cy, inner, -ROOT))
+            for (i in 0 until TEETH) {
+                val a = i * STEP
+                path.lineTo(px(cx, outer, a - TIP), py(cy, outer, a - TIP))
+                oval.set(cx - outer, cy - outer, cx + outer, cy + outer)
+                path.arcTo(oval, a - TIP, 2 * TIP)
+                path.lineTo(px(cx, inner, a + ROOT), py(cy, inner, a + ROOT))
+                oval.set(cx - inner, cy - inner, cx + inner, cy + inner)
+                path.arcTo(oval, a + ROOT, STEP - 2 * ROOT)
+            }
+            path.close()
+            path.addCircle(cx, cy, hole, Path.Direction.CW)
+        }
+
+        private fun px(cx: Float, r: Float, deg: Float): Float = cx + r * Math.cos(Math.toRadians(deg.toDouble())).toFloat()
+        private fun py(cy: Float, r: Float, deg: Float): Float = cy + r * Math.sin(Math.toRadians(deg.toDouble())).toFloat()
     }
 
     /** Глифы кружков веера, нарисованные от центра: искра (модель) и стрелка в лоток (обновление). */

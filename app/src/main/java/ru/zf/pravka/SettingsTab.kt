@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -492,6 +493,35 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
         onValueChangeFinished = { scope.launch { settings.setFabAlpha(alphaSlider) } },
         valueRange = 0.15f..1f,
     )
+    Spacer(Modifier.height(10.dp))
+    // Круг или стопка (владелец, 19.09.2026): явный выбор из двух, не тумблер
+    // «вместо» — «сделай переключалку в настройках: круг и стопка». Стопка
+    // остаётся живой дорогой: «если не получится — откатим» одним движением.
+    val diskMode by settings.diskModeFlow.collectAsState(initial = true)
+    Text("Как стоят кнопки", style = MaterialTheme.typography.bodyMedium)
+    Spacer(Modifier.height(4.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = diskMode,
+            onClick = { scope.launch { settings.setDiskMode(true) } },
+            label = { Text("Круг") },
+        )
+        FilterChip(
+            selected = !diskMode,
+            onClick = { scope.launch { settings.setDiskMode(false) } },
+            label = { Text("Стопка") },
+        )
+    }
+    HintText(
+        "Круг: четыре кнопки вокруг шестерёнки на стекле. Повёл кнопку по кругу — " +
+            "крутится весь диск и щёлкает по четвертям, махнул сильнее — провернётся " +
+            "дальше; тап и долгое нажатие по кнопке — как были. Тянешь за стекло " +
+            "(края круга, промежутки между кнопками) — диск переезжает; у края экрана " +
+            "прячется до середины шестерёнки: «П» и «З» внутри, «Д» и «Е» за краем, " +
+            "докрутить их — пальцем. Шестерёнка: тап — веер, двойной тап — всё в " +
+            "точку «П» (тап по точке возвращает), долгое нажатие и тянуть — тоже " +
+            "переезд. Стопка: прежний столбик с ручкой-галочкой."
+    )
     // Бегущая строка у всех четырёх кнопок — одна ширина (владелец, 15.09:
     // «поставим в общих настройках размер плашки по горизонтали»). На экране
     // режется так, чтобы кнопка и поле рядом оставались видны.
@@ -522,29 +552,6 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
     HintText(
         "«П/З/Д/Е» станут пиктограммами, как в нижней ленте: перо, часы, " +
             "галочка, тарелка. Применяется сразу."
-    )
-
-    Spacer(Modifier.height(10.dp))
-    // Диск вместо стопки (владелец, 19.09.2026). Тумблер обязателен: «если не
-    // получится — откатим» должно быть одним движением, без пересборки.
-    val diskMode by settings.diskModeFlow.collectAsState(initial = true)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Switch(
-            checked = diskMode,
-            onCheckedChange = { on -> scope.launch { settings.setDiskMode(on) } },
-        )
-        Spacer(Modifier.width(8.dp))
-        Text("Диск вместо стопки", style = MaterialTheme.typography.bodyMedium)
-    }
-    HintText(
-        "Четыре кнопки по кругу вокруг шестерёнки, под ними стекло. Повёл любую " +
-            "кнопку по кругу — крутится весь диск и щёлкает по четвертям; махнул " +
-            "сильнее — провернётся дальше. Тап и долгое нажатие по кнопке — как " +
-            "были. Шестерёнка: тап — веер, долгое нажатие и потом тянуть — диск " +
-            "переезжает; у края экрана он прячется наполовину: «П» и «З» внутри, " +
-            "«Д» и «Е» за краем, докрутить их — пальцем. Полминуты без касаний " +
-            "диск сам возвращается в исходный поворот (тумблер ниже). Выключено — " +
-            "прежняя стопка с ручкой."
     )
 
     Spacer(Modifier.height(10.dp))

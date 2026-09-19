@@ -4,12 +4,15 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.RadialGradient
+import android.graphics.Shader
 import android.os.Build
 import android.os.SystemClock
 import android.view.Choreographer
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
 import kotlin.math.abs
@@ -69,8 +72,13 @@ class DiskController(
         private val PAPER = 0xFFF7F3EA.toInt()
         /** Доля прозрачности кнопок, с которой стоит тарелка: заметно, но под кнопками. */
         private const val PLATE_ALPHA_FACTOR = 0.45f
-        /** Ободок тарелки — бумага, в эту доли от её же прозрачности. */
-        private const val RIM_ALPHA = 0.55f
+        /**
+         * Край стекла мягкий: к границе тарелка темнеет, обводки нет. Владелец
+         * (19.09, вечер) спросил, не лучше ли «круг весь без края», — да: за
+         * стекло теперь тянут, и жёсткая линия читалась бы как рамка виджета,
+         * а не как край предмета. Это доля плотности стекла в центре от края.
+         */
+        private const val CENTRE_ALPHA_FACTOR = 0.55f
         /** Окно кнопки за краем с таким запасом — снимается. */
         private const val OFFSCREEN_MARGIN_DP = 2
         /** Кнопка не там, где ей быть, дальше этого — расставить заново. */
@@ -157,7 +165,7 @@ class DiskController(
     private class Dims(val button: Int, val gear: Int, val gap: Int) {
         val ring = DiskGeometry.ringRadius(button, gear, gap)
         val plate = DiskGeometry.plateRadius(button, gear, gap)
-        val inset = DiskGeometry.dockInset(gear, gap)
+        val inset = DiskGeometry.DOCK_INSET
     }
 
     private fun dims(): Dims {
@@ -208,10 +216,10 @@ class DiskController(
     fun show() {
         if (shown) return
         shown = true
-        load(reattach = true)
+        load()
     }
 
-    private fun load(reattach: Boolean) {
+    private fun load() {
         cachedFrame = null
         val key = frameKey()
         scope.launch {
@@ -228,13 +236,6 @@ class DiskController(
             stopMotion()
             showPlate()
             layout()
-            // Тарелка добавилась последней — то есть поверх кнопок и
-            // шестерёнки. Порядок окон одного типа — порядок добавления, так
-            // что они перевешиваются заново и оказываются над стеклом.
-            if (reattach) {
-                slots.forEach { it.button.reattach() }
-                head?.reattach()
-            }
         }
     }
 
@@ -271,14 +272,13 @@ class DiskController(
         } else if (shown && placed && !folded) {
             showPlate()
             layout()
-            slots.forEach { it.button.reattach() }
         }
     }
 
     /** Экран сложили или повернули: позиция для нового размера — с диска. */
     fun onConfigurationChanged() {
         if (!shown) return
-        load(reattach = false)
+        load()
     }
 
     // ---- Расстановка ----
@@ -359,6 +359,8 @@ class DiskController(
         val h = head ?: return
         val d = dims()
         h.moveToCentre(cx.roundToInt(), cy.roundToInt(), d.button)
+        // Шестерёнка крутится вместе с диском (владелец: «будет классный эффект»).
+        h.setTurn(rotation)
         // Веер и записки шестерёнки — снаружи тарелки, не поверх кнопок.
         h.clearance = if (allHidden) 0 else (d.plate - h.headSizePx() / 2f).roundToInt().coerceAtLeast(0)
     }
@@ -440,22 +442,31 @@ class DiskController(
 
     /**
      * Голова едет: ([headX], [headY]) — левый верхний угол её окна, центр
-     * диска — её центр. Отпустили — докование и, если диск переехал на другую
-     * половину экрана, доворот домой: лицом внутрь.
+     * диска — её центр.
      */
     fun onHeadDragged(headX: Int, headY: Int, dropped: Boolean) {
         if (!shown || !placed || folded) return
-        onTouched?.invoke()
         val size = head?.headSizePx() ?: 0
-        val (w, h) = frame()
+        slide(headX + size / 2f, headY + size / 2f, dropped)
+    }
+
+    /**
+     * Диск везут — за шестерёнку или за стекло: центр под пальцем. Отпустили
+     * — докование и, если диск переехал на другую половину экрана, доворот
+     * домой: лицом внутрь.
+     */
+    private fun slide(nx: Float, ny: Float, dropped: Boolean) {
+        if (!shown || !placed || folded) return
+        onTouched?.invoke()
+        val (w, _) = frame()
         if (!sliding) {
             sliding = true
             turning = null
             stopMotion()
             slideFacing = DiskGeometry.facing(cx, w)
         }
-        cx = headX + size / 2f
-        cy = headY + size / 2f
+        cx = nx
+        cy = ny
         if (allHidden) placeHead() else layout()
         if (!dropped) return
         sliding = false
@@ -463,6 +474,52 @@ class DiskController(
         val turnedAround = DiskGeometry.facing(dx, w) != slideFacing
         val target = if (turnedAround) DiskGeometry.home(rotation) else DiskGeometry.snap(rotation, step())
         animateTo(target, dx, dy)
+    }
+
+    /**
+     * Палец на стекле — диск везут. За любое свободное место тарелки: север,
+     * юг, запад, восток и промежутки между кнопками (кнопки — свои окна
+     * поверх стекла, им касание достаётся первым). Владелец (19.09, вечер):
+     * «перетаскивать неудобно, давай добавим перетаскивание за четыре края
+     * круга плюс за свободные зоны между кружками». Углы квадрата окна вне
+     * круга — не диск: касание там не принимается. Тап по стеклу — ничего.
+     */
+    private inner class PlateTouch : View.OnTouchListener {
+        private var downX = 0f
+        private var downY = 0f
+        private var startCx = 0f
+        private var startCy = 0f
+        private var dragging = false
+        private val slop = ViewConfiguration.get(service).scaledTouchSlop
+
+        override fun onTouch(v: View, event: MotionEvent): Boolean {
+            if (service.isLockedIdle()) return true
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    val r = v.width / 2f
+                    val dx = event.x - r
+                    val dy = event.y - r
+                    if (dx * dx + dy * dy > r * r) return false
+                    if (turning != null || allHidden) return false
+                    onTouched?.invoke()
+                    downX = event.rawX
+                    downY = event.rawY
+                    startCx = cx
+                    startCy = cy
+                    dragging = false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downX
+                    val dy = event.rawY - downY
+                    if (!dragging && (abs(dx) > slop || abs(dy) > slop)) dragging = true
+                    if (dragging) slide(startCx + dx, startCy + dy, dropped = false)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (dragging) slide(cx, cy, dropped = true)
+                }
+            }
+            return true
+        }
     }
 
     /**
@@ -546,13 +603,18 @@ class DiskController(
         if (plate != null || allHidden || folded) return
         val d = dims()
         val size = (d.plate * 2).roundToInt()
-        val v = PlateView(service, dp(1) + dp(1) / 2f).apply { alpha = plateAlpha() }
+        val v = PlateView(service).apply {
+            alpha = plateAlpha()
+            setOnTouchListener(PlateTouch())
+        }
+        // Стекло трогаемое: за него везут диск. Углы квадрата окна вне круга
+        // касание не принимают (PlateTouch), но и в приложение под ними оно не
+        // проходит — окно круглым не бывает; это цена, и она принята.
         val p = WindowManager.LayoutParams(
             size,
             size,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
@@ -563,6 +625,12 @@ class DiskController(
         plate = v
         plateParams = p
         runCatching { windowManager.addView(v, p) }
+        // Стекло добавилось последним — то есть ПОВЕРХ кнопок и шестерёнки, а
+        // ему положено лежать под ними: касание сначала им. Порядок окон
+        // одного типа — порядок добавления, так что всё, что сейчас висит,
+        // перевешивается заново; снятого это не касается (reattach — no-op).
+        slots.forEach { it.button.reattach() }
+        head?.reattach()
     }
 
     private fun placePlate(d: Dims) {
@@ -594,28 +662,29 @@ class DiskController(
     }
 
     /**
-     * Стекло диска: круг чернил с тонким бумажным ободком. Рисуется от
+     * Стекло диска: круг чернил, к краю плотнее, без обводки. Рисуется от
      * центра вида, как все глифы стопки — центрируется по построению.
      */
-    private class PlateView(context: Context, private val rim: Float) : View(context) {
-        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = GLASS
-            style = Paint.Style.FILL
-        }
-        private val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = PAPER
-            style = Paint.Style.STROKE
-            strokeWidth = rim
-            alpha = (255 * RIM_ALPHA).toInt()
-        }
+    private class PlateView(context: Context) : View(context) {
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private var shaderFor = 0f
 
         override fun onDraw(canvas: Canvas) {
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
             val r = minOf(w, h) / 2f
-            canvas.drawCircle(w / 2f, h / 2f, r - rim, fill)
-            canvas.drawCircle(w / 2f, h / 2f, r - rim, edge)
+            if (shaderFor != r) {
+                shaderFor = r
+                val centre = (GLASS and 0x00FFFFFF) or ((255 * CENTRE_ALPHA_FACTOR).toInt() shl 24)
+                fill.shader = RadialGradient(
+                    w / 2f, h / 2f, r,
+                    intArrayOf(centre, centre, GLASS),
+                    floatArrayOf(0f, 0.55f, 1f),
+                    Shader.TileMode.CLAMP,
+                )
+            }
+            canvas.drawCircle(w / 2f, h / 2f, r, fill)
         }
     }
 }
