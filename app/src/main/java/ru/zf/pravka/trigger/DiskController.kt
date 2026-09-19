@@ -288,15 +288,10 @@ class DiskController(
         if (!shown || !placed || folded) return
         val d = dims()
         val (w, h) = frame()
-        val f = DiskGeometry.facing(cx, w)
-        val previous = facing
-        if (previous != null && previous != f && sliding) {
-            // Диск переехал через середину экрана и смотрит теперь в другую
-            // сторону. Абсолютные углы кнопок не меняются — иначе они
-            // перескочили бы на другой бок посреди жеста; домой диск
-            // довернётся после броска (см. onHeadDragged).
-            rotation += previous - f
-        }
+        // Пока диск везут, лицо не меняется: раскладки у левого и правого
+        // краёв зеркальны («П» всегда сверху), и перескок посреди жеста
+        // выглядел бы как рассыпавшиеся кнопки. Новое лицо — на броске (slide).
+        val f = if (sliding) slideFacing else DiskGeometry.facing(cx, w)
         facing = f
         if (!allHidden) {
             val live = liveSlots()
@@ -322,7 +317,7 @@ class DiskController(
         if (index < 0) return null
         val d = dims()
         val (w, _) = frame()
-        val angle = DiskGeometry.slotAngle(index, live.size, DiskGeometry.facing(cx, w), rotation)
+        val angle = DiskGeometry.slotAngle(index, live.size, facing ?: DiskGeometry.facing(cx, w), rotation)
         return DiskGeometry.slotOrigin(cx, cy, d.ring, angle, d.button)
     }
 
@@ -471,9 +466,16 @@ class DiskController(
         if (!dropped) return
         sliding = false
         val (dx, dy) = docked()
-        val turnedAround = DiskGeometry.facing(dx, w) != slideFacing
-        val target = if (turnedAround) DiskGeometry.home(rotation) else DiskGeometry.snap(rotation, step())
-        animateTo(target, dx, dy)
+        val newFacing = DiskGeometry.facing(dx, w)
+        if (newFacing != slideFacing) {
+            // Переехал на другую половину экрана: раскладка зеркалится
+            // (`DiskGeometry.sense`), и диск встаёт домой — «П» сверху, «З»
+            // снизу, лицом внутрь. Перескок кнопок здесь, на броске, а не
+            // посреди жеста.
+            rotation = 0f
+            facing = newFacing
+        }
+        animateTo(DiskGeometry.snap(rotation, step()), dx, dy)
     }
 
     /**

@@ -47,4 +47,26 @@ interface RingButton {
      * `UP`). Диск считает по ним поворот; кнопка сама не двигается.
      */
     var onRingDrag: ((rawX: Float, rawY: Float, localX: Float, localY: Float, action: Int) -> Unit)?
+
+    // ---- Связка (стопка) и служба: то, что было у каждого контроллера своё ----
+
+    /** Палец тащит ЭТУ кнопку (стопка): её левый верхний угол; ещё раз — на броске. */
+    var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)?
+
+    /** Каждый кадр догонялки: ручка и шестерёнка едут за бусами. */
+    var onFrame: (() -> Unit)?
+
+    /** Убрана в ручку или в точку «всё убрано». */
+    fun setStacked(value: Boolean)
+
+    /** Складывание Fold идёт: окно снято на время перехода. */
+    fun setFolded(value: Boolean)
+
+    /** Экран сложили или повернули: в стопке — вернуться на своё сохранённое место. */
+    fun onConfigurationChanged()
+
+    /** Сколько оверлейных окон держит сейчас — перепись для журнала складывания. */
+    fun windowCount(): Int
+
+    fun destroy()
 }

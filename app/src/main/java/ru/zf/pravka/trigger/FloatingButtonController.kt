@@ -151,7 +151,7 @@ class FloatingButtonController(
     // ---- Elastic pair: trail the "З" button on a rubber band ----
 
     /** Fired while the owner drags THIS button (and once more on drop). */
-    var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
+    override var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
 
     /** Where this button should appear when it shows up (docked over "З"). */
     var pairAnchor: (() -> Pair<Int, Int>?)? = null
@@ -169,7 +169,7 @@ class FloatingButtonController(
      * [applyStash]. Пока несколько мест пишут одно поле, побеждает
      * последнее, и это всегда не то, которого ждёшь.
      */
-    fun setStacked(value: Boolean) {
+    override fun setStacked(value: Boolean) {
         stashed = value
         val v = button ?: return
         if (value) {
@@ -205,7 +205,7 @@ class FloatingButtonController(
      * Исключение — идущая запись: кнопку «стоп» отнимать нельзя даже на
      * полсекунды, иначе останавливать наговор будет нечем.
      */
-    fun setFolded(value: Boolean) {
+    override fun setFolded(value: Boolean) {
         folded = value && !recording
         applyStash()
     }
@@ -274,7 +274,7 @@ class FloatingButtonController(
     override fun buttonSizePx(): Int = buttonSize
 
     /** Каждый кадр догонялки: ручка и шестерёнка едут за бусами (служба ставит refreshHandles). */
-    var onFrame: (() -> Unit)? = null
+    override var onFrame: (() -> Unit)? = null
 
     // Пружина вместо «30 % пути за кадр»: у бусины есть скорость, она
     // догоняет, чуть проскакивает и успокаивается; звено дальше от пальца —
@@ -366,7 +366,7 @@ class FloatingButtonController(
         if (value) show()
     }
 
-    fun onConfigurationChanged() {
+    override fun onConfigurationChanged() {
         cachedScreen = null  // fold/rotate: re-measure once
         val p = params ?: return
         if (ringMode) {
@@ -674,7 +674,7 @@ class FloatingButtonController(
     fun hideCancelBubble() = cancelBubble.hide()
 
     /** How many overlay windows this controller currently holds. */
-    fun windowCount(): Int =
+    override fun windowCount(): Int =
         // Именно attached, а не «button != null»: спрятанная кнопка держит
         // свой View, но окна в WindowManager у неё нет — и в перепись,
         // которой меряют цену складывания, она входить не должна.
@@ -682,7 +682,7 @@ class FloatingButtonController(
             (if (learnBadge != null) 1 else 0) + (if (cancelBubble.shown) 1 else 0) +
             (if (menu != null) 1 else 0)
 
-    fun destroy() {
+    override fun destroy() {
         learnBadge?.let { runCatching { windowManager.removeView(it) } }
         learnBadge = null
         hideCancelBubble()

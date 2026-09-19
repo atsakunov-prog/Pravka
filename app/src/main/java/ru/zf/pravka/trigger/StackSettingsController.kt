@@ -136,6 +136,13 @@ class StackSettingsController(
     var onHideAll: (() -> Unit)? = null
     /** Тап по точке: вернуть всё. */
     var onShowAll: (() -> Unit)? = null
+    /**
+     * Одиночный тап по шестерёнке. Не задан — веер. Задан (диск): служба
+     * возвращает диск домой — веер теперь открывает серая кнопка
+     * «инструменты» на кольце, а шестерёнка в центре — ручка и украшение
+     * (владелец: «шестерёнку крутящуюся надо оставить, она классно выглядит»).
+     */
+    var onGearTap: (() -> Unit)? = null
 
     /**
      * Голова стоит в центре диска (`DiskController`). Шестерёнку тогда везут
@@ -415,7 +422,7 @@ class StackSettingsController(
                             }
                             else -> {
                                 lastTapAt = now
-                                toggleFan()
+                                onGearTap?.invoke() ?: toggleFan()
                             }
                         }
                     }
@@ -427,7 +434,8 @@ class StackSettingsController(
 
     // ---- Веер ----
 
-    private fun toggleFan() {
+    /** Веер: открыть или убрать. Зовут тап по шестерёнке (стопка) и кнопка «инструменты». */
+    fun toggleFan() {
         if (fan != null) hideFan() else showFan()
     }
 

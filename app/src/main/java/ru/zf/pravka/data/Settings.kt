@@ -511,7 +511,13 @@ class Settings(private val context: Context) {
     // ---- Тело: силовые, зарядка, GTG ----
 
     /** Кнопка «Т»: одна на подходы, еду и зарядку — намерение решает модель. */
-    val tEnabledFlow = context.dataStore.data.map { it[KEY_T_ENABLED] ?: true }
+    /**
+     * Зелёная кнопка тела/еды на стекле. С завода ВЫКЛЮЧЕНА (владелец,
+     * 19.09.2026 вечер: «уберём кружок спорт и поставим вместо него кружок
+     * настройки») — её место в связке и на кольце заняли инструменты. Тумблер
+     * в настройках Еды возвращает её пятой.
+     */
+    val tEnabledFlow = context.dataStore.data.map { it[KEY_T_ENABLED] ?: false }
     suspend fun setTEnabled(value: Boolean) {
         context.dataStore.edit { it[KEY_T_ENABLED] = value }
     }
@@ -970,6 +976,21 @@ class Settings(private val context: Context) {
         context.dataStore.edit {
             it[floatPreferencesKey("efab_x_$screenKey")] = xFraction
             it[floatPreferencesKey("efab_y_$screenKey")] = yFraction
+        }
+    }
+
+    // Инструменты — серый кружок настроек, четвёртый в связке (место бывшей «Е»).
+    suspend fun toolsFabPosition(screenKey: String): Pair<Float, Float> {
+        val prefs = context.dataStore.data.first()
+        val x = prefs[floatPreferencesKey("toolsfab_x_$screenKey")] ?: 0.92f
+        val y = prefs[floatPreferencesKey("toolsfab_y_$screenKey")] ?: 0.88f
+        return x to y
+    }
+
+    suspend fun setToolsFabPosition(screenKey: String, xFraction: Float, yFraction: Float) {
+        context.dataStore.edit {
+            it[floatPreferencesKey("toolsfab_x_$screenKey")] = xFraction
+            it[floatPreferencesKey("toolsfab_y_$screenKey")] = yFraction
         }
     }
 

@@ -17,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.R
 import ru.zf.pravka.core.ProofreadEngine
@@ -153,6 +154,13 @@ class PravkaAccessibilityService : AccessibilityService() {
     // поля, ни ленты этот путь не касается (в ленту еда только ПРИПИСЫВАЕТСЯ,
     // и то из движка).
     internal var eButton: BodyButtonController? = null
+    /**
+     * Инструменты: серый кружок настроек, четвёртый в связке и на кольце, на
+     * месте бывшей зелёной «Е» (владелец, 19.09.2026 вечер: «уберём кружок
+     * спорт и поставим вместо него кружок настройки»). Тап — веер шестерёнки,
+     * долгое нажатие — экран настроек. Всегда включён: это дверь в настройки.
+     */
+    internal var toolsButton: ToolsButtonController? = null
     /** Ручка под хвостом: галочка, выпускает и убирает «Д» и «Е». */
     internal var tailHandle: StackHandleController? = null
     /**
@@ -176,7 +184,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var eTypeInstead = false
     /** Серая «отмена» у «Т»: ближайший итог тейка выбрасывается. */
     @Volatile internal var eDiscard = false
-    @Volatile internal var cachedEEnabled = true
+    /** «Е» с завода выключена (19.09.2026): до чтения настройки считаем так же. */
+    @Volatile internal var cachedEEnabled = false
     internal var micRequestForFood = false
     // Отдых между подходами: дедлайн на диске не нужен - это минуты, и
     // переживать перезапуск службы ему незачем.
@@ -301,6 +310,23 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
         eButton?.onTickerTap = ::onFoodTickerTap
 
+        // Инструменты: серая кнопка настроек на месте бывшей «Е». Тап — веер
+        // шестерёнки (он и раньше был «настройками на стекле»), долгое
+        // нажатие — экран настроек приложения.
+        toolsButton = ToolsButtonController(
+            service = this,
+            scope = scope,
+            settings = app.settings,
+            onShortTap = {
+                touched()
+                stackSettings?.toggleFan()
+            },
+            onLongPress = {
+                touched()
+                openSettingsTab()
+            },
+        )
+
         // Серая ручка под хвостом, с галочкой: выпускает и убирает «Д» и «Е».
         tailHandle = StackHandleController(this, scope, app.settings).also { h ->
             h.onTap = {
@@ -318,6 +344,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             s.onTouched = { touched() }
             s.onHideAll = { setAllHidden(true) }
             s.onShowAll = { setAllHidden(false) }
+            // На диске веер открывают инструменты, а тап по шестерёнке
+            // возвращает диск домой; в стопке — веер, как было.
+            s.onGearTap = { if (cachedDiskMode) disk?.goHome() else s.toggleFan() }
             // Голову таскают, как кнопку, и за ней едет вся цепочка. Иначе,
             // когда всё убрано, точка единственная на экране — и приросла бы
             // к месту навсегда. Координаты «П» считает сама шестерёнка,
@@ -331,12 +360,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 } else {
                     val size = floatingButton?.buttonSizePx() ?: 0
                     val (px, py) = s.buttonOrigin(hx, hy, size)
-                    floatingButton?.followTo(px, py, dropped, link = 1)
-                    zButton?.followTo(px, py + slotOffset(1), dropped, link = 2)
-                    // Спрятанные ставим под «З»: оттуда они и выезжают.
-                    rButton?.followTo(px, py + slotOffset(if (stacked) 1 else 2), dropped, link = 3)
-                    eButton?.followTo(px, py + slotOffset(if (stacked) 1 else 3), dropped, link = 4)
-                    refreshHandles()
+                    followChain(null, px, py, dropped)
                 }
             }
         }
@@ -350,41 +374,19 @@ class PravkaAccessibilityService : AccessibilityService() {
         // оставаться спрятанным, куда бы связку ни увезли. Раньше здесь
         // стоял expandButtons(), и «Д» с «Е» выскакивали от любого сдвига
         // пальцем — то есть спрятать их надолго было попросту нельзя.
-        floatingButton?.onDragged = { x, y, dropped ->
-            touched()
-            zButton?.followTo(x, y + slotOffset(1), dropped, link = 1)
-            rButton?.followTo(x, y + slotOffset(if (stacked) 1 else 2), dropped, link = 2)
-            eButton?.followTo(x, y + slotOffset(if (stacked) 1 else 3), dropped, link = 3)
-            refreshHandles()
-        }
-        zButton?.onDragged = { x, y, dropped ->
-            touched()
-            floatingButton?.followTo(x, y - slotOffset(1), dropped, link = 1)
-            rButton?.followTo(x, y + (if (stacked) 0 else slotOffset(1)), dropped, link = 1)
-            eButton?.followTo(x, y + (if (stacked) 0 else slotOffset(2)), dropped, link = 2)
-            refreshHandles()
-        }
-        rButton?.onDragged = { x, y, dropped ->
-            touched()
-            zButton?.followTo(x, y - slotOffset(1), dropped, link = 1)
-            floatingButton?.followTo(x, y - slotOffset(2), dropped, link = 2)
-            eButton?.followTo(x, y + slotOffset(1), dropped, link = 1)
-            refreshHandles()
-        }
-        eButton?.onDragged = { x, y, dropped ->
-            touched()
-            rButton?.followTo(x, y - slotOffset(1), dropped, link = 1)
-            zButton?.followTo(x, y - slotOffset(2), dropped, link = 2)
-            floatingButton?.followTo(x, y - slotOffset(3), dropped, link = 3)
-            refreshHandles()
+        // Порядок связки: П · З · Д · инструменты · Е (если включена). Один
+        // обработчик на всех: тянут кнопку — остальные встают по своим слотам
+        // от неё; спрятанные (стопка сложена) лежат под «З».
+        chainButtons().forEach { b ->
+            b.onDragged = { x, y, dropped ->
+                touched()
+                followChain(b, x, y, dropped)
+            }
         }
         // Пока бусы догоняют, ручка и шестерёнка едут за ними кадр в кадр —
         // иначе галочка встала бы на будущее место хвоста раньше него.
         val chainFrame: () -> Unit = { refreshHandles() }
-        floatingButton?.onFrame = chainFrame
-        zButton?.onFrame = chainFrame
-        rButton?.onFrame = chainFrame
-        eButton?.onFrame = chainFrame
+        chainButtons().forEach { it.onFrame = chainFrame }
         floatingButton?.pairAnchor = anchor@{
             // На диске «П» появляется в своём слоте кольца.
             if (cachedDiskMode) return@anchor floatingButton?.let { disk?.slotOrigin(it) }
@@ -399,11 +401,13 @@ class PravkaAccessibilityService : AccessibilityService() {
             d.head = stackSettings
             d.onTouched = { touched() }
             d.buttonSize = { floatingButton?.buttonSizePx() ?: 0 }
+            // Порядок по кольцу — тот же, что в связке: П · З · Д · инструменты · Е.
             floatingButton?.let { b -> d.add(b) { true } }
             zButton?.let { b -> d.add(b) { cachedZEnabled } }
             rButton?.let { b -> d.add(b) { cachedREnabled } }
+            toolsButton?.let { b -> d.add(b) { true } }
             eButton?.let { b -> d.add(b) { cachedEEnabled } }
-            listOfNotNull<RingButton>(floatingButton, zButton, rButton, eButton).forEach { b ->
+            chainButtons().forEach { b ->
                 b.onRingDrag = { rx, ry, lx, ly, action -> d.onRingDrag(b, rx, ry, lx, ly, action) }
             }
         }
@@ -412,6 +416,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // take still works: CLEAN runs and the result lands in the clipboard
         // plus a notification (the no-field path).
         floatingButton?.show()
+        toolsButton?.show()
         chromeHandler.post(chromeTicker)
         scope.launch {
             app.settings.zEnabledFlow.collect {
@@ -2204,17 +2209,15 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (stacked) return
         val (x, y) = floatingButton?.currentPosition() ?: return
         stacked = true
-        // «П» и «З» остаются на своих местах в цепочке и работают как обычно.
+        // Первые две («П» и «З») остаются на своих местах и работают как
+        // обычно; всё, что дальше по связке («Д», инструменты, «Е»),
+        // схлопывается В «З» и прячется: оттуда же и выедет. Раньше спрятанные
+        // оставались торчать краями — и наезжали на саму «З».
         val underZ = y + slotOffset(1)
-        zButton?.followTo(x, underZ, true)
-        // «Д» и «Е» схлопываются В «З» и прячутся: оттуда же и выедут.
-        // Раньше они оставались торчать краями — и наезжали на саму «З».
-        rButton?.followTo(x, underZ, true)
-        eButton?.followTo(x, underZ, true)
-        floatingButton?.setStacked(false)
-        zButton?.setStacked(false)
-        rButton?.setStacked(true)
-        eButton?.setStacked(true)
+        chain().forEachIndexed { j, b ->
+            if (j >= 1) b.followTo(x, underZ, true)
+            b.setStacked(j >= 2)
+        }
         refreshHandles()
     }
 
@@ -2232,10 +2235,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         allHidden = hidden
         if (hidden) {
             stackSettings?.hideFan()
-            floatingButton?.setStacked(true)
-            zButton?.setStacked(true)
-            rButton?.setStacked(true)
-            eButton?.setStacked(true)
+            chainButtons().forEach { it.setStacked(true) }
             // Значки и плашки привязаны к кнопкам: без них они висели бы
             // посреди экрана сами по себе. Убрать — значит убрать всё.
             floatingButton?.hideLearnBadge()
@@ -2253,10 +2253,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         } else if (cachedDiskMode) {
             // Диск: кнопки возвращаются прямо на кольцо, тарелка — под них.
             stacked = false
-            floatingButton?.setStacked(false)
-            zButton?.setStacked(false)
-            rButton?.setStacked(false)
-            eButton?.setStacked(false)
+            chainButtons().forEach { it.setStacked(false) }
             disk?.setAllHidden(false)
             refreshLearnBadge()
         } else {
@@ -2276,18 +2273,13 @@ class PravkaAccessibilityService : AccessibilityService() {
      * движением, без пересборки.
      */
     private fun applyDiskMode(on: Boolean) {
-        listOfNotNull<RingButton>(floatingButton, zButton, rButton, eButton).forEach { it.ringMode = on }
+        chainButtons().forEach { it.ringMode = on }
         stackSettings?.ringMode = on
         if (on) {
             tailHandle?.hide()
             // На диске спрятанных нет: всё, что не убрано в точку, стоит на кольце.
             stacked = false
-            if (!allHidden) {
-                floatingButton?.setStacked(false)
-                zButton?.setStacked(false)
-                rButton?.setStacked(false)
-                eButton?.setStacked(false)
-            }
+            if (!allHidden) chainButtons().forEach { it.setStacked(false) }
             disk?.setAllHidden(allHidden)
             disk?.show()
         } else {
@@ -2295,12 +2287,54 @@ class PravkaAccessibilityService : AccessibilityService() {
             stackSettings?.clearance = 0
             // Обратно в стопку: каждая кнопка возвращается на своё сохранённое
             // место — той же дорогой, что после поворота экрана.
-            floatingButton?.onConfigurationChanged()
-            zButton?.onConfigurationChanged()
-            rButton?.onConfigurationChanged()
-            eButton?.onConfigurationChanged()
+            chainButtons().forEach { it.onConfigurationChanged() }
         }
         refreshHandles()
+    }
+
+    /** Все кнопки связки по порядку: П · З · Д · инструменты · Е — включённые и нет. */
+    internal fun chainButtons(): List<RingButton> =
+        listOfNotNull(floatingButton, zButton, rButton, toolsButton, eButton)
+
+    /** Включённые кнопки связки по порядку — то, что реально стоит на экране. */
+    internal fun chain(): List<RingButton> = listOfNotNull(
+        floatingButton,
+        zButton?.takeIf { cachedZEnabled },
+        rButton?.takeIf { cachedREnabled },
+        toolsButton,
+        eButton?.takeIf { cachedEEnabled },
+    )
+
+    /** Слот кнопки с номером [index] в связке сейчас: сложено — всё после «З» лежит под «З». */
+    private fun chainSlot(index: Int): Int = if (stacked) minOf(index, 1) else index
+
+    /**
+     * Связка едет за [from] — кнопкой, чей левый верхний угол теперь в
+     * ([x], [y]); null — за головой над «П», тогда едут все, включая «П».
+     * Бусы: чем дальше звено от пальца (`link`), тем мягче пружина.
+     */
+    private fun followChain(from: RingButton?, x: Int, y: Int, dropped: Boolean) {
+        val list = chain()
+        val i = if (from == null) 0 else list.indexOf(from)
+        if (i < 0) return
+        val top = y - slotOffset(chainSlot(i))
+        list.forEachIndexed { j, b ->
+            if (b === from) return@forEachIndexed
+            val link = if (from == null) j + 1 else abs(j - i)
+            b.followTo(x, top + slotOffset(chainSlot(j)), dropped, link = link)
+        }
+        refreshHandles()
+    }
+
+    /** Экран настроек приложения — по долгому нажатию на инструменты. */
+    private fun openSettingsTab() {
+        runCatching {
+            startActivity(
+                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                    .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_SETTINGS)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
     }
 
     /**
@@ -2334,16 +2368,14 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
 
         val tail = tailHandle ?: return
-        if (allHidden || !cachedZEnabled || (!cachedREnabled && !cachedEEnabled)) {
+        val list = chain()
+        // В связке две кнопки или меньше — прятать нечего, и ручки нет.
+        if (allHidden || list.size <= 2) {
             tail.hide()
             return
         }
-        val last = when {
-            stacked -> zButton?.currentPosition()
-            cachedEEnabled -> eButton?.currentPosition()
-            else -> rButton?.currentPosition()
-        }
-        val (lx, ly) = last ?: (x to (y + slotOffset(if (stacked) 1 else if (cachedEEnabled) 3 else 2)))
+        val lastSlot = if (stacked) 1 else list.size - 1
+        val (lx, ly) = list[lastSlot].currentPosition() ?: (x to (y + slotOffset(lastSlot)))
         tail.show(stacked)
         tail.moveTo(lx, ly, size, above = false)
     }
@@ -2371,15 +2403,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (!stacked) return false
         val (x, y) = floatingButton?.currentPosition() ?: return false
         stacked = false
-        // Сначала показать, потом развезти: тогда «Д» и «Е» видно, как они
+        // Сначала показать, потом развезти: тогда видно, как спрятанные
         // выезжают из-под «З», а не как они появляются готовыми на местах.
-        floatingButton?.setStacked(false)
-        zButton?.setStacked(false)
-        rButton?.setStacked(false)
-        eButton?.setStacked(false)
-        zButton?.followTo(x, y + slotOffset(1), true)
-        rButton?.followTo(x, y + slotOffset(2), true)
-        eButton?.followTo(x, y + slotOffset(3), true)
+        // setStacked(false) — всем, и выключенным: иначе кнопка, включённая
+        // позже тумблером, осталась бы убранной.
+        chainButtons().forEach { it.setStacked(false) }
+        chain().forEachIndexed { j, b -> if (j >= 1) b.followTo(x, y + slotOffset(j), true) }
         refreshHandles()
         if (!silent) Haptics.start(this)
         return true
@@ -2553,8 +2582,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // transition must relayout and WAIT for. If a freeze report ever comes
         // back with a big number here, the leak is ours; a small one clears us.
         runCatching {
-            val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0) +
-                (rButton?.windowCount() ?: 0) + (eButton?.windowCount() ?: 0) +
+            val n = chainButtons().sumOf { it.windowCount() } +
                 (tailHandle?.windowCount() ?: 0) + (stackSettings?.windowCount() ?: 0) +
                 (disk?.windowCount() ?: 0) + (if (screenKeeper != null) 1 else 0)
             app.eventLog.add("смена конфигурации: наших окон $n")
@@ -2570,10 +2598,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Снять или вернуть окна всех четырёх кнопок на время складывания. */
     private fun setFolded(value: Boolean) {
-        floatingButton?.setFolded(value)
-        zButton?.setFolded(value)
-        rButton?.setFolded(value)
-        eButton?.setFolded(value)
+        chainButtons().forEach { it.setFolded(value) }
     }
 
     internal val configHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -2583,10 +2608,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // добавления, а стеклу положено лежать под ними.
         disk?.setFolded(false)
         setFolded(false)
-        floatingButton?.onConfigurationChanged()
-        zButton?.onConfigurationChanged()
-        rButton?.onConfigurationChanged()
-        eButton?.onConfigurationChanged()
+        chainButtons().forEach { it.onConfigurationChanged() }
         disk?.onConfigurationChanged()
         refreshHandles()
     }
@@ -2623,6 +2645,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         restHandler.removeCallbacks(restTick)
         eButton?.destroy()
         eButton = null
+        toolsButton?.destroy()
+        toolsButton = null
         tailHandle?.hide()
         tailHandle = null
         stackSettings?.destroy()

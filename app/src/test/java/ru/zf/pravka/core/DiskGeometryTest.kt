@@ -33,30 +33,37 @@ class DiskGeometryTest {
         assertEquals(0f, DiskGeometry.facing(cx = 80f, frameW = 1080), 0f)
     }
 
+    // Экранная ось y смотрит вниз: 225° — вверх-влево, 135° — вниз-влево.
     @Test
-    fun `дома у правого края П вверху-слева, З внизу-слева, Д и Е за краем`() {
+    fun `дома у правого края П вверху-слева, З внизу-слева, Д и инструменты за краем`() {
         val facing = 180f
-        assertEquals(135f, DiskGeometry.slotAngle(0, 4, facing, 0f), 0f)   // П: вверх-влево
-        assertEquals(225f, DiskGeometry.slotAngle(1, 4, facing, 0f), 0f)   // З: вниз-влево
-        assertEquals(315f, DiskGeometry.slotAngle(2, 4, facing, 0f), 0f)   // Д: вниз-вправо, за краем
-        assertEquals(45f, DiskGeometry.slotAngle(3, 4, facing, 0f), 0f)    // Е: вверх-вправо, за краем
+        assertEquals(225f, DiskGeometry.slotAngle(0, 4, facing, 0f), 0f)   // П: вверх-влево
+        assertEquals(135f, DiskGeometry.slotAngle(1, 4, facing, 0f), 0f)   // З: вниз-влево
+        assertEquals(45f, DiskGeometry.slotAngle(2, 4, facing, 0f), 0f)    // Д: вниз-вправо, за краем
+        assertEquals(315f, DiskGeometry.slotAngle(3, 4, facing, 0f), 0f)   // инструменты: вверх-вправо, за краем
     }
 
     @Test
-    fun `у левого края те же две кнопки внутри - лицо развёрнуто`() {
+    fun `у левого края те же две внутри, П снова сверху - раскладка зеркальна`() {
         assertEquals(315f, DiskGeometry.slotAngle(0, 4, 0f, 0f), 0f)   // П: вверх-вправо
         assertEquals(45f, DiskGeometry.slotAngle(1, 4, 0f, 0f), 0f)    // З: вниз-вправо
+        assertEquals(135f, DiskGeometry.slotAngle(2, 4, 0f, 0f), 0f)   // Д: вниз-влево, за краем
+        assertEquals(1f, DiskGeometry.sense(0f), 0f)
+        assertEquals(-1f, DiskGeometry.sense(180f), 0f)
     }
 
     @Test
-    fun `поворот на четверть выводит Е на место П`() {
-        assertEquals(135f, DiskGeometry.slotAngle(3, 4, 180f, 90f), 0f)
+    fun `четверть против часовой выводит четвёртый слот на место П`() {
+        assertEquals(225f, DiskGeometry.slotAngle(3, 4, 180f, -90f), 0f)
+        // По часовой — «З» встаёт наверх, «Д» вниз.
+        assertEquals(225f, DiskGeometry.slotAngle(1, 4, 180f, 90f), 0f)
+        assertEquals(135f, DiskGeometry.slotAngle(2, 4, 180f, 90f), 0f)
     }
 
     @Test
     fun `три кнопки - через 120, одна - прямо на лице`() {
-        assertEquals(120f, DiskGeometry.slotAngle(0, 3, 180f, 0f), 0f)
-        assertEquals(240f, DiskGeometry.slotAngle(1, 3, 180f, 0f), 0f)
+        assertEquals(240f, DiskGeometry.slotAngle(0, 3, 180f, 0f), 0f)
+        assertEquals(120f, DiskGeometry.slotAngle(1, 3, 180f, 0f), 0f)
         assertEquals(0f, DiskGeometry.slotAngle(2, 3, 180f, 0f), 0f)
         assertEquals(180f, DiskGeometry.slotAngle(0, 1, 180f, 0f), 0f)
     }
