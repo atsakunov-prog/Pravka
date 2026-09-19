@@ -61,7 +61,10 @@ class FloatingButtonController(
      * кнопками, а не наоборот» (19.09.2026). Порядок окон тут ни при чём —
      * дело в плотности; «не мешать приложению» на диске держит тарелка.
      */
-    private val idleAlpha: Float get() = DiskLook.faceAlpha(fabAlpha, ringMode)
+    private val idleAlpha: Float get() = DiskLook.faceAlpha(fabAlpha, ringMode, faceOverride)
+
+    /** Ползунок «плотность кнопок» из настроек; null — считать по формуле. */
+    private var faceOverride: Float? = null
 
     private var button: FrameLayout? = null
     private var background: GradientDrawable? = null
@@ -793,8 +796,13 @@ class FloatingButtonController(
         scope.launch {
             settings.fabAlphaFlow.collect { alpha ->
                 fabAlpha = alpha
-                if (!busy && !recording) container.alpha = idleAlpha
-                cancelBubble.setAlpha(idleAlpha)
+                applyFaceAlpha()
+            }
+        }
+        scope.launch {
+            settings.diskFaceAlphaFlow.collect { value ->
+                faceOverride = value
+                applyFaceAlpha()
             }
         }
 

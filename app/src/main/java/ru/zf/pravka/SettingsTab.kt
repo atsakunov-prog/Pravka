@@ -42,6 +42,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 import kotlinx.coroutines.launch
+import ru.zf.pravka.core.DiskLook
+import ru.zf.pravka.core.StackGeometry
+import ru.zf.pravka.data.Settings
 
 // Все настройки в одном месте, разложенные по режимам.
 //
@@ -429,8 +432,8 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
         loaded = true
     }
 
-    val fabSize by settings.fabSizeFlow.collectAsState(initial = ru.zf.pravka.data.Settings.FAB_SIZE_DEFAULT)
-    val fabAlpha by settings.fabAlphaFlow.collectAsState(initial = ru.zf.pravka.data.Settings.FAB_ALPHA_DEFAULT)
+    val fabSize by settings.fabSizeFlow.collectAsState(initial = Settings.FAB_SIZE_DEFAULT)
+    val fabAlpha by settings.fabAlphaFlow.collectAsState(initial = Settings.FAB_ALPHA_DEFAULT)
     var sizeSlider by remember(fabSize) { mutableStateOf(fabSize.toFloat()) }
     var alphaSlider by remember(fabAlpha) { mutableStateOf(fabAlpha) }
 
@@ -554,6 +557,108 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
             "тёмная: на светлом фоне диск отделяет от него именно она. Переключается " +
             "на живом диске, смотреть лучше прямо на том экране, где он терялся."
     )
+
+    // Ручки вида диска (владелец, 19.09.2026: «и нужно всё это в настройки.
+    // Прозрачность, размер»). Плотности до первого касания ползунка НЕ
+    // записаны: пока ключа нет, их считает core/DiskLook.kt, следя за
+    // прозрачностью кнопок и за тем, какое стекло. Ползунок показывает это
+    // счётное число, и владелец видит, откуда стартует.
+    Spacer(Modifier.height(14.dp))
+    Text("Вид диска", style = MaterialTheme.typography.titleSmall)
+    Spacer(Modifier.height(4.dp))
+
+    val diskGap by settings.diskGapFlow.collectAsState(initial = Settings.DISK_GAP_DEFAULT)
+    var gapSlider by remember(diskGap) { mutableStateOf(diskGap.toFloat()) }
+    Text("Размер диска: просвет ${gapSlider.toInt()} dp", style = MaterialTheme.typography.bodyMedium)
+    Slider(
+        value = gapSlider,
+        onValueChange = { gapSlider = it },
+        onValueChangeFinished = { scope.launch { settings.setDiskGap(gapSlider.toInt()) } },
+        valueRange = Settings.DISK_GAP_MIN.toFloat()..Settings.DISK_GAP_MAX.toFloat(),
+    )
+    HintText(
+        "Просвет между шестерёнкой и кнопками; от него считается всё кольцо и " +
+            "тарелка под ним. Больше просвет — шире диск и дальше кнопки друг от друга."
+    )
+
+    val diskGear by settings.diskGearFlow.collectAsState(initial = StackGeometry.GEAR_PCT_DEFAULT)
+    var gearSlider by remember(diskGear) { mutableStateOf(diskGear.toFloat()) }
+    Text("Шестерёнка: ${gearSlider.toInt()} % от кнопки", style = MaterialTheme.typography.bodyMedium)
+    Slider(
+        value = gearSlider,
+        onValueChange = { gearSlider = it },
+        onValueChangeFinished = { scope.launch { settings.setDiskGear(gearSlider.toInt()) } },
+        valueRange = StackGeometry.GEAR_PCT_MIN.toFloat()..StackGeometry.GEAR_PCT_MAX.toFloat(),
+    )
+    HintText("Она же кружки веера. Заводские 72 %; меньше 45 % по ней трудно попасть.")
+
+    val plateOverride by settings.diskPlateAlphaFlow.collectAsState(initial = null)
+    val plateAuto = DiskLook.plateAlpha(alphaSlider, diskLight)
+    var plateSlider by remember(plateOverride, plateAuto) {
+        mutableStateOf(plateOverride ?: plateAuto)
+    }
+    Text(
+        "Плотность стекла: ${(plateSlider * 100).toInt()} %" +
+            if (plateOverride == null) " (по счёту)" else "",
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    Slider(
+        value = plateSlider,
+        onValueChange = { plateSlider = it },
+        onValueChangeFinished = { scope.launch { settings.setDiskPlateAlpha(plateSlider) } },
+        valueRange = 0f..1f,
+    )
+    HintText("Сама тарелка. Ноль — стекла нет, остаются кнопки и тень под ними.")
+
+    val faceOverride by settings.diskFaceAlphaFlow.collectAsState(initial = null)
+    val faceAuto = DiskLook.faceAlpha(alphaSlider, onDisk = true)
+    var faceSlider by remember(faceOverride, faceAuto) {
+        mutableStateOf(faceOverride ?: faceAuto)
+    }
+    Text(
+        "Плотность кнопок на диске: ${(faceSlider * 100).toInt()} %" +
+            if (faceOverride == null) " (по счёту)" else "",
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    Slider(
+        value = faceSlider,
+        onValueChange = { faceSlider = it },
+        onValueChangeFinished = { scope.launch { settings.setDiskFaceAlpha(faceSlider) } },
+        valueRange = 0.2f..1f,
+    )
+    HintText(
+        "Только на диске: в стопке у кнопки своя прозрачность, та, что выше. " +
+            "Полупрозрачная кнопка на светлом стекле читается как лежащая ПОД ним — " +
+            "отсюда и ручка."
+    )
+
+    val socketOverride by settings.diskSocketAlphaFlow.collectAsState(initial = null)
+    val socketAuto = DiskLook.socketAlpha(plateSlider, diskLight)
+    var socketSlider by remember(socketOverride, socketAuto) {
+        mutableStateOf(socketOverride ?: socketAuto)
+    }
+    Text(
+        "Тень кнопок на стекле: ${(socketSlider * 100).toInt()} %" +
+            if (socketOverride == null) " (по счёту)" else "",
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    Slider(
+        value = socketSlider,
+        onValueChange = { socketSlider = it },
+        onValueChangeFinished = { scope.launch { settings.setDiskSocketAlpha(socketSlider) } },
+        valueRange = 0f..0.6f,
+    )
+    HintText("Ноль — теней нет. Они и делают кнопки лежащими НА стекле, а не под ним.")
+
+    Spacer(Modifier.height(6.dp))
+    OutlinedButton(onClick = { scope.launch { settings.resetDiskLook() } }) {
+        Text("Вернуть вид диска в счёт")
+    }
+    HintText(
+        "Размеры — к заводским, плотности — обратно к счёту: они снова поедут за " +
+            "прозрачностью кнопок и за выбором «Светлее · Темнее»."
+    )
+
     Spacer(Modifier.height(10.dp))
     // Автоуборка диска (владелец, 19.09.2026): «через 30 секунд диск пришёл к
     // ближайшему краю и прилепился, так что остались только засечка и правка».
@@ -575,7 +680,7 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
     // Бегущая строка у всех четырёх кнопок — одна ширина (владелец, 15.09:
     // «поставим в общих настройках размер плашки по горизонтали»). На экране
     // режется так, чтобы кнопка и поле рядом оставались видны.
-    val tickerWidth by settings.tickerWidthFlow.collectAsState(initial = ru.zf.pravka.data.Settings.TICKER_WIDTH_DEFAULT)
+    val tickerWidth by settings.tickerWidthFlow.collectAsState(initial = Settings.TICKER_WIDTH_DEFAULT)
     var tickerSlider by remember(tickerWidth) { mutableStateOf(tickerWidth.toFloat()) }
     Text(
         "Ширина бегущей строки: ${tickerSlider.toInt()} dp",
@@ -585,7 +690,7 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
         value = tickerSlider,
         onValueChange = { tickerSlider = it },
         onValueChangeFinished = { scope.launch { settings.setTickerWidth(tickerSlider.toInt()) } },
-        valueRange = ru.zf.pravka.data.Settings.TICKER_WIDTH_MIN.toFloat()..ru.zf.pravka.data.Settings.TICKER_WIDTH_MAX.toFloat(),
+        valueRange = Settings.TICKER_WIDTH_MIN.toFloat()..Settings.TICKER_WIDTH_MAX.toFloat(),
     )
     HintText("Одна на «П», «З», «Д» и «Т»; шире экрана не станет — кнопка рядом остаётся видна.")
 

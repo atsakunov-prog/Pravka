@@ -32,6 +32,17 @@ class StackGeometryTest {
     }
 
     @Test
+    fun `размер шестерёнки - настройка, и заводское значение её не двигает`() {
+        // Без процента — те же 72 %, что были до ползунка.
+        assertEquals(StackGeometry.gearSize(48), StackGeometry.gearSize(48, StackGeometry.GEAR_PCT_DEFAULT))
+        assertEquals(24, StackGeometry.gearSize(48, 50))
+        assertEquals(48, StackGeometry.gearSize(48, 100))
+        // За края не пускаем: по шестерёнке в 10 % кнопки не попасть пальцем.
+        assertEquals(StackGeometry.gearSize(48, StackGeometry.GEAR_PCT_MIN), StackGeometry.gearSize(48, 1))
+        assertEquals(StackGeometry.gearSize(48, StackGeometry.GEAR_PCT_MAX), StackGeometry.gearSize(48, 500))
+    }
+
+    @Test
     fun `веер раскрывается в сторону, где есть место`() {
         // Стопка у правого края экрана 1080 — веер уходит влево от шестерёнки.
         val left = StackGeometry.fanX(gearX = 1030, gearSize = 34, count = 4, bubble = 34, gap = 8, screenW = 1080)

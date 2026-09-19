@@ -80,6 +80,20 @@ class DiskLookTest {
     }
 
     @Test
+    fun `ползунок владельца сильнее счёта, но только на диске`() {
+        // Двинул — его число.
+        assertEquals(0.5f, DiskLook.faceAlpha(fab, onDisk = true, override = 0.5f), 0f)
+        // Не двигал — счёт как был.
+        assertEquals(
+            DiskLook.faceAlpha(fab, true),
+            DiskLook.faceAlpha(fab, true, null),
+            0f,
+        )
+        // В стопке ползунка нет: там прозрачность кнопки — это её прозрачность.
+        assertEquals(fab, DiskLook.faceAlpha(fab, onDisk = false, override = 0.5f), 0f)
+    }
+
+    @Test
     fun `тень кнопки на бумаге заметнее, чем на чернилах`() {
         val light = DiskLook.plateAlpha(fab, light = true)
         val dark = DiskLook.plateAlpha(fab, light = false)

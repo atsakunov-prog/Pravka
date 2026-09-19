@@ -107,7 +107,10 @@ class StackSettingsController(
     private var fabAlpha = Settings.FAB_ALPHA_DEFAULT
 
     /** Лицо головы: на диске плотнее настройки, как у кнопок (`DiskLook.faceAlpha`). */
-    private val idleAlpha: Float get() = DiskLook.faceAlpha(fabAlpha, ringMode)
+    private val idleAlpha: Float get() = DiskLook.faceAlpha(fabAlpha, ringMode, faceOverride)
+
+    /** Ползунок «плотность кнопок» из настроек; null — считать по формуле. */
+    private var faceOverride: Float? = null
 
     /**
      * Какое под головой стекло — от него зависит цвет шестерёнки без
@@ -119,6 +122,14 @@ class StackSettingsController(
             field = value
             paintHead()
         }
+
+    /**
+     * Размер шестерёнки — доля кнопки в процентах, настройка владельца
+     * (19.09.2026: «и нужно всё это в настройки. Прозрачность, размер»).
+     * Читаем ту же, что и диск: кольцо кнопок считается от этого же числа,
+     * и разойтись им нельзя.
+     */
+    private var gearPct = StackGeometry.GEAR_PCT_DEFAULT
 
     // Голова: шестерёнка или точка. Позиция переживает пересборку головы.
     private var head: FrameLayout? = null
@@ -204,13 +215,29 @@ class StackSettingsController(
                 Knob.values().forEach { paintKnob(it) }
             }
         }
+        scope.launch {
+            settings.diskFaceAlphaFlow.collect { value ->
+                faceOverride = value
+                head?.alpha = idleAlpha
+                Knob.values().forEach { paintKnob(it) }
+            }
+        }
+        scope.launch {
+            settings.diskGearFlow.collect { percent ->
+                if (gearPct == percent) return@collect
+                gearPct = percent
+                // Размер окна задают при создании — голову проще пересобрать
+                // на том же месте, чем заводить второй путь ради ползунка.
+                reattach()
+            }
+        }
     }
 
     // ---- Голова ----
 
     /** Размер головы, какая она сейчас: шестерёнка или точка. */
     fun headSizePx(): Int =
-        if (headIsDot) StackGeometry.dotSize(buttonSize) else StackGeometry.gearSize(buttonSize)
+        if (headIsDot) StackGeometry.dotSize(buttonSize) else StackGeometry.gearSize(buttonSize, gearPct)
 
     fun currentPosition(): Pair<Int, Int>? = headParams?.let { it.x to it.y }
 
@@ -495,7 +522,7 @@ class StackSettingsController(
     private fun showFan() {
         hideFan()
         val hp = headParams ?: return
-        val size = StackGeometry.gearSize(buttonSize)
+        val size = StackGeometry.gearSize(buttonSize, gearPct)
         val gap = dp(8)
         val (w, _) = screen()
         // Веер раскрывается в сторону, где есть место; ряд строится так,
@@ -543,7 +570,7 @@ class StackSettingsController(
         val hp = headParams ?: return
         val p = fanParams ?: return
         val f = fan ?: return
-        val size = StackGeometry.gearSize(buttonSize)
+        val size = StackGeometry.gearSize(buttonSize, gearPct)
         val gap = dp(8)
         val (w, h) = screen()
         // На диске голова считается шире на clearance с каждой стороны — веер уходит за тарелку.

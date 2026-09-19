@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import ru.zf.pravka.core.PlaceDeal
+import ru.zf.pravka.core.StackGeometry
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
@@ -62,6 +63,11 @@ class Settings(private val context: Context) {
         private val KEY_DISK = booleanPreferencesKey("buttons_disk")
         private val KEY_DISK_TUCK = booleanPreferencesKey("disk_auto_tuck")
         private val KEY_DISK_LIGHT = booleanPreferencesKey("disk_light_glass")
+        private val KEY_DISK_GAP = intPreferencesKey("disk_gap_dp")
+        private val KEY_DISK_GEAR = intPreferencesKey("disk_gear_pct")
+        private val KEY_DISK_PLATE_ALPHA = floatPreferencesKey("disk_plate_alpha")
+        private val KEY_DISK_FACE_ALPHA = floatPreferencesKey("disk_face_alpha")
+        private val KEY_DISK_SOCKET_ALPHA = floatPreferencesKey("disk_socket_alpha")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -132,6 +138,15 @@ class Settings(private val context: Context) {
         const val TICKER_WIDTH_DEFAULT = 340
         const val TICKER_WIDTH_MIN = 160
         const val TICKER_WIDTH_MAX = 900
+
+        /**
+         * Просвет диска, dp: от шестерёнки до кнопок его полтора
+         * (`DiskGeometry.ringRadius`), поэтому он и есть ручка «размер
+         * диска» — тарелка растёт вместе с кольцом.
+         */
+        const val DISK_GAP_DEFAULT = 8
+        const val DISK_GAP_MIN = 2
+        const val DISK_GAP_MAX = 28
 
         // Заводские цели КБЖУ: посчитаны по Миффлину-Сан-Жеору для владельца
         // (86 кг, 180 см, 1982) при умеренной активности, белок 1,8 г/кг.
@@ -407,6 +422,60 @@ class Settings(private val context: Context) {
     val diskLightFlow = context.dataStore.data.map { it[KEY_DISK_LIGHT] ?: true }
     suspend fun setDiskLight(value: Boolean) {
         context.dataStore.edit { it[KEY_DISK_LIGHT] = value }
+    }
+
+    /**
+     * Ручки вида диска (владелец, 19.09.2026: «и нужно всё это в настройки.
+     * Прозрачность, размер»). Раньше эти числа жили в `core/DiskLook.kt` и
+     * правились только пересборкой — а подобрать их можно лишь на живом
+     * экране, глядя на свой фон.
+     *
+     * Плотности хранятся как `Float?`: НЕТ ключа — «как посчитается»
+     * (формула из `DiskLook`, она следит и за прозрачностью кнопок, и за
+     * тем, какое стекло). Есть ключ — владелец двинул ползунок, и дальше
+     * слово за ним. Поэтому у плотностей нет «заводского числа»: заводское —
+     * это сама формула, и до первого касания ползунка ничего не застывает.
+     * [resetDiskLook] убирает ключи и возвращает всё в счёт.
+     */
+    val diskGapFlow = context.dataStore.data.map { it[KEY_DISK_GAP] ?: DISK_GAP_DEFAULT }
+    suspend fun setDiskGap(dp: Int) {
+        context.dataStore.edit { it[KEY_DISK_GAP] = dp.coerceIn(DISK_GAP_MIN, DISK_GAP_MAX) }
+    }
+
+    val diskGearFlow = context.dataStore.data.map { it[KEY_DISK_GEAR] ?: StackGeometry.GEAR_PCT_DEFAULT }
+    suspend fun setDiskGear(percent: Int) {
+        context.dataStore.edit {
+            it[KEY_DISK_GEAR] = percent.coerceIn(StackGeometry.GEAR_PCT_MIN, StackGeometry.GEAR_PCT_MAX)
+        }
+    }
+
+    /** Плотность стекла; null — считать по `DiskLook.plateAlpha`. */
+    val diskPlateAlphaFlow = context.dataStore.data.map { it[KEY_DISK_PLATE_ALPHA] }
+    suspend fun setDiskPlateAlpha(value: Float) {
+        context.dataStore.edit { it[KEY_DISK_PLATE_ALPHA] = value.coerceIn(0f, 1f) }
+    }
+
+    /** Плотность лица кнопки на диске; null — считать по `DiskLook.faceAlpha`. */
+    val diskFaceAlphaFlow = context.dataStore.data.map { it[KEY_DISK_FACE_ALPHA] }
+    suspend fun setDiskFaceAlpha(value: Float) {
+        context.dataStore.edit { it[KEY_DISK_FACE_ALPHA] = value.coerceIn(0.2f, 1f) }
+    }
+
+    /** Плотность тени кнопки на стекле; null — считать по `DiskLook.socketAlpha`. */
+    val diskSocketAlphaFlow = context.dataStore.data.map { it[KEY_DISK_SOCKET_ALPHA] }
+    suspend fun setDiskSocketAlpha(value: Float) {
+        context.dataStore.edit { it[KEY_DISK_SOCKET_ALPHA] = value.coerceIn(0f, 0.6f) }
+    }
+
+    /** Вернуть вид диска в счёт: размеры — к заводским, плотности — к формулам. */
+    suspend fun resetDiskLook() {
+        context.dataStore.edit {
+            it.remove(KEY_DISK_GAP)
+            it.remove(KEY_DISK_GEAR)
+            it.remove(KEY_DISK_PLATE_ALPHA)
+            it.remove(KEY_DISK_FACE_ALPHA)
+            it.remove(KEY_DISK_SOCKET_ALPHA)
+        }
     }
 
     /**

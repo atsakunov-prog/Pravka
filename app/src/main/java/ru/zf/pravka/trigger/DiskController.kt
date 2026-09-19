@@ -141,6 +141,13 @@ class DiskController(
     private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
     /** Какое стекло у тарелки — бумага или чернила; тумблер в Общих. */
     private var lightGlass = true
+    // Ручки вида диска из настроек (владелец: «и нужно всё это в настройки»).
+    // Размеры — числа, плотности — null, пока владелец не двинул ползунок:
+    // до тех пор их считает `DiskLook`, следя за прозрачностью кнопок и стеклом.
+    private var gapDp = Settings.DISK_GAP_DEFAULT
+    private var gearPct = StackGeometry.GEAR_PCT_DEFAULT
+    private var plateOverride: Float? = null
+    private var socketOverride: Float? = null
 
     // Тарелка.
     private var plate: PlateView? = null
@@ -190,7 +197,7 @@ class DiskController(
         scope.launch {
             settings.fabAlphaFlow.collect {
                 idleAlpha = it
-                plate?.setLook(plateAlpha(), lightGlass)
+                repaintPlate()
             }
         }
         // Светлее или темнее — на живом стекле, без пересборки диска: тумблер
@@ -198,11 +205,58 @@ class DiskController(
         scope.launch {
             settings.diskLightFlow.collect {
                 lightGlass = it
-                plate?.setLook(plateAlpha(), it)
+                repaintPlate()
                 // Шестерёнка на диске без подложки — её цвет тоже от стекла.
                 head?.glassLight = it
             }
         }
+        // Ползунки вида: размеры двигают геометрию (расставить заново),
+        // плотности — только краски (перерисовать стекло).
+        scope.launch {
+            settings.diskGapFlow.collect {
+                // Первое значение потока обычно равно заводскому — пересобирать
+                // стекло на старте не за что, а пересборка снимает и вешает окна.
+                if (gapDp == it) return@collect
+                gapDp = it
+                relayout()
+            }
+        }
+        scope.launch {
+            settings.diskGearFlow.collect {
+                if (gearPct == it) return@collect
+                gearPct = it
+                relayout()
+            }
+        }
+        scope.launch {
+            settings.diskPlateAlphaFlow.collect {
+                plateOverride = it
+                repaintPlate()
+            }
+        }
+        scope.launch {
+            settings.diskSocketAlphaFlow.collect {
+                socketOverride = it
+                repaintPlate()
+            }
+        }
+    }
+
+    /** Краски стекла поменялись — перерисовать, не трогая геометрию. */
+    private fun repaintPlate() {
+        plate?.setLook(plateAlpha(), lightGlass, socketOverride)
+    }
+
+    /**
+     * Размеры поменялись — расставить заново. Окно тарелки при этом меняет
+     * размер, а его задают только при создании: проще снять и повесить, чем
+     * плодить второй путь для редкого случая (ползунок двигают руками).
+     */
+    private fun relayout() {
+        if (!shown || !placed || folded || allHidden) return
+        hidePlate()
+        showPlate()
+        layout()
     }
 
     fun add(button: RingButton, enabled: () -> Boolean) {
@@ -221,7 +275,7 @@ class DiskController(
 
     private fun dims(): Dims {
         val b = buttonSize().coerceAtLeast(1)
-        return Dims(b, StackGeometry.gearSize(b), dp(8), dp(SHADOW_DP))
+        return Dims(b, StackGeometry.gearSize(b, gearPct), dp(gapDp), dp(SHADOW_DP))
     }
 
     /**
@@ -853,14 +907,14 @@ class DiskController(
 
     // ---- Тарелка ----
 
-    private fun plateAlpha(): Float = DiskLook.plateAlpha(idleAlpha, lightGlass)
+    private fun plateAlpha(): Float = plateOverride ?: DiskLook.plateAlpha(idleAlpha, lightGlass)
 
     private fun showPlate() {
         if (plate != null || allHidden || folded) return
         val d = dims()
         val size = d.window
         val v = PlateView(service, d.shadow.toFloat(), dp(SHADOW_DROP_DP).toFloat()).apply {
-            setLook(plateAlpha(), lightGlass)
+            setLook(plateAlpha(), lightGlass, socketOverride)
             setOnTouchListener(PlateTouch())
         }
         // Стекло трогаемое: за него везут диск. Углы квадрата окна вне круга
@@ -947,10 +1001,13 @@ class DiskController(
         private val socket = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private var fillAlpha = 0.16f
         private var light = true
+        /** Плотность тени кнопки: null — считать от плотности стекла. */
+        private var socketAlpha: Float? = null
         private var shaderFor = 0f
         private var shaderAlpha = -1f
         private var shaderLight = true
         private var shaderSocket = -1f
+        private var shaderSocketAlpha: Float? = Float.NaN
 
         // Где стоят кнопки: радиус кольца, радиус кнопки и углы. Диск
         // называет их на каждой расстановке; стекло рисует под ними тени.
@@ -958,9 +1015,10 @@ class DiskController(
         private var socketR = 0f
         private var angles = FloatArray(0)
 
-        fun setLook(fillAlpha: Float, light: Boolean) {
+        fun setLook(fillAlpha: Float, light: Boolean, socketAlpha: Float?) {
             this.fillAlpha = fillAlpha
             this.light = light
+            this.socketAlpha = socketAlpha
             invalidate()
         }
 
@@ -995,11 +1053,14 @@ class DiskController(
             val cy = h / 2f
             val r = minOf(w, h) / 2f - shadow
             if (r <= 0f) return
-            if (shaderFor != r || shaderAlpha != fillAlpha || shaderLight != light || shaderSocket != socketR) {
+            if (shaderFor != r || shaderAlpha != fillAlpha || shaderLight != light ||
+                shaderSocket != socketR || shaderSocketAlpha != socketAlpha
+            ) {
                 shaderFor = r
                 shaderAlpha = fillAlpha
                 shaderLight = light
                 shaderSocket = socketR
+                shaderSocketAlpha = socketAlpha
                 val glass = DiskLook.glass(light)
                 val edge = DiskLook.withAlpha(glass, fillAlpha)
                 val centre = DiskLook.withAlpha(glass, DiskLook.centreAlpha(fillAlpha))
@@ -1031,13 +1092,10 @@ class DiskController(
                 )
                 // Тень кнопки строится ВОКРУГ НУЛЯ и одна на все кнопки:
                 // холст под каждую сдвигается сам, а шейдер едет с ним.
+                val dense = socketAlpha ?: DiskLook.socketAlpha(fillAlpha, light)
                 socket.shader = if (socketR <= 0f) null else RadialGradient(
                     0f, 0f, socketR * SOCKET_SPREAD,
-                    intArrayOf(
-                        DiskLook.black(DiskLook.socketAlpha(fillAlpha, light)),
-                        DiskLook.black(DiskLook.socketAlpha(fillAlpha, light)),
-                        0,
-                    ),
+                    intArrayOf(DiskLook.black(dense), DiskLook.black(dense), 0),
                     floatArrayOf(0f, 1f / SOCKET_SPREAD, 1f),
                     Shader.TileMode.CLAMP,
                 )
