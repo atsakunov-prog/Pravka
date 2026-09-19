@@ -87,6 +87,8 @@ class DiskController(
         private const val MAX_LAUNCH = 1500f
         /** Палец стоял дольше этого перед отпусканием — бросок не считается. */
         private const val FLICK_PAUSE_MS = 90L
+        /** Второй тап по стеклу не позже этого — двойной: веер быстрых настроек. */
+        private const val DOUBLE_TAP_MS = 320L
     }
 
     private class Slot(val button: RingButton, val enabled: () -> Boolean)
@@ -484,7 +486,10 @@ class DiskController(
      * поверх стекла, им касание достаётся первым). Владелец (19.09, вечер):
      * «перетаскивать неудобно, давай добавим перетаскивание за четыре края
      * круга плюс за свободные зоны между кружками». Углы квадрата окна вне
-     * круга — не диск: касание там не принимается. Тап по стеклу — ничего.
+     * круга — не диск: касание там не принимается. Одиночный тап по стеклу —
+     * ничего; двойной — веер быстрых настроек (владелец: «дабл тап в любом
+     * месте, свободном от кнопки, должен вызывать дополнительные настройки»),
+     * тот же, что по тапу на шестерёнку.
      */
     private inner class PlateTouch : View.OnTouchListener {
         private var downX = 0f
@@ -492,6 +497,7 @@ class DiskController(
         private var startCx = 0f
         private var startCy = 0f
         private var dragging = false
+        private var lastTapAt = 0L
         private val slop = ViewConfiguration.get(service).scaledTouchSlop
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
@@ -517,7 +523,17 @@ class DiskController(
                     if (dragging) slide(startCx + dx, startCy + dy, dropped = false)
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (dragging) slide(cx, cy, dropped = true)
+                    if (dragging) {
+                        slide(cx, cy, dropped = true)
+                    } else if (event.actionMasked == MotionEvent.ACTION_UP) {
+                        val now = SystemClock.uptimeMillis()
+                        if (now - lastTapAt < DOUBLE_TAP_MS) {
+                            lastTapAt = 0L
+                            head?.toggleFan()
+                        } else {
+                            lastTapAt = now
+                        }
+                    }
                 }
             }
             return true

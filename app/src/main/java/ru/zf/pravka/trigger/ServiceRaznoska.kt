@@ -517,6 +517,7 @@ internal fun PravkaAccessibilityService.showRaznoskaMenu() {
                     if (newest != null) showRaznoskaPlate(newest.id) else openTodoistTab()
                 },
                 RaznoskaButtonController.MenuItem("Открыть Дело") { openTodoistTab() },
+                RaznoskaButtonController.MenuItem("Настройки") { openSettingsTab() },
                 RaznoskaButtonController.MenuItem("Закрыть") { rButton?.hideMenu() },
             )
         )
