@@ -34,6 +34,10 @@ object BubbleMotion {
 
     fun press(v: View) {
         v.animate().cancel()
+        // Заодно гаснет блик на выпуклой шкурке: клавиша ушла вниз, свет с
+        // неё соскользнул. Здесь, а не в четырёх контроллерах, — нажатие у
+        // всех кнопок одно и живёт уже тут.
+        skin(v)?.pressed = true
         v.animate().scaleX(PRESSED).scaleY(PRESSED)
             .setDuration(80).setInterpolator(DecelerateInterpolator()).start()
     }
@@ -46,6 +50,7 @@ object BubbleMotion {
 
     fun release(v: View) {
         v.animate().cancel()
+        skin(v)?.pressed = false
         v.animate().scaleX(1f).scaleY(1f)
             .setDuration(220).setInterpolator(OvershootInterpolator(1.2f)).start()
     }
@@ -86,6 +91,9 @@ object BubbleMotion {
             }
         }, delayMs + 400)
     }
+
+    /** Выпуклая шкурка кнопки, если она у вида есть: у плашек и записок её нет. */
+    private fun skin(v: View): BubbleSkin? = v.background as? BubbleSkin
 
 }
 

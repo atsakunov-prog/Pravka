@@ -60,6 +60,41 @@ class DiskLookTest {
     }
 
     @Test
+    fun `на диске лицо кнопки плотнее стекла — иначе оно просвечивает`() {
+        val face = DiskLook.faceAlpha(fab, onDisk = true)
+        val plate = DiskLook.plateAlpha(fab, light = true)
+        assertTrue("кнопка должна быть плотнее тарелки", face > plate)
+        assertTrue("и заметно плотнее настройки", face > fab)
+        // В стопке кнопка висит прямо на приложении — там настройка как есть.
+        assertEquals(fab, DiskLook.faceAlpha(fab, onDisk = false), 0f)
+    }
+
+    @Test
+    fun `слайдер прозрачности на диске жив, но в верхней трети`() {
+        assertEquals(0.7f, DiskLook.faceAlpha(0f, onDisk = true), 0.001f)
+        assertEquals(1f, DiskLook.faceAlpha(1f, onDisk = true), 0.001f)
+        assertTrue(DiskLook.faceAlpha(0.8f, true) > DiskLook.faceAlpha(0.3f, true))
+        // За края не выходим даже на кривой настройке.
+        assertEquals(1f, DiskLook.faceAlpha(5f, onDisk = true), 0f)
+        assertEquals(0.7f, DiskLook.faceAlpha(-1f, onDisk = true), 0.001f)
+    }
+
+    @Test
+    fun `тень кнопки на бумаге заметнее, чем на чернилах`() {
+        val light = DiskLook.plateAlpha(fab, light = true)
+        val dark = DiskLook.plateAlpha(fab, light = false)
+        assertTrue(DiskLook.socketAlpha(light, true) > DiskLook.socketAlpha(dark, false))
+        // Потолок держит: тень кнопки не превращается в кляксу.
+        assertEquals(0.3f, DiskLook.socketAlpha(1f, true), 0f)
+    }
+
+    @Test
+    fun `шестерёнка берёт цвет у стекла наоборот`() {
+        assertEquals(DiskLook.GLASS_DARK, DiskLook.gearInk(light = true))
+        assertEquals(DiskLook.GLASS_LIGHT, DiskLook.gearInk(light = false))
+    }
+
+    @Test
     fun `прозрачность кладётся в старший байт, цвет не трогается`() {
         assertEquals(0xFF3A342B.toInt(), DiskLook.withAlpha(DiskLook.GLASS_DARK, 1f))
         assertEquals(0x003A342B, DiskLook.withAlpha(DiskLook.GLASS_DARK, 0f))

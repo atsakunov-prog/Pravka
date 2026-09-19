@@ -30,6 +30,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.BuildConfig
 import ru.zf.pravka.R
+import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.StackGeometry
 import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.Models
@@ -102,7 +103,22 @@ class StackSettingsController(
     private val main = Handler(Looper.getMainLooper())
 
     private var buttonSize = dp(Settings.FAB_SIZE_DEFAULT)
-    private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
+    /** Прозрачность кнопок — настройка владельца. */
+    private var fabAlpha = Settings.FAB_ALPHA_DEFAULT
+
+    /** Лицо головы: на диске плотнее настройки, как у кнопок (`DiskLook.faceAlpha`). */
+    private val idleAlpha: Float get() = DiskLook.faceAlpha(fabAlpha, ringMode)
+
+    /**
+     * Какое под головой стекло — от него зависит цвет шестерёнки без
+     * подложки: чернила на бумаге, бумага на чернилах. Ставит диск.
+     */
+    var glassLight = true
+        set(value) {
+            if (field == value) return
+            field = value
+            paintHead()
+        }
 
     // Голова: шестерёнка или точка. Позиция переживает пересборку головы.
     private var head: FrameLayout? = null
@@ -158,6 +174,7 @@ class StackSettingsController(
             if (field == value) return
             field = value
             reattach()
+            paintHead()
         }
 
     /**
@@ -182,8 +199,8 @@ class StackSettingsController(
         }
         scope.launch {
             settings.fabAlphaFlow.collect { alpha ->
-                idleAlpha = alpha
-                head?.alpha = alpha
+                fabAlpha = alpha
+                head?.alpha = idleAlpha
                 Knob.values().forEach { paintKnob(it) }
             }
         }
@@ -214,15 +231,9 @@ class StackSettingsController(
                 background = BubbleSkin().apply { setColor(FloatingButtonController.ACCENT) }
             }
         } else {
-            // Шестерёнка живёт посреди диска, и плоской рядом с выпуклыми
-            // кнопками выглядела бы дыркой: та же клавиша (`BubbleSkin`).
-            GearGlyph(service).apply {
-                background = BubbleSkin().apply { setColor(GREY) }
-            }
+            GearGlyph(service)
         }
-        glyph.elevation = dp(3).toFloat()
         frame.addView(glyph, FrameLayout.LayoutParams(size, size, Gravity.CENTER))
-        frame.alpha = idleAlpha
         frame.setOnTouchListener(HeadTouch().also { headTouch = it })
         val p = WindowManager.LayoutParams(
             size,
@@ -242,10 +253,16 @@ class StackSettingsController(
         headParams = p
         head = frame
         headGlyph = glyph
+        // Подложка, цвет и плотность — одним местом: они зависят от режима и
+        // стекла, а те меняются и после того, как голова собрана.
+        paintHead()
         runCatching { windowManager.addView(frame, p) }
         // Точка ВЫСКАКИВАЕТ: всё сжалось в неё, и ей положено появиться с
         // перелётом. Шестерёнка встаёт тихо — она возвращается на своё место.
-        if (dot) BubbleMotion.pop(glyph, 0, 1f)
+        if (dot) {
+            glyph.elevation = dp(3).toFloat()
+            BubbleMotion.pop(glyph, 0, 1f)
+        }
     }
 
     /** Голова над «П» по центру; [buttonSize] — текущий размер кнопки. */
@@ -290,6 +307,26 @@ class StackSettingsController(
         headY = p.y
         runCatching { windowManager.updateViewLayout(v, p) }
         if (fan != null) placeFan()
+    }
+
+    /**
+     * Подложка и цвет головы. На диске шестерёнка стоит БЕЗ кружка (владелец,
+     * 19.09.2026: «посередине шестерёнку надо без бэкграунда»): серая
+     * подложка посреди тарелки читалась как пятно, а шестерёнка — сама себе
+     * знак. Цвет она берёт у стекла наоборот: чернила на бумаге, бумага на
+     * чернилах. В стопке подложка остаётся — там под головой произвольное
+     * приложение, и без кружка шестерёнку было бы не видно.
+     *
+     * Тень (elevation) — только под подложкой: у вида без фона обводки нет,
+     * и просить систему о тени не за что.
+     */
+    private fun paintHead() {
+        head?.alpha = idleAlpha
+        val gear = headGlyph as? GearGlyph ?: return
+        val plain = ringMode
+        gear.background = if (plain) null else BubbleSkin().apply { setColor(GREY) }
+        gear.elevation = if (plain) 0f else dp(3).toFloat()
+        gear.setInk(if (plain) DiskLook.gearInk(glassLight) else PAPER)
     }
 
     /** Диск повернулся — шестерёнка крутится вместе с ним (владелец: «будет классный эффект»). */
@@ -842,6 +879,14 @@ class StackSettingsController(
             color = PAPER
             style = Paint.Style.FILL
         }
+
+        /** Цвет зубьев: на диске — по стеклу, в стопке — бумага на подложке. */
+        fun setInk(color: Int) {
+            if (paint.color == color) return
+            paint.color = color
+            invalidate()
+        }
+
         private val path = Path().apply { fillType = Path.FillType.EVEN_ODD }
         private val oval = RectF()
         private var builtFor = 0f

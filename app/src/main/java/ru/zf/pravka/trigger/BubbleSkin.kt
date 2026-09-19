@@ -38,6 +38,8 @@ class BubbleSkin : GradientDrawable() {
         private const val RIM_SHADE = 0.22f
         /** Толщина фаски — доля радиуса: на кнопке любого размера одна и та же. */
         private const val RIM_WIDTH = 0.055f
+        /** Во сколько раз тусклее блик у нажатой кнопки. */
+        private const val PRESSED_LIGHT = 0.3f
     }
 
     private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -46,6 +48,19 @@ class BubbleSkin : GradientDrawable() {
 
     /** Радиус, под который построены краски: меняется только с размером кнопки. */
     private var builtFor = 0f
+
+    /**
+     * Кнопка под пальцем: блик и фаска гаснут, затенение снизу остаётся —
+     * клавиша ушла вниз, и свет с неё соскользнул. Ставит это `BubbleMotion`,
+     * одно место на все кнопки, там же, где живёт сжатие: палец и так видит
+     * ответ размером, а теперь ещё и светом.
+     */
+    var pressed = false
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidateSelf()
+        }
 
     init {
         shape = GradientDrawable.OVAL
@@ -63,9 +78,10 @@ class BubbleSkin : GradientDrawable() {
         // Прозрачность самого рисунка (не вида): краска с шейдером умножает
         // его цвета на свою альфу, так что слои гаснут вместе с заливкой.
         val a = alpha
-        sheen.alpha = a
+        val lit = if (pressed) (a * PRESSED_LIGHT).toInt() else a
+        sheen.alpha = lit
         foot.alpha = a
-        rim.alpha = a
+        rim.alpha = lit
         val save = canvas.save()
         // Рисуем от центра: слои строятся вокруг нуля и центрируются по
         // построению — тот же приём, что у глифов стопки.

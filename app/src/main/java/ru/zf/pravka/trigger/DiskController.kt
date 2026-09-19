@@ -17,7 +17,9 @@ import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.DiskGeometry
@@ -82,6 +84,14 @@ class DiskController(
         private const val SHADOW_DROP_DP = 2
         /** Толщина фаски по кромке стекла — доля радиуса тарелки. */
         private const val RIM_WIDTH_FACTOR = 0.012f
+        /**
+         * Тень кнопки на стекле: насколько она шире самой кнопки. Полтора
+         * радиуса — мягкое пятно, из-под кнопки видно только его край; меньше
+         * читалось бы как обводка, больше — как грязь на стекле.
+         */
+        private const val SOCKET_SPREAD = 1.5f
+        /** Угол кнопки сдвинулся меньше этого — стекло не перерисовываем. */
+        private const val SOCKET_STEP_DEG = 0.25f
         /** Окно кнопки за краем с таким запасом — снимается. */
         private const val OFFSCREEN_MARGIN_DP = 2
         /** Кнопка не там, где ей быть, дальше этого — расставить заново. */
@@ -135,6 +145,8 @@ class DiskController(
     // Тарелка.
     private var plate: PlateView? = null
     private var plateParams: WindowManager.LayoutParams? = null
+    /** Углы кнопок для теней на стекле — буфер, чтобы не сорить кадр за кадром. */
+    private var socketAngles = FloatArray(0)
 
     // Движение: одно тело.
     private val turn = DiskPhysics.turn(0f)
@@ -187,6 +199,8 @@ class DiskController(
             settings.diskLightFlow.collect {
                 lightGlass = it
                 plate?.setLook(plateAlpha(), it)
+                // Шестерёнка на диске без подложки — её цвет тоже от стекла.
+                head?.glassLight = it
             }
         }
     }
@@ -335,14 +349,19 @@ class DiskController(
         if (!allHidden) {
             val live = liveSlots()
             val margin = dp(OFFSCREEN_MARGIN_DP)
+            if (socketAngles.size != live.size) socketAngles = FloatArray(live.size)
             live.forEachIndexed { i, slot ->
                 val angle = DiskGeometry.slotAngle(i, live.size, f, rotation)
+                socketAngles[i] = angle
                 val (x, y) = DiskGeometry.slotOrigin(cx, cy, d.ring, angle, d.button)
                 // Сначала место, потом окно: снятое окно ставится на место в
                 // параметрах и вешается уже там, где надо.
                 slot.button.followTo(x, y, settle = false, link = 1, snap = true)
                 slot.button.setOffscreen(!DiskGeometry.onScreen(x, y, d.button, w, h, margin))
             }
+            // Тени кнопок рисует стекло: своё окно кнопки у неё ровно по
+            // кружку и наружу ничего не выпустит (см. `BubbleSkin`).
+            plate?.setSockets(d.ring, d.button / 2f, socketAngles)
         }
         placeHead()
         placePlate(d)
@@ -392,6 +411,7 @@ class DiskController(
     private fun placeHead() {
         val h = head ?: return
         val d = dims()
+        h.glassLight = lightGlass
         h.moveToCentre(cx.roundToInt(), cy.roundToInt(), d.button)
         // Шестерёнка крутится вместе с диском (владелец: «будет классный эффект»).
         h.setTurn(rotation)
@@ -924,15 +944,46 @@ class DiskController(
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val shade = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        private val socket = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private var fillAlpha = 0.16f
         private var light = true
         private var shaderFor = 0f
         private var shaderAlpha = -1f
         private var shaderLight = true
+        private var shaderSocket = -1f
+
+        // Где стоят кнопки: радиус кольца, радиус кнопки и углы. Диск
+        // называет их на каждой расстановке; стекло рисует под ними тени.
+        private var ring = 0f
+        private var socketR = 0f
+        private var angles = FloatArray(0)
 
         fun setLook(fillAlpha: Float, light: Boolean) {
             this.fillAlpha = fillAlpha
             this.light = light
+            invalidate()
+        }
+
+        /**
+         * Куда класть тени кнопок. Перерисовываемся не на каждый вызов, а
+         * когда картинка правда поехала: диск зовёт это кадр за кадром, пока
+         * крутится, и четверть градуса глазу не видна, а перерисовка стоит.
+         */
+        fun setSockets(ring: Float, radius: Float, src: FloatArray) {
+            var moved = this.ring != ring || socketR != radius || angles.size != src.size
+            if (!moved) {
+                for (i in src.indices) {
+                    if (abs(DiskGeometry.delta(angles[i], src[i])) > SOCKET_STEP_DEG) {
+                        moved = true
+                        break
+                    }
+                }
+            }
+            if (!moved) return
+            this.ring = ring
+            this.socketR = radius
+            if (angles.size != src.size) angles = FloatArray(src.size)
+            src.copyInto(angles)
             invalidate()
         }
 
@@ -944,10 +995,11 @@ class DiskController(
             val cy = h / 2f
             val r = minOf(w, h) / 2f - shadow
             if (r <= 0f) return
-            if (shaderFor != r || shaderAlpha != fillAlpha || shaderLight != light) {
+            if (shaderFor != r || shaderAlpha != fillAlpha || shaderLight != light || shaderSocket != socketR) {
                 shaderFor = r
                 shaderAlpha = fillAlpha
                 shaderLight = light
+                shaderSocket = socketR
                 val glass = DiskLook.glass(light)
                 val edge = DiskLook.withAlpha(glass, fillAlpha)
                 val centre = DiskLook.withAlpha(glass, DiskLook.centreAlpha(fillAlpha))
@@ -977,10 +1029,38 @@ class DiskController(
                     floatArrayOf(0f, 0.5f, 1f),
                     Shader.TileMode.CLAMP,
                 )
+                // Тень кнопки строится ВОКРУГ НУЛЯ и одна на все кнопки:
+                // холст под каждую сдвигается сам, а шейдер едет с ним.
+                socket.shader = if (socketR <= 0f) null else RadialGradient(
+                    0f, 0f, socketR * SOCKET_SPREAD,
+                    intArrayOf(
+                        DiskLook.black(DiskLook.socketAlpha(fillAlpha, light)),
+                        DiskLook.black(DiskLook.socketAlpha(fillAlpha, light)),
+                        0,
+                    ),
+                    floatArrayOf(0f, 1f / SOCKET_SPREAD, 1f),
+                    Shader.TileMode.CLAMP,
+                )
             }
             canvas.drawCircle(cx, cy + drop, r + shadow, shade)
             canvas.drawCircle(cx, cy, r, fill)
+            drawSockets(canvas, cx, cy)
             canvas.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
+        }
+
+        /** Тени под кнопками: свет сверху, поэтому пятно сдвинуто вниз, как у тарелки. */
+        private fun drawSockets(canvas: Canvas, cx: Float, cy: Float) {
+            if (socketR <= 0f || angles.isEmpty()) return
+            for (a in angles) {
+                val rad = Math.toRadians(a.toDouble())
+                val save = canvas.save()
+                canvas.translate(
+                    cx + ring * cos(rad).toFloat(),
+                    cy + ring * sin(rad).toFloat() + drop,
+                )
+                canvas.drawCircle(0f, 0f, socketR * SOCKET_SPREAD, socket)
+                canvas.restoreToCount(save)
+            }
         }
     }
 }

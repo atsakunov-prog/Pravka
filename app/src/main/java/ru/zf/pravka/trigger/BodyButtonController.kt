@@ -17,6 +17,7 @@ import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
+import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.data.Settings
 
 // Тело: четвёртая кнопка, «Т». Тот же TYPE_ACCESSIBILITY_OVERLAY, что у «П»,
@@ -74,7 +75,16 @@ class BodyButtonController(
     private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
 
     private var buttonSize = dp(Settings.FAB_SIZE_DEFAULT)
-    private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
+    /** Прозрачность кнопок — настройка владельца (слайдер в Общих). */
+    private var fabAlpha = Settings.FAB_ALPHA_DEFAULT
+
+    /**
+     * Лицо кнопки: на диске плотнее настройки. Светлое стекло просвечивало
+     * сквозь полупрозрачную кнопку, и владелец читал это как «диск над
+     * кнопками, а не наоборот» (19.09.2026). Порядок окон тут ни при чём —
+     * дело в плотности; «не мешать приложению» на диске держит тарелка.
+     */
+    private val idleAlpha: Float get() = DiskLook.faceAlpha(fabAlpha, ringMode)
 
     private var button: FrameLayout? = null
     private var background: GradientDrawable? = null
@@ -103,11 +113,20 @@ class BodyButtonController(
         set(value) {
             if (field == value) return
             field = value
+            // Режим сменился — сменилась и плотность лица (DiskLook.faceAlpha);
+            // ставим её ДО ранних возвратов ниже: те про окно, а не про цвет.
+            applyFaceAlpha()
             val p = params ?: return
             val noLimits = WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             p.flags = if (value) p.flags or noLimits else p.flags and noLimits.inv()
             if (attached) button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
         }
+
+    /** Поставить лицу текущую плотность — пока кнопка не занята и не пишет. */
+    private fun applyFaceAlpha() {
+        cancelBubble.setAlpha(idleAlpha)
+        if (!busy && !recording) button?.alpha = idleAlpha
+    }
 
     override var onRingDrag: ((Float, Float, Float, Float, Int) -> Unit)? = null
     private var busy = false
@@ -1241,8 +1260,8 @@ class BodyButtonController(
             }
             scope.launch {
                 settings.fabAlphaFlow.collect { alpha ->
-                    idleAlpha = alpha
-                    cancelBubble.setAlpha(alpha)
+                    fabAlpha = alpha
+                    cancelBubble.setAlpha(idleAlpha)
                     if (!busy && !recording) {
                         button?.alpha = idleAlpha
                     }
