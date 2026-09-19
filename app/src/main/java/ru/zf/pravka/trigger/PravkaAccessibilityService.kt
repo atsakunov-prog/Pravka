@@ -320,6 +320,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             s.onTouched = { touched() }
             s.onHideAll = { setAllHidden(true) }
             s.onShowAll = { setAllHidden(false) }
+            // Палец на шестерёнке — тоже палец на диске: вторым он делает щипок.
+            s.onRawTouch = { rx, ry, action -> disk?.finger("head", rx, ry, action) }
             // Голову таскают, как кнопку, и за ней едет вся цепочка. Иначе,
             // когда всё убрано, точка единственная на экране — и приросла бы
             // к месту навсегда. Координаты «П» считает сама шестерёнка,

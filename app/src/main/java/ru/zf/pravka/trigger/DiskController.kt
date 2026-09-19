@@ -89,6 +89,12 @@ class DiskController(
         private const val FLICK_PAUSE_MS = 90L
         /** Второй тап по стеклу не позже этого — двойной: веер быстрых настроек. */
         private const val DOUBLE_TAP_MS = 320L
+        /**
+         * Палец, о котором столько не докладывали, — призрак: окно пропало
+         * из-под него без отпускания (уехало за край, сложился экран), и
+         * иначе следующее одиночное касание считалось бы вторым пальцем.
+         */
+        private const val FINGER_STALE_MS = 6_000L
     }
 
     private class Slot(val button: RingButton, val enabled: () -> Boolean)
@@ -145,9 +151,21 @@ class DiskController(
     private var turned = false
     private var lastDetent = 0
 
-    // Палец везёт за шестерёнку.
+    // Палец везёт за шестерёнку или за стекло.
     private var sliding = false
     private var slideFacing = 0f
+
+    // Два пальца — щипок: диск едет за их серединой, где бы ни взяли.
+    private val fingers = LinkedHashMap<Any, FloatArray>()
+    private var pinch = false
+    private var pinchMidX = 0f
+    private var pinchMidY = 0f
+    private var pinchCx = 0f
+    private var pinchCy = 0f
+
+    private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
+    private var downRawX = 0f
+    private var downRawY = 0f
 
     init {
         scope.launch {
@@ -248,6 +266,8 @@ class DiskController(
         stopMotion()
         turning = null
         sliding = false
+        pinch = false
+        fingers.clear()
         hidePlate()
         slots.forEach { it.button.setOffscreen(false) }
     }
@@ -367,10 +387,16 @@ class DiskController(
     fun onRingDrag(button: RingButton, rawX: Float, rawY: Float, localX: Float, localY: Float, action: Int) {
         if (!shown || !placed || folded || allHidden) return
         onTouched?.invoke()
+        // Сначала — в общий счёт пальцев: второй палец на любом окне диска
+        // делает щипок, и тогда это касание диск везёт, а не крутит.
+        finger(button, rawX, rawY, action)
+        if (pinch) return
         when (action) {
             MotionEvent.ACTION_DOWN -> {
                 if (sliding) return
                 stopMotion()
+                downRawX = rawX
+                downRawY = rawY
                 val (bx, by) = button.currentPosition() ?: return
                 // Сырые координаты — дисплея, позиции окон — рабочей области.
                 // Разница постоянна и известна в момент касания: палец в окне
@@ -388,6 +414,9 @@ class DiskController(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (turning !== button) return
+                // Порог свой: кнопка докладывает каждый сдвиг, а поворот
+                // начинается, когда палец действительно поехал.
+                if (!turned && abs(rawX - downRawX) <= touchSlop && abs(rawY - downRawY) <= touchSlop) return
                 val angle = DiskGeometry.angleOf(cx, cy, rawX + fingerOffX, rawY + fingerOffY)
                 val delta = DiskGeometry.delta(lastAngle, angle)
                 val now = SystemClock.uptimeMillis()
@@ -442,7 +471,7 @@ class DiskController(
      * диска — её центр.
      */
     fun onHeadDragged(headX: Int, headY: Int, dropped: Boolean) {
-        if (!shown || !placed || folded) return
+        if (!shown || !placed || folded || pinch) return
         val size = head?.headSizePx() ?: 0
         slide(headX + size / 2f, headY + size / 2f, dropped)
     }
@@ -480,6 +509,92 @@ class DiskController(
         animateTo(DiskGeometry.snap(rotation, step()), dx, dy)
     }
 
+    // ---- Два пальца: диск везут, где бы ни взяли ----
+
+    /**
+     * Пальцы на диске из всех его окон: от кнопки и от шестерёнки — по
+     * первому указателю окна, от стекла — все. Два пальца разом — щипок:
+     * диск едет за их серединой, где бы ни взяли, а жесты самих окон (тап,
+     * меню, поворот, переезд за шестерёнку) этому касанию больше не
+     * принадлежат. Владелец (19.09.2026): «если я беру двумя пальцами этот
+     * диск, то могу его двигать, где бы я ни прикоснулся к нему».
+     *
+     * Почему через диск, а не в одном окне: система раздаёт указатели по
+     * окнам под ними, и второй палец на другом окне приходит туда отдельным
+     * ACTION_DOWN — щипок «через окна» видит только тот, кто слушает все.
+     * [key] — кто докладывает: кнопка, «head» или указатель стекла.
+     */
+    fun finger(key: Any, rawX: Float, rawY: Float, action: Int) {
+        if (!shown || !placed) return
+        val now = SystemClock.uptimeMillis()
+        when (action) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                fingers.values.removeAll { now - it[2] > FINGER_STALE_MS }
+                fingers[key] = floatArrayOf(rawX, rawY, now.toFloat())
+                if (!pinch && fingers.size >= 2) beginPinch()
+            }
+            MotionEvent.ACTION_MOVE -> {
+                fingers[key]?.let {
+                    it[0] = rawX
+                    it[1] = rawY
+                    it[2] = now.toFloat()
+                }
+                if (pinch) movePinch()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                fingers.remove(key)
+                if (pinch) {
+                    // Ушёл один из двух — щипок кончился; ушёл третий или
+                    // один из первых при живом третьем — середина считается
+                    // от оставшейся пары заново, без скачка диска.
+                    if (fingers.size < 2) endPinch() else rebasePinch()
+                }
+            }
+        }
+    }
+
+    private fun pinchMid(): Pair<Float, Float> {
+        val two = fingers.values.take(2)
+        return (two[0][0] + two[1][0]) / 2f to (two[0][1] + two[1][1]) / 2f
+    }
+
+    private fun beginPinch() {
+        pinch = true
+        onTouched?.invoke()
+        stopMotion()
+        turning = null
+        // Жесты окон гасятся: палец, который только что крутил или ждал
+        // долгого нажатия, теперь везёт диск вместе со вторым.
+        slots.forEach { it.button.cancelGesture() }
+        head?.cancelGesture()
+        rebasePinch()
+        if (!sliding) {
+            sliding = true
+            slideFacing = DiskGeometry.facing(cx, frame().first)
+        }
+        Haptics.tick(service)
+    }
+
+    /** Опорная середина пальцев и центр диска — отсюда считается сдвиг. */
+    private fun rebasePinch() {
+        val (mx, my) = pinchMid()
+        pinchMidX = mx
+        pinchMidY = my
+        pinchCx = cx
+        pinchCy = cy
+    }
+
+    private fun movePinch() {
+        val (mx, my) = pinchMid()
+        slide(pinchCx + (mx - pinchMidX), pinchCy + (my - pinchMidY), dropped = false)
+    }
+
+    /** Один из двух пальцев поднялся — щипок кончился, диск докуется; оставшийся палец уже погашен. */
+    private fun endPinch() {
+        pinch = false
+        slide(cx, cy, dropped = true)
+    }
+
     /**
      * Палец на стекле — диск везут. За любое свободное место тарелки: север,
      * юг, запад, восток и промежутки между кнопками (кнопки — свои окна
@@ -498,31 +613,68 @@ class DiskController(
         private var startCy = 0f
         private var dragging = false
         private var lastTapAt = 0L
+        /** В этом касании был щипок — одиночная логика стекла молчит до следующего DOWN. */
+        private var pinched = false
         private val slop = ViewConfiguration.get(service).scaledTouchSlop
+
+        private fun key(pointerId: Int): String = "plate:$pointerId"
+
+        private fun inside(v: View, x: Float, y: Float): Boolean {
+            val r = v.width / 2f
+            val dx = x - r
+            val dy = y - r
+            return dx * dx + dy * dy <= r * r
+        }
+
+        // Сырые координаты второго указателя: getRawX(index) есть только с
+        // API 29, а сдвиг между указателями в окне тот же, что на экране.
+        private fun rawX(event: MotionEvent, index: Int): Float = event.rawX + (event.getX(index) - event.getX(0))
+        private fun rawY(event: MotionEvent, index: Int): Float = event.rawY + (event.getY(index) - event.getY(0))
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
             if (service.isLockedIdle()) return true
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    val r = v.width / 2f
-                    val dx = event.x - r
-                    val dy = event.y - r
-                    if (dx * dx + dy * dy > r * r) return false
-                    if (turning != null || allHidden) return false
+                    if (!inside(v, event.x, event.y)) return false
+                    if (allHidden) return false
                     onTouched?.invoke()
                     downX = event.rawX
                     downY = event.rawY
                     startCx = cx
                     startCy = cy
                     dragging = false
+                    pinched = false
+                    finger(key(event.getPointerId(0)), event.rawX, event.rawY, MotionEvent.ACTION_DOWN)
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    val i = event.actionIndex
+                    if (!inside(v, event.getX(i), event.getY(i))) return true
+                    finger(key(event.getPointerId(i)), rawX(event, i), rawY(event, i), MotionEvent.ACTION_POINTER_DOWN)
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    for (i in 0 until event.pointerCount) {
+                        finger(key(event.getPointerId(i)), rawX(event, i), rawY(event, i), MotionEvent.ACTION_MOVE)
+                    }
+                    if (pinch) {
+                        pinched = true
+                        dragging = false
+                        return true
+                    }
+                    if (pinched) return true
                     val dx = event.rawX - downX
                     val dy = event.rawY - downY
                     if (!dragging && (abs(dx) > slop || abs(dy) > slop)) dragging = true
                     if (dragging) slide(startCx + dx, startCy + dy, dropped = false)
                 }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    val i = event.actionIndex
+                    finger(key(event.getPointerId(i)), rawX(event, i), rawY(event, i), MotionEvent.ACTION_POINTER_UP)
+                }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    for (i in 0 until event.pointerCount) {
+                        finger(key(event.getPointerId(i)), rawX(event, i), rawY(event, i), MotionEvent.ACTION_UP)
+                    }
+                    if (pinched) return true
                     if (dragging) {
                         slide(cx, cy, dropped = true)
                     } else if (event.actionMasked == MotionEvent.ACTION_UP) {

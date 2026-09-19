@@ -136,6 +136,11 @@ class StackSettingsController(
     var onHideAll: (() -> Unit)? = null
     /** Тап по точке: вернуть всё. */
     var onShowAll: (() -> Unit)? = null
+    /**
+     * Палец на голове, сырые координаты и действие (DOWN / MOVE / UP): диск
+     * собирает пальцы со всех своих окон и по двум разом везёт себя целиком.
+     */
+    var onRawTouch: ((rawX: Float, rawY: Float, action: Int) -> Unit)? = null
 
     /**
      * Голова стоит в центре диска (`DiskController`). Шестерёнку тогда везут
@@ -222,7 +227,7 @@ class StackSettingsController(
         glyph.elevation = dp(3).toFloat()
         frame.addView(glyph, FrameLayout.LayoutParams(size, size, Gravity.CENTER))
         frame.alpha = idleAlpha
-        frame.setOnTouchListener(HeadTouch())
+        frame.setOnTouchListener(HeadTouch().also { headTouch = it })
         val p = WindowManager.LayoutParams(
             size,
             size,
@@ -321,12 +326,28 @@ class StackSettingsController(
         headParams = null
     }
 
+    private var headTouch: HeadTouch? = null
+
+    /** Диск взяли двумя пальцами — текущее касание головы гасится: ни тапа, ни переезда за неё. */
+    fun cancelGesture() {
+        headTouch?.swallow()
+    }
+
     private inner class HeadTouch : View.OnTouchListener {
         private var downX = 0f
         private var downY = 0f
         private var startX = 0
         private var startY = 0
         private var dragging = false
+        private var pressedView: View? = null
+
+        fun swallow() {
+            slipped = true
+            dragging = false
+            armed = false
+            pressedView?.removeCallbacks(arm)
+            pressedGlyph?.let { BubbleMotion.release(it) }
+        }
         /** Диск: долгое нажатие сработало — шестерёнку можно везти. */
         private var armed = false
         /** Диск: палец поехал раньше долгого нажатия — жест пропал: ни тапа, ни переезда. */
@@ -358,10 +379,13 @@ class StackSettingsController(
                     armed = false
                     slipped = false
                     pressedGlyph = glyph
+                    pressedView = v
                     BubbleMotion.press(glyph)
                     if (needsLongPress()) v.postDelayed(arm, LONG_PRESS_MS)
+                    onRawTouch?.invoke(event.rawX, event.rawY, MotionEvent.ACTION_DOWN)
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    onRawTouch?.invoke(event.rawX, event.rawY, MotionEvent.ACTION_MOVE)
                     val dx = event.rawX - downX
                     val dy = event.rawY - downY
                     if (!dragging && !slipped && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
@@ -391,8 +415,10 @@ class StackSettingsController(
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    onRawTouch?.invoke(event.rawX, event.rawY, MotionEvent.ACTION_UP)
                     v.removeCallbacks(arm)
                     pressedGlyph = null
+                    pressedView = null
                     BubbleMotion.release(glyph)
                     if (dragging) {
                         onDragged?.invoke(p.x, p.y, true)

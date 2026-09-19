@@ -1252,13 +1252,19 @@ class BodyButtonController(
             }
         }
 
-        container.setOnTouchListener(DragTouchListener())
+        container.setOnTouchListener(DragTouchListener().also { touch = it })
     }
 
     private fun applyPosition(p: WindowManager.LayoutParams, xFraction: Float, yFraction: Float) {
         val (w, h) = screenSize()
         p.x = ((w - buttonSize) * xFraction.coerceIn(0f, 1f)).toInt()
         p.y = ((h - buttonSize) * yFraction.coerceIn(0f, 1f)).toInt()
+    }
+
+    private var touch: DragTouchListener? = null
+
+    override fun cancelGesture() {
+        touch?.swallow()
     }
 
     private inner class DragTouchListener : View.OnTouchListener {
@@ -1269,6 +1275,17 @@ class BodyButtonController(
         private var dragging = false
         private var longPressFired = false
         private var pressed: View? = null
+        /** Диск взяли двумя пальцами — этот жест кнопке больше не принадлежит. */
+        private var swallowed = false
+
+        fun swallow() {
+            if (swallowed) return
+            swallowed = true
+            pressed?.let { v ->
+                v.removeCallbacks(longPressRunnable)
+                BubbleMotion.release(v)
+            }
+        }
         private val longPressRunnable = Runnable {
             longPressFired = true
             pressed?.let { BubbleMotion.nod(it) }
@@ -1288,6 +1305,7 @@ class BodyButtonController(
                     startY = p.y
                     dragging = false
                     longPressFired = false
+                    swallowed = false
                     pressed = view
                     view.alpha = 1f
                     // Сжалась под пальцем (`BubbleMotion`): кнопка отвечает на касание телом.
@@ -1296,6 +1314,14 @@ class BodyButtonController(
                     if (ringMode) onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_DOWN)
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    // Диск слышит каждый сдвиг, и до порога тоже: второй палец
+                    // на стекле делает из касания щипок, и этот палец везёт
+                    // диск. Порог для поворота диск держит свой. Кнопка сама
+                    // на диске не едет — палец крутит диск, диск ставит кнопку.
+                    if (ringMode && !longPressFired) {
+                        onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_MOVE)
+                    }
+                    if (swallowed) return true
                     val dx = event.rawX - startRawX
                     val dy = event.rawY - startRawY
                     if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
@@ -1303,10 +1329,7 @@ class BodyButtonController(
                         view.removeCallbacks(longPressRunnable)
                         BubbleMotion.lift(view)
                     }
-                    if (dragging && !longPressFired && ringMode) {
-                        // Диск: кнопка сама не едет — палец крутит диск, диск ставит кнопку.
-                        onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_MOVE)
-                    } else if (dragging && !longPressFired) {
+                    if (dragging && !longPressFired && !ringMode) {
                         p.x = startX + dx.toInt()
                         p.y = startY + dy.toInt()
                         runCatching { windowManager.updateViewLayout(view, p) }
@@ -1323,7 +1346,7 @@ class BodyButtonController(
                     if (ringMode) {
                         // Диск: отпустили — щёлкнуть по ближайшей четверти; тап остаётся тапом.
                         onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_UP)
-                        if (!dragging && !longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
+                        if (!swallowed && !dragging && !longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
                             if (!busy) onShortTap()
                         }
                     } else if (dragging) {
