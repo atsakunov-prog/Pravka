@@ -61,6 +61,7 @@ class Settings(private val context: Context) {
         private val KEY_STACK_IDLE = booleanPreferencesKey("buttons_stack_idle")
         private val KEY_DISK = booleanPreferencesKey("buttons_disk")
         private val KEY_DISK_TUCK = booleanPreferencesKey("disk_auto_tuck")
+        private val KEY_DISK_LIGHT = booleanPreferencesKey("disk_light_glass")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -393,6 +394,19 @@ class Settings(private val context: Context) {
     val diskTuckFlow = context.dataStore.data.map { it[KEY_DISK_TUCK] ?: true }
     suspend fun setDiskTuck(value: Boolean) {
         context.dataStore.edit { it[KEY_DISK_TUCK] = value }
+    }
+
+    /**
+     * Светлое стекло диска (владелец, 19.09.2026, ночь): «давай его сделаем
+     * наоборот, светлее, чем бэкграунд. А то теряется иногда. И сделаем
+     * тумблер в настройках: светлее/темнее». С завода светлое — это и есть
+     * просьба; тёмные чернила остаются вторым положением, потому что фон под
+     * диском бывает любой, и какое стекло на нём не теряется, видно только на
+     * самом телефоне. Числа обеих шкурок — `core/DiskLook.kt`.
+     */
+    val diskLightFlow = context.dataStore.data.map { it[KEY_DISK_LIGHT] ?: true }
+    suspend fun setDiskLight(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK_LIGHT] = value }
     }
 
     /**

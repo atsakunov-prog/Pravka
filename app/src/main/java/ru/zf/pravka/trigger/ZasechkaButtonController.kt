@@ -742,10 +742,8 @@ class ZasechkaButtonController(
     @SuppressLint("ClickableViewAccessibility")
     private fun create() {
         val container = FrameLayout(service)
-        val bg = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(AMBER)
-        }
+        // Не плоский кружок: выпуклая клавиша со светом сверху (`BubbleSkin`).
+        val bg = BubbleSkin().apply { setColor(AMBER) }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()

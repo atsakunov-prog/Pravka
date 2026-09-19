@@ -2,6 +2,7 @@ package ru.zf.pravka.trigger
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.RadialGradient
@@ -20,6 +21,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.DiskGeometry
+import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.DiskPhysics
 import ru.zf.pravka.core.Spring
 import ru.zf.pravka.core.StackGeometry
@@ -67,18 +69,6 @@ class DiskController(
 ) {
 
     private companion object {
-        /** Тарелка — тёмное стекло: чернила, не цвет режима; диск не кнопка и не спорит с ними. */
-        private val GLASS = 0xFF3A342B.toInt()
-        private val PAPER = 0xFFF7F3EA.toInt()
-        /** Доля прозрачности кнопок, с которой стоит тарелка: заметно, но под кнопками. */
-        private const val PLATE_ALPHA_FACTOR = 0.45f
-        /**
-         * Край стекла мягкий: к границе тарелка темнеет, обводки нет. Владелец
-         * (19.09, вечер) спросил, не лучше ли «круг весь без края», — да: за
-         * стекло теперь тянут, и жёсткая линия читалась бы как рамка виджета,
-         * а не как край предмета. Это доля плотности стекла в центре от края.
-         */
-        private const val CENTRE_ALPHA_FACTOR = 0.55f
         /**
          * Тень под стеклом: диск — предмет над приложением, а не пятно на нём.
          * Владелец (19.09, поздно) о шкале-метках: «засечки выглядят плохо,
@@ -86,10 +76,12 @@ class DiskController(
          * круга?» Метки сняты, тень мягкая: выходит за край тарелки на столько,
          * чуть сдвинута вниз, как от света сверху, и вдвое плотнее стекла (с
          * потолком) — на белом читается ореолом, на тёмном не мешает.
+         * Плотности и цвета обеих шкурок стекла — `core/DiskLook.kt`.
          */
         private const val SHADOW_DP = 10
         private const val SHADOW_DROP_DP = 2
-        private const val SHADOW_MAX_ALPHA = 0.45f
+        /** Толщина фаски по кромке стекла — доля радиуса тарелки. */
+        private const val RIM_WIDTH_FACTOR = 0.012f
         /** Окно кнопки за краем с таким запасом — снимается. */
         private const val OFFSCREEN_MARGIN_DP = 2
         /** Кнопка не там, где ей быть, дальше этого — расставить заново. */
@@ -137,6 +129,8 @@ class DiskController(
     private var folded = false
     private var allHidden = false
     private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
+    /** Какое стекло у тарелки — бумага или чернила; тумблер в Общих. */
+    private var lightGlass = true
 
     // Тарелка.
     private var plate: PlateView? = null
@@ -184,7 +178,15 @@ class DiskController(
         scope.launch {
             settings.fabAlphaFlow.collect {
                 idleAlpha = it
-                plate?.setLook(plateAlpha())
+                plate?.setLook(plateAlpha(), lightGlass)
+            }
+        }
+        // Светлее или темнее — на живом стекле, без пересборки диска: тумблер
+        // смотрят, переключая туда-сюда на том фоне, где диск терялся.
+        scope.launch {
+            settings.diskLightFlow.collect {
+                lightGlass = it
+                plate?.setLook(plateAlpha(), it)
             }
         }
     }
@@ -831,14 +833,14 @@ class DiskController(
 
     // ---- Тарелка ----
 
-    private fun plateAlpha(): Float = idleAlpha * PLATE_ALPHA_FACTOR
+    private fun plateAlpha(): Float = DiskLook.plateAlpha(idleAlpha, lightGlass)
 
     private fun showPlate() {
         if (plate != null || allHidden || folded) return
         val d = dims()
         val size = d.window
         val v = PlateView(service, d.shadow.toFloat(), dp(SHADOW_DROP_DP).toFloat()).apply {
-            setLook(plateAlpha())
+            setLook(plateAlpha(), lightGlass)
             setOnTouchListener(PlateTouch())
         }
         // Стекло трогаемое: за него везут диск. Углы квадрата окна вне круга
@@ -895,25 +897,42 @@ class DiskController(
     }
 
     /**
-     * Стекло диска: круг чернил, к краю плотнее, без обводки, под ним мягкая
-     * тень — чуть шире тарелки и сдвинута вниз, как от света сверху. Вид
-     * больше тарелки на тень с каждой стороны; рисуется от центра, как все
-     * глифы стопки — центрируется по построению.
+     * Стекло диска: круг бумаги (или чернил — тумблер «Светлее · Темнее»), к
+     * краю плотнее, по кромке фаска, под ним мягкая тень — чуть шире тарелки
+     * и сдвинута вниз, как от света сверху. Вид больше тарелки на тень с
+     * каждой стороны; рисуется от центра, как все глифы стопки —
+     * центрируется по построению.
      *
-     * Прозрачность — в красках, а не на виде: тень и стекло — разные слои с
-     * разной плотностью, а общая альфа вида утопила бы тень вместе со стеклом.
-     * Тень аппаратному холсту рисуется кольцом-градиентом: setShadowLayer у
-     * фигур работает только программно.
+     * Светлое стекло появилось 19.09 ночью: «давай его сделаем наоборот,
+     * светлее, чем бэкграунд. А то теряется иногда». Тёмная тарелка пропадала
+     * на тёмных экранах — а их у владельца большинство. Тень при этом
+     * остаётся ЧЁРНОЙ и на светлом стекле: светлый предмет от светлого фона
+     * отделяет именно она, а не он сам.
+     *
+     * Фаска — не обводка: тонкая дуга, светлая сверху и тёмная снизу, одним
+     * штрихом с продольным градиентом. Ровная линия по кругу читалась бы как
+     * рамка виджета (за это уже заплачено: край тарелки нарочно мягкий), а
+     * фаска читается как толщина предмета — и работает только потому, что
+     * сверху и снизу она разная.
+     *
+     * Прозрачность — в красках, а не на виде: тень, стекло и фаска — разные
+     * слои с разной плотностью, а общая альфа вида утопила бы тень вместе со
+     * стеклом. Тень аппаратному холсту рисуется кольцом-градиентом:
+     * setShadowLayer у фигур работает только программно.
      */
     private class PlateView(context: Context, private val shadow: Float, private val drop: Float) : View(context) {
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val shade = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
         private var fillAlpha = 0.16f
+        private var light = true
         private var shaderFor = 0f
         private var shaderAlpha = -1f
+        private var shaderLight = true
 
-        fun setLook(fillAlpha: Float) {
+        fun setLook(fillAlpha: Float, light: Boolean) {
             this.fillAlpha = fillAlpha
+            this.light = light
             invalidate()
         }
 
@@ -925,12 +944,13 @@ class DiskController(
             val cy = h / 2f
             val r = minOf(w, h) / 2f - shadow
             if (r <= 0f) return
-            if (shaderFor != r || shaderAlpha != fillAlpha) {
+            if (shaderFor != r || shaderAlpha != fillAlpha || shaderLight != light) {
                 shaderFor = r
                 shaderAlpha = fillAlpha
-                val rgb = GLASS and 0x00FFFFFF
-                val edge = ((255 * fillAlpha).toInt().coerceIn(0, 255) shl 24) or rgb
-                val centre = ((255 * fillAlpha * CENTRE_ALPHA_FACTOR).toInt().coerceIn(0, 255) shl 24) or rgb
+                shaderLight = light
+                val glass = DiskLook.glass(light)
+                val edge = DiskLook.withAlpha(glass, fillAlpha)
+                val centre = DiskLook.withAlpha(glass, DiskLook.centreAlpha(fillAlpha))
                 fill.shader = RadialGradient(
                     cx, cy, r,
                     intArrayOf(centre, centre, edge),
@@ -938,7 +958,7 @@ class DiskController(
                     Shader.TileMode.CLAMP,
                 )
                 // Тень: плотная под тарелкой, к внешнему краю сходит в ноль.
-                val dark = ((255 * (fillAlpha * 2f).coerceAtMost(SHADOW_MAX_ALPHA)).toInt() shl 24)
+                val dark = DiskLook.black(DiskLook.shadowAlpha(fillAlpha))
                 val outer = r + shadow
                 shade.shader = RadialGradient(
                     cx, cy + drop, outer,
@@ -946,9 +966,21 @@ class DiskController(
                     floatArrayOf(0f, (r - drop) / outer, 1f),
                     Shader.TileMode.CLAMP,
                 )
+                rim.strokeWidth = (r * RIM_WIDTH_FACTOR).coerceAtLeast(1f)
+                rim.shader = LinearGradient(
+                    cx, cy - r, cx, cy + r,
+                    intArrayOf(
+                        DiskLook.white(DiskLook.rimLightAlpha(fillAlpha, light)),
+                        DiskLook.white(0f),
+                        DiskLook.black(DiskLook.rimShadeAlpha(fillAlpha, light)),
+                    ),
+                    floatArrayOf(0f, 0.5f, 1f),
+                    Shader.TileMode.CLAMP,
+                )
             }
             canvas.drawCircle(cx, cy + drop, r + shadow, shade)
             canvas.drawCircle(cx, cy, r, fill)
+            canvas.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
         }
     }
 }

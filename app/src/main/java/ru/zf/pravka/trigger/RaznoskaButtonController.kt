@@ -1041,10 +1041,8 @@ class RaznoskaButtonController(
     @SuppressLint("ClickableViewAccessibility")
     private fun create() {
         val container = FrameLayout(service)
-        val bg = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(INK)
-        }
+        // Не плоский кружок: выпуклая клавиша со светом сверху (`BubbleSkin`).
+        val bg = BubbleSkin().apply { setColor(INK) }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()

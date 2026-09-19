@@ -211,17 +211,13 @@ class StackSettingsController(
         val glyph: View = if (dot) {
             ImageView(service).apply {
                 setImageResource(R.drawable.ic_fab_glyph)
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(FloatingButtonController.ACCENT)
-                }
+                background = BubbleSkin().apply { setColor(FloatingButtonController.ACCENT) }
             }
         } else {
+            // Шестерёнка живёт посреди диска, и плоской рядом с выпуклыми
+            // кнопками выглядела бы дыркой: та же клавиша (`BubbleSkin`).
             GearGlyph(service).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(GREY)
-                }
+                background = BubbleSkin().apply { setColor(GREY) }
             }
         }
         glyph.elevation = dp(3).toFloat()
@@ -540,10 +536,7 @@ class StackSettingsController(
     @SuppressLint("ClickableViewAccessibility")
     private fun makeKnob(knob: Knob, size: Int): FrameLayout {
         val bubble = FrameLayout(service)
-        bubble.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(GREY)
-        }
+        bubble.background = BubbleSkin().apply { setColor(GREY) }
         bubble.elevation = dp(3).toFloat()
         val inset = size / 5
         val glyph: View = when (knob) {

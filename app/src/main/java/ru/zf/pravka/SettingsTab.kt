@@ -528,6 +528,33 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
             "Зелёная «Е» выключена — вернуть её можно тумблером в настройках Еды."
     )
     Spacer(Modifier.height(10.dp))
+    // Светлее или темнее (владелец, 19.09.2026, ночь): «давай его сделаем
+    // наоборот, светлее, чем бэкграунд. А то теряется иногда. И сделаем
+    // тумблер в настройках: светлее/темнее». Двумя чипами, как «Круг ·
+    // Стопка»: оба положения видны сразу, а тумблер «Светлое стекло» пришлось
+    // бы читать. Числа обеих шкурок — `core/DiskLook.kt`.
+    val diskLight by settings.diskLightFlow.collectAsState(initial = true)
+    Text("Стекло диска", style = MaterialTheme.typography.bodyMedium)
+    Spacer(Modifier.height(4.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = diskLight,
+            onClick = { scope.launch { settings.setDiskLight(true) } },
+            label = { Text("Светлее") },
+        )
+        FilterChip(
+            selected = !diskLight,
+            onClick = { scope.launch { settings.setDiskLight(false) } },
+            label = { Text("Темнее") },
+        )
+    }
+    HintText(
+        "Светлее — тарелка под кнопками из бумаги: на тёмных экранах диск не " +
+            "теряется. Темнее — прежние чернила. Тень под стеклом в обоих случаях " +
+            "тёмная: на светлом фоне диск отделяет от него именно она. Переключается " +
+            "на живом диске, смотреть лучше прямо на том экране, где он терялся."
+    )
+    Spacer(Modifier.height(10.dp))
     // Автоуборка диска (владелец, 19.09.2026): «через 30 секунд диск пришёл к
     // ближайшему краю и прилепился, так что остались только засечка и правка».
     val diskTuck by settings.diskTuckFlow.collectAsState(initial = true)

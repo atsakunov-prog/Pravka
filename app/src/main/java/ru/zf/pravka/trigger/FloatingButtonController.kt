@@ -698,10 +698,9 @@ class FloatingButtonController(
     @SuppressLint("ClickableViewAccessibility")
     private fun create() {
         val container = FrameLayout(service)
-        val bg = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(ACCENT)
-        }
+        // Не плоский кружок: выпуклая клавиша со светом сверху (`BubbleSkin`).
+        // Наследник GradientDrawable — поле и все setColor по состояниям те же.
+        val bg = BubbleSkin().apply { setColor(ACCENT) }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()
