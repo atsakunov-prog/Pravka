@@ -59,6 +59,7 @@ class Settings(private val context: Context) {
         // Засечка (timesheet).
         private val KEY_Z_ENABLED = booleanPreferencesKey("z_enabled")
         private val KEY_STACK_IDLE = booleanPreferencesKey("buttons_stack_idle")
+        private val KEY_DISK = booleanPreferencesKey("buttons_disk")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -368,6 +369,39 @@ class Settings(private val context: Context) {
     val stackIdleFlow = context.dataStore.data.map { it[KEY_STACK_IDLE] ?: true }
     suspend fun setStackIdle(value: Boolean) {
         context.dataStore.edit { it[KEY_STACK_IDLE] = value }
+    }
+
+    /**
+     * Диск вместо стопки (владелец, 19.09.2026): четыре кнопки по кольцу
+     * вокруг шестерёнки, крутится пальцем, у края виден наполовину. Включён с
+     * завода — владелец хочет посмотреть; тумблер обязателен: «если не
+     * получится, откатим» должно быть одним движением, без пересборки.
+     */
+    val diskModeFlow = context.dataStore.data.map { it[KEY_DISK] ?: true }
+    suspend fun setDiskMode(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK] = value }
+    }
+
+    /**
+     * Где стоит диск: центр долями рабочей области экрана и поворот в
+     * градусах, отдельно на каждый размер экрана (у складного их два).
+     * Умолчание — за правым краем на высоте «П»: первая же расстановка
+     * докует его к краю.
+     */
+    suspend fun diskPlace(screenKey: String): Triple<Float, Float, Float> {
+        val prefs = context.dataStore.data.first()
+        val x = prefs[floatPreferencesKey("disk_x_$screenKey")] ?: 1f
+        val y = prefs[floatPreferencesKey("disk_y_$screenKey")] ?: 0.45f
+        val r = prefs[floatPreferencesKey("disk_r_$screenKey")] ?: 0f
+        return Triple(x, y, r)
+    }
+
+    suspend fun setDiskPlace(screenKey: String, xFraction: Float, yFraction: Float, rotation: Float) {
+        context.dataStore.edit {
+            it[floatPreferencesKey("disk_x_$screenKey")] = xFraction
+            it[floatPreferencesKey("disk_y_$screenKey")] = yFraction
+            it[floatPreferencesKey("disk_r_$screenKey")] = rotation
+        }
     }
 
     val zEnabledFlow = context.dataStore.data.map { it[KEY_Z_ENABLED] ?: true }

@@ -162,6 +162,15 @@ class PravkaAccessibilityService : AccessibilityService() {
      * (владелец, 18.09.2026: «убираем грязь из стекла кнопок»).
      */
     internal var stackSettings: StackSettingsController? = null
+    /**
+     * Диск (владелец, 19.09.2026): те же четыре кнопки по кольцу вокруг
+     * шестерёнки, крутится пальцем, у края виден наполовину. Включается
+     * тумблером «Диск вместо стопки» в Общих; выключен — прежняя стопка с
+     * ручкой. Пока настройка не прочитана — стопка.
+     */
+    internal var disk: DiskController? = null
+    @Volatile internal var cachedDiskMode = false
+    private var diskModeApplied = false
     internal var eSession: GoogleSpeechSession? = null
     @Volatile internal var eWhisperRecording = false
     @Volatile internal var eTypeInstead = false
@@ -316,14 +325,19 @@ class PravkaAccessibilityService : AccessibilityService() {
             // где палец её отпустил, без доводки и прыжка.
             s.onDragged = { hx, hy, dropped ->
                 touched()
-                val size = floatingButton?.buttonSizePx() ?: 0
-                val (px, py) = s.buttonOrigin(hx, hy, size)
-                floatingButton?.followTo(px, py, dropped, link = 1)
-                zButton?.followTo(px, py + slotOffset(1), dropped, link = 2)
-                // Спрятанные ставим под «З»: оттуда они и выезжают.
-                rButton?.followTo(px, py + slotOffset(if (stacked) 1 else 2), dropped, link = 3)
-                eButton?.followTo(px, py + slotOffset(if (stacked) 1 else 3), dropped, link = 4)
-                refreshHandles()
+                if (cachedDiskMode) {
+                    // Диск: голова — его центр; переезд и докование считает он.
+                    disk?.onHeadDragged(hx, hy, dropped)
+                } else {
+                    val size = floatingButton?.buttonSizePx() ?: 0
+                    val (px, py) = s.buttonOrigin(hx, hy, size)
+                    floatingButton?.followTo(px, py, dropped, link = 1)
+                    zButton?.followTo(px, py + slotOffset(1), dropped, link = 2)
+                    // Спрятанные ставим под «З»: оттуда они и выезжают.
+                    rButton?.followTo(px, py + slotOffset(if (stacked) 1 else 2), dropped, link = 3)
+                    eButton?.followTo(px, py + slotOffset(if (stacked) 1 else 3), dropped, link = 4)
+                    refreshHandles()
+                }
             }
         }
 
@@ -372,9 +386,26 @@ class PravkaAccessibilityService : AccessibilityService() {
         rButton?.onFrame = chainFrame
         eButton?.onFrame = chainFrame
         floatingButton?.pairAnchor = anchor@{
+            // На диске «П» появляется в своём слоте кольца.
+            if (cachedDiskMode) return@anchor floatingButton?.let { disk?.slotOrigin(it) }
             if (!cachedZEnabled) return@anchor null
             val (zx, zy) = zButton?.currentPosition() ?: return@anchor null
             zx to (zy - slotOffset(1))
+        }
+        // Диск (`DiskController`): те же четыре кнопки по кольцу вокруг
+        // шестерёнки. Палец на кнопке крутит диск, а не везёт кнопку —
+        // контроллеры в режиме диска отдают касание сюда (`onRingDrag`).
+        disk = DiskController(this, scope, app.settings).also { d ->
+            d.head = stackSettings
+            d.onTouched = { touched() }
+            d.buttonSize = { floatingButton?.buttonSizePx() ?: 0 }
+            floatingButton?.let { b -> d.add(b) { true } }
+            zButton?.let { b -> d.add(b) { cachedZEnabled } }
+            rButton?.let { b -> d.add(b) { cachedREnabled } }
+            eButton?.let { b -> d.add(b) { cachedEEnabled } }
+            listOfNotNull<RingButton>(floatingButton, zButton, rButton, eButton).forEach { b ->
+                b.onRingDrag = { rx, ry, lx, ly, action -> d.onRingDrag(b, rx, ry, lx, ly, action) }
+            }
         }
         // The "П" lives on screen permanently (owner: "пусть будет всегда") -
         // no field-following, no window watching. Without a focused field a
@@ -420,6 +451,14 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // набор это не касается: его убрали руками и вернуть должны
                 // тоже руками.
                 if (!it && stacked && !allHidden) expandButtons()
+            }
+        }
+        scope.launch {
+            app.settings.diskModeFlow.collect { on ->
+                if (diskModeApplied && on == cachedDiskMode) return@collect
+                diskModeApplied = true
+                cachedDiskMode = on
+                applyDiskMode(on)
             }
         }
         scope.launch { app.settings.restSecFlow.collect { cachedRestSec = it } }
@@ -2114,15 +2153,16 @@ class PravkaAccessibilityService : AccessibilityService() {
         val working = busy || googleSession != null || zSession != null ||
             rSession != null || eSession != null || DictationService.recording ||
             zWhisperRecording || rWhisperRecording || eWhisperRecording
-        if (!stacked && cachedStackIdle && !working && !screenLocked &&
+        val idle = cachedStackIdle && !working && !screenLocked &&
             now - lastTouchAt >= STACK_IDLE_MS
-        ) {
-            collapseButtons()
-        } else {
-            // Самолечение: при старте службы позиции кнопок могло ещё не
-            // быть, и стрелка тогда не нарисовалась. Тик её донесёт. Он же
-            // вернёт кнопки, если складывание почему-то не доиграло свой
-            // configSettled: остаться без кнопок насовсем нельзя.
+        if (!stacked && idle) collapseButtons()
+        // Самолечение: при старте службы позиции кнопок могло ещё не
+        // быть, и стрелка тогда не нарисовалась. Тик её донесёт. Он же
+        // вернёт кнопки, если складывание почему-то не доиграло свой
+        // configSettled: остаться без кнопок насовсем нельзя. В стопке —
+        // когда не складываем на этом тике; на диске — всегда: диск не
+        // складывается, `stacked` у него не поднимается никогда.
+        if (cachedDiskMode || stacked || !idle) {
             if (!folding) setFolded(false)
             refreshHandles()
         }
@@ -2156,6 +2196,11 @@ class PravkaAccessibilityService : AccessibilityService() {
      * размечают день; ручка и есть стрелка.
      */
     internal fun collapseButtons() {
+        if (cachedDiskMode) {
+            // Диск не складывается — возвращается домой: «П» и «З» внутрь экрана.
+            disk?.goHome()
+            return
+        }
         if (stacked) return
         val (x, y) = floatingButton?.currentPosition() ?: return
         stacked = true
@@ -2203,7 +2248,17 @@ class PravkaAccessibilityService : AccessibilityService() {
             eButton?.hideTicker()
             eButton?.hidePlate()
             eButton?.hideCancelBubble()
-            stacked = true
+            stacked = !cachedDiskMode
+            disk?.setAllHidden(true)
+        } else if (cachedDiskMode) {
+            // Диск: кнопки возвращаются прямо на кольцо, тарелка — под них.
+            stacked = false
+            floatingButton?.setStacked(false)
+            zButton?.setStacked(false)
+            rButton?.setStacked(false)
+            eButton?.setStacked(false)
+            disk?.setAllHidden(false)
+            refreshLearnBadge()
         } else {
             stacked = true      // чтобы expandButtons развёз все четыре
             expandButtons(silent = true)
@@ -2211,6 +2266,41 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         refreshHandles()
         Haptics.start(this)
+    }
+
+    /**
+     * Диск или стопка. Диск (владелец, 19.09.2026) — те же четыре кнопки на
+     * кольце вокруг шестерёнки (`DiskController`), стопка — прежний столбик с
+     * ручкой. Переключается тумблером в Общих на живой службе: владелец
+     * сказал «если не получится — откатим», и откат обязан быть одним
+     * движением, без пересборки.
+     */
+    private fun applyDiskMode(on: Boolean) {
+        listOfNotNull<RingButton>(floatingButton, zButton, rButton, eButton).forEach { it.ringMode = on }
+        stackSettings?.ringMode = on
+        if (on) {
+            tailHandle?.hide()
+            // На диске спрятанных нет: всё, что не убрано в точку, стоит на кольце.
+            stacked = false
+            if (!allHidden) {
+                floatingButton?.setStacked(false)
+                zButton?.setStacked(false)
+                rButton?.setStacked(false)
+                eButton?.setStacked(false)
+            }
+            disk?.setAllHidden(allHidden)
+            disk?.show()
+        } else {
+            disk?.hide()
+            stackSettings?.clearance = 0
+            // Обратно в стопку: каждая кнопка возвращается на своё сохранённое
+            // место — той же дорогой, что после поворота экрана.
+            floatingButton?.onConfigurationChanged()
+            zButton?.onConfigurationChanged()
+            rButton?.onConfigurationChanged()
+            eButton?.onConfigurationChanged()
+        }
+        refreshHandles()
     }
 
     /**
@@ -2227,6 +2317,14 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     internal fun refreshHandles() {
         if (folding) return
+        if (cachedDiskMode) {
+            // Диск: шестерёнка (или точка) стоит в его центре, ручки-галочки нет —
+            // прятать под краем и без неё есть чему.
+            stackSettings?.show(dot = allHidden)
+            tailHandle?.hide()
+            disk?.refresh()
+            return
+        }
         val (x, y) = floatingButton?.currentPosition() ?: return
         val size = floatingButton?.buttonSizePx() ?: return
 
@@ -2268,6 +2366,8 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     internal fun expandButtons(silent: Boolean = false): Boolean {
         if (!silent) touched()
+        // На диске прятаться некуда и разворачивать нечего: тап — сразу дело.
+        if (cachedDiskMode) return false
         if (!stacked) return false
         val (x, y) = floatingButton?.currentPosition() ?: return false
         stacked = false
@@ -2435,6 +2535,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         folding = true
         tailHandle?.hide()
         stackSettings?.hideAll()
+        disk?.setFolded(true)
         // И сами кнопки. Владелец показал, где ответ: «если все кнопки
         // сложить в три точки, то никаких проблем нет, складывается всё
         // отлично» — в журнале при этом «наших окон 0». Значит дело не в том,
@@ -2455,7 +2556,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0) +
                 (rButton?.windowCount() ?: 0) + (eButton?.windowCount() ?: 0) +
                 (tailHandle?.windowCount() ?: 0) + (stackSettings?.windowCount() ?: 0) +
-                (if (screenKeeper != null) 1 else 0)
+                (disk?.windowCount() ?: 0) + (if (screenKeeper != null) 1 else 0)
             app.eventLog.add("смена конфигурации: наших окон $n")
         }
     }
@@ -2478,11 +2579,15 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal val configHandler = android.os.Handler(android.os.Looper.getMainLooper())
     internal val configSettled = Runnable {
         folding = false
+        // Тарелка диска — раньше кнопок: порядок окон одного типа — порядок
+        // добавления, а стеклу положено лежать под ними.
+        disk?.setFolded(false)
         setFolded(false)
         floatingButton?.onConfigurationChanged()
         zButton?.onConfigurationChanged()
         rButton?.onConfigurationChanged()
         eButton?.onConfigurationChanged()
+        disk?.onConfigurationChanged()
         refreshHandles()
     }
 
@@ -2522,6 +2627,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         tailHandle = null
         stackSettings?.destroy()
         stackSettings = null
+        disk?.destroy()
+        disk = null
         scope.cancel()
         super.onDestroy()
     }

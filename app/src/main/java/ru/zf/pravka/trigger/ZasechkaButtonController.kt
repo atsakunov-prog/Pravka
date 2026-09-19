@@ -36,7 +36,7 @@ class ZasechkaButtonController(
     private val settings: Settings,
     private val onShortTap: () -> Unit,
     private val onLongPress: () -> Unit,
-) {
+) : RingButton {
 
     companion object {
         private const val LONG_PRESS_MS = 450L
@@ -79,6 +79,27 @@ class ZasechkaButtonController(
     private var attached = false
     /** Идёт складывание: окно снято на время перехода. */
     private var folded = false
+    /** Диск: окно кнопки целиком за краем экрана — снято из WindowManager (см. `DiskController`). */
+    private var offscreen = false
+
+    /**
+     * Кнопка на диске (`DiskController`): сама себя не ставит и не тащит —
+     * палец крутит диск ([onRingDrag]); цели [followTo] не режутся краем
+     * экрана, а окну разрешено выезжать за край (FLAG_LAYOUT_NO_LIMITS). В
+     * стопке флага нет: там за край кнопка не заходит, и прижимать её к
+     * экрану должен WindowManager, как и раньше.
+     */
+    override var ringMode: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            val p = params ?: return
+            val noLimits = WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            p.flags = if (value) p.flags or noLimits else p.flags and noLimits.inv()
+            if (attached) button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
+        }
+
+    override var onRingDrag: ((Float, Float, Float, Float, Int) -> Unit)? = null
     private var busy = false
     private var recording = false
     private var reminding = false
@@ -195,6 +216,13 @@ class ZasechkaButtonController(
     fun onConfigurationChanged() {
         cachedScreen = null
         val p = params ?: return
+        if (ringMode) {
+            // На диске место кнопки — дело диска: он перечитает свою позицию
+            // под новый экран и расставит всех. Своё сохранённое место — для стопки.
+            repositionTickerIfVisible()
+            repositionCancelBubble()
+            return
+        }
         scope.launch {
             val (xFraction, yFraction) = settings.zFabPosition(positionKey())
             applyPosition(p, xFraction, yFraction)
@@ -276,7 +304,7 @@ class ZasechkaButtonController(
     private fun applyStash() {
         val v = button ?: return
         val p = params ?: return
-        val want = !stashed && !folded && enabled
+        val want = !stashed && !folded && enabled && !offscreen
         // Кнопка должна быть видна, а её не видно — чиним вид целиком:
         // видимость, масштаб, альфу. Проверка идёт ДО выхода «нечего
         // менять», и это не перестраховка, а разбор двух подряд промахов.
@@ -306,9 +334,25 @@ class ZasechkaButtonController(
         }
     }
 
-    fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
+    override fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
-    fun buttonSizePx(): Int = buttonSize
+    /** Диск: окно целиком за краем — снять; показался край — вернуть. Своё поле, не `stashed`. */
+    override fun setOffscreen(value: Boolean) {
+        if (offscreen == value) return
+        offscreen = value
+        applyStash()
+    }
+
+    /** Снять и повесить заново — поверх окон, добавленных позже (тарелка диска). */
+    override fun reattach() {
+        val v = button ?: return
+        val p = params ?: return
+        if (!attached) return
+        runCatching { windowManager.removeView(v) }
+        runCatching { windowManager.addView(v, p) }
+    }
+
+    override fun buttonSizePx(): Int = buttonSize
 
     /** Каждый кадр догонялки: ручка и шестерёнка едут за бусами (служба ставит refreshHandles). */
     var onFrame: (() -> Unit)? = null
@@ -336,13 +380,14 @@ class ZasechkaButtonController(
     )
 
     /** Ехать к ([x], [y]); [link] — через сколько бусин от той, что тянут. */
-    fun followTo(x: Int, y: Int, settle: Boolean, link: Int = 1) {
+    override fun followTo(x: Int, y: Int, settle: Boolean, link: Int, snap: Boolean) {
         if (!enabled) return
         val view = button ?: return
         val p = params ?: return
         val (w, h) = screenSize()
-        val targetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
-        val targetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
+        // На диске цель не режется краем: кнопке положено выезжать за него.
+        val targetX = if (ringMode) x else x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
+        val targetY = if (ringMode) y else y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
         // ОТКРЕПЛЁННОЕ окно догонять нечем: view.post у view без окна не
         // выполняется вовсе — он ждёт следующего прикрепления. Владелец
         // увидел это так: убрал всё в три точки, оттащил их, и через пару
@@ -352,11 +397,18 @@ class ZasechkaButtonController(
         //
         // Поэтому спрятанная кнопка встаёт на место сразу, без резинки:
         // догонять всё равно некому, а координаты обязаны быть настоящими.
-        if (!attached) {
+        //
+        // С [snap] — то же самое для видимой кнопки: диск ведёт свою анимацию
+        // сам и ставит кнопки кадр в кадр, пружина здесь только мешала бы.
+        if (!attached || snap) {
             follower.stop()
             p.x = targetX
             p.y = targetY
             runCatching { windowManager.updateViewLayout(view, p) }
+            if (attached) {
+                repositionTickerIfVisible()
+                repositionCancelBubble()
+            }
             if (settle) savePosition(view, p)
             return
         }
@@ -738,6 +790,7 @@ class ZasechkaButtonController(
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            if (ringMode) flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             val (w, h) = screenSize()
             x = w - buttonSize
             y = (h * 0.62f).toInt()
@@ -750,8 +803,10 @@ class ZasechkaButtonController(
 
         scope.launch {
             val (xFraction, yFraction) = settings.zFabPosition(positionKey())
-            applyPosition(p, xFraction, yFraction)
-            runCatching { windowManager.updateViewLayout(container, p) }
+            if (!ringMode) {
+                applyPosition(p, xFraction, yFraction)
+                runCatching { windowManager.updateViewLayout(container, p) }
+            }
         }
         // Same size/alpha knobs as the big button - one look for the pair.
         scope.launch {
@@ -994,6 +1049,7 @@ class ZasechkaButtonController(
                     // Сжалась под пальцем (`BubbleMotion`): кнопка отвечает на касание телом.
                     BubbleMotion.press(view)
                     view.postDelayed(longPressRunnable, LONG_PRESS_MS)
+                    if (ringMode) onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_DOWN)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - startRawX
@@ -1003,7 +1059,10 @@ class ZasechkaButtonController(
                         view.removeCallbacks(longPressRunnable)
                         BubbleMotion.lift(view)
                     }
-                    if (dragging && !longPressFired) {
+                    if (dragging && !longPressFired && ringMode) {
+                        // Диск: кнопка сама не едет — палец крутит диск, диск ставит кнопку.
+                        onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_MOVE)
+                    } else if (dragging && !longPressFired) {
                         p.x = startX + dx.toInt()
                         p.y = startY + dy.toInt()
                         runCatching { windowManager.updateViewLayout(view, p) }
@@ -1017,7 +1076,13 @@ class ZasechkaButtonController(
                     pressed = null
                     BubbleMotion.release(view)
                     applyFaceAndLook()
-                    if (dragging) {
+                    if (ringMode) {
+                        // Диск: отпустили — щёлкнуть по ближайшей четверти; тап остаётся тапом.
+                        onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_UP)
+                        if (!dragging && !longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
+                            if (!busy) onShortTap()
+                        }
+                    } else if (dragging) {
                         savePosition(view, p)
                         onDragged?.invoke(p.x, p.y, true)
                     } else if (!longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {

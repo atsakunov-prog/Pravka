@@ -81,6 +81,8 @@ class StackSettingsController(
         /** Веер не модальный (оверлей чужих тапов не видит) — уходит сам. */
         private const val FAN_HOLD_MS = 7_000L
         private const val NOTE_HOLD_MS = 2_200L
+        /** Долгое нажатие на шестерёнку диска — после него её можно везти. Как у кнопок. */
+        private const val LONG_PRESS_MS = 450L
         /** Гарнитура выбрана, а её не видно среди входов — кружок бледнеет во столько. */
         private const val ABSENT_FACTOR = 0.45f
     }
@@ -130,6 +132,21 @@ class StackSettingsController(
     var onHideAll: (() -> Unit)? = null
     /** Тап по точке: вернуть всё. */
     var onShowAll: (() -> Unit)? = null
+
+    /**
+     * Голова стоит в центре диска (`DiskController`). Шестерёнку тогда везут
+     * только после долгого нажатия — владелец: «если нажимаю на кнопку
+     * настроек долго, то за неё я могу двигать диск»; короткий свайп по ней
+     * ничего не делает, тап — веер. Точку везут сразу: другого жеста у неё
+     * нет, а долгое нажатие по крошке — мучение.
+     */
+    var ringMode = false
+
+    /**
+     * На диске веер и записки раскрываются СНАРУЖИ тарелки, не поверх кнопок:
+     * на столько пикселей голова считается шире со всех сторон.
+     */
+    var clearance = 0
 
     init {
         scope.launch {
@@ -215,6 +232,19 @@ class StackSettingsController(
 
     /** Голова над «П» по центру; [buttonSize] — текущий размер кнопки. */
     fun moveTo(buttonX: Int, buttonY: Int, buttonSize: Int) {
+        syncButtonSize(buttonSize)
+        val size = headSizePx()
+        place(buttonX + (buttonSize - size) / 2, buttonY - size - dp(5))
+    }
+
+    /** Голова в центре диска: ([cx], [cy]) — центр диска в координатах окон. */
+    fun moveToCentre(cx: Int, cy: Int, buttonSize: Int) {
+        syncButtonSize(buttonSize)
+        val size = headSizePx()
+        place(cx - size / 2, cy - size / 2)
+    }
+
+    private fun syncButtonSize(buttonSize: Int) {
         if (buttonSize > 0 && buttonSize != this.buttonSize) {
             // Размер кнопок поменяли в настройках — голова пересобирается под новый.
             this.buttonSize = buttonSize
@@ -224,12 +254,16 @@ class StackSettingsController(
                 show(dot)
             }
         }
+    }
+
+    /** Поставить голову левым верхним углом в ([x], [y]), не выпуская за экран. */
+    private fun place(x: Int, y: Int) {
         val p = headParams ?: return
         val v = head ?: return
         val size = headSizePx()
         val (w, h) = screen()
-        p.x = (buttonX + (buttonSize - size) / 2).coerceIn(0, (w - size).coerceAtLeast(0))
-        p.y = (buttonY - size - dp(5)).coerceIn(0, (h - size).coerceAtLeast(0))
+        p.x = x.coerceIn(0, (w - size).coerceAtLeast(0))
+        p.y = y.coerceIn(0, (h - size).coerceAtLeast(0))
         headX = p.x
         headY = p.y
         runCatching { windowManager.updateViewLayout(v, p) }
@@ -246,6 +280,14 @@ class StackSettingsController(
         return (headX - (buttonSize - size) / 2) to (headY + size + dp(5))
     }
 
+    /** Пересобрать голову на том же месте — поверх окон, добавленных позже (тарелка диска). */
+    fun reattach() {
+        if (head == null) return
+        val dot = headIsDot
+        hideHead()
+        show(dot)
+    }
+
     private fun hideHead() {
         head?.let { runCatching { windowManager.removeView(it) } }
         head = null
@@ -259,6 +301,20 @@ class StackSettingsController(
         private var startX = 0
         private var startY = 0
         private var dragging = false
+        /** Диск: долгое нажатие сработало — шестерёнку можно везти. */
+        private var armed = false
+        /** Диск: палец поехал раньше долгого нажатия — жест пропал: ни тапа, ни переезда. */
+        private var slipped = false
+        private var pressedGlyph: View? = null
+        private val arm = Runnable {
+            armed = true
+            // Кивок и короткий отклик: «взял, можно везти».
+            pressedGlyph?.let { BubbleMotion.nod(it) }
+            Haptics.start(service)
+        }
+
+        /** Шестерёнку на диске везут только после долгого нажатия; точку — сразу. */
+        private fun needsLongPress(): Boolean = ringMode && !headIsDot
 
         override fun onTouch(v: View, event: MotionEvent): Boolean {
             if (service.isLockedIdle()) return true
@@ -271,15 +327,26 @@ class StackSettingsController(
                     startX = p.x
                     startY = p.y
                     dragging = false
+                    armed = false
+                    slipped = false
+                    pressedGlyph = glyph
                     BubbleMotion.press(glyph)
+                    if (needsLongPress()) v.postDelayed(arm, LONG_PRESS_MS)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - downX
                     val dy = event.rawY - downY
-                    if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
-                        dragging = true
-                        hideFan()
-                        BubbleMotion.lift(glyph)
+                    if (!dragging && !slipped && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                        if (needsLongPress() && !armed) {
+                            // Свайп по шестерёнке без долгого нажатия — ни переезд, ни тап.
+                            v.removeCallbacks(arm)
+                            slipped = true
+                            BubbleMotion.release(glyph)
+                        } else {
+                            dragging = true
+                            hideFan()
+                            BubbleMotion.lift(glyph)
+                        }
                     }
                     if (dragging) {
                         val size = headSizePx()
@@ -293,10 +360,12 @@ class StackSettingsController(
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.removeCallbacks(arm)
+                    pressedGlyph = null
                     BubbleMotion.release(glyph)
                     if (dragging) {
                         onDragged?.invoke(p.x, p.y, true)
-                    } else if (event.actionMasked == MotionEvent.ACTION_UP) {
+                    } else if (!slipped && !armed && event.actionMasked == MotionEvent.ACTION_UP) {
                         onTouched?.invoke()
                         if (headIsDot) onShowAll?.invoke() else toggleFan()
                     }
@@ -367,7 +436,8 @@ class StackSettingsController(
         val size = StackGeometry.gearSize(buttonSize)
         val gap = dp(8)
         val (w, h) = screen()
-        p.x = StackGeometry.fanX(hp.x, headSizePx(), Knob.values().size, size, gap, w)
+        // На диске голова считается шире на clearance с каждой стороны — веер уходит за тарелку.
+        p.x = StackGeometry.fanX(hp.x - clearance, headSizePx() + 2 * clearance, Knob.values().size, size, gap, w)
         p.y = (hp.y + (headSizePx() - size) / 2).coerceIn(0, (h - size).coerceAtLeast(0))
         if (f.parent != null) runCatching { windowManager.updateViewLayout(f, p) }
     }
@@ -623,8 +693,8 @@ class StackSettingsController(
         val noteH = v.measuredHeight
         val size = headSizePx()
         // Под веером (или под головой, если веера нет), к той же стороне.
-        val anchorX = fanParams?.x ?: hp.x
-        val anchorW = fanParams?.width ?: size
+        val anchorX = fanParams?.x ?: (hp.x - clearance)
+        val anchorW = fanParams?.width ?: (size + 2 * clearance)
         val centre = hp.x + size / 2
         val p = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -636,7 +706,7 @@ class StackSettingsController(
             gravity = Gravity.TOP or Gravity.START
             x = (if (centre < w / 2) anchorX else anchorX + anchorW - noteW)
                 .coerceIn(0, (w - noteW).coerceAtLeast(0))
-            y = (hp.y + size + dp(8)).coerceIn(0, (h - noteH).coerceAtLeast(0))
+            y = (hp.y + size + clearance + dp(8)).coerceIn(0, (h - noteH).coerceAtLeast(0))
         }
         note = v
         runCatching { windowManager.addView(v, p) }

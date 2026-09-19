@@ -525,6 +525,29 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
     )
 
     Spacer(Modifier.height(10.dp))
+    // Диск вместо стопки (владелец, 19.09.2026). Тумблер обязателен: «если не
+    // получится — откатим» должно быть одним движением, без пересборки.
+    val diskMode by settings.diskModeFlow.collectAsState(initial = true)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = diskMode,
+            onCheckedChange = { on -> scope.launch { settings.setDiskMode(on) } },
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("Диск вместо стопки", style = MaterialTheme.typography.bodyMedium)
+    }
+    HintText(
+        "Четыре кнопки по кругу вокруг шестерёнки, под ними стекло. Повёл любую " +
+            "кнопку по кругу — крутится весь диск и щёлкает по четвертям; махнул " +
+            "сильнее — провернётся дальше. Тап и долгое нажатие по кнопке — как " +
+            "были. Шестерёнка: тап — веер, долгое нажатие и потом тянуть — диск " +
+            "переезжает; у края экрана он прячется наполовину: «П» и «З» внутри, " +
+            "«Д» и «Е» за краем, докрутить их — пальцем. Полминуты без касаний " +
+            "диск сам возвращается в исходный поворот (тумблер ниже). Выключено — " +
+            "прежняя стопка с ручкой."
+    )
+
+    Spacer(Modifier.height(10.dp))
     val stackIdle by settings.stackIdleFlow.collectAsState(initial = true)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Switch(
@@ -535,7 +558,9 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
         Text("Складывать кнопки в стопку", style = MaterialTheme.typography.bodyMedium)
     }
     HintText(
-        "Полминуты без касаний остаются две: «П» и «З» — они на своих местах " +
+        "На диске — полминуты без касаний возвращают его домой: «П» и «З» " +
+            "внутрь экрана. В стопке — " +
+            "полминуты без касаний остаются две: «П» и «З» — они на своих местах " +
             "и работают как обычно, первый тап сразу пишет. «Д» и «Е» уезжают " +
             "в «З» и пропадают; вернуть их — серая ручка с галочкой под " +
             "стопкой, ею же можно свернуть и разложить когда угодно. Вторая " +

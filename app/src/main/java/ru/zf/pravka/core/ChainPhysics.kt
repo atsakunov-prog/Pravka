@@ -29,10 +29,15 @@ class Spring(position: Float, val stiffness: Float, val dampingRatio: Float) {
     var velocity: Float = 0f
         private set
 
-    /** Поставить на место без движения: скорость обнуляется. */
-    fun reset(position: Float) {
+    /**
+     * Поставить на место; [velocity] — с какой скоростью продолжать. Ноль
+     * (умолчание) — покой. Диск подхватывает здесь скорость броска: палец
+     * отпустил его на ходу, и пружина к щелчку стартует с этой скоростью, а
+     * не с нуля — иначе диск замирал бы на миг и лишь потом ехал.
+     */
+    fun reset(position: Float, velocity: Float = 0f) {
         this.position = position
-        velocity = 0f
+        this.velocity = velocity
     }
 
     /**
@@ -101,4 +106,20 @@ object ChainPhysics {
         val (k, zeta) = forLink(link)
         return Spring(position, k, zeta)
     }
+}
+
+/**
+ * Пружины диска (`trigger/DiskController.kt`). Диск — одно тело, а не бусы:
+ * кнопки на нём едут вместе, и пружина одна на поворот и две на центр.
+ * Поворот мягче связки и с чуть большим перелётом — щелчок, а не удар о
+ * стенку; переезд к краю — плотнее, докование должно читаться как «встал».
+ */
+object DiskPhysics {
+    const val TURN_STIFFNESS = 220f
+    const val TURN_DAMPING = 0.70f
+    const val SLIDE_STIFFNESS = 300f
+    const val SLIDE_DAMPING = 0.82f
+
+    fun turn(position: Float): Spring = Spring(position, TURN_STIFFNESS, TURN_DAMPING)
+    fun slide(position: Float): Spring = Spring(position, SLIDE_STIFFNESS, SLIDE_DAMPING)
 }
