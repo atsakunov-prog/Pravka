@@ -172,6 +172,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal var disk: DiskController? = null
     @Volatile internal var cachedDiskMode = false
     private var diskModeApplied = false
+    /** Автоуборка диска: полминуты без касаний — к ближайшему краю и домой. */
+    @Volatile internal var cachedDiskTuck = true
     internal var eSession: GoogleSpeechSession? = null
     @Volatile internal var eWhisperRecording = false
     @Volatile internal var eTypeInstead = false
@@ -439,6 +441,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 applyDiskMode(on)
             }
         }
+        scope.launch { app.settings.diskTuckFlow.collect { cachedDiskTuck = it } }
         scope.launch { app.settings.restSecFlow.collect { cachedRestSec = it } }
         scope.launch {
             app.settings.modeIconsFlow.collect {
@@ -2132,16 +2135,22 @@ class PravkaAccessibilityService : AccessibilityService() {
         val working = busy || googleSession != null || zSession != null ||
             rSession != null || eSession != null || DictationService.recording ||
             zWhisperRecording || rWhisperRecording || eWhisperRecording
-        val idle = cachedStackIdle && !working && !screenLocked &&
-            now - lastTouchAt >= STACK_IDLE_MS
-        if (!stacked && idle) collapseButtons()
+        val quiet = !working && !screenLocked && now - lastTouchAt >= STACK_IDLE_MS
+        if (cachedDiskMode) {
+            // Диск: полминуты без касаний — к ближайшему краю и домой, свой
+            // тумблер («Автоматически убирать диск к краю»); стопочный его
+            // не касается.
+            if (cachedDiskTuck && quiet) disk?.tuck()
+        } else if (!stacked && cachedStackIdle && quiet) {
+            collapseButtons()
+        }
         // Самолечение: при старте службы позиции кнопок могло ещё не
         // быть, и стрелка тогда не нарисовалась. Тик её донесёт. Он же
         // вернёт кнопки, если складывание почему-то не доиграло свой
         // configSettled: остаться без кнопок насовсем нельзя. В стопке —
         // когда не складываем на этом тике; на диске — всегда: диск не
         // складывается, `stacked` у него не поднимается никогда.
-        if (cachedDiskMode || stacked || !idle) {
+        if (cachedDiskMode || stacked || !(cachedStackIdle && quiet)) {
             if (!folding) setFolded(false)
             refreshHandles()
         }
@@ -2176,8 +2185,8 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     internal fun collapseButtons() {
         if (cachedDiskMode) {
-            // Диск не складывается — возвращается домой: «П» и «З» внутрь экрана.
-            disk?.goHome()
+            // Диск не складывается — убирается к краю и домой: «П» и «З» внутрь экрана.
+            disk?.tuck()
             return
         }
         if (stacked) return

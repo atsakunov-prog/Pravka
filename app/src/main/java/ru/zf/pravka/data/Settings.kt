@@ -60,6 +60,7 @@ class Settings(private val context: Context) {
         private val KEY_Z_ENABLED = booleanPreferencesKey("z_enabled")
         private val KEY_STACK_IDLE = booleanPreferencesKey("buttons_stack_idle")
         private val KEY_DISK = booleanPreferencesKey("buttons_disk")
+        private val KEY_DISK_TUCK = booleanPreferencesKey("disk_auto_tuck")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -380,6 +381,18 @@ class Settings(private val context: Context) {
     val diskModeFlow = context.dataStore.data.map { it[KEY_DISK] ?: true }
     suspend fun setDiskMode(value: Boolean) {
         context.dataStore.edit { it[KEY_DISK] = value }
+    }
+
+    /**
+     * Автоуборка диска (владелец, 19.09.2026): «что-то написал в еде, и через
+     * 30 секунд диск пришёл к ближайшему краю и прилепился, так что остались
+     * только засечка и правка». Полминуты без касаний — к ближайшему краю и
+     * домой. Тумблер обязателен: выдвинутый руками диск, который сам уезжает,
+     * без объяснения выглядит как поломка.
+     */
+    val diskTuckFlow = context.dataStore.data.map { it[KEY_DISK_TUCK] ?: true }
+    suspend fun setDiskTuck(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK_TUCK] = value }
     }
 
     /**

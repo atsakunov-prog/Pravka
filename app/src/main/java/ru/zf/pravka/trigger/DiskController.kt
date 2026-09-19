@@ -89,6 +89,8 @@ class DiskController(
         private const val FLICK_PAUSE_MS = 90L
         /** Второй тап по стеклу не позже этого — двойной: веер быстрых настроек. */
         private const val DOUBLE_TAP_MS = 320L
+        /** Долгое нажатие на стекло — выдвинуть диск целиком (или убрать обратно). Как у кнопок. */
+        private const val LONG_PRESS_MS = 450L
         /**
          * Палец, о котором столько не докладывали, — призрак: окно пропало
          * из-под него без отпускания (уехало за край, сложился экран), и
@@ -171,7 +173,7 @@ class DiskController(
         scope.launch {
             settings.fabAlphaFlow.collect {
                 idleAlpha = it
-                plate?.alpha = plateAlpha()
+                plate?.setLook(plateAlpha(), idleAlpha)
             }
         }
     }
@@ -318,14 +320,18 @@ class DiskController(
         if (!allHidden) {
             val live = liveSlots()
             val margin = dp(OFFSCREEN_MARGIN_DP)
+            val angles = FloatArray(live.size)
             live.forEachIndexed { i, slot ->
                 val angle = DiskGeometry.slotAngle(i, live.size, f, rotation)
+                angles[i] = angle
                 val (x, y) = DiskGeometry.slotOrigin(cx, cy, d.ring, angle, d.button)
                 // Сначала место, потом окно: снятое окно ставится на место в
                 // параметрах и вешается уже там, где надо.
                 slot.button.followTo(x, y, settle = false, link = 1, snap = true)
                 slot.button.setOffscreen(!DiskGeometry.onScreen(x, y, d.button, w, h, margin))
             }
+            // Шкала на стекле крутится вместе с кнопками.
+            plate?.setMarks(angles, rotation)
         }
         placeHead()
         placePlate(d)
@@ -615,6 +621,14 @@ class DiskController(
         private var lastTapAt = 0L
         /** В этом касании был щипок — одиночная логика стекла молчит до следующего DOWN. */
         private var pinched = false
+        /** Долгое нажатие сработало: диск выдвинулся или убрался, тап не считается. */
+        private var held = false
+        private val hold = Runnable {
+            if (pinch || pinched || dragging) return@Runnable
+            held = true
+            Haptics.start(service)
+            togglePullOut()
+        }
         private val slop = ViewConfiguration.get(service).scaledTouchSlop
 
         private fun key(pointerId: Int): String = "plate:$pointerId"
@@ -644,9 +658,12 @@ class DiskController(
                     startCy = cy
                     dragging = false
                     pinched = false
+                    held = false
+                    v.postDelayed(hold, LONG_PRESS_MS)
                     finger(key(event.getPointerId(0)), event.rawX, event.rawY, MotionEvent.ACTION_DOWN)
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
+                    v.removeCallbacks(hold)
                     val i = event.actionIndex
                     if (!inside(v, event.getX(i), event.getY(i))) return true
                     finger(key(event.getPointerId(i)), rawX(event, i), rawY(event, i), MotionEvent.ACTION_POINTER_DOWN)
@@ -656,14 +673,18 @@ class DiskController(
                         finger(key(event.getPointerId(i)), rawX(event, i), rawY(event, i), MotionEvent.ACTION_MOVE)
                     }
                     if (pinch) {
+                        v.removeCallbacks(hold)
                         pinched = true
                         dragging = false
                         return true
                     }
-                    if (pinched) return true
+                    if (pinched || held) return true
                     val dx = event.rawX - downX
                     val dy = event.rawY - downY
-                    if (!dragging && (abs(dx) > slop || abs(dy) > slop)) dragging = true
+                    if (!dragging && (abs(dx) > slop || abs(dy) > slop)) {
+                        dragging = true
+                        v.removeCallbacks(hold)
+                    }
                     if (dragging) slide(startCx + dx, startCy + dy, dropped = false)
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
@@ -671,10 +692,11 @@ class DiskController(
                     finger(key(event.getPointerId(i)), rawX(event, i), rawY(event, i), MotionEvent.ACTION_POINTER_UP)
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.removeCallbacks(hold)
                     for (i in 0 until event.pointerCount) {
                         finger(key(event.getPointerId(i)), rawX(event, i), rawY(event, i), MotionEvent.ACTION_UP)
                     }
-                    if (pinched) return true
+                    if (pinched || held) return true
                     if (dragging) {
                         slide(cx, cy, dropped = true)
                     } else if (event.actionMasked == MotionEvent.ACTION_UP) {
@@ -693,16 +715,47 @@ class DiskController(
     }
 
     /**
-     * Домой: «П» и «З» внутрь, коротким путём. Зовётся тиком службы по
-     * простою (замена складыванию стопки); уже дома или под пальцем — ничего.
+     * Убраться: к ближайшему краю и домой — «П» и «З» внутрь, остальное за
+     * край. Зовётся тиком службы по простою при тумблере «Автоматически
+     * убирать диск к краю» (владелец: «через 30 секунд диск пришёл к
+     * ближайшему краю и прилепился, так что остались только засечка и
+     * правка»). Уже там или под пальцем — ничего.
      */
-    fun goHome() {
+    fun tuck() {
         if (!shown || !placed || folded || allHidden) return
-        if (animating || turning != null || sliding) return
+        if (animating || turning != null || sliding || pinch) return
+        val d = dims()
+        val (w, h) = frame()
+        val f = facing ?: DiskGeometry.facing(cx, w)
+        val edge = if (f == 0f) 0f else w.toFloat()
+        val (dx, dy) = DiskGeometry.dock(edge, cy, w, h, d.plate, d.inset)
         val target = DiskGeometry.home(rotation)
-        val (dx, dy) = docked()
         if (abs(target - rotation) < 0.5f && abs(dx - cx) < 0.5f && abs(dy - cy) < 0.5f) return
         animateTo(target, dx, dy)
+    }
+
+    /**
+     * Выдвинуть диск целиком на экран — или, если он уже целиком виден,
+     * убрать к краю (поворот не трогая). Долгое нажатие на стекло; владелец
+     * согласился на «выдвижение по удержанию»: докованный диск показывает две
+     * кнопки, а за третьей иначе надо крутить.
+     */
+    private fun togglePullOut() {
+        if (!shown || !placed || folded || allHidden) return
+        onTouched?.invoke()
+        val d = dims()
+        val (w, h) = frame()
+        val f = facing ?: DiskGeometry.facing(cx, w)
+        val whole = cx - d.plate >= 0f && cx + d.plate <= w
+        val tx = when {
+            whole -> if (f == 0f) 0f else w.toFloat()
+            f == 0f -> d.plate + d.gap
+            else -> w - d.plate - d.gap
+        }
+        val (dx, dy) = DiskGeometry.dock(tx, cy, w, h, d.plate, d.inset)
+        stopMotion()
+        turning = null
+        animateTo(DiskGeometry.snap(rotation, step()), dx, dy)
     }
 
     // ---- Пружины ----
@@ -773,8 +826,8 @@ class DiskController(
         if (plate != null || allHidden || folded) return
         val d = dims()
         val size = (d.plate * 2).roundToInt()
-        val v = PlateView(service).apply {
-            alpha = plateAlpha()
+        val v = PlateView(service, density).apply {
+            setLook(plateAlpha(), idleAlpha)
             setOnTouchListener(PlateTouch())
         }
         // Стекло трогаемое: за него везут диск. Углы квадрата окна вне круга
@@ -832,29 +885,86 @@ class DiskController(
     }
 
     /**
-     * Стекло диска: круг чернил, к краю плотнее, без обводки. Рисуется от
+     * Стекло диска: круг чернил, к краю плотнее, без обводки, и шкала по
+     * ободу — метка на каждой кнопке и мелкие через 30°, крутится вместе с
+     * диском (владелец: «метки на диске — это будет красиво»). Рисуется от
      * центра вида, как все глифы стопки — центрируется по построению.
+     *
+     * Прозрачность — в красках, а не на виде: стекло стоит в 0,45 от
+     * прозрачности кнопок, а метки — в неё же целиком, иначе на общей альфе
+     * вида они пропадали бы вместе со стеклом.
      */
-    private class PlateView(context: Context) : View(context) {
+    private class PlateView(context: Context, private val density: Float) : View(context) {
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val major = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = PAPER
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeWidth = 1.5f * density
+        }
+        private val minor = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = PAPER
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeWidth = 1f * density
+        }
+        private var fillAlpha = 0.16f
         private var shaderFor = 0f
+        private var shaderAlpha = -1f
+        private var marks = FloatArray(0)
+        private var turn = 0f
+
+        fun setLook(fillAlpha: Float, markAlpha: Float) {
+            this.fillAlpha = fillAlpha
+            major.alpha = (255 * markAlpha).toInt().coerceIn(0, 255)
+            minor.alpha = (255 * markAlpha * 0.5f).toInt().coerceIn(0, 255)
+            invalidate()
+        }
+
+        /** Углы кнопок (большие метки) и поворот диска (от него — мелкие). */
+        fun setMarks(angles: FloatArray, rotation: Float) {
+            marks = angles
+            turn = rotation
+            invalidate()
+        }
 
         override fun onDraw(canvas: Canvas) {
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
+            val cx = w / 2f
+            val cy = h / 2f
             val r = minOf(w, h) / 2f
-            if (shaderFor != r) {
+            if (shaderFor != r || shaderAlpha != fillAlpha) {
                 shaderFor = r
-                val centre = (GLASS and 0x00FFFFFF) or ((255 * CENTRE_ALPHA_FACTOR).toInt() shl 24)
+                shaderAlpha = fillAlpha
+                val rgb = GLASS and 0x00FFFFFF
+                val edge = ((255 * fillAlpha).toInt().coerceIn(0, 255) shl 24) or rgb
+                val centre = ((255 * fillAlpha * CENTRE_ALPHA_FACTOR).toInt().coerceIn(0, 255) shl 24) or rgb
                 fill.shader = RadialGradient(
-                    w / 2f, h / 2f, r,
-                    intArrayOf(centre, centre, GLASS),
+                    cx, cy, r,
+                    intArrayOf(centre, centre, edge),
                     floatArrayOf(0f, 0.55f, 1f),
                     Shader.TileMode.CLAMP,
                 )
             }
-            canvas.drawCircle(w / 2f, h / 2f, r, fill)
+            canvas.drawCircle(cx, cy, r, fill)
+            // Шкала: большие метки на кнопках, мелкие через 30° от поворота
+            // диска — там, где нет большой.
+            val outer = r - 3f * density
+            for (a in marks) tick(canvas, cx, cy, a, outer, outer - 6f * density, major)
+            for (k in 0 until 12) {
+                val a = DiskGeometry.norm(turn + k * 30f)
+                if (marks.any { abs(DiskGeometry.delta(it, a)) < 1f }) continue
+                tick(canvas, cx, cy, a, outer, outer - 3f * density, minor)
+            }
+        }
+
+        private fun tick(canvas: Canvas, cx: Float, cy: Float, deg: Float, from: Float, to: Float, paint: Paint) {
+            val a = Math.toRadians(deg.toDouble())
+            val dx = Math.cos(a).toFloat()
+            val dy = Math.sin(a).toFloat()
+            canvas.drawLine(cx + dx * from, cy + dy * from, cx + dx * to, cy + dy * to, paint)
         }
     }
 }
