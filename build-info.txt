@@ -1,0 +1,7 @@
+pravka=2.0.462
+versionName=2.0.462
+apk=pravka-debug.apk
+versionCode=462
+commit=379aeebab3caeb7fc47b021bf1bb19a6ff3ad619
+branch=pravka
+builtAt=2026-09-19T16:01Z
