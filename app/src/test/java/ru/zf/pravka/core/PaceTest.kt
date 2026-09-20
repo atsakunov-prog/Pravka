@@ -115,6 +115,45 @@ class PaceTest {
     }
 
     @Test
+    fun `заводская прикидка отдаёт ровно ту прямую, что в неё положили`() {
+        val acc = Pace.prior(1_400.0, 19.0)
+        val l = Pace.line(acc)!!
+        assertTrue("прикидка должна быть прямой, иначе короткие получат время длинных", l.straight)
+        assertEquals(1_400.0, l.baseMs, 1.0)
+        assertEquals(19.0, l.msPerChar, 0.01)
+        assertEquals(1_400L + 19 * 150, Pace.estimate(acc, 150))
+        assertTrue(l.n >= Pace.MIN_FOR_LINE)
+        // Пустая дорога с прикидкой — уже не вслепую.
+        assertEquals(Pace.estimate(acc, 150), Pace.estimate(Pace.mix(null, acc), 150))
+        assertTrue(Pace.estimate(Pace.mix(null, acc), 900) > Pace.BLIND_MS)
+    }
+
+    @Test
+    fun `прикидка тает и к дюжине своих замеров исчезает совсем`() {
+        // Прикидка «медленно» (4 с + 20 мс на знак) против настоящих
+        // 1 с + 2 мс: нарочно мимо, чтобы было видно, кто кого тянет.
+        val guess = Pace.prior(4_000.0, 20.0)
+        var own = Pace.Acc()
+        fun seen(chars: Int) = Pace.estimate(Pace.mix(own, guess), chars)
+        val blind = seen(300)
+        assertEquals("пока замеров нет — живём прикидкой", 10_000.0, blind.toDouble(), 1.0)
+
+        repeat(4) { i -> own = Pace.add(own, 100 + i * 200, 1_000L + 2 * (100 + i * 200)) }
+        val early = seen(300)
+        assertTrue("первые замеры уже сдвинули оценку", early < blind * 0.8)
+
+        repeat(12) { i -> own = Pace.add(own, 100 + (i % 6) * 200, 1_000L + 2 * (100 + (i % 6) * 200)) }
+        val settled = seen(300)
+        // Дюжина своих замеров — прикидки в оценке больше нет вообще.
+        assertEquals("осталась ровно своя прямая", 1_600.0, settled.toDouble(), 60.0)
+        assertEquals(Pace.estimate(own, 300), settled)
+        // И число замеров — своё, а не своё плюс заводское.
+        assertTrue(own.n > Pace.PRIOR_FADE_AT)
+        // Чуть меньше шестнадцати: каждый новый замер приглушает прошлые.
+        assertEquals(16.0, own.n, 1.5)
+    }
+
+    @Test
     fun `без ожидания дуги нет`() {
         assertEquals(0f, Pace.progress(1_000, 0), 0f)
         assertEquals(0f, Pace.progress(-5, 4_000), 0f)

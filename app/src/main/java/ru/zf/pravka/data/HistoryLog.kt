@@ -133,6 +133,37 @@ class HistoryLog(private val context: Context) {
         }.getOrElse { emptyList() }
     }
 
+    /** Один запрос глазами дуги прогресса: чем, на скольких знаках, сколько шёл. */
+    data class Timing(val mode: String, val model: String, val chars: Int, val ms: Long)
+
+    /**
+     * Последние [limit] удачных запросов — только замеры, без текстов.
+     * Отсюда дуга прогресса берёт своё прошлое при первом запуске после
+     * обновления: журнал ведётся с июля, и начинать учиться заново, имея
+     * полторы тысячи записей, было бы глупо (владелец, 20.09.2026: «ты не
+     * взял всю статистику, а только начал её собирать»).
+     *
+     * Читаем построчно и держим хвост: файл — мегабайты текста правок, а
+     * нужны с каждой строки четыре числа. Упавшие запросы пропускаем — время
+     * ошибки это время сети, а не время модели.
+     */
+    fun readTimings(limit: Int): List<Timing> {
+        if (!file.exists() || limit <= 0) return emptyList()
+        val tail = ArrayDeque<Timing>()
+        runCatching {
+            file.forEachLine { line ->
+                val o = runCatching { JSONObject(line) }.getOrNull() ?: return@forEachLine
+                if (o.has("error")) return@forEachLine
+                val model = o.optString("model")
+                val ms = o.optLong("latency_ms", 0L)
+                if (model.isBlank() || ms <= 0L) return@forEachLine
+                tail.addLast(Timing(o.optString("mode"), model, o.optString("input").length, ms))
+                if (tail.size > limit) tail.removeFirst()
+            }
+        }
+        return tail.toList()
+    }
+
     /** Что делал сам владелец в приложении: режим, день, деньги. Без текстов. */
     data class Meta(val date: String, val mode: String, val costUsd: Double, val changed: Boolean)
 

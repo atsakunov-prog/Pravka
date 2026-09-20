@@ -98,8 +98,13 @@ class DiskController(
         private const val SOCKET_STEP_DEG = 0.25f
         /** Сколько замкнувшаяся дуга висит, прежде чем погаснуть. */
         private const val WORK_FADE_MS = 700L
-        /** Толщина дуги прогресса — доля радиуса тарелки; заметно, но не обод. */
-        private const val WORK_WIDTH_FACTOR = 0.035f
+        /**
+         * Толщина дуги прогресса — доля радиуса тарелки. Было 0,035, и
+         * владелец (20.09.2026): «может, сделать чуть пошире? А то такое
+         * ощущение, что они состоят из двух тонких полосок». На тонкой полосе
+         * поперечный профиль не читается — выпуклости нужна ширина.
+         */
+        private const val WORK_WIDTH_FACTOR = 0.055f
         /**
          * Стрелка на кромке: насколько она вдвинута внутрь и какого размера —
          * доли радиуса. Владелец (20.09.2026): «стрелку на краю диска
@@ -1479,51 +1484,67 @@ class DiskController(
          * что со стороны лица: у правого края идём от верха ПРОТИВ часовой.
          */
         private fun drawWork(canvas: Canvas, cx: Float, cy: Float, r: Float) {
-            val width = (r * WORK_WIDTH_FACTOR).coerceAtLeast(2f)
-            val radius = r - width / 2f
-            if (radius <= 0f) return
-            arcBox.set(cx - radius, cy - radius, cx + radius, cy + radius)
+            val width = (r * WORK_WIDTH_FACTOR).coerceAtLeast(3f)
+            if (r - width <= 0f) return
             // Ноль градусов у Android — вправо, дуга нужна от верха: −90°.
             val full = if (atEdge) 180f else 360f
             val sense = if (atEdge && facing >= 90f && facing <= 270f) -1f else 1f
             val alpha = (255 * workOn).toInt().coerceIn(0, 255)
+            val swept = sense * full * workProgress
 
             // Канавка на весь путь: полоса едет ПО ЖЕЛОБУ, а не висит в
             // воздухе. Без неё видно только сколько прошло и не видно,
             // сколько осталось.
+            val mid = r - width / 2f
             arc.shader = null
             arc.strokeCap = Paint.Cap.ROUND
             arc.strokeWidth = width
             arc.color = DiskLook.black(0.16f)
             arc.alpha = (alpha * 0.16f).toInt().coerceIn(0, 255)
+            arcBox.set(cx - mid, cy - mid, cx + mid, cy + mid)
             canvas.drawArc(arcBox, -90f, sense * full, false, arc)
 
-            // Сама полоса — в материале кромки: продольный градиент, светлее
-            // сверху, глубже снизу, как фаска и кнопки (владелец: «прогресс
-            // бар какой-то простой, я бы его сделал в стиле края диска»).
-            arc.color = -0x1  // белый: цвет приходит шейдером
-            arc.alpha = alpha
+            // Сама полоса — кольцами от внешнего края к внутреннему, каждое
+            // своего тона (`DiskLook.bandTone`): получается ОДНА выпуклая
+            // полоса, а не цветная дуга с белой ниткой поверх.
+            //
+            // Пока дуга гаснет, она полупрозрачна, и кольца на нахлёстах
+            // складывались бы в полосатость. Поэтому на время затухания вся
+            // полоса собирается в слое и гасится целиком; на полной яркости
+            // слой не нужен — лишний буфер каждый кадр.
+            val layer = if (alpha < 250) canvas.saveLayerAlpha(null, alpha) else -1
+            val slices = DiskLook.BAND_SLICES
+            arc.strokeWidth = width / slices * 1.7f
+            for (i in 0 until slices) {
+                val t = (i + 0.5f) / slices
+                val rad = r - width * t
+                if (rad <= 0f) continue
+                val tone = DiskLook.bandTone(t)
+                arc.color = if (tone >= 0f) lighten(workColour, tone) else darken(workColour, -tone)
+                arc.alpha = 255
+                arcBox.set(cx - rad, cy - rad, cx + rad, cy + rad)
+                canvas.drawArc(arcBox, -90f, swept, false, arc)
+            }
+
+            // Продольный свет на всю полосу разом: верх дуги светлее, низ
+            // глубже — та же сцена, что у фаски стекла и у кнопок.
+            arc.color = -0x1
+            arc.alpha = 255
+            arc.strokeWidth = width
             arc.shader = LinearGradient(
-                cx, cy - radius, cx, cy + radius,
+                cx, cy - mid, cx, cy + mid,
                 intArrayOf(
-                    lighten(workColour, 0.35f),
-                    workColour,
-                    darken(workColour, 0.25f),
+                    DiskLook.white(DiskLook.BAND_SHEEN),
+                    DiskLook.white(0f),
+                    DiskLook.black(DiskLook.BAND_FOOT),
                 ),
                 floatArrayOf(0f, 0.5f, 1f),
                 Shader.TileMode.CLAMP,
             )
-            canvas.drawArc(arcBox, -90f, sense * full * workProgress, false, arc)
-
-            // Блик по верхней половине полосы — тонкая нить, сдвинутая
-            // наружу: та же фаска, что по кромке стекла.
+            arcBox.set(cx - mid, cy - mid, cx + mid, cy + mid)
+            canvas.drawArc(arcBox, -90f, swept, false, arc)
             arc.shader = null
-            arc.strokeWidth = width * 0.3f
-            arc.color = DiskLook.white(0.5f)
-            arc.alpha = (alpha * 0.5f).toInt().coerceIn(0, 255)
-            val glossR = radius + width * 0.28f
-            arcBox.set(cx - glossR, cy - glossR, cx + glossR, cy + glossR)
-            canvas.drawArc(arcBox, -90f, sense * full * workProgress, false, arc)
+            if (layer >= 0) canvas.restoreToCount(layer)
         }
 
         private fun lighten(colour: Int, k: Float): Int = mix(colour, 0xFFFFFF, k)

@@ -64,6 +64,13 @@ class PravkaApp : Application() {
             val expect = paceStore.expect(route, model, chars)
             workWatcher?.invoke(route, expect, false, true)
         }
+        // Прошлое дуги — из журнала правок, один раз после обновления
+        // (владелец, 20.09.2026: «ты не взял всю статистику, а только начал её
+        // собирать. Посмотри, в аппе есть логи»). Журнал — мегабайты, поэтому
+        // не на старте службы и не на главном потоке: фоновая корутина.
+        appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { paceStore.seedFromHistory(historyLog) }
+        }
         claudeProvider.workDone = { route, model, chars, ms, ok ->
             // Замер пишем только с удачного ответа: время упавшего запроса —
             // это время сети, а не время модели.
