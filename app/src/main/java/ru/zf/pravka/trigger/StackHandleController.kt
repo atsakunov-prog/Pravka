@@ -86,7 +86,7 @@ class StackHandleController(
             val v = HandleGlyph(service).apply {
                 alpha = idleAlpha
                 elevation = dp(3).toFloat()
-                background = GradientDrawable().apply {
+                background = BubbleSkin().apply {
                     shape = GradientDrawable.OVAL
                     setColor(GREY)
                 }

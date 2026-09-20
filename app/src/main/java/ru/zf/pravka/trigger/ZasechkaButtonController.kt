@@ -524,7 +524,7 @@ class ZasechkaButtonController(
             setTextColor(PAPER)
             textSize = 14f
             maxLines = 3
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 cornerRadius = dp(14).toFloat()
                 setColor(if (ok) AMBER else NOTE_BAD)
             }
@@ -579,7 +579,7 @@ class ZasechkaButtonController(
                 text = item.label
                 setTextColor(PAPER)
                 textSize = 15f
-                background = GradientDrawable().apply {
+                background = BubbleSkin().apply {
                     cornerRadius = dp(18).toFloat()
                     setColor(if (item.accent) INK else AMBER)
                 }
@@ -648,7 +648,7 @@ class ZasechkaButtonController(
         hideMenu()
         val column = android.widget.LinearLayout(service).apply {
             orientation = android.widget.LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 cornerRadius = dp(16).toFloat()
                 setColor(AMBER)
             }
@@ -765,7 +765,7 @@ class ZasechkaButtonController(
     private fun create() {
         val container = FrameLayout(service)
         // Не плоский кружок: выпуклая клавиша со светом сверху (`BubbleSkin`).
-        val bg = BubbleSkin().apply { setColor(AMBER) }
+        val bg = BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(AMBER) }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()
@@ -862,7 +862,7 @@ class ZasechkaButtonController(
     @SuppressLint("ClickableViewAccessibility")
     private fun createTicker() {
         val pill = FrameLayout(service)
-        pill.background = GradientDrawable().apply {
+        pill.background = BubbleSkin().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = buttonSize / 2f
             setColor(AMBER)
@@ -931,7 +931,7 @@ class ZasechkaButtonController(
         hideTicker()
         val row = android.widget.LinearLayout(service).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
                 setColor(AMBER)

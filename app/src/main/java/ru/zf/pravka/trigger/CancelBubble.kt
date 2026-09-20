@@ -43,7 +43,7 @@ class CancelBubble(private val context: Context, private val windowManager: Wind
             text = "отмена"
             setTextColor(PAPER)
             textSize = 13f
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 cornerRadius = dp(16).toFloat()
                 setColor(GREY)
             }

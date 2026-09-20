@@ -255,7 +255,7 @@ class StackSettingsController(
         val glyph: View = if (dot) {
             ImageView(service).apply {
                 setImageResource(R.drawable.ic_fab_glyph)
-                background = BubbleSkin().apply { setColor(FloatingButtonController.ACCENT) }
+                background = BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(FloatingButtonController.ACCENT) }
             }
         } else {
             GearGlyph(service)
@@ -351,7 +351,7 @@ class StackSettingsController(
         head?.alpha = idleAlpha
         val gear = headGlyph as? GearGlyph ?: return
         val plain = ringMode
-        gear.background = if (plain) null else BubbleSkin().apply { setColor(GREY) }
+        gear.background = if (plain) null else BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(GREY) }
         gear.elevation = if (plain) 0f else dp(3).toFloat()
         gear.setInk(if (plain) DiskLook.gearInk(glassLight) else PAPER)
     }
@@ -600,7 +600,7 @@ class StackSettingsController(
     @SuppressLint("ClickableViewAccessibility")
     private fun makeKnob(knob: Knob, size: Int): FrameLayout {
         val bubble = FrameLayout(service)
-        bubble.background = BubbleSkin().apply { setColor(GREY) }
+        bubble.background = BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(GREY) }
         bubble.elevation = dp(3).toFloat()
         val inset = size / 5
         val glyph: View = when (knob) {
@@ -813,7 +813,7 @@ class StackSettingsController(
             setTextColor(PAPER)
             textSize = 13f
             maxLines = 3
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 cornerRadius = dp(14).toFloat()
                 setColor(if (bad) NOTE_BAD else NOTE_INK)
             }

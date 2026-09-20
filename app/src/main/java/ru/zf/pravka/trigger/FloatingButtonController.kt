@@ -510,7 +510,7 @@ class FloatingButtonController(
                     text = item.label
                     setTextColor(PAPER)
                     textSize = 15f
-                    background = GradientDrawable().apply {
+                    background = BubbleSkin().apply {
                         cornerRadius = dp(18).toFloat()
                         setColor(item.color)
                     }
@@ -564,7 +564,7 @@ class FloatingButtonController(
     @SuppressLint("ClickableViewAccessibility")
     private fun createTicker() {
         val pill = FrameLayout(service)
-        pill.background = GradientDrawable().apply {
+        pill.background = BubbleSkin().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = buttonSize / 2f
             setColor(ACCENT)
@@ -722,7 +722,7 @@ class FloatingButtonController(
         val container = FrameLayout(service)
         // Не плоский кружок: выпуклая клавиша со светом сверху (`BubbleSkin`).
         // Наследник GradientDrawable — поле и все setColor по состояниям те же.
-        val bg = BubbleSkin().apply { setColor(ACCENT) }
+        val bg = BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(ACCENT) }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()

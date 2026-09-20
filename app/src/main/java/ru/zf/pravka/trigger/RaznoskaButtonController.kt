@@ -459,7 +459,7 @@ class RaznoskaButtonController(
     @SuppressLint("ClickableViewAccessibility")
     private fun createTicker() {
         val pill = FrameLayout(service)
-        pill.background = GradientDrawable().apply {
+        pill.background = BubbleSkin().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = buttonSize / 2f
             setColor(INK)
@@ -538,7 +538,7 @@ class RaznoskaButtonController(
                 text = item.label
                 setTextColor(PAPER)
                 textSize = 15f
-                background = GradientDrawable().apply {
+                background = BubbleSkin().apply {
                     cornerRadius = dp(18).toFloat()
                     setColor(INK)
                 }
@@ -623,7 +623,7 @@ class RaznoskaButtonController(
         val chosen = shown.filter { !it.sent }.map { it.id }.toMutableSet()
         val sheet = LinearLayout(service).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
                 setColor(INK)
@@ -652,7 +652,7 @@ class RaznoskaButtonController(
                 android.graphics.Typeface.SANS_SERIF,
                 android.graphics.Typeface.BOLD,
             )
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 cornerRadius = dp(16).toFloat()
                 setColor(PAPER)
             }
@@ -812,7 +812,7 @@ class RaznoskaButtonController(
 
     /** Отмеченный кружок - залитый бумагой, снятый - только обводка. */
     private fun paintCheck(view: TextView, on: Boolean) {
-        view.background = GradientDrawable().apply {
+        view.background = BubbleSkin().apply {
             shape = GradientDrawable.OVAL
             if (on) {
                 setColor(PAPER)
@@ -850,7 +850,7 @@ class RaznoskaButtonController(
         val row = LinearLayout(service).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
                 setColor(INK)
@@ -879,7 +879,7 @@ class RaznoskaButtonController(
                         android.graphics.Typeface.SANS_SERIF,
                         android.graphics.Typeface.BOLD,
                     )
-                    background = GradientDrawable().apply {
+                    background = BubbleSkin().apply {
                         cornerRadius = dp(14).toFloat()
                         setColor(PAPER)
                     }
@@ -921,7 +921,7 @@ class RaznoskaButtonController(
         hideTicker()
         val row = LinearLayout(service).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
                 setColor(INK)
@@ -1064,7 +1064,7 @@ class RaznoskaButtonController(
     private fun create() {
         val container = FrameLayout(service)
         // Не плоский кружок: выпуклая клавиша со светом сверху (`BubbleSkin`).
-        val bg = BubbleSkin().apply { setColor(INK) }
+        val bg = BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(INK) }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()

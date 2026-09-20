@@ -4,27 +4,39 @@ import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RadialGradient
+import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import ru.zf.pravka.core.DiskLook
 
 /**
- * Шкурка плавающей кнопки: выпуклая клавиша вместо плоского кружка. Владелец
- * (19.09.2026, ночь): «может, кнопки на нём пореалистичнее?»
+ * Шкурка стекла: выпуклая клавиша вместо плоского кружка и такая же плашка
+ * вместо плоского прямоугольника. Владелец (19.09.2026, ночь): «может, кнопки
+ * на нём пореалистичнее?» — и следом: «кнопки очень красивые. Сделаешь тогда
+ * их характеристики и у плашек».
  *
  * Свет — сверху, как у тени под стеклом диска: блик у верхнего края, затенение
  * у нижнего, по кромке тонкая фаска — светлая сверху, тёмная снизу. Три слоя
  * поверх заливки, ни одного лишнего окна и ни одного нового поля состояния.
  *
+ * Круг и плашка светятся по-разному, и это не лень, а форма. У кружка блик
+ * радиальный: центр градиента вынесен ЗА край, поэтому ярче всего оказывается
+ * сама кромка, а не пятно посередине — пятно читалось бы как стеклянный шарик,
+ * кромка как клавиша. У плашки блик продольный: она широкая, и радиальное
+ * пятно на ней выглядело бы фонарём, а ровная полоса сверху — стеклом.
+ *
  * Почему наследник `GradientDrawable`, а не свой `Drawable`: четыре
  * контроллера кнопок держат заливку полем `GradientDrawable?` и красят её
- * `setColor()` на каждое состояние (пишу · слушаю · напоминаю). Наследник
- * встаёт на то же поле и слышит те же вызовы — объём получают все состояния
- * разом, и ни одному контроллеру не пришлось переучиваться.
+ * `setColor()` на каждое состояние (пишу · слушаю · напоминаю), а плашки
+ * собираются тем же `.apply { cornerRadius = …; setColor(…) }`. Наследник
+ * встаёт на то же место и слышит те же вызовы — объём получают все состояния
+ * разом, и ни одному контроллеру не пришлось переучиваться. Форму он тоже
+ * берёт у себя же (`shape`, `cornerRadius`), поэтому заводское — прямоугольник,
+ * как у родителя, а кружки просят `shape = OVAL` явно.
  *
- * Тень наружу кнопка отбросить не может: её окно ровно по кружку, и всё, что
- * вылезет за края, обрежется. Поэтому объём — целиком внутри круга; тень под
- * диском рисует стекло (`DiskController.PlateView`), у него окно шире.
+ * Тень наружу ни кнопка, ни плашка отбросить не могут: окно ровно по ним, и
+ * всё, что вылезет за края, обрежется. Поэтому объём — целиком внутри фигуры;
+ * тень под диском рисует стекло (`DiskController.PlateView`), у него окно шире.
  */
 class BubbleSkin : GradientDrawable() {
 
@@ -36,18 +48,29 @@ class BubbleSkin : GradientDrawable() {
         /** Фаска по кромке: светлая дуга сверху, тёмная снизу. */
         private const val RIM_LIGHT = 0.34f
         private const val RIM_SHADE = 0.22f
-        /** Толщина фаски — доля радиуса: на кнопке любого размера одна и та же. */
+        /** Толщина фаски — доля половины меньшей стороны: на любом размере одна. */
         private const val RIM_WIDTH = 0.055f
         /** Во сколько раз тусклее блик у нажатой кнопки. */
         private const val PRESSED_LIGHT = 0.3f
+        /**
+         * У плашки блик занимает верхнюю треть, а затенение — нижнюю четверть:
+         * она низкая и широкая, и растяни их на всю высоту — получится не
+         * стекло, а градиентная заливка.
+         */
+        private const val PILL_SHEEN_SPAN = 0.34f
+        private const val PILL_FOOT_SPAN = 0.26f
     }
 
     private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
     private val foot = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val face = RectF()
 
-    /** Радиус, под который построены краски: меняется только с размером кнопки. */
-    private var builtFor = 0f
+    // Под что построены краски: размер и форма. Меняется редко — на смену
+    // размера кнопки или на первую компоновку плашки.
+    private var builtW = 0f
+    private var builtH = 0f
+    private var builtOval = false
 
     /**
      * Кнопка под пальцем: блик и фаска гаснут, затенение снизу остаётся —
@@ -62,18 +85,18 @@ class BubbleSkin : GradientDrawable() {
             invalidateSelf()
         }
 
-    init {
-        shape = GradientDrawable.OVAL
-    }
-
     override fun draw(canvas: Canvas) {
         super.draw(canvas)
         val b = bounds
-        val r = minOf(b.width(), b.height()) / 2f
-        if (r <= 0f) return
-        if (builtFor != r) {
-            builtFor = r
-            build(r)
+        val w = b.width().toFloat()
+        val h = b.height().toFloat()
+        if (w <= 0f || h <= 0f) return
+        val oval = shape == GradientDrawable.OVAL
+        if (builtW != w || builtH != h || builtOval != oval) {
+            builtW = w
+            builtH = h
+            builtOval = oval
+            build(w, h, oval)
         }
         // Прозрачность самого рисунка (не вида): краска с шейдером умножает
         // его цвета на свою альфу, так что слои гаснут вместе с заливкой.
@@ -86,33 +109,62 @@ class BubbleSkin : GradientDrawable() {
         // Рисуем от центра: слои строятся вокруг нуля и центрируются по
         // построению — тот же приём, что у глифов стопки.
         canvas.translate(b.exactCenterX(), b.exactCenterY())
-        canvas.drawCircle(0f, 0f, r, foot)
-        canvas.drawCircle(0f, 0f, r, sheen)
-        canvas.drawCircle(0f, 0f, r - rim.strokeWidth / 2f, rim)
+        drawFace(canvas, w, h, oval, 0f, foot)
+        drawFace(canvas, w, h, oval, 0f, sheen)
+        drawFace(canvas, w, h, oval, rim.strokeWidth / 2f, rim)
         canvas.restoreToCount(save)
     }
 
-    /**
-     * Центры бликовых градиентов — ЗА краем кружка: так внутри него ярче
-     * всего оказывается сама кромка, а не пятно посередине. Пятно посередине
-     * читалось бы как стеклянный шарик, кромка — как клавиша.
-     */
-    private fun build(r: Float) {
-        sheen.shader = RadialGradient(
-            0f, -r * 0.55f, r * 1.25f,
-            intArrayOf(DiskLook.white(SHEEN), DiskLook.white(SHEEN * 0.35f), DiskLook.white(0f)),
-            floatArrayOf(0f, 0.45f, 1f),
-            Shader.TileMode.CLAMP,
-        )
-        foot.shader = RadialGradient(
-            0f, r * 0.9f, r * 1.15f,
-            intArrayOf(DiskLook.black(FOOT), DiskLook.black(FOOT * 0.3f), DiskLook.black(0f)),
-            floatArrayOf(0f, 0.5f, 1f),
-            Shader.TileMode.CLAMP,
-        )
-        rim.strokeWidth = (r * RIM_WIDTH).coerceAtLeast(1f)
+    /** Фигура вокруг нуля, поджатая на [inset] со всех сторон: кружок или плашка. */
+    private fun drawFace(canvas: Canvas, w: Float, h: Float, oval: Boolean, inset: Float, paint: Paint) {
+        face.set(-w / 2f + inset, -h / 2f + inset, w / 2f - inset, h / 2f - inset)
+        if (face.isEmpty) return
+        if (oval) {
+            canvas.drawOval(face, paint)
+        } else {
+            // Радиус скругления — свой же, поджатый вместе с фигурой: иначе
+            // фаска срезала бы углы плашки не там, где её край.
+            val r = (cornerRadius - inset).coerceAtLeast(0f)
+            canvas.drawRoundRect(face, r, r, paint)
+        }
+    }
+
+    private fun build(w: Float, h: Float, oval: Boolean) {
+        val half = minOf(w, h) / 2f
+        val top = -h / 2f
+        val bottom = h / 2f
+        if (oval) {
+            sheen.shader = RadialGradient(
+                0f, -half * 0.55f, half * 1.25f,
+                intArrayOf(DiskLook.white(SHEEN), DiskLook.white(SHEEN * 0.35f), DiskLook.white(0f)),
+                floatArrayOf(0f, 0.45f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+            foot.shader = RadialGradient(
+                0f, half * 0.9f, half * 1.15f,
+                intArrayOf(DiskLook.black(FOOT), DiskLook.black(FOOT * 0.3f), DiskLook.black(0f)),
+                floatArrayOf(0f, 0.5f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+        } else {
+            sheen.shader = LinearGradient(
+                0f, top, 0f, top + h * PILL_SHEEN_SPAN,
+                intArrayOf(DiskLook.white(SHEEN), DiskLook.white(SHEEN * 0.3f), DiskLook.white(0f)),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+            foot.shader = LinearGradient(
+                0f, bottom, 0f, bottom - h * PILL_FOOT_SPAN,
+                intArrayOf(DiskLook.black(FOOT), DiskLook.black(0f)),
+                floatArrayOf(0f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+        }
+        // Фаска у обеих форм одна: тонкий штрих с продольным градиентом —
+        // светлый сверху, тёмный снизу, посередине его нет.
+        rim.strokeWidth = (half * RIM_WIDTH).coerceAtLeast(1f)
         rim.shader = LinearGradient(
-            0f, -r, 0f, r,
+            0f, top, 0f, bottom,
             intArrayOf(DiskLook.white(RIM_LIGHT), DiskLook.white(0f), DiskLook.black(RIM_SHADE)),
             floatArrayOf(0f, 0.5f, 1f),
             Shader.TileMode.CLAMP,
