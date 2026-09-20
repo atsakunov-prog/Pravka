@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -41,6 +42,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -213,13 +215,12 @@ fun ReaderScreen(
         // Переносы: без них выключка по ширине растаскивает строку дырами -
         // на широком экране это видно сразу.
         //
-        // Разбиение остаётся простым, а не абзацным: абзацное красивее, но
-        // считается заметно дольше, а разбивка на страницы меряет окно из
-        // пятисот абзацев на главном потоке - «Размечаю страницы…» и так не
-        // мгновенное. Переносы и с простым разбиением работают: жадный
-        // алгоритм переносит слово, которое не влезло.
+        // Разбиение при них абзацное, а не простое, и это не украшение:
+        // с простым Android переносов не делает вовсе - владелец проверил на
+        // живой сборке («переносы не появились»). Плата - разбивка на страницы
+        // считается дольше; окно вокруг места мы за это подрезали.
         hyphens = if (prefs.readerHyphens) Hyphens.Auto else Hyphens.None,
-        lineBreak = LineBreak.Simple,
+        lineBreak = if (prefs.readerHyphens) LineBreak.Paragraph else LineBreak.Simple,
         fontFamily = fontOf(prefs.readerFont),
         fontSize = (if (heading) prefs.readerSize + 3 else prefs.readerSize).sp,
         lineHeight = (prefs.readerSize * prefs.readerLineHeight).sp,
@@ -358,11 +359,20 @@ fun ReaderScreen(
     val card = cardMetrics(look, shape)
     // Колонтитул в нижнем углу страницы: панель прячется, а «где я в книге»
     // хочется видеть всегда.
-    val footer = when (prefs.readerFooter) {
-        Settings.FOOTER_NONE -> ""
-        Settings.FOOTER_PAGE -> "${t.pageOf(offset)} / ${t.pages}"
-        Settings.FOOTER_PERCENT -> "${(progress * 100).roundToInt()}%"
-        else -> "${t.pageOf(offset)} / ${t.pages} · ${(progress * 100).roundToInt()}%"
+    val marks = when (prefs.readerFooter) {
+        Settings.FOOTER_NONE -> PageMarks()
+        Settings.FOOTER_PAGE -> PageMarks(corner = "${t.pageOf(offset)} / ${t.pages}")
+        Settings.FOOTER_PERCENT -> PageMarks(corner = "${(progress * 100).roundToInt()}%")
+        Settings.FOOTER_BOTH -> PageMarks(
+            corner = "${t.pageOf(offset)} / ${t.pages} · ${(progress * 100).roundToInt()}%"
+        )
+        // Как в типографской книге: автор и название на верхнем поле, номер
+        // страницы внизу по центру между тире.
+        else -> PageMarks(
+            author = t.author.ifBlank { bk.title },
+            title = t.title.ifBlank { bk.title },
+            center = "— ${t.pageOf(offset)} —",
+        )
     }
 
     Box(Modifier.fillMaxSize().readerBackdrop(tones, look)) {
@@ -372,7 +382,7 @@ fun ReaderScreen(
             PagedBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
                 tones = tones, look = look, turn = prefs.readerPageTurn,
-                shape = shape, footer = footer,
+                shape = shape, marks = marks,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
                 target = target, onTargetUsed = { target = null },
                 onShown = { start, end -> offset = start; shownEnd = end },
@@ -384,7 +394,7 @@ fun ReaderScreen(
         } else {
             ScrollBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
-                tones = tones, look = look, shape = shape, footer = footer,
+                tones = tones, look = look, shape = shape, marks = marks,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
                 bars = bars, topBarPx = topBarPx, bottomBarPx = bottomBarPx,
                 target = target, onTargetUsed = { target = null },
@@ -724,8 +734,7 @@ private fun ScrollBody(
     tones: PaperTones,
     look: PageLook,
     shape: BookShape,
-    /** Строка в нижнем углу страницы; пустая - не рисуется. */
-    footer: String,
+    marks: PageMarks,
     margin: Int,
     styleFor: (Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
@@ -832,72 +841,61 @@ private fun ScrollBody(
                         blocks.getOrNull(hit?.index ?: -1)?.let { onLongPress(it.start) }
                     },
                 )
-            }
-            // Карточка - после жестов: тап у края экрана листает и там, где
-            // страницы уже нет, а виден стол. Системные отступы учтены здесь,
-            // а не внутри: страница должна лежать в экране целиком, все четыре
-            // угла на виду.
-            .padding(
-                start = card.side,
-                end = card.side,
-                top = safeTop + card.top,
-                bottom = safeBottom + card.bottom,
-            )
-            .pageCard(tones, look, shape),
+            },
     ) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            // Читалка рисуется во весь экран, без Scaffold, поэтому системные
-            // отступы считаем сами: иначе первая строка уезжает под часы.
-            contentPadding = PaddingValues(
-                start = margin.dp,
-                end = margin.dp,
-                top = PAGE_TOP,
-                bottom = 110.dp,
-            ),
+        // Подложка - обложка книги или колода - стоит на месте, страница
+        // лежит поверх. Системные отступы держит она, а не текст: страница
+        // должна быть видна в экране целиком, всеми четырьмя углами.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(underPadding(card, safeTop, safeBottom))
+                .pageUnder(tones, look, shape)
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(pagePadding(look, card, PageSide.SINGLE, safeTop, safeBottom))
+                .pageSheet(tones, look, shape, PageSide.SINGLE)
         ) {
-            itemsIndexed(blocks, key = { i, _ -> i }) { _, block ->
-                val pic = block.picture
-                if (pic != null) {
-                    val file = app.texts.pictureFile(bookId, pic.file)
-                    PictureBlock(file, pic.caption, palette) {
-                        onPicture(ShownPicture(file, pic.caption, pic.charOffset))
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                // Читалка рисуется во весь экран, без Scaffold, поэтому системные
+                // отступы считаем сами: иначе первая строка уезжает под часы.
+                contentPadding = PaddingValues(
+                    start = margin.dp,
+                    end = margin.dp,
+                    top = PAGE_TOP,
+                    bottom = 110.dp,
+                ),
+            ) {
+                itemsIndexed(blocks, key = { i, _ -> i }) { _, block ->
+                    val pic = block.picture
+                    if (pic != null) {
+                        val file = app.texts.pictureFile(bookId, pic.file)
+                        PictureBlock(file, pic.caption, palette) {
+                            onPicture(ShownPicture(file, pic.caption, pic.charOffset))
+                        }
+                    } else {
+                        val heading = isHeading(block)
+                        // Абзац докладывает, где лежит и как разложен, - ради обводки.
+                        DisposableEffect(block.start) { onDispose { hits.forget(block.start) } }
+                        Text(
+                            text = litText(block.text, block.start, highlight, highlightAlpha, palette),
+                            style = styleFor(heading),
+                            onTextLayout = { hits.layout(block.start, it) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = if (heading) 28.dp else 0.dp, bottom = 10.dp)
+                                .onGloballyPositioned { hits.place(block.start, it.boundsInRoot()) },
+                        )
                     }
-                } else {
-                    val heading = isHeading(block)
-                    // Абзац докладывает, где лежит и как разложен, - ради обводки.
-                    DisposableEffect(block.start) { onDispose { hits.forget(block.start) } }
-                    Text(
-                        text = litText(block.text, block.start, highlight, highlightAlpha, palette),
-                        style = styleFor(heading),
-                        onTextLayout = { hits.layout(block.start, it) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = if (heading) 28.dp else 0.dp, bottom = 10.dp)
-                            .onGloballyPositioned { hits.place(block.start, it.boundsInRoot()) },
-                    )
                 }
             }
+            PageMarksLayer(marks, PageSide.SINGLE, palette, margin, styleFor(false))
         }
-        PageFooter(footer, palette, margin, Modifier.align(Alignment.BottomEnd))
     }
-}
-
-/**
- * Колонтитул страницы: номер и процент в нижнем углу, на самой карточке.
- * Панель с теми же числами прячется по тапу, а место в книге хочется видеть,
- * не трогая экран.
- */
-@Composable
-private fun PageFooter(text: String, palette: ReaderPalette, margin: Int, modifier: Modifier) {
-    if (text.isEmpty()) return
-    Text(
-        text,
-        color = palette.dim,
-        fontSize = 11.sp,
-        modifier = modifier.padding(end = margin.dp, bottom = 12.dp),
-    )
 }
 
 // ------------------------------------------------------------------- листание
@@ -913,8 +911,7 @@ private fun PagedBody(
     look: PageLook,
     turn: String,
     shape: BookShape,
-    /** Строка в нижнем углу страницы; пустая - не рисуется. */
-    footer: String,
+    marks: PageMarks,
     margin: Int,
     styleFor: (Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
@@ -938,13 +935,14 @@ private fun PagedBody(
         // нарочно, иначе тающая колода гоняла бы разбивку при каждом
         // перелистывании.
         val card = cardMetrics(look, shape)
-        // В развороте карточек две, каждая по своей половине экрана.
+        // В развороте страниц две, каждая по своей половине экрана.
         val halves = if (shape.spread) 2 else 1
+        val chrome = pageChrome(look, card, halves)
         val widthPx = with(density) {
-            (maxWidth / halves - card.side * 2 - margin.dp * 2).roundToPx()
+            (maxWidth / halves - chrome.width - margin.dp * 2).roundToPx()
         }
         val heightPx = with(density) {
-            (maxHeight - topInset - bottomInset - PAGE_TOP - PAGE_BOTTOM - card.top - card.bottom)
+            (maxHeight - topInset - bottomInset - chrome.height - PAGE_TOP - PAGE_BOTTOM)
                 .roundToPx()
         }
         val gapPx = with(density) { 10.dp.roundToPx() }
@@ -1060,6 +1058,14 @@ private fun PagedBody(
                     )
                 },
         ) {
+            // Подложка - обложка книги или колода - стоит на месте: страница
+            // уезжает одна, а книга остаётся лежать на столе.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(underPadding(card, topInset, bottomInset))
+                    .pageUnder(tones, look, shape)
+            )
             if (pages.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Размечаю страницы…", color = palette.dim, fontSize = 13.sp)
@@ -1067,14 +1073,12 @@ private fun PagedBody(
                 return@Box
             }
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { slot ->
-                val face: @Composable (Page?, Modifier) -> Unit = { page, modifier ->
+                val face: @Composable (Page?, PageSide, Modifier) -> Unit = { page, side, modifier ->
                     PageFace(
-                        page = page, app = app, bookId = bookId, palette = palette, hits = hits,
-                        tones = tones, look = look, shape = shape, card = card,
-                        margin = margin, style = style, footer = footer,
-                        // Системные отступы держит карточка, а не текст: так
-                        // она лежит в экране целиком, всеми четырьмя углами.
-                        cardTop = topInset + card.top, cardBottom = bottomInset + card.bottom,
+                        page = page, side = side, app = app, bookId = bookId, palette = palette,
+                        hits = hits, tones = tones, look = look, shape = shape,
+                        pad = pagePadding(look, card, side, topInset, bottomInset),
+                        margin = margin, style = style, marks = marks,
                         highlight = highlight, highlightAlpha = highlightAlpha,
                         onPicture = onPicture, modifier = modifier,
                     )
@@ -1086,22 +1090,37 @@ private fun PagedBody(
                     .zIndex(-slot.toFloat())
                     .pageTurn(turn, gentle = shape.spread) { pagerState.turnOffset(slot) }
                 if (!shape.spread) {
-                    face(pages.getOrNull(slot), slotModifier)
+                    face(pages.getOrNull(slot), PageSide.SINGLE, slotModifier)
                     return@HorizontalPager
                 }
                 Row(slotModifier) {
-                    face(pages.getOrNull(slot * 2), Modifier.weight(1f).fillMaxHeight())
-                    face(pages.getOrNull(slot * 2 + 1), Modifier.weight(1f).fillMaxHeight())
+                    face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight())
+                    face(pages.getOrNull(slot * 2 + 1), PageSide.RIGHT, Modifier.weight(1f).fillMaxHeight())
                 }
             }
         }
     }
 }
 
-/** Одна страница: карточка из колоды и текст на ней. */
+/** Что пишется на полях страницы. Пустая строка - не рисуется. */
+data class PageMarks(
+    /** Верхний колонтитул книжного вида. */
+    val author: String = "",
+    val title: String = "",
+    /** Номер в нижнем углу: «142 / 380 · 37%». */
+    val corner: String = "",
+    /** Номер внизу по центру, как в типографской книге: «— 46 —». */
+    val center: String = "",
+) {
+    val head: Boolean get() = author.isNotEmpty() || title.isNotEmpty()
+    val any: Boolean get() = head || corner.isNotEmpty() || center.isNotEmpty()
+}
+
+/** Одна страница: лист (или карточка) и текст на ней. */
 @Composable
 private fun PageFace(
     page: Page?,
+    side: PageSide,
     app: SlushalkaApp,
     bookId: String,
     palette: ReaderPalette,
@@ -1109,29 +1128,18 @@ private fun PageFace(
     tones: PaperTones,
     look: PageLook,
     shape: BookShape,
-    card: CardMetrics,
+    pad: PaddingValues,
     margin: Int,
     style: TextStyle,
-    footer: String,
-    cardTop: Dp,
-    cardBottom: Dp,
+    marks: PageMarks,
     highlight: IntRange?,
     highlightAlpha: Float,
     onPicture: (ShownPicture) -> Unit,
     modifier: Modifier,
 ) {
-    Box(
-        modifier
-            .padding(
-                start = card.side,
-                end = card.side,
-                top = cardTop,
-                bottom = cardBottom,
-            )
-            .pageCard(tones, look, shape),
-    ) {
+    Box(modifier.padding(pad).pageSheet(tones, look, shape, side)) {
         if (page == null) return@Box
-        PageFooter(footer, palette, margin, Modifier.align(Alignment.BottomEnd))
+        PageMarksLayer(marks, side, palette, margin, style)
         Column(
             Modifier
                 .fillMaxSize()
@@ -1166,10 +1174,82 @@ private fun PageFace(
     }
 }
 
+/**
+ * Колонтитулы поверх страницы.
+ *
+ * Рисуются не в колонке текста, а поверх неё, в запасе под панели: иначе
+ * верхний колонтитул съедал бы строку, и разбивку на страницы пришлось бы
+ * считать с поправкой на него. Автор на левой странице, название на правой -
+ * как в книге; на одной странице оба сразу.
+ */
+@Composable
+private fun BoxScope.PageMarksLayer(
+    marks: PageMarks,
+    side: PageSide,
+    palette: ReaderPalette,
+    margin: Int,
+    style: TextStyle,
+) {
+    if (!marks.any) return
+    val small = style.copy(
+        fontSize = 11.sp,
+        lineHeight = 14.sp,
+        letterSpacing = 0.6.sp,
+        color = palette.dim,
+        textAlign = TextAlign.Start,
+        fontWeight = FontWeight.Normal,
+    )
+    if (marks.head) {
+        Column(
+            Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .padding(start = margin.dp, end = margin.dp, top = PAGE_TOP - 30.dp),
+        ) {
+            Row(Modifier.fillMaxWidth()) {
+                if (side != PageSide.RIGHT) {
+                    Text(marks.author, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.weight(1f))
+                if (side != PageSide.LEFT) {
+                    Text(marks.title, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            HorizontalDivider(thickness = 1.dp, color = palette.dim.copy(alpha = 0.35f))
+        }
+    }
+    if (marks.center.isNotEmpty()) {
+        Text(
+            marks.center,
+            style = small,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = PAGE_BOTTOM - 34.dp),
+        )
+    }
+    if (marks.corner.isNotEmpty()) {
+        Text(
+            marks.corner,
+            style = small,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = margin.dp, bottom = 12.dp),
+        )
+    }
+}
+
 private val PAGE_TOP = 52.dp
 private val PAGE_BOTTOM = 60.dp
-/** Сколько абзацев вокруг текущего места разбивать на страницы за раз. */
-private const val WINDOW_BLOCKS = 260
+/**
+ * Сколько абзацев вокруг текущего места разбивать на страницы за раз.
+ *
+ * Было 260. С переносами разбор строк абзацный, а не простой, и считается он
+ * заметно дольше - окно подрезано, чтобы «Размечаю страницы…» не растягивалось
+ * на глазах. Края окна пересчитываются на подходе, так что читателю видна та
+ * же бесконечная книга.
+ */
+private const val WINDOW_BLOCKS = 160
 
 // ------------------------------------------------------------------- картинки
 

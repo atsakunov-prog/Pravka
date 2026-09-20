@@ -63,7 +63,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerPaged: Boolean = false,
         // Вид страницы: читалка рисует не белый лист, а верхнюю страницу книги -
         // со стопкой под ней, сгибом у корешка и светом (см. BookPage.kt).
-        val readerPageStyle: String = PAGE_BOOK,
+        val readerPageStyle: String = PAGE_VOLUME,
         /** Как уходит страница при листании; в прокрутке ни при чём. */
         val readerPageTurn: String = TURN_DECK,
         /** Разворот из двух страниц: по ширине экрана, всегда или никогда. */
@@ -79,7 +79,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         /** Насколько стол темнее бумаги. */
         val readerTable: Float = TABLE_MID,
         /** Колонтитул в нижнем углу страницы: номер, процент, оба или ничего. */
-        val readerFooter: String = FOOTER_BOTH,
+        val readerFooter: String = FOOTER_BOOK,
         /** Переносы: без них выключка по ширине рвёт строку дырами. */
         val readerHyphens: Boolean = true,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
@@ -150,7 +150,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerTheme = p[KEY_R_THEME] ?: THEME_AUTO,
                 readerKeepAwake = p[KEY_R_AWAKE] ?: true,
                 readerPaged = p[KEY_R_PAGED] ?: false,
-                readerPageStyle = p[KEY_R_PAGE_STYLE]?.takeIf { it in PAGE_STYLES } ?: PAGE_BOOK,
+                readerPageStyle = p[KEY_R_PAGE_STYLE]?.takeIf { it in PAGE_STYLES } ?: PAGE_VOLUME,
                 readerPageTurn = p[KEY_R_PAGE_TURN]?.takeIf { it in PAGE_TURNS } ?: TURN_DECK,
                 readerSpread = p[KEY_R_SPREAD]?.takeIf { it in SPREADS } ?: SPREAD_AUTO,
                 readerCardMargin = p[KEY_R_CARD_MARGIN] ?: 10,
@@ -159,7 +159,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerSheen = p[KEY_R_SHEEN] ?: true,
                 readerGrain = p[KEY_R_GRAIN] ?: true,
                 readerTable = p[KEY_R_TABLE]?.takeIf { it in TABLES } ?: TABLE_MID,
-                readerFooter = p[KEY_R_FOOTER]?.takeIf { it in FOOTERS } ?: FOOTER_BOTH,
+                readerFooter = p[KEY_R_FOOTER]?.takeIf { it in FOOTERS } ?: FOOTER_BOOK,
                 readerHyphens = p[KEY_R_HYPHENS] ?: true,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
@@ -304,12 +304,15 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         // колоды, ради этого всё и затевалось. Ключи остались прежними, чтобы
         // выбор владельца пережил смену самого вида.
         const val PAGE_BOOK = "book"
+        /** Книжный: обложка по краям, корешок, срез блока - как настоящий том. */
+        const val PAGE_VOLUME = "volume"
         const val PAGE_SOFT = "soft"
         const val PAGE_FLAT = "flat"
 
-        val PAGE_STYLES = listOf(PAGE_BOOK, PAGE_SOFT, PAGE_FLAT)
+        val PAGE_STYLES = listOf(PAGE_VOLUME, PAGE_BOOK, PAGE_SOFT, PAGE_FLAT)
 
         fun pageStyleLabel(style: String): String = when (style) {
+            PAGE_VOLUME -> "Книжный"
             PAGE_BOOK -> "Стопка"
             PAGE_SOFT -> "Одна карточка"
             else -> "Плоско"
@@ -373,10 +376,13 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val FOOTER_PAGE = "page"
         const val FOOTER_PERCENT = "percent"
         const val FOOTER_BOTH = "both"
+        /** Как в типографской книге: автор и название сверху, номер внизу по центру. */
+        const val FOOTER_BOOK = "book"
 
-        val FOOTERS = listOf(FOOTER_BOTH, FOOTER_PAGE, FOOTER_PERCENT, FOOTER_NONE)
+        val FOOTERS = listOf(FOOTER_BOOK, FOOTER_BOTH, FOOTER_PAGE, FOOTER_PERCENT, FOOTER_NONE)
 
         fun footerLabel(v: String): String = when (v) {
+            FOOTER_BOOK -> "Как в книге"
             FOOTER_BOTH -> "Страница и процент"
             FOOTER_PAGE -> "Страница"
             FOOTER_PERCENT -> "Процент"
