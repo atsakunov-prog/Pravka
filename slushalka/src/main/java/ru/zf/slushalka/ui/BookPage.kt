@@ -269,8 +269,11 @@ data class PageChrome(val width: Dp, val height: Dp)
 fun pageChrome(look: PageLook, card: CardMetrics, halves: Int): PageChrome = when {
     look.flat -> PageChrome(0.dp, 0.dp)
     // В книге поля, кант и корешок делятся на обе страницы разворота.
+    // В книге у каждой страницы своя половина разворота: поле, кант и
+    // половина сгиба. На одной странице то же самое - она и есть половина
+    // разворота, по которому ездит камера.
     look.volume -> PageChrome(
-        width = (card.side * 2 + card.cover * 2 + card.spine) / halves,
+        width = card.side + card.cover + card.spine / 2,
         height = card.top + card.bottom + card.cover * 2 + card.reveal * 2,
     )
     else -> PageChrome(card.side * 2, card.top + card.bottom)
@@ -623,6 +626,51 @@ fun Modifier.pageTurn(style: String, gentle: Boolean, offset: () -> Float): Modi
         }
     }
 }
+
+/**
+ * Живая книга на одной странице: лист переворачивается вокруг корешка, а
+ * камера едет за ним.
+ *
+ * Разворот шириной в два экрана лежит на месте, страницы - его половины.
+ * С левой на правую камера просто едет вперёд, и пейджер делает это сам.
+ * С правой на следующую левую лист переворачивается: правая страница
+ * поднимается вокруг корешка (её левый край) и уходит за него, а из-за
+ * корешка опускается её оборот - левая страница следующего разворота, у
+ * которой корешок справа. Обе крепятся к корешку, а корешок вместе с камерой
+ * едет от левого края экрана к правому: `translationX` у каждой удваивает
+ * сдвиг пейджера в обратную сторону, чтобы двигаться с книгой, а не с
+ * пальцем. Встречаются они на 90°, где лист виден ребром, - подмены не
+ * заметно.
+ */
+fun Modifier.liveBookTurn(side: PageSide, offset: () -> Float): Modifier = this.graphicsLayer {
+    val off = offset()
+    val w = size.width
+    when (side) {
+        PageSide.RIGHT -> if (off > 0f && off < 1f) {
+            cameraDistance = bookCamera(w, density)
+            translationX = 2f * w * off
+            transformOrigin = TransformOrigin(0f, 0.5f)
+            rotationY = -180f * off
+            alpha = if (off < 0.5f) 1f else 0f
+        }
+        PageSide.LEFT -> if (off > -1f && off < 0f) {
+            val t = 1f + off
+            cameraDistance = bookCamera(w, density)
+            translationX = -2f * w * (1f - t)
+            transformOrigin = TransformOrigin(1f, 0.5f)
+            rotationY = 90f * (2f - 2f * t).coerceIn(0f, 1f)
+            alpha = if (t > 0.5f) 1f else 0f
+        }
+        PageSide.SINGLE -> Unit
+    }
+}
+
+/**
+ * Камера для поворота листа - в двух с половиной его ширинах. Единица
+ * `cameraDistance` в Compose - не пиксель, а дюйм: RenderNode делит пиксели
+ * на dpi (у View по умолчанию 1280*density px - те самые 8.0).
+ */
+private fun bookCamera(widthPx: Float, density: Float): Float = 2.5f * widthPx / (160f * density)
 
 /**
  * Зерно: плитка шума 64x64 повтором. Взято у Правки (`ui/CardLook.kt`) вместе

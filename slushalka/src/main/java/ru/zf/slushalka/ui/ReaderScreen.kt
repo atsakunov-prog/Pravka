@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -64,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -773,8 +775,13 @@ private fun ScrollBody(
     val statusPx = with(density) { WindowInsets.statusBars.asPaddingValues().calculateTopPadding().roundToPx() }
     val navPx = with(density) { WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding().roundToPx() }
     // Где на экране лежит сам список - границы строк из [hits] даны в
-    // координатах корня, и сравнивать их надо в одних единицах.
-    var boxTop by remember { mutableStateOf(0f) }
+    // координатах корня, и сравнивать их надо в одних единицах. Экран (корень)
+    // и список теперь не одно и то же: список сидит внутри страницы, между
+    // колонтитулами, а панели висят по краям экрана.
+    var screenTop by remember { mutableStateOf(0f) }
+    var screenBottom by remember { mutableStateOf(0f) }
+    var listTop by remember { mutableStateOf(0f) }
+    var listBottom by remember { mutableStateOf(0f) }
 
     LaunchedEffect(target) {
         val to = target ?: return@LaunchedEffect
@@ -787,10 +794,11 @@ private fun ScrollBody(
      * жестовой полоской, когда спрятаны. Тап по краю листает ровно на неё.
      */
     fun band(): ClosedFloatingPointRange<Float> {
-        val h = listState.layoutInfo.viewportSize.height.toFloat()
-        val top = boxTop + (if (bars) topBarPx else statusPx)
-        val bottom = boxTop + h - (if (bars) bottomBarPx else navPx)
-        return if (bottom > top) top..bottom else boxTop..(boxTop + h)
+        // Видимая полоса списка минус то, что закрывают панели (или часы и
+        // жестовая полоска, когда панелей нет).
+        val top = maxOf(listTop, screenTop + (if (bars) topBarPx else statusPx))
+        val bottom = minOf(listBottom, screenBottom - (if (bars) bottomBarPx else navPx))
+        return if (bottom > top) top..bottom else listTop..listBottom
     }
 
     /**
@@ -837,7 +845,10 @@ private fun ScrollBody(
     Box(
         Modifier
             .fillMaxSize()
-            .onGloballyPositioned { boxTop = it.positionInRoot().y }
+            .onGloballyPositioned {
+                screenTop = it.positionInRoot().y
+                screenBottom = screenTop + it.size.height
+            }
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { pos ->
@@ -875,14 +886,22 @@ private fun ScrollBody(
         ) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
-                // Читалка рисуется во весь экран, без Scaffold, поэтому системные
-                // отступы считаем сами: иначе первая строка уезжает под часы.
+                // Список сидит между колонтитулами, а не под ними: иначе строка
+                // уезжала под номер страницы и обрывалась краем карточки -
+                // владелец это увидел первым делом. Внутри списка отступов по
+                // вертикали нет, поэтому строка режется ровно по краю полосы, как
+                // в любом окне, а не посреди колонтитула.
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = PAGE_TOP, bottom = PAGE_BOTTOM)
+                    .onGloballyPositioned {
+                        listTop = it.positionInRoot().y
+                        listBottom = listTop + it.size.height
+                    },
                 contentPadding = PaddingValues(
                     start = margin.dp,
                     end = margin.dp,
-                    top = PAGE_TOP,
-                    bottom = 110.dp,
+                    bottom = 40.dp,
                 ),
             ) {
                 itemsIndexed(blocks, key = { i, _ -> i }) { _, block ->
@@ -1082,7 +1101,30 @@ private fun PagedBody(
         ) {
             // Подложка - обложка книги или колода - стоит на месте: страница
             // уезжает одна, а книга остаётся лежать на столе.
-            Box(
+            //
+            // Живая книга на одной странице: подложка - целый разворот шириной в
+            // два экрана, и «камера» ездит по нему. Читаешь левую страницу -
+            // смахнул - книга сдвинулась к правой - смахнул ещё - лист
+            // перевернулся, и книга поехала назад к левой. Как в жизни
+            // (владелец так и попросил).
+            val live = look.volume && !shape.spread
+            // Ширина экрана берётся до входа во вложенный Box: у областей
+            // компоновки свои маркеры, и наружный maxWidth изнутри не виден.
+            val screenWidth = this@BoxWithConstraints.maxWidth
+            if (live) Box(
+                Modifier
+                    .requiredWidth(screenWidth * 2)
+                    .fillMaxHeight()
+                    .graphicsLayer {
+                        val pos = pagerState.currentPage + pagerState.currentPageOffsetFraction
+                        val pair = ((pos % 2f) + 2f) % 2f
+                        // К правой странице камера едет вперёд, при перевороте
+                        // листа - возвращается к левой.
+                        translationX = -size.width / 2f * minOf(pair, 2f - pair)
+                    }
+                    .padding(underPadding(card, topInset, bottomInset))
+                    .pageUnder(tones, look, shape.copy(spread = true))
+            ) else Box(
                 Modifier
                     .fillMaxSize()
                     .padding(underPadding(card, topInset, bottomInset))
@@ -1106,14 +1148,20 @@ private fun PagedBody(
                         onPicture = onPicture, modifier = modifier,
                     )
                 }
+                // В живой книге чётная страница левая, нечётная правая.
+                val single = if (live) (if (slot % 2 == 0) PageSide.LEFT else PageSide.RIGHT)
+                else PageSide.SINGLE
                 // Ранняя карточка лежит поверх поздней, как в колоде: смахнутая
                 // должна закрывать ту, что под ней.
                 val slotModifier = Modifier
                     .fillMaxSize()
                     .zIndex(-slot.toFloat())
-                    .pageTurn(turn, gentle = shape.spread) { pagerState.turnOffset(slot) }
+                    .then(
+                        if (live) Modifier.liveBookTurn(single) { pagerState.turnOffset(slot) }
+                        else Modifier.pageTurn(turn, gentle = shape.spread) { pagerState.turnOffset(slot) }
+                    )
                 if (!shape.spread) {
-                    face(pages.getOrNull(slot), PageSide.SINGLE, slotModifier)
+                    face(pages.getOrNull(slot), single, slotModifier)
                     return@HorizontalPager
                 }
                 Row(slotModifier) {

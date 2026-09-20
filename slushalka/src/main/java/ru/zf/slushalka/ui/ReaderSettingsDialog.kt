@@ -417,6 +417,9 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
             if (!prefs.readerPaged) {
                 append(" Работает при листании страницами: сейчас выбрана прокрутка, ")
                 append("и смахивать там нечего.")
+            } else if (prefs.readerPageStyle == Settings.PAGE_VOLUME) {
+                append(" В книжном виде на одной странице не действует: там лист сам ")
+                append("переворачивается вокруг корешка, а книга едет за ним.")
             }
         },
         style = MaterialTheme.typography.bodySmall,
