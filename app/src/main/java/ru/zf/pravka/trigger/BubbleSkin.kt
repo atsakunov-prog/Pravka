@@ -53,12 +53,24 @@ class BubbleSkin : GradientDrawable() {
         /** Во сколько раз тусклее блик у нажатой кнопки. */
         private const val PRESSED_LIGHT = 0.3f
         /**
-         * У плашки блик занимает верхнюю треть, а затенение — нижнюю четверть:
+         * У плашки блик занимает верхнюю треть, а затенение — нижнюю пятую:
          * она низкая и широкая, и растяни их на всю высоту — получится не
          * стекло, а градиентная заливка.
          */
         private const val PILL_SHEEN_SPAN = 0.34f
-        private const val PILL_FOOT_SPAN = 0.26f
+        private const val PILL_FOOT_SPAN = 0.2f
+        /**
+         * Низ плашки СВЕТЛЕЕ, чем низ кружка, и это правило, а не вкус.
+         * Владелец (20.09.2026): «плашки с текстом классно выглядят
+         * объёмными. Только вот нижняя часть всё равно чуть выглядит
+         * грязноватой». У кружка затенение снизу — это уход поверхности от
+         * света, оно короткое и скруглённое. У плашки та же плотность ложится
+         * ровной полосой во всю ширину под текстом — и полоса читается не
+         * тенью, а налётом. Поэтому у неё своя, вдвое меньшая, и фаска снизу
+         * тоже мягче.
+         */
+        private const val PILL_FOOT = 0.1f
+        private const val PILL_RIM_SHADE = 0.12f
     }
 
     private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -155,17 +167,22 @@ class BubbleSkin : GradientDrawable() {
             )
             foot.shader = LinearGradient(
                 0f, bottom, 0f, bottom - h * PILL_FOOT_SPAN,
-                intArrayOf(DiskLook.black(FOOT), DiskLook.black(0f)),
+                intArrayOf(DiskLook.black(PILL_FOOT), DiskLook.black(0f)),
                 floatArrayOf(0f, 1f),
                 Shader.TileMode.CLAMP,
             )
         }
         // Фаска у обеих форм одна: тонкий штрих с продольным градиентом —
-        // светлый сверху, тёмный снизу, посередине его нет.
+        // светлый сверху, тёмный снизу, посередине его нет. Темнота низа у
+        // плашки своя: см. PILL_RIM_SHADE.
         rim.strokeWidth = (half * RIM_WIDTH).coerceAtLeast(1f)
         rim.shader = LinearGradient(
             0f, top, 0f, bottom,
-            intArrayOf(DiskLook.white(RIM_LIGHT), DiskLook.white(0f), DiskLook.black(RIM_SHADE)),
+            intArrayOf(
+                DiskLook.white(RIM_LIGHT),
+                DiskLook.white(0f),
+                DiskLook.black(if (oval) RIM_SHADE else PILL_RIM_SHADE),
+            ),
             floatArrayOf(0f, 0.5f, 1f),
             Shader.TileMode.CLAMP,
         )

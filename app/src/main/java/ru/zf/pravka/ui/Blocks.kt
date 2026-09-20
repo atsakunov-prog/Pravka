@@ -60,9 +60,9 @@ fun Modifier.bevel(shape: Shape? = null): Modifier = composed {
     border(
         width = 1.dp,
         brush = Brush.verticalGradient(
-            0f to Color.White.copy(alpha = 0.10f),
+            0f to Color.White.copy(alpha = CardLook.RIM_LIGHT),
             0.5f to Color.Transparent,
-            1f to Color.Black.copy(alpha = 0.14f),
+            1f to Color.Black.copy(alpha = CardLook.RIM_SHADE),
         ),
         shape = shape ?: MaterialTheme.shapes.medium,
     )
@@ -105,14 +105,25 @@ fun PaperCard(
             Box(
                 Modifier
                     .fillMaxWidth()
+                    // Блик полосой по верхней трети и лёгкое затенение по
+                    // нижней пятой — ровно как у плашек на стекле, а не
+                    // градиент во всю высоту: тот читался заливкой.
                     .then(
-                        if (look.light) Modifier.background(
-                            Brush.verticalGradient(
-                                0f to Color.White.copy(alpha = CardLook.LIGHT_TOP),
-                                0.45f to Color.Transparent,
-                                1f to Color.Black.copy(alpha = CardLook.LIGHT_BOTTOM),
+                        if (look.light) Modifier
+                            .background(
+                                Brush.verticalGradient(
+                                    0f to Color.White.copy(alpha = CardLook.SHEEN),
+                                    CardLook.SHEEN_SPAN * 0.55f to Color.White.copy(alpha = CardLook.SHEEN * 0.3f),
+                                    CardLook.SHEEN_SPAN to Color.Transparent,
+                                )
                             )
-                        ) else Modifier
+                            .background(
+                                Brush.verticalGradient(
+                                    1f - CardLook.FOOT_SPAN to Color.Transparent,
+                                    1f to Color.Black.copy(alpha = CardLook.FOOT),
+                                )
+                            )
+                        else Modifier
                     )
                     .then(if (look.grain) Modifier.grain(CardLook.GRAIN) else Modifier)
                     .then(if (decor != null) Modifier.glyphPattern(decor) else Modifier),
