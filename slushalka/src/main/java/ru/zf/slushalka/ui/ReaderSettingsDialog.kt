@@ -258,6 +258,92 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
+    labels("Поле от края экрана: ${prefs.readerCardMargin}")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Settings.CARD_MARGINS.forEach { v ->
+            FilterChip(
+                selected = prefs.readerCardMargin == v,
+                onClick = { scope.launch { s.setReaderCardMargin(v) } },
+                label = { Text(if (v == 0) "Без поля" else "$v") },
+            )
+        }
+    }
+    Text(
+        "Сколько стола видно вокруг страницы. Ноль - карточка встык с краями, и её " +
+            "верхние углы уходят под часы; несколько точек - и страница лежит в экране " +
+            "целиком, всеми четырьмя углами на виду.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    labels("Тень под страницей")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Settings.SHADOWS.forEach { id ->
+            FilterChip(
+                selected = prefs.readerShadow == id,
+                onClick = { scope.launch { s.setReaderShadow(id) } },
+                label = { Text(Settings.shadowLabel(id)) },
+            )
+        }
+    }
+
+    labels("Стол")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Settings.TABLES.forEach { v ->
+            FilterChip(
+                selected = kotlin.math.abs(prefs.readerTable - v) < 0.01f,
+                onClick = { scope.launch { s.setReaderTable(v) } },
+                label = { Text(Settings.tableLabel(v)) },
+            )
+        }
+    }
+    Text(
+        "Насколько поверхность вокруг страницы темнее её самой (на ночных темах - светлее). " +
+            "К краям экрана она ещё немного темнеет: ровная заливка читается фоном, " +
+            "затемнённая по углам - поверхностью, на которой что-то лежит.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Spacer(Modifier.height(6.dp))
+    Toggle("Фаска по кромке", prefs.readerBevel) { scope.launch { s.setReaderBevel(it) } }
+    Toggle("Блик и затенение", prefs.readerSheen) { scope.launch { s.setReaderSheen(it) } }
+    Toggle("Зерно", prefs.readerGrain) { scope.launch { s.setReaderGrain(it) } }
+    Text(
+        "Три слоя объёма, каждый сам по себе: светлая линия сверху и тёмная снизу, блик по " +
+            "верхней трети с затенением по нижней пятой, и шум поверх заливки, но под текстом. " +
+            "Те же слои, что у диска и плашек Правки.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    labels("Номер в углу страницы")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Settings.FOOTERS.forEach { id ->
+            FilterChip(
+                selected = prefs.readerFooter == id,
+                onClick = { scope.launch { s.setReaderFooter(id) } },
+                label = { Text(Settings.footerLabel(id)) },
+            )
+        }
+    }
+    Text(
+        "Внизу справа, на самой странице: панель с теми же числами прячется по тапу, а место " +
+            "в книге хочется видеть, не трогая экран.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Spacer(Modifier.height(6.dp))
+    Toggle("Переносы", prefs.readerHyphens) { scope.launch { s.setReaderHyphens(it) } }
+    Text(
+        "С выключкой по ширине без переносов строка растаскивается дырами между словами - " +
+            "на широком экране это видно сразу. Вместе с переносами включается и абзацный " +
+            "разбор: строки раскладываются по всему абзацу, а не каждая сама по себе.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
     labels("Разворот")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Settings.SPREADS.forEach { id ->

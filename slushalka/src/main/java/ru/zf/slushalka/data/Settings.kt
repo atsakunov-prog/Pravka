@@ -68,6 +68,20 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerPageTurn: String = TURN_DECK,
         /** Разворот из двух страниц: по ширине экрана, всегда или никогда. */
         val readerSpread: String = SPREAD_AUTO,
+        // Вид карточки. Каждый слой со своим тумблером - как у плашек Правки:
+        // владелец хочет крутить объём, а не получать его готовым.
+        /** Поле от края экрана: сколько стола видно вокруг страницы. */
+        val readerCardMargin: Int = 10,
+        val readerShadow: String = SHADOW_SOFT,
+        val readerBevel: Boolean = true,
+        val readerSheen: Boolean = true,
+        val readerGrain: Boolean = true,
+        /** Насколько стол темнее бумаги. */
+        val readerTable: Float = TABLE_MID,
+        /** Колонтитул в нижнем углу страницы: номер, процент, оба или ничего. */
+        val readerFooter: String = FOOTER_BOTH,
+        /** Переносы: без них выключка по ширине рвёт строку дырами. */
+        val readerHyphens: Boolean = true,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
         // экраном система нередко считает плотность малой, и кнопки с надписями
         // выходят мелкими. Множитель к плотности - растёт всё разом, включая
@@ -139,6 +153,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerPageStyle = p[KEY_R_PAGE_STYLE]?.takeIf { it in PAGE_STYLES } ?: PAGE_BOOK,
                 readerPageTurn = p[KEY_R_PAGE_TURN]?.takeIf { it in PAGE_TURNS } ?: TURN_DECK,
                 readerSpread = p[KEY_R_SPREAD]?.takeIf { it in SPREADS } ?: SPREAD_AUTO,
+                readerCardMargin = p[KEY_R_CARD_MARGIN] ?: 10,
+                readerShadow = p[KEY_R_SHADOW]?.takeIf { it in SHADOWS } ?: SHADOW_SOFT,
+                readerBevel = p[KEY_R_BEVEL] ?: true,
+                readerSheen = p[KEY_R_SHEEN] ?: true,
+                readerGrain = p[KEY_R_GRAIN] ?: true,
+                readerTable = p[KEY_R_TABLE]?.takeIf { it in TABLES } ?: TABLE_MID,
+                readerFooter = p[KEY_R_FOOTER]?.takeIf { it in FOOTERS } ?: FOOTER_BOTH,
+                readerHyphens = p[KEY_R_HYPHENS] ?: true,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
                 updateAuto = p[KEY_UPD_AUTO] ?: true,
@@ -201,6 +223,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderPageStyle(v: String) = edit { if (v in PAGE_STYLES) it[KEY_R_PAGE_STYLE] = v }
     suspend fun setReaderPageTurn(v: String) = edit { if (v in PAGE_TURNS) it[KEY_R_PAGE_TURN] = v }
     suspend fun setReaderSpread(v: String) = edit { if (v in SPREADS) it[KEY_R_SPREAD] = v }
+    suspend fun setReaderCardMargin(v: Int) = edit { it[KEY_R_CARD_MARGIN] = v.coerceIn(0, 28) }
+    suspend fun setReaderShadow(v: String) = edit { if (v in SHADOWS) it[KEY_R_SHADOW] = v }
+    suspend fun setReaderBevel(v: Boolean) = edit { it[KEY_R_BEVEL] = v }
+    suspend fun setReaderSheen(v: Boolean) = edit { it[KEY_R_SHEEN] = v }
+    suspend fun setReaderGrain(v: Boolean) = edit { it[KEY_R_GRAIN] = v }
+    suspend fun setReaderTable(v: Float) = edit { if (v in TABLES) it[KEY_R_TABLE] = v }
+    suspend fun setReaderFooter(v: String) = edit { if (v in FOOTERS) it[KEY_R_FOOTER] = v }
+    suspend fun setReaderHyphens(v: Boolean) = edit { it[KEY_R_HYPHENS] = v }
     suspend fun setUiScale(v: Float) = edit { if (v in UI_SCALES) it[KEY_UI_SCALE] = v }
     suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
     suspend fun setUpdateAuto(v: Boolean) = edit { it[KEY_UPD_AUTO] = v }
@@ -307,6 +337,52 @@ class Settings(private val context: Context, scope: CoroutineScope) {
             else -> "Одна страница"
         }
 
+        // Тень под карточкой: у Правки её рисует стекло диска, здесь - сама
+        // читалка, и владелец хотел крутить её силу.
+        const val SHADOW_NONE = "none"
+        const val SHADOW_SOFT = "soft"
+        const val SHADOW_DEEP = "deep"
+
+        val SHADOWS = listOf(SHADOW_NONE, SHADOW_SOFT, SHADOW_DEEP)
+
+        fun shadowLabel(v: String): String = when (v) {
+            SHADOW_NONE -> "Без тени"
+            SHADOW_SOFT -> "Мягкая"
+            else -> "Глубокая"
+        }
+
+        /** Ступени стола: насколько он темнее (на ночных темах светлее) бумаги. */
+        const val TABLE_LIGHT = 0.45f
+        const val TABLE_MID = 0.62f
+        const val TABLE_DEEP = 0.8f
+
+        val TABLES = listOf(TABLE_LIGHT, TABLE_MID, TABLE_DEEP)
+
+        fun tableLabel(v: Float): String = when (v) {
+            TABLE_LIGHT -> "Светлее"
+            TABLE_MID -> "Средний"
+            else -> "Темнее"
+        }
+
+        /** Поля карточки от края экрана: сколько стола видно вокруг страницы. */
+        val CARD_MARGINS = listOf(0, 6, 10, 14, 20)
+
+        // Колонтитул в нижнем углу страницы. Он же был и в панели, но панель
+        // прячется - а «где я в книге» хочется видеть всегда.
+        const val FOOTER_NONE = "none"
+        const val FOOTER_PAGE = "page"
+        const val FOOTER_PERCENT = "percent"
+        const val FOOTER_BOTH = "both"
+
+        val FOOTERS = listOf(FOOTER_BOTH, FOOTER_PAGE, FOOTER_PERCENT, FOOTER_NONE)
+
+        fun footerLabel(v: String): String = when (v) {
+            FOOTER_BOTH -> "Страница и процент"
+            FOOTER_PAGE -> "Страница"
+            FOOTER_PERCENT -> "Процент"
+            else -> "Ничего"
+        }
+
         fun pageTurnLabel(turn: String): String = when (turn) {
             TURN_DECK -> "Смахнуть"
             TURN_SLIDE -> "Сдвиг"
@@ -340,6 +416,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_PAGE_STYLE = stringPreferencesKey("reader_page_style")
         private val KEY_R_PAGE_TURN = stringPreferencesKey("reader_page_turn")
         private val KEY_R_SPREAD = stringPreferencesKey("reader_spread")
+        private val KEY_R_CARD_MARGIN = intPreferencesKey("reader_card_margin")
+        private val KEY_R_SHADOW = stringPreferencesKey("reader_shadow")
+        private val KEY_R_BEVEL = booleanPreferencesKey("reader_bevel")
+        private val KEY_R_SHEEN = booleanPreferencesKey("reader_sheen")
+        private val KEY_R_GRAIN = booleanPreferencesKey("reader_grain")
+        private val KEY_R_TABLE = floatPreferencesKey("reader_table")
+        private val KEY_R_FOOTER = stringPreferencesKey("reader_footer")
+        private val KEY_R_HYPHENS = booleanPreferencesKey("reader_hyphens")
         private val KEY_UI_SCALE = floatPreferencesKey("ui_scale")
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
         private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")

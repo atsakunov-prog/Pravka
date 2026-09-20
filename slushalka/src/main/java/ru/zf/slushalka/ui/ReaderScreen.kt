@@ -74,6 +74,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -81,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import java.io.File
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -163,7 +166,18 @@ fun ReaderScreen(
     val palette = readerPalette(prefs.readerTheme, isSystemInDarkTheme())
     // Объём страницы считается от цвета бумаги: на белой он держится на тенях,
     // на чёрной - на засветах (см. BookPage.kt).
-    val tones = remember(palette.bg) { PaperTones(palette.bg) }
+    val tones = remember(palette.bg, prefs.readerTable) {
+        PaperTones(palette.bg, prefs.readerTable)
+    }
+    // Что включено в виде страницы - одним набором, а не восемью параметрами.
+    val look = PageLook(
+        style = prefs.readerPageStyle,
+        margin = prefs.readerCardMargin.dp,
+        shadow = prefs.readerShadow,
+        bevel = prefs.readerBevel,
+        sheen = prefs.readerSheen,
+        grain = prefs.readerGrain,
+    )
 
     val view = LocalView.current
     DisposableEffect(prefs.readerKeepAwake) {
@@ -196,6 +210,16 @@ fun ReaderScreen(
     val isHeading: (Block) -> Boolean = { it.picture == null && it.start in chapterStarts && it.text.length < 120 }
 
     fun styleFor(heading: Boolean) = TextStyle(
+        // Переносы: без них выключка по ширине растаскивает строку дырами -
+        // на широком экране это видно сразу.
+        //
+        // Разбиение остаётся простым, а не абзацным: абзацное красивее, но
+        // считается заметно дольше, а разбивка на страницы меряет окно из
+        // пятисот абзацев на главном потоке - «Размечаю страницы…» и так не
+        // мгновенное. Переносы и с простым разбиением работают: жадный
+        // алгоритм переносит слово, которое не влезло.
+        hyphens = if (prefs.readerHyphens) Hyphens.Auto else Hyphens.None,
+        lineBreak = LineBreak.Simple,
         fontFamily = fontOf(prefs.readerFont),
         fontSize = (if (heading) prefs.readerSize + 3 else prefs.readerSize).sp,
         lineHeight = (prefs.readerSize * prefs.readerLineHeight).sp,
@@ -331,16 +355,24 @@ fun ReaderScreen(
         progress = progress,
         spread = spreadOn(prefs.readerSpread, prefs.readerPaged, screenWidth),
     )
-    val card = cardMetrics(prefs.readerPageStyle, shape)
+    val card = cardMetrics(look, shape)
+    // Колонтитул в нижнем углу страницы: панель прячется, а «где я в книге»
+    // хочется видеть всегда.
+    val footer = when (prefs.readerFooter) {
+        Settings.FOOTER_NONE -> ""
+        Settings.FOOTER_PAGE -> "${t.pageOf(offset)} / ${t.pages}"
+        Settings.FOOTER_PERCENT -> "${(progress * 100).roundToInt()}%"
+        else -> "${t.pageOf(offset)} / ${t.pages} · ${(progress * 100).roundToInt()}%"
+    }
 
-    Box(Modifier.fillMaxSize().readerBackdrop(tones, prefs.readerPageStyle)) {
+    Box(Modifier.fillMaxSize().readerBackdrop(tones, look)) {
         val onLong: (Int) -> Unit = { pressed = it }
         val onTapPicture: (ShownPicture) -> Unit = { picture = it }
         if (prefs.readerPaged) {
             PagedBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
-                tones = tones, pageStyle = prefs.readerPageStyle, turn = prefs.readerPageTurn,
-                shape = shape,
+                tones = tones, look = look, turn = prefs.readerPageTurn,
+                shape = shape, footer = footer,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
                 target = target, onTargetUsed = { target = null },
                 onShown = { start, end -> offset = start; shownEnd = end },
@@ -352,7 +384,7 @@ fun ReaderScreen(
         } else {
             ScrollBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
-                tones = tones, pageStyle = prefs.readerPageStyle, shape = shape,
+                tones = tones, look = look, shape = shape, footer = footer,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
                 bars = bars, topBarPx = topBarPx, bottomBarPx = bottomBarPx,
                 target = target, onTargetUsed = { target = null },
@@ -690,8 +722,10 @@ private fun ScrollBody(
     palette: ReaderPalette,
     hits: TextHits,
     tones: PaperTones,
-    pageStyle: String,
+    look: PageLook,
     shape: BookShape,
+    /** Строка в нижнем углу страницы; пустая - не рисуется. */
+    footer: String,
     margin: Int,
     styleFor: (Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
@@ -773,7 +807,9 @@ private fun ScrollBody(
             }
     }
 
-    val card = cardMetrics(pageStyle, shape)
+    val card = cardMetrics(look, shape)
+    val safeTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val safeBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Box(
         Modifier
             .fillMaxSize()
@@ -798,9 +834,16 @@ private fun ScrollBody(
                 )
             }
             // Карточка - после жестов: тап у края экрана листает и там, где
-            // страницы уже нет, а виден стол.
-            .padding(start = card.side, end = card.side, top = card.top, bottom = card.bottom)
-            .pageCard(tones, pageStyle, shape),
+            // страницы уже нет, а виден стол. Системные отступы учтены здесь,
+            // а не внутри: страница должна лежать в экране целиком, все четыре
+            // угла на виду.
+            .padding(
+                start = card.side,
+                end = card.side,
+                top = safeTop + card.top,
+                bottom = safeBottom + card.bottom,
+            )
+            .pageCard(tones, look, shape),
     ) {
         LazyColumn(
             state = listState,
@@ -810,7 +853,7 @@ private fun ScrollBody(
             contentPadding = PaddingValues(
                 start = margin.dp,
                 end = margin.dp,
-                top = 56.dp + WindowInsets.statusBars.asPaddingValues().calculateTopPadding(),
+                top = PAGE_TOP,
                 bottom = 110.dp,
             ),
         ) {
@@ -837,7 +880,24 @@ private fun ScrollBody(
                 }
             }
         }
+        PageFooter(footer, palette, margin, Modifier.align(Alignment.BottomEnd))
     }
+}
+
+/**
+ * Колонтитул страницы: номер и процент в нижнем углу, на самой карточке.
+ * Панель с теми же числами прячется по тапу, а место в книге хочется видеть,
+ * не трогая экран.
+ */
+@Composable
+private fun PageFooter(text: String, palette: ReaderPalette, margin: Int, modifier: Modifier) {
+    if (text.isEmpty()) return
+    Text(
+        text,
+        color = palette.dim,
+        fontSize = 11.sp,
+        modifier = modifier.padding(end = margin.dp, bottom = 12.dp),
+    )
 }
 
 // ------------------------------------------------------------------- листание
@@ -850,9 +910,11 @@ private fun PagedBody(
     palette: ReaderPalette,
     hits: TextHits,
     tones: PaperTones,
-    pageStyle: String,
+    look: PageLook,
     turn: String,
     shape: BookShape,
+    /** Строка в нижнем углу страницы; пустая - не рисуется. */
+    footer: String,
     margin: Int,
     styleFor: (Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
@@ -875,7 +937,7 @@ private fun PagedBody(
         // колоду тексту не принадлежат. Мерки не зависят от места в книге
         // нарочно, иначе тающая колода гоняла бы разбивку при каждом
         // перелистывании.
-        val card = cardMetrics(pageStyle, shape)
+        val card = cardMetrics(look, shape)
         // В развороте карточек две, каждая по своей половине экрана.
         val halves = if (shape.spread) 2 else 1
         val widthPx = with(density) {
@@ -1008,9 +1070,11 @@ private fun PagedBody(
                 val face: @Composable (Page?, Modifier) -> Unit = { page, modifier ->
                     PageFace(
                         page = page, app = app, bookId = bookId, palette = palette, hits = hits,
-                        tones = tones, pageStyle = pageStyle, shape = shape, card = card,
-                        margin = margin, style = style,
-                        topPad = topInset + PAGE_TOP, bottomPad = bottomInset + PAGE_BOTTOM,
+                        tones = tones, look = look, shape = shape, card = card,
+                        margin = margin, style = style, footer = footer,
+                        // Системные отступы держит карточка, а не текст: так
+                        // она лежит в экране целиком, всеми четырьмя углами.
+                        cardTop = topInset + card.top, cardBottom = bottomInset + card.bottom,
                         highlight = highlight, highlightAlpha = highlightAlpha,
                         onPicture = onPicture, modifier = modifier,
                     )
@@ -1043,13 +1107,14 @@ private fun PageFace(
     palette: ReaderPalette,
     hits: TextHits,
     tones: PaperTones,
-    pageStyle: String,
+    look: PageLook,
     shape: BookShape,
     card: CardMetrics,
     margin: Int,
     style: TextStyle,
-    topPad: Dp,
-    bottomPad: Dp,
+    footer: String,
+    cardTop: Dp,
+    cardBottom: Dp,
     highlight: IntRange?,
     highlightAlpha: Float,
     onPicture: (ShownPicture) -> Unit,
@@ -1060,20 +1125,21 @@ private fun PageFace(
             .padding(
                 start = card.side,
                 end = card.side,
-                top = card.top,
-                bottom = card.bottom,
+                top = cardTop,
+                bottom = cardBottom,
             )
-            .pageCard(tones, pageStyle, shape),
+            .pageCard(tones, look, shape),
     ) {
         if (page == null) return@Box
+        PageFooter(footer, palette, margin, Modifier.align(Alignment.BottomEnd))
         Column(
             Modifier
                 .fillMaxSize()
                 .padding(
                     start = margin.dp,
                     end = margin.dp,
-                    top = topPad,
-                    bottom = bottomPad,
+                    top = PAGE_TOP,
+                    bottom = PAGE_BOTTOM,
                 ),
         ) {
             page.pieces.forEach { piece ->

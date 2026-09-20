@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -30,6 +31,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import ru.zf.slushalka.data.Settings
 import java.util.Random
+import kotlin.math.max
 import kotlin.math.ceil
 import kotlin.math.sqrt
 
@@ -57,7 +59,7 @@ import kotlin.math.sqrt
  * Тона считаются от цвета бумаги, а не задаются числом: на светлой странице
  * объём держат тень на столе и тёмная кромка снизу, на тёмной - блик и фаска.
  */
-class PaperTones(val paper: Color) {
+class PaperTones(val paper: Color, val tableDark: Float = Settings.TABLE_MID) {
 
     val dark: Boolean = paper.luminance() < 0.18f
 
@@ -69,9 +71,13 @@ class PaperTones(val paper: Color) {
      */
     val oled: Boolean = paper.luminance() < 0.02f
 
-    /** Стол, на котором лежит колода. */
+    /**
+     * Стол, на котором лежит колода. На светлой бумаге он темнее её, на тёмной
+     * - светлее: карточка должна читаться предметом, а не дырой в фоне.
+     */
     val backdrop: Color =
-        if (dark) lerp(paper, Color.White, 0.10f) else lerp(paper, Color(0xFF2A211A), 0.62f)
+        if (dark) lerp(paper, Color.White, 0.06f + 0.12f * tableDark)
+        else lerp(paper, Color(0xFF2A211A), tableDark)
 
     /** Цвет отброшенной тени: тёплый, холодная серая на бумаге читается грязью. */
     val cast: Color = if (dark) Color.Black else Color(0xFF2A211A)
@@ -94,6 +100,23 @@ class PaperTones(val paper: Color) {
      */
     fun deck(depth: Float): Color = lerp(paper, backdrop, 0.10f + 0.55f * depth)
 }
+
+/**
+ * Что включено в виде страницы.
+ *
+ * Каждый слой - свой тумблер, как у плашек Правки: владелец хочет крутить
+ * объём, а не получать его готовым («надо это сделать всё включаемым,
+ * отключаемым в настройках»).
+ */
+data class PageLook(
+    val style: String,
+    /** Поле от края экрана: сколько стола видно вокруг страницы. */
+    val margin: Dp,
+    val shadow: String,
+    val bevel: Boolean,
+    val sheen: Boolean,
+    val grain: Boolean,
+)
 
 /** Книга: сколько в ней бумаги, сколько её позади и как она разложена. */
 data class BookShape(
@@ -158,19 +181,27 @@ fun rimsNow(metrics: CardMetrics, shape: BookShape): Int {
     return ceil(metrics.rims * left).toInt().coerceIn(0, metrics.rims)
 }
 
-fun cardMetrics(style: String, shape: BookShape): CardMetrics = when (style) {
+fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.style) {
     Settings.PAGE_FLAT -> CardMetrics(0.dp, 0.dp, 0.dp, 0.dp, 0.dp, 0.dp, 0)
-    Settings.PAGE_SOFT -> CardMetrics(8.dp, 7.dp, 9.dp, 20.dp, 0.dp, 0.dp, 0)
+    Settings.PAGE_SOFT -> CardMetrics(
+        side = look.margin,
+        top = look.margin,
+        bottom = look.margin,
+        radius = CARD_RADIUS,
+        deckStep = 0.dp,
+        deckInset = 0.dp,
+        rims = 0,
+    )
     else -> {
         // Толстая книга - колода в четыре кромки, тонкая - в одну: объём книги
         // виден с первой страницы, а не только в счётчике внизу.
         val rims = (shape.thickness.value / 4f).toInt().coerceIn(1, 4)
         val step = 5.dp
         CardMetrics(
-            side = 8.dp,
-            top = 7.dp,
-            bottom = 9.dp + step * rims,
-            radius = 20.dp,
+            side = look.margin,
+            top = look.margin,
+            bottom = look.margin + step * rims,
+            radius = CARD_RADIUS,
             deckStep = step,
             deckInset = 5.dp,
             rims = rims,
@@ -178,28 +209,47 @@ fun cardMetrics(style: String, shape: BookShape): CardMetrics = when (style) {
     }
 }
 
-/** Стол под колодой: плотный тон и зерно, как на стекле диска у Правки. */
-fun Modifier.readerBackdrop(tones: PaperTones, style: String): Modifier =
-    if (style == Settings.PAGE_FLAT) this.background(tones.paper)
-    else this.background(tones.backdrop).grain(tones.tableGrain)
+/**
+ * Стол под колодой: плотный тон, виньетка к краям и зерно - как стекло диска
+ * у Правки. Виньетка важнее, чем кажется: ровная заливка читается фоном
+ * экрана, затемнённая по углам - поверхностью, на которой что-то лежит.
+ */
+fun Modifier.readerBackdrop(tones: PaperTones, look: PageLook): Modifier =
+    if (look.style == Settings.PAGE_FLAT) this.background(tones.paper)
+    else this
+        .background(tones.backdrop)
+        .drawWithCache {
+            val vignette = Brush.radialGradient(
+                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.26f)),
+                center = Offset(size.width * 0.5f, size.height * 0.42f),
+                radius = max(size.width, size.height) * 0.74f,
+            )
+            onDrawBehind { drawRect(vignette) }
+        }
+        .then(if (look.grain) Modifier.grain(tones.tableGrain) else Modifier)
 
 /**
  * Карточка страницы: колода под ней, тень на стол, заливка, блик, затенение,
  * фаска и зерно. Порядок слоёв тот же, что у плашек Правки, - свет в двух
  * приложениях одного хозяина должен падать с одной стороны.
  */
-fun Modifier.pageCard(tones: PaperTones, style: String, shape: BookShape): Modifier {
-    if (style == Settings.PAGE_FLAT) return this.background(tones.paper)
-    val m = cardMetrics(style, shape)
+fun Modifier.pageCard(tones: PaperTones, look: PageLook, shape: BookShape): Modifier {
+    if (look.style == Settings.PAGE_FLAT) return this.background(tones.paper)
+    val m = cardMetrics(look, shape)
     val corner = RoundedCornerShape(m.radius)
     val rims = rimsNow(m, shape)
+    val lift = when (look.shadow) {
+        Settings.SHADOW_NONE -> 0.dp
+        Settings.SHADOW_DEEP -> 20.dp
+        else -> 10.dp
+    }
     return this
         // Тень рисуется по фигуре карточки и НЕ обрезает содержимое: кромки
         // колоды лежат ниже её края и должны остаться видимыми. Она идёт
         // ПЕРЕД колодой, то есть под ней: тень, размазанная поверх кромок,
         // съедала их - стопка превращалась в серое пятно.
         .shadow(
-            elevation = if (m.rims > 0) 10.dp else 7.dp,
+            elevation = lift,
             shape = corner,
             clip = false,
             ambientColor = tones.cast,
@@ -210,31 +260,36 @@ fun Modifier.pageCard(tones: PaperTones, style: String, shape: BookShape): Modif
         .background(tones.paper)
         // Блик полосой по верхней трети, к концу полосы в ноль: градиент во всю
         // высоту читался бы не объёмом, а заливкой (у Правки та же история).
-        .background(
-            Brush.verticalGradient(
-                0f to Color.White.copy(alpha = tones.sheen),
-                SHEEN_SPAN * 0.55f to Color.White.copy(alpha = tones.sheen * 0.3f),
-                SHEEN_SPAN to Color.Transparent,
-            )
-        )
-        .background(
-            Brush.verticalGradient(
-                1f - FOOT_SPAN to Color.Transparent,
-                1f to Color.Black.copy(alpha = tones.foot),
-            )
+        .then(
+            if (!look.sheen) Modifier else Modifier
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.White.copy(alpha = tones.sheen),
+                        SHEEN_SPAN * 0.55f to Color.White.copy(alpha = tones.sheen * 0.3f),
+                        SHEEN_SPAN to Color.Transparent,
+                    )
+                )
+                .background(
+                    Brush.verticalGradient(
+                        1f - FOOT_SPAN to Color.Transparent,
+                        1f to Color.Black.copy(alpha = tones.foot),
+                    )
+                )
         )
         // Фаска: светлая линия сверху, тёмная снизу, посередине её нет. Ровный
         // кант по периметру читался бы рамкой виджета, разный - толщиной.
-        .border(
-            width = 1.dp,
-            brush = Brush.verticalGradient(
-                0f to Color.White.copy(alpha = tones.rimLight),
-                0.5f to Color.Transparent,
-                1f to Color.Black.copy(alpha = tones.rimShade),
-            ),
-            shape = corner,
+        .then(
+            if (!look.bevel) Modifier else Modifier.border(
+                width = 1.dp,
+                brush = Brush.verticalGradient(
+                    0f to Color.White.copy(alpha = tones.rimLight),
+                    0.5f to Color.Transparent,
+                    1f to Color.Black.copy(alpha = tones.rimShade),
+                ),
+                shape = corner,
+            )
         )
-        .grain(tones.grain)
+        .then(if (look.grain) Modifier.grain(tones.grain) else Modifier)
 }
 
 /**
@@ -347,3 +402,9 @@ private fun grainBitmap(): ImageBitmap {
 /** Блик занимает верхнюю треть, затенение - нижнюю пятую: как у плашек Правки. */
 private const val SHEEN_SPAN = 0.34f
 private const val FOOT_SPAN = 0.2f
+
+/**
+ * Скругление карточки. Крупное нарочно: у Правки кнопки и плашки круглые, и
+ * страница с робким радиусом рядом с ними выглядела бы диалогом системы.
+ */
+private val CARD_RADIUS = 24.dp
