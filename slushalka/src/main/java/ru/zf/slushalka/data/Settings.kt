@@ -82,6 +82,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerFooter: String = FOOTER_BOOK,
         /** Переносы: без них выключка по ширине рвёт строку дырами. */
         val readerHyphens: Boolean = true,
+        /** Абзацы отступом первой строки, как в книге, а не отбивкой между ними. */
+        val readerIndent: Boolean = true,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
         // экраном система нередко считает плотность малой, и кнопки с надписями
         // выходят мелкими. Множитель к плотности - растёт всё разом, включая
@@ -161,6 +163,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerTable = p[KEY_R_TABLE]?.takeIf { it in TABLES } ?: TABLE_MID,
                 readerFooter = p[KEY_R_FOOTER]?.takeIf { it in FOOTERS } ?: FOOTER_BOOK,
                 readerHyphens = p[KEY_R_HYPHENS] ?: true,
+                readerIndent = p[KEY_R_INDENT] ?: true,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
                 updateAuto = p[KEY_UPD_AUTO] ?: true,
@@ -231,6 +234,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderTable(v: Float) = edit { if (v in TABLES) it[KEY_R_TABLE] = v }
     suspend fun setReaderFooter(v: String) = edit { if (v in FOOTERS) it[KEY_R_FOOTER] = v }
     suspend fun setReaderHyphens(v: Boolean) = edit { it[KEY_R_HYPHENS] = v }
+    suspend fun setReaderIndent(v: Boolean) = edit { it[KEY_R_INDENT] = v }
     suspend fun setUiScale(v: Float) = edit { if (v in UI_SCALES) it[KEY_UI_SCALE] = v }
     suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
     suspend fun setUpdateAuto(v: Boolean) = edit { it[KEY_UPD_AUTO] = v }
@@ -430,6 +434,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_TABLE = floatPreferencesKey("reader_table")
         private val KEY_R_FOOTER = stringPreferencesKey("reader_footer")
         private val KEY_R_HYPHENS = booleanPreferencesKey("reader_hyphens")
+        private val KEY_R_INDENT = booleanPreferencesKey("reader_indent")
         private val KEY_UI_SCALE = floatPreferencesKey("ui_scale")
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
         private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")

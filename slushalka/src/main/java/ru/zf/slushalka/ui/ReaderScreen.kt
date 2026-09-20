@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -79,9 +80,11 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import java.io.File
@@ -211,7 +214,15 @@ fun ReaderScreen(
     val chapterStarts = remember(t) { t.chapters.map { it.start }.toHashSet() }
     val isHeading: (Block) -> Boolean = { it.picture == null && it.start in chapterStarts && it.text.length < 120 }
 
-    fun styleFor(heading: Boolean) = TextStyle(
+    // Отбивка между абзацами: в книге её нет, абзац начинается отступом первой
+    // строки. Тумблер «Абзацный отступ» переключает одно на другое разом - и
+    // здесь, и в разбивке на страницы, иначе они разошлись бы.
+    val paragraphGap = if (prefs.readerIndent) 0.dp else 10.dp
+
+    /** [head] - кусок начинает абзац; продолжению на новой странице отступ не положен. */
+    fun styleFor(heading: Boolean, head: Boolean = true) = TextStyle(
+        textIndent = if (prefs.readerIndent && !heading && head) TextIndent(firstLine = 1.5.em)
+        else TextIndent.None,
         // Переносы: без них выключка по ширине растаскивает строку дырами -
         // на широком экране это видно сразу.
         //
@@ -383,7 +394,8 @@ fun ReaderScreen(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
                 tones = tones, look = look, turn = prefs.readerPageTurn,
                 shape = shape, marks = marks,
-                margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
+                margin = prefs.readerMargin, gap = paragraphGap,
+                styleFor = ::styleFor, isHeading = isHeading,
                 target = target, onTargetUsed = { target = null },
                 onShown = { start, end -> offset = start; shownEnd = end },
                 onToggleBars = { bars = !bars },
@@ -395,7 +407,8 @@ fun ReaderScreen(
             ScrollBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
                 tones = tones, look = look, shape = shape, marks = marks,
-                margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
+                margin = prefs.readerMargin, gap = paragraphGap,
+                styleFor = ::styleFor, isHeading = isHeading,
                 bars = bars, topBarPx = topBarPx, bottomBarPx = bottomBarPx,
                 target = target, onTargetUsed = { target = null },
                 onShown = { start, end -> offset = start; shownEnd = end },
@@ -736,7 +749,9 @@ private fun ScrollBody(
     shape: BookShape,
     marks: PageMarks,
     margin: Int,
-    styleFor: (Boolean) -> TextStyle,
+    /** Отбивка между абзацами; ноль, когда абзацы отступом. */
+    gap: Dp,
+    styleFor: (heading: Boolean, head: Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
     /** Панели видны и сколько они закрывают сверху и снизу (px). */
     bars: Boolean,
@@ -883,17 +898,17 @@ private fun ScrollBody(
                         DisposableEffect(block.start) { onDispose { hits.forget(block.start) } }
                         Text(
                             text = litText(block.text, block.start, highlight, highlightAlpha, palette),
-                            style = styleFor(heading),
+                            style = styleFor(heading, true),
                             onTextLayout = { hits.layout(block.start, it) },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = if (heading) 28.dp else 0.dp, bottom = 10.dp)
+                                .padding(top = if (heading) 28.dp else 0.dp, bottom = if (heading) 14.dp else gap)
                                 .onGloballyPositioned { hits.place(block.start, it.boundsInRoot()) },
                         )
                     }
                 }
             }
-            PageMarksLayer(marks, PageSide.SINGLE, palette, margin, styleFor(false))
+            PageMarksLayer(marks, PageSide.SINGLE, palette, margin, styleFor(false, false))
         }
     }
 }
@@ -913,7 +928,8 @@ private fun PagedBody(
     shape: BookShape,
     marks: PageMarks,
     margin: Int,
-    styleFor: (Boolean) -> TextStyle,
+    gap: Dp,
+    styleFor: (heading: Boolean, head: Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
     target: Int?,
     onTargetUsed: () -> Unit,
@@ -945,14 +961,17 @@ private fun PagedBody(
             (maxHeight - topInset - bottomInset - chrome.height - PAGE_TOP - PAGE_BOTTOM)
                 .roundToPx()
         }
-        val gapPx = with(density) { 10.dp.roundToPx() }
+        val gapPx = with(density) { gap.roundToPx() }
+        val headingTopPx = with(density) { HEADING_TOP.roundToPx() }
+        val headingGapPx = with(density) { HEADING_GAP.roundToPx() }
 
         var pages by remember { mutableStateOf<List<Page>>(emptyList()) }
         var anchor by remember { mutableIntStateOf(-1) }
         var window by remember { mutableStateOf(0..0) }
         val scope = rememberCoroutineScope()
-        val style = styleFor(false)
-        val headingStyle = styleFor(true)
+        val style = styleFor(false, true)
+        val contStyle = styleFor(false, false)
+        val headingStyle = styleFor(true, true)
         // Страница в списке и место в пейджере - разные вещи: в развороте на
         // одно место пейджера приходится две страницы.
         fun slotOf(index: Int) = if (shape.spread) index / 2 else index
@@ -997,11 +1016,14 @@ private fun PagedBody(
                 range = range,
                 measurer = measurer,
                 style = style,
+                contStyle = contStyle,
                 headingStyle = headingStyle,
                 isHeading = isHeading,
                 widthPx = widthPx,
                 heightPx = heightPx,
                 gapPx = gapPx,
+                headingTopPx = headingTopPx,
+                headingGapPx = headingGapPx,
             )
             pages = fresh
             if (fresh.isNotEmpty()) {
@@ -1078,7 +1100,8 @@ private fun PagedBody(
                         page = page, side = side, app = app, bookId = bookId, palette = palette,
                         hits = hits, tones = tones, look = look, shape = shape,
                         pad = pagePadding(look, card, side, topInset, bottomInset),
-                        margin = margin, style = style, marks = marks,
+                        margin = margin, style = style, contStyle = contStyle,
+                        headingStyle = headingStyle, gap = gap, marks = marks,
                         highlight = highlight, highlightAlpha = highlightAlpha,
                         onPicture = onPicture, modifier = modifier,
                     )
@@ -1131,6 +1154,9 @@ private fun PageFace(
     pad: PaddingValues,
     margin: Int,
     style: TextStyle,
+    contStyle: TextStyle,
+    headingStyle: TextStyle,
+    gap: Dp,
     marks: PageMarks,
     highlight: IntRange?,
     highlightAlpha: Float,
@@ -1139,7 +1165,7 @@ private fun PageFace(
 ) {
     Box(modifier.padding(pad).pageSheet(tones, look, shape, side)) {
         if (page == null) return@Box
-        PageMarksLayer(marks, side, palette, margin, style)
+        PageMarksLayer(marks, side, palette, margin, contStyle)
         Column(
             Modifier
                 .fillMaxSize()
@@ -1150,7 +1176,7 @@ private fun PageFace(
                     bottom = PAGE_BOTTOM,
                 ),
         ) {
-            page.pieces.forEach { piece ->
+            page.pieces.forEachIndexed { index, piece ->
                 val pic = piece.picture
                 if (pic != null) {
                     val file = app.texts.pictureFile(bookId, pic.file)
@@ -1161,11 +1187,20 @@ private fun PageFace(
                     DisposableEffect(piece.start) { onDispose { hits.forget(piece.start) } }
                     Text(
                         litText(piece.text, piece.start, highlight, highlightAlpha, palette),
-                        style = style,
+                        // Тем же стилем, каким мерили: заголовок - заголовочным,
+                        // продолжение абзаца - без отступа первой строки.
+                        style = when {
+                            piece.heading -> headingStyle
+                            piece.head -> style
+                            else -> contStyle
+                        },
                         onTextLayout = { hits.layout(piece.start, it) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 10.dp)
+                            .padding(
+                                top = if (piece.heading && index > 0) HEADING_TOP else 0.dp,
+                                bottom = if (piece.heading) HEADING_GAP else gap,
+                            )
                             .onGloballyPositioned { hits.place(piece.start, it.boundsInRoot()) },
                     )
                 }
@@ -1200,23 +1235,30 @@ private fun BoxScope.PageMarksLayer(
         fontWeight = FontWeight.Normal,
     )
     if (marks.head) {
-        Column(
+        // Линейка идёт по строке рядом с текстом и заполняет остаток полосы:
+        // «Автор ————» на левой странице, «———— Название» на правой. Линия под
+        // текстом читалась подчёркиванием.
+        val rule: @Composable RowScope.() -> Unit = {
+            HorizontalDivider(
+                Modifier.weight(1f).padding(horizontal = 8.dp),
+                thickness = 1.dp,
+                color = palette.dim.copy(alpha = 0.35f),
+            )
+        }
+        Row(
             Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
-                .padding(start = margin.dp, end = margin.dp, top = PAGE_TOP - 30.dp),
+                .padding(start = margin.dp, end = margin.dp, top = PAGE_TOP - 28.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(Modifier.fillMaxWidth()) {
-                if (side != PageSide.RIGHT) {
-                    Text(marks.author, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                Spacer(Modifier.weight(1f))
-                if (side != PageSide.LEFT) {
-                    Text(marks.title, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+            if (side != PageSide.RIGHT) {
+                Text(marks.author, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Spacer(Modifier.height(4.dp))
-            HorizontalDivider(thickness = 1.dp, color = palette.dim.copy(alpha = 0.35f))
+            rule()
+            if (side != PageSide.LEFT) {
+                Text(marks.title, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
     if (marks.center.isNotEmpty()) {
@@ -1240,6 +1282,9 @@ private fun BoxScope.PageMarksLayer(
 }
 
 private val PAGE_TOP = 52.dp
+/** Воздух над заголовком главы и под ним - те же числа и в разбивке, и в рисунке. */
+private val HEADING_TOP = 24.dp
+private val HEADING_GAP = 14.dp
 private val PAGE_BOTTOM = 60.dp
 /**
  * Сколько абзацев вокруг текущего места разбивать на страницы за раз.

@@ -7,8 +7,20 @@ import androidx.compose.ui.unit.Constraints
 import ru.zf.slushalka.text.Block
 import ru.zf.slushalka.text.Picture
 
-/** Кусок страницы: либо часть абзаца, либо картинка. */
-data class PagePiece(val text: String, val picture: Picture?, val start: Int = 0) {
+/**
+ * Кусок страницы: либо часть абзаца, либо картинка.
+ *
+ * [head] - кусок начинает абзац (а не продолжает его с прошлой страницы):
+ * абзацный отступ ставится только ему. [heading] - это заголовок главы, и
+ * рисовать его надо заголовочным стилем, тем же, каким мерили.
+ */
+data class PagePiece(
+    val text: String,
+    val picture: Picture?,
+    val start: Int = 0,
+    val head: Boolean = true,
+    val heading: Boolean = false,
+) {
     val end get() = start + text.length + 1
 }
 
@@ -32,11 +44,16 @@ object Paginator {
         range: IntRange,
         measurer: TextMeasurer,
         style: TextStyle,
+        /** Стиль продолжения абзаца на новой странице: без абзацного отступа. */
+        contStyle: TextStyle,
         headingStyle: TextStyle,
         isHeading: (Block) -> Boolean,
         widthPx: Int,
         heightPx: Int,
         gapPx: Int,
+        /** Воздух над заголовком главы (кроме верха страницы) и под ним. */
+        headingTopPx: Int = 0,
+        headingGapPx: Int = gapPx,
     ): List<Page> {
         if (widthPx <= 0 || heightPx <= 0) return emptyList()
         val pages = ArrayList<Page>()
@@ -65,9 +82,15 @@ object Paginator {
 
             var text = block.text
             var base = block.start
-            val st = if (isHeading(block)) headingStyle else style
+            val heading = isHeading(block)
+            if (heading && used > 0) used += headingTopPx
 
             while (text.isNotEmpty()) {
+                val head = base == block.start
+                // Продолжение абзаца меряется без отступа первой строки: он
+                // есть только у настоящего начала, иначе разбивка и рисунок
+                // разошлись бы на ширину отступа.
+                val st = if (heading) headingStyle else if (head) style else contStyle
                 val remaining = heightPx - used
                 val layout = measurer.measure(
                     AnnotatedString(text),
@@ -76,8 +99,8 @@ object Paginator {
                 )
                 if (layout.size.height <= remaining) {
                     if (pageStart < 0) pageStart = base
-                    pieces.add(PagePiece(text, null, base))
-                    used += layout.size.height + gapPx
+                    pieces.add(PagePiece(text, null, base, head, heading))
+                    used += layout.size.height + if (heading) headingGapPx else gapPx
                     break
                 }
                 var last = -1
@@ -95,7 +118,7 @@ object Paginator {
                 }
                 val end = layout.getLineEnd(last, visibleEnd = true).coerceIn(1, text.length)
                 if (pageStart < 0) pageStart = base
-                pieces.add(PagePiece(text.substring(0, end), null, base))
+                pieces.add(PagePiece(text.substring(0, end), null, base, head, heading))
                 flush()
                 val rest = text.substring(end)
                 val trimmed = rest.trimStart()

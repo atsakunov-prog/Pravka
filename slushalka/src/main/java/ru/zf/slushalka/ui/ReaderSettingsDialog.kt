@@ -245,9 +245,10 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
     Text(
         when (prefs.readerPageStyle) {
             Settings.PAGE_VOLUME ->
-                "Настоящий том: обложка кантом по краям, корешок посередине разворота, срез " +
-                    "блока сбоку - слева прочитанное, справа остаток, - и тень на столе. " +
-                    "Страница лежит внутри переплёта и смахивается, а книга остаётся на месте."
+                "Настоящий том, по фотографии свёрстанной книги: переплёт кантом по краю, " +
+                    "обрез из многих страниц сбоку - слева прочитанное, справа остаток, - сгиб " +
+                    "посередине разворота с капталом сверху и снизу, светлый стол и густая тень. " +
+                    "Страница смахивается, книга остаётся на месте."
             Settings.PAGE_BOOK ->
                 "Страница - верхняя карточка колоды: лежит на столе с мягкой тенью, по кромке " +
                     "тонкая фаска (светлая сверху, тёмная снизу), сверху блик, снизу затенение, " +
@@ -343,6 +344,13 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
     )
 
     Spacer(Modifier.height(6.dp))
+    Toggle("Абзацный отступ", prefs.readerIndent) { scope.launch { s.setReaderIndent(it) } }
+    Text(
+        "Как в свёрстанной книге: абзац начинается отступом первой строки, а не отбивкой " +
+            "между абзацами. Продолжению абзаца на новой странице отступ не ставится.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     Toggle("Переносы", prefs.readerHyphens) { scope.launch { s.setReaderHyphens(it) } }
     Text(
         "С выключкой по ширине без переносов строка растаскивается дырами между словами - " +
