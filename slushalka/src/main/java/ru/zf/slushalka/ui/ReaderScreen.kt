@@ -76,6 +76,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import java.io.File
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -157,6 +158,9 @@ fun ReaderScreen(
     val highlight = remember { androidx.compose.animation.core.Animatable(0f) }
 
     val palette = readerPalette(prefs.readerTheme, isSystemInDarkTheme())
+    // Объём страницы считается от цвета бумаги: на белой он держится на тенях,
+    // на чёрной - на засветах (см. BookPage.kt).
+    val tones = remember(palette.bg) { PaperTones(palette.bg) }
 
     val view = LocalView.current
     DisposableEffect(prefs.readerKeepAwake) {
@@ -307,12 +311,20 @@ fun ReaderScreen(
         }
     }
 
-    Box(Modifier.fillMaxSize().background(palette.bg)) {
+    // Сколько книги позади: от этого толщина стопки под страницей и глубина
+    // сгиба у корешка. Место берём верхом экрана, а не readPlace(): стопка
+    // меняется от страницы к странице, а не от того, откуда пришли со звука.
+    val progress = (offset.toFloat() / t.length.coerceAtLeast(1)).coerceIn(0f, 1f)
+    val bookInsets = pageInsets(prefs.readerPageStyle)
+
+    Box(Modifier.fillMaxSize().bookStack(tones, prefs.readerPageStyle, progress)) {
         val onLong: (Int) -> Unit = { pressed = it }
         val onTapPicture: (ShownPicture) -> Unit = { picture = it }
         if (prefs.readerPaged) {
             PagedBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
+                tones = tones, pageStyle = prefs.readerPageStyle, turn = prefs.readerPageTurn,
+                progress = progress,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
                 target = target, onTargetUsed = { target = null },
                 onShown = { start, end -> offset = start; shownEnd = end },
@@ -324,6 +336,7 @@ fun ReaderScreen(
         } else {
             ScrollBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
+                tones = tones, pageStyle = prefs.readerPageStyle, progress = progress,
                 margin = prefs.readerMargin, styleFor = ::styleFor, isHeading = isHeading,
                 bars = bars, topBarPx = topBarPx, bottomBarPx = bottomBarPx,
                 target = target, onTargetUsed = { target = null },
@@ -372,6 +385,9 @@ fun ReaderScreen(
                 Modifier
                     .onSizeChanged { topBarPx = it.height }
                     .fillMaxWidth()
+                    // Панель лежит на странице, а не на стопке: срез виден по
+                    // всей высоте экрана, и книга не разрезается полосой.
+                    .padding(end = bookInsets.end)
                     .background(palette.bg.copy(alpha = 0.96f))
                     .statusBarsPadding()
                     .padding(horizontal = 6.dp, vertical = 4.dp),
@@ -408,6 +424,7 @@ fun ReaderScreen(
                 Modifier
                     .onSizeChanged { bottomBarPx = it.height }
                     .fillMaxWidth()
+                    .padding(end = bookInsets.end, bottom = bookInsets.bottom)
                     .background(palette.bg.copy(alpha = 0.96f))
                     .navigationBarsPadding()
                     .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -656,6 +673,9 @@ private fun ScrollBody(
     blocks: List<Block>,
     palette: ReaderPalette,
     hits: TextHits,
+    tones: PaperTones,
+    pageStyle: String,
+    progress: Float,
     margin: Int,
     styleFor: (Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
@@ -737,6 +757,7 @@ private fun ScrollBody(
             }
     }
 
+    val insets = pageInsets(pageStyle)
     Box(
         Modifier
             .fillMaxSize()
@@ -759,7 +780,11 @@ private fun ScrollBody(
                         blocks.getOrNull(hit?.index ?: -1)?.let { onLongPress(it.start) }
                     },
                 )
-            },
+            }
+            // Лист - после жестов: тап у края экрана листает и там, где из-под
+            // страницы уже виден срез стопки.
+            .padding(end = insets.end, bottom = insets.bottom)
+            .bookSheet(tones, pageStyle, progress),
     ) {
         LazyColumn(
             state = listState,
@@ -767,7 +792,8 @@ private fun ScrollBody(
             // Читалка рисуется во весь экран, без Scaffold, поэтому системные
             // отступы считаем сами: иначе первая строка уезжает под часы.
             contentPadding = PaddingValues(
-                start = margin.dp,
+                // У корешка строка не начинается вплотную: там бумага уходит в сгиб.
+                start = margin.dp + insets.start,
                 end = margin.dp,
                 top = 56.dp + WindowInsets.statusBars.asPaddingValues().calculateTopPadding(),
                 bottom = 110.dp,
@@ -808,6 +834,10 @@ private fun PagedBody(
     blocks: List<Block>,
     palette: ReaderPalette,
     hits: TextHits,
+    tones: PaperTones,
+    pageStyle: String,
+    turn: String,
+    progress: Float,
     margin: Int,
     styleFor: (Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
@@ -826,9 +856,15 @@ private fun PagedBody(
         val measurer = rememberTextMeasurer()
         val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-        val widthPx = with(density) { (maxWidth - margin.dp * 2).roundToPx() }
+        // Меряем по листу, а не по экрану: срез стопки справа и снизу - не
+        // место для текста. Отступы не зависят от места в книге нарочно, иначе
+        // тающая стопка гоняла бы разбивку на каждом перелистывании.
+        val insets = pageInsets(pageStyle)
+        val widthPx = with(density) {
+            (maxWidth - margin.dp * 2 - insets.start - insets.end).roundToPx()
+        }
         val heightPx = with(density) {
-            (maxHeight - topInset - bottomInset - PAGE_TOP - PAGE_BOTTOM).roundToPx()
+            (maxHeight - topInset - bottomInset - PAGE_TOP - PAGE_BOTTOM - insets.bottom).roundToPx()
         }
         val gapPx = with(density) { 10.dp.roundToPx() }
 
@@ -937,34 +973,45 @@ private fun PagedBody(
             }
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { index ->
                 val page = pages.getOrNull(index) ?: return@HorizontalPager
-                Column(
+                Box(
                     Modifier
                         .fillMaxSize()
-                        .padding(
-                            start = margin.dp,
-                            end = margin.dp,
-                            top = topInset + PAGE_TOP,
-                            bottom = bottomInset + PAGE_BOTTOM,
-                        ),
+                        // Ранняя страница лежит поверх поздней, как в книге:
+                        // уходящий лист должен закрывать тот, что под ним.
+                        .zIndex(-index.toFloat())
+                        .pageTurn(turn, tones) { pagerState.turnOffset(index) }
+                        .padding(end = insets.end, bottom = insets.bottom)
+                        .bookSheet(tones, pageStyle, progress),
                 ) {
-                    page.pieces.forEach { piece ->
-                        val pic = piece.picture
-                        if (pic != null) {
-                            val file = app.texts.pictureFile(bookId, pic.file)
-                            PictureBlock(file, pic.caption, palette) {
-                                onPicture(ShownPicture(file, pic.caption, pic.charOffset))
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(
+                                start = margin.dp + insets.start,
+                                end = margin.dp,
+                                top = topInset + PAGE_TOP,
+                                bottom = bottomInset + PAGE_BOTTOM,
+                            ),
+                    ) {
+                        page.pieces.forEach { piece ->
+                            val pic = piece.picture
+                            if (pic != null) {
+                                val file = app.texts.pictureFile(bookId, pic.file)
+                                PictureBlock(file, pic.caption, palette) {
+                                    onPicture(ShownPicture(file, pic.caption, pic.charOffset))
+                                }
+                            } else {
+                                DisposableEffect(piece.start) { onDispose { hits.forget(piece.start) } }
+                                Text(
+                                    litText(piece.text, piece.start, highlight, highlightAlpha, palette),
+                                    style = style,
+                                    onTextLayout = { hits.layout(piece.start, it) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 10.dp)
+                                        .onGloballyPositioned { hits.place(piece.start, it.boundsInRoot()) },
+                                )
                             }
-                        } else {
-                            DisposableEffect(piece.start) { onDispose { hits.forget(piece.start) } }
-                            Text(
-                                litText(piece.text, piece.start, highlight, highlightAlpha, palette),
-                                style = style,
-                                onTextLayout = { hits.layout(piece.start, it) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 10.dp)
-                                    .onGloballyPositioned { hits.place(piece.start, it.boundsInRoot()) },
-                            )
                         }
                     }
                 }

@@ -113,7 +113,7 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 )
             }
 
-            Section("Экран")
+            Section("Внешний вид")
             Text("Масштаб интерфейса", style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Settings.UI_SCALES.forEach { k ->
@@ -129,6 +129,12 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                     "растёт разом весь интерфейс, кнопки и надписи. Кегль текста в читалке " +
                     "настраивается отдельно, в «Аа Вид»."
             )
+
+            // Тот же кусок, что в «Аа Вид» читалки: настройка одна, экрана два.
+            PageLookSettings(app) { title ->
+                Spacer(Modifier.height(12.dp))
+                Text(title, style = MaterialTheme.typography.bodyMedium)
+            }
 
             // Раздел про открытую книгу - здесь, а не только в настройках
             // читалки: сюда заходят в первую очередь, и «где мои картинки»

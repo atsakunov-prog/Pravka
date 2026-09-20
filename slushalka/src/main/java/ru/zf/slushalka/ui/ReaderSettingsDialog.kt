@@ -161,6 +161,8 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
                     }
                 }
 
+                PageLookSettings(app, labels = { Label(it) })
+
                 Spacer(Modifier.height(10.dp))
                 Toggle("Выключка по ширине", prefs.readerJustify) {
                     scope.launch { s.setReaderJustify(it) }
@@ -210,6 +212,83 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
             }
         },
         confirmButton = { TextButton(onClick = onClose) { Text("Готово") } },
+    )
+}
+
+/**
+ * Объём страницы и перелистывание.
+ *
+ * Один кусок на два экрана: крутят его и из читалки («Аа Вид»), и из общих
+ * настроек («Внешний вид»), а настройка одна - дублировать её парой чипов в
+ * двух местах значило бы однажды их разойтись.
+ *
+ * [labels] - как экран подписывает разделы: в диалоге читалки свои подписи,
+ * в общих настройках свои.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
+    val prefs by app.state.prefs.collectAsState()
+    val scope = rememberCoroutineScope()
+    val s = app.state.settings
+
+    labels("Объём страницы")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Settings.PAGE_STYLES.forEach { id ->
+            FilterChip(
+                selected = prefs.readerPageStyle == id,
+                onClick = { scope.launch { s.setReaderPageStyle(id) } },
+                label = { Text(Settings.pageStyleLabel(id)) },
+            )
+        }
+    }
+    Text(
+        when (prefs.readerPageStyle) {
+            Settings.PAGE_BOOK ->
+                "Экран - не белый лист, а верхняя страница книги: слева бумага уходит в " +
+                    "корешок и темнеет, справа и снизу из-под неё выглядывает стопка ещё не " +
+                    "прочитанных страниц, на саму страницу падает свет. Стопка тает по мере " +
+                    "чтения, а сгиб становится глубже - прочитанное ушло на ту сторону " +
+                    "разворота. Размеры берутся от экрана: на планшете корешок шире."
+            Settings.PAGE_SOFT ->
+                "То же вполсилы и без стопки: мягкий свет на бумаге и лёгкая тень у корешка. " +
+                    "Для тех, кому полная книга мешает читать."
+            else -> "Ровная заливка во весь экран, как было раньше."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    labels("Перелистывание")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Settings.PAGE_TURNS.forEach { id ->
+            FilterChip(
+                selected = prefs.readerPageTurn == id,
+                onClick = { scope.launch { s.setReaderPageTurn(id) } },
+                label = { Text(Settings.pageTurnLabel(id)) },
+            )
+        }
+    }
+    Text(
+        buildString {
+            append(
+                when (prefs.readerPageTurn) {
+                    Settings.TURN_BOOK ->
+                        "Лист поворачивается вокруг корешка и открывает следующий, который " +
+                            "всё это время лежит неподвижно, - как в настоящей книге."
+                    Settings.TURN_OVER ->
+                        "Верхний лист уезжает, нижний лежит на месте, и по его краю идёт тень."
+                    Settings.TURN_SLIDE -> "Обе страницы едут вбок - обычное листание."
+                    else -> "Страница растворяется, не двигаясь с места."
+                }
+            )
+            if (!prefs.readerPaged) {
+                append(" Работает при листании страницами: сейчас выбрана прокрутка, ")
+                append("и лист там не переворачивается.")
+            }
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
 

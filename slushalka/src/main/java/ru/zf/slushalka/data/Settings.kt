@@ -61,6 +61,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerKeepAwake: Boolean = true,
         /** true - листание постранично, false - обычная прокрутка. */
         val readerPaged: Boolean = false,
+        // Вид страницы: читалка рисует не белый лист, а верхнюю страницу книги -
+        // со стопкой под ней, сгибом у корешка и светом (см. BookPage.kt).
+        val readerPageStyle: String = PAGE_BOOK,
+        /** Как уходит страница при листании; в прокрутке ни при чём. */
+        val readerPageTurn: String = TURN_BOOK,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
         // экраном система нередко считает плотность малой, и кнопки с надписями
         // выходят мелкими. Множитель к плотности - растёт всё разом, включая
@@ -129,6 +134,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerTheme = p[KEY_R_THEME] ?: THEME_AUTO,
                 readerKeepAwake = p[KEY_R_AWAKE] ?: true,
                 readerPaged = p[KEY_R_PAGED] ?: false,
+                readerPageStyle = p[KEY_R_PAGE_STYLE]?.takeIf { it in PAGE_STYLES } ?: PAGE_BOOK,
+                readerPageTurn = p[KEY_R_PAGE_TURN]?.takeIf { it in PAGE_TURNS } ?: TURN_BOOK,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
                 updateAuto = p[KEY_UPD_AUTO] ?: true,
@@ -188,6 +195,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderTheme(v: String) = edit { it[KEY_R_THEME] = v }
     suspend fun setReaderKeepAwake(v: Boolean) = edit { it[KEY_R_AWAKE] = v }
     suspend fun setReaderPaged(v: Boolean) = edit { it[KEY_R_PAGED] = v }
+    suspend fun setReaderPageStyle(v: String) = edit { if (v in PAGE_STYLES) it[KEY_R_PAGE_STYLE] = v }
+    suspend fun setReaderPageTurn(v: String) = edit { if (v in PAGE_TURNS) it[KEY_R_PAGE_TURN] = v }
     suspend fun setUiScale(v: Float) = edit { if (v in UI_SCALES) it[KEY_UI_SCALE] = v }
     suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
     suspend fun setUpdateAuto(v: Boolean) = edit { it[KEY_UPD_AUTO] = v }
@@ -257,6 +266,36 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val THEME_GREY = "grey"
         const val THEME_BLACK = "black"
 
+        // Объём страницы. Заводской - «как книга»: ради него всё и затевалось,
+        // а кому мешает - два шага назад, до плоского листа.
+        const val PAGE_BOOK = "book"
+        const val PAGE_SOFT = "soft"
+        const val PAGE_FLAT = "flat"
+
+        val PAGE_STYLES = listOf(PAGE_BOOK, PAGE_SOFT, PAGE_FLAT)
+
+        fun pageStyleLabel(style: String): String = when (style) {
+            PAGE_BOOK -> "Как книга"
+            PAGE_SOFT -> "Мягкий свет"
+            else -> "Плоско"
+        }
+
+        // Как уходит страница: поворотом вокруг корешка, внахлёст, сдвигом
+        // (как было) или растворяясь.
+        const val TURN_BOOK = "book"
+        const val TURN_OVER = "over"
+        const val TURN_SLIDE = "slide"
+        const val TURN_FADE = "fade"
+
+        val PAGE_TURNS = listOf(TURN_BOOK, TURN_OVER, TURN_SLIDE, TURN_FADE)
+
+        fun pageTurnLabel(turn: String): String = when (turn) {
+            TURN_BOOK -> "Разворот"
+            TURN_OVER -> "Внахлёст"
+            TURN_SLIDE -> "Сдвиг"
+            else -> "Растворение"
+        }
+
         private val KEY_API: Preferences.Key<String> = stringPreferencesKey("anthropic_api_key")
         private val KEY_LIB = stringPreferencesKey("library_uri")
         /** Дополнительные папки, через перевод строки: в URI его быть не может. */
@@ -281,6 +320,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_THEME = stringPreferencesKey("reader_theme")
         private val KEY_R_AWAKE = booleanPreferencesKey("reader_keep_awake")
         private val KEY_R_PAGED = booleanPreferencesKey("reader_paged")
+        private val KEY_R_PAGE_STYLE = stringPreferencesKey("reader_page_style")
+        private val KEY_R_PAGE_TURN = stringPreferencesKey("reader_page_turn")
         private val KEY_UI_SCALE = floatPreferencesKey("ui_scale")
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
         private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")
