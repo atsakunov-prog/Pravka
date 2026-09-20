@@ -100,11 +100,24 @@ class DiskController(
         private const val WORK_FADE_MS = 700L
         /** Толщина дуги прогресса — доля радиуса тарелки; заметно, но не обод. */
         private const val WORK_WIDTH_FACTOR = 0.035f
-        /** Стрелка на кромке: насколько она вдвинута внутрь и какого размера — доли радиуса. */
-        private const val ARROW_INSET = 0.1f
-        private const val ARROW_SIZE = 0.1f
-        /** Палец попал в стрелку, если он ближе этого к её центру (доля радиуса). */
+        /**
+         * Стрелка на кромке: насколько она вдвинута внутрь и какого размера —
+         * доли радиуса. Владелец (20.09.2026): «стрелку на краю диска
+         * поменьше и побледнее» — она подсказка, а не кнопка режима, и
+         * соперничать с «П» и «З» за взгляд ей незачем.
+         */
+        private const val ARROW_INSET = 0.09f
+        private const val ARROW_SIZE = 0.065f
+        /**
+         * Палец попал в стрелку, если он ближе этого к её центру (доля
+         * радиуса). Зона ОСТАЁТСЯ прежней, хотя рисунок уменьшился: целиться
+         * приходится в стекло у края экрана, часто на ходу, и мелкий значок
+         * не повод делать мелкой мишень.
+         */
         private const val ARROW_TOUCH = 0.17f
+        /** Плотность шеврона и его тени: подсказка, а не знак. */
+        private const val ARROW_ALPHA = 0.5f
+        private const val ARROW_SHADOW = 0.16f
         /** Окно кнопки за краем с таким запасом — снимается. */
         private const val OFFSCREEN_MARGIN_DP = 2
         /** Кнопка не там, где ей быть, дальше этого — расставить заново. */
@@ -1434,7 +1447,7 @@ class DiskController(
             val size = (r * ARROW_SIZE).coerceAtLeast(4f)
             // Наружу — значит против лица; внутрь — по лицу.
             val dir = if (sunk) facing else facing + 180f
-            arrow.strokeWidth = (size * 0.34f).coerceAtLeast(2f)
+            arrow.strokeWidth = (size * 0.38f).coerceAtLeast(2f)
             arrowPath.reset()
             // Шеврон: два луча от кончика назад, под 40° к направлению.
             val tip = Math.toRadians(dir.toDouble())
@@ -1447,12 +1460,12 @@ class DiskController(
             }
             // Тень под шевроном и сам шеврон: тот же свет сверху, что у всего
             // остального — тёмный штрих снизу, светлый поверх.
-            arrow.color = DiskLook.black(0.35f)
+            arrow.color = DiskLook.black(ARROW_SHADOW)
             canvas.save()
             canvas.translate(0f, arrow.strokeWidth * 0.4f)
             canvas.drawPath(arrowPath, arrow)
             canvas.restore()
-            arrow.color = DiskLook.withAlpha(DiskLook.gearInk(light), 0.85f)
+            arrow.color = DiskLook.withAlpha(DiskLook.gearInk(light), ARROW_ALPHA)
             canvas.drawPath(arrowPath, arrow)
         }
 
