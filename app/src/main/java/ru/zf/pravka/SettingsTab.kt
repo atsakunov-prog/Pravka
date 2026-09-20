@@ -650,6 +650,62 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
     )
     HintText("Ноль — теней нет. Они и делают кнопки лежащими НА стекле, а не под ним.")
 
+    Spacer(Modifier.height(8.dp))
+    // Три тумблера вида и поведения (владелец, 20.09.2026): «матовое стекло
+    // делаем, но с выключением в настройках», «рельс давай попробуем… тоже с
+    // выключением», «инерция выглядит круто. Делаем. Выключалкой в настройках».
+    val frost by settings.diskFrostFlow.collectAsState(initial = true)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(checked = frost, onCheckedChange = { on -> scope.launch { settings.setDiskFrost(on) } })
+        Spacer(Modifier.width(8.dp))
+        Text("Матовое стекло", style = MaterialTheme.typography.bodyMedium)
+    }
+    HintText(
+        "Мелкое зерно по тарелке: стекло перестаёт быть плёнкой. Системное " +
+            "размытие фона сюда не годится — оно размывает ПРЯМОУГОЛЬНИК окна, а " +
+            "окно у круглой тарелки квадратное, и вокруг диска висел бы размытый " +
+            "квадрат."
+    )
+
+    val rail by settings.diskRailFlow.collectAsState(initial = true)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(checked = rail, onCheckedChange = { on -> scope.launch { settings.setDiskRail(on) } })
+        Spacer(Modifier.width(8.dp))
+        Text("Рельс под кнопками", style = MaterialTheme.typography.bodyMedium)
+    }
+    HintText(
+        "Канавка по кольцу, на котором сидят кнопки: видна в промежутках между " +
+            "ними, и глазу сразу понятно, что диск крутится, а не просто лежит. " +
+            "Это не те засечки, что мы сняли: рельс ровный и под кнопки не лезет."
+    )
+
+    val inertia by settings.diskInertiaFlow.collectAsState(initial = true)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(checked = inertia, onCheckedChange = { on -> scope.launch { settings.setDiskInertia(on) } })
+        Spacer(Modifier.width(8.dp))
+        Text("Инерция при переезде", style = MaterialTheme.typography.bodyMedium)
+    }
+    if (inertia) {
+        val roll by settings.diskRollFlow.collectAsState(initial = Settings.DISK_ROLL_DEFAULT)
+        var rollSlider by remember(roll) { mutableStateOf(roll) }
+        Text(
+            "Охота катиться: ${(rollSlider * 100).toInt()} %",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Slider(
+            value = rollSlider,
+            onValueChange = { rollSlider = it },
+            onValueChangeFinished = { scope.launch { settings.setDiskRoll(rollSlider) } },
+            valueRange = 0f..1.5f,
+        )
+    }
+    HintText(
+        "Везёшь диск вбок — кольцо проворачивается, как колесо по поверхности. " +
+            "Сто процентов — настоящее качение без проскальзывания; заводские " +
+            "пятьдесят, потому что на полном взмахе через экран кнопки успевают " +
+            "уехать из-под руки. На отпускании диск всё равно щёлкает по четверти."
+    )
+
     Spacer(Modifier.height(6.dp))
     OutlinedButton(onClick = { scope.launch { settings.resetDiskLook() } }) {
         Text("Вернуть вид диска в счёт")

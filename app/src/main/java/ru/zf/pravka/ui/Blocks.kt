@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -19,7 +20,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.unit.Dp
@@ -40,6 +44,26 @@ fun PaperLabel(text: String, color: Color? = null) {
         style = MaterialTheme.typography.labelMedium,
         color = color ?: MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+    )
+}
+
+/**
+ * Фаска по кромке плашки: светлая линия сверху, тёмная снизу, посередине её
+ * нет. Один штрих с продольным градиентом — ровный кант по всему периметру
+ * читался бы как рамка виджета, а разный сверху и снизу — как толщина
+ * предмета. То же правило, что у `trigger/BubbleSkin.kt` на стекле: свет в
+ * приложении и на кнопках должен падать с одной стороны, иначе это два
+ * дизайна в одном экране.
+ */
+fun Modifier.bevel(shape: Shape? = null): Modifier = composed {
+    border(
+        width = 1.dp,
+        brush = Brush.verticalGradient(
+            0f to Color.White.copy(alpha = 0.10f),
+            0.5f to Color.Transparent,
+            1f to Color.Black.copy(alpha = 0.14f),
+        ),
+        shape = shape ?: MaterialTheme.shapes.medium,
     )
 }
 
@@ -64,10 +88,22 @@ fun PaperCard(
         }
         // Узор знаков режима — на самой плашке, под текстом (владелец, 15.09).
         val decor = LocalModeDecor.current
-        Card(Modifier.fillMaxWidth()) {
+        // Фаска и свет сверху — те же, что у кнопок на стекле (владелец,
+        // 20.09.2026: «кнопки очень красивые, сделаешь тогда их
+        // характеристики и у плашек»; следом — «плашки выглядят немного
+        // грязными»). Плоский прямоугольник тёмного тёплого цвета читается
+        // пылью; тот же цвет с ребром и светом сверху — предметом.
+        Card(Modifier.fillMaxWidth().bevel()) {
             Box(
                 Modifier
                     .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.White.copy(alpha = 0.05f),
+                            0.45f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.05f),
+                        )
+                    )
                     .then(if (decor != null) Modifier.glyphPattern(decor) else Modifier),
             ) {
                 Column(

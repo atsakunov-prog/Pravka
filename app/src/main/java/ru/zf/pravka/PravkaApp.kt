@@ -8,6 +8,7 @@ import ru.zf.pravka.core.DictionaryApplier
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.HistoryLog
+import ru.zf.pravka.data.PaceStore
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Recordings
 import ru.zf.pravka.data.Settings
@@ -56,6 +57,19 @@ class PravkaApp : Application() {
                 claudeProvider.requestLogger = if (on) ({ text -> requestLog.add(text) }) else null
             }
         }
+        // Сколько идёт запрос — в историю, а ход запроса — тому, кто его
+        // показывает (20.09.2026). Та же одна точка на все дороги: здесь
+        // известны и дорога, и модель, и длина входа.
+        claudeProvider.workStart = { route, model, chars ->
+            val expect = paceStore.expect(route, model, chars)
+            workWatcher?.invoke(route, expect, false, true)
+        }
+        claudeProvider.workDone = { route, model, chars, ms, ok ->
+            // Замер пишем только с удачного ответа: время упавшего запроса —
+            // это время сети, а не время модели.
+            if (ok) paceStore.record(route, model, chars, ms)
+            workWatcher?.invoke(route, 0L, true, ok)
+        }
         // Кэш промпта виден в статистике: транспорт отдаёт расход каждого ответа,
         // сюда падают токены чтения и записи кэша со всех дорог сразу.
         claudeProvider.usageObserver = { r ->
@@ -68,7 +82,16 @@ class PravkaApp : Application() {
         }
     }
 
+    /**
+     * Кто показывает ход запроса: служба ставит сюда свою дугу на стекле
+     * диска. Отдельным полем, а не подпиской в транспорте: на `workStart`
+     * поле одно, и хранилище истории уже его заняло.
+     */
+    var workWatcher: ((route: String, expectMs: Long, done: Boolean, ok: Boolean) -> Unit)? = null
+
     val settings by lazy { Settings(this) }
+    /** История «сколько идёт запрос» по парам «дорога + модель». */
+    val paceStore by lazy { PaceStore(this) }
     val promptStore by lazy { PromptStore(this) }
     val stats by lazy { Stats(this) }
     val dictionaryStore by lazy { DictionaryStore(this) }

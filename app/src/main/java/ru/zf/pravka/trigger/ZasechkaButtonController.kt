@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.core.DiskLook
+import ru.zf.pravka.core.MicLevel
 import ru.zf.pravka.data.Settings
 
 // The Засечка (timesheet) button: Правка's little sibling, drawn from the
@@ -48,7 +49,8 @@ class ZasechkaButtonController(
         // Warm pair with the "П": red-orange pen there, a marker halfway
         // between orange and yellow here (owner tuned it twice - this is the
         // midpoint) - same paper-white glyph on both.
-        private val AMBER = 0xFFF78810.toInt()
+        /** Цвет кнопки «З» — им же идёт дуга прогресса по кромке стекла. */
+        val AMBER = 0xFFF78810.toInt()
         private val AMBER_DEEP = 0xFFEA580C.toInt()   // remind pulse
         private val REC_RED = FloatingButtonController.REC_RED
         private val PAPER = 0xFFF7F3EA.toInt()
@@ -115,6 +117,34 @@ class ZasechkaButtonController(
             if (attached) button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
         }
 
+    /**
+     * Пульс по громкости: на записи кнопка поджата (`MicLevel.QUIET`) и
+     * распрямляется от голоса. Наружу расти нельзя — окно ровно с кружок и
+     * срезало бы его по краям, — поэтому растём «из поджатого».
+     */
+    override fun setLevel(level: Float) {
+        if (!recording) return
+        val v = button ?: return
+        micPulse = MicLevel.smooth(micPulse, level)
+        val s = MicLevel.scale(micPulse)
+        v.animate().cancel()
+        v.scaleX = s
+        v.scaleY = s
+    }
+
+    /** Сглаженная громкость: замеры приходят рывками, кнопка не должна дрожать. */
+    private var micPulse = 0f
+
+    /** Запись кончилась — кнопка распрямляется из пульса в свой размер. */
+    private fun restPulse() {
+        micPulse = 0f
+        button?.let { v ->
+            v.animate().cancel()
+            v.scaleX = 1f
+            v.scaleY = 1f
+        }
+    }
+
     /** Поставить лицу текущую плотность — пока кнопка не занята и не пишет. */
     private fun applyFaceAlpha() {
         cancelBubble.setAlpha(idleAlpha)
@@ -167,6 +197,7 @@ class ZasechkaButtonController(
     /** Recording: red stop glyph at full opacity, like the big button. */
     fun setRecording(value: Boolean) {
         recording = value
+        if (!value) restPulse()
         recDot?.visibility = if (value) View.VISIBLE else View.GONE
         applyFaceAndLook()
     }

@@ -68,6 +68,10 @@ class Settings(private val context: Context) {
         private val KEY_DISK_PLATE_ALPHA = floatPreferencesKey("disk_plate_alpha")
         private val KEY_DISK_FACE_ALPHA = floatPreferencesKey("disk_face_alpha")
         private val KEY_DISK_SOCKET_ALPHA = floatPreferencesKey("disk_socket_alpha")
+        private val KEY_DISK_FROST = booleanPreferencesKey("disk_frost")
+        private val KEY_DISK_RAIL = booleanPreferencesKey("disk_rail")
+        private val KEY_DISK_INERTIA = booleanPreferencesKey("disk_inertia")
+        private val KEY_DISK_ROLL = floatPreferencesKey("disk_roll_k")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -147,6 +151,13 @@ class Settings(private val context: Context) {
         const val DISK_GAP_DEFAULT = 8
         const val DISK_GAP_MIN = 2
         const val DISK_GAP_MAX = 28
+
+        /**
+         * Охота диска катиться при переезде. Половина настоящего качения:
+         * на полной единице кольцо за один взмах через экран уходит на
+         * полтора оборота, и кнопки успевают уехать из-под руки.
+         */
+        const val DISK_ROLL_DEFAULT = 0.5f
 
         // Заводские цели КБЖУ: посчитаны по Миффлину-Сан-Жеору для владельца
         // (86 кг, 180 см, 1982) при умеренной активности, белок 1,8 г/кг.
@@ -467,6 +478,35 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_DISK_SOCKET_ALPHA] = value.coerceIn(0f, 0.6f) }
     }
 
+    /**
+     * Матовое стекло — зерно по тарелке. Системное размытие фона сюда не
+     * годится: оно размывает прямоугольник окна, а окно у круглой тарелки
+     * квадратное (см. `DiskLook.frostAlpha`). Тумблер — владелец просил
+     * выключение отдельно от всего остального.
+     */
+    val diskFrostFlow = context.dataStore.data.map { it[KEY_DISK_FROST] ?: true }
+    suspend fun setDiskFrost(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK_FROST] = value }
+    }
+
+    /** Рельс — канавка по кольцу, на котором сидят кнопки. */
+    val diskRailFlow = context.dataStore.data.map { it[KEY_DISK_RAIL] ?: true }
+    suspend fun setDiskRail(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK_RAIL] = value }
+    }
+
+    /** Инерция: диск катится, пока его везут. */
+    val diskInertiaFlow = context.dataStore.data.map { it[KEY_DISK_INERTIA] ?: true }
+    suspend fun setDiskInertia(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK_INERTIA] = value }
+    }
+
+    /** Насколько охотно катится: 1,0 — качение без проскальзывания. */
+    val diskRollFlow = context.dataStore.data.map { it[KEY_DISK_ROLL] ?: DISK_ROLL_DEFAULT }
+    suspend fun setDiskRoll(value: Float) {
+        context.dataStore.edit { it[KEY_DISK_ROLL] = value.coerceIn(0f, 1.5f) }
+    }
+
     /** Вернуть вид диска в счёт: размеры — к заводским, плотности — к формулам. */
     suspend fun resetDiskLook() {
         context.dataStore.edit {
@@ -475,6 +515,7 @@ class Settings(private val context: Context) {
             it.remove(KEY_DISK_PLATE_ALPHA)
             it.remove(KEY_DISK_FACE_ALPHA)
             it.remove(KEY_DISK_SOCKET_ALPHA)
+            it.remove(KEY_DISK_ROLL)
         }
     }
 

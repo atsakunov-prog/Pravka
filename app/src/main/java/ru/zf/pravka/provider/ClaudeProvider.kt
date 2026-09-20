@@ -683,6 +683,18 @@ $listing
      */
     internal var usageObserver: ((ApiReply) -> Unit)? = null
 
+    /**
+     * Кто смотрит, КОГДА запрос идёт и сколько шёл (20.09.2026). Одна точка на
+     * все дороги, как и у расхода: здесь известны и дорога, и модель, и длина
+     * входа — то есть ровно то, из чего считается ожидание
+     * (`core/Pace.kt`). Дуга прогресса на стекле диска живёт отсюда.
+     *
+     * Зовётся с потока запроса (IO): и служба, и хранилище сами решают, куда
+     * это переложить.
+     */
+    internal var workStart: ((route: String, model: String, chars: Int) -> Unit)? = null
+    internal var workDone: ((route: String, model: String, chars: Int, ms: Long, ok: Boolean) -> Unit)? = null
+
     internal fun requestWithOneRetry(
         apiKey: String,
         model: String,
@@ -701,6 +713,9 @@ $listing
         // short-backoff retry turns them from a user-visible failure into
         // nothing. A short pause before the network retry too: an instant
         // re-POST into the same dead socket just fails the same way.
+        val chars = input.length
+        val startedAt = System.currentTimeMillis()
+        runCatching { workStart?.invoke(routeKey, model, chars) }
         val raw = try {
             request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
         } catch (e: IOException) {
@@ -710,7 +725,14 @@ $listing
             if (!e.retryable) throw e
             Thread.sleep(e.retryDelayMs)
             request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
+        } catch (e: Throwable) {
+            // Сорвалось — дугу надо погасить, иначе она останется висеть на
+            // стекле до следующего запроса. Замер при этом НЕ пишем: время
+            // упавшего запроса не про то, сколько идёт нормальный.
+            runCatching { workDone?.invoke(routeKey, model, chars, System.currentTimeMillis() - startedAt, false) }
+            throw e
         }
+        runCatching { workDone?.invoke(routeKey, model, chars, System.currentTimeMillis() - startedAt, true) }
         val reply = raw.copy(route = routeKey)
         // Ответ — в тот же лог отладки, что и запрос (владелец, 18.09.2026: «надо
         // проверить, что точно промпт кэшируется»): единственная правда о кэше —

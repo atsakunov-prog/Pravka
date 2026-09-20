@@ -37,12 +37,20 @@ private val WaveDeep = Color(0xFF0F4C5C)
 // Ночь: текст живёт в плашках, фон под ними — тёмный (владелец, 15.09, второй
 // заход: «плашки должны быть на более тёмном фоне»); сами плашки на три тона
 // светлее фона, и на них — едва заметный узор знаков режима (ui/Frame.kt).
-private val NightBg = Color(0xFF161412)
-private val NightCard = Color(0xFF2B2824)
-private val NightCardHigh = Color(0xFF35312C)
-private val NightText = Color(0xFFECE5D8)
-private val NightTextSoft = Color(0xFFA79D8C)
-private val NightLine = Color(0xFF443E35)
+//
+// 20.09.2026 плашки подняли и почистили: «кнопки внизу темноватые — выглядит
+// как будто они немного грязные (и плашки тоже)». Грязь была не в узоре, а в
+// самом тоне: тёмный, тёплый и почти бесцветный — та самая зона, где глаз
+// читает не «дерево», а «пыль». Фон ушёл глубже, плашки поднялись и стали
+// чуть нейтральнее, линии посветлели; заодно у плашек появилась фаска
+// (`ui/Blocks.kt`), та же, что у кнопок на стекле, — она и делает половину
+// работы, потому что грязным выглядит не цвет, а плоскость.
+private val NightBg = Color(0xFF131210)
+private val NightCard = Color(0xFF332F2A)
+private val NightCardHigh = Color(0xFF3D3934)
+private val NightText = Color(0xFFF0EADF)
+private val NightTextSoft = Color(0xFFB2A896)
+private val NightLine = Color(0xFF4C463C)
 private val WaveBright = Color(0xFF6CC3DD)
 
 private val LightColors = lightColorScheme(

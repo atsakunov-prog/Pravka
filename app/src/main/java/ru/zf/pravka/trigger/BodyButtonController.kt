@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.core.DiskLook
+import ru.zf.pravka.core.MicLevel
 import ru.zf.pravka.data.Settings
 
 // Тело: четвёртая кнопка, «Т». Тот же TYPE_ACCESSIBILITY_OVERLAY, что у «П»,
@@ -125,6 +126,34 @@ class BodyButtonController(
             if (attached) button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
         }
 
+    /**
+     * Пульс по громкости: на записи кнопка поджата (`MicLevel.QUIET`) и
+     * распрямляется от голоса. Наружу расти нельзя — окно ровно с кружок и
+     * срезало бы его по краям, — поэтому растём «из поджатого».
+     */
+    override fun setLevel(level: Float) {
+        if (!recording) return
+        val v = button ?: return
+        micPulse = MicLevel.smooth(micPulse, level)
+        val s = MicLevel.scale(micPulse)
+        v.animate().cancel()
+        v.scaleX = s
+        v.scaleY = s
+    }
+
+    /** Сглаженная громкость: замеры приходят рывками, кнопка не должна дрожать. */
+    private var micPulse = 0f
+
+    /** Запись кончилась — кнопка распрямляется из пульса в свой размер. */
+    private fun restPulse() {
+        micPulse = 0f
+        button?.let { v ->
+            v.animate().cancel()
+            v.scaleX = 1f
+            v.scaleY = 1f
+        }
+    }
+
     /** Поставить лицу текущую плотность — пока кнопка не занята и не пишет. */
     private fun applyFaceAlpha() {
         cancelBubble.setAlpha(idleAlpha)
@@ -184,6 +213,7 @@ class BodyButtonController(
 
     fun setRecording(value: Boolean) {
         recording = value
+        if (!value) restPulse()
         recDot?.visibility = if (value) View.VISIBLE else View.GONE
         applyFace()
     }

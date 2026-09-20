@@ -41,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -57,6 +58,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -519,18 +522,43 @@ private fun MainScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
+            val navLine = MaterialTheme.colorScheme.outlineVariant
+            val navColours = NavigationBarItemDefaults.colors(
+                selectedIconColor = MaterialTheme.colorScheme.primary,
+                selectedTextColor = MaterialTheme.colorScheme.primary,
+                indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             // Шесть кнопок — порядок и подписи владельца: Правка, Засечка,
             // Дело, Тело (С), Тело (Е), Ещё. Пиктограммы те же, что могут
             // встать на плавающие кнопки: перо, часы, галочка, гантеля,
             // тарелка — один язык на всё приложение. Тап по кнопке закрывает
             // и верхний экран: владелец хочет вкладку, а не то, что над ней.
-            NavigationBar {
+            // Панель — на фоне вкладки, а не своей плитой (владелец,
+            // 20.09.2026: «кнопки внизу темноватые, выглядит как будто они
+            // немного грязные»). Тёмно-тёплая плита под тёмным фоном и была
+            // той грязью: два почти одинаковых тона, между ними ступенька.
+            // Теперь панель — продолжение фона, сверху волосяная линия, а
+            // выбранная кнопка держится акцентом, а не подложкой-пятном.
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.background,
+                modifier = Modifier.drawBehind {
+                    drawLine(
+                        color = navLine,
+                        start = Offset(0f, 0f),
+                        end = Offset(size.width, 0f),
+                        strokeWidth = 1.dp.toPx(),
+                    )
+                },
+            ) {
                 NavigationBarItem(
                     selected = tab == Tab.PRAVKA && page == null,
                     onClick = { tab = Tab.PRAVKA; page = null },
                     icon = {
                         Icon(painterResource(R.drawable.ic_mode_pravka), contentDescription = null)
                     },
+                    colors = navColours,
                     label = { Text(stringResource(Tab.PRAVKA.titleRes)) },
                 )
                 NavigationBarItem(
@@ -539,6 +567,7 @@ private fun MainScreen(
                     icon = {
                         Icon(painterResource(R.drawable.ic_mode_zasechka), contentDescription = null)
                     },
+                    colors = navColours,
                     label = { Text(stringResource(Tab.ZASECHKA.titleRes)) },
                 )
                 NavigationBarItem(
@@ -547,6 +576,7 @@ private fun MainScreen(
                     icon = {
                         Icon(painterResource(R.drawable.ic_mode_delo), contentDescription = null)
                     },
+                    colors = navColours,
                     label = { Text(stringResource(Tab.TODOIST.titleRes)) },
                 )
                 NavigationBarItem(
@@ -555,6 +585,7 @@ private fun MainScreen(
                     icon = {
                         Icon(painterResource(R.drawable.ic_mode_sport), contentDescription = null)
                     },
+                    colors = navColours,
                     label = { Text(stringResource(Tab.SPORT.titleRes)) },
                 )
                 NavigationBarItem(
@@ -563,6 +594,7 @@ private fun MainScreen(
                     icon = {
                         Icon(painterResource(R.drawable.ic_mode_food), contentDescription = null)
                     },
+                    colors = navColours,
                     label = { Text(stringResource(Tab.FOOD.titleRes)) },
                 )
                 NavigationBarItem(
@@ -571,6 +603,7 @@ private fun MainScreen(
                     // Логов обратно к списку пришлось бы жать «назад».
                     onClick = { tab = Tab.MORE; page = null },
                     icon = { Icon(Icons.Filled.MoreVert, contentDescription = null) },
+                    colors = navColours,
                     label = { Text(stringResource(Tab.MORE.titleRes)) },
                 )
             }

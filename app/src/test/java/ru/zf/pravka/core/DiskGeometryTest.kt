@@ -21,6 +21,21 @@ class DiskGeometryTest {
     }
 
     @Test
+    fun `инерция - диск катится вбок, как колесо`() {
+        val r = 240f
+        // Везём вправо — кольцо проворачивается против часовой (угол убывает).
+        assertTrue(DiskGeometry.roll(100f, r, 1f) < 0f)
+        assertTrue(DiskGeometry.roll(-100f, r, 1f) > 0f)
+        // Качение без проскальзывания: путь, равный радиусу, — это радиан.
+        assertEquals(-57.3f, DiskGeometry.roll(r, r, 1f), 0.1f)
+        // Охота катиться делит угол ровно пополам, ноль — не катимся.
+        assertEquals(DiskGeometry.roll(r, r, 1f) / 2f, DiskGeometry.roll(r, r, 0.5f), 0.01f)
+        assertEquals(0f, DiskGeometry.roll(r, r, 0f), 0f)
+        // Диск без радиуса (ещё не расставлен) не крутится и не делит на ноль.
+        assertEquals(0f, DiskGeometry.roll(100f, 0f, 1f), 0f)
+    }
+
+    @Test
     fun `шаг - четверть для четырёх и двух, треть для трёх`() {
         assertEquals(90f, DiskGeometry.spread(4), 0f)
         assertEquals(120f, DiskGeometry.spread(3), 0f)

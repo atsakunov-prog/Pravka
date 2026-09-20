@@ -81,6 +81,18 @@ class GoogleSpeechSession(
     private var onLog: (String) -> Unit = {}
 
     companion object {
+
+        /**
+         * Куда уходит громкость микрофона: кнопка пульсирует в ритме звуков
+         * (владелец, 20.09.2026). Поле общее, а не на каждой сессии, потому
+         * что микрофон один: живая сессия в любой миг ровно одна, и
+         * прокидывать колбэк через четыре места создания было бы четырьмя
+         * копиями одного и того же. Зовётся с главного потока — колбэки
+         * SpeechRecognizer приходят туда.
+         */
+        @Volatile
+        var levelSink: ((Float) -> Unit)? = null
+
         // Only give up after a long run of pure errors with no speech at all
         // (a genuinely dead mic), never on a transient blip mid-dictation.
         private const val MAX_ERROR_STREAK = 40
@@ -415,7 +427,9 @@ class GoogleSpeechSession(
             if (!readyFired) { readyFired = true; onReady() }
         }
         override fun onBeginningOfSpeech() { errorStreak = 0; producedAny = true; onLog("beginSpeech") }
-        override fun onRmsChanged(rmsdB: Float) {}
+        override fun onRmsChanged(rmsdB: Float) {
+            levelSink?.let { sink -> runCatching { sink(ru.zf.pravka.core.MicLevel.normalise(rmsdB)) } }
+        }
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() { onLog("endSpeech") }
 

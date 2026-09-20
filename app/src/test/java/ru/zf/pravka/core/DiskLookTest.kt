@@ -103,6 +103,28 @@ class DiskLookTest {
     }
 
     @Test
+    fun `свет, рельс и иней слабее самой заливки и не растут без края`() {
+        val fill = DiskLook.plateAlpha(fab, light = true)
+        // Все три — слои ПОВЕРХ стекла: заметны, но стекло остаётся главным.
+        assertTrue(DiskLook.topLightAlpha(fill, true) < fill)
+        assertTrue(DiskLook.railAlpha(fill, true) < fill)
+        assertTrue(DiskLook.frostAlpha(fill, true) < fill)
+        // На непрозрачных кнопках потолки держат: иначе стекло стало бы белым.
+        val full = DiskLook.plateAlpha(1f, true)
+        assertEquals(0.18f, DiskLook.topLightAlpha(full, true), 0f)
+        assertEquals(0.16f, DiskLook.railAlpha(full, true), 0f)
+        assertEquals(0.14f, DiskLook.frostAlpha(full, true), 0f)
+    }
+
+    @Test
+    fun `на чернилах свет и иней заметнее, а рельс тише`() {
+        val fill = DiskLook.plateAlpha(fab, light = false)
+        assertTrue(DiskLook.topLightAlpha(fill, false) > DiskLook.topLightAlpha(fill, true))
+        assertTrue(DiskLook.frostAlpha(fill, false) > DiskLook.frostAlpha(fill, true))
+        assertTrue(DiskLook.railAlpha(fill, false) < DiskLook.railAlpha(fill, true))
+    }
+
+    @Test
     fun `шестерёнка берёт цвет у стекла наоборот`() {
         assertEquals(DiskLook.GLASS_DARK, DiskLook.gearInk(light = true))
         assertEquals(DiskLook.GLASS_LIGHT, DiskLook.gearInk(light = false))

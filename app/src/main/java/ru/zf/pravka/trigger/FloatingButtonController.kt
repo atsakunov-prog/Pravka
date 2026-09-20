@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.core.DiskLook
+import ru.zf.pravka.core.MicLevel
 import ru.zf.pravka.data.Settings
 
 // Floating button drawn from the accessibility service as a
@@ -100,6 +101,34 @@ class FloatingButtonController(
             p.flags = if (value) p.flags or noLimits else p.flags and noLimits.inv()
             if (attached) button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
         }
+
+    /**
+     * Пульс по громкости: на записи кнопка поджата (`MicLevel.QUIET`) и
+     * распрямляется от голоса. Наружу расти нельзя — окно ровно с кружок и
+     * срезало бы его по краям, — поэтому растём «из поджатого».
+     */
+    override fun setLevel(level: Float) {
+        if (!recording) return
+        val v = button ?: return
+        micPulse = MicLevel.smooth(micPulse, level)
+        val s = MicLevel.scale(micPulse)
+        v.animate().cancel()
+        v.scaleX = s
+        v.scaleY = s
+    }
+
+    /** Сглаженная громкость: замеры приходят рывками, кнопка не должна дрожать. */
+    private var micPulse = 0f
+
+    /** Запись кончилась — кнопка распрямляется из пульса в свой размер. */
+    private fun restPulse() {
+        micPulse = 0f
+        button?.let { v ->
+            v.animate().cancel()
+            v.scaleX = 1f
+            v.scaleY = 1f
+        }
+    }
 
     /** Поставить лицу текущую плотность — пока кнопка не занята и не пишет. */
     private fun applyFaceAlpha() {
@@ -381,6 +410,7 @@ class FloatingButtonController(
     /** Recording on: red stop dot, full opacity, pinned visible everywhere. */
     fun setRecording(value: Boolean) {
         recording = value
+        if (!value) restPulse()
         background?.setColor(if (value) REC_RED else ACCENT)
         recDot?.visibility = if (value) View.VISIBLE else View.GONE
         label?.visibility = if (value || busy) View.GONE else View.VISIBLE

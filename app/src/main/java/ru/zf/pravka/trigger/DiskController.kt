@@ -1,11 +1,15 @@
 package ru.zf.pravka.trigger
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RadialGradient
+import android.graphics.RectF
 import android.graphics.Shader
 import android.os.Build
 import android.os.SystemClock
@@ -92,6 +96,10 @@ class DiskController(
         private const val SOCKET_SPREAD = 1.5f
         /** Угол кнопки сдвинулся меньше этого — стекло не перерисовываем. */
         private const val SOCKET_STEP_DEG = 0.25f
+        /** Сколько замкнувшаяся дуга висит, прежде чем погаснуть. */
+        private const val WORK_FADE_MS = 700L
+        /** Толщина дуги прогресса — доля радиуса тарелки; заметно, но не обод. */
+        private const val WORK_WIDTH_FACTOR = 0.035f
         /** Окно кнопки за краем с таким запасом — снимается. */
         private const val OFFSCREEN_MARGIN_DP = 2
         /** Кнопка не там, где ей быть, дальше этого — расставить заново. */
@@ -148,6 +156,16 @@ class DiskController(
     private var gearPct = StackGeometry.GEAR_PCT_DEFAULT
     private var plateOverride: Float? = null
     private var socketOverride: Float? = null
+    private var frost = true
+    private var rail = true
+    private var inertia = true
+    private var rollK = Settings.DISK_ROLL_DEFAULT
+
+    // Дуга прогресса: что идёт, когда началось и сколько обещано.
+    private var workAt = 0L
+    private var workExpect = 0L
+    private var workColour = 0
+    private var workFading = false
 
     // Тарелка.
     private var plate: PlateView? = null
@@ -240,11 +258,65 @@ class DiskController(
                 repaintPlate()
             }
         }
+        scope.launch {
+            settings.diskFrostFlow.collect {
+                frost = it
+                repaintPlate()
+            }
+        }
+        scope.launch {
+            settings.diskRailFlow.collect {
+                rail = it
+                repaintPlate()
+            }
+        }
+        scope.launch { settings.diskInertiaFlow.collect { inertia = it } }
+        scope.launch { settings.diskRollFlow.collect { rollK = it } }
+    }
+
+    /**
+     * Запрос к модели пошёл: дуга по кромке стекла на [expectMs] — столько
+     * ждёт `core/Pace.kt` по своей истории. Цвет — дороги, которая работает.
+     *
+     * Второй запрос поверх первого просто переписывает дугу: одна полоса на
+     * стекле честнее двух, а одновременных запросов у владельца не бывает —
+     * кнопка на время разбора занята.
+     */
+    fun startWork(expectMs: Long, colour: Int) {
+        workAt = SystemClock.uptimeMillis()
+        workExpect = expectMs
+        workColour = colour
+        workFading = false
+        plate?.setWork(1f, colour, 0f)
+        tickWork()
+    }
+
+    /** Ответ пришёл (или сорвался): дуга замыкается и гаснет. */
+    fun finishWork(ok: Boolean) {
+        if (workAt == 0L) return
+        workAt = 0L
+        workFading = true
+        // Удачный ответ дугу ЗАМЫКАЕТ, сорвавшийся — гасит там, где стоял:
+        // полный круг это «сделано», и врать им нельзя.
+        plate?.setWork(1f, workColour, if (ok) 1f else -1f)
+        plate?.postDelayed({ if (workFading) { workFading = false; plate?.setWork(0f, workColour, 0f) } }, WORK_FADE_MS)
+    }
+
+    /**
+     * Кадр дуги. Идёт своим циклом, а не общим: тот крутится только пока
+     * пружины живые, а запрос идёт и на стоящем диске.
+     */
+    private fun tickWork() {
+        val v = plate ?: return
+        if (workAt == 0L) return
+        val elapsed = SystemClock.uptimeMillis() - workAt
+        v.setWork(1f, workColour, ru.zf.pravka.core.Pace.progress(elapsed, workExpect))
+        v.postOnAnimation { tickWork() }
     }
 
     /** Краски стекла поменялись — перерисовать, не трогая геометрию. */
     private fun repaintPlate() {
-        plate?.setLook(plateAlpha(), lightGlass, socketOverride)
+        plate?.setLook(plateAlpha(), lightGlass, socketOverride, frost, rail)
     }
 
     /**
@@ -419,6 +491,9 @@ class DiskController(
         }
         placeHead()
         placePlate(d)
+        // Дуге нужно знать, видна ли тарелка целиком: у края она идёт по
+        // видимому полукругу, сверху и до низу (владелец, 20.09.2026).
+        plate?.setFacing(f, cx - d.plate < 0f || cx + d.plate > w)
     }
 
     /** Где стоять кнопке [button] сейчас — для «П», которая появляется по show(). */
@@ -582,6 +657,10 @@ class DiskController(
             stopMotion()
             slideFacing = DiskGeometry.facing(cx, w)
         }
+        // Инерция: диск катится по экрану, как колесо (`DiskGeometry.roll`).
+        // Считаем от пройденного пути, а не от скорости: путь ровно тот, что
+        // видит глаз, и на рывке пальца кольцо не дёргается лишнего.
+        if (inertia && !allHidden) rotation = DiskGeometry.norm(rotation + DiskGeometry.roll(nx - cx, dims().plate, rollK))
         cx = nx
         cy = ny
         if (allHidden) placeHead() else layout()
@@ -914,7 +993,7 @@ class DiskController(
         val d = dims()
         val size = d.window
         val v = PlateView(service, d.shadow.toFloat(), dp(SHADOW_DROP_DP).toFloat()).apply {
-            setLook(plateAlpha(), lightGlass, socketOverride)
+            setLook(plateAlpha(), lightGlass, socketOverride, frost, rail)
             setOnTouchListener(PlateTouch())
         }
         // Стекло трогаемое: за него везут диск. Углы квадрата окна вне круга
@@ -999,15 +1078,38 @@ class DiskController(
         private val shade = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
         private val socket = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val topLight = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val railPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        private val frostPaint = Paint().apply { isFilterBitmap = false }
         private var fillAlpha = 0.16f
         private var light = true
         /** Плотность тени кнопки: null — считать от плотности стекла. */
         private var socketAlpha: Float? = null
+        private var frost = true
+        private var rail = true
         private var shaderFor = 0f
         private var shaderAlpha = -1f
         private var shaderLight = true
         private var shaderSocket = -1f
         private var shaderSocketAlpha: Float? = Float.NaN
+        private var shaderRail: Boolean? = null
+        private var shaderFrost: Boolean? = null
+        private var grain: Bitmap? = null
+        private val clip = Path()
+
+        // Дуга прогресса: сколько её видно (0 — нет), цвет дороги и докуда
+        // дошла. Плюс лицо диска и «виден ли он целиком» — от них зависит,
+        // по какой дуге идти.
+        private val arc = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+        }
+        private val arcBox = RectF()
+        private var workOn = 0f
+        private var workColour = 0
+        private var workProgress = 0f
+        private var facing = 180f
+        private var atEdge = false
 
         // Где стоят кнопки: радиус кольца, радиус кнопки и углы. Диск
         // называет их на каждой расстановке; стекло рисует под ними тени.
@@ -1015,11 +1117,32 @@ class DiskController(
         private var socketR = 0f
         private var angles = FloatArray(0)
 
-        fun setLook(fillAlpha: Float, light: Boolean, socketAlpha: Float?) {
+        fun setLook(fillAlpha: Float, light: Boolean, socketAlpha: Float?, frost: Boolean, rail: Boolean) {
             this.fillAlpha = fillAlpha
             this.light = light
             this.socketAlpha = socketAlpha
+            this.frost = frost
+            this.rail = rail
             invalidate()
+        }
+
+        /**
+         * Дуга прогресса: [on] — видна ли (0 гасит), [progress] — докуда
+         * дошла, −1 — «сорвалось, оставить где было».
+         */
+        fun setWork(on: Float, colour: Int, progress: Float) {
+            workOn = on
+            workColour = colour
+            if (progress >= 0f) workProgress = progress
+            invalidate()
+        }
+
+        /** Куда смотрит диск и торчит ли он за край — от этого зависит дуга. */
+        fun setFacing(facing: Float, atEdge: Boolean) {
+            if (this.facing == facing && this.atEdge == atEdge) return
+            this.facing = facing
+            this.atEdge = atEdge
+            if (workOn > 0f) invalidate()
         }
 
         /**
@@ -1054,13 +1177,16 @@ class DiskController(
             val r = minOf(w, h) / 2f - shadow
             if (r <= 0f) return
             if (shaderFor != r || shaderAlpha != fillAlpha || shaderLight != light ||
-                shaderSocket != socketR || shaderSocketAlpha != socketAlpha
+                shaderSocket != socketR || shaderSocketAlpha != socketAlpha ||
+                shaderRail != rail || shaderFrost != frost
             ) {
                 shaderFor = r
                 shaderAlpha = fillAlpha
                 shaderLight = light
                 shaderSocket = socketR
                 shaderSocketAlpha = socketAlpha
+                shaderRail = rail
+                shaderFrost = frost
                 val glass = DiskLook.glass(light)
                 val edge = DiskLook.withAlpha(glass, fillAlpha)
                 val centre = DiskLook.withAlpha(glass, DiskLook.centreAlpha(fillAlpha))
@@ -1077,6 +1203,41 @@ class DiskController(
                     cx, cy + drop, outer,
                     intArrayOf(dark, dark, 0),
                     floatArrayOf(0f, (r - drop) / outer, 1f),
+                    Shader.TileMode.CLAMP,
+                )
+                // Свет сверху: верх тарелки ярче, низ уходит в ноль. Мягкая
+                // заливка на полдиска, не кромка — за кромку отвечает фаска.
+                topLight.shader = LinearGradient(
+                    cx, cy - r, cx, cy + r * 0.3f,
+                    intArrayOf(
+                        DiskLook.white(DiskLook.topLightAlpha(fillAlpha, light)),
+                        DiskLook.white(0f),
+                    ),
+                    floatArrayOf(0f, 1f),
+                    Shader.TileMode.CLAMP,
+                )
+                // Рельс: канавка по кольцу кнопок. Один штрих шириной в
+                // кнопку, а поперёк него — радиальный градиент от центра
+                // тарелки: тёмная середина канавки и светлые края читаются
+                // как вдавленность, а не как нарисованное кольцо.
+                railPaint.strokeWidth = (socketR * 1.1f).coerceAtLeast(1f)
+                val deep = DiskLook.railAlpha(fillAlpha, light)
+                railPaint.shader = if (socketR <= 0f || ring <= 0f) null else RadialGradient(
+                    cx, cy, ring + socketR,
+                    intArrayOf(
+                        DiskLook.white(0f),
+                        DiskLook.white(deep * 0.8f),
+                        DiskLook.black(deep),
+                        DiskLook.white(deep * 0.5f),
+                        DiskLook.white(0f),
+                    ),
+                    floatArrayOf(
+                        0f,
+                        ((ring - socketR * 0.55f) / (ring + socketR)).coerceIn(0f, 1f),
+                        (ring / (ring + socketR)).coerceIn(0f, 1f),
+                        ((ring + socketR * 0.55f) / (ring + socketR)).coerceIn(0f, 1f),
+                        1f,
+                    ),
                     Shader.TileMode.CLAMP,
                 )
                 rim.strokeWidth = (r * RIM_WIDTH_FACTOR).coerceAtLeast(1f)
@@ -1102,8 +1263,71 @@ class DiskController(
             }
             canvas.drawCircle(cx, cy + drop, r + shadow, shade)
             canvas.drawCircle(cx, cy, r, fill)
+            if (frost) drawFrost(canvas, cx, cy, r)
+            canvas.drawCircle(cx, cy, r, topLight)
+            if (rail && railPaint.shader != null) canvas.drawCircle(cx, cy, ring, railPaint)
             drawSockets(canvas, cx, cy)
             canvas.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
+            if (workOn > 0f && workProgress > 0f) drawWork(canvas, cx, cy, r)
+        }
+
+        /**
+         * Дуга по кромке стекла. Диск виден целиком — полный круг от верха по
+         * часовой. Диск у края — только по ВИДИМОМУ полукругу, сверху и до
+         * низу (владелец, 20.09.2026): за краем дуги всё равно не видно, и
+         * полный круг там означал бы, что половина прогресса ушла в стену.
+         *
+         * Лицо диска смотрит внутрь экрана, поэтому видимая половина — та,
+         * что со стороны лица: у правого края идём от верха ПРОТИВ часовой.
+         */
+        private fun drawWork(canvas: Canvas, cx: Float, cy: Float, r: Float) {
+            val width = (r * WORK_WIDTH_FACTOR).coerceAtLeast(2f)
+            val radius = r - width / 2f
+            if (radius <= 0f) return
+            arc.strokeWidth = width
+            arc.color = workColour
+            arc.alpha = (255 * workOn).toInt().coerceIn(0, 255)
+            arcBox.set(cx - radius, cy - radius, cx + radius, cy + radius)
+            // Ноль градусов у Android — вправо, дуга нужна от верха: −90°.
+            val full = if (atEdge) 180f else 360f
+            val sense = if (atEdge && facing >= 90f && facing <= 270f) -1f else 1f
+            canvas.drawArc(arcBox, -90f, sense * full * workProgress, false, arc)
+        }
+
+        /**
+         * Иней: мелкое зерно по стеклу, плиткой 64×64 и с обрезкой по кругу.
+         * Зерно одно на все размеры и все шкурки — меняется только его
+         * плотность: это шум, его незачем пересчитывать под каждую тарелку.
+         */
+        private fun drawFrost(canvas: Canvas, cx: Float, cy: Float, r: Float) {
+            val grain = grain ?: makeGrain().also { grain = it }
+            frostPaint.shader = frostPaint.shader ?: BitmapShader(grain, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+            frostPaint.alpha = (255 * DiskLook.frostAlpha(fillAlpha, light)).toInt().coerceIn(0, 255)
+            val save = canvas.save()
+            canvas.clipPath(clip.also {
+                it.reset()
+                it.addCircle(cx, cy, r, Path.Direction.CW)
+            })
+            canvas.drawPaint(frostPaint)
+            canvas.restoreToCount(save)
+        }
+
+        /**
+         * Плитка зерна: чёрно-белый шум без повторяющегося рисунка на глаз.
+         * Seed постоянный — зерно не «кипит» при каждой перерисовке.
+         */
+        private fun makeGrain(): Bitmap {
+            val size = 64
+            val random = java.util.Random(20_260_920L)
+            val pixels = IntArray(size * size)
+            for (i in pixels.indices) {
+                // Половина точек светлые, половина тёмные: средняя яркость
+                // не сдвигается, значит зерно не красит стекло, а только
+                // делает его шероховатым.
+                val v = random.nextInt(256)
+                pixels[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+            }
+            return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888)
         }
 
         /** Тени под кнопками: свет сверху, поэтому пятно сдвинуто вниз, как у тарелки. */
