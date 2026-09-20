@@ -100,6 +100,11 @@ class DiskController(
         private const val WORK_FADE_MS = 700L
         /** Толщина дуги прогресса — доля радиуса тарелки; заметно, но не обод. */
         private const val WORK_WIDTH_FACTOR = 0.035f
+        /** Стрелка на кромке: насколько она вдвинута внутрь и какого размера — доли радиуса. */
+        private const val ARROW_INSET = 0.1f
+        private const val ARROW_SIZE = 0.1f
+        /** Палец попал в стрелку, если он ближе этого к её центру (доля радиуса). */
+        private const val ARROW_TOUCH = 0.17f
         /** Окно кнопки за краем с таким запасом — снимается. */
         private const val OFFSCREEN_MARGIN_DP = 2
         /** Кнопка не там, где ей быть, дальше этого — расставить заново. */
@@ -497,7 +502,10 @@ class DiskController(
         placePlate(d)
         // Дуге нужно знать, видна ли тарелка целиком: у края она идёт по
         // видимому полукругу, сверху и до низу (владелец, 20.09.2026).
-        plate?.setFacing(f, cx - d.plate < 0f || cx + d.plate > w)
+        plate?.let {
+            it.allHiddenView = allHidden
+            it.setFacing(f, cx - d.plate < 0f || cx + d.plate > w, sunk)
+        }
     }
 
     /** Где стоять кнопке [button] сейчас — для «П», которая появляется по show(). */
@@ -792,12 +800,14 @@ class DiskController(
         private var startCy = 0f
         private var dragging = false
         private var lastTapAt = 0L
+        /** Касание началось на стрелке: на отпускании диск утопает. */
+        private var onArrow = false
         /** В этом касании был щипок — одиночная логика стекла молчит до следующего DOWN. */
         private var pinched = false
         /** Долгое нажатие сработало: диск выдвинулся или убрался, тап не считается. */
         private var held = false
         private val hold = Runnable {
-            if (pinch || pinched || dragging) return@Runnable
+            if (pinch || pinched || dragging || onArrow) return@Runnable
             held = true
             Haptics.start(service)
             togglePullOut()
@@ -805,6 +815,17 @@ class DiskController(
         private val slop = ViewConfiguration.get(service).scaledTouchSlop
 
         private fun key(pointerId: Int): String = "plate:$pointerId"
+
+        /** Палец на стрелке кромки: её зона шире рисунка — целиться некуда. */
+        private fun onArrow(v: View, x: Float, y: Float): Boolean {
+            val p = plate ?: return false
+            if (!p.arrowShown()) return false
+            val (ax, ay) = p.arrowAt()
+            val reach = (minOf(v.width, v.height) / 2f) * ARROW_TOUCH
+            val dx = x - ax
+            val dy = y - ay
+            return dx * dx + dy * dy <= reach * reach
+        }
 
         /** Внутри тарелки — без тени: тень не предмет, за неё не берут. */
         private fun inside(v: View, x: Float, y: Float): Boolean {
@@ -828,6 +849,11 @@ class DiskController(
                     if (allHidden) return false
                     if (wakeIfSunk()) return true
                     onTouched?.invoke()
+                    // Стрелка на кромке — единственное место стекла со своим
+                    // смыслом: убрать диск досрочно. Остальные жесты стекла на
+                    // этом касании молчат, иначе долгое нажатие выдвинуло бы
+                    // диск ровно тогда, когда его просили убрать.
+                    onArrow = onArrow(v, event.x, event.y)
                     downX = event.rawX
                     downY = event.rawY
                     startCx = cx
@@ -873,6 +899,18 @@ class DiskController(
                         finger(key(event.getPointerId(i)), rawX(event, i), rawY(event, i), MotionEvent.ACTION_UP)
                     }
                     if (pinched || held) return true
+                    if (onArrow) {
+                        // Стрелка сработала на отпускании, а не на нажатии:
+                        // палец, поехавший со стрелки, всё ещё везёт диск.
+                        onArrow = false
+                        if (!dragging && event.actionMasked == MotionEvent.ACTION_UP) {
+                            Haptics.tick(service)
+                            sink()
+                        } else if (dragging) {
+                            slide(cx, cy, dropped = true)
+                        }
+                        return true
+                    }
                     if (dragging) {
                         slide(cx, cy, dropped = true)
                     } else if (event.actionMasked == MotionEvent.ACTION_UP) {
@@ -925,13 +963,23 @@ class DiskController(
         if (animating || turning != null || sliding || pinch) return
         val d = dims()
         val (w, h) = frame()
-        // Докован — значит центр ровно на краю (DOCK_INSET = 0).
-        if (cx > 0.5f && cx < w - 0.5f) return
+        // Стрелкой диск убирают и с середины экрана: это ручное действие, а
+        // не автоматика, и ждать автоуборки владелец не просил. Автоматика
+        // сюда же приходит уже докованной, так что ей эта ветка не мешает.
+        if (cx > 0.5f && cx < w - 0.5f) {
+            val f = facing ?: DiskGeometry.facing(cx, w)
+            cxToEdge(if (f == 0f) 0f else w.toFloat())
+        }
         val deep = (buttonSize() * sinkPct / 100f).roundToInt()
         if (deep <= 0) return
         sunk = true
         val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, -deep)
         animateTo(rotation, dx, dy)
+    }
+
+    /** Поставить центр на край без анимации — дальше утопание доведёт его глубже. */
+    private fun cxToEdge(edge: Float) {
+        cx = edge
     }
 
     /**
@@ -1180,6 +1228,15 @@ class DiskController(
         private var workProgress = 0f
         private var facing = 180f
         private var atEdge = false
+        private var sunk = false
+        /** Всё убрано в точку — стекла нет, и стрелки тоже. */
+        var allHiddenView = false
+        private val arrow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        private val arrowPath = Path()
 
         // Где стоят кнопки: радиус кольца, радиус кнопки и углы. Диск
         // называет их на каждой расстановке; стекло рисует под ними тени.
@@ -1207,13 +1264,30 @@ class DiskController(
             invalidate()
         }
 
-        /** Куда смотрит диск и торчит ли он за край — от этого зависит дуга. */
-        fun setFacing(facing: Float, atEdge: Boolean) {
-            if (this.facing == facing && this.atEdge == atEdge) return
+        /**
+         * Куда смотрит диск, торчит ли он за край и утоплен ли. От этого
+         * зависит и дуга прогресса, и стрелка на кромке.
+         */
+        fun setFacing(facing: Float, atEdge: Boolean, sunk: Boolean) {
+            if (this.facing == facing && this.atEdge == atEdge && this.sunk == sunk) return
             this.facing = facing
             this.atEdge = atEdge
-            if (workOn > 0f) invalidate()
+            this.sunk = sunk
+            invalidate()
         }
+
+        /** Где стрелка в координатах вида: у кромки со стороны лица диска. */
+        fun arrowAt(): Pair<Float, Float> {
+            val w = width.toFloat()
+            val h = height.toFloat()
+            val r = minOf(w, h) / 2f - shadow
+            val a = Math.toRadians(facing.toDouble())
+            return (w / 2f + (r - r * ARROW_INSET) * cos(a).toFloat()) to
+                (h / 2f + (r - r * ARROW_INSET) * sin(a).toFloat())
+        }
+
+        /** Стрелка сейчас видна — значит по ней и жмут. */
+        fun arrowShown(): Boolean = atEdge && !allHiddenView
 
         /**
          * Куда класть тени кнопок. Перерисовываемся не на каждый вызов, а
@@ -1339,6 +1413,47 @@ class DiskController(
             drawSockets(canvas, cx, cy)
             canvas.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
             if (workOn > 0f && workProgress > 0f) drawWork(canvas, cx, cy, r)
+            if (arrowShown()) drawArrow(canvas, cx, cy, r)
+        }
+
+        /**
+         * Стрелка на кромке (владелец, 20.09.2026): «на краю торчащего диска
+         * должна быть маленькая стрелочка, которая бы убирала диск досрочно…
+         * когда диск убран, то на краю есть такая же стрелка, но в другую
+         * сторону, которая его открывает».
+         *
+         * Стоит она на кромке со стороны ЛИЦА — то есть в самой дальней от
+         * края экрана точке тарелки. Это единственное место, которое видно и
+         * у торчащего диска, и у утопленного, и оно же всегда свободно: лицо
+         * лежит ровно между «П» и «З», а кольцо кнопок проходит ближе к
+         * центру. Смотрит стрелка туда, куда поедет диск: наружу — убрать,
+         * внутрь — достать.
+         */
+        private fun drawArrow(canvas: Canvas, cx: Float, cy: Float, r: Float) {
+            val (ax, ay) = arrowAt()
+            val size = (r * ARROW_SIZE).coerceAtLeast(4f)
+            // Наружу — значит против лица; внутрь — по лицу.
+            val dir = if (sunk) facing else facing + 180f
+            arrow.strokeWidth = (size * 0.34f).coerceAtLeast(2f)
+            arrowPath.reset()
+            // Шеврон: два луча от кончика назад, под 40° к направлению.
+            val tip = Math.toRadians(dir.toDouble())
+            val tx = ax + cos(tip).toFloat() * size * 0.5f
+            val ty = ay + sin(tip).toFloat() * size * 0.5f
+            for (side in intArrayOf(-1, 1)) {
+                val a = Math.toRadians((dir + side * 140f).toDouble())
+                arrowPath.moveTo(tx, ty)
+                arrowPath.lineTo(tx + cos(a).toFloat() * size, ty + sin(a).toFloat() * size)
+            }
+            // Тень под шевроном и сам шеврон: тот же свет сверху, что у всего
+            // остального — тёмный штрих снизу, светлый поверх.
+            arrow.color = DiskLook.black(0.35f)
+            canvas.save()
+            canvas.translate(0f, arrow.strokeWidth * 0.4f)
+            canvas.drawPath(arrowPath, arrow)
+            canvas.restore()
+            arrow.color = DiskLook.withAlpha(DiskLook.gearInk(light), 0.85f)
+            canvas.drawPath(arrowPath, arrow)
         }
 
         /**
@@ -1354,14 +1469,61 @@ class DiskController(
             val width = (r * WORK_WIDTH_FACTOR).coerceAtLeast(2f)
             val radius = r - width / 2f
             if (radius <= 0f) return
-            arc.strokeWidth = width
-            arc.color = workColour
-            arc.alpha = (255 * workOn).toInt().coerceIn(0, 255)
             arcBox.set(cx - radius, cy - radius, cx + radius, cy + radius)
             // Ноль градусов у Android — вправо, дуга нужна от верха: −90°.
             val full = if (atEdge) 180f else 360f
             val sense = if (atEdge && facing >= 90f && facing <= 270f) -1f else 1f
+            val alpha = (255 * workOn).toInt().coerceIn(0, 255)
+
+            // Канавка на весь путь: полоса едет ПО ЖЕЛОБУ, а не висит в
+            // воздухе. Без неё видно только сколько прошло и не видно,
+            // сколько осталось.
+            arc.shader = null
+            arc.strokeCap = Paint.Cap.ROUND
+            arc.strokeWidth = width
+            arc.color = DiskLook.black(0.16f)
+            arc.alpha = (alpha * 0.16f).toInt().coerceIn(0, 255)
+            canvas.drawArc(arcBox, -90f, sense * full, false, arc)
+
+            // Сама полоса — в материале кромки: продольный градиент, светлее
+            // сверху, глубже снизу, как фаска и кнопки (владелец: «прогресс
+            // бар какой-то простой, я бы его сделал в стиле края диска»).
+            arc.color = -0x1  // белый: цвет приходит шейдером
+            arc.alpha = alpha
+            arc.shader = LinearGradient(
+                cx, cy - radius, cx, cy + radius,
+                intArrayOf(
+                    lighten(workColour, 0.35f),
+                    workColour,
+                    darken(workColour, 0.25f),
+                ),
+                floatArrayOf(0f, 0.5f, 1f),
+                Shader.TileMode.CLAMP,
+            )
             canvas.drawArc(arcBox, -90f, sense * full * workProgress, false, arc)
+
+            // Блик по верхней половине полосы — тонкая нить, сдвинутая
+            // наружу: та же фаска, что по кромке стекла.
+            arc.shader = null
+            arc.strokeWidth = width * 0.3f
+            arc.color = DiskLook.white(0.5f)
+            arc.alpha = (alpha * 0.5f).toInt().coerceIn(0, 255)
+            val glossR = radius + width * 0.28f
+            arcBox.set(cx - glossR, cy - glossR, cx + glossR, cy + glossR)
+            canvas.drawArc(arcBox, -90f, sense * full * workProgress, false, arc)
+        }
+
+        private fun lighten(colour: Int, k: Float): Int = mix(colour, 0xFFFFFF, k)
+        private fun darken(colour: Int, k: Float): Int = mix(colour, 0x000000, k)
+
+        private fun mix(colour: Int, towards: Int, k: Float): Int {
+            val t = k.coerceIn(0f, 1f)
+            fun ch(shift: Int): Int {
+                val a = (colour shr shift) and 0xFF
+                val b = (towards shr shift) and 0xFF
+                return (a + (b - a) * t).toInt().coerceIn(0, 255)
+            }
+            return ((colour ushr 24) shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
         }
 
         /**

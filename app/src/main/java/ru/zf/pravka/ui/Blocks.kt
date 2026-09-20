@@ -15,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -88,22 +89,32 @@ fun PaperCard(
         }
         // Узор знаков режима — на самой плашке, под текстом (владелец, 15.09).
         val decor = LocalModeDecor.current
-        // Фаска и свет сверху — те же, что у кнопок на стекле (владелец,
-        // 20.09.2026: «кнопки очень красивые, сделаешь тогда их
-        // характеристики и у плашек»; следом — «плашки выглядят немного
-        // грязными»). Плоский прямоугольник тёмного тёплого цвета читается
-        // пылью; тот же цвет с ребром и светом сверху — предметом.
-        Card(Modifier.fillMaxWidth().bevel()) {
+        // Фаска, свет сверху и зерно — те же слои, что у стекла диска
+        // (владелец, 20.09.2026: «сделаешь тогда их характеристики и у
+        // плашек», потом «потемнее и с такими же эффектами, как и диск»).
+        // Плоский прямоугольник тёмного тёплого цвета читается пылью; тот же
+        // цвет с ребром, светом и зерном — предметом. Каждый слой со своим
+        // тумблером: `ui/CardLook.kt`.
+        val look = LocalCardLook.current
+        Card(
+            modifier = Modifier.fillMaxWidth().then(if (look.bevel) Modifier.bevel() else Modifier),
+            colors = CardDefaults.cardColors(
+                containerColor = darkened(MaterialTheme.colorScheme.surfaceContainerLow, look.darken),
+            ),
+        ) {
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(
-                            0f to Color.White.copy(alpha = 0.05f),
-                            0.45f to Color.Transparent,
-                            1f to Color.Black.copy(alpha = 0.05f),
-                        )
+                    .then(
+                        if (look.light) Modifier.background(
+                            Brush.verticalGradient(
+                                0f to Color.White.copy(alpha = CardLook.LIGHT_TOP),
+                                0.45f to Color.Transparent,
+                                1f to Color.Black.copy(alpha = CardLook.LIGHT_BOTTOM),
+                            )
+                        ) else Modifier
                     )
+                    .then(if (look.grain) Modifier.grain(CardLook.GRAIN) else Modifier)
                     .then(if (decor != null) Modifier.glyphPattern(decor) else Modifier),
             ) {
                 Column(

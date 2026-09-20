@@ -2,6 +2,8 @@ package ru.zf.pravka.data
 
 import android.content.Context
 import java.io.File
+import java.util.Locale
+import kotlin.math.roundToInt
 import org.json.JSONObject
 import ru.zf.pravka.core.Pace
 
@@ -66,11 +68,30 @@ class PaceStore(private val context: Context) {
         DiskWriter.post { persist(snapshot) }
     }
 
-    /** Сколько пар уже знает — для строки в настройках: «дуга учится». */
+    /**
+     * Что дуга знает о каждой дороге — строками для настроек. Владелец
+     * (20.09.2026): «ты точно рассчитал средние? И ты точно учитываешь модель
+     * и количество знаков? Короче, посмотри». Единственный честный ответ на
+     * такой вопрос — показать числа, а не пересказать их: видно и дорогу, и
+     * модель, и основание, и цену знака, и сколько замеров за этим стоит.
+     */
     @Synchronized
-    fun knownRoutes(): Int {
+    fun summary(): List<String> {
         load()
-        return acc.size
+        return acc.entries
+            .sortedByDescending { it.value.n }
+            .map { (key, a) ->
+                val road = key.substringBefore('|')
+                val model = key.substringAfter('|').substringAfterLast('-').ifBlank { key.substringAfter('|') }
+                val l = Pace.line(a)
+                val n = l?.n?.roundToInt() ?: 0
+                val body = when {
+                    l == null -> "замеров нет"
+                    l.straight -> "%.1f с + %.1f мс на знак".format(Locale.US, l.baseMs / 1000.0, l.msPerChar)
+                    else -> "среднее %.1f с (длина ещё не учтена)".format(Locale.US, l.meanMs / 1000.0)
+                }
+                "$road · $model: $body · замеров $n"
+            }
     }
 
     private fun key(route: String, model: String): String =

@@ -75,6 +75,11 @@ class Settings(private val context: Context) {
         private val KEY_DISK_SINK = booleanPreferencesKey("disk_sink")
         private val KEY_DISK_SINK_PCT = intPreferencesKey("disk_sink_pct")
         private val KEY_DISK_SINK_MIN = intPreferencesKey("disk_sink_minutes")
+        // Плашки приложения: те же слои, что у стекла, и своя темнота.
+        private val KEY_CARD_DARK = floatPreferencesKey("card_darken")
+        private val KEY_CARD_BEVEL = booleanPreferencesKey("card_bevel")
+        private val KEY_CARD_LIGHT = booleanPreferencesKey("card_light")
+        private val KEY_CARD_GRAIN = booleanPreferencesKey("card_grain")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -174,6 +179,14 @@ class Settings(private val context: Context) {
         const val DISK_SINK_MIN_DEFAULT = 5
         const val DISK_SINK_MIN_MIN = 1
         const val DISK_SINK_MIN_MAX = 60
+
+        /**
+         * Насколько плашки приложения темнее заводского тона. Владелец
+         * (20.09.2026): «плашки в самом приложении стали другие, но мне
+         * понравилось. Давай их только сделаем потемнее и с такими же
+         * эффектами, как и диск».
+         */
+        const val CARD_DARK_DEFAULT = 0.18f
 
         // Заводские цели КБЖУ: посчитаны по Миффлину-Сан-Жеору для владельца
         // (86 кг, 180 см, 1982) при умеренной активности, белок 1,8 г/кг.
@@ -545,6 +558,30 @@ class Settings(private val context: Context) {
     val diskSinkMinutesFlow = context.dataStore.data.map { it[KEY_DISK_SINK_MIN] ?: DISK_SINK_MIN_DEFAULT }
     suspend fun setDiskSinkMinutes(value: Int) {
         context.dataStore.edit { it[KEY_DISK_SINK_MIN] = value.coerceIn(DISK_SINK_MIN_MIN, DISK_SINK_MIN_MAX) }
+    }
+
+    /** Насколько затемнять плашки приложения (0 — заводской тон). */
+    val cardDarkFlow = context.dataStore.data.map { it[KEY_CARD_DARK] ?: CARD_DARK_DEFAULT }
+    suspend fun setCardDark(value: Float) {
+        context.dataStore.edit { it[KEY_CARD_DARK] = value.coerceIn(0f, 0.6f) }
+    }
+
+    /** Фаска по кромке плашки — та же, что у кнопок на стекле. */
+    val cardBevelFlow = context.dataStore.data.map { it[KEY_CARD_BEVEL] ?: true }
+    suspend fun setCardBevel(value: Boolean) {
+        context.dataStore.edit { it[KEY_CARD_BEVEL] = value }
+    }
+
+    /** Свет сверху на плашке. */
+    val cardLightFlow = context.dataStore.data.map { it[KEY_CARD_LIGHT] ?: true }
+    suspend fun setCardLight(value: Boolean) {
+        context.dataStore.edit { it[KEY_CARD_LIGHT] = value }
+    }
+
+    /** Зерно на плашке — тот же иней, что на стекле диска. */
+    val cardGrainFlow = context.dataStore.data.map { it[KEY_CARD_GRAIN] ?: true }
+    suspend fun setCardGrain(value: Boolean) {
+        context.dataStore.edit { it[KEY_CARD_GRAIN] = value }
     }
 
     /** Вернуть вид диска в счёт: размеры — к заводским, плотности — к формулам. */

@@ -69,7 +69,8 @@ import ru.zf.pravka.data.Settings
  * а «Ещё → Настройки» — всё вместе, с службой и обновлениями сверху.
  */
 internal enum class SettingsGroup(val title: String, val hint: String) {
-    COMMON("Общее", "Ключ Anthropic, кнопки на экране, сохранённые записи"),
+    COMMON("Общее", "Ключ Anthropic, микрофон, сохранённые записи, отладка"),
+    LOOK("Внешний вид", "Кнопки на стекле, диск и его слои, плашки приложения"),
     MODELS("Модели", "Какая модель и с каким усилием работает в каждом режиме"),
     PRAVKA("Правка", "Распознавание речи, проза, контекст разговора"),
     ZASECHKA("Засечка", "Кнопка, напоминания, категории, Google Sheets, intervals.icu"),
@@ -141,6 +142,7 @@ internal fun SettingsTab(
 private fun GroupContent(app: PravkaApp, group: SettingsGroup, serviceEnabled: Boolean) {
     when (group) {
         SettingsGroup.COMMON -> CommonSettings(app, serviceEnabled)
+        SettingsGroup.LOOK -> LookSettings(app)
         SettingsGroup.MODELS -> ModelsSettings(app)
         SettingsGroup.PRAVKA -> PravkaSettings(app)
         SettingsGroup.ZASECHKA -> ZasechkaSettings(app)
@@ -416,60 +418,25 @@ private fun UpdatesCard(app: PravkaApp) {
 // Общее
 // ---------------------------------------------------------------------------
 
+/**
+ * Внешний вид — всё, что про то, КАК это выглядит: кнопки на стекле, диск и
+ * его слои, плашки приложения. Владелец (20.09.2026): «давай все настройки по
+ * внешнему виду выведем в Настройки — Внешний вид».
+ *
+ * Раньше это жило в «Общем» вперемешку с ключом Anthropic и микрофоном, и
+ * чтобы подкрутить плотность стекла, приходилось прокручивать мимо всего
+ * остального. Поведение диска (автоуборка, утопание) уехало сюда же: оно про
+ * тот же предмет, и искать его в другом месте было бы хуже, чем считать
+ * поведение видом.
+ */
 @Composable
-private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
-    // Своя область жизни приложения, а не композиции: rememberCoroutineScope
-    // умирает вместе с экраном и рвёт запись в DataStore на полпути, если
-    // владелец переключил вкладку сразу после нажатия.
+private fun LookSettings(app: PravkaApp) {
     val scope = app.appScope
     val settings = app.settings
-    var apiKey by remember { mutableStateOf("") }
-    var keyVisible by remember { mutableStateOf(false) }
-    var savedMark by remember { mutableStateOf(false) }
-    var loaded by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        apiKey = settings.apiKey()
-        loaded = true
-    }
-
     val fabSize by settings.fabSizeFlow.collectAsState(initial = Settings.FAB_SIZE_DEFAULT)
     val fabAlpha by settings.fabAlphaFlow.collectAsState(initial = Settings.FAB_ALPHA_DEFAULT)
     var sizeSlider by remember(fabSize) { mutableStateOf(fabSize.toFloat()) }
     var alphaSlider by remember(fabAlpha) { mutableStateOf(fabAlpha) }
-
-    Text(
-        stringResource(R.string.settings_api_key_title),
-        style = MaterialTheme.typography.titleSmall,
-    )
-    Spacer(Modifier.height(6.dp))
-    OutlinedTextField(
-        value = apiKey,
-        onValueChange = { apiKey = it; savedMark = false },
-        enabled = loaded,
-        singleLine = true,
-        visualTransformation =
-            if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-        label = { Text(stringResource(R.string.settings_api_key_label)) },
-        trailingIcon = {
-            TextButton(onClick = { keyVisible = !keyVisible }) {
-                Text(
-                    stringResource(
-                        if (keyVisible) R.string.settings_hide else R.string.settings_show
-                    )
-                )
-            }
-        },
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Spacer(Modifier.height(6.dp))
-    HintText(stringResource(R.string.settings_api_key_hint))
-    Spacer(Modifier.height(10.dp))
-    Button(
-        onClick = { scope.launch { settings.setApiKey(apiKey); savedMark = true } },
-        enabled = loaded,
-    ) {
-        Text(stringResource(if (savedMark) R.string.settings_saved else R.string.settings_save))
-    }
 
     Spacer(Modifier.height(18.dp))
     Text(
@@ -824,6 +791,119 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
             "разворачивает спрятанное, и посреди записи или разбора кнопки " +
             "сами не складываются никогда."
     )
+
+    // Плашки приложения — те же слои, что у стекла (владелец, 20.09.2026:
+    // «потемнее и с такими же эффектами, как и диск. И это должно быть в
+    // настройках отдельных»).
+    Spacer(Modifier.height(18.dp))
+    Text("Плашки приложения", style = MaterialTheme.typography.titleSmall)
+    Spacer(Modifier.height(4.dp))
+    val cardDark by settings.cardDarkFlow.collectAsState(initial = Settings.CARD_DARK_DEFAULT)
+    var darkSlider by remember(cardDark) { mutableStateOf(cardDark) }
+    Text("Темнее на ${(darkSlider * 100).toInt()} %", style = MaterialTheme.typography.bodyMedium)
+    Slider(
+        value = darkSlider,
+        onValueChange = { darkSlider = it },
+        onValueChangeFinished = { scope.launch { settings.setCardDark(darkSlider) } },
+        valueRange = 0f..0.6f,
+    )
+    val cardBevel by settings.cardBevelFlow.collectAsState(initial = true)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(checked = cardBevel, onCheckedChange = { on -> scope.launch { settings.setCardBevel(on) } })
+        Spacer(Modifier.width(8.dp))
+        Text("Фаска по кромке", style = MaterialTheme.typography.bodyMedium)
+    }
+    val cardLight by settings.cardLightFlow.collectAsState(initial = true)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(checked = cardLight, onCheckedChange = { on -> scope.launch { settings.setCardLight(on) } })
+        Spacer(Modifier.width(8.dp))
+        Text("Свет сверху", style = MaterialTheme.typography.bodyMedium)
+    }
+    val cardGrain by settings.cardGrainFlow.collectAsState(initial = true)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(checked = cardGrain, onCheckedChange = { on -> scope.launch { settings.setCardGrain(on) } })
+        Spacer(Modifier.width(8.dp))
+        Text("Зерно", style = MaterialTheme.typography.bodyMedium)
+    }
+    HintText(
+        "Те же три слоя, что у стекла диска, и та же логика света. Числа у них " +
+            "свои: плашку разглядывают вблизи, и незаметное на диске тут " +
+            "становится заметным. Видно сразу — эта карточка тоже из них."
+    )
+
+    // Что дуга знает о дорогах (владелец: «ты точно рассчитал средние? И ты
+    // точно учитываешь модель и количество знаков? Короче, посмотри»).
+    // Показываем числа: пересказывать их было бы ответом ни о чём.
+    Spacer(Modifier.height(18.dp))
+    Text("Что знает дуга прогресса", style = MaterialTheme.typography.titleSmall)
+    Spacer(Modifier.height(4.dp))
+    val pace = remember { app.paceStore.summary() }
+    if (pace.isEmpty()) {
+        HintText("Замеров пока нет — первые запросы дуга идёт вслепую и учится на них.")
+    } else {
+        for (line in pace) {
+            Text("· $line", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    HintText(
+        "Ожидание считается по своей истории, отдельно на каждую пару «дорога + " +
+            "модель»: основание плюс цена знака. Пока замеров меньше четырёх — " +
+            "только среднее, и короткая фраза получает ожидание длинной; после " +
+            "них длина учитывается. Сменил модель дороги — старое тускнеет за " +
+            "неделю работы, не мгновенно."
+    )
+}
+
+@Composable
+private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
+    // Своя область жизни приложения, а не композиции: rememberCoroutineScope
+    // умирает вместе с экраном и рвёт запись в DataStore на полпути, если
+    // владелец переключил вкладку сразу после нажатия.
+    val scope = app.appScope
+    val settings = app.settings
+    var apiKey by remember { mutableStateOf("") }
+    var keyVisible by remember { mutableStateOf(false) }
+    var savedMark by remember { mutableStateOf(false) }
+    var loaded by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        apiKey = settings.apiKey()
+        loaded = true
+    }
+
+    Text(
+        stringResource(R.string.settings_api_key_title),
+        style = MaterialTheme.typography.titleSmall,
+    )
+    Spacer(Modifier.height(6.dp))
+    OutlinedTextField(
+        value = apiKey,
+        onValueChange = { apiKey = it; savedMark = false },
+        enabled = loaded,
+        singleLine = true,
+        visualTransformation =
+            if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+        label = { Text(stringResource(R.string.settings_api_key_label)) },
+        trailingIcon = {
+            TextButton(onClick = { keyVisible = !keyVisible }) {
+                Text(
+                    stringResource(
+                        if (keyVisible) R.string.settings_hide else R.string.settings_show
+                    )
+                )
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(6.dp))
+    HintText(stringResource(R.string.settings_api_key_hint))
+    Spacer(Modifier.height(10.dp))
+    Button(
+        onClick = { scope.launch { settings.setApiKey(apiKey); savedMark = true } },
+        enabled = loaded,
+    ) {
+        Text(stringResource(if (savedMark) R.string.settings_saved else R.string.settings_save))
+    }
+
 
     Spacer(Modifier.height(10.dp))
     val phoneMicOnly by settings.phoneMicOnlyFlow.collectAsState(initial = true)

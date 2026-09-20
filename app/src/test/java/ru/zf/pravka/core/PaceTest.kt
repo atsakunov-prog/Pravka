@@ -29,6 +29,7 @@ class PaceTest {
         var acc = Pace.Acc()
         acc = Pace.add(acc, 100, 1_000)
         acc = Pace.add(acc, 900, 9_000)
+        assertTrue(acc.n < Pace.MIN_FOR_LINE)
         // Двух точек хватило бы на прямую формально, но не по существу:
         // держимся среднего, пока история не набралась.
         val short = Pace.estimate(acc, 100)
@@ -82,18 +83,35 @@ class PaceTest {
     fun `дуга идёт ровно до срока и дальше только ползёт`() {
         val t = 4_000L
         assertEquals(0f, Pace.progress(0, t), 0.001f)
-        assertEquals(0.375f, Pace.progress(t / 2, t), 0.01f)
-        assertEquals(0.75f, Pace.progress(t, t), 0.01f)
+        assertEquals(0.45f, Pace.progress(t / 2, t), 0.01f)
+        // К сроку дуга почти полная: раньше она стояла на трёх четвертях, и
+        // владелец читал это как «полоса отстаёт от работы».
+        assertEquals(0.9f, Pace.progress(t, t), 0.01f)
         // После срока — ползёт и НИКОГДА не доходит до края: полоса, упёршаяся
         // в конец и замершая, читается как «повисло».
         val late = Pace.progress(t * 3, t)
-        assertTrue(late > 0.75f)
+        assertTrue(late > 0.9f)
         assertTrue(late < 1f)
         assertTrue(Pace.progress(t * 100, t) > late)
         // И даже через сто сроков круг не замкнётся: замкнуть его может
         // только пришедший ответ.
         assertEquals(Pace.CEILING, Pace.progress(t * 100, t), 0f)
         assertTrue(Pace.CEILING < 1f)
+    }
+
+    @Test
+    fun `дорога рассказывает о себе числами, а не на словах`() {
+        assertEquals(null, Pace.line(null))
+        val acc = honest(points = 40)
+        val l = Pace.line(acc)!!
+        assertTrue("на истории должна быть прямая", l.straight)
+        assertEquals(2_000.0, l.baseMs, 300.0)
+        assertEquals(5.0, l.msPerChar, 0.5)
+        assertTrue(l.n > 30.0)
+        // Мало замеров — прямой нет, но среднее есть и честно так названо.
+        val few = Pace.add(Pace.Acc(), 300, 3_000)
+        assertEquals(false, Pace.line(few)!!.straight)
+        assertEquals(3_000.0, Pace.line(few)!!.meanMs, 1.0)
     }
 
     @Test

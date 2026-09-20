@@ -229,6 +229,11 @@ class MainActivity : ComponentActivity() {
         val initialTab = tabOf(intent) ?: Tab.ZASECHKA
         setContent {
             PravkaTheme {
+                // Вид плашек — из настроек, один раз на всё приложение
+                // (`ui/CardLook.kt`): `PaperCard` зовут из десятка мест, и
+                // протаскивать четыре тумблера через каждый вызов значило бы
+                // править их все ради одного.
+                ru.zf.pravka.ui.ProvideCardLook(app.settings) {
                 MainScreen(
                     app = app,
                     initialTab = initialTab,
@@ -260,6 +265,7 @@ class MainActivity : ComponentActivity() {
                         )
                     },
                 )
+                }
             }
         }
     }

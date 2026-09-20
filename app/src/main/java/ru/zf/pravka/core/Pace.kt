@@ -32,11 +32,17 @@ object Pace {
      */
     const val DECAY = 0.99
 
-    /** Меньше стольких замеров — прямую не строим, берём простое среднее. */
-    const val MIN_FOR_LINE = 6
+    /**
+     * Меньше стольких замеров — прямую не строим, берём простое среднее.
+     * Было шесть; владелец (20.09.2026): «расшифровка правки обычно быстрее,
+     * чем прогресс бар». Пока идёт среднее, короткая фраза получает ожидание
+     * длинной — и дуга честно отстаёт. Четыре замера набираются за пару
+     * минут работы, после них длина уже учитывается.
+     */
+    const val MIN_FOR_LINE = 4
 
-    /** Замеров нет совсем — столько и обещаем: средняя чистка Опусом. */
-    const val BLIND_MS = 4_000L
+    /** Замеров нет совсем — столько и обещаем: короткая чистка Опусом. */
+    const val BLIND_MS = 2_500L
 
     /** Ни один запрос не считается быстрее и дольше этого. */
     const val MIN_MS = 300L
@@ -68,21 +74,41 @@ object Pace {
         )
     }
 
-    /**
-     * Сколько ждать на [chars] символах. Мало замеров — среднее; хватает —
-     * прямая. Прямая с ОТРИЦАТЕЛЬНЫМ наклоном («чем длиннее, тем быстрее») —
-     * это шум, а не закон: такую отбрасываем и берём среднее.
-     */
+    /** Сколько ждать на [chars] символах: по прямой, если она есть, иначе среднее. */
     fun estimate(acc: Acc?, chars: Int): Long {
-        if (acc == null || acc.n < 1.0) return BLIND_MS
+        val l = line(acc) ?: return BLIND_MS
+        val ms = if (l.straight) l.baseMs + l.msPerChar * chars.coerceAtLeast(0) else l.meanMs
+        return ms.toLong().coerceIn(MIN_MS, MAX_MS)
+    }
+
+    /**
+     * Что именно дорога знает о себе: прямая, среднее и сколько замеров за
+     * этим стоит. Отдельно от [estimate], чтобы это можно было ПОКАЗАТЬ —
+     * владелец спросил «ты точно рассчитал средние?», и единственный честный
+     * ответ на такой вопрос — показать числа, а не пересказать их.
+     */
+    data class Line(
+        val n: Double,
+        val meanMs: Double,
+        val baseMs: Double,
+        val msPerChar: Double,
+        /** Прямая построена; иначе всё, что есть, — среднее. */
+        val straight: Boolean,
+    )
+
+    fun line(acc: Acc?): Line? {
+        if (acc == null || acc.n < 1.0) return null
         val mean = acc.sumY / acc.n
-        if (acc.n < MIN_FOR_LINE) return mean.toLong().coerceIn(MIN_MS, MAX_MS)
+        val flat = Line(acc.n, mean, mean, 0.0, straight = false)
+        if (acc.n < MIN_FOR_LINE) return flat
         val varX = acc.sumXX - acc.sumX * acc.sumX / acc.n
-        if (varX <= 1.0) return mean.toLong().coerceIn(MIN_MS, MAX_MS)
+        if (varX <= 1.0) return flat
         val slope = (acc.sumXY - acc.sumX * acc.sumY / acc.n) / varX
-        if (slope <= 0.0) return mean.toLong().coerceIn(MIN_MS, MAX_MS)
+        // Прямая с отрицательным наклоном («чем длиннее, тем быстрее») — шум,
+        // а не закон: так выглядит кэш, поймавший длинный запрос.
+        if (slope <= 0.0) return flat
         val base = (acc.sumY - slope * acc.sumX) / acc.n
-        return (base + slope * chars.coerceAtLeast(0)).toLong().coerceIn(MIN_MS, MAX_MS)
+        return Line(acc.n, mean, base, slope, straight = true)
     }
 
     /**
@@ -109,8 +135,14 @@ object Pace {
         return p.toFloat().coerceIn(0f, CEILING)
     }
 
-    /** Докуда дуга доходит к сроку: дальше — только ползком. */
-    private const val HONEST = 0.75
+    /**
+     * Докуда дуга доходит к сроку: дальше — только ползком. Было 0,75, и
+     * владелец сразу поймал: «расшифровка правки обычно быстрее, чем прогресс
+     * бар». При точной оценке дуга к сроку стояла на трёх четвертях и
+     * прыгала на конец — читалось как «полоса отстаёт». Девять десятых: к
+     * сроку она почти полная, а запас на «дольше обычного» остаётся.
+     */
+    private const val HONEST = 0.9
 
     /** Дальше этого дуга не идёт, пока ответ не пришёл. */
     const val CEILING = 0.99f
