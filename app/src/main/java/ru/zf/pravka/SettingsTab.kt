@@ -706,6 +706,43 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
             "уехать из-под руки. На отпускании диск всё равно щёлкает по четверти."
     )
 
+    // Утопание после долгого простоя (владелец, 20.09.2026): «если я не
+    // использую правку пять минут и больше, то она залезает ещё дальше в
+    // край: на 75 % кнопок где-то. И я тапаю по ней, и она вылезает».
+    val diskSink by settings.diskSinkFlow.collectAsState(initial = true)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(checked = diskSink, onCheckedChange = { on -> scope.launch { settings.setDiskSink(on) } })
+        Spacer(Modifier.width(8.dp))
+        Text("Утопить диск после долгого простоя", style = MaterialTheme.typography.bodyMedium)
+    }
+    if (diskSink) {
+        val sinkMin by settings.diskSinkMinutesFlow.collectAsState(initial = Settings.DISK_SINK_MIN_DEFAULT)
+        var minSlider by remember(sinkMin) { mutableStateOf(sinkMin.toFloat()) }
+        Text("Через ${minSlider.toInt()} мин", style = MaterialTheme.typography.bodyMedium)
+        Slider(
+            value = minSlider,
+            onValueChange = { minSlider = it },
+            onValueChangeFinished = { scope.launch { settings.setDiskSinkMinutes(minSlider.toInt()) } },
+            valueRange = Settings.DISK_SINK_MIN_MIN.toFloat()..Settings.DISK_SINK_MIN_MAX.toFloat(),
+        )
+        val sinkPct by settings.diskSinkPctFlow.collectAsState(initial = Settings.DISK_SINK_PCT_DEFAULT)
+        var pctSlider by remember(sinkPct) { mutableStateOf(sinkPct.toFloat()) }
+        Text("Глубже на ${pctSlider.toInt()} % кнопки", style = MaterialTheme.typography.bodyMedium)
+        Slider(
+            value = pctSlider,
+            onValueChange = { pctSlider = it },
+            onValueChangeFinished = { scope.launch { settings.setDiskSinkPct(pctSlider.toInt()) } },
+            valueRange = Settings.DISK_SINK_PCT_MIN.toFloat()..Settings.DISK_SINK_PCT_MAX.toFloat(),
+        )
+    }
+    HintText(
+        "Диск, который давно не трогали, уходит за край ещё глубже — видна " +
+            "полоска кнопок. Тап по ней ДОСТАЁТ диск и ничего не нажимает: " +
+            "иначе первое касание после простоя запускало бы запись из-за края. " +
+            "Работает поверх автоуборки: диск, оставленный посреди экрана, " +
+            "никуда не уезжает — он там нарочно."
+    )
+
     Spacer(Modifier.height(6.dp))
     OutlinedButton(onClick = { scope.launch { settings.resetDiskLook() } }) {
         Text("Вернуть вид диска в счёт")

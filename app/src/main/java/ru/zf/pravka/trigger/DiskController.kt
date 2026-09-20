@@ -160,6 +160,9 @@ class DiskController(
     private var rail = true
     private var inertia = true
     private var rollK = Settings.DISK_ROLL_DEFAULT
+    /** Диск утоплен за край глубже обычного: первое касание его достаёт. */
+    private var sunk = false
+    private var sinkPct = Settings.DISK_SINK_PCT_DEFAULT
 
     // Дуга прогресса: что идёт, когда началось и сколько обещано.
     private var workAt = 0L
@@ -272,6 +275,7 @@ class DiskController(
         }
         scope.launch { settings.diskInertiaFlow.collect { inertia = it } }
         scope.launch { settings.diskRollFlow.collect { rollK = it } }
+        scope.launch { settings.diskSinkPctFlow.collect { sinkPct = it } }
     }
 
     /**
@@ -559,6 +563,8 @@ class DiskController(
         if (pinch) return
         when (action) {
             MotionEvent.ACTION_DOWN -> {
+                // Утопленный диск это касание ДОСТАЁТ — и больше ничего.
+                if (wakeIfSunk()) return
                 if (sliding) return
                 stopMotion()
                 downRawX = rawX
@@ -649,6 +655,9 @@ class DiskController(
      */
     private fun slide(nx: Float, ny: Float, dropped: Boolean) {
         if (!shown || !placed || folded) return
+        // Диск везут — значит он уже не спит: следующий простой отсчитается
+        // заново, и утопание не догонит его посреди переезда.
+        sunk = false
         onTouched?.invoke()
         val (w, _) = frame()
         if (!sliding) {
@@ -817,6 +826,7 @@ class DiskController(
                 MotionEvent.ACTION_DOWN -> {
                     if (!inside(v, event.x, event.y)) return false
                     if (allHidden) return false
+                    if (wakeIfSunk()) return true
                     onTouched?.invoke()
                     downX = event.rawX
                     downY = event.rawY
@@ -888,7 +898,7 @@ class DiskController(
      * правка»). Уже там или под пальцем — ничего.
      */
     fun tuck() {
-        if (!shown || !placed || folded || allHidden) return
+        if (!shown || !placed || folded || allHidden || sunk) return
         if (animating || turning != null || sliding || pinch) return
         val d = dims()
         val (w, h) = frame()
@@ -898,6 +908,66 @@ class DiskController(
         val target = DiskGeometry.home(rotation)
         if (abs(target - rotation) < 0.5f && abs(dx - cx) < 0.5f && abs(dy - cy) < 0.5f) return
         animateTo(target, dx, dy)
+    }
+
+    /**
+     * Утопить: уйти за край ещё глубже, на долю кнопки [Settings.diskSinkPctFlow].
+     * Владелец (20.09.2026): «если я не использую правку пять минут и больше,
+     * то она залезает ещё дальше в край: на 75 % кнопок где-то. И я тапаю по
+     * ней, и она вылезает».
+     *
+     * Только «ЕЩЁ дальше»: диск, стоящий посреди экрана, не трогаем — его там
+     * оставили нарочно, и уехать он должен сам, автоуборкой, если она
+     * включена. Поэтому утопание — продолжение уборки, а не вторая её копия.
+     */
+    fun sink() {
+        if (!shown || !placed || folded || allHidden || sunk) return
+        if (animating || turning != null || sliding || pinch) return
+        val d = dims()
+        val (w, h) = frame()
+        // Докован — значит центр ровно на краю (DOCK_INSET = 0).
+        if (cx > 0.5f && cx < w - 0.5f) return
+        val deep = (buttonSize() * sinkPct / 100f).roundToInt()
+        if (deep <= 0) return
+        sunk = true
+        val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, -deep)
+        animateTo(rotation, dx, dy)
+    }
+
+    /**
+     * Достать утопленный диск обратно к краю. Возвращает true, если он и
+     * правда спал: тогда это касание его ДОСТАЁТ, а не нажимает кнопку, на
+     * которую пришлось. Иначе первый тап после простоя запускал бы запись
+     * из-за края экрана — ровно то, чего от него не ждут.
+     */
+    private fun wakeIfSunk(): Boolean {
+        if (!sunk) return false
+        slots.forEach { it.button.cancelGesture() }
+        head?.cancelGesture()
+        turning = null
+        sliding = false
+        stopMotion()
+        awake()
+        Haptics.tick(service)
+        // Отсчёт простоя — после пробуждения: `touched` зовёт `awake`, а он
+        // к этому мигу уже ничего не делает, и круга не получается.
+        onTouched?.invoke()
+        return true
+    }
+
+    /**
+     * Диск трогали — не обязательно его самого: владелец мог ответить на
+     * уведомление или коснуться метки. Утопленный выезжает обратно к краю;
+     * не утопленный не двигается. Зовётся с каждого `touched()` службы.
+     */
+    fun awake() {
+        if (!sunk) return
+        sunk = false
+        if (!shown || !placed || folded) return
+        val d = dims()
+        val (w, h) = frame()
+        val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, d.inset)
+        animateTo(rotation, dx, dy)
     }
 
     /**
