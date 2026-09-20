@@ -259,6 +259,40 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
+    labels("Разворот")
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Settings.SPREADS.forEach { id ->
+            FilterChip(
+                selected = prefs.readerSpread == id,
+                onClick = { scope.launch { s.setReaderSpread(id) } },
+                label = { Text(Settings.spreadLabel(id)) },
+            )
+        }
+    }
+    Text(
+        buildString {
+            append(
+                when (prefs.readerSpread) {
+                    Settings.SPREAD_AUTO ->
+                        "Две страницы, когда экран это позволяет: раскрытая книжка-телефон, " +
+                            "планшет, телефон набок. Одна полоса текста посреди широкого экрана " +
+                            "выглядит сиротливо, а так получается настоящий разворот - с " +
+                            "корешком посередине и стопками по краям."
+                    Settings.SPREAD_ON ->
+                        "Всегда две страницы, даже на узком экране. Полосы там выходят в " +
+                            "половину ширины - кегль, скорее всего, придётся убавить."
+                    else -> "Всегда одна страница, какой бы широкий экран ни был."
+                }
+            )
+            if (!prefs.readerPaged) {
+                append(" Работает при листании страницами: сейчас выбрана прокрутка, ")
+                append("а в ленте разворота быть не может.")
+            }
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
     labels("Перелистывание")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Settings.PAGE_TURNS.forEach { id ->
@@ -275,7 +309,9 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
                 when (prefs.readerPageTurn) {
                     Settings.TURN_BOOK ->
                         "Лист поворачивается вокруг корешка и открывает следующий, который " +
-                            "всё это время лежит неподвижно, - как в настоящей книге."
+                            "всё это время лежит неподвижно, - как в настоящей книге. В " +
+                            "развороте лист двусторонний: с лица уходит правая страница, а на " +
+                            "левую половину ложится его оборот - следующая левая."
                     Settings.TURN_OVER ->
                         "Верхний лист уезжает, нижний лежит на месте, и по его краю идёт тень."
                     Settings.TURN_SLIDE -> "Обе страницы едут вбок - обычное листание."

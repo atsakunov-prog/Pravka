@@ -66,6 +66,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerPageStyle: String = PAGE_BOOK,
         /** Как уходит страница при листании; в прокрутке ни при чём. */
         val readerPageTurn: String = TURN_BOOK,
+        /** Разворот из двух страниц: по ширине экрана, всегда или никогда. */
+        val readerSpread: String = SPREAD_AUTO,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
         // экраном система нередко считает плотность малой, и кнопки с надписями
         // выходят мелкими. Множитель к плотности - растёт всё разом, включая
@@ -136,6 +138,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerPaged = p[KEY_R_PAGED] ?: false,
                 readerPageStyle = p[KEY_R_PAGE_STYLE]?.takeIf { it in PAGE_STYLES } ?: PAGE_BOOK,
                 readerPageTurn = p[KEY_R_PAGE_TURN]?.takeIf { it in PAGE_TURNS } ?: TURN_BOOK,
+                readerSpread = p[KEY_R_SPREAD]?.takeIf { it in SPREADS } ?: SPREAD_AUTO,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
                 updateAuto = p[KEY_UPD_AUTO] ?: true,
@@ -197,6 +200,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderPaged(v: Boolean) = edit { it[KEY_R_PAGED] = v }
     suspend fun setReaderPageStyle(v: String) = edit { if (v in PAGE_STYLES) it[KEY_R_PAGE_STYLE] = v }
     suspend fun setReaderPageTurn(v: String) = edit { if (v in PAGE_TURNS) it[KEY_R_PAGE_TURN] = v }
+    suspend fun setReaderSpread(v: String) = edit { if (v in SPREADS) it[KEY_R_SPREAD] = v }
     suspend fun setUiScale(v: Float) = edit { if (v in UI_SCALES) it[KEY_UI_SCALE] = v }
     suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
     suspend fun setUpdateAuto(v: Boolean) = edit { it[KEY_UPD_AUTO] = v }
@@ -289,6 +293,20 @@ class Settings(private val context: Context, scope: CoroutineScope) {
 
         val PAGE_TURNS = listOf(TURN_BOOK, TURN_OVER, TURN_SLIDE, TURN_FADE)
 
+        // Разворот из двух страниц: на раскрытой книжке-телефоне и на планшете
+        // одна полоса текста посреди экрана выглядит сиротливо.
+        const val SPREAD_AUTO = "auto"
+        const val SPREAD_ON = "on"
+        const val SPREAD_OFF = "off"
+
+        val SPREADS = listOf(SPREAD_AUTO, SPREAD_ON, SPREAD_OFF)
+
+        fun spreadLabel(mode: String): String = when (mode) {
+            SPREAD_AUTO -> "По экрану"
+            SPREAD_ON -> "Две страницы"
+            else -> "Одна страница"
+        }
+
         fun pageTurnLabel(turn: String): String = when (turn) {
             TURN_BOOK -> "Разворот"
             TURN_OVER -> "Внахлёст"
@@ -322,6 +340,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_PAGED = booleanPreferencesKey("reader_paged")
         private val KEY_R_PAGE_STYLE = stringPreferencesKey("reader_page_style")
         private val KEY_R_PAGE_TURN = stringPreferencesKey("reader_page_turn")
+        private val KEY_R_SPREAD = stringPreferencesKey("reader_spread")
         private val KEY_UI_SCALE = floatPreferencesKey("ui_scale")
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
         private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")
