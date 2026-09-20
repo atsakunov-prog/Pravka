@@ -39,8 +39,12 @@ class Updater(private val context: Context, private val settings: Settings) {
     sealed interface Status {
         data object Idle : Status
         data object Checking : Status
-        /** [at] - когда это выяснили: ответ получасовой давности выглядит как свежий. */
-        data class UpToDate(val at: Long) : Status
+        /**
+         * [at] - когда это выяснили: ответ получасовой давности выглядит как
+         * свежий. [code] - номер, который лежит на сервере: без него «стоит
+         * последняя» и «не подхватывает новую» выглядят одинаково.
+         */
+        data class UpToDate(val at: Long, val code: Int) : Status
         data class Ready(val update: Available) : Status
         data class Downloading(val percent: Int) : Status
         data class Failed(val message: String) : Status
@@ -96,7 +100,7 @@ class Updater(private val context: Context, private val settings: Settings) {
                     ?: return@runCatching Status.Failed(
                         "В файле версий нет строки slushalka - это сборка не Слушалки"
                     )
-                if (code <= BuildConfig.VERSION_CODE) return@runCatching Status.UpToDate(now)
+                if (code <= BuildConfig.VERSION_CODE) return@runCatching Status.UpToDate(now, code)
                 Status.Ready(
                     Available(
                         versionCode = code,
@@ -209,9 +213,18 @@ class Updater(private val context: Context, private val settings: Settings) {
         }
     }
 
+    /**
+     * Человеческая причина вместо имени исключения. Про GitHub отдельно: в
+     * российских сетях `raw.githubusercontent.com` то открывается, то нет, и
+     * «Нет сети» в такой момент отправляет чинить вайфай вместо VPN.
+     */
     private fun readable(e: Throwable): String = when (e) {
-        is java.net.UnknownHostException -> "Нет сети"
-        is java.net.SocketTimeoutException -> "Сервер не ответил"
+        is java.net.UnknownHostException ->
+            "Не открывается ${e.message ?: "сервер"} - сеть его не пускает, помогает VPN"
+        is java.net.SocketTimeoutException ->
+            "Сервер не ответил - у GitHub это бывает без VPN"
+        is javax.net.ssl.SSLException ->
+            "Соединение оборвалось на полпути - у GitHub это бывает без VPN"
         else -> e.message ?: "Не вышло проверить обновления"
     }
 

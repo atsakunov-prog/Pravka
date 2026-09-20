@@ -398,7 +398,7 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                     is ru.zf.slushalka.data.Updater.Status.Downloading -> "Качаю: ${u.percent}%"
                     ru.zf.slushalka.data.Updater.Status.Checking -> "Смотрю…"
                     is ru.zf.slushalka.data.Updater.Status.UpToDate ->
-                        "Стоит последняя версия · проверено ${formatAgo(u.at)}"
+                        "Стоит последняя (сборка ${u.code}) · проверено ${formatAgo(u.at)}"
                     is ru.zf.slushalka.data.Updater.Status.Failed -> u.message
                     else -> "Проверяется само при каждом запуске, не чаще раза в полчаса"
                 },
