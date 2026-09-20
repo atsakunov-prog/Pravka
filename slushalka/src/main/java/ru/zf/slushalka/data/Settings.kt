@@ -65,7 +65,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         // со стопкой под ней, сгибом у корешка и светом (см. BookPage.kt).
         val readerPageStyle: String = PAGE_BOOK,
         /** Как уходит страница при листании; в прокрутке ни при чём. */
-        val readerPageTurn: String = TURN_BOOK,
+        val readerPageTurn: String = TURN_DECK,
         /** Разворот из двух страниц: по ширине экрана, всегда или никогда. */
         val readerSpread: String = SPREAD_AUTO,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
@@ -137,7 +137,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerKeepAwake = p[KEY_R_AWAKE] ?: true,
                 readerPaged = p[KEY_R_PAGED] ?: false,
                 readerPageStyle = p[KEY_R_PAGE_STYLE]?.takeIf { it in PAGE_STYLES } ?: PAGE_BOOK,
-                readerPageTurn = p[KEY_R_PAGE_TURN]?.takeIf { it in PAGE_TURNS } ?: TURN_BOOK,
+                readerPageTurn = p[KEY_R_PAGE_TURN]?.takeIf { it in PAGE_TURNS } ?: TURN_DECK,
                 readerSpread = p[KEY_R_SPREAD]?.takeIf { it in SPREADS } ?: SPREAD_AUTO,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
@@ -270,8 +270,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val THEME_GREY = "grey"
         const val THEME_BLACK = "black"
 
-        // Объём страницы. Заводской - «как книга»: ради него всё и затевалось,
-        // а кому мешает - два шага назад, до плоского листа.
+        // Вид страницы. Заводской - «стопка»: страница как верхняя карточка
+        // колоды, ради этого всё и затевалось. Ключи остались прежними, чтобы
+        // выбор владельца пережил смену самого вида.
         const val PAGE_BOOK = "book"
         const val PAGE_SOFT = "soft"
         const val PAGE_FLAT = "flat"
@@ -279,19 +280,18 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val PAGE_STYLES = listOf(PAGE_BOOK, PAGE_SOFT, PAGE_FLAT)
 
         fun pageStyleLabel(style: String): String = when (style) {
-            PAGE_BOOK -> "Как книга"
-            PAGE_SOFT -> "Мягкий свет"
+            PAGE_BOOK -> "Стопка"
+            PAGE_SOFT -> "Одна карточка"
             else -> "Плоско"
         }
 
-        // Как уходит страница: поворотом вокруг корешка, внахлёст, сдвигом
-        // (как было) или растворяясь.
-        const val TURN_BOOK = "book"
-        const val TURN_OVER = "over"
+        // Как уходит страница: смахиванием из колоды, сдвигом (как было) или
+        // растворяясь. Поворот вокруг корешка убран вместе с самим корешком.
+        const val TURN_DECK = "deck"
         const val TURN_SLIDE = "slide"
         const val TURN_FADE = "fade"
 
-        val PAGE_TURNS = listOf(TURN_BOOK, TURN_OVER, TURN_SLIDE, TURN_FADE)
+        val PAGE_TURNS = listOf(TURN_DECK, TURN_SLIDE, TURN_FADE)
 
         // Разворот из двух страниц: на раскрытой книжке-телефоне и на планшете
         // одна полоса текста посреди экрана выглядит сиротливо.
@@ -308,8 +308,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         }
 
         fun pageTurnLabel(turn: String): String = when (turn) {
-            TURN_BOOK -> "Разворот"
-            TURN_OVER -> "Внахлёст"
+            TURN_DECK -> "Смахнуть"
             TURN_SLIDE -> "Сдвиг"
             else -> "Растворение"
         }

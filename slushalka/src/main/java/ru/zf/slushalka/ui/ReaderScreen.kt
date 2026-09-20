@@ -331,9 +331,9 @@ fun ReaderScreen(
         progress = progress,
         spread = spreadOn(prefs.readerSpread, prefs.readerPaged, screenWidth),
     )
-    val bookInsets = pageInsets(prefs.readerPageStyle, shape)
+    val card = cardMetrics(prefs.readerPageStyle, shape)
 
-    Box(Modifier.fillMaxSize().bookStack(tones, prefs.readerPageStyle, shape)) {
+    Box(Modifier.fillMaxSize().readerBackdrop(tones, prefs.readerPageStyle)) {
         val onLong: (Int) -> Unit = { pressed = it }
         val onTapPicture: (ShownPicture) -> Unit = { picture = it }
         if (prefs.readerPaged) {
@@ -401,9 +401,9 @@ fun ReaderScreen(
                 Modifier
                     .onSizeChanged { topBarPx = it.height }
                     .fillMaxWidth()
-                    // Панель лежит на странице, а не на стопках: срезы видны по
-                    // всей высоте экрана, и книга не разрезается полосой.
-                    .padding(start = bookInsets.left, end = bookInsets.right)
+                    // Панель лежит на самой карточке, а не на столе: иначе она
+                    // разрезала бы страницу полосой поперёк.
+                    .padding(start = card.side, end = card.side)
                     .background(palette.bg.copy(alpha = 0.96f))
                     .statusBarsPadding()
                     .padding(horizontal = 6.dp, vertical = 4.dp),
@@ -440,11 +440,7 @@ fun ReaderScreen(
                 Modifier
                     .onSizeChanged { bottomBarPx = it.height }
                     .fillMaxWidth()
-                    .padding(
-                        start = bookInsets.left,
-                        end = bookInsets.right,
-                        bottom = bookInsets.bottom,
-                    )
+                    .padding(start = card.side, end = card.side, bottom = card.bottom)
                     .background(palette.bg.copy(alpha = 0.96f))
                     .navigationBarsPadding()
                     .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -777,7 +773,7 @@ private fun ScrollBody(
             }
     }
 
-    val insets = pageInsets(pageStyle, shape)
+    val card = cardMetrics(pageStyle, shape)
     Box(
         Modifier
             .fillMaxSize()
@@ -801,10 +797,10 @@ private fun ScrollBody(
                     },
                 )
             }
-            // Лист - после жестов: тап у края экрана листает и там, где из-под
-            // страницы уже виден срез стопки.
-            .padding(start = insets.left, end = insets.right, bottom = insets.bottom)
-            .bookSheet(tones, pageStyle, shape),
+            // Карточка - после жестов: тап у края экрана листает и там, где
+            // страницы уже нет, а виден стол.
+            .padding(start = card.side, end = card.side, top = card.top, bottom = card.bottom)
+            .pageCard(tones, pageStyle, shape),
     ) {
         LazyColumn(
             state = listState,
@@ -812,8 +808,7 @@ private fun ScrollBody(
             // Читалка рисуется во весь экран, без Scaffold, поэтому системные
             // отступы считаем сами: иначе первая строка уезжает под часы.
             contentPadding = PaddingValues(
-                // У корешка строка не начинается вплотную: там бумага уходит в сгиб.
-                start = margin.dp + insets.fold,
+                start = margin.dp,
                 end = margin.dp,
                 top = 56.dp + WindowInsets.statusBars.asPaddingValues().calculateTopPadding(),
                 bottom = 110.dp,
@@ -876,19 +871,19 @@ private fun PagedBody(
         val measurer = rememberTextMeasurer()
         val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-        // Меряем по листу, а не по экрану: срезы стопок по краям - не место для
-        // текста. Полосы под них не зависят от места в книге нарочно, иначе
-        // перетекающая стопка гоняла бы разбивку при каждом перелистывании.
-        val insets = pageInsets(pageStyle, shape)
-        // В развороте страниц две, каждая по своей половине экрана; стопка при
-        // этом у каждой одна - своя внешняя, у корешка их нет.
+        // Меряем по карточке, а не по экрану: её поля, скругление и место под
+        // колоду тексту не принадлежат. Мерки не зависят от места в книге
+        // нарочно, иначе тающая колода гоняла бы разбивку при каждом
+        // перелистывании.
+        val card = cardMetrics(pageStyle, shape)
+        // В развороте карточек две, каждая по своей половине экрана.
         val halves = if (shape.spread) 2 else 1
-        val bands = if (shape.spread) insets.right else insets.left + insets.right
         val widthPx = with(density) {
-            (maxWidth / halves - bands - margin.dp * 2 - insets.fold).roundToPx()
+            (maxWidth / halves - card.side * 2 - margin.dp * 2).roundToPx()
         }
         val heightPx = with(density) {
-            (maxHeight - topInset - bottomInset - PAGE_TOP - PAGE_BOTTOM - insets.bottom).roundToPx()
+            (maxHeight - topInset - bottomInset - PAGE_TOP - PAGE_BOTTOM - card.top - card.bottom)
+                .roundToPx()
         }
         val gapPx = with(density) { 10.dp.roundToPx() }
 
@@ -1010,94 +1005,39 @@ private fun PagedBody(
                 return@Box
             }
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { slot ->
-                val offsetOf = { pagerState.turnOffset(slot) }
-                val face: @Composable (Page?, PageSide, Boolean, Modifier) -> Unit =
-                    { page, side, track, modifier ->
-                        PageFace(
-                            page = page, side = side, app = app, bookId = bookId,
-                            palette = palette, hits = hits, tones = tones,
-                            pageStyle = pageStyle, shape = shape, insets = insets,
-                            margin = margin, style = style,
-                            topPad = topInset + PAGE_TOP, bottomPad = bottomInset + PAGE_BOTTOM,
-                            highlight = highlight, highlightAlpha = highlightAlpha,
-                            onPicture = onPicture, track = track, modifier = modifier,
-                        )
-                    }
-                if (!shape.spread) {
-                    face(
-                        pages.getOrNull(slot),
-                        PageSide.SINGLE,
-                        true,
-                        Modifier
-                            .fillMaxSize()
-                            // Ранняя страница лежит поверх поздней, как в книге:
-                            // уходящий лист должен закрывать тот, что под ним.
-                            .zIndex(-slot.toFloat())
-                            .pageTurn(turn, tones, offsetOf),
+                val face: @Composable (Page?, Modifier) -> Unit = { page, modifier ->
+                    PageFace(
+                        page = page, app = app, bookId = bookId, palette = palette, hits = hits,
+                        tones = tones, pageStyle = pageStyle, shape = shape, card = card,
+                        margin = margin, style = style,
+                        topPad = topInset + PAGE_TOP, bottomPad = bottomInset + PAGE_BOTTOM,
+                        highlight = highlight, highlightAlpha = highlightAlpha,
+                        onPicture = onPicture, modifier = modifier,
                     )
+                }
+                // Ранняя карточка лежит поверх поздней, как в колоде: смахнутая
+                // должна закрывать ту, что под ней.
+                val slotModifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(-slot.toFloat())
+                    .pageTurn(turn, gentle = shape.spread) { pagerState.turnOffset(slot) }
+                if (!shape.spread) {
+                    face(pages.getOrNull(slot), slotModifier)
                     return@HorizontalPager
                 }
-                // Разворот: слева страница, справа страница, корешок посередине.
-                val leftPage = pages.getOrNull(slot * 2)
-                val rightPage = pages.getOrNull(slot * 2 + 1)
-                // Оборот переворачиваемого листа - левая страница следующего
-                // разворота: в книге это одна и та же бумага.
-                val nextLeft = pages.getOrNull(slot * 2 + 2)
-                val asBook = turn == Settings.TURN_BOOK
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .zIndex(-slot.toFloat())
-                        .then(
-                            if (asBook) Modifier.spreadStill(tones, offsetOf)
-                            else Modifier.pageTurn(turn, tones, offsetOf)
-                        ),
-                ) {
-                    Row(Modifier.fillMaxSize()) {
-                        face(leftPage, PageSide.LEFT, true, Modifier.weight(1f).fillMaxHeight())
-                        face(
-                            rightPage, PageSide.RIGHT, true,
-                            Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .then(if (asBook) Modifier.spreadRestingHalf(offsetOf) else Modifier),
-                        )
-                    }
-                    if (asBook) {
-                        face(
-                            rightPage, PageSide.RIGHT, false,
-                            Modifier
-                                .align(Alignment.CenterEnd)
-                                .fillMaxHeight()
-                                .fillMaxWidth(0.5f)
-                                .spreadLeaf(face = true, tones = tones, offset = offsetOf),
-                        )
-                        face(
-                            nextLeft, PageSide.LEFT, false,
-                            Modifier
-                                .align(Alignment.CenterStart)
-                                .fillMaxHeight()
-                                .fillMaxWidth(0.5f)
-                                .spreadLeaf(face = false, tones = tones, offset = offsetOf),
-                        )
-                    }
+                Row(slotModifier) {
+                    face(pages.getOrNull(slot * 2), Modifier.weight(1f).fillMaxHeight())
+                    face(pages.getOrNull(slot * 2 + 1), Modifier.weight(1f).fillMaxHeight())
                 }
             }
         }
     }
 }
 
-/**
- * Одна страница: лист с объёмом и текст на нём.
- *
- * [track] - отмечать ли абзацы в [TextHits]. Копии страницы на
- * переворачиваемом листе не отмечаются: две копии одного абзаца спорили бы за
- * его границы, и обводка пальцем била бы мимо.
- */
+/** Одна страница: карточка из колоды и текст на ней. */
 @Composable
 private fun PageFace(
     page: Page?,
-    side: PageSide,
     app: SlushalkaApp,
     bookId: String,
     palette: ReaderPalette,
@@ -1105,7 +1045,7 @@ private fun PageFace(
     tones: PaperTones,
     pageStyle: String,
     shape: BookShape,
-    insets: PageInsets,
+    card: CardMetrics,
     margin: Int,
     style: TextStyle,
     topPad: Dp,
@@ -1113,25 +1053,25 @@ private fun PageFace(
     highlight: IntRange?,
     highlightAlpha: Float,
     onPicture: (ShownPicture) -> Unit,
-    track: Boolean,
     modifier: Modifier,
 ) {
     Box(
         modifier
             .padding(
-                start = insets.sheetStart(side),
-                end = insets.sheetEnd(side),
-                bottom = insets.bottom,
+                start = card.side,
+                end = card.side,
+                top = card.top,
+                bottom = card.bottom,
             )
-            .bookSheet(tones, pageStyle, shape, side),
+            .pageCard(tones, pageStyle, shape),
     ) {
         if (page == null) return@Box
         Column(
             Modifier
                 .fillMaxSize()
                 .padding(
-                    start = margin.dp + insets.textStart(side),
-                    end = margin.dp + insets.textEnd(side),
+                    start = margin.dp,
+                    end = margin.dp,
                     top = topPad,
                     bottom = bottomPad,
                 ),
@@ -1144,19 +1084,15 @@ private fun PageFace(
                         onPicture(ShownPicture(file, pic.caption, pic.charOffset))
                     }
                 } else {
-                    if (track) DisposableEffect(piece.start) { onDispose { hits.forget(piece.start) } }
+                    DisposableEffect(piece.start) { onDispose { hits.forget(piece.start) } }
                     Text(
                         litText(piece.text, piece.start, highlight, highlightAlpha, palette),
                         style = style,
-                        onTextLayout = { if (track) hits.layout(piece.start, it) },
+                        onTextLayout = { hits.layout(piece.start, it) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 10.dp)
-                            .then(
-                                if (track) Modifier.onGloballyPositioned {
-                                    hits.place(piece.start, it.boundsInRoot())
-                                } else Modifier
-                            ),
+                            .onGloballyPositioned { hits.place(piece.start, it.boundsInRoot()) },
                     )
                 }
             }
