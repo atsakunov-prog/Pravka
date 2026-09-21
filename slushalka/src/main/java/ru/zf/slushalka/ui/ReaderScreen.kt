@@ -1475,17 +1475,10 @@ private fun BoxScope.PageMarksLayer(
         fontWeight = FontWeight.Normal,
     )
     if (marks.head) {
-        // Линейка идёт по строке рядом с текстом и заполняет остаток полосы:
-        // «Автор ————» на левой странице, «———— Название» на правой. Линия под
-        // текстом читалась подчёркиванием.
-        val rule: @Composable RowScope.() -> Unit = {
-            HorizontalDivider(
-                Modifier.weight(1f).padding(horizontal = 8.dp),
-                thickness = 1.dp,
-                color = palette.dim.copy(alpha = 0.35f),
-            )
-        }
-        Row(
+        // Линейка идёт ПОД колонтитулом во всю ширину полосы - так её
+        // ставят в книгах, и так она отделяет служебную строку от текста.
+        // Короткая линейка между автором и названием висела в пустоте.
+        Column(
             Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
@@ -1494,17 +1487,23 @@ private fun BoxScope.PageMarksLayer(
                     end = margins.end(side),
                     // Колонтитул сидит в верхнем поле: под текстом он читался
                     // бы первой строкой полосы.
-                    top = (margins.top - 26.dp).coerceAtLeast(6.dp),
+                    top = (margins.top - 24.dp).coerceAtLeast(4.dp),
                 ),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (side != PageSide.RIGHT) {
-                Text(marks.author, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (side != PageSide.RIGHT) {
+                    Text(marks.author, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.weight(1f))
+                if (side != PageSide.LEFT) {
+                    Text(marks.title, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
-            rule()
-            if (side != PageSide.LEFT) {
-                Text(marks.title, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            HorizontalDivider(
+                Modifier.fillMaxWidth().padding(top = 3.dp),
+                thickness = 0.8.dp,
+                color = palette.dim.copy(alpha = 0.45f),
+            )
         }
     }
     if (marks.center.isNotEmpty()) {
@@ -1513,7 +1512,8 @@ private fun BoxScope.PageMarksLayer(
             style = small,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = ((margins.bottom - 20.dp) / 2).coerceAtLeast(6.dp)),
+                // Номер у самого низа поля, но не на торце блока.
+                .padding(bottom = 9.dp),
         )
     }
     if (marks.corner.isNotEmpty()) {
@@ -1558,9 +1558,14 @@ fun pageMargins(margin: Int, canon: Boolean): PageMargins {
     // налезут на текст.
     return PageMargins(
         inner = (base * 2).dp,
-        top = (base * 3).coerceAtLeast(26f).dp,
+        // Верхнее поле держит колонтитул с линейкой, нижнее - номер.
+        top = (base * 2.75f).coerceAtLeast(22f).dp,
         outer = (base * 4).dp,
-        bottom = (base * 6).coerceAtLeast(34f).dp,
+        // Канонические шесть долей снизу - про бумажный разворот, где места
+        // вдоволь. На экране каждая строка на счету, и владелец это видит:
+        // «внизу отступ от номера не такой большой, туда можно ещё строку
+        // впихнуть». Ужато до четырёх долей - ровно на строку, номеру хватает.
+        bottom = (base * 4f).coerceAtLeast(24f).dp,
     )
 }
 
