@@ -598,10 +598,11 @@ private fun DrawScope.drawVolume(
         // глубине, у самой страницы - снова светлая нить.
         drawRect(
             Brush.horizontalGradient(
-                0f to tones.cast(0.42f),
-                0.30f to tones.light(0.10f),
-                0.62f to tones.cast(0.20f),
-                1f to tones.cast(0.46f),
+                0f to tones.cast(0.52f),
+                0.14f to tones.cast(0.24f),
+                0.34f to tones.light(0.14f),
+                0.66f to tones.cast(0.22f),
+                1f to tones.cast(0.54f),
                 startX = sx,
                 endX = sx + spine,
             ),
