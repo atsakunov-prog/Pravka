@@ -71,12 +71,11 @@ import kotlin.math.sqrt
  * колода, - рисуется ПОД пейджером и стоит на месте ([pageUnder]). Едет
  * только сама страница ([pageSheet]).
  *
- * **Книга целиком в экране.** Узкий экран показывал половину разворота, и
- * половина уходила за край: «левый край книги вылезает, а правая страница
- * вылезает». Теперь на узком экране книга лежит в экране целиком - корешок
- * слева, обрез справа, - а страница не уезжает вбок, а **заворачивается**
- * ([pageFold]): линия сгиба идёт справа налево, за ней виден оборот листа, и
- * из-под него открывается следующая страница. Ничего за край не выходит.
+ * **Книга целиком в экране.** На узком экране книга лежит в экране целиком:
+ * корешок слева, обрез справа. Переворотов листа тут нет - владелец
+ * перепробовал их все и выбрал спокойное листание: «перелистывание убирай в
+ * книге, в стопке отлично». Страницы сменяются тем же способом, что у
+ * карточек (настройка «Перелистывание»), а книга остаётся лежать.
  */
 
 /**
@@ -235,7 +234,6 @@ data class BookShape(
  * книги вылезает». Полоска чужой страницы за корешком объясняет глазу, что
  * книга шире экрана, и всё встаёт на место.
  */
-val BOOK_PEEK = 22.dp
 
 /**
  * Толщина книги по объёму текста.
@@ -366,14 +364,8 @@ fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.styl
 /** Сколько ширины и высоты у одной страницы отнимает всё, что не текст. */
 data class PageChrome(val width: Dp, val height: Dp)
 
-fun pageChrome(look: PageLook, card: CardMetrics, halves: Int, half: Boolean = false): PageChrome = when {
+fun pageChrome(look: PageLook, card: CardMetrics, halves: Int): PageChrome = when {
     look.flat -> PageChrome(0.dp, 0.dp)
-    // Половина разворота: с одной стороны край книги, с другой - корешок и
-    // полоска соседней страницы за ним.
-    look.volume && half -> PageChrome(
-        width = card.side + card.cover + card.cut + card.spine / 2 + BOOK_PEEK,
-        height = card.top + card.bottom + card.cover * 2 + card.reveal * 2,
-    )
     // В развороте у каждой страницы своя половина: поле, кант и половина щели.
     look.volume && halves > 1 -> PageChrome(
         width = card.side + card.cover + card.cut + card.spine / 2,
@@ -400,15 +392,11 @@ fun pagePadding(
     side: PageSide,
     safeTop: Dp,
     safeBottom: Dp,
-    /** Половина разворота: за корешком видна полоска соседней страницы. */
-    half: Boolean = false,
 ): PaddingValues {
     if (look.flat) return PaddingValues(0.dp)
     val under = underPadding(card, safeTop, safeBottom)
     if (!look.volume) return under
-    // На половине разворота страница стоит там, где она окажется, когда
-    // камера доедет до своей стороны: у корешка плюс полоска подглядывания.
-    val inner = card.spine / 2 + if (half) BOOK_PEEK else 0.dp
+    val inner = card.spine / 2
     val outer = card.side + card.cover + card.cut
     return PaddingValues(
         start = when (side) {
@@ -1060,365 +1048,6 @@ fun Modifier.pageTurn(style: String, gentle: Boolean, offset: () -> Float): Modi
         }
     }
 }
-
-/** Страница книги стоит на месте: пейджер возит слоты, мы сдвиг отменяем. */
-fun Modifier.bookSlot(offset: () -> Float): Modifier = this.graphicsLayer {
-    translationX = offset() * size.width
-}
-
-/**
- * Насколько книга отъехала вбок на половине разворота.
- *
- * Разворот шире экрана ровно на две полоски подглядывания, и камера ездит по
- * нему от левого края к правому: читаешь левую страницу - книга стоит слева,
- * смахнул - она доехала до правого края, и перед глазами правая страница.
- * Дальше лист переворачивается, и книга едет обратно. [phase] - 0 у левой
- * страницы, 1 у правой; на обратном пути она снова идёт к нулю.
- */
-fun bookPan(phase: Float, widthPx: Float, peekPx: Float): Float =
-    -(widthPx - 2f * peekPx) * phase.coerceIn(0f, 1f)
-
-/** Фаза книги по месту в пейджере: 0 - левая страница, 1 - правая. */
-fun bookPhase(position: Float): Float {
-    val pair = ((position % 2f) + 2f) % 2f
-    return min(pair, 2f - pair)
-}
-
-/**
- * Страница на половине разворота: едет вместе с книгой и переворачивается
- * вокруг корешка.
- *
- * Левая страница уходит из-под глаз, когда камера едет вправо, - никакого
- * переворота, книга просто сдвинулась. А вот с правой на следующую левую
- * лист переворачивается: он поднимается вокруг корешка, на его обороте и
- * оказывается следующая левая страница. Обе половины поворота стыкуются на
- * ребре (90 градусов), где листа всё равно не видно.
- */
-fun Modifier.halfPan(
-    side: PageSide,
-    peek: Dp,
-    offset: () -> Float,
-    position: () -> Float,
-): Modifier = this.graphicsLayer {
-    val off = offset()
-    // На место в книге ставятся только страницы этого разворота и соседнего.
-    // Дальние должны уехать за экран, как их и увёз пейджер: иначе все
-    // страницы книги складываются в одну стопку на двух местах, и поверх
-    // читаемой ложится давно прочитанная - владелец на живой сборке увидел
-    // ровно это, «левая страница просто как обложка».
-    if (off < -1.05f || off > 2.05f) return@graphicsLayer
-    val w = size.width
-    val peekPx = peek.toPx()
-    val pan = bookPan(bookPhase(position()), w, peekPx)
-    // Своя фаза: левая страница живёт в начале хода камеры, правая - в конце.
-    val home = if (side == PageSide.RIGHT) bookPan(1f, w, peekPx) else 0f
-    translationX = off * w + pan - home
-}
-
-/**
- * Сам лист на половине разворота: поворот вокруг корешка.
- *
- * Вешается на страницу, а не на место пейджера: ось поворота - край листа у
- * корешка, а не край экрана. Левая страница уходит из-под глаз без поворота,
- * её увозит камера; переворачивается только лист с правой страницей, и на
- * его обороте оказывается следующая левая. Половины стыкуются на ребре, где
- * листа всё равно не видно.
- */
-/**
- * Разгон поворота: у бумаги есть вес.
- *
- * Лист сперва отрывается медленно, а к концу падает - равномерный поворот
- * читается картонкой на шарнире. Владелец: «они не должны перелистываться как
- * большие картонные листы, они же бумага».
- */
-fun leafEase(t: Float): Float {
-    val x = t.coerceIn(0f, 1f)
-    return x * x * (1.62f - 0.62f * x)
-}
-
-/**
- * Заворот страницы - перелистывание одной страницы в книге.
- *
- * Владелец о прежнем: «перелистывание очень топорное, надо, чтобы страница
- * изгибалась и поворачивалась, а у тебя как будто страница из картона». Лист
- * не уезжает вбок (за краем экрана ему деться некуда - книга лежит в экране
- * целиком), а заворачивается: линия сгиба идёт справа налево, бумага
- * наматывается на сгиб круглым валиком, за ним видна изнанка листа с
- * просвечивающим текстом, а из-под неё - следующая страница.
- *
- * Свет и тень на каждом куске: валик сгиба круглый (тень - свет - тень),
- * изнанка темнеет к валику, на страницу под листом ложится тень, и тем гуще,
- * чем ближе к сгибу.
- */
-@Composable
-fun Modifier.pageFold(
-    tones: PaperTones,
-    offset: () -> Float,
-    /**
-     * Куда уходит сгиб. `true` - справа налево: лист сворачивается и
-     * исчезает. `false` - слева направо: зеркальная сторона, ею
-     * разворачивается лист, ложащийся на соседнюю половину.
-     */
-    toLeft: Boolean = true,
-): Modifier {
-    val layer = rememberGraphicsLayer()
-    return this.drawWithContent {
-        val off = offset()
-        if (off <= 0f) {
-            drawContent()
-            return@drawWithContent
-        }
-        if (off >= 1f) return@drawWithContent
-        // Разгон: лист медленно отрывается и быстрее падает - у бумаги есть
-        // вес, равномерное движение читается механизмом.
-        val p = leafEase(off)
-        // Лист записывается один раз за кадр и потом рисуется трижды: лицо,
-        // валик и изнанка. Иначе пришлось бы держать три копии страницы.
-        layer.record { this@drawWithContent.drawContent() }
-        val w = size.width
-        val h = size.height
-        val dp = 1.dp.toPx()
-        val dir = if (toLeft) 1f else -1f
-        // Сгиб идёт от своего края к противоположному; у самого конца лист
-        // уже почти ушёл.
-        val fold = if (toLeft) w * (1f - p) else w * p
-        val roll = (w * 0.05f).coerceIn(6f * dp, 16f * dp)   // радиус валика
-
-        /** Полоса между двумя х, в любом порядке. */
-        fun band(a: Float, b: Float): Pair<Float, Float> =
-            if (a <= b) a to b else b to a
-
-        // 1. Тень от поднятого листа на страницу под ним: гуще у сгиба.
-        val shade = (roll * 2.6f).coerceAtMost(if (toLeft) w - fold else fold)
-        if (shade > 0f) {
-            val (s0, s1) = band(fold, fold + shade * dir)
-            drawRect(
-                Brush.horizontalGradient(
-                    listOf(tones.cast(0.30f), Color.Transparent),
-                    startX = fold,
-                    endX = fold + shade * dir,
-                ),
-                topLeft = Offset(s0, 0f),
-                size = Size(s1 - s0, h),
-            )
-        }
-
-        // 2. Изнанка: бумага, на просвет чуть виден зеркальный текст, к валику
-        // темнее - лист там уходит от света.
-        val backEdge = if (toLeft) (2f * fold - w).coerceAtLeast(0f) else (2f * fold).coerceAtMost(w)
-        val rollEdge = fold - roll * dir
-        val (b0, b1) = band(backEdge, rollEdge)
-        if (b1 - b0 > dp) clipRect(b0, 0f, b1, h) {
-            drawRect(tones.paper, topLeft = Offset(b0, 0f), size = Size(b1 - b0, h))
-            // Зеркальная копия листа: бумага тонкая, текст с той стороны
-            // просвечивает - без этого изнанка читается куском картона.
-            // Зеркало ставится по самому сгибу, иначе бумага за валиком
-            // рвалась бы. Сквозь лист видно немного: полный текст навыворот
-            // читался бы ошибкой отрисовки, а не изнанкой.
-            layer.alpha = 0.13f
-            scale(-1f, 1f, pivot = Offset(fold, h / 2f)) { drawLayer(layer) }
-            layer.alpha = 1f
-            drawRect(
-                Brush.horizontalGradient(
-                    listOf(Color.Transparent, tones.cast(0.05f), tones.cast(0.22f)),
-                    startX = backEdge,
-                    endX = rollEdge,
-                ),
-                topLeft = Offset(b0, 0f),
-                size = Size(b1 - b0, h),
-            )
-        }
-
-        // 3. Валик сгиба: круглая бумага - тень, свет, тень.
-        val (r0, r1) = band(rollEdge.coerceIn(0f, w), fold)
-        if (r1 - r0 > 0f) clipRect(r0, 0f, r1, h) {
-            drawRect(tones.paper, topLeft = Offset(r0, 0f), size = Size(r1 - r0, h))
-            drawRect(
-                Brush.horizontalGradient(
-                    0f to tones.cast(0.26f),
-                    0.38f to tones.light(0.18f),
-                    0.72f to tones.cast(0.14f),
-                    1f to tones.cast(0.38f),
-                    startX = rollEdge,
-                    endX = fold,
-                ),
-                topLeft = Offset(r0, 0f),
-                size = Size(r1 - r0, h),
-            )
-        }
-
-        // 4. Лицо: плоская часть листа до валика, с тенью у самого сгиба -
-        // бумага там уже начинает подниматься.
-        val (f0, f1) = if (toLeft) 0f to rollEdge.coerceAtLeast(0f) else rollEdge.coerceAtMost(w) to w
-        if (f1 - f0 > 0f) clipRect(f0, 0f, f1, h) {
-            drawLayer(layer)
-            val lift = (roll * 2f).coerceAtMost(f1 - f0)
-            val (l0, l1) = band(rollEdge, rollEdge - lift * dir)
-            drawRect(
-                Brush.horizontalGradient(
-                    listOf(Color.Transparent, tones.cast(0.16f)),
-                    startX = rollEdge - lift * dir,
-                    endX = rollEdge,
-                ),
-                topLeft = Offset(l0, 0f),
-                size = Size(l1 - l0, h),
-            )
-        }
-    }
-}
-
-/**
- * Тень, которую поднятый лист бросает на страницу под ним.
- *
- * Без неё поворот читается наложением двух картинок: лист висит в воздухе и
- * ничего вокруг себя не меняет. Тень живёт по законам света - сверху и чуть
- * спереди: она ложится от корешка в ту сторону, куда наклонён лист, сжимается
- * вместе с его проекцией (ширина по косинусу угла), гуще всего у самого
- * корешка и в середине поворота, когда лист стоит торчком.
- *
- * Рисуется на неповёрнутом слое той же геометрии, что и лист: повёрнутый слой
- * унёс бы тень вместе с собой.
- */
-fun Modifier.leafCast(tones: PaperTones, gutterLeft: Boolean, offset: () -> Float): Modifier =
-    drawBehind {
-        val off = offset()
-        // Лицо листа поворачивается на положительном ходе, оборот - на
-        // отрицательном; тень нужна и там, и там.
-        val t = leafEase(if (off > 0f) off else -off)
-        if (t <= 0.01f || t >= 0.99f) return@drawBehind
-        val angle = (Math.PI * t).toFloat()
-        val w = size.width
-        val h = size.height
-        val dp = 1.dp.toPx()
-        // Проекция листа на страницу: во сколько раз он «укоротился».
-        val span = (w * abs(cos(angle))).coerceAtLeast(2f * dp)
-        // Наклон: до ребра лист висит над своей половиной, после - над соседней.
-        val toRight = gutterLeft == (t < 0.5f)
-        val axis = if (gutterLeft) 0f else w
-        val from = if (toRight) axis else axis - span
-        val dense = sin(angle)                       // гуще всего на ребре
-        drawRect(
-            Brush.horizontalGradient(
-                0f to tones.cast(0.34f * dense),
-                0.35f to tones.cast(0.16f * dense),
-                1f to Color.Transparent,
-                startX = axis,
-                endX = if (toRight) axis + span else axis - span,
-            ),
-            topLeft = Offset(from, 0f),
-            size = Size(span, h),
-        )
-        // Контактная полоса у самого корешка: там лист ещё касается страницы.
-        val touch = 5f * dp
-        drawRect(
-            Brush.horizontalGradient(
-                listOf(tones.cast(0.30f * dense), Color.Transparent),
-                startX = axis,
-                endX = if (toRight) axis + touch else axis - touch,
-            ),
-            topLeft = Offset(if (toRight) axis else axis - touch, 0f),
-            size = Size(touch, h),
-        )
-    }
-
-/**
- * Лист разворота, поворачивающийся вокруг корешка.
- *
- * На развороте лист есть куда переворачивать - на соседнюю половину, - и он
- * там и переворачивается: правая страница поднимается вокруг корешка, на её
- * обороте оказывается левая страница следующего разворота. [back] - эта самая
- * изнанка: её видно со второй половины поворота.
- *
- * Прежде пара страниц уезжала вбок колодой, и владелец это заметил сразу:
- * «если страницы двойные, то они съезжают вместе как со стопки, странно очень».
- */
-fun Modifier.leafTurn(back: Boolean, offset: () -> Float): Modifier = this.graphicsLayer {
-    val t = leafEase(offset().coerceIn(0f, 1f))
-    // Ось - левый край правой половины, то есть корешок.
-    transformOrigin = TransformOrigin(0f, 0.5f)
-    cameraDistance = bookCamera(size.width, density)
-    rotationY = -180f * t
-    // Лицо видно до ребра, изнанка - после: на 90° лист виден ребром, и
-    // подмены не заметно. Считаем по углу, а не по пальцу: с разгоном это
-    // разные вещи.
-    alpha = if (back == (t >= 0.5f)) 1f else 0f
-}
-
-/**
- * Бумага гнётся.
- *
- * Поворот плоского прямоугольника читается картонкой, поэтому лист при
- * повороте выгибается парусом и по-разному ловит свет: у корешка тень, к
- * свободному краю светлее, по дуге - блик. Считает это шейдер (AGSL), он есть
- * с Android 13; на старых - хотя бы свет и тень градиентом.
- *
- * [amount] - насколько лист поднят: 0 у лежащего, 1 в середине поворота.
- */
-fun Modifier.paperBend(tones: PaperTones, amount: () -> Float): Modifier = composed {
-    // Шейдер собирается один раз и только там, где он есть (Android 13+).
-    // Если драйвер его не примет, остаётся свет и тень градиентом: перелистывание
-    // не должно ронять читалку из-за украшения.
-    val shader = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        remember { runCatching { android.graphics.RuntimeShader(BEND_SHADER) }.getOrNull() }
-    } else null
-    if (shader != null) graphicsLayer {
-        val a = amount().coerceIn(0f, 1f)
-        if (a <= 0.001f) {
-            renderEffect = null
-            return@graphicsLayer
-        }
-        shader.setFloatUniform("size", size.width, size.height)
-        shader.setFloatUniform("amount", a)
-        renderEffect = android.graphics.RenderEffect
-            .createRuntimeShaderEffect(shader, "content")
-            .asComposeRenderEffect()
-    } else drawWithCache {
-        val light = Brush.horizontalGradient(
-            0f to tones.cast(0.22f),
-            0.45f to tones.light(0.10f),
-            1f to tones.cast(0.06f),
-        )
-        onDrawWithContent {
-            drawContent()
-            val a = amount().coerceIn(0f, 1f)
-            if (a > 0.001f) drawRect(light, alpha = a)
-        }
-    }
-}
-
-/**
- * Изгиб и свет одним проходом: бумага выгибается парусом (строки в середине
- * листа сходятся тем сильнее, чем выше он поднят), у корешка тень, по дуге -
- * блик.
- *
- * Знак сдвига важен: изгиб **втягивает** содержимое, а не растягивает. Со
- * вторым по краям листа появлялись бы прозрачные полосы - шейдер брал бы
- * точки за границей слоя.
- */
-private const val BEND_SHADER = """
-uniform shader content;
-uniform float2 size;
-uniform float amount;
-half4 main(float2 p) {
-    float u = clamp(p.x / size.x, 0.0, 1.0);
-    float v = p.y / size.y;
-    float bow = sin(u * 3.14159265);
-    float2 q = float2(p.x, p.y - (v - 0.5) * bow * amount * size.y * 0.11);
-    half4 c = content.eval(q);
-    // Свет: у корешка тень (там бумага уходит в сгиб), по дуге блик, и весь
-    // лист темнеет к середине поворота - он встаёт ребром к свету.
-    float light = 1.0 - 0.30 * amount * (1.0 - u) + 0.16 * amount * bow - 0.14 * amount;
-    half k = half(clamp(light, 0.0, 1.5));
-    return half4(c.r * k, c.g * k, c.b * k, c.a);
-}
-"""
-
-/**
- * Камера для поворота листа - в двух с половиной его ширинах. Единица
- * `cameraDistance` в Compose - не пиксель, а дюйм: RenderNode делит пиксели
- * на dpi (у View по умолчанию 1280*density px - те самые 8.0).
- */
-private fun bookCamera(widthPx: Float, density: Float): Float = 2.5f * widthPx / (160f * density)
 
 /**
  * Матовая поверхность: бумага и картон переплёта.

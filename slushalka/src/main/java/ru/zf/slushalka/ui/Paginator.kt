@@ -64,6 +64,12 @@ object Paginator {
         /** Воздух над заголовком главы (кроме верха страницы) и под ним. */
         headingTopPx: Int = 0,
         headingGapPx: Int = gapPx,
+        /**
+         * Высота строки. Всё, что не строка текста - заголовок с воздухом
+         * вокруг, - округляется до целого их числа: иначе текст под
+         * заголовком съезжает с сетки, и низ полос на развороте расходится.
+         */
+        lineHeightPx: Int = 0,
     ): List<Page> {
         if (widthPx <= 0 || heightPx <= 0) return emptyList()
         val pages = ArrayList<Page>()
@@ -112,6 +118,10 @@ object Paginator {
                     if (pageStart < 0) pageStart = base
                     pieces.add(PagePiece(text, null, base, head, heading))
                     used += layout.size.height + if (heading) headingGapPx else gapPx
+                    // Заголовок с воздухом ставится на сетку строк целиком.
+                    if (heading && lineHeightPx > 0) {
+                        used = ((used + lineHeightPx - 1) / lineHeightPx) * lineHeightPx
+                    }
                     break
                 }
                 var last = -1

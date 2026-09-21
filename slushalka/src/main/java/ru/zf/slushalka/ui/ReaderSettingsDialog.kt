@@ -269,8 +269,8 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
             Settings.PAGE_VOLUME ->
                 "Настоящий том: переплёт кантом по краю и цветом с обложки книги, плетёный " +
                     "корешок, обрез из многих страниц, каптал, светлый стол и мягкая тень по " +
-                    "форме книги. Книга целиком в экране и остаётся на месте: на одной странице " +
-                    "лист заворачивается, в развороте поворачивается вокруг корешка."
+                    "форме книги. Книга целиком в экране и остаётся на месте; страницы " +
+                    "сменяются так, как выбрано в «Перелистывании»."
             Settings.PAGE_BOOK ->
                 "Страница - верхняя карточка колоды: лежит на столе с мягкой тенью, по кромке " +
                     "тонкая фаска (светлая сверху, тёмная снизу), сверху блик, снизу затенение, " +
@@ -360,6 +360,13 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
     Spacer(Modifier.height(6.dp))
     Toggle("Книжные поля 2:3:4:6", prefs.readerCanon) { scope.launch { s.setReaderCanon(it) } }
     Toggle("Без висячих строк", prefs.readerWidows) { scope.launch { s.setReaderWidows(it) } }
+    Text(
+        "Висячие строки - это одна строка абзаца внизу страницы или вверху следующей. " +
+            "Чтобы её убрать, разбивка снимает строку, и низ полос на развороте перестаёт " +
+            "сходиться. Заводски выключено: ровный низ важнее.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     Toggle("Капитель в начале главы", prefs.readerSmallCaps) { scope.launch { s.setReaderSmallCaps(it) } }
     Toggle("Типограф: тире и неразрывные", prefs.readerTypograph) { scope.launch { s.setReaderTypograph(it) } }
     Toggle("Неровности печати", prefs.readerImperfect) { scope.launch { s.setReaderImperfect(it) } }
@@ -476,9 +483,6 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
             if (!prefs.readerPaged) {
                 append(" Работает при листании страницами: сейчас выбрана прокрутка, ")
                 append("и смахивать там нечего.")
-            } else if (prefs.readerPageStyle == Settings.PAGE_VOLUME) {
-                append(" В книжном виде не действует: на одной странице лист ")
-                append("заворачивается сам, в развороте поворачивается вокруг корешка.")
             }
         },
         style = MaterialTheme.typography.bodySmall,

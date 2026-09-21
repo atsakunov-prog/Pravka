@@ -89,8 +89,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
          * и на экране такие съели бы полполосы.
          */
         val readerCanon: Boolean = true,
-        /** Не оставлять одну строку абзаца внизу или вверху страницы. */
-        val readerWidows: Boolean = true,
+        /**
+         * Не оставлять одну строку абзаца внизу или вверху страницы.
+         *
+         * Выключено заводски: чтобы убрать висячую строку, разбивка снимает
+         * строку со страницы, и низ полос на развороте перестаёт сходиться.
+         * Владельцу важнее ровный низ; кому важнее типографика - включает.
+         */
+        val readerWidows: Boolean = false,
         /** Первые слова главы капителью, первый абзац без отступа. */
         val readerSmallCaps: Boolean = true,
         /** Типограф: тире, неразрывные пробелы после коротких слов. */
@@ -179,7 +185,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerFooter = p[KEY_R_FOOTER]?.takeIf { it in FOOTERS } ?: FOOTER_BOOK,
                 readerHyphens = p[KEY_R_HYPHENS] ?: true,
                 readerCanon = p[KEY_R_CANON] ?: true,
-                readerWidows = p[KEY_R_WIDOWS] ?: true,
+                readerWidows = p[KEY_R_WIDOWS] ?: false,
                 readerSmallCaps = p[KEY_R_SMALLCAPS] ?: true,
                 readerTypograph = p[KEY_R_TYPOGRAPH] ?: true,
                 readerImperfect = p[KEY_R_IMPERFECT] ?: true,
@@ -272,7 +278,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         it[KEY_R_HYPHENS] = true
         it[KEY_R_INDENT] = true
         it[KEY_R_CANON] = true
-        it[KEY_R_WIDOWS] = true
+        it[KEY_R_WIDOWS] = false
         it[KEY_R_SMALLCAPS] = true
         it[KEY_R_TYPOGRAPH] = true
         it[KEY_R_IMPERFECT] = true
