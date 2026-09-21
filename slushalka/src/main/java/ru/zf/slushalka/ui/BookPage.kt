@@ -611,9 +611,25 @@ private fun DrawScope.drawVolume(
         edgeShadow(tones, pxL - lw, by, bh, -1)
         edgeShadow(tones, pxR + rw, by, bh, +1)
         blockEnds(tones, pxL - lw, (pxR + rw) - (pxL - lw), by, bh, reveal)
-        // Щель сгиба: две точки тени, основную тень несут сами страницы.
-        val at = w / 2f - spine / 2f
-        drawRect(tones.cast(0.55f), topLeft = Offset(at, by), size = Size(spine, bh))
+        // Сгиб: щель в волос и тень по обе стороны от неё. Полоса в цвет
+        // переплёта читалась чертой, проведённой по белому листу, - владелец
+        // это и увидел: «корешок красится в цвет обложки, а он просто тень».
+        val at = w / 2f
+        val throat = spine * 1.6f
+        drawRect(
+            Brush.horizontalGradient(
+                0f to Color.Transparent,
+                0.35f to tones.cast(0.30f),
+                0.5f to tones.cast(0.62f),
+                0.65f to tones.cast(0.30f),
+                1f to Color.Transparent,
+                startX = at - throat,
+                endX = at + throat,
+            ),
+            topLeft = Offset(at - throat, by),
+            size = Size(throat * 2f, bh),
+        )
+        drawRect(tones.cast(0.72f), topLeft = Offset(at - hair / 2f, by), size = Size(hair, bh))
         headbands(tones, headband, w / 2f, by, bh, reveal, 22f * dp)
         return
     }
@@ -889,10 +905,10 @@ fun Modifier.pageSheet(
                 // и градиентом».
                 val band = (w * 0.22f).coerceIn(36f * dp, 80f * dp)
                 val stops = arrayOf(
-                    0f to tones.cast(0.36f),
-                    0.05f to tones.cast(0.22f),
-                    0.16f to tones.cast(0.10f),
-                    0.55f to tones.cast(0.03f),
+                    0f to tones.cast(0.52f),
+                    0.04f to tones.cast(0.34f),
+                    0.14f to tones.cast(0.16f),
+                    0.45f to tones.cast(0.05f),
                     1f to Color.Transparent,
                 )
                 val fold = if (gutterLeft) Brush.horizontalGradient(*stops, startX = 0f, endX = band)
@@ -1084,12 +1100,19 @@ fun Modifier.halfPan(
     offset: () -> Float,
     position: () -> Float,
 ): Modifier = this.graphicsLayer {
+    val off = offset()
+    // На место в книге ставятся только страницы этого разворота и соседнего.
+    // Дальние должны уехать за экран, как их и увёз пейджер: иначе все
+    // страницы книги складываются в одну стопку на двух местах, и поверх
+    // читаемой ложится давно прочитанная - владелец на живой сборке увидел
+    // ровно это, «левая страница просто как обложка».
+    if (off < -1.05f || off > 2.05f) return@graphicsLayer
     val w = size.width
     val peekPx = peek.toPx()
     val pan = bookPan(bookPhase(position()), w, peekPx)
     // Своя фаза: левая страница живёт в начале хода камеры, правая - в конце.
     val home = if (side == PageSide.RIGHT) bookPan(1f, w, peekPx) else 0f
-    translationX = offset() * w + pan - home
+    translationX = off * w + pan - home
 }
 
 /**
@@ -1106,16 +1129,33 @@ fun Modifier.halfLeaf(side: PageSide, offset: () -> Float): Modifier = this.grap
     cameraDistance = bookCamera(size.width, density)
     when {
         side == PageSide.RIGHT && off > 0f && off < 1f -> {
+            val t = leafEase(off)
             transformOrigin = TransformOrigin(0f, 0.5f)
-            rotationY = -180f * off
-            alpha = if (off < 0.5f) 1f else 0f
+            rotationY = -180f * t
+            // Подмена лица оборотом ровно на ребре: считаем по углу, а не по
+            // пальцу. С разгоном они расходятся, и лист «щёлкал» на шестидесяти
+            // градусах - владелец это и увидел.
+            alpha = if (t < 0.5f) 1f else 0f
         }
         side == PageSide.LEFT && off < 0f && off > -1f -> {
+            val t = leafEase(-off)
             transformOrigin = TransformOrigin(1f, 0.5f)
-            rotationY = 180f * -off
-            alpha = if (-off < 0.5f) 1f else 0f
+            rotationY = 180f * t
+            alpha = if (t < 0.5f) 1f else 0f
         }
     }
+}
+
+/**
+ * Разгон поворота: у бумаги есть вес.
+ *
+ * Лист сперва отрывается медленно, а к концу падает - равномерный поворот
+ * читается картонкой на шарнире. Владелец: «они не должны перелистываться как
+ * большие картонные листы, они же бумага».
+ */
+fun leafEase(t: Float): Float {
+    val x = t.coerceIn(0f, 1f)
+    return x * x * (1.62f - 0.62f * x)
 }
 
 /**
@@ -1238,14 +1278,15 @@ fun Modifier.pageFold(tones: PaperTones, offset: () -> Float): Modifier {
  * «если страницы двойные, то они съезжают вместе как со стопки, странно очень».
  */
 fun Modifier.leafTurn(back: Boolean, offset: () -> Float): Modifier = this.graphicsLayer {
-    val off = offset().coerceIn(0f, 1f)
+    val t = leafEase(offset().coerceIn(0f, 1f))
     // Ось - левый край правой половины, то есть корешок.
     transformOrigin = TransformOrigin(0f, 0.5f)
     cameraDistance = bookCamera(size.width, density)
-    rotationY = -180f * off
+    rotationY = -180f * t
     // Лицо видно до ребра, изнанка - после: на 90° лист виден ребром, и
-    // подмены не заметно.
-    alpha = if (back == (off >= 0.5f)) 1f else 0f
+    // подмены не заметно. Считаем по углу, а не по пальцу: с разгоном это
+    // разные вещи.
+    alpha = if (back == (t >= 0.5f)) 1f else 0f
 }
 
 /**
@@ -1265,7 +1306,7 @@ fun Modifier.leafCast(tones: PaperTones, gutterLeft: Boolean, offset: () -> Floa
         val off = offset()
         // Лицо листа поворачивается на положительном ходе, оборот - на
         // отрицательном; тень нужна и там, и там.
-        val t = if (off > 0f) off else -off
+        val t = leafEase(if (off > 0f) off else -off)
         if (t <= 0.01f || t >= 0.99f) return@drawBehind
         val angle = (Math.PI * t).toFloat()
         val w = size.width
@@ -1361,7 +1402,7 @@ half4 main(float2 p) {
     float u = clamp(p.x / size.x, 0.0, 1.0);
     float v = p.y / size.y;
     float bow = sin(u * 3.14159265);
-    float2 q = float2(p.x, p.y - (v - 0.5) * bow * amount * size.y * 0.07);
+    float2 q = float2(p.x, p.y - (v - 0.5) * bow * amount * size.y * 0.11);
     half4 c = content.eval(q);
     // Свет: у корешка тень (там бумага уходит в сгиб), по дуге блик, и весь
     // лист темнеет к середине поворота - он встаёт ребром к свету.

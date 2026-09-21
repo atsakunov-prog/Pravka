@@ -152,7 +152,7 @@ object Paginator {
                 // другой абзац, и он раскладывается заново, иногда в лишнюю
                 // строку. На живой сборке она и срезалась нижним краем.
                 var cut = last
-                var end = layout.getLineEnd(cut, visibleEnd = true).coerceIn(1, text.length)
+                var end = wordEnd(text, layout.getLineEnd(cut, visibleEnd = true))
                 while (cut > 0) {
                     val fit = measurer.measure(
                         annotate(text.substring(0, end), opens),
@@ -161,7 +161,7 @@ object Paginator {
                     )
                     if (fit.size.height <= remaining) break
                     cut--
-                    end = layout.getLineEnd(cut, visibleEnd = true).coerceIn(1, text.length)
+                    end = wordEnd(text, layout.getLineEnd(cut, visibleEnd = true))
                 }
                 if (pageStart < 0) pageStart = base
                 pieces.add(PagePiece(text.substring(0, end), null, base, head, heading))
@@ -174,6 +174,25 @@ object Paginator {
         }
         flush()
         return pages
+    }
+
+    /**
+     * Граница куска - по слову, а не по строке.
+     *
+     * Строка с переносом кончается посреди слова, и если резать страницу
+     * ровно там, слово разваливается: на живой сборке владелец увидел внизу
+     * «на служб близ», а «ости» уехало на следующую страницу - без дефиса и
+     * без смысла. Дефис принадлежит строке, а не тексту, поэтому переносить
+     * приходится слово целиком.
+     */
+    private fun wordEnd(text: String, lineEnd: Int): Int {
+        val end = lineEnd.coerceIn(1, text.length)
+        if (end >= text.length) return end
+        if (!text[end - 1].isLetterOrDigit() || !text[end].isLetterOrDigit()) return end
+        // Режем посреди слова - отходим назад до его начала.
+        var i = end - 1
+        while (i > 0 && text[i - 1].isLetterOrDigit()) i--
+        return if (i <= 0) end else i
     }
 
     /** Номер страницы, на которой лежит это место книги. */

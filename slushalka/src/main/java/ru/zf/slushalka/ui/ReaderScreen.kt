@@ -514,27 +514,28 @@ fun ReaderScreen(
     // Номер считается от начала самой страницы, а не от верха экрана: в
     // развороте страниц две, и на живой сборке обе показывали один и тот же
     // номер.
-    val marksAt: (Int) -> PageMarks = { at ->
+    val marksAt: (Int, PageNo?) -> PageMarks = { at, no ->
         val share = (at.toFloat() / t.length.coerceAtLeast(1)).coerceIn(0f, 1f)
+        val page = no?.page ?: t.pageOf(at)
+        val total = no?.total ?: t.pages
         when (prefs.readerFooter) {
             Settings.FOOTER_NONE -> PageMarks()
-            Settings.FOOTER_PAGE -> PageMarks(corner = "${t.pageOf(at)} / ${t.pages}")
+            Settings.FOOTER_PAGE -> PageMarks(corner = "$page / $total")
             Settings.FOOTER_PERCENT -> PageMarks(corner = "${(share * 100).roundToInt()}%")
             Settings.FOOTER_BOTH -> PageMarks(
-                corner = "${t.pageOf(at)} / ${t.pages} · ${(share * 100).roundToInt()}%"
+                corner = "$page / $total · ${(share * 100).roundToInt()}%"
             )
             // Как в типографской книге: автор и название на верхнем поле, номер
-            // страницы внизу по центру между тире.
+            // страницы внизу по центру. Без тире вокруг: в книгах номер стоит
+            // голым, тире - это из машинописи.
             else -> PageMarks(
                 author = t.author.ifBlank { bk.title },
                 title = t.title.ifBlank { bk.title },
-                // Без тире вокруг: в книгах номер стоит голым, тире - это
-                // из машинописи.
-                center = "${t.pageOf(at)}",
+                center = "$page",
             )
         }
     }
-    val marks = marksAt(offset)
+    val marks = marksAt(offset, null)
 
     Box(Modifier.fillMaxSize().readerBackdrop(tones, look)) {
         val onLong: (Int) -> Unit = { pressed = it }
@@ -1096,7 +1097,7 @@ private fun PagedBody(
     turn: String,
     shape: BookShape,
     /** Колонтитулы считаются от начала самой страницы: в развороте их две. */
-    marksAt: (Int) -> PageMarks,
+    marksAt: (Int, PageNo?) -> PageMarks,
     margins: PageMargins,
     gap: Dp,
     styleFor: (heading: Boolean, head: Boolean) -> TextStyle,
@@ -1147,6 +1148,19 @@ private fun PagedBody(
         val headingGapPx = with(density) { HEADING_GAP.roundToPx() }
 
         var pages by remember { mutableStateOf<List<Page>>(emptyList()) }
+        // Средняя длина страницы в текущей разбивке: по ней и считаются
+        // номера, иначе на развороте оба номера выходили одинаковыми.
+        val pageStep = remember(pages) {
+            if (pages.size < 3) 0
+            else ((pages.last().startChar - pages.first().startChar) / (pages.size - 1))
+                .coerceAtLeast(200)
+        }
+        val bookChars = remember(blocks) {
+            blocks.lastOrNull()?.let { it.start + it.text.length } ?: 0
+        }
+        fun numberOf(start: Int): PageNo? =
+            if (pageStep <= 0) null
+            else PageNo(start / pageStep + 1, (bookChars / pageStep + 1).coerceAtLeast(1))
         var anchor by remember { mutableIntStateOf(-1) }
         var window by remember { mutableStateOf(0..0) }
         val scope = rememberCoroutineScope()
@@ -1345,12 +1359,22 @@ private fun PagedBody(
                             headingStyle = headingStyle, gap = gap, marksAt = marksAt,
                             highlight = highlight, highlightAlpha = highlightAlpha,
                             onPicture = onPicture, fold = fold, noIndent = noIndent,
-                            smallCaps = smallCaps, imperfect = imperfect, modifier = modifier,
+                            smallCaps = smallCaps, imperfect = imperfect,
+                            number = page?.let { numberOf(it.startChar) }, modifier = modifier,
                         )
                     }
-                // Ранняя страница лежит поверх поздней: смахнутая должна
-                // закрывать ту, что под ней.
-                val z = Modifier.fillMaxSize().zIndex(-slot.toFloat())
+                // Ближняя к читаемому месту страница лежит поверх дальних.
+                // Раньше порядок задавался номером слота, и на половине
+                // разворота давно прочитанная страница ложилась поверх той,
+                // которую открываешь. Расстояние берём от целой страницы -
+                // порядок меняется раз за перелистывание, а не каждый кадр.
+                val away = slot - pagerState.currentPage
+                val z = Modifier
+                    .fillMaxSize()
+                    // Позади читаемого места страница лежит ниже равноудалённой
+                    // впереди: иначе прочитанная и открываемая спорят за одно
+                    // место, и наверху оказывается прочитанная.
+                    .zIndex(-(kotlin.math.abs(away) + if (away < 0) 0.5f else 0f))
                 val position = { pagerState.currentPage + pagerState.currentPageOffsetFraction }
                 when {
                     // Половина разворота: чётная страница левая, нечётная
@@ -1360,9 +1384,9 @@ private fun PagedBody(
                         val side = if (slot % 2 == 0) PageSide.LEFT else PageSide.RIGHT
                         val bend = {
                             val o = off()
-                            val t = if (side == PageSide.RIGHT) o.coerceIn(0f, 1f)
+                            val raw = if (side == PageSide.RIGHT) o.coerceIn(0f, 1f)
                             else (-o).coerceIn(0f, 1f)
-                            kotlin.math.sin(t * Math.PI).toFloat()
+                            kotlin.math.sin(leafEase(raw) * Math.PI).toFloat()
                         }
                         val pad = pagePadding(look, card, side, topInset, bottomInset, true)
                         // Тень поднятого листа ложится на страницу под ним и
@@ -1385,6 +1409,7 @@ private fun PagedBody(
                             highlight = highlight, highlightAlpha = highlightAlpha,
                             onPicture = onPicture, fold = null, noIndent = noIndent,
                             smallCaps = smallCaps, imperfect = imperfect,
+                            number = pages.getOrNull(slot)?.let { numberOf(it.startChar) },
                             // Пан книги - на месте пейджера, поворот листа - на
                             // самом листе: ось у корешка, а не у края экрана.
                             leaf = Modifier.halfLeaf(side, off).paperBend(tones, bend),
@@ -1403,7 +1428,9 @@ private fun PagedBody(
                     book -> Row(z.bookSlot(off)) {
                         face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight(), null)
                         Box(Modifier.weight(1f).fillMaxHeight()) {
-                            val bend = { val o = off().coerceIn(0f, 1f); kotlin.math.sin(o * Math.PI).toFloat() }
+                            val bend = {
+                                kotlin.math.sin(leafEase(off().coerceIn(0f, 1f)) * Math.PI).toFloat()
+                            }
                             // Тень поднятого листа на страницах под ним.
                             Box(
                                 Modifier
@@ -1446,6 +1473,15 @@ private fun PagedBody(
 }
 
 /** Что пишется на полях страницы. Пустая строка - не рисуется. */
+/**
+ * Номер страницы по настоящей разбивке, а не по условным 1800 знакам.
+ *
+ * Условная мерка давала на развороте два одинаковых номера: экранная
+ * страница короче, и соседние места книги попадали в одно «условное».
+ * Здесь шаг - средняя длина страницы в текущей разбивке.
+ */
+data class PageNo(val page: Int, val total: Int)
+
 data class PageMarks(
     /** Верхний колонтитул книжного вида. */
     val author: String = "",
@@ -1477,7 +1513,8 @@ private fun PageFace(
     contStyle: TextStyle,
     headingStyle: TextStyle,
     gap: Dp,
-    marksAt: (Int) -> PageMarks,
+    marksAt: (Int, PageNo?) -> PageMarks,
+    number: PageNo?,
     highlight: IntRange?,
     highlightAlpha: Float,
     onPicture: (ShownPicture) -> Unit,
@@ -1500,7 +1537,7 @@ private fun PageFace(
             .pageSheet(tones, look, shape, side)
     ) {
         if (page == null) return@Box
-        PageMarksLayer(marksAt(page.startChar), side, palette, margins, contStyle)
+        PageMarksLayer(marksAt(page.startChar, number), side, palette, margins, contStyle)
         Column(
             Modifier
                 .fillMaxSize()
@@ -1515,8 +1552,12 @@ private fun PageFace(
                 // страницы в книге, чтобы не дрожали между кадрами.
                 .then(
                     if (!imperfect) Modifier else Modifier.graphicsLayer {
-                        rotationZ = (pageNoise(page.startChar, 1) - 0.5f) * 0.3f
-                        translationY = (pageNoise(page.startChar, 2) - 0.5f) * 3f
+                        // На грани заметности: сдвиг базовых линий был в
+                        // полтора пикселя, и на развороте низ полос переставал
+                        // сходиться - владелец увидел это как «строчки внизу
+                        // заканчиваются неровно».
+                        rotationZ = (pageNoise(page.startChar, 1) - 0.5f) * 0.16f
+                        translationY = (pageNoise(page.startChar, 2) - 0.5f) * 1.2f
                     }
                 ),
         ) {
@@ -1667,22 +1708,28 @@ fun pageMargins(margin: Int, canon: Boolean): PageMargins {
     // налезут на текст.
     return PageMargins(
         inner = (base * 2).dp,
-        // Верхнее поле держит колонтитул с линейкой, нижнее - номер.
-        top = (base * 2.75f).coerceAtLeast(22f).dp,
+        // Верхнее поле держит колонтитул с линейкой и воздух под ней: текст,
+        // начинающийся сразу под линейкой, липнет к верхнему краю - владелец
+        // на живой сборке это и увидел.
+        top = (base * 4.2f).coerceAtLeast(34f).dp,
         outer = (base * 4).dp,
-        // Канонические шесть долей снизу - про бумажный разворот, где места
-        // вдоволь. На экране каждая строка на счету, и владелец это видит:
-        // «внизу отступ от номера не такой большой, туда можно ещё строку
-        // впихнуть». Ужато до четырёх долей - ровно на строку, номеру хватает.
-        bottom = (base * 4f).coerceAtLeast(24f).dp,
+        // Нижнее поле, наоборот, ужато: канонические шесть долей - про
+        // бумажный разворот, где места вдоволь, а на экране это провал под
+        // текстом и потерянная строка.
+        bottom = (base * 3.2f).coerceAtLeast(22f).dp,
     )
 }
 
+/**
+ * Поля карточки и ленты: сверху колонтитул, снизу номер. Нижнее было больше
+ * верхнего на восемь точек - на живой сборке это читалось провалом под
+ * текстом («снизу очень много, сверху нормально»).
+ */
 private val PAGE_TOP = 52.dp
 /** Воздух над заголовком главы и под ним - те же числа и в разбивке, и в рисунке. */
 private val HEADING_TOP = 24.dp
 private val HEADING_GAP = 14.dp
-private val PAGE_BOTTOM = 60.dp
+private val PAGE_BOTTOM = 44.dp
 /**
  * Сколько абзацев вокруг текущего места разбивать на страницы за раз.
  *
