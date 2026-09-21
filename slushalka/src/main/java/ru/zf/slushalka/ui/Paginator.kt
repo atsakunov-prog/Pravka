@@ -116,7 +116,26 @@ object Paginator {
                         continue
                     }
                 }
-                val end = layout.getLineEnd(last, visibleEnd = true).coerceIn(1, text.length)
+                // Отрезанный кусок перемеряется, и если он вырос - строка
+                // снимается ещё раз.
+                //
+                // Причина не в округлении: с переносами абзац разбивается
+                // «оптимально», то есть по всему абзацу сразу (LineBreak.
+                // Paragraph). Кусок, отрезанный по границе строки, - это уже
+                // другой абзац, и он раскладывается заново, иногда в лишнюю
+                // строку. На живой сборке она и срезалась нижним краем.
+                var cut = last
+                var end = layout.getLineEnd(cut, visibleEnd = true).coerceIn(1, text.length)
+                while (cut > 0) {
+                    val fit = measurer.measure(
+                        AnnotatedString(text.substring(0, end)),
+                        st,
+                        constraints = Constraints(maxWidth = widthPx),
+                    )
+                    if (fit.size.height <= remaining) break
+                    cut--
+                    end = layout.getLineEnd(cut, visibleEnd = true).coerceIn(1, text.length)
+                }
                 if (pageStart < 0) pageStart = base
                 pieces.add(PagePiece(text.substring(0, end), null, base, head, heading))
                 flush()

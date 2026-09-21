@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -72,6 +71,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalView
@@ -103,12 +103,15 @@ import ru.zf.slushalka.text.BookText
 data class ReaderPalette(val bg: Color, val fg: Color, val dim: Color)
 
 fun readerPalette(theme: String, dark: Boolean): ReaderPalette = when (theme) {
-    Settings.THEME_PAPER -> ReaderPalette(Color(0xFFFBF8F1), Color(0xFF17150F), Color(0xFF6E6659))
-    Settings.THEME_SEPIA -> ReaderPalette(Color(0xFFF3E6CE), Color(0xFF43331C), Color(0xFF8A7550))
+    // Краска, а не чернила: в книге буквы не угольно-чёрные, а тёмно-серые с
+    // тёплым уходом - владелец попросил «шрифт как в книге, чуть более серый».
+    // Абсолютный чёрный на светлой бумаге к тому же режет глаз на экране.
+    Settings.THEME_PAPER -> ReaderPalette(Color(0xFFFBF8F1), Color(0xFF2E2A25), Color(0xFF6E6659))
+    Settings.THEME_SEPIA -> ReaderPalette(Color(0xFFF3E6CE), Color(0xFF4A3B26), Color(0xFF8A7550))
     Settings.THEME_GREY -> ReaderPalette(Color(0xFF2A2D33), Color(0xFFCBC8C1), Color(0xFF8B8880))
     Settings.THEME_BLACK -> ReaderPalette(Color(0xFF000000), Color(0xFFB6B3AC), Color(0xFF6E6B65))
     else -> if (dark) ReaderPalette(Color(0xFF000000), Color(0xFFB6B3AC), Color(0xFF6E6B65))
-    else ReaderPalette(Color(0xFFFBF8F1), Color(0xFF17150F), Color(0xFF6E6659))
+    else ReaderPalette(Color(0xFFFBF8F1), Color(0xFF2E2A25), Color(0xFF6E6659))
 }
 
 fun fontOf(name: String): FontFamily = when (name) {
@@ -173,8 +176,19 @@ fun ReaderScreen(
     val palette = readerPalette(prefs.readerTheme, isSystemInDarkTheme())
     // Объём страницы считается от цвета бумаги: на белой он держится на тенях,
     // на чёрной - на засветах (см. BookPage.kt).
-    val tones = remember(palette.bg, prefs.readerTable) {
-        PaperTones(palette.bg, prefs.readerTable)
+    // Переплёт красится по обложке книги: владелец просил, чтобы цвет книги
+    // изнутри совпадал с её обложкой из fb2. Обложка уже лежит в кэше Covers
+    // (её показывает полка); если книга без обложки - остаётся крафт.
+    val context = LocalContext.current
+    var coverSeed by remember(book?.id) { mutableStateOf<Color?>(null) }
+    LaunchedEffect(book?.id) {
+        val bk = book ?: return@LaunchedEffect
+        val tree = app.state.treeOf(bk) ?: return@LaunchedEffect
+        val bmp = runCatching { Covers.load(context, tree, bk, app.texts) }.getOrNull()
+        coverSeed = bmp?.let { coverTone(it) }?.let { Color(it) }
+    }
+    val tones = remember(palette.bg, prefs.readerTable, coverSeed) {
+        PaperTones(palette.bg, prefs.readerTable, coverSeed)
     }
     // Что включено в виде страницы - одним набором, а не восемью параметрами.
     val look = PageLook(
@@ -372,21 +386,28 @@ fun ReaderScreen(
     val card = cardMetrics(look, shape)
     // Колонтитул в нижнем углу страницы: панель прячется, а «где я в книге»
     // хочется видеть всегда.
-    val marks = when (prefs.readerFooter) {
-        Settings.FOOTER_NONE -> PageMarks()
-        Settings.FOOTER_PAGE -> PageMarks(corner = "${t.pageOf(offset)} / ${t.pages}")
-        Settings.FOOTER_PERCENT -> PageMarks(corner = "${(progress * 100).roundToInt()}%")
-        Settings.FOOTER_BOTH -> PageMarks(
-            corner = "${t.pageOf(offset)} / ${t.pages} · ${(progress * 100).roundToInt()}%"
-        )
-        // Как в типографской книге: автор и название на верхнем поле, номер
-        // страницы внизу по центру между тире.
-        else -> PageMarks(
-            author = t.author.ifBlank { bk.title },
-            title = t.title.ifBlank { bk.title },
-            center = "— ${t.pageOf(offset)} —",
-        )
+    // Номер считается от начала самой страницы, а не от верха экрана: в
+    // развороте страниц две, и на живой сборке обе показывали один и тот же
+    // номер.
+    val marksAt: (Int) -> PageMarks = { at ->
+        val share = (at.toFloat() / t.length.coerceAtLeast(1)).coerceIn(0f, 1f)
+        when (prefs.readerFooter) {
+            Settings.FOOTER_NONE -> PageMarks()
+            Settings.FOOTER_PAGE -> PageMarks(corner = "${t.pageOf(at)} / ${t.pages}")
+            Settings.FOOTER_PERCENT -> PageMarks(corner = "${(share * 100).roundToInt()}%")
+            Settings.FOOTER_BOTH -> PageMarks(
+                corner = "${t.pageOf(at)} / ${t.pages} · ${(share * 100).roundToInt()}%"
+            )
+            // Как в типографской книге: автор и название на верхнем поле, номер
+            // страницы внизу по центру между тире.
+            else -> PageMarks(
+                author = t.author.ifBlank { bk.title },
+                title = t.title.ifBlank { bk.title },
+                center = "— ${t.pageOf(at)} —",
+            )
+        }
     }
+    val marks = marksAt(offset)
 
     Box(Modifier.fillMaxSize().readerBackdrop(tones, look)) {
         val onLong: (Int) -> Unit = { pressed = it }
@@ -395,7 +416,7 @@ fun ReaderScreen(
             PagedBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
                 tones = tones, look = look, turn = prefs.readerPageTurn,
-                shape = shape, marks = marks,
+                shape = shape, marksAt = marksAt,
                 margin = prefs.readerMargin, gap = paragraphGap,
                 styleFor = ::styleFor, isHeading = isHeading,
                 target = target, onTargetUsed = { target = null },
@@ -945,7 +966,8 @@ private fun PagedBody(
     look: PageLook,
     turn: String,
     shape: BookShape,
-    marks: PageMarks,
+    /** Колонтитулы считаются от начала самой страницы: в развороте их две. */
+    marksAt: (Int) -> PageMarks,
     margin: Int,
     gap: Dp,
     styleFor: (heading: Boolean, head: Boolean) -> TextStyle,
@@ -973,12 +995,15 @@ private fun PagedBody(
         // В развороте страниц две, каждая по своей половине экрана.
         val halves = if (shape.spread) 2 else 1
         val chrome = pageChrome(look, card, halves)
+        // Вниз, а не к ближайшему: место на странице меряется в целых
+        // пикселях, и лишняя половина пикселя оборачивалась строкой, которая
+        // на живой сборке срезалась нижним краем.
         val widthPx = with(density) {
-            (maxWidth / halves - chrome.width - margin.dp * 2).roundToPx()
+            (maxWidth / halves - chrome.width - margin.dp * 2).toPx().toInt()
         }
         val heightPx = with(density) {
             (maxHeight - topInset - bottomInset - chrome.height - PAGE_TOP - PAGE_BOTTOM)
-                .roundToPx()
+                .toPx().toInt()
         }
         val gapPx = with(density) { gap.roundToPx() }
         val headingTopPx = with(density) { HEADING_TOP.roundToPx() }
@@ -1099,32 +1124,11 @@ private fun PagedBody(
                     )
                 },
         ) {
-            // Подложка - обложка книги или колода - стоит на месте: страница
-            // уезжает одна, а книга остаётся лежать на столе.
-            //
-            // Живая книга на одной странице: подложка - целый разворот шириной в
-            // два экрана, и «камера» ездит по нему. Читаешь левую страницу -
-            // смахнул - книга сдвинулась к правой - смахнул ещё - лист
-            // перевернулся, и книга поехала назад к левой. Как в жизни
-            // (владелец так и попросил).
-            val live = look.volume && !shape.spread
-            // Ширина экрана берётся до входа во вложенный Box: у областей
-            // компоновки свои маркеры, и наружный maxWidth изнутри не виден.
-            val screenWidth = this@BoxWithConstraints.maxWidth
-            if (live) Box(
-                Modifier
-                    .requiredWidth(screenWidth * 2)
-                    .fillMaxHeight()
-                    .graphicsLayer {
-                        val pos = pagerState.currentPage + pagerState.currentPageOffsetFraction
-                        val pair = ((pos % 2f) + 2f) % 2f
-                        // К правой странице камера едет вперёд, при перевороте
-                        // листа - возвращается к левой.
-                        translationX = -size.width / 2f * minOf(pair, 2f - pair)
-                    }
-                    .padding(underPadding(card, topInset, bottomInset))
-                    .pageUnder(tones, look, shape.copy(spread = true))
-            ) else Box(
+            // Подложка - книга или колода - стоит на месте: страницы ездят
+            // поверх, а том лежит на столе. Книга целиком в экране: половина
+            // разворота, уезжавшая за край, владельцу на живой сборке
+            // читалась поломкой - «левый край книги вылезает».
+            Box(
                 Modifier
                     .fillMaxSize()
                     .padding(underPadding(card, topInset, bottomInset))
@@ -1136,37 +1140,68 @@ private fun PagedBody(
                 }
                 return@Box
             }
+            // Книжный вид перелистывается по-своему: слоты пейджера стоят на
+            // месте книги, а лист либо заворачивается (одна страница), либо
+            // поворачивается вокруг корешка (разворот).
+            val book = look.volume
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { slot ->
-                val face: @Composable (Page?, PageSide, Modifier) -> Unit = { page, side, modifier ->
-                    PageFace(
-                        page = page, side = side, app = app, bookId = bookId, palette = palette,
-                        hits = hits, tones = tones, look = look, shape = shape,
-                        pad = pagePadding(look, card, side, topInset, bottomInset),
-                        margin = margin, style = style, contStyle = contStyle,
-                        headingStyle = headingStyle, gap = gap, marks = marks,
-                        highlight = highlight, highlightAlpha = highlightAlpha,
-                        onPicture = onPicture, modifier = modifier,
+                val off = { pagerState.turnOffset(slot) }
+                val face: @Composable (Page?, PageSide, Modifier, (() -> Float)?) -> Unit =
+                    { page, side, modifier, fold ->
+                        PageFace(
+                            page = page, side = side, app = app, bookId = bookId, palette = palette,
+                            hits = hits, tones = tones, look = look, shape = shape,
+                            pad = pagePadding(look, card, side, topInset, bottomInset),
+                            margin = margin, style = style, contStyle = contStyle,
+                            headingStyle = headingStyle, gap = gap, marksAt = marksAt,
+                            highlight = highlight, highlightAlpha = highlightAlpha,
+                            onPicture = onPicture, fold = fold, modifier = modifier,
+                        )
+                    }
+                // Ранняя страница лежит поверх поздней: смахнутая должна
+                // закрывать ту, что под ней.
+                val z = Modifier.fillMaxSize().zIndex(-slot.toFloat())
+                when {
+                    // Одна страница в книге: лист заворачивается на месте.
+                    book && !shape.spread ->
+                        face(pages.getOrNull(slot), PageSide.SINGLE, z.bookSlot(off), off)
+
+                    // Разворот книги: левая половина лежит, правая - лист,
+                    // который поворачивается вокруг корешка; на его обороте -
+                    // левая страница следующего разворота, поэтому подмены в
+                    // конце поворота не видно.
+                    book -> Row(z.bookSlot(off)) {
+                        face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight(), null)
+                        Box(Modifier.weight(1f).fillMaxHeight()) {
+                            val bend = { val o = off().coerceIn(0f, 1f); kotlin.math.sin(o * Math.PI).toFloat() }
+                            face(
+                                pages.getOrNull(slot * 2 + 1), PageSide.RIGHT,
+                                Modifier.fillMaxSize().leafTurn(back = false, offset = off)
+                                    .paperBend(tones, bend),
+                                null,
+                            )
+                            Box(Modifier.fillMaxSize().leafTurn(back = true, offset = off)) {
+                                face(
+                                    pages.getOrNull(slot * 2 + 2), PageSide.LEFT,
+                                    // Изнанка видна с изнанки: зеркалим её
+                                    // обратно, иначе текст читался бы навыворот.
+                                    Modifier.fillMaxSize().graphicsLayer { scaleX = -1f }
+                                        .paperBend(tones, bend),
+                                    null,
+                                )
+                            }
+                        }
+                    }
+
+                    shape.spread -> Row(z.pageTurn(turn, gentle = true, offset = off)) {
+                        face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight(), null)
+                        face(pages.getOrNull(slot * 2 + 1), PageSide.RIGHT, Modifier.weight(1f).fillMaxHeight(), null)
+                    }
+
+                    else -> face(
+                        pages.getOrNull(slot), PageSide.SINGLE,
+                        z.pageTurn(turn, gentle = false, offset = off), null,
                     )
-                }
-                // В живой книге чётная страница левая, нечётная правая.
-                val single = if (live) (if (slot % 2 == 0) PageSide.LEFT else PageSide.RIGHT)
-                else PageSide.SINGLE
-                // Ранняя карточка лежит поверх поздней, как в колоде: смахнутая
-                // должна закрывать ту, что под ней.
-                val slotModifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(-slot.toFloat())
-                    .then(
-                        if (live) Modifier.liveBookTurn(single) { pagerState.turnOffset(slot) }
-                        else Modifier.pageTurn(turn, gentle = shape.spread) { pagerState.turnOffset(slot) }
-                    )
-                if (!shape.spread) {
-                    face(pages.getOrNull(slot), single, slotModifier)
-                    return@HorizontalPager
-                }
-                Row(slotModifier) {
-                    face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight())
-                    face(pages.getOrNull(slot * 2 + 1), PageSide.RIGHT, Modifier.weight(1f).fillMaxHeight())
                 }
             }
         }
@@ -1205,15 +1240,24 @@ private fun PageFace(
     contStyle: TextStyle,
     headingStyle: TextStyle,
     gap: Dp,
-    marks: PageMarks,
+    marksAt: (Int) -> PageMarks,
     highlight: IntRange?,
     highlightAlpha: Float,
     onPicture: (ShownPicture) -> Unit,
+    /** Насколько лист завёрнут: 0 - лежит, 1 - перевёрнут. null - не книга. */
+    fold: (() -> Float)?,
     modifier: Modifier,
 ) {
-    Box(modifier.padding(pad).pageSheet(tones, look, shape, side)) {
+    Box(
+        modifier
+            .padding(pad)
+            // Заворот считается по самому листу, а не по слоту пейджера:
+            // сгиб идёт по бумаге, а не по краю экрана.
+            .then(if (fold != null) Modifier.pageFold(tones, fold) else Modifier)
+            .pageSheet(tones, look, shape, side)
+    ) {
         if (page == null) return@Box
-        PageMarksLayer(marks, side, palette, margin, contStyle)
+        PageMarksLayer(marksAt(page.startChar), side, palette, margin, contStyle)
         Column(
             Modifier
                 .fillMaxSize()

@@ -72,3 +72,57 @@ object Covers {
         return runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) }.getOrNull()
     }
 }
+
+/**
+ * Цвет переплёта по обложке книги.
+ *
+ * Владелец: «цвет обложки книги изнутри должен совпадать с обложкой самой
+ * книги из fb2». Среднее по картинке для этого не годится - у пёстрой обложки
+ * оно всегда бурое; берём самый весомый цвет по кубам 6x6x6, где вес считает и
+ * количество точек, и насыщенность: у обложки с белым полем и красной полосой
+ * переплёт должен стать красным, а не белым.
+ *
+ * Найденный цвет потом приводится к картону (см. [bookCloth]): переплёт не
+ * бывает ни кислотным, ни чёрным - он ткань или крашеный картон.
+ */
+fun coverTone(bitmap: Bitmap): Int? {
+    val side = 72
+    val small = runCatching {
+        Bitmap.createScaledBitmap(bitmap, side, side, true)
+    }.getOrNull() ?: return null
+    val pixels = IntArray(side * side)
+    small.getPixels(pixels, 0, side, 0, 0, side, side)
+    if (small !== bitmap) small.recycle()
+
+    val bins = 6
+    val weight = FloatArray(bins * bins * bins)
+    val sumR = FloatArray(bins * bins * bins)
+    val sumG = FloatArray(bins * bins * bins)
+    val sumB = FloatArray(bins * bins * bins)
+    val hsv = FloatArray(3)
+    for (p in pixels) {
+        val r = (p shr 16) and 0xFF
+        val g = (p shr 8) and 0xFF
+        val b = p and 0xFF
+        android.graphics.Color.RGBToHSV(r, g, b, hsv)
+        // Почти белое и почти чёрное в переплёт не годятся: белый картон
+        // сливается с бумагой, чёрный - с тенью под книгой.
+        if (hsv[2] < 0.12f || (hsv[1] < 0.07f && hsv[2] > 0.90f)) continue
+        val i = (r * bins / 256) * bins * bins + (g * bins / 256) * bins + (b * bins / 256)
+        // Насыщенный цвет весит больше: на обложке он и есть «цвет книги».
+        val w = 0.35f + hsv[1]
+        weight[i] += w
+        sumR[i] += r * w
+        sumG[i] += g * w
+        sumB[i] += b * w
+    }
+    var best = -1
+    for (i in weight.indices) if (best < 0 || weight[i] > weight[best]) best = i
+    if (best < 0 || weight[best] <= 0f) return null
+    val w = weight[best]
+    return android.graphics.Color.rgb(
+        (sumR[best] / w).toInt().coerceIn(0, 255),
+        (sumG[best] / w).toInt().coerceIn(0, 255),
+        (sumB[best] / w).toInt().coerceIn(0, 255),
+    )
+}
