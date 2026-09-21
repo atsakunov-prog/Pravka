@@ -299,10 +299,14 @@ fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.styl
         // такие, чтобы читаться книгой, и ни точкой больше.
         cover = 9.dp,
         // На одной странице корешок - настоящая полоса с плетением, в
-        // развороте от него видна только щель сгиба.
-        spine = if (shape.spread) 2.dp else 11.dp,
+        // развороте от него видна только щель сгиба. У толстой книги корешок
+        // шире: он и есть толщина блока.
+        spine = if (shape.spread) 2.dp else (7f + shape.thickness.value * 0.45f).coerceIn(9f, 16f).dp,
         reveal = 3.dp,
-        cut = 14.dp,
+        // Обрез по толщине книги: у повести торец узкий, у тома широкий.
+        // Мерка считается на книгу и при листании не меняется, поэтому
+        // разбивку на страницы это не гоняет.
+        cut = (5f + shape.thickness.value * 0.8f).coerceIn(9f, 20f).dp,
     )
 
     Settings.PAGE_SOFT -> CardMetrics(
@@ -816,7 +820,15 @@ fun Modifier.pageSheet(
     if (look.flat) return this.background(tones.paper)
     val m = cardMetrics(look, shape)
     if (look.volume) {
+        // Внешние углы листа скруглены на точку с небольшим: бумага в книге
+        // трётся о соседей и об обрез, идеально острых углов у неё не
+        // бывает. У корешка угол острый - там лист не трётся ни обо что.
+        val leaf = when (side) {
+            PageSide.LEFT -> RoundedCornerShape(topStart = 2.dp, bottomStart = 2.dp)
+            else -> RoundedCornerShape(topEnd = 2.dp, bottomEnd = 2.dp)
+        }
         return this
+            .clip(leaf)
             .background(tones.paper)
             .drawWithCache {
                 val w = size.width
@@ -867,12 +879,29 @@ fun Modifier.pageSheet(
                 )
                 val fine = if (look.grain) matteBrush(tones.paper, FINE_SEED, 1f) else null
                 val fibers = if (look.grain) matteBrush(tones.paper, FIBERS_SEED, PAPER_FIBERS.toPx()) else null
+                // Внешний край листа резан ножом и оттого не идеально прям:
+                // зазубрины в полточки, детерминированные - иначе край кипел
+                // бы между кадрами.
+                val nickAt = if (gutterLeft) w - 0.5f * dp else 0f
                 onDrawWithContent {
                     drawRect(castOut, topLeft = Offset(if (dir > 0) outerX else outerX - 3f * dp, 0f), size = Size(3f * dp, h))
                     fine?.let { drawRect(it, alpha = tones.paperFine) }
                     fibers?.let { drawRect(it, alpha = tones.paperFibers) }
                     drawRect(fall)
                     drawContent()
+                    var y = 0f
+                    var i = 0
+                    while (y < h) {
+                        val step = (6f + 10f * jitter(i, 6)) * dp
+                        val deep = jitter(i, 7) * 0.6f * dp
+                        drawRect(
+                            tones.cast(0.10f + 0.10f * jitter(i, 8)),
+                            topLeft = Offset(nickAt, y),
+                            size = Size(0.5f * dp + deep, step.coerceAtMost(h - y)),
+                        )
+                        y += step
+                        i++
+                    }
                     drawRect(fold, topLeft = foldAt, size = Size(band, h))
                     drawRect(glow, topLeft = Offset(glowFrom, 0f), size = Size(band * 0.45f, h))
                     drawRect(tones.light(0.55f), topLeft = Offset(if (gutterLeft) w - 1f else 0f, 0f), size = Size(1f, h))
