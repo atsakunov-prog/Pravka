@@ -48,6 +48,7 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -214,7 +215,26 @@ data class BookShape(
     val progress: Float,
     /** Разворот: две страницы рядом. */
     val spread: Boolean = false,
-)
+    /**
+     * Половина разворота: узкий экран показывает одну страницу настоящего
+     * разворота, а не книгу из одной страницы. Владелец: «сделал бы так, что
+     * это половина от вида двух страниц, но с корешком».
+     */
+    val half: Boolean = false,
+) {
+    /** Книга раскрыта: корешок посередине, страницы по обе стороны от него. */
+    val opened: Boolean get() = spread || half
+}
+
+/**
+ * Сколько соседней половины видно за корешком.
+ *
+ * Без этого «подглядывания» экран резал книгу ровно по сгибу, и она читалась
+ * не раскрытой книгой, а обрубком: владелец на той сборке сказал «левый край
+ * книги вылезает». Полоска чужой страницы за корешком объясняет глазу, что
+ * книга шире экрана, и всё встаёт на место.
+ */
+val BOOK_PEEK = 22.dp
 
 /**
  * Толщина книги по объёму текста.
@@ -301,7 +321,9 @@ fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.styl
         // На одной странице корешок - настоящая полоса с плетением, в
         // развороте от него видна только щель сгиба. У толстой книги корешок
         // шире: он и есть толщина блока.
-        spine = if (shape.spread) 2.dp else (7f + shape.thickness.value * 0.45f).coerceIn(9f, 16f).dp,
+        // В раскрытой книге от корешка видна щель сгиба; на закрытой
+        // половине - его полоса с плетением.
+        spine = if (shape.opened) 3.dp else (7f + shape.thickness.value * 0.45f).coerceIn(9f, 16f).dp,
         reveal = 2.5.dp,
         // Обрез по толщине книги: у повести торец узкий, у тома широкий.
         // Мерка считается на книгу и при листании не меняется, поэтому
@@ -343,8 +365,14 @@ fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.styl
 /** Сколько ширины и высоты у одной страницы отнимает всё, что не текст. */
 data class PageChrome(val width: Dp, val height: Dp)
 
-fun pageChrome(look: PageLook, card: CardMetrics, halves: Int): PageChrome = when {
+fun pageChrome(look: PageLook, card: CardMetrics, halves: Int, half: Boolean = false): PageChrome = when {
     look.flat -> PageChrome(0.dp, 0.dp)
+    // Половина разворота: с одной стороны край книги, с другой - корешок и
+    // полоска соседней страницы за ним.
+    look.volume && half -> PageChrome(
+        width = card.side + card.cover + card.cut + card.spine / 2 + BOOK_PEEK,
+        height = card.top + card.bottom + card.cover * 2 + card.reveal * 2,
+    )
     // В развороте у каждой страницы своя половина: поле, кант и половина щели.
     look.volume && halves > 1 -> PageChrome(
         width = card.side + card.cover + card.cut + card.spine / 2,
@@ -371,11 +399,15 @@ fun pagePadding(
     side: PageSide,
     safeTop: Dp,
     safeBottom: Dp,
+    /** Половина разворота: за корешком видна полоска соседней страницы. */
+    half: Boolean = false,
 ): PaddingValues {
     if (look.flat) return PaddingValues(0.dp)
     val under = underPadding(card, safeTop, safeBottom)
     if (!look.volume) return under
-    val inner = card.spine / 2
+    // На половине разворота страница стоит там, где она окажется, когда
+    // камера доедет до своей стороны: у корешка плюс полоска подглядывания.
+    val inner = card.spine / 2 + if (half) BOOK_PEEK else 0.dp
     val outer = card.side + card.cover + card.cut
     return PaddingValues(
         start = when (side) {
@@ -567,7 +599,7 @@ private fun DrawScope.drawVolume(
 
     val p = shape.progress.coerceIn(0f, 1f)
 
-    if (shape.spread) {
+    if (shape.opened) {
         // Разворот: обрез с обеих сторон - слева прочитанное, справа остаток.
         val lw = cut * p
         val rw = cut * (1f - p)
@@ -1015,6 +1047,74 @@ fun Modifier.pageTurn(style: String, gentle: Boolean, offset: () -> Float): Modi
 /** Страница книги стоит на месте: пейджер возит слоты, мы сдвиг отменяем. */
 fun Modifier.bookSlot(offset: () -> Float): Modifier = this.graphicsLayer {
     translationX = offset() * size.width
+}
+
+/**
+ * Насколько книга отъехала вбок на половине разворота.
+ *
+ * Разворот шире экрана ровно на две полоски подглядывания, и камера ездит по
+ * нему от левого края к правому: читаешь левую страницу - книга стоит слева,
+ * смахнул - она доехала до правого края, и перед глазами правая страница.
+ * Дальше лист переворачивается, и книга едет обратно. [phase] - 0 у левой
+ * страницы, 1 у правой; на обратном пути она снова идёт к нулю.
+ */
+fun bookPan(phase: Float, widthPx: Float, peekPx: Float): Float =
+    -(widthPx - 2f * peekPx) * phase.coerceIn(0f, 1f)
+
+/** Фаза книги по месту в пейджере: 0 - левая страница, 1 - правая. */
+fun bookPhase(position: Float): Float {
+    val pair = ((position % 2f) + 2f) % 2f
+    return min(pair, 2f - pair)
+}
+
+/**
+ * Страница на половине разворота: едет вместе с книгой и переворачивается
+ * вокруг корешка.
+ *
+ * Левая страница уходит из-под глаз, когда камера едет вправо, - никакого
+ * переворота, книга просто сдвинулась. А вот с правой на следующую левую
+ * лист переворачивается: он поднимается вокруг корешка, на его обороте и
+ * оказывается следующая левая страница. Обе половины поворота стыкуются на
+ * ребре (90 градусов), где листа всё равно не видно.
+ */
+fun Modifier.halfPan(
+    side: PageSide,
+    peek: Dp,
+    offset: () -> Float,
+    position: () -> Float,
+): Modifier = this.graphicsLayer {
+    val w = size.width
+    val peekPx = peek.toPx()
+    val pan = bookPan(bookPhase(position()), w, peekPx)
+    // Своя фаза: левая страница живёт в начале хода камеры, правая - в конце.
+    val home = if (side == PageSide.RIGHT) bookPan(1f, w, peekPx) else 0f
+    translationX = offset() * w + pan - home
+}
+
+/**
+ * Сам лист на половине разворота: поворот вокруг корешка.
+ *
+ * Вешается на страницу, а не на место пейджера: ось поворота - край листа у
+ * корешка, а не край экрана. Левая страница уходит из-под глаз без поворота,
+ * её увозит камера; переворачивается только лист с правой страницей, и на
+ * его обороте оказывается следующая левая. Половины стыкуются на ребре, где
+ * листа всё равно не видно.
+ */
+fun Modifier.halfLeaf(side: PageSide, offset: () -> Float): Modifier = this.graphicsLayer {
+    val off = offset()
+    cameraDistance = bookCamera(size.width, density)
+    when {
+        side == PageSide.RIGHT && off > 0f && off < 1f -> {
+            transformOrigin = TransformOrigin(0f, 0.5f)
+            rotationY = -180f * off
+            alpha = if (off < 0.5f) 1f else 0f
+        }
+        side == PageSide.LEFT && off < 0f && off > -1f -> {
+            transformOrigin = TransformOrigin(1f, 0.5f)
+            rotationY = 180f * -off
+            alpha = if (-off < 0.5f) 1f else 0f
+        }
+    }
 }
 
 /**

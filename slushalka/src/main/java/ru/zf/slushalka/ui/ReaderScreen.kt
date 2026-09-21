@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -489,10 +490,18 @@ fun ReaderScreen(
     val screenWidth = with(LocalDensity.current) {
         LocalWindowInfo.current.containerSize.width.toDp()
     }
+    val spread = spreadOn(prefs.readerSpread, prefs.readerPaged, screenWidth)
+    // Узкий экран показывает половину настоящего разворота - с корешком и
+    // полоской соседней страницы за ним. «Всегда одна» оставляет прежнее:
+    // книга целиком в экране, лист заворачивается на месте.
+    val half = prefs.readerPaged && !spread &&
+        prefs.readerPageStyle == Settings.PAGE_VOLUME &&
+        prefs.readerSpread != Settings.SPREAD_OFF
     val shape = BookShape(
         thickness = thickness,
         progress = progress,
-        spread = spreadOn(prefs.readerSpread, prefs.readerPaged, screenWidth),
+        spread = spread,
+        half = half,
     )
     val card = cardMetrics(look, shape)
     // Колонтитул в нижнем углу страницы: панель прячется, а «где я в книге»
@@ -1117,7 +1126,7 @@ private fun PagedBody(
         val card = cardMetrics(look, shape)
         // В развороте страниц две, каждая по своей половине экрана.
         val halves = if (shape.spread) 2 else 1
-        val chrome = pageChrome(look, card, halves)
+        val chrome = pageChrome(look, card, halves, shape.half)
         // Вниз, а не к ближайшему: место на странице меряется в целых
         // пикселях, и лишняя половина пикселя оборачивалась строкой, которая
         // на живой сборке срезалась нижним краем.
@@ -1258,7 +1267,26 @@ private fun PagedBody(
             // поверх, а том лежит на столе. Книга целиком в экране: половина
             // разворота, уезжавшая за край, владельцу на живой сборке
             // читалась поломкой - «левый край книги вылезает».
-            Box(
+            val screenWidth = this@BoxWithConstraints.maxWidth
+            if (shape.half) Box(
+                // Разворот шире экрана на две полоски подглядывания, и камера
+                // ездит по нему: левая страница - правая страница - переворот
+                // листа и снова левая. «Как в жизни», как просил владелец.
+                Modifier
+                    .requiredWidth(screenWidth * 2 - BOOK_PEEK * 2)
+                    .fillMaxHeight()
+                    .graphicsLayer {
+                        val pos = pagerState.currentPage + pagerState.currentPageOffsetFraction
+                        // Камера меряется по экрану, а слой шире него.
+                        translationX = bookPan(
+                            bookPhase(pos),
+                            size.width / 2f + BOOK_PEEK.toPx(),
+                            BOOK_PEEK.toPx(),
+                        )
+                    }
+                    .padding(underPadding(card, topInset, bottomInset))
+                    .pageUnder(tones, look, shape)
+            ) else Box(
                 Modifier
                     .fillMaxSize()
                     .padding(underPadding(card, topInset, bottomInset))
@@ -1281,7 +1309,7 @@ private fun PagedBody(
                         PageFace(
                             page = page, side = side, app = app, bookId = bookId, palette = palette,
                             hits = hits, tones = tones, look = look, shape = shape,
-                            pad = pagePadding(look, card, side, topInset, bottomInset),
+                            pad = pagePadding(look, card, side, topInset, bottomInset, shape.half),
                             margins = margins, style = style, contStyle = contStyle,
                             headingStyle = headingStyle, gap = gap, marksAt = marksAt,
                             highlight = highlight, highlightAlpha = highlightAlpha,
@@ -1292,7 +1320,36 @@ private fun PagedBody(
                 // Ранняя страница лежит поверх поздней: смахнутая должна
                 // закрывать ту, что под ней.
                 val z = Modifier.fillMaxSize().zIndex(-slot.toFloat())
+                val position = { pagerState.currentPage + pagerState.currentPageOffsetFraction }
                 when {
+                    // Половина разворота: чётная страница левая, нечётная
+                    // правая; книга ездит камерой, лист переворачивается
+                    // вокруг корешка.
+                    book && shape.half -> {
+                        val side = if (slot % 2 == 0) PageSide.LEFT else PageSide.RIGHT
+                        val bend = {
+                            val o = off()
+                            val t = if (side == PageSide.RIGHT) o.coerceIn(0f, 1f)
+                            else (-o).coerceIn(0f, 1f)
+                            kotlin.math.sin(t * Math.PI).toFloat()
+                        }
+                        PageFace(
+                            page = pages.getOrNull(slot), side = side, app = app, bookId = bookId,
+                            palette = palette, hits = hits, tones = tones, look = look,
+                            shape = shape,
+                            pad = pagePadding(look, card, side, topInset, bottomInset, true),
+                            margins = margins, style = style, contStyle = contStyle,
+                            headingStyle = headingStyle, gap = gap, marksAt = marksAt,
+                            highlight = highlight, highlightAlpha = highlightAlpha,
+                            onPicture = onPicture, fold = null, noIndent = noIndent,
+                            smallCaps = smallCaps, imperfect = imperfect,
+                            // Пан книги - на месте пейджера, поворот листа - на
+                            // самом листе: ось у корешка, а не у края экрана.
+                            leaf = Modifier.halfLeaf(side, off).paperBend(tones, bend),
+                            modifier = z.halfPan(side, BOOK_PEEK, off, position),
+                        )
+                    }
+
                     // Одна страница в книге: лист заворачивается на месте.
                     book && !shape.spread ->
                         face(pages.getOrNull(slot), PageSide.SINGLE, z.bookSlot(off), off)
@@ -1380,11 +1437,14 @@ private fun PageFace(
     noIndent: (Int) -> Boolean,
     smallCaps: Boolean,
     imperfect: Boolean,
+    /** Что делается с самим листом: поворот вокруг корешка и изгиб бумаги. */
+    leaf: Modifier = Modifier,
     modifier: Modifier,
 ) {
     Box(
         modifier
             .padding(pad)
+            .then(leaf)
             // Заворот считается по самому листу, а не по слоту пейджера:
             // сгиб идёт по бумаге, а не по краю экрана.
             .then(if (fold != null) Modifier.pageFold(tones, fold) else Modifier)
