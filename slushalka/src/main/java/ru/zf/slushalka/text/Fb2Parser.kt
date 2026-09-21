@@ -57,7 +57,12 @@ object Fb2Parser {
         var titleStart = -1
 
         var bookTitle = ""
-        val authorParts = ArrayList<String>()
+        // Автор - только из <author> в <title-info>. Раньше сюда попадали все
+        // имена подряд, а в fb2 рядом лежат <translator> и редакторы: у
+        // владельца в колонтитуле стояло «Белва Плейн Ольга Александровна
+        // Варшавер» - автор, слипшийся с переводчицей.
+        val authors = ArrayList<String>()
+        var authorParts: ArrayList<String>? = null
         var coverHref: String? = null
         var coverBytes: ByteArray? = null
 
@@ -88,6 +93,9 @@ object Fb2Parser {
                     val name = parser.name.lowercase()
                     path.add(name)
                     if (skipUntilDepth < 0) when (name) {
+                        // Имена копим по одному автору: у книги их бывает
+                        // несколько, и в строку они идут через запятую.
+                        "author" -> if (path.contains("title-info")) authorParts = ArrayList()
                         "body" -> {
                             // <body name="notes"> - это сноски, не текст книги.
                             if (parser.getAttributeValue(null, "name")
@@ -165,7 +173,9 @@ object Fb2Parser {
                             when (path.lastOrNull()) {
                                 "book-title" -> if (bookTitle.isBlank()) bookTitle = raw.trim()
                                 "first-name", "middle-name", "last-name" ->
-                                    if (path.contains("title-info")) authorParts.add(raw.trim())
+                                    authorParts?.add(raw.trim())
+                                // Иногда автор записан одной строкой.
+                                "nickname" -> authorParts?.add(raw.trim())
                             }
                         }
                     }
@@ -174,6 +184,11 @@ object Fb2Parser {
                 XmlPullParser.END_TAG -> {
                     val name = parser.name.lowercase()
                     if (skipUntilDepth < 0) when (name) {
+                        "author" -> {
+                            authorParts?.joinToString(" ")?.trim()?.takeIf { it.isNotEmpty() }
+                                ?.let { if (it !in authors) authors.add(it) }
+                            authorParts = null
+                        }
                         "body" -> if (bodyDepth > 0) bodyDepth--
                         "binary" -> {
                             val buf = binaryBuf
@@ -223,7 +238,7 @@ object Fb2Parser {
             body = body,
             marks = marks,
             title = bookTitle,
-            author = authorParts.joinToString(" ").trim(),
+            author = authors.joinToString(", "),
             pictures = pictures,
         )
         val sample = buildString {

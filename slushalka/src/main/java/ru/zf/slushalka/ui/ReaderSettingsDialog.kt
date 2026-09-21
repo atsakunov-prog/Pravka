@@ -545,7 +545,10 @@ private fun charsPerLine(prefs: Settings.Prefs): Int? {
         val card = cardMetrics(look, shape)
         val halves = if (spread) 2 else 1
         val chrome = pageChrome(look, card, halves)
-        val margins = pageMargins(prefs.readerMargin, prefs.readerCanon && prefs.readerPaged)
+        val margins = pageMargins(
+            prefs.readerMargin,
+            prefs.readerCanon && prefs.readerPaged && prefs.readerPageStyle == Settings.PAGE_VOLUME,
+        )
         val line = screen / halves - chrome.width - margins.width
         if (line <= 0.dp) return@remember null
         val sample = "строчная проза средней длины, по ней и меряем ширину знака"

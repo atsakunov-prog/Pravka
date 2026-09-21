@@ -657,10 +657,14 @@ private fun DrawScope.cutBand(
     while (x < x0 + width) {
         val j1 = jitter(i, 3) * 1.8f * dp
         val j2 = jitter(i, 4) * 1.8f * dp
-        drawRect(
-            tones.cast(0.14f + 0.10f * jitter(i, 5)),
-            topLeft = Offset(x, y + j1),
-            size = Size(hair, (height - j1 - j2).coerceAtLeast(0f)),
+        // Веер: чем ближе к внешнему краю, тем сильнее лист отходит от
+        // соседа - линии расходятся, а не стоят строем. Отсюда и наклон.
+        val lean = (if (towardsRight) 1f else -1f) * (x - x0) / width.coerceAtLeast(1f) * 0.6f * dp
+        drawLine(
+            color = tones.cast(0.14f + 0.10f * jitter(i, 5)),
+            start = Offset(x - lean, y + j1),
+            end = Offset(x + lean, y + height - j2),
+            strokeWidth = hair,
         )
         x += 1.5f * dp
         i++
@@ -789,11 +793,22 @@ private fun DrawScope.drawDeck(tones: PaperTones, m: CardMetrics, rims: Int) {
     val inset = m.deckInset.toPx()
     val radius = CornerRadius(m.radius.toPx())
     val hair = 1.dp.toPx().coerceAtLeast(1f)
+    val dp = 1.dp.toPx()
     for (i in rims downTo 1) {
         val depth = i / rims.toFloat()
+        // Колода лежит вразнобой: каждая карточка чуть сдвинута и повёрнута.
+        // Идеально соосная стопка читается тенью под карточкой, а не стопкой.
+        val skew = (jitter(i, 11) - 0.5f) * 2.4f * dp
         val dx = inset * i
-        val at = Offset(dx, 0f)
+        val at = Offset(dx + skew, 0f)
         val box = Size((size.width - dx * 2f).coerceAtLeast(0f), size.height + step * i)
+        // Каждая кромка отбрасывает тень на ту, что под ней.
+        drawRoundRect(
+            color = tones.cast(0.10f),
+            topLeft = Offset(at.x, at.y + 1.5f * dp),
+            size = box,
+            cornerRadius = radius,
+        )
         drawRoundRect(color = tones.deck(depth), topLeft = at, size = box, cornerRadius = radius)
         // Светлая нить по кромке каждой: без неё соседние сливаются в одну
         // серую полосу, и колода читается тенью, а не стопкой.

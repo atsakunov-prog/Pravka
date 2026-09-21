@@ -322,7 +322,13 @@ fun ReaderScreen(
         set
     }
     val noIndent: (Int) -> Boolean = { it in chapterFirst }
-    val margins = pageMargins(prefs.readerMargin, prefs.readerCanon && prefs.readerPaged)
+    // Канон - только в книжном виде и только при листании страницами: полоса
+    // смещается к корешку, а у карточки из колоды корешка нет, и смещённый
+    // текст читался бы там перекосом, а не набором.
+    val margins = pageMargins(
+        prefs.readerMargin,
+        prefs.readerCanon && prefs.readerPaged && prefs.readerPageStyle == Settings.PAGE_VOLUME,
+    )
 
     // Отбивка между абзацами: в книге её нет, абзац начинается отступом первой
     // строки. Тумблер «Абзацный отступ» переключает одно на другое разом - и
@@ -331,7 +337,9 @@ fun ReaderScreen(
 
     /** [head] - кусок начинает абзац; продолжению на новой странице отступ не положен. */
     fun styleFor(heading: Boolean, head: Boolean = true) = TextStyle(
-        textIndent = if (prefs.readerIndent && !heading && head) TextIndent(firstLine = 1.5.em)
+        // Отступ в четверть с небольшим кегля: полтора было по-машинописному
+        // много, в книгах отступ примерно в кегль с четвертью.
+        textIndent = if (prefs.readerIndent && !heading && head) TextIndent(firstLine = 1.25.em)
         else TextIndent.None,
         // Переносы: без них выключка по ширине растаскивает строку дырами -
         // на широком экране это видно сразу.
