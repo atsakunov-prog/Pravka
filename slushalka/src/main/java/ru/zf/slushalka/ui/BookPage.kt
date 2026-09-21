@@ -20,11 +20,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
@@ -33,6 +36,8 @@ import androidx.compose.ui.unit.dp
 import ru.zf.slushalka.data.Settings
 import java.util.Random
 import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.sin
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -85,12 +90,19 @@ class PaperTones(val paper: Color, val tableDark: Float = Settings.TABLE_MID) {
      * книга не светилась ярче страницы.
      */
     val cover: Color =
-        if (dark) lerp(paper, Color(0xFF3B2A1A), 0.55f) else lerp(paper, Color(0xFFB08A5C), 0.78f)
+        if (dark) lerp(paper, Color(0xFF3B2A1A), 0.55f) else lerp(paper, Color(0xFFA87C48), 0.75f)
 
-    /** Срез блока страниц под верхней: та же бумага, но в тени переплёта. */
-    val block: Color = lerp(paper, cover, 0.14f)
+    /**
+     * Форзац - внутренняя сторона той же обложки. Тот же картон, чуть светлее
+     * от света: владелец просил, чтобы край книги был под цвет обложки, а не
+     * отдельной бежевой полосой.
+     */
+    val endpaper: Color = lerp(cover, paper, 0.06f)
 
-    /** Каптал - цветная тесьма в корешке, видна сверху и снизу между страницами. */
+    /** Бумага обреза - страницы блока с торца, чуть в тени. */
+    val block: Color = lerp(paper, Color(0xFF3A3633), 0.06f)
+
+    /** Каптал - плетёная тесьма в корешке, видна сверху и снизу между страницами. */
     val headband: Color = if (dark) Color(0xFF2F6B66) else Color(0xFF3F8F86)
 
     /**
@@ -98,7 +110,11 @@ class PaperTones(val paper: Color, val tableDark: Float = Settings.TABLE_MID) {
      * книги она лежит на светло-сером, и тень от неё читается именно на нём.
      */
     val bookTable: Color =
-        if (dark) backdrop else lerp(paper, Color(0xFF5A5652), 0.18f + 0.4f * tableDark)
+        if (dark) backdrop else lerp(paper, Color(0xFF6E6B68), 0.06f + 0.30f * tableDark)
+
+    /** Тень книги на стол: нейтрально-тёплая, с прозрачностью по месту. */
+    fun cast(alpha: Float): Color =
+        (if (dark) Color.Black else Color(0xFF3A3633)).copy(alpha = alpha)
 
     val sheen: Float = if (oled) 0f else if (dark) 0.06f else 0.05f
     val foot: Float = if (oled) 0f else if (dark) 0.10f else 0.05f
@@ -203,6 +219,13 @@ data class CardMetrics(
     val spine: Dp,
     /** Насколько страницы короче блока сверху и снизу: там виден каптал. */
     val reveal: Dp = 0.dp,
+    /**
+     * Полоса под обрез с внешней стороны страницы. Постоянная: сам обрез
+     * внутри неё то шире, то уже (слева прочитанное, справа остаток), а
+     * остаток полосы - форзац. Иначе ширина страницы плыла бы с каждым
+     * перелистыванием.
+     */
+    val cut: Dp = 0.dp,
 )
 
 /** Сколько кромок видно сейчас: колода тает по мере чтения. */
@@ -213,7 +236,7 @@ fun rimsNow(metrics: CardMetrics, shape: BookShape): Int {
 }
 
 fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.style) {
-    Settings.PAGE_FLAT -> CardMetrics(0.dp, 0.dp, 0.dp, 0.dp, 0.dp, 0.dp, 0, 0.dp, 0.dp, 0.dp)
+    Settings.PAGE_FLAT -> CardMetrics(0.dp, 0.dp, 0.dp, 0.dp, 0.dp, 0.dp, 0, 0.dp, 0.dp, 0.dp, 0.dp)
 
     Settings.PAGE_VOLUME -> CardMetrics(
         side = look.margin,
@@ -230,6 +253,7 @@ fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.styl
         // палец шириной читалась дырой, а не корешком.
         spine = 2.dp,
         reveal = 3.dp,
+        cut = 16.dp,
     )
 
     Settings.PAGE_SOFT -> CardMetrics(
@@ -273,7 +297,7 @@ fun pageChrome(look: PageLook, card: CardMetrics, halves: Int): PageChrome = whe
     // половина сгиба. На одной странице то же самое - она и есть половина
     // разворота, по которому ездит камера.
     look.volume -> PageChrome(
-        width = card.side + card.cover + card.spine / 2,
+        width = card.side + card.cover + card.cut + card.spine / 2,
         height = card.top + card.bottom + card.cover * 2 + card.reveal * 2,
     )
     else -> PageChrome(card.side * 2, card.top + card.bottom)
@@ -300,15 +324,17 @@ fun pagePadding(
     // которой страница к нему повёрнута. С внутренней стороны разворота поля
     // экрана не нужны: там соседняя страница.
     val inner = card.spine / 2
+    val outer = card.side + card.cover + card.cut
     return PaddingValues(
         start = when (side) {
             PageSide.RIGHT -> inner
+            // Одна страница в прокрутке: корешок слева, обрез справа.
             PageSide.SINGLE -> card.side + card.cover + card.spine
-            PageSide.LEFT -> card.side + card.cover
+            PageSide.LEFT -> outer
         },
         end = when (side) {
             PageSide.LEFT -> inner
-            else -> card.side + card.cover
+            else -> outer
         },
         top = safeTop + card.top + card.cover + card.reveal,
         bottom = safeBottom + card.bottom + card.cover + card.reveal,
@@ -332,14 +358,22 @@ fun Modifier.readerBackdrop(tones: PaperTones, look: PageLook): Modifier =
     else this
         .background(if (look.volume) tones.bookTable else tones.backdrop)
         .drawWithCache {
-            // Ровная заливка читается фоном экрана, затемнённая по углам -
-            // поверхностью, на которой что-то лежит.
-            val vignette = Brush.radialGradient(
-                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.26f)),
-                center = Offset(size.width * 0.5f, size.height * 0.42f),
-                radius = max(size.width, size.height) * 0.74f,
+            // Свет сверху: стол к низу темнее. Ровная заливка читается фоном
+            // экрана, затемнённая к низу и по углам - поверхностью, на которой
+            // что-то лежит.
+            val fall = Brush.verticalGradient(
+                0f to Color.White.copy(alpha = 0.07f),
+                1f to tones.cast(0.10f),
             )
-            onDrawBehind { drawRect(vignette) }
+            val vignette = Brush.radialGradient(
+                colors = listOf(Color.Transparent, tones.cast(if (look.volume) 0.20f else 0.26f)),
+                center = Offset(size.width * 0.5f, size.height * 0.40f),
+                radius = max(size.width, size.height) * 0.78f,
+            )
+            onDrawBehind {
+                if (look.volume) drawRect(fall)
+                drawRect(vignette)
+            }
         }
         .then(if (look.grain) Modifier.grain(tones.tableGrain) else Modifier)
 
@@ -359,100 +393,247 @@ fun Modifier.pageUnder(tones: PaperTones, look: PageLook, shape: BookShape): Mod
         else -> 10.dp
     }
     val corner = RoundedCornerShape(m.radius)
-    // Книге тень нужна заметнее, чем карточке: она лежит на светлом столе и
-    // толще - на фотографии тень под томом густая и широкая.
+    // У книги тень своя, слоями (см. drawVolume): системная - ровный ореол
+    // одной формы, а под томом на фотографии тень мягкая, гуще к нижнему
+    // ребру и с плотной полосой там, где он касается стола.
+    val depth = when (look.shadow) {
+        Settings.SHADOW_NONE -> 0f
+        Settings.SHADOW_DEEP -> 1.45f
+        else -> 1f
+    }
     return if (look.volume) this
-        .shadow(lift * 1.4f, corner, clip = false, ambientColor = tones.cast, spotColor = tones.cast)
-        .drawBehind { drawVolume(tones, m, shape) }
+        .drawBehind { drawVolume(tones, m, shape, depth) }
     else this
-        .shadow(lift, RoundedCornerShape(m.radius), clip = false, ambientColor = tones.cast, spotColor = tones.cast)
+        .shadow(lift, corner, clip = false, ambientColor = tones.cast, spotColor = tones.cast)
         .drawBehind { drawDeck(tones, m, rimsNow(m, shape)) }
 }
 
 /**
- * Обложка, обрез блока, корешок и каптал - всё, что в книге не страница.
+ * Всё, что в книге не страница: тень на стол, картон обложки, форзац, обрез,
+ * корешок и каптал.
  *
- * Собрано по фотографии свёрстанной книги: кант переплёта вокруг блока, на
- * торце много тонких страниц, а не три толстых слоя, между страницами не щель,
- * а сгиб, и в сгибе сверху и снизу видна цветная тесьма каптала.
+ * Собрано по фотографии свёрстанной книги, и правило одно: ни одного элемента
+ * без света и тени. Свет сверху-спереди, поэтому верхние кромки светлее,
+ * нижние темнее, тень под книгой гуще у нижнего ребра, обрез темнее у обложки
+ * и светлее у верхней страницы, а сама страница отбрасывает тень на обрез.
  */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawVolume(
     tones: PaperTones,
     m: CardMetrics,
     shape: BookShape,
+    /** Сила тени на стол: 0 - без тени, 1 - мягкая, больше - глубокая. */
+    depth: Float,
 ) {
-    val radius = CornerRadius(m.radius.toPx())
-    val coverPx = m.cover.toPx()
+    val w = size.width
+    val h = size.height
+    val cover = m.cover.toPx()
+    val cut = m.cut.toPx()
+    val reveal = m.reveal.toPx()
+    val spine = m.spine.toPx()
     val hair = 1.dp.toPx().coerceAtLeast(1f)
-    // Переплёт во всю область. Сверху чуть светлее, снизу чуть темнее - кант
-    // ловит свет, как фаска у плашек Правки.
-    drawRoundRect(tones.cover, cornerRadius = radius)
-    drawRoundRect(
+    val dp = 1.dp.toPx()
+    // Углы картона побиты: у каждого свой радиус, идеально ровных нет.
+    val radii = floatArrayOf(4f, 6f, 3.5f, 5f).map { it * dp }.toFloatArray()
+
+    // 1. Тень на стол: слоями с убывающей плотностью вместо размытия, каждый
+    // следующий шире и ниже - выходит мягкий ореол по форме книги, гуще к
+    // нижнему ребру. Плюс плотная контактная полоса там, где ребро касается
+    // стола.
+    if (depth > 0f) {
+        val layers = 16
+        for (i in layers downTo 1) {
+            val k = i / layers.toFloat()
+            val grow = 1.8f * dp * i * depth
+            val drop = 1.3f * dp * i * depth
+            drawPath(
+                wornPath(-grow, -grow * 0.35f + drop, w + grow * 2f, h + grow * 1.35f, radii.map { it + grow * 0.4f }.toFloatArray()),
+                tones.cast((0.04f * (1f - k) * (1f - k) + 0.004f) * depth.coerceAtMost(1.2f)),
+            )
+        }
+        drawPath(wornPath(2f * dp, h - dp, w - 4f * dp, 4f * dp, floatArrayOf(2f * dp, 2f * dp, 3f * dp, 3f * dp)), tones.cast(0.22f))
+        drawPath(wornPath(dp, h - dp, w - 2f * dp, 9f * dp, floatArrayOf(3f * dp, 3f * dp, 5f * dp, 5f * dp)), tones.cast(0.08f))
+    }
+
+    // 2. Обложка: картон, свет сверху, кромка завёрнута, углы потёрты.
+    val outline = wornPath(0f, 0f, w, h, radii)
+    drawPath(outline, tones.cover)
+    drawPath(
+        outline,
         Brush.verticalGradient(
-            0f to tones.light(0.16f),
+            0f to tones.light(0.10f),
             0.5f to Color.Transparent,
-            1f to tones.shadow(0.20f),
+            1f to tones.cast(0.14f),
         ),
-        cornerRadius = radius,
     )
-    drawRoundRect(tones.light(0.22f), cornerRadius = radius, style = Stroke(width = hair))
+    clipPath(outline) {
+        // Ребро картона: внутри контура темнее - край завёрнут; по самой
+        // кромке светлая нить - ловит свет.
+        drawPath(outline, tones.cast(0.14f), style = Stroke(width = 3f * dp))
+        drawPath(wornPath(dp, dp, w - 2f * dp, h - 2f * dp, radii), tones.light(0.22f), style = Stroke(width = hair))
+        // Потёртости: на углах картон стёрт до светлого, у каждого по-своему.
+        listOf(Offset(0f, 0f), Offset(w, 0f), Offset(w, h), Offset(0f, h)).forEachIndexed { i, corner ->
+            val rr = (9f + 4f * jitter(i, 1)) * dp
+            drawRect(
+                Brush.radialGradient(
+                    colors = listOf(tones.light(0.34f + 0.14f * jitter(i, 2)), Color.Transparent),
+                    center = corner,
+                    radius = rr,
+                ),
+                topLeft = Offset(corner.x - rr, corner.y - rr),
+                size = Size(rr * 2f, rr * 2f),
+            )
+        }
+    }
 
-    // Блок страниц внутри переплёта.
-    val block = Size(size.width - coverPx * 2f, size.height - coverPx * 2f)
-    if (block.width <= 0f || block.height <= 0f) return
-    val at = Offset(coverPx, coverPx)
-    drawRect(tones.block, topLeft = at, size = block)
+    // 3. Блок страниц лежит на форзаце - той же обложке с изнанки. Форзац виден
+    // там, где обрез ещё тонок.
+    val bx = cover
+    val by = cover
+    val bw = w - cover * 2f
+    val bh = h - cover * 2f
+    if (bw <= 0f || bh <= 0f) return
+    drawRect(tones.endpaper, topLeft = Offset(bx, by), size = Size(bw, bh))
 
-    // Обрез по бокам: слева прочитанное, справа остаток. Не три слоя, а много
-    // тонких линий через две точки - так выглядит торец настоящего блока.
-    val cut = 9.dp.toPx()
+    // Где страницы: внешние края с запасом под обрез. Слева обрез - прочитанное,
+    // справа - остаток; сумма постоянна, как толщина книги.
     val p = shape.progress.coerceIn(0f, 1f)
-    val step = 2.dp.toPx()
-    fun stripes(x0: Float, width: Float) {
-        if (width < step) return
-        drawRect(tones.cut(0.25f), topLeft = Offset(x0, at.y), size = Size(width, block.height))
-        var x = x0 + step
+    val lw = cut * p
+    val rw = cut * (1f - p)
+    val pxL = bx + cut
+    val pxR = w - cover - cut
+
+    // 4. Обрез: бумага с торца. У обложки в тени, к верхней странице светлее;
+    // страницы - линии через полтора пункта, неровные по концам, как у
+    // настоящего блока.
+    fun cutBand(x0: Float, width: Float, towardsRight: Boolean) {
+        if (width < dp) return
+        drawRect(tones.block, topLeft = Offset(x0, by), size = Size(width, bh))
+        drawRect(
+            Brush.horizontalGradient(
+                0f to tones.cast(0.34f),
+                0.4f to tones.cast(0.14f),
+                1f to tones.cast(0.03f),
+                startX = if (towardsRight) x0 else x0 + width,
+                endX = if (towardsRight) x0 + width else x0,
+            ),
+            topLeft = Offset(x0, by),
+            size = Size(width, bh),
+        )
+        var x = x0 + 1.5f * dp
         var i = 0
         while (x < x0 + width) {
+            val j1 = jitter(i, 3) * 1.8f * dp
+            val j2 = jitter(i, 4) * 1.8f * dp
             drawRect(
-                tones.cut(if (i % 2 == 0) 0.9f else 0.55f),
-                topLeft = Offset(x, at.y + hair),
-                size = Size(hair, block.height - hair * 2f),
+                tones.cast(0.14f + 0.10f * jitter(i, 5)),
+                topLeft = Offset(x, by + j1),
+                size = Size(hair, (bh - j1 - j2).coerceAtLeast(0f)),
             )
-            x += step
+            x += 1.5f * dp
             i++
         }
     }
-    stripes(at.x, cut * p)
-    stripes(at.x + block.width - cut * (1f - p), cut * (1f - p))
-    // Нижний торец: пара линий под страницами, чтобы блок читался толщиной.
-    val foot = 4.dp.toPx()
-    drawRect(tones.cut(0.3f), topLeft = Offset(at.x, at.y + block.height - foot), size = Size(block.width, foot))
-    drawRect(tones.cut(0.85f), topLeft = Offset(at.x, at.y + block.height - foot + hair), size = Size(block.width, hair))
-    drawRect(tones.cut(0.85f), topLeft = Offset(at.x, at.y + block.height - hair), size = Size(block.width, hair))
+    cutBand(pxL - lw, lw, towardsRight = true)
+    cutBand(pxR, rw, towardsRight = false)
+    // Блок возвышается над форзацем: тень наружу от его края.
+    fun edgeShadow(x0: Float, dir: Int) {
+        val band = 4f * dp
+        drawRect(
+            Brush.horizontalGradient(
+                listOf(tones.cast(0.22f), Color.Transparent),
+                startX = x0,
+                endX = x0 + band * dir,
+            ),
+            topLeft = Offset(if (dir > 0) x0 else x0 - band, by),
+            size = Size(band, bh),
+        )
+    }
+    edgeShadow(pxL - lw, -1)
+    edgeShadow(pxR + rw, +1)
 
-    // Корешок: узкая щель сгиба посередине разворота или у левого края одной
+    // 5. Верхний и нижний обрез: страницы стопкой под верхней, с её тенью.
+    val spanL = pxL - lw
+    val spanW = (pxR + rw) - spanL
+    for ((yy, down) in listOf(by + bh - reveal to true, by to false)) {
+        drawRect(tones.block, topLeft = Offset(spanL, yy), size = Size(spanW, reveal))
+        drawRect(
+            Brush.verticalGradient(
+                listOf(tones.cast(0.26f), tones.cast(0.06f)),
+                startY = if (down) yy else yy + reveal,
+                endY = if (down) yy + reveal else yy,
+            ),
+            topLeft = Offset(spanL, yy),
+            size = Size(spanW, reveal),
+        )
+        drawRect(
+            tones.cast(0.12f),
+            topLeft = Offset(spanL, if (down) yy + 1.5f * dp else yy + reveal - 2f * dp),
+            size = Size(spanW, hair),
+        )
+    }
+
+    // 6. Корешок: щель сгиба - посередине разворота или у корешка одной
     // страницы. Основную тень сгиба несут сами страницы (см. pageSheet).
-    val spinePx = m.spine.toPx()
-    val spineAt = if (shape.spread) size.width / 2f - spinePx / 2f else at.x
-    drawRect(tones.shadow(0.45f), topLeft = Offset(spineAt, at.y), size = Size(spinePx, block.height))
+    val spineAt = if (shape.spread) w / 2f - spine / 2f else bx
+    drawRect(tones.cast(0.55f), topLeft = Offset(spineAt, by), size = Size(spine, bh))
 
-    // Каптал: цветная тесьма в корешке, видна в зазоре над страницами и под
-    // ними. Мелочь, по которой книга узнаётся книгой.
+    // 7. Каптал: плетёная тесьма в корешке, видна в зазоре над страницами и
+    // под ними. Стежки косые, светлый через тёмный; с той стороны, что глубже
+    // в сгибе, тень.
     if (shape.spread) {
-        val bw = 16.dp.toPx()
-        val bh = m.reveal.toPx() + 2.dp.toPx()
-        val bx = size.width / 2f - bw / 2f
-        for (y in listOf(at.y, at.y + block.height - bh)) {
-            drawRoundRect(tones.headband, topLeft = Offset(bx, y), size = Size(bw, bh), cornerRadius = CornerRadius(hair))
-            // Тесьма плетёная: светлые нити через одну.
-            var x = bx + step
-            while (x < bx + bw) {
-                drawRect(tones.light(0.28f), topLeft = Offset(x, y), size = Size(hair, bh))
-                x += step
+        val hw = 22f * dp
+        val hh = reveal + 4f * dp
+        val hx = w / 2f - hw / 2f
+        for ((yy, top) in listOf(by - dp to true, by + bh - hh + dp to false)) {
+            clipRect(hx, yy, hx + hw, yy + hh) {
+                drawRect(tones.headband, topLeft = Offset(hx, yy), size = Size(hw, hh))
+                var x = hx - hh
+                var i = 0
+                while (x < hx + hw + hh) {
+                    drawLine(
+                        if (i % 2 == 0) tones.light(0.32f) else Color.Black.copy(alpha = 0.22f),
+                        start = Offset(x, yy + hh),
+                        end = Offset(x + hh * 0.7f, yy),
+                        strokeWidth = 1.1f * dp,
+                    )
+                    x += 2.2f * dp
+                    i++
+                }
+                drawRect(
+                    Brush.verticalGradient(
+                        listOf(tones.cast(0.30f), Color.Transparent),
+                        startY = if (top) yy else yy + hh,
+                        endY = if (top) yy + hh else yy,
+                    ),
+                    topLeft = Offset(hx, yy),
+                    size = Size(hw, hh),
+                )
             }
         }
     }
+}
+
+/** Прямоугольник с разными радиусами углов: побитые уголки картона. */
+private fun wornPath(x: Float, y: Float, w: Float, h: Float, r: FloatArray): Path = Path().apply {
+    moveTo(x + r[0], y)
+    lineTo(x + w - r[1], y)
+    quadraticTo(x + w, y, x + w, y + r[1])
+    lineTo(x + w, y + h - r[2])
+    quadraticTo(x + w, y + h, x + w - r[2], y + h)
+    lineTo(x + r[3], y + h)
+    quadraticTo(x, y + h, x, y + h - r[3])
+    lineTo(x, y + r[0])
+    quadraticTo(x, y, x + r[0], y)
+    close()
+}
+
+/**
+ * Детерминированный «шум» для неровностей: одна и та же книга - одни и те же
+ * зазубрины, ничего не кипит между кадрами.
+ */
+private fun jitter(i: Int, k: Int): Float {
+    val v = sin(i * 12.9898 + k * 78.233) * 43758.5453
+    return (v - floor(v)).toFloat()
 }
 
 /** Кромки следующих карточек под верхней. */
@@ -497,36 +678,58 @@ fun Modifier.pageSheet(
     if (look.flat) return this.background(tones.paper)
     val m = cardMetrics(look, shape)
     if (look.volume) {
-        val gutter = side != PageSide.SINGLE
         return this
             .background(tones.paper)
             .drawWithCache {
-                // Тень от сгиба ложится на строку у корешка - как в книге. Не
-                // полоса, а плавный уход бумаги в переплёт: густо у самого
-                // сгиба, дальше быстро на нет.
                 val w = size.width
-                val band = (w * 0.14f).coerceIn(28.dp.toPx(), 64.dp.toPx())
-                val fold = if (side == PageSide.LEFT) Brush.horizontalGradient(
-                    0f to Color.Transparent,
-                    0.6f to tones.shadow(0.09f),
-                    0.92f to tones.shadow(0.24f),
-                    1f to tones.shadow(0.34f),
-                    startX = w - band,
-                    endX = w,
-                ) else Brush.horizontalGradient(
-                    0f to tones.shadow(0.34f),
-                    0.08f to tones.shadow(0.24f),
-                    0.4f to tones.shadow(0.09f),
+                val h = size.height
+                val dp = 1.dp.toPx()
+                val gutterLeft = side != PageSide.LEFT     // корешок слева у правой и одиночной
+                // Сгиб двумя ступенями: тёмная щель у самого корешка, крутой
+                // склон, длинный мягкий хвост - и блик там, где бумага снова
+                // выходит на свет. Владелец: «внутри тень, а потом сразу мягче и
+                // градиентом».
+                val band = (w * 0.22f).coerceIn(36f * dp, 80f * dp)
+                val stops = arrayOf(
+                    0f to tones.cast(0.36f),
+                    0.05f to tones.cast(0.22f),
+                    0.16f to tones.cast(0.10f),
+                    0.55f to tones.cast(0.03f),
                     1f to Color.Transparent,
-                    startX = 0f,
-                    endX = band,
                 )
-                val at = if (side == PageSide.LEFT) Offset(w - band, 0f) else Offset.Zero
+                val fold = if (gutterLeft) Brush.horizontalGradient(*stops, startX = 0f, endX = band)
+                else Brush.horizontalGradient(*stops, startX = w, endX = w - band)
+                val foldAt = if (gutterLeft) Offset.Zero else Offset(w - band, 0f)
+                val glowFrom = if (gutterLeft) band * 0.45f else w - band * 0.9f
+                val glow = Brush.horizontalGradient(
+                    0f to Color.Transparent,
+                    0.5f to tones.light(0.07f),
+                    1f to Color.Transparent,
+                    startX = glowFrom,
+                    endX = glowFrom + band * 0.45f,
+                )
+                // Свет сверху: страница чуть светлее у верха, чуть темнее у низа.
+                val fall = Brush.verticalGradient(
+                    0f to tones.light(0.10f),
+                    0.4f to Color.Transparent,
+                    1f to tones.cast(0.05f),
+                )
+                // Верхняя страница возвышается над обрезом: наружу от внешнего
+                // края тень на обрез, а сама кромка листа ловит свет.
+                val outerX = if (gutterLeft) w else 0f
+                val dir = if (gutterLeft) 1f else -1f
+                val castOut = Brush.horizontalGradient(
+                    listOf(tones.cast(0.26f), Color.Transparent),
+                    startX = outerX,
+                    endX = outerX + 3f * dp * dir,
+                )
                 onDrawWithContent {
+                    drawRect(castOut, topLeft = Offset(if (dir > 0) outerX else outerX - 3f * dp, 0f), size = Size(3f * dp, h))
+                    drawRect(fall)
                     drawContent()
-                    if (gutter || side == PageSide.SINGLE) {
-                        drawRect(fold, topLeft = at, size = Size(band, size.height))
-                    }
+                    drawRect(fold, topLeft = foldAt, size = Size(band, h))
+                    drawRect(glow, topLeft = Offset(glowFrom, 0f), size = Size(band * 0.45f, h))
+                    drawRect(tones.light(0.55f), topLeft = Offset(if (gutterLeft) w - 1f else 0f, 0f), size = Size(1f, h))
                 }
             }
             .then(if (look.grain) Modifier.grain(tones.grain) else Modifier)
