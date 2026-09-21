@@ -1,0 +1,9 @@
+Literata © 2018 Google LLC.
+Лицензия: SIL Open Font License 1.1 (https://openfontlicense.org).
+Взято с fonts.google.com/specimen/Literata; начертания Regular, SemiBold (600)
+и Italic, полная кириллица.
+
+Зачем свой шрифт, а не системный: FontFamily.Serif на разных прошивках
+разворачивается в разные гарнитуры (у владельца книжный вид рисовался
+гротеском), и книга выглядела бы по-разному на каждом устройстве. Literata -
+книжная антиква, нарисованная для чтения с экрана.

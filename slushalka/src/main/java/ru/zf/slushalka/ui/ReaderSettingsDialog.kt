@@ -16,14 +16,19 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -71,6 +76,7 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
                 Label("Шрифт")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(
+                        Settings.FONT_BOOK to "Книжный",
                         Settings.FONT_SERIF to "С засечками",
                         Settings.FONT_SANS to "Рубленый",
                         Settings.FONT_MONO to "Машинописный",
@@ -83,7 +89,12 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
                     }
                 }
 
-                Label("Кегль: ${prefs.readerSize}")
+                // Сколько знаков в строке - главная мерка книжного набора.
+                // В книге их 45-55: короче строка - глаз скачет, длиннее -
+                // теряет начало следующей. На телефоне столько выходит только
+                // мелким кеглем, поэтому число показываем, а решает владелец.
+                val perLine = charsPerLine(prefs)
+                Label("Кегль: ${prefs.readerSize}" + (perLine?.let { " · ≈$it знаков в строке" } ?: ""))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { scope.launch { s.setReaderSize(prefs.readerSize - 1) } }) {
                         Text("А−", fontSize = 15.sp)
@@ -91,11 +102,22 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
                     TextButton(onClick = { scope.launch { s.setReaderSize(prefs.readerSize + 1) } }) {
                         Text("А+", fontSize = 21.sp)
                     }
+                    if (perLine != null && perLine !in 44..56) {
+                        // Ширина знака прямо пропорциональна кеглю, значит
+                        // знаков в строке - обратно ему: пересчёт одним
+                        // делением, без подбора.
+                        val bookSize = (prefs.readerSize * perLine / 50f).toInt().coerceIn(10, 40)
+                        TextButton(onClick = { scope.launch { s.setReaderSize(bookSize) } }) {
+                            Text("Как в книге")
+                        }
+                    }
                 }
 
                 Label("Междустрочье")
                 NumberRow(
-                    values = listOf(1.2f, 1.4f, 1.5f, 1.7f, 2.0f),
+                    // 1,32 - книжный интерлиньяж: у антиквы в книге строки
+                    // стоят теснее, чем принято в интерфейсах.
+                    values = listOf(1.2f, 1.32f, 1.45f, 1.6f, 1.8f),
                     selected = prefs.readerLineHeight,
                     format = { it.toString().replace('.', ',') },
                 ) { scope.launch { s.setReaderLineHeight(it) } }
@@ -323,6 +345,37 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
+    labels("Набор")
+    Text(
+        "Книжный набор разом: гарнитура Literata, интерлиньяж 1,32, поля по канону, " +
+            "переносы, висячие строки, капитель и типограф. Каждую мелочь ниже можно " +
+            "включить и выключить по отдельности - чтобы было с чем сравнивать.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(6.dp))
+    FilledTonalButton(onClick = { scope.launch { s.setBookTypography() } }) {
+        Text("Набрать как книгу")
+    }
+    Spacer(Modifier.height(6.dp))
+    Toggle("Книжные поля 2:3:4:6", prefs.readerCanon) { scope.launch { s.setReaderCanon(it) } }
+    Toggle("Без висячих строк", prefs.readerWidows) { scope.launch { s.setReaderWidows(it) } }
+    Toggle("Капитель в начале главы", prefs.readerSmallCaps) { scope.launch { s.setReaderSmallCaps(it) } }
+    Toggle("Типограф: тире и неразрывные", prefs.readerTypograph) { scope.launch { s.setReaderTypograph(it) } }
+    Toggle("Неровности печати", prefs.readerImperfect) { scope.launch { s.setReaderImperfect(it) } }
+    Text(
+        "Поля по канону Ван де Граафа: внутреннее, верхнее, внешнее и нижнее как 2:3:4:6, " +
+            "полоса смещена к корешку и вверх - от этого разворот и читается книгой. " +
+            "Висячие строки: одну строку абзаца внизу или вверху страницы не оставляем. " +
+            "Капитель: первые слова главы прописными пониженного кегля, первый абзац без " +
+            "отступа. Типограф: дефис между пробелами становится тире, после коротких слов " +
+            "неразрывный пробел (длина текста не меняется, места в книге не едут). " +
+            "Неровности: полоса каждой страницы перекошена на доли градуса, базовые линии " +
+            "соседних страниц не совпадают - как в печати.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
     labels("Номер в углу страницы")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Settings.FOOTERS.forEach { id ->
@@ -461,5 +514,47 @@ private fun Toggle(title: String, checked: Boolean, onChange: (Boolean) -> Unit)
     ) {
         Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+
+/**
+ * Сколько знаков помещается в строке при нынешних кегле, шрифте и полях.
+ *
+ * Меряется той же строчной прозой, какой набрана книга: у кириллицы средняя
+ * ширина знака сильно зависит от гарнитуры, и считать по ширине «м» или по
+ * кеглю было бы гаданием. null - когда мерить негде (нет окна).
+ */
+@Composable
+private fun charsPerLine(prefs: Settings.Prefs): Int? {
+    val density = LocalDensity.current
+    val measurer = rememberTextMeasurer()
+    val screen = with(density) { LocalWindowInfo.current.containerSize.width.toDp() }
+    if (screen <= 0.dp) return null
+    return remember(prefs, screen) {
+        val look = PageLook(
+            style = prefs.readerPageStyle,
+            margin = prefs.readerCardMargin.dp,
+            shadow = prefs.readerShadow,
+            bevel = prefs.readerBevel,
+            sheen = prefs.readerSheen,
+            grain = prefs.readerGrain,
+        )
+        val spread = spreadOn(prefs.readerSpread, prefs.readerPaged, screen)
+        val shape = BookShape(10.dp, 0.5f, spread)
+        val card = cardMetrics(look, shape)
+        val halves = if (spread) 2 else 1
+        val chrome = pageChrome(look, card, halves)
+        val margins = pageMargins(prefs.readerMargin, prefs.readerCanon && prefs.readerPaged)
+        val line = screen / halves - chrome.width - margins.width
+        if (line <= 0.dp) return@remember null
+        val sample = "строчная проза средней длины, по ней и меряем ширину знака"
+        val style = TextStyle(
+            fontFamily = fontOf(prefs.readerFont),
+            fontSize = prefs.readerSize.sp,
+        )
+        val width = measurer.measure(sample, style).size.width.toFloat()
+        val per = width / sample.length
+        if (per <= 0f) null else (with(density) { line.toPx() } / per).toInt()
     }
 }

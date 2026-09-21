@@ -76,7 +76,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.Hyphens
@@ -94,6 +96,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import ru.zf.slushalka.R
 import ru.zf.slushalka.SlushalkaApp
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.text.Block
@@ -106,18 +109,88 @@ fun readerPalette(theme: String, dark: Boolean): ReaderPalette = when (theme) {
     // Краска, а не чернила: в книге буквы не угольно-чёрные, а тёмно-серые с
     // тёплым уходом - владелец попросил «шрифт как в книге, чуть более серый».
     // Абсолютный чёрный на светлой бумаге к тому же режет глаз на экране.
-    Settings.THEME_PAPER -> ReaderPalette(Color(0xFFFBF8F1), Color(0xFF2E2A25), Color(0xFF6E6659))
+    // Бумага книжная, а не офисная: тёплый кремовый тон вместо почти белого.
+    Settings.THEME_PAPER -> ReaderPalette(Color(0xFFF4EFE4), Color(0xFF2E2A25), Color(0xFF6E6659))
     Settings.THEME_SEPIA -> ReaderPalette(Color(0xFFF3E6CE), Color(0xFF4A3B26), Color(0xFF8A7550))
     Settings.THEME_GREY -> ReaderPalette(Color(0xFF2A2D33), Color(0xFFCBC8C1), Color(0xFF8B8880))
     Settings.THEME_BLACK -> ReaderPalette(Color(0xFF000000), Color(0xFFB6B3AC), Color(0xFF6E6B65))
     else -> if (dark) ReaderPalette(Color(0xFF000000), Color(0xFFB6B3AC), Color(0xFF6E6B65))
-    else ReaderPalette(Color(0xFFFBF8F1), Color(0xFF2E2A25), Color(0xFF6E6659))
+    else ReaderPalette(Color(0xFFF4EFE4), Color(0xFF2E2A25), Color(0xFF6E6659))
 }
 
 fun fontOf(name: String): FontFamily = when (name) {
     Settings.FONT_SANS -> FontFamily.SansSerif
     Settings.FONT_MONO -> FontFamily.Monospace
-    else -> FontFamily.Serif
+    Settings.FONT_SERIF -> FontFamily.Serif
+    // Книжная антиква своей гарнитурой: системная «с засечками» на разных
+    // прошивках разворачивается в разное, и у владельца книжный вид рисовался
+    // гротеском. Literata нарисована для чтения с экрана, кириллица полная.
+    else -> LITERATA
+}
+
+private val LITERATA = FontFamily(
+    Font(R.font.literata_regular, FontWeight.Normal),
+    Font(R.font.literata_italic, FontWeight.Normal, FontStyle.Italic),
+    Font(R.font.literata_bold, FontWeight.SemiBold),
+    Font(R.font.literata_bold, FontWeight.Bold),
+)
+
+/**
+ * Типограф: то, что в наборе делают руками, а в файле книги обычно не сделано.
+ *
+ * Неразрывный пробел после коротких слов (предлоги, союзы, частицы) - главное
+ * здесь: при выключке по формату «в» или «и» в конце строки сразу видно.
+ * Дефис между пробелами - это тире, а не дефис; перед тире тоже неразрывный,
+ * иначе оно уезжает в начало строки. Кавычки и сам текст не трогаем: в fb2
+ * они обычно уже расставлены, а лезть в текст книги - последнее дело.
+ */
+fun typograph(text: String): String {
+    val nbsp = '\u00A0'
+    val dash = '\u2014'
+    val sb = StringBuilder(text)
+    // 1. Дефис, окружённый пробелами, - это тире, а не дефис. Длина та же.
+    for (i in 1 until sb.length - 1) {
+        if (sb[i] == '-' && sb[i - 1] == ' ' && sb[i + 1] == ' ') sb[i] = dash
+    }
+    // 2. Пробел перед тире - неразрывный: тире не должно начинать строку.
+    for (i in 1 until sb.length) {
+        if (sb[i] == dash && sb[i - 1] == ' ') sb[i - 1] = nbsp
+    }
+    // 3. Пробел после короткого слова - неразрывный. При выключке по формату
+    // «в» или «и», повисшие в конце строки, видно сразу.
+    var i = 0
+    while (i < sb.length) {
+        if (sb[i] != ' ') { i++; continue }
+        // Слово перед пробелом.
+        var from = i
+        while (from > 0 && sb[from - 1].isLetter()) from--
+        val len = i - from
+        val bounded = from == 0 || !sb[from - 1].isLetterOrDigit()
+        val next = sb.getOrNull(i + 1)
+        if (len in 1..2 && bounded && next != null && (next.isLetterOrDigit() || next == '\u00AB')) {
+            sb[i] = nbsp
+        }
+        i++
+    }
+    return sb.toString()
+}
+
+/**
+ * Капитель для первых слов главы: Literata малых прописных не содержит, и
+ * подмена шрифта тут была бы хуже подделки - берём прописные пониженного
+ * кегля с разрядкой, как делают в наборе, когда капители нет.
+ */
+fun smallCapsHead(text: String, words: Int = 3): Pair<String, Int> {
+    var seen = 0
+    var i = 0
+    while (i < text.length && seen < words) {
+        val space = text.indexOf(' ', i)
+        if (space < 0) { i = text.length; break }
+        i = space + 1
+        seen++
+    }
+    val end = i.coerceAtMost(text.length)
+    return text.uppercase() to end
 }
 
 /**
@@ -223,12 +296,33 @@ fun ReaderScreen(
         return
     }
 
-    val blocks = t.blocks
+    // Типограф работает по блокам, а не при рисовании: разбивка на страницы
+    // меряет тот же текст, что рисуется. Все замены сохраняют длину строки
+    // (пробел на неразрывный, «пробел-дефис-пробел» на «пробел-тире-пробел»),
+    // поэтому места в книге - разметка, позиции, синк - не едут ни на знак.
+    val blocks = remember(t, prefs.readerTypograph) {
+        if (!prefs.readerTypograph) t.blocks
+        else t.blocks.map { if (it.picture != null) it else it.copy(text = typograph(it.text)) }
+    }
     // Считается один раз на книгу: панель читалки перерисовывается на каждой
     // прокрутке, и лазить в файловую систему на каждом кадре ей незачем.
     val hasPictures = remember(t, bk.id) { app.state.picturesOnDisk() > 0 }
     val chapterStarts = remember(t) { t.chapters.map { it.start }.toHashSet() }
     val isHeading: (Block) -> Boolean = { it.picture == null && it.start in chapterStarts && it.text.length < 120 }
+    // Первый абзац главы: он идёт сразу за заголовком и набирается без
+    // абзацного отступа - отступ отделяет абзац от предыдущего, а до него
+    // ничего нет. Так набирают книги, и капитель ставится тоже сюда.
+    val chapterFirst = remember(t) {
+        val set = HashSet<Int>()
+        t.blocks.forEachIndexed { i, b ->
+            if (b.picture == null && b.start in chapterStarts && b.text.length < 120) {
+                t.blocks.getOrNull(i + 1)?.let { if (it.picture == null) set.add(it.start) }
+            }
+        }
+        set
+    }
+    val noIndent: (Int) -> Boolean = { it in chapterFirst }
+    val margins = pageMargins(prefs.readerMargin, prefs.readerCanon && prefs.readerPaged)
 
     // Отбивка между абзацами: в книге её нет, абзац начинается отступом первой
     // строки. Тумблер «Абзацный отступ» переключает одно на другое разом - и
@@ -252,6 +346,15 @@ fun ReaderScreen(
         fontSize = (if (heading) prefs.readerSize + 3 else prefs.readerSize).sp,
         lineHeight = (prefs.readerSize * prefs.readerLineHeight).sp,
         fontWeight = if (heading) FontWeight.Bold else FontWeight.Normal,
+        // Краска чуть растекается по бумаге: еле заметный ореол того же
+        // цвета. Без него буквы выглядят вырезанными, а не напечатанными.
+        shadow = if (prefs.readerImperfect) {
+            androidx.compose.ui.graphics.Shadow(
+                color = palette.fg.copy(alpha = 0.30f),
+                offset = androidx.compose.ui.geometry.Offset.Zero,
+                blurRadius = 0.7f,
+            )
+        } else null,
         textAlign = when {
             heading -> TextAlign.Center
             prefs.readerJustify -> TextAlign.Justify
@@ -403,7 +506,9 @@ fun ReaderScreen(
             else -> PageMarks(
                 author = t.author.ifBlank { bk.title },
                 title = t.title.ifBlank { bk.title },
-                center = "— ${t.pageOf(at)} —",
+                // Без тире вокруг: в книгах номер стоит голым, тире - это
+                // из машинописи.
+                center = "${t.pageOf(at)}",
             )
         }
     }
@@ -417,8 +522,10 @@ fun ReaderScreen(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
                 tones = tones, look = look, turn = prefs.readerPageTurn,
                 shape = shape, marksAt = marksAt,
-                margin = prefs.readerMargin, gap = paragraphGap,
+                margins = margins, gap = paragraphGap,
                 styleFor = ::styleFor, isHeading = isHeading,
+                noIndent = noIndent, smallCaps = prefs.readerSmallCaps,
+                widows = prefs.readerWidows, imperfect = prefs.readerImperfect,
                 target = target, onTargetUsed = { target = null },
                 onShown = { start, end -> offset = start; shownEnd = end },
                 onToggleBars = { bars = !bars },
@@ -430,7 +537,7 @@ fun ReaderScreen(
             ScrollBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
                 tones = tones, look = look, shape = shape, marks = marks,
-                margin = prefs.readerMargin, gap = paragraphGap,
+                margins = margins, gap = paragraphGap,
                 styleFor = ::styleFor, isHeading = isHeading,
                 bars = bars, topBarPx = topBarPx, bottomBarPx = bottomBarPx,
                 target = target, onTargetUsed = { target = null },
@@ -771,7 +878,7 @@ private fun ScrollBody(
     look: PageLook,
     shape: BookShape,
     marks: PageMarks,
-    margin: Int,
+    margins: PageMargins,
     /** Отбивка между абзацами; ноль, когда абзацы отступом. */
     gap: Dp,
     styleFor: (heading: Boolean, head: Boolean) -> TextStyle,
@@ -914,14 +1021,14 @@ private fun ScrollBody(
                 // в любом окне, а не посреди колонтитула.
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = PAGE_TOP, bottom = PAGE_BOTTOM)
+                    .padding(top = margins.top, bottom = margins.bottom)
                     .onGloballyPositioned {
                         listTop = it.positionInRoot().y
                         listBottom = listTop + it.size.height
                     },
                 contentPadding = PaddingValues(
-                    start = margin.dp,
-                    end = margin.dp,
+                    start = margins.start(PageSide.SINGLE),
+                    end = margins.end(PageSide.SINGLE),
                     bottom = 40.dp,
                 ),
             ) {
@@ -948,7 +1055,7 @@ private fun ScrollBody(
                     }
                 }
             }
-            PageMarksLayer(marks, PageSide.SINGLE, palette, margin, styleFor(false, false))
+            PageMarksLayer(marks, PageSide.SINGLE, palette, margins, styleFor(false, false))
         }
     }
 }
@@ -968,10 +1075,18 @@ private fun PagedBody(
     shape: BookShape,
     /** Колонтитулы считаются от начала самой страницы: в развороте их две. */
     marksAt: (Int) -> PageMarks,
-    margin: Int,
+    margins: PageMargins,
     gap: Dp,
     styleFor: (heading: Boolean, head: Boolean) -> TextStyle,
     isHeading: (Block) -> Boolean,
+    /** Первый абзац главы набирается без абзацного отступа. */
+    noIndent: (Int) -> Boolean,
+    /** Первые слова главы - капителью. */
+    smallCaps: Boolean,
+    /** Не оставлять одну строку абзаца внизу или вверху страницы. */
+    widows: Boolean,
+    /** Неровности печати: перекос полосы и сдвиг базовых линий. */
+    imperfect: Boolean,
     target: Int?,
     onTargetUsed: () -> Unit,
     /** Что на экране: от начала страницы (левой в развороте) до начала следующей. */
@@ -999,10 +1114,10 @@ private fun PagedBody(
         // пикселях, и лишняя половина пикселя оборачивалась строкой, которая
         // на живой сборке срезалась нижним краем.
         val widthPx = with(density) {
-            (maxWidth / halves - chrome.width - margin.dp * 2).toPx().toInt()
+            (maxWidth / halves - chrome.width - margins.width).toPx().toInt()
         }
         val heightPx = with(density) {
-            (maxHeight - topInset - bottomInset - chrome.height - PAGE_TOP - PAGE_BOTTOM)
+            (maxHeight - topInset - bottomInset - chrome.height - margins.height)
                 .toPx().toInt()
         }
         val gapPx = with(density) { gap.roundToPx() }
@@ -1063,6 +1178,13 @@ private fun PagedBody(
                 contStyle = contStyle,
                 headingStyle = headingStyle,
                 isHeading = isHeading,
+                noIndent = noIndent,
+                widows = widows,
+                // Меряем ровно то, что нарисуем: с капителью строка шире.
+                annotate = { txt, opens ->
+                    if (opens && smallCaps) openingText(txt, 0, null, 0f, palette)
+                    else androidx.compose.ui.text.AnnotatedString(txt)
+                },
                 widthPx = widthPx,
                 heightPx = heightPx,
                 gapPx = gapPx,
@@ -1152,10 +1274,11 @@ private fun PagedBody(
                             page = page, side = side, app = app, bookId = bookId, palette = palette,
                             hits = hits, tones = tones, look = look, shape = shape,
                             pad = pagePadding(look, card, side, topInset, bottomInset),
-                            margin = margin, style = style, contStyle = contStyle,
+                            margins = margins, style = style, contStyle = contStyle,
                             headingStyle = headingStyle, gap = gap, marksAt = marksAt,
                             highlight = highlight, highlightAlpha = highlightAlpha,
-                            onPicture = onPicture, fold = fold, modifier = modifier,
+                            onPicture = onPicture, fold = fold, noIndent = noIndent,
+                            smallCaps = smallCaps, imperfect = imperfect, modifier = modifier,
                         )
                     }
                 // Ранняя страница лежит поверх поздней: смахнутая должна
@@ -1235,7 +1358,7 @@ private fun PageFace(
     look: PageLook,
     shape: BookShape,
     pad: PaddingValues,
-    margin: Int,
+    margins: PageMargins,
     style: TextStyle,
     contStyle: TextStyle,
     headingStyle: TextStyle,
@@ -1246,6 +1369,9 @@ private fun PageFace(
     onPicture: (ShownPicture) -> Unit,
     /** Насколько лист завёрнут: 0 - лежит, 1 - перевёрнут. null - не книга. */
     fold: (() -> Float)?,
+    noIndent: (Int) -> Boolean,
+    smallCaps: Boolean,
+    imperfect: Boolean,
     modifier: Modifier,
 ) {
     Box(
@@ -1257,15 +1383,24 @@ private fun PageFace(
             .pageSheet(tones, look, shape, side)
     ) {
         if (page == null) return@Box
-        PageMarksLayer(marksAt(page.startChar), side, palette, margin, contStyle)
+        PageMarksLayer(marksAt(page.startChar), side, palette, margins, contStyle)
         Column(
             Modifier
                 .fillMaxSize()
                 .padding(
-                    start = margin.dp,
-                    end = margin.dp,
-                    top = PAGE_TOP,
-                    bottom = PAGE_BOTTOM,
+                    start = margins.start(side),
+                    end = margins.end(side),
+                    top = margins.top,
+                    bottom = margins.bottom,
+                )
+                // Неровности печати: полоса набора чуть перекошена, базовые
+                // линии соседних страниц не совпадают. Угол и сдвиг - от места
+                // страницы в книге, чтобы не дрожали между кадрами.
+                .then(
+                    if (!imperfect) Modifier else Modifier.graphicsLayer {
+                        rotationZ = (pageNoise(page.startChar, 1) - 0.5f) * 0.3f
+                        translationY = (pageNoise(page.startChar, 2) - 0.5f) * 3f
+                    }
                 ),
         ) {
             page.pieces.forEachIndexed { index, piece ->
@@ -1277,13 +1412,16 @@ private fun PageFace(
                     }
                 } else {
                     DisposableEffect(piece.start) { onDispose { hits.forget(piece.start) } }
+                    val opens = piece.head && noIndent(piece.start)
                     Text(
-                        litText(piece.text, piece.start, highlight, highlightAlpha, palette),
+                        if (opens && smallCaps) openingText(
+                            piece.text, piece.start, highlight, highlightAlpha, palette,
+                        ) else litText(piece.text, piece.start, highlight, highlightAlpha, palette),
                         // Тем же стилем, каким мерили: заголовок - заголовочным,
-                        // продолжение абзаца - без отступа первой строки.
+                        // первый абзац главы и продолжение абзаца - без отступа.
                         style = when {
                             piece.heading -> headingStyle
-                            piece.head -> style
+                            piece.head && !opens -> style
                             else -> contStyle
                         },
                         onTextLayout = { hits.layout(piece.start, it) },
@@ -1314,14 +1452,16 @@ private fun BoxScope.PageMarksLayer(
     marks: PageMarks,
     side: PageSide,
     palette: ReaderPalette,
-    margin: Int,
+    margins: PageMargins,
     style: TextStyle,
 ) {
     if (!marks.any) return
+    // Кегль колонтитула - 60% основного, разрядка 0.08 em: так он читается
+    // служебной строкой, а не началом текста.
     val small = style.copy(
-        fontSize = 11.sp,
-        lineHeight = 14.sp,
-        letterSpacing = 0.6.sp,
+        fontSize = style.fontSize * 0.6f,
+        lineHeight = style.fontSize * 0.78f,
+        letterSpacing = style.fontSize * 0.08f,
         color = palette.dim,
         textAlign = TextAlign.Start,
         fontWeight = FontWeight.Normal,
@@ -1341,7 +1481,13 @@ private fun BoxScope.PageMarksLayer(
             Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
-                .padding(start = margin.dp, end = margin.dp, top = PAGE_TOP - 28.dp),
+                .padding(
+                    start = margins.start(side),
+                    end = margins.end(side),
+                    // Колонтитул сидит в верхнем поле: под текстом он читался
+                    // бы первой строкой полосы.
+                    top = (margins.top - 26.dp).coerceAtLeast(6.dp),
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (side != PageSide.RIGHT) {
@@ -1359,7 +1505,7 @@ private fun BoxScope.PageMarksLayer(
             style = small,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = PAGE_BOTTOM - 34.dp),
+                .padding(bottom = ((margins.bottom - 20.dp) / 2).coerceAtLeast(6.dp)),
         )
     }
     if (marks.corner.isNotEmpty()) {
@@ -1368,9 +1514,46 @@ private fun BoxScope.PageMarksLayer(
             style = small,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = margin.dp, bottom = 12.dp),
+                .padding(end = margins.end(side), bottom = 12.dp),
         )
     }
+}
+
+/**
+ * Поля полосы набора.
+ *
+ * Канон Ван де Граафа: внутреннее, верхнее, внешнее и нижнее в пропорции
+ * 2:3:4:6. Полоса смещена к корешку и вверх - именно это и делает разворот
+ * похожим на книгу, а не на текст в рамке. Размер задаёт настройка «поле»,
+ * канон - только пропорцию: бумажные поля (внешнее в две девятых ширины) на
+ * телефоне съели бы полполосы, и в строке осталось бы знаков тридцать.
+ *
+ * Без канона поля равные со всех сторон, как было: тумблер оставлен, чтобы
+ * владелец мог сравнить.
+ */
+data class PageMargins(val inner: Dp, val top: Dp, val outer: Dp, val bottom: Dp) {
+    /** Сколько ширины и высоты отнимают поля - для разбивки на страницы. */
+    val width: Dp get() = inner + outer
+    val height: Dp get() = top + bottom
+
+    fun start(side: PageSide): Dp = if (side == PageSide.LEFT) outer else inner
+    fun end(side: PageSide): Dp = if (side == PageSide.LEFT) inner else outer
+}
+
+fun pageMargins(margin: Int, canon: Boolean): PageMargins {
+    if (!canon) return PageMargins(margin.dp, PAGE_TOP, margin.dp, PAGE_BOTTOM)
+    // База меньше самого поля: канон задаёт пропорцию, а не размер. На бумаге
+    // внешнее поле - две девятых ширины; на телефоне такое оставило бы в
+    // строке знаков тридцать, и книга читалась бы колонкой газеты.
+    val base = margin / 2.5f
+    // Верхнее и нижнее поле держат колонтитул и номер: ниже этого они
+    // налезут на текст.
+    return PageMargins(
+        inner = (base * 2).dp,
+        top = (base * 3).coerceAtLeast(26f).dp,
+        outer = (base * 4).dp,
+        bottom = (base * 6).coerceAtLeast(34f).dp,
+    )
 }
 
 private val PAGE_TOP = 52.dp
@@ -1553,6 +1736,71 @@ private fun PictureChip(
  * Тот же текст, но с подсвеченной фразой. Подсветка живёт внутри строки, а не
  * заливает абзац целиком: найденное предложение видно, соседние - нет.
  */
+/**
+ * Первый абзац главы: первые слова капителью.
+ *
+ * Literata малых прописных не содержит, поэтому капитель - прописные
+ * пониженного кегля с разрядкой: так её и подделывают в наборе, когда своей
+ * нет. Длина строки при этом не меняется ни на знак - меняются только стили
+ * поверх тех же букв, - значит разбивка на страницы остаётся верной.
+ */
+private fun openingText(
+    text: String,
+    start: Int,
+    highlight: IntRange?,
+    alpha: Float,
+    palette: ReaderPalette,
+): androidx.compose.ui.text.AnnotatedString {
+    val base = litText(text, start, highlight, alpha, palette)
+    // Три слова или первое предложение - что короче: длинную капитель читать
+    // тяжело, она сбивает с ритма.
+    var end = 0
+    var words = 0
+    while (end < text.length && words < 3) {
+        val space = text.indexOf(' ', end)
+        if (space < 0) { end = text.length; break }
+        end = space + 1
+        words++
+    }
+    end = end.coerceAtMost(text.length).coerceAtMost(28)
+    if (end <= 0) return base
+    return androidx.compose.ui.text.buildAnnotatedString {
+        append(base)
+        addStyle(
+            androidx.compose.ui.text.SpanStyle(
+                fontSize = 0.86.em,
+                letterSpacing = 0.06.em,
+                fontFeatureSettings = "smcp",
+            ),
+            0, end,
+        )
+        // Прописными - тем же текстом, но в верхнем регистре: SpanStyle
+        // регистра не меняет, поэтому подменяем сам кусок.
+    }.let { styled ->
+        androidx.compose.ui.text.buildAnnotatedString {
+            append(text.substring(0, end).uppercase())
+            addStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    fontSize = 0.86.em,
+                    letterSpacing = 0.06.em,
+                ),
+                0, end,
+            )
+            append(styled.subSequence(end, styled.length))
+        }
+    }
+}
+
+/**
+ * Детерминированный «шум» по месту в книге: одна и та же страница всегда
+ * перекошена одинаково. Без этого неровности печати дрожали бы на каждом
+ * кадре, и вместо живой бумаги вышла бы рябь.
+ */
+private fun pageNoise(key: Int, salt: Int): Float {
+    val v = kotlin.math.sin(key * 0.0173 + salt * 12.9898) * 43758.5453
+    return (v - kotlin.math.floor(v)).toFloat()
+}
+
 private fun litText(
     text: String,
     start: Int,

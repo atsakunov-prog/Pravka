@@ -295,12 +295,14 @@ fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.styl
         deckStep = 0.dp,
         deckInset = 0.dp,
         rims = 0,
-        cover = 10.dp,
+        // Кант, корешок и обрез отнимают ширину у текста, поэтому они ровно
+        // такие, чтобы читаться книгой, и ни точкой больше.
+        cover = 9.dp,
         // На одной странице корешок - настоящая полоса с плетением, в
         // развороте от него видна только щель сгиба.
-        spine = if (shape.spread) 2.dp else 13.dp,
+        spine = if (shape.spread) 2.dp else 11.dp,
         reveal = 3.dp,
-        cut = 16.dp,
+        cut = 14.dp,
     )
 
     Settings.PAGE_SOFT -> CardMetrics(
@@ -504,8 +506,10 @@ private fun DrawScope.drawVolume(
             val k = i / layers.toFloat()
             val grow = 1.8f * dp * i * depth
             val drop = 1.3f * dp * i * depth
+            // Свет под 145 градусами, значит тень уходит вправо и вниз.
+            val side = drop * 0.7f
             drawPath(
-                wornPath(-grow, -grow * 0.35f + drop, w + grow * 2f, h + grow * 1.35f, radii.map { it + grow * 0.4f }.toFloatArray()),
+                wornPath(-grow + side, -grow * 0.35f + drop, w + grow * 2f, h + grow * 1.35f, radii.map { it + grow * 0.4f }.toFloatArray()),
                 tones.cast((0.04f * (1f - k) * (1f - k) + 0.004f) * depth.coerceAtMost(1.2f)),
             )
         }
@@ -842,11 +846,15 @@ fun Modifier.pageSheet(
                     startX = glowFrom,
                     endX = glowFrom + band * 0.45f,
                 )
-                // Свет сверху: страница чуть светлее у верха, чуть темнее у низа.
-                val fall = Brush.verticalGradient(
-                    0f to tones.light(0.10f),
-                    0.4f to Color.Transparent,
+                // Свет из верхнего левого угла, примерно под 145 градусами:
+                // ровно вертикальный градиент читается заливкой, косой - светом
+                // от окна. Амплитуда мала нарочно, на грани заметности.
+                val fall = Brush.linearGradient(
+                    0f to tones.light(0.09f),
+                    0.45f to Color.Transparent,
                     1f to tones.cast(0.05f),
+                    start = Offset.Zero,
+                    end = Offset(w, h),
                 )
                 // Верхняя страница возвышается над обрезом: наружу от внешнего
                 // края тень на обрез, а сама кромка листа ловит свет.

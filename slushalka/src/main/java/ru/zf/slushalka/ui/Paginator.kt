@@ -48,6 +48,16 @@ object Paginator {
         contStyle: TextStyle,
         headingStyle: TextStyle,
         isHeading: (Block) -> Boolean,
+        /** Первый абзац главы: набирается без абзацного отступа. */
+        noIndent: (Int) -> Boolean = { false },
+        /** Не оставлять одну строку абзаца внизу или вверху страницы. */
+        widows: Boolean = false,
+        /**
+         * Как кусок будет выглядеть на странице. Нужна из-за капители: первые
+         * слова главы набираются прописными, а они шире строчных, и мерить
+         * простой строкой значило бы промахнуться на строку.
+         */
+        annotate: (text: String, opens: Boolean) -> AnnotatedString = { t, _ -> AnnotatedString(t) },
         widthPx: Int,
         heightPx: Int,
         gapPx: Int,
@@ -90,10 +100,11 @@ object Paginator {
                 // Продолжение абзаца меряется без отступа первой строки: он
                 // есть только у настоящего начала, иначе разбивка и рисунок
                 // разошлись бы на ширину отступа.
-                val st = if (heading) headingStyle else if (head) style else contStyle
+                val opens = head && noIndent(block.start)
+                val st = if (heading) headingStyle else if (head && !opens) style else contStyle
                 val remaining = heightPx - used
                 val layout = measurer.measure(
-                    AnnotatedString(text),
+                    annotate(text, opens),
                     st,
                     constraints = Constraints(maxWidth = widthPx),
                 )
@@ -106,6 +117,22 @@ object Paginator {
                 var last = -1
                 for (line in 0 until layout.lineCount) {
                     if (layout.getLineBottom(line) <= remaining) last = line else break
+                }
+                // Висячие строки. Одна строка абзаца внизу страницы (сирота) и
+                // одна вверху следующей (вдова) - то, за что в типографии бьют
+                // по рукам: глаз цепляется за обрывок, а не за текст.
+                if (widows && last >= 0 && pieces.isNotEmpty()) {
+                    val left = layout.lineCount - (last + 1)
+                    if (head && last == 0) {
+                        // Абзац только начался - уносим его целиком.
+                        flush()
+                        continue
+                    }
+                    if (left == 1 && last >= 1) last--
+                    if (last < 0) {
+                        flush()
+                        continue
+                    }
                 }
                 if (last < 0) {
                     // Ни одной строки не влезло. На пустой странице это значит,
@@ -128,7 +155,7 @@ object Paginator {
                 var end = layout.getLineEnd(cut, visibleEnd = true).coerceIn(1, text.length)
                 while (cut > 0) {
                     val fit = measurer.measure(
-                        AnnotatedString(text.substring(0, end)),
+                        annotate(text.substring(0, end), opens),
                         st,
                         constraints = Constraints(maxWidth = widthPx),
                     )

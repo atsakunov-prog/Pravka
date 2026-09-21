@@ -52,7 +52,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val recapAfterHours: Int = 8,
         val skipSilence: Boolean = false,
         // Читалка.
-        val readerFont: String = FONT_SERIF,
+        val readerFont: String = FONT_BOOK,
         val readerSize: Int = 19,
         val readerLineHeight: Float = 1.5f,
         val readerMargin: Int = 20,
@@ -82,6 +82,21 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerFooter: String = FOOTER_BOOK,
         /** Переносы: без них выключка по ширине рвёт строку дырами. */
         val readerHyphens: Boolean = true,
+        /**
+         * Книжные поля: внутреннее, верхнее, внешнее и нижнее в пропорции
+         * 2:3:4:6, как в каноне Ван де Граафа. Размер задаёт «поле от края»,
+         * канон - только пропорцию: у бумажного разворота поля вдвое больше,
+         * и на экране такие съели бы полполосы.
+         */
+        val readerCanon: Boolean = true,
+        /** Не оставлять одну строку абзаца внизу или вверху страницы. */
+        val readerWidows: Boolean = true,
+        /** Первые слова главы капителью, первый абзац без отступа. */
+        val readerSmallCaps: Boolean = true,
+        /** Типограф: тире, неразрывные пробелы после коротких слов. */
+        val readerTypograph: Boolean = true,
+        /** Неровности печати: перекос полосы и сдвиг базовых линий. */
+        val readerImperfect: Boolean = true,
         /** Абзацы отступом первой строки, как в книге, а не отбивкой между ними. */
         val readerIndent: Boolean = true,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
@@ -144,7 +159,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 syncPositions = p[KEY_SYNC] ?: true,
                 recapAfterHours = p[KEY_RECAP_H] ?: 8,
                 skipSilence = p[KEY_SKIP_SILENCE] ?: false,
-                readerFont = p[KEY_R_FONT] ?: FONT_SERIF,
+                readerFont = p[KEY_R_FONT] ?: FONT_BOOK,
                 readerSize = p[KEY_R_SIZE] ?: 19,
                 readerLineHeight = p[KEY_R_LINE] ?: 1.5f,
                 readerMargin = p[KEY_R_MARGIN] ?: 20,
@@ -163,6 +178,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerTable = p[KEY_R_TABLE]?.takeIf { it in TABLES } ?: TABLE_MID,
                 readerFooter = p[KEY_R_FOOTER]?.takeIf { it in FOOTERS } ?: FOOTER_BOOK,
                 readerHyphens = p[KEY_R_HYPHENS] ?: true,
+                readerCanon = p[KEY_R_CANON] ?: true,
+                readerWidows = p[KEY_R_WIDOWS] ?: true,
+                readerSmallCaps = p[KEY_R_SMALLCAPS] ?: true,
+                readerTypograph = p[KEY_R_TYPOGRAPH] ?: true,
+                readerImperfect = p[KEY_R_IMPERFECT] ?: true,
                 readerIndent = p[KEY_R_INDENT] ?: true,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
@@ -234,6 +254,31 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderTable(v: Float) = edit { if (v in TABLES) it[KEY_R_TABLE] = v }
     suspend fun setReaderFooter(v: String) = edit { if (v in FOOTERS) it[KEY_R_FOOTER] = v }
     suspend fun setReaderHyphens(v: Boolean) = edit { it[KEY_R_HYPHENS] = v }
+    suspend fun setReaderCanon(v: Boolean) = edit { it[KEY_R_CANON] = v }
+    suspend fun setReaderWidows(v: Boolean) = edit { it[KEY_R_WIDOWS] = v }
+    suspend fun setReaderSmallCaps(v: Boolean) = edit { it[KEY_R_SMALLCAPS] = v }
+    suspend fun setReaderTypograph(v: Boolean) = edit { it[KEY_R_TYPOGRAPH] = v }
+    suspend fun setReaderImperfect(v: Boolean) = edit { it[KEY_R_IMPERFECT] = v }
+
+    /**
+     * Книжный набор одним нажатием: гарнитура, интерлиньяж, поля и все
+     * тонкости разом. Настройки эти живут порознь нарочно - владелец хочет
+     * сравнивать, - но выставлять их по одной ради «как в книге» утомительно.
+     */
+    suspend fun setBookTypography() = edit {
+        it[KEY_R_FONT] = FONT_BOOK
+        it[KEY_R_LINE] = 1.32f
+        it[KEY_R_MARGIN] = 20
+        it[KEY_R_HYPHENS] = true
+        it[KEY_R_INDENT] = true
+        it[KEY_R_CANON] = true
+        it[KEY_R_WIDOWS] = true
+        it[KEY_R_SMALLCAPS] = true
+        it[KEY_R_TYPOGRAPH] = true
+        it[KEY_R_IMPERFECT] = true
+        it[KEY_R_FOOTER] = FOOTER_BOOK
+        it[KEY_R_PAGE_STYLE] = PAGE_VOLUME
+    }
     suspend fun setReaderIndent(v: Boolean) = edit { it[KEY_R_INDENT] = v }
     suspend fun setUiScale(v: Float) = edit { if (v in UI_SCALES) it[KEY_UI_SCALE] = v }
     suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
@@ -292,6 +337,13 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         /** Адрес каталога Флибусты. Ленты OPDS лежат под `/opds`. */
         const val DEFAULT_FLIBUSTA_URL = "https://flibusta.is"
 
+        /**
+         * Книжный - Literata, своя гарнитура в ресурсах. Системный «с
+         * засечками» на разных прошивках разворачивается в разную гарнитуру
+         * (у владельца книжный вид рисовался гротеском), а книга должна
+         * выглядеть одинаково везде.
+         */
+        const val FONT_BOOK = "book"
         const val FONT_SERIF = "serif"
         const val FONT_SANS = "sans"
         const val FONT_MONO = "mono"
@@ -434,6 +486,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_TABLE = floatPreferencesKey("reader_table")
         private val KEY_R_FOOTER = stringPreferencesKey("reader_footer")
         private val KEY_R_HYPHENS = booleanPreferencesKey("reader_hyphens")
+        private val KEY_R_CANON = booleanPreferencesKey("reader_canon")
+        private val KEY_R_WIDOWS = booleanPreferencesKey("reader_widows")
+        private val KEY_R_SMALLCAPS = booleanPreferencesKey("reader_smallcaps")
+        private val KEY_R_TYPOGRAPH = booleanPreferencesKey("reader_typograph")
+        private val KEY_R_IMPERFECT = booleanPreferencesKey("reader_imperfect")
         private val KEY_R_INDENT = booleanPreferencesKey("reader_indent")
         private val KEY_UI_SCALE = floatPreferencesKey("ui_scale")
         private val KEY_UPD_URL = stringPreferencesKey("update_url")

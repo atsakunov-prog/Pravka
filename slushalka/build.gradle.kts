@@ -93,4 +93,7 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.core)
+    // Только для проверок на машине: в APK не попадает. Нужен типографу -
+    // у него есть свойство, которое нельзя сломать молча (длина текста).
+    testImplementation("junit:junit:4.13.2")
 }
