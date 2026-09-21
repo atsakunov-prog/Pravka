@@ -313,11 +313,12 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
     Spacer(Modifier.height(6.dp))
     Toggle("Фаска по кромке", prefs.readerBevel) { scope.launch { s.setReaderBevel(it) } }
     Toggle("Блик и затенение", prefs.readerSheen) { scope.launch { s.setReaderSheen(it) } }
-    Toggle("Зерно", prefs.readerGrain) { scope.launch { s.setReaderGrain(it) } }
+    Toggle("Матовость: зерно и волокна", prefs.readerGrain) { scope.launch { s.setReaderGrain(it) } }
     Text(
         "Три слоя объёма, каждый сам по себе: светлая линия сверху и тёмная снизу, блик по " +
-            "верхней трети с затенением по нижней пятой, и шум поверх заливки, но под текстом. " +
-            "Те же слои, что у диска и плашек Правки.",
+            "верхней трети с затенением по нижней пятой, и матовость - мелкое зерно в тон " +
+            "поверхности, как иней на стекле диска Правки, плюс те же точки крупнее и размытые, " +
+            "волокнами. Матовы бумага, стол и картон переплёта; под текстом, а не поверх него.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

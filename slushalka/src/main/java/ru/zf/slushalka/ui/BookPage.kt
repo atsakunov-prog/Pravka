@@ -6,9 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
@@ -25,6 +23,7 @@ import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -120,9 +119,20 @@ class PaperTones(val paper: Color, val tableDark: Float = Settings.TABLE_MID) {
     val foot: Float = if (oled) 0f else if (dark) 0.10f else 0.05f
     val rimLight: Float = if (oled) 0.10f else if (dark) 0.14f else 0.55f
     val rimShade: Float = if (dark) 0.22f else 0.10f
-    /** Зерно по странице - вдвое слабее, чем по столу: под буквами оно мешает. */
-    val grain: Float = if (oled) 0f else if (dark) 0.025f else 0.018f
-    val tableGrain: Float = if (dark) 0.05f else 0.035f
+
+    /**
+     * Матовость - как иней на стекле диска Правки (`DiskLook.frostAlpha`, до
+     * 0.14), владелец попросил «такую же матовость внутри книги и на столе».
+     * Два слоя (см. [matte]): мелкое зерно и волокна. По бумаге слабее, чем по
+     * столу и картону: под буквами шероховатость мешает читать. На настоящем
+     * чёрном ничего: любой засвет зажигает OLED-страницу целиком.
+     */
+    val paperFine: Float = if (oled) 0f else if (dark) 0.14f else 0.16f
+    val paperFibers: Float = if (oled) 0f else if (dark) 0.06f else 0.07f
+    val tableFine: Float = if (dark) 0.16f else 0.20f
+    val tableFibers: Float = if (dark) 0.08f else 0.11f
+    val coverFine: Float = 0.18f
+    val coverFibers: Float = 0.08f
 
     fun shadow(alpha: Float): Color =
         if (dark) Color.Black.copy(alpha = alpha * 0.65f) else Color(0xFF2E2418).copy(alpha = alpha)
@@ -375,7 +385,13 @@ fun Modifier.readerBackdrop(tones: PaperTones, look: PageLook): Modifier =
                 drawRect(vignette)
             }
         }
-        .then(if (look.grain) Modifier.grain(tones.tableGrain) else Modifier)
+        .then(
+            if (!look.grain) Modifier
+            else Modifier.matte(
+                if (look.volume) tones.bookTable else tones.backdrop,
+                tones.tableFine, tones.tableFibers, TABLE_FIBERS,
+            )
+        )
 
 /**
  * Подложка под страницами: то, что при перелистывании стоит на месте.
@@ -402,7 +418,13 @@ fun Modifier.pageUnder(tones: PaperTones, look: PageLook, shape: BookShape): Mod
         else -> 1f
     }
     return if (look.volume) this
-        .drawBehind { drawVolume(tones, m, shape, depth) }
+        .drawWithCache {
+            // Картон матовый, как стол и страницы: кисти зерна и волокон в тон
+            // обложки. Считаются здесь, а не на каждый кадр, - плитка одна.
+            val fine = if (look.grain) matteBrush(tones.cover, FINE_SEED, 1f) else null
+            val fibers = if (look.grain) matteBrush(tones.cover, FIBERS_SEED, COVER_FIBERS.toPx()) else null
+            onDrawBehind { drawVolume(tones, m, shape, depth, fine, fibers) }
+        }
     else this
         .shadow(lift, corner, clip = false, ambientColor = tones.cast, spotColor = tones.cast)
         .drawBehind { drawDeck(tones, m, rimsNow(m, shape)) }
@@ -423,6 +445,9 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawVolume(
     shape: BookShape,
     /** Сила тени на стол: 0 - без тени, 1 - мягкая, больше - глубокая. */
     depth: Float,
+    /** Матовость картона: зерно и волокна в тон обложки, null - выключена. */
+    coverFine: Brush?,
+    coverFibers: Brush?,
 ) {
     val w = size.width
     val h = size.height
@@ -457,6 +482,11 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawVolume(
     // 2. Обложка: картон, свет сверху, кромка завёрнута, углы потёрты.
     val outline = wornPath(0f, 0f, w, h, radii)
     drawPath(outline, tones.cover)
+    if (coverFine != null || coverFibers != null) clipPath(outline) {
+        // Шероховатость картона под светом и тенью, не поверх них.
+        coverFine?.let { drawRect(it, alpha = tones.coverFine) }
+        coverFibers?.let { drawRect(it, alpha = tones.coverFibers) }
+    }
     drawPath(
         outline,
         Brush.verticalGradient(
@@ -732,7 +762,7 @@ fun Modifier.pageSheet(
                     drawRect(tones.light(0.55f), topLeft = Offset(if (gutterLeft) w - 1f else 0f, 0f), size = Size(1f, h))
                 }
             }
-            .then(if (look.grain) Modifier.grain(tones.grain) else Modifier)
+            .then(if (look.grain) Modifier.matte(tones.paper, tones.paperFine, tones.paperFibers, PAPER_FIBERS) else Modifier)
     }
     val corner = RoundedCornerShape(m.radius)
     val lift = when (look.shadow) {
@@ -775,7 +805,7 @@ fun Modifier.pageSheet(
                 shape = corner,
             )
         )
-        .then(if (look.grain) Modifier.grain(tones.grain) else Modifier)
+        .then(if (look.grain) Modifier.matte(tones.paper, tones.paperFine, tones.paperFibers, PAPER_FIBERS) else Modifier)
 }
 
 /**
@@ -876,28 +906,71 @@ fun Modifier.liveBookTurn(side: PageSide, offset: () -> Float): Modifier = this.
 private fun bookCamera(widthPx: Float, density: Float): Float = 2.5f * widthPx / (160f * density)
 
 /**
- * Зерно: плитка шума 64x64 повтором. Взято у Правки (`ui/CardLook.kt`) вместе
- * с причиной рисовать его ПОД содержимым - поверх текста оно читается грязным
- * стеклом, а не материалом.
+ * Матовая поверхность: бумага, стол, картон.
+ *
+ * Взято у диска Правки - иней на стекле (`DiskController.drawFrost`,
+ * `ui/CardLook.kt`): плитка шума 64x64 по пикселям экрана, повтором. Два
+ * отличия. Плитка не серая, а в тон поверхности - точки светлее и темнее её
+ * цвета, - иначе на светлой бумаге зерно сереет страницу, а на стекле диска
+ * этого не видно, оно на просвет. И слоёв два: мелкое зерно ([fine], иней) и
+ * оно же крупнее и размытое ([fibers], волокна) - без второго материал
+ * читается телевизионным шумом, а не бумагой или картоном.
+ *
+ * Рисуется ПОД содержимым (`drawBehind`): поверх текста шероховатость
+ * читалась бы грязным стеклом, а не материалом.
  */
-fun Modifier.grain(alpha: Float): Modifier = if (alpha <= 0f) this else composed {
-    val brush = remember {
-        ShaderBrush(ImageShader(grainBitmap(), TileMode.Repeated, TileMode.Repeated))
+fun Modifier.matte(base: Color, fine: Float, fibers: Float, fiberScale: Dp): Modifier =
+    if (fine <= 0f && fibers <= 0f) this else drawWithCache {
+        val fineBrush = matteBrush(base, FINE_SEED, 1f)
+        val fiberBrush = matteBrush(base, FIBERS_SEED, fiberScale.toPx())
+        onDrawBehind {
+            if (fine > 0f) drawRect(fineBrush, alpha = fine)
+            if (fibers > 0f) drawRect(fiberBrush, alpha = fibers)
+        }
     }
-    drawBehind { drawRect(brush = brush, alpha = alpha) }
+
+/**
+ * Кисть зерна в тон [base], растянутая в [scale] раз: растянутую плитку
+ * шейдер сглаживает билинейно, и точки расплываются в мягкие пятна - волокна.
+ */
+private fun matteBrush(base: Color, seed: Long, scale: Float): ShaderBrush {
+    val shader = ImageShader(matteTile(base, seed), TileMode.Repeated, TileMode.Repeated)
+    if (scale != 1f) shader.setLocalMatrix(android.graphics.Matrix().apply { setScale(scale, scale) })
+    return ShaderBrush(shader)
 }
 
-/** Seed постоянный: зерно не должно кипеть при каждой перерисовке. */
-private fun grainBitmap(): ImageBitmap {
+/**
+ * Плитки по цвету и семени, чтобы не считать шум заново на каждую страницу:
+ * цветов у бумаги, стола и картона считанные единицы.
+ */
+private val matteTiles = HashMap<Pair<Int, Long>, ImageBitmap>()
+
+/**
+ * Плитка шума в тон поверхности. Половина точек светлее базового цвета (к
+ * белому, но не до конца), половина темнее (к тёплому тёмному): средний тон
+ * почти не сдвигается, значит зерно не красит поверхность, а только делает её
+ * шероховатой. Seed постоянный: зерно не должно кипеть между перерисовками.
+ */
+private fun matteTile(base: Color, seed: Long): ImageBitmap = matteTiles.getOrPut(base.toArgb() to seed) {
     val size = 64
-    val random = Random(20_260_920L)
+    val random = Random(seed)
+    val dark = lerp(base, Color(0xFF2A211A), 0.55f)
     val pixels = IntArray(size * size)
     for (i in pixels.indices) {
-        val v = random.nextInt(256)
-        pixels[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+        val u = random.nextFloat() * 2f - 1f
+        val c = if (u < 0f) lerp(base, Color.White, -u * 0.7f) else lerp(base, dark, u)
+        pixels[i] = c.toArgb()
     }
-    return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888).asImageBitmap()
+    Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888).asImageBitmap()
 }
+
+private const val FINE_SEED = 20_260_920L
+private const val FIBERS_SEED = 7L
+
+/** Размер волокна: у бумаги мельче, у картона и стола крупнее. */
+private val PAPER_FIBERS = 3.dp
+private val COVER_FIBERS = 5.dp
+private val TABLE_FIBERS = 6.dp
 
 /** Блик занимает верхнюю треть, затенение - нижнюю пятую: как у плашек Правки. */
 private const val SHEEN_SPAN = 0.34f
