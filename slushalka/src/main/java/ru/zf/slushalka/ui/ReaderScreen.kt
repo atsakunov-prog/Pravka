@@ -1349,8 +1349,8 @@ private fun PagedBody(
                 beyondViewportPageCount = if (shape.half) 1 else 0,
             ) { slot ->
                 val off = { pagerState.turnOffset(slot) }
-                val face: @Composable (Page?, PageSide, Modifier, (() -> Float)?) -> Unit =
-                    { page, side, modifier, fold ->
+                val face: @Composable (Page?, PageSide, Modifier, (() -> Float)?, (() -> Float)?) -> Unit =
+                    { page, side, modifier, fold, unfold ->
                         PageFace(
                             page = page, side = side, app = app, bookId = bookId, palette = palette,
                             hits = hits, tones = tones, look = look, shape = shape,
@@ -1358,7 +1358,8 @@ private fun PagedBody(
                             margins = margins, style = style, contStyle = contStyle,
                             headingStyle = headingStyle, gap = gap, marksAt = marksAt,
                             highlight = highlight, highlightAlpha = highlightAlpha,
-                            onPicture = onPicture, fold = fold, noIndent = noIndent,
+                            onPicture = onPicture, fold = fold, unfold = unfold,
+                            noIndent = noIndent,
                             smallCaps = smallCaps, imperfect = imperfect,
                             number = page?.let { numberOf(it.startChar) }, modifier = modifier,
                         )
@@ -1382,23 +1383,15 @@ private fun PagedBody(
                     // вокруг корешка.
                     book && shape.half -> {
                         val side = if (slot % 2 == 0) PageSide.LEFT else PageSide.RIGHT
-                        val bend = {
-                            val o = off()
-                            val raw = if (side == PageSide.RIGHT) o.coerceIn(0f, 1f)
-                            else (-o).coerceIn(0f, 1f)
-                            kotlin.math.sin(leafEase(raw) * Math.PI).toFloat()
-                        }
                         val pad = pagePadding(look, card, side, topInset, bottomInset, true)
+                        // Правая страница сворачивается к корешку, как
+                        // настоящая бумага: поворот плоского прямоугольника
+                        // читался картонкой на шарнире. Левую переворачивать
+                        // не надо - её открывает камера.
+                        val fold2 = if (side == PageSide.RIGHT) off else null
                         // Тень поднятого листа ложится на страницу под ним и
                         // живёт на неповёрнутом слое: повёрнутый унёс бы её с
                         // собой.
-                        Box(
-                            z.halfPan(side, BOOK_PEEK, off, position)
-                                .padding(pad)
-                                // Ось тени там же, где корешок: у правой
-                                // страницы он слева, у оборота - справа.
-                                .leafCast(tones, gutterLeft = side == PageSide.RIGHT, offset = off)
-                        )
                         PageFace(
                             page = pages.getOrNull(slot), side = side, app = app, bookId = bookId,
                             palette = palette, hits = hits, tones = tones, look = look,
@@ -1407,31 +1400,38 @@ private fun PagedBody(
                             margins = margins, style = style, contStyle = contStyle,
                             headingStyle = headingStyle, gap = gap, marksAt = marksAt,
                             highlight = highlight, highlightAlpha = highlightAlpha,
-                            onPicture = onPicture, fold = null, noIndent = noIndent,
+                            onPicture = onPicture, fold = fold2, unfold = null, noIndent = noIndent,
                             smallCaps = smallCaps, imperfect = imperfect,
                             number = pages.getOrNull(slot)?.let { numberOf(it.startChar) },
-                            // Пан книги - на месте пейджера, поворот листа - на
-                            // самом листе: ось у корешка, а не у края экрана.
-                            leaf = Modifier.halfLeaf(side, off).paperBend(tones, bend),
+                            // Правая страница сворачивается к корешку, как
+                            // настоящая бумага: поворот плоского
+                            // прямоугольника читался картонкой на шарнире.
+                            // Левую страницу переворачивать не надо - её
+                            // открывает камера.
+                            leaf = Modifier,
                             modifier = z.halfPan(side, BOOK_PEEK, off, position),
                         )
                     }
 
                     // Одна страница в книге: лист заворачивается на месте.
                     book && !shape.spread ->
-                        face(pages.getOrNull(slot), PageSide.SINGLE, z.bookSlot(off), off)
+                        face(pages.getOrNull(slot), PageSide.SINGLE, z.bookSlot(off), off, null)
 
                     // Разворот книги: левая половина лежит, правая - лист,
                     // который поворачивается вокруг корешка; на его обороте -
                     // левая страница следующего разворота, поэтому подмены в
                     // конце поворота не видно.
+                    // Разворот: листу есть куда переворачиваться - на соседнюю
+                    // половину, - и он туда и переворачивается. Правая
+                    // страница поднимается вокруг корешка, на её обороте
+                    // оказывается левая страница следующего разворота, лист
+                    // гнётся парусом и бросает тень на страницы под собой.
                     book -> Row(z.bookSlot(off)) {
-                        face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight(), null)
+                        face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight(), null, null)
                         Box(Modifier.weight(1f).fillMaxHeight()) {
                             val bend = {
                                 kotlin.math.sin(leafEase(off().coerceIn(0f, 1f)) * Math.PI).toFloat()
                             }
-                            // Тень поднятого листа на страницах под ним.
                             Box(
                                 Modifier
                                     .fillMaxSize()
@@ -1442,7 +1442,7 @@ private fun PagedBody(
                                 pages.getOrNull(slot * 2 + 1), PageSide.RIGHT,
                                 Modifier.fillMaxSize().leafTurn(back = false, offset = off)
                                     .paperBend(tones, bend),
-                                null,
+                                null, null,
                             )
                             Box(Modifier.fillMaxSize().leafTurn(back = true, offset = off)) {
                                 face(
@@ -1451,20 +1451,20 @@ private fun PagedBody(
                                     // обратно, иначе текст читался бы навыворот.
                                     Modifier.fillMaxSize().graphicsLayer { scaleX = -1f }
                                         .paperBend(tones, bend),
-                                    null,
+                                    null, null,
                                 )
                             }
                         }
                     }
 
                     shape.spread -> Row(z.pageTurn(turn, gentle = true, offset = off)) {
-                        face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight(), null)
-                        face(pages.getOrNull(slot * 2 + 1), PageSide.RIGHT, Modifier.weight(1f).fillMaxHeight(), null)
+                        face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight(), null, null)
+                        face(pages.getOrNull(slot * 2 + 1), PageSide.RIGHT, Modifier.weight(1f).fillMaxHeight(), null, null)
                     }
 
                     else -> face(
                         pages.getOrNull(slot), PageSide.SINGLE,
-                        z.pageTurn(turn, gentle = false, offset = off), null,
+                        z.pageTurn(turn, gentle = false, offset = off), null, null,
                     )
                 }
             }
@@ -1520,6 +1520,8 @@ private fun PageFace(
     onPicture: (ShownPicture) -> Unit,
     /** Насколько лист завёрнут: 0 - лежит, 1 - перевёрнут. null - не книга. */
     fold: (() -> Float)?,
+    /** Насколько лист развернулся и лёг: 0 - его ещё нет, 1 - лежит целиком. */
+    unfold: (() -> Float)? = null,
     noIndent: (Int) -> Boolean,
     smallCaps: Boolean,
     imperfect: Boolean,
@@ -1532,8 +1534,16 @@ private fun PageFace(
             .padding(pad)
             .then(leaf)
             // Заворот считается по самому листу, а не по слоту пейджера:
-            // сгиб идёт по бумаге, а не по краю экрана.
-            .then(if (fold != null) Modifier.pageFold(tones, fold) else Modifier)
+            // сгиб идёт по бумаге, а не по краю экрана. Уходящий лист
+            // сворачивается, приходящий разворачивается - это один и тот же
+            // сгиб, только с разных сторон.
+            .then(
+                when {
+                    fold != null -> Modifier.pageFold(tones, fold)
+                    unfold != null -> Modifier.pageFold(tones, { 1f - unfold() }, toLeft = false)
+                    else -> Modifier
+                }
+            )
             .pageSheet(tones, look, shape, side)
     ) {
         if (page == null) return@Box

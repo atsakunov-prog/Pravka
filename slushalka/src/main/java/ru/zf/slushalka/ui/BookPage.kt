@@ -1124,28 +1124,6 @@ fun Modifier.halfPan(
  * его обороте оказывается следующая левая. Половины стыкуются на ребре, где
  * листа всё равно не видно.
  */
-fun Modifier.halfLeaf(side: PageSide, offset: () -> Float): Modifier = this.graphicsLayer {
-    val off = offset()
-    cameraDistance = bookCamera(size.width, density)
-    when {
-        side == PageSide.RIGHT && off > 0f && off < 1f -> {
-            val t = leafEase(off)
-            transformOrigin = TransformOrigin(0f, 0.5f)
-            rotationY = -180f * t
-            // Подмена лица оборотом ровно на ребре: считаем по углу, а не по
-            // пальцу. С разгоном они расходятся, и лист «щёлкал» на шестидесяти
-            // градусах - владелец это и увидел.
-            alpha = if (t < 0.5f) 1f else 0f
-        }
-        side == PageSide.LEFT && off < 0f && off > -1f -> {
-            val t = leafEase(-off)
-            transformOrigin = TransformOrigin(1f, 0.5f)
-            rotationY = 180f * t
-            alpha = if (t < 0.5f) 1f else 0f
-        }
-    }
-}
-
 /**
  * Разгон поворота: у бумаги есть вес.
  *
@@ -1173,7 +1151,16 @@ fun leafEase(t: Float): Float {
  * чем ближе к сгибу.
  */
 @Composable
-fun Modifier.pageFold(tones: PaperTones, offset: () -> Float): Modifier {
+fun Modifier.pageFold(
+    tones: PaperTones,
+    offset: () -> Float,
+    /**
+     * Куда уходит сгиб. `true` - справа налево: лист сворачивается и
+     * исчезает. `false` - слева направо: зеркальная сторона, ею
+     * разворачивается лист, ложащийся на соседнюю половину.
+     */
+    toLeft: Boolean = true,
+): Modifier {
     val layer = rememberGraphicsLayer()
     return this.drawWithContent {
         val off = offset()
@@ -1182,111 +1169,102 @@ fun Modifier.pageFold(tones: PaperTones, offset: () -> Float): Modifier {
             return@drawWithContent
         }
         if (off >= 1f) return@drawWithContent
+        // Разгон: лист медленно отрывается и быстрее падает - у бумаги есть
+        // вес, равномерное движение читается механизмом.
+        val p = leafEase(off)
         // Лист записывается один раз за кадр и потом рисуется трижды: лицо,
         // валик и изнанка. Иначе пришлось бы держать три копии страницы.
         layer.record { this@drawWithContent.drawContent() }
         val w = size.width
         val h = size.height
         val dp = 1.dp.toPx()
-        // Сгиб идёт справа налево; у самого конца лист уже почти ушёл.
-        val fold = w * (1f - off)
+        val dir = if (toLeft) 1f else -1f
+        // Сгиб идёт от своего края к противоположному; у самого конца лист
+        // уже почти ушёл.
+        val fold = if (toLeft) w * (1f - p) else w * p
         val roll = (w * 0.05f).coerceIn(6f * dp, 16f * dp)   // радиус валика
 
+        /** Полоса между двумя х, в любом порядке. */
+        fun band(a: Float, b: Float): Pair<Float, Float> =
+            if (a <= b) a to b else b to a
+
         // 1. Тень от поднятого листа на страницу под ним: гуще у сгиба.
-        val shade = (roll * 2.6f).coerceAtMost(w - fold)
-        if (shade > 0f) drawRect(
-            Brush.horizontalGradient(
-                listOf(tones.cast(0.30f), Color.Transparent),
-                startX = fold,
-                endX = fold + shade,
-            ),
-            topLeft = Offset(fold, 0f),
-            size = Size(shade, h),
-        )
+        val shade = (roll * 2.6f).coerceAtMost(if (toLeft) w - fold else fold)
+        if (shade > 0f) {
+            val (s0, s1) = band(fold, fold + shade * dir)
+            drawRect(
+                Brush.horizontalGradient(
+                    listOf(tones.cast(0.30f), Color.Transparent),
+                    startX = fold,
+                    endX = fold + shade * dir,
+                ),
+                topLeft = Offset(s0, 0f),
+                size = Size(s1 - s0, h),
+            )
+        }
 
         // 2. Изнанка: бумага, на просвет чуть виден зеркальный текст, к валику
         // темнее - лист там уходит от света.
-        val backFrom = (2f * fold - w).coerceAtLeast(0f)
-        val backTo = (fold - roll).coerceAtLeast(backFrom)
-        if (backTo > backFrom) clipRect(backFrom, 0f, backTo, h) {
-            drawRect(tones.paper, topLeft = Offset(backFrom, 0f), size = Size(backTo - backFrom, h))
+        val backEdge = if (toLeft) (2f * fold - w).coerceAtLeast(0f) else (2f * fold).coerceAtMost(w)
+        val rollEdge = fold - roll * dir
+        val (b0, b1) = band(backEdge, rollEdge)
+        if (b1 - b0 > dp) clipRect(b0, 0f, b1, h) {
+            drawRect(tones.paper, topLeft = Offset(b0, 0f), size = Size(b1 - b0, h))
             // Зеркальная копия листа: бумага тонкая, текст с той стороны
-            // просвечивает - без этого изнанка читается куском картона. Зеркало
-            // ставится по самому сгибу, иначе бумага за валиком рвалась бы.
-            // Сквозь лист видно немного: полный текст навыворот читался бы
-            // ошибкой отрисовки, а не изнанкой.
+            // просвечивает - без этого изнанка читается куском картона.
+            // Зеркало ставится по самому сгибу, иначе бумага за валиком
+            // рвалась бы. Сквозь лист видно немного: полный текст навыворот
+            // читался бы ошибкой отрисовки, а не изнанкой.
             layer.alpha = 0.13f
             scale(-1f, 1f, pivot = Offset(fold, h / 2f)) { drawLayer(layer) }
             layer.alpha = 1f
             drawRect(
                 Brush.horizontalGradient(
                     listOf(Color.Transparent, tones.cast(0.05f), tones.cast(0.22f)),
-                    startX = backFrom,
-                    endX = backTo,
+                    startX = backEdge,
+                    endX = rollEdge,
                 ),
-                topLeft = Offset(backFrom, 0f),
-                size = Size(backTo - backFrom, h),
+                topLeft = Offset(b0, 0f),
+                size = Size(b1 - b0, h),
             )
         }
 
-        // 3. Валик сгиба: круглая бумага - тень, свет, тень. Сюда же уходит
-        // лицевая сторона, поэтому рисуем её сжатой на ширину валика.
-        val rollFrom = (fold - roll).coerceAtLeast(0f)
-        if (fold > rollFrom) clipRect(rollFrom, 0f, fold, h) {
-            drawRect(tones.paper, topLeft = Offset(rollFrom, 0f), size = Size(fold - rollFrom, h))
+        // 3. Валик сгиба: круглая бумага - тень, свет, тень.
+        val (r0, r1) = band(rollEdge.coerceIn(0f, w), fold)
+        if (r1 - r0 > 0f) clipRect(r0, 0f, r1, h) {
+            drawRect(tones.paper, topLeft = Offset(r0, 0f), size = Size(r1 - r0, h))
             drawRect(
                 Brush.horizontalGradient(
                     0f to tones.cast(0.26f),
                     0.38f to tones.light(0.18f),
                     0.72f to tones.cast(0.14f),
                     1f to tones.cast(0.38f),
-                    startX = rollFrom,
+                    startX = rollEdge,
                     endX = fold,
                 ),
-                topLeft = Offset(rollFrom, 0f),
-                size = Size(fold - rollFrom, h),
+                topLeft = Offset(r0, 0f),
+                size = Size(r1 - r0, h),
             )
         }
 
         // 4. Лицо: плоская часть листа до валика, с тенью у самого сгиба -
         // бумага там уже начинает подниматься.
-        if (rollFrom > 0f) clipRect(0f, 0f, rollFrom, h) {
+        val (f0, f1) = if (toLeft) 0f to rollEdge.coerceAtLeast(0f) else rollEdge.coerceAtMost(w) to w
+        if (f1 - f0 > 0f) clipRect(f0, 0f, f1, h) {
             drawLayer(layer)
-            val lift = (roll * 2f).coerceAtMost(rollFrom)
+            val lift = (roll * 2f).coerceAtMost(f1 - f0)
+            val (l0, l1) = band(rollEdge, rollEdge - lift * dir)
             drawRect(
                 Brush.horizontalGradient(
                     listOf(Color.Transparent, tones.cast(0.16f)),
-                    startX = rollFrom - lift,
-                    endX = rollFrom,
+                    startX = rollEdge - lift * dir,
+                    endX = rollEdge,
                 ),
-                topLeft = Offset(rollFrom - lift, 0f),
-                size = Size(lift, h),
+                topLeft = Offset(l0, 0f),
+                size = Size(l1 - l0, h),
             )
         }
     }
-}
-
-/**
- * Лист разворота, поворачивающийся вокруг корешка.
- *
- * На развороте лист есть куда переворачивать - на соседнюю половину, - и он
- * там и переворачивается: правая страница поднимается вокруг корешка, на её
- * обороте оказывается левая страница следующего разворота. [back] - эта самая
- * изнанка: её видно со второй половины поворота.
- *
- * Прежде пара страниц уезжала вбок колодой, и владелец это заметил сразу:
- * «если страницы двойные, то они съезжают вместе как со стопки, странно очень».
- */
-fun Modifier.leafTurn(back: Boolean, offset: () -> Float): Modifier = this.graphicsLayer {
-    val t = leafEase(offset().coerceIn(0f, 1f))
-    // Ось - левый край правой половины, то есть корешок.
-    transformOrigin = TransformOrigin(0f, 0.5f)
-    cameraDistance = bookCamera(size.width, density)
-    rotationY = -180f * t
-    // Лицо видно до ребра, изнанка - после: на 90° лист виден ребром, и
-    // подмены не заметно. Считаем по углу, а не по пальцу: с разгоном это
-    // разные вещи.
-    alpha = if (back == (t >= 0.5f)) 1f else 0f
 }
 
 /**
@@ -1342,6 +1320,29 @@ fun Modifier.leafCast(tones: PaperTones, gutterLeft: Boolean, offset: () -> Floa
             size = Size(touch, h),
         )
     }
+
+/**
+ * Лист разворота, поворачивающийся вокруг корешка.
+ *
+ * На развороте лист есть куда переворачивать - на соседнюю половину, - и он
+ * там и переворачивается: правая страница поднимается вокруг корешка, на её
+ * обороте оказывается левая страница следующего разворота. [back] - эта самая
+ * изнанка: её видно со второй половины поворота.
+ *
+ * Прежде пара страниц уезжала вбок колодой, и владелец это заметил сразу:
+ * «если страницы двойные, то они съезжают вместе как со стопки, странно очень».
+ */
+fun Modifier.leafTurn(back: Boolean, offset: () -> Float): Modifier = this.graphicsLayer {
+    val t = leafEase(offset().coerceIn(0f, 1f))
+    // Ось - левый край правой половины, то есть корешок.
+    transformOrigin = TransformOrigin(0f, 0.5f)
+    cameraDistance = bookCamera(size.width, density)
+    rotationY = -180f * t
+    // Лицо видно до ребра, изнанка - после: на 90° лист виден ребром, и
+    // подмены не заметно. Считаем по углу, а не по пальцу: с разгоном это
+    // разные вещи.
+    alpha = if (back == (t >= 0.5f)) 1f else 0f
+}
 
 /**
  * Бумага гнётся.
