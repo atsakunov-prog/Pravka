@@ -89,14 +89,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
          * и на экране такие съели бы полполосы.
          */
         val readerCanon: Boolean = true,
-        /**
-         * Не оставлять одну строку абзаца внизу или вверху страницы.
-         *
-         * Выключено заводски: чтобы убрать висячую строку, разбивка снимает
-         * строку со страницы, и низ полос на развороте перестаёт сходиться.
-         * Владельцу важнее ровный низ; кому важнее типографика - включает.
-         */
-        val readerWidows: Boolean = false,
         /** Первые слова главы капителью, первый абзац без отступа. */
         val readerSmallCaps: Boolean = true,
         /** Типограф: тире, неразрывные пробелы после коротких слов. */
@@ -185,7 +177,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerFooter = p[KEY_R_FOOTER]?.takeIf { it in FOOTERS } ?: FOOTER_BOOK,
                 readerHyphens = p[KEY_R_HYPHENS] ?: true,
                 readerCanon = p[KEY_R_CANON] ?: true,
-                readerWidows = p[KEY_R_WIDOWS] ?: false,
                 readerSmallCaps = p[KEY_R_SMALLCAPS] ?: true,
                 readerTypograph = p[KEY_R_TYPOGRAPH] ?: true,
                 readerImperfect = p[KEY_R_IMPERFECT] ?: true,
@@ -261,7 +252,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderFooter(v: String) = edit { if (v in FOOTERS) it[KEY_R_FOOTER] = v }
     suspend fun setReaderHyphens(v: Boolean) = edit { it[KEY_R_HYPHENS] = v }
     suspend fun setReaderCanon(v: Boolean) = edit { it[KEY_R_CANON] = v }
-    suspend fun setReaderWidows(v: Boolean) = edit { it[KEY_R_WIDOWS] = v }
     suspend fun setReaderSmallCaps(v: Boolean) = edit { it[KEY_R_SMALLCAPS] = v }
     suspend fun setReaderTypograph(v: Boolean) = edit { it[KEY_R_TYPOGRAPH] = v }
     suspend fun setReaderImperfect(v: Boolean) = edit { it[KEY_R_IMPERFECT] = v }
@@ -278,7 +268,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         it[KEY_R_HYPHENS] = true
         it[KEY_R_INDENT] = true
         it[KEY_R_CANON] = true
-        it[KEY_R_WIDOWS] = false
         it[KEY_R_SMALLCAPS] = true
         it[KEY_R_TYPOGRAPH] = true
         it[KEY_R_IMPERFECT] = true
@@ -493,7 +482,6 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_FOOTER = stringPreferencesKey("reader_footer")
         private val KEY_R_HYPHENS = booleanPreferencesKey("reader_hyphens")
         private val KEY_R_CANON = booleanPreferencesKey("reader_canon")
-        private val KEY_R_WIDOWS = booleanPreferencesKey("reader_widows")
         private val KEY_R_SMALLCAPS = booleanPreferencesKey("reader_smallcaps")
         private val KEY_R_TYPOGRAPH = booleanPreferencesKey("reader_typograph")
         private val KEY_R_IMPERFECT = booleanPreferencesKey("reader_imperfect")

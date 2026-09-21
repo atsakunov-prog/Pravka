@@ -24,8 +24,16 @@ data class PagePiece(
     val end get() = start + text.length + 1
 }
 
-/** Готовая страница: с какого знака книги начинается и что на ней стоит. */
-data class Page(val startChar: Int, val pieces: List<PagePiece>)
+/**
+ * Готовая страница: с какого знака книги начинается и что на ней стоит.
+ *
+ * [slack] - сколько места осталось незанятым. Обычно это доли строки, но
+ * перед заголовком главы, который на страницу не влез, остаётся дыра в
+ * несколько строк. В типографии её не оставляют: воздух у заголовка тянется,
+ * и полоса всё равно кончается на своей линии. Этим и занимается страница
+ * при рисовании.
+ */
+data class Page(val startChar: Int, val pieces: List<PagePiece>, val slack: Int = 0)
 
 /**
  * Разбивка текста на страницы для режима листания.
@@ -51,7 +59,6 @@ object Paginator {
         /** Первый абзац главы: набирается без абзацного отступа. */
         noIndent: (Int) -> Boolean = { false },
         /** Не оставлять одну строку абзаца внизу или вверху страницы. */
-        widows: Boolean = false,
         /**
          * Как кусок будет выглядеть на странице. Нужна из-за капители: первые
          * слова главы набираются прописными, а они шире строчных, и мерить
@@ -79,7 +86,10 @@ object Paginator {
 
         fun flush() {
             if (pieces.isNotEmpty()) {
-                pages.add(Page(if (pageStart >= 0) pageStart else 0, pieces))
+                // Остаток места отдаётся странице: она растянет им воздух у
+                // заголовка, чтобы низ полосы не уезжал вверх.
+                val slack = (heightPx - used).coerceAtLeast(0)
+                pages.add(Page(if (pageStart >= 0) pageStart else 0, pieces, slack))
                 pieces = ArrayList()
             }
             used = 0
@@ -118,31 +128,11 @@ object Paginator {
                     if (pageStart < 0) pageStart = base
                     pieces.add(PagePiece(text, null, base, head, heading))
                     used += layout.size.height + if (heading) headingGapPx else gapPx
-                    // Заголовок с воздухом ставится на сетку строк целиком.
-                    if (heading && lineHeightPx > 0) {
-                        used = ((used + lineHeightPx - 1) / lineHeightPx) * lineHeightPx
-                    }
                     break
                 }
                 var last = -1
                 for (line in 0 until layout.lineCount) {
                     if (layout.getLineBottom(line) <= remaining) last = line else break
-                }
-                // Висячие строки. Одна строка абзаца внизу страницы (сирота) и
-                // одна вверху следующей (вдова) - то, за что в типографии бьют
-                // по рукам: глаз цепляется за обрывок, а не за текст.
-                if (widows && last >= 0 && pieces.isNotEmpty()) {
-                    val left = layout.lineCount - (last + 1)
-                    if (head && last == 0) {
-                        // Абзац только начался - уносим его целиком.
-                        flush()
-                        continue
-                    }
-                    if (left == 1 && last >= 1) last--
-                    if (last < 0) {
-                        flush()
-                        continue
-                    }
                 }
                 if (last < 0) {
                     // Ни одной строки не влезло. На пустой странице это значит,

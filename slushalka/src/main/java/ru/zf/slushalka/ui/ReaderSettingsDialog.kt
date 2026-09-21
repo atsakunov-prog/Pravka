@@ -348,7 +348,7 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
     labels("Набор")
     Text(
         "Книжный набор разом: гарнитура Literata, интерлиньяж 1,32, поля по канону, " +
-            "переносы, висячие строки, капитель и типограф. Каждую мелочь ниже можно " +
+            "переносы, капитель и типограф. Каждую мелочь ниже можно " +
             "включить и выключить по отдельности - чтобы было с чем сравнивать.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -359,21 +359,12 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
     }
     Spacer(Modifier.height(6.dp))
     Toggle("Книжные поля 2:3:4:6", prefs.readerCanon) { scope.launch { s.setReaderCanon(it) } }
-    Toggle("Без висячих строк", prefs.readerWidows) { scope.launch { s.setReaderWidows(it) } }
-    Text(
-        "Висячие строки - это одна строка абзаца внизу страницы или вверху следующей. " +
-            "Чтобы её убрать, разбивка снимает строку, и низ полос на развороте перестаёт " +
-            "сходиться. Заводски выключено: ровный низ важнее.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
     Toggle("Капитель в начале главы", prefs.readerSmallCaps) { scope.launch { s.setReaderSmallCaps(it) } }
     Toggle("Типограф: тире и неразрывные", prefs.readerTypograph) { scope.launch { s.setReaderTypograph(it) } }
     Toggle("Неровности печати", prefs.readerImperfect) { scope.launch { s.setReaderImperfect(it) } }
     Text(
         "Поля по канону Ван де Граафа: внутреннее, верхнее, внешнее и нижнее как 2:3:4:6, " +
             "полоса смещена к корешку и вверх - от этого разворот и читается книгой. " +
-            "Висячие строки: одну строку абзаца внизу или вверху страницы не оставляем. " +
             "Капитель: первые слова главы прописными пониженного кегля, первый абзац без " +
             "отступа. Типограф: дефис между пробелами становится тире, после коротких слов " +
             "неразрывный пробел (длина текста не меняется, места в книге не едут). " +

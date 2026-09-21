@@ -234,6 +234,7 @@ data class BookShape(
  * книги вылезает». Полоска чужой страницы за корешком объясняет глазу, что
  * книга шире экрана, и всё встаёт на место.
  */
+val BOOK_PEEK = 22.dp
 
 /**
  * Толщина книги по объёму текста.
@@ -364,8 +365,14 @@ fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.styl
 /** Сколько ширины и высоты у одной страницы отнимает всё, что не текст. */
 data class PageChrome(val width: Dp, val height: Dp)
 
-fun pageChrome(look: PageLook, card: CardMetrics, halves: Int): PageChrome = when {
+fun pageChrome(look: PageLook, card: CardMetrics, halves: Int, half: Boolean = false): PageChrome = when {
     look.flat -> PageChrome(0.dp, 0.dp)
+    // Половина разворота: с одной стороны край книги, с другой - корешок и
+    // полоска соседней страницы за ним.
+    look.volume && half -> PageChrome(
+        width = card.side + card.cover + card.cut + card.spine / 2 + BOOK_PEEK,
+        height = card.top + card.bottom + card.cover * 2 + card.reveal * 2,
+    )
     // В развороте у каждой страницы своя половина: поле, кант и половина щели.
     look.volume && halves > 1 -> PageChrome(
         width = card.side + card.cover + card.cut + card.spine / 2,
@@ -392,11 +399,15 @@ fun pagePadding(
     side: PageSide,
     safeTop: Dp,
     safeBottom: Dp,
+    /** Половина разворота: за корешком видна полоска соседней страницы. */
+    half: Boolean = false,
 ): PaddingValues {
     if (look.flat) return PaddingValues(0.dp)
     val under = underPadding(card, safeTop, safeBottom)
     if (!look.volume) return under
-    val inner = card.spine / 2
+    // На половине разворота страница стоит там, где она окажется, когда
+    // камера доедет до своей стороны: у корешка плюс полоска подглядывания.
+    val inner = card.spine / 2 + if (half) BOOK_PEEK else 0.dp
     val outer = card.side + card.cover + card.cut
     return PaddingValues(
         start = when (side) {
@@ -1048,6 +1059,53 @@ fun Modifier.pageTurn(style: String, gentle: Boolean, offset: () -> Float): Modi
         }
     }
 }
+
+/**
+ * Насколько книга отъехала вбок на половине разворота.
+ *
+ * Разворот шире экрана ровно на две полоски подглядывания, и камера ездит по
+ * нему от левого края к правому: читаешь левую страницу - книга стоит слева,
+ * смахнул - она доехала до правого края, и перед глазами правая страница.
+ * Дальше лист переворачивается, и книга едет обратно. [phase] - 0 у левой
+ * страницы, 1 у правой; на обратном пути она снова идёт к нулю.
+ */
+fun bookPan(phase: Float, widthPx: Float, peekPx: Float): Float =
+    -(widthPx - 2f * peekPx) * phase.coerceIn(0f, 1f)
+
+/** Фаза книги по месту в пейджере: 0 - левая страница, 1 - правая. */
+fun bookPhase(position: Float): Float {
+    val pair = ((position % 2f) + 2f) % 2f
+    return min(pair, 2f - pair)
+}
+
+
+/**
+ * Страница на половине разворота: едет вместе с книгой.
+ *
+ * Пан книги висит на месте пейджера: слоты пейджера иначе разъезжаются с
+ * книгой. Переворотов листа тут нет - владелец их забраковал.
+ */
+fun Modifier.halfPan(
+    side: PageSide,
+    peek: Dp,
+    offset: () -> Float,
+    position: () -> Float,
+): Modifier = this.graphicsLayer {
+    val off = offset()
+    // На место в книге ставятся только страницы этого разворота и соседнего.
+    // Дальние должны уехать за экран, как их и увёз пейджер: иначе все
+    // страницы книги складываются в одну стопку на двух местах, и поверх
+    // читаемой ложится давно прочитанная - владелец на живой сборке увидел
+    // ровно это, «левая страница просто как обложка».
+    if (off < -1.05f || off > 2.05f) return@graphicsLayer
+    val w = size.width
+    val peekPx = peek.toPx()
+    val pan = bookPan(bookPhase(position()), w, peekPx)
+    // Своя фаза: левая страница живёт в начале хода камеры, правая - в конце.
+    val home = if (side == PageSide.RIGHT) bookPan(1f, w, peekPx) else 0f
+    translationX = off * w + pan - home
+}
+
 
 /**
  * Матовая поверхность: бумага и картон переплёта.

@@ -495,10 +495,17 @@ fun ReaderScreen(
     val screenWidth = with(LocalDensity.current) {
         LocalWindowInfo.current.containerSize.width.toDp()
     }
+    val spread = spreadOn(prefs.readerSpread, prefs.readerPaged, screenWidth)
+    // Узкий экран показывает половину настоящего разворота - с корешком и
+    // полоской соседней страницы за ним. «Всегда одна» оставляет книгу
+    // целиком в экране.
     val shape = BookShape(
         thickness = thickness,
         progress = progress,
-        spread = spreadOn(prefs.readerSpread, prefs.readerPaged, screenWidth),
+        spread = spread,
+        half = prefs.readerPaged && !spread &&
+            prefs.readerPageStyle == Settings.PAGE_VOLUME &&
+            prefs.readerSpread != Settings.SPREAD_OFF,
     )
     val card = cardMetrics(look, shape)
     // Колонтитул в нижнем углу страницы: панель прячется, а «где я в книге»
@@ -543,7 +550,7 @@ fun ReaderScreen(
                 margins = margins, onChapters = { showChapters = true }, gap = paragraphGap,
                 styleFor = ::styleFor, isHeading = isHeading,
                 noIndent = noIndent, smallCaps = prefs.readerSmallCaps,
-                widows = prefs.readerWidows, imperfect = prefs.readerImperfect,
+                imperfect = prefs.readerImperfect,
                 target = target, onTargetUsed = { target = null },
                 onShown = { start, end -> offset = start; shownEnd = end },
                 onToggleBars = { bars = !bars },
@@ -1105,8 +1112,6 @@ private fun PagedBody(
     noIndent: (Int) -> Boolean,
     /** Первые слова главы - капителью. */
     smallCaps: Boolean,
-    /** Не оставлять одну строку абзаца внизу или вверху страницы. */
-    widows: Boolean,
     /** Неровности печати: перекос полосы и сдвиг базовых линий. */
     imperfect: Boolean,
     target: Int?,
@@ -1131,7 +1136,7 @@ private fun PagedBody(
         val card = cardMetrics(look, shape)
         // В развороте страниц две, каждая по своей половине экрана.
         val halves = if (shape.spread) 2 else 1
-        val chrome = pageChrome(look, card, halves)
+        val chrome = pageChrome(look, card, halves, shape.half)
         // Вниз, а не к ближайшему: место на странице меряется в целых
         // пикселях, и лишняя половина пикселя оборачивалась строкой, которая
         // на живой сборке срезалась нижним краем.
@@ -1223,7 +1228,6 @@ private fun PagedBody(
                 headingStyle = headingStyle,
                 isHeading = isHeading,
                 noIndent = noIndent,
-                widows = widows,
                 // Меряем ровно то, что нарисуем: с капителью строка шире.
                 annotate = { txt, opens ->
                     if (opens && smallCaps) openingText(txt, 0, null, 0f, palette)
@@ -1284,7 +1288,10 @@ private fun PagedBody(
                                     // страницу переворачивают примерно так.
                                     pagerState.animateScrollToPage(
                                         to,
-                                        animationSpec = tween(460, easing = FastOutSlowInEasing),
+                                        animationSpec = tween(
+                                            if (look.volume) 240 else 460,
+                                            easing = FastOutSlowInEasing,
+                                        ),
                                     )
                                 }
                             }
@@ -1302,7 +1309,26 @@ private fun PagedBody(
             // поверх, а том лежит на столе. Книга целиком в экране: половина
             // разворота, уезжавшая за край, владельцу на живой сборке
             // читалась поломкой - «левый край книги вылезает».
-            Box(
+            val screenWidth = this@BoxWithConstraints.maxWidth
+            if (shape.half) Box(
+                // Разворот шире экрана на две полоски подглядывания, и камера
+                // ездит по нему: читаешь левую страницу - смахнул - книга
+                // доехала до правой. Переворота листа тут нет.
+                Modifier
+                    .requiredWidth(screenWidth * 2 - BOOK_PEEK * 2)
+                    .fillMaxHeight()
+                    .graphicsLayer {
+                        val pos = pagerState.currentPage + pagerState.currentPageOffsetFraction
+                        // Камера меряется по экрану, а слой шире него.
+                        translationX = bookPan(
+                            bookPhase(pos),
+                            size.width / 2f + BOOK_PEEK.toPx(),
+                            BOOK_PEEK.toPx(),
+                        )
+                    }
+                    .padding(underPadding(card, topInset, bottomInset))
+                    .pageUnder(tones, look, shape)
+            ) else Box(
                 Modifier
                     .fillMaxSize()
                     .padding(underPadding(card, topInset, bottomInset))
@@ -1323,22 +1349,29 @@ private fun PagedBody(
             // примерно вес бумаги.
             val fling = PagerDefaults.flingBehavior(
                 state = pagerState,
+                // В книге страница растворяется, и тянуть это незачем: жёсткая
+                // пружина без отскока даёт короткий, чистый переход. У
+                // карточек ход мягче - там страница едет вбок.
                 snapAnimationSpec = spring(
                     dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
+                    stiffness = if (book) Spring.StiffnessMedium else Spring.StiffnessMediumLow,
                 ),
             )
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
                 flingBehavior = fling,
+                // На половине разворота за корешком видна соседняя страница -
+                // её надо держать в композиции и в покое, иначе в полоске
+                // подглядывания пусто.
+                beyondViewportPageCount = if (shape.half) 1 else 0,
             ) { slot ->
                 val off = { pagerState.turnOffset(slot) }
                 val face: @Composable (Page?, PageSide, Modifier) -> Unit = { page, side, modifier ->
                     PageFace(
                         page = page, side = side, app = app, bookId = bookId, palette = palette,
                         hits = hits, tones = tones, look = look, shape = shape,
-                        pad = pagePadding(look, card, side, topInset, bottomInset),
+                        pad = pagePadding(look, card, side, topInset, bottomInset, shape.half),
                         margins = margins, style = style, contStyle = contStyle,
                         headingStyle = headingStyle, gap = gap, marksAt = marksAt,
                         highlight = highlight, highlightAlpha = highlightAlpha,
@@ -1348,20 +1381,40 @@ private fun PagedBody(
                         onChapters = onChapters, modifier = modifier,
                     )
                 }
-                // Ранняя страница лежит поверх поздней: уходящая должна
-                // закрывать ту, что под ней.
-                val z = Modifier.fillMaxSize().zIndex(-slot.toFloat())
-                // Перелистывание в книге - то же, что у карточек: владелец
-                // перепробовал перевороты листа и выбрал спокойное листание
-                // («перелистывание убирай в книге, в стопке отлично»). Книга
-                // при этом остаётся лежать: едет только страница.
-                if (shape.spread) Row(z.pageTurn(turn, gentle = true, offset = off)) {
-                    face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight())
-                    face(pages.getOrNull(slot * 2 + 1), PageSide.RIGHT, Modifier.weight(1f).fillMaxHeight())
-                } else {
-                    face(
+                // Ближняя к читаемому месту страница лежит поверх дальних.
+                val away = slot - pagerState.currentPage
+                val z = Modifier
+                    .fillMaxSize()
+                    .zIndex(-(kotlin.math.abs(away) + if (away < 0) 0.5f else 0f))
+                // Перелистывание в книге - растворение, и только оно:
+                // переворот листа владелец забраковал во всех видах, а
+                // смахивание книжной странице не идёт («для книг растворение,
+                // для стопки смахивание»). Настройка «Перелистывание»
+                // остаётся за карточками.
+                val bookTurn = Settings.TURN_FADE
+                when {
+                    // Половина разворота: чётная страница левая, нечётная
+                    // правая; книга ездит камерой, страницы растворяются.
+                    shape.half -> {
+                        val side = if (slot % 2 == 0) PageSide.LEFT else PageSide.RIGHT
+                        val position = { pagerState.currentPage + pagerState.currentPageOffsetFraction }
+                        face(
+                            pages.getOrNull(slot), side,
+                            z.halfPan(side, BOOK_PEEK, off, position)
+                                .graphicsLayer { alpha = 1f - off().coerceIn(0f, 1f) },
+                        )
+                    }
+
+                    shape.spread -> Row(
+                        z.pageTurn(if (book) bookTurn else turn, gentle = true, offset = off)
+                    ) {
+                        face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight())
+                        face(pages.getOrNull(slot * 2 + 1), PageSide.RIGHT, Modifier.weight(1f).fillMaxHeight())
+                    }
+
+                    else -> face(
                         pages.getOrNull(slot), PageSide.SINGLE,
-                        z.pageTurn(turn, gentle = false, offset = off),
+                        z.pageTurn(if (book) bookTurn else turn, gentle = false, offset = off),
                     )
                 }
             }
@@ -1454,6 +1507,23 @@ private fun PageFace(
                     }
                 ),
         ) {
+            // Остаток места на странице отдаётся воздуху у заголовка: без
+            // этого перед главой, которая не влезла, зияла дыра в несколько
+            // строк, а низ полосы уезжал вверх. В книгах воздух у заголовка
+            // для того и тянется.
+            val headings = page.pieces.count { it.heading }
+            val density = LocalDensity.current
+            // Воздух у заголовка тянется первым. Если заголовка нет, остаток
+            // раскладывается между абзацами, но не больше чем по строке на
+            // промежуток: разгонка хороша в меру, иначе текст расползается.
+            val stretch = with(density) {
+                if (headings > 0) (page.slack / headings).toDp() else 0.dp
+            }
+            val spread = with(density) {
+                val gaps = page.pieces.size - 1
+                if (headings > 0 || gaps < 1) 0.dp
+                else (page.slack / gaps).toDp().coerceAtMost(headingAir)
+            }
             page.pieces.forEachIndexed { index, piece ->
                 val pic = piece.picture
                 if (pic != null) {
@@ -1479,8 +1549,15 @@ private fun PageFace(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(
-                                top = if (piece.heading && index > 0) headingAir else 0.dp,
-                                bottom = if (piece.heading) headingAir else gap,
+                                // Треть растяжки сверху, две трети снизу:
+                                // заголовок должен висеть ближе к своему
+                                // тексту, чем к чужому.
+                                top = if (piece.heading && index > 0) headingAir + stretch / 3 else 0.dp,
+                                bottom = when {
+                                    piece.heading -> headingAir + stretch * 2 / 3
+                                    index < page.pieces.lastIndex -> gap + spread
+                                    else -> gap
+                                },
                             )
                             .onGloballyPositioned { hits.place(piece.start, it.boundsInRoot()) },
                     )
