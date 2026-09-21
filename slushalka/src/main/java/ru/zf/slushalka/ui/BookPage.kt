@@ -46,6 +46,7 @@ import ru.zf.slushalka.data.Settings
 import java.util.Random
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -1248,6 +1249,60 @@ fun Modifier.leafTurn(back: Boolean, offset: () -> Float): Modifier = this.graph
 }
 
 /**
+ * Тень, которую поднятый лист бросает на страницу под ним.
+ *
+ * Без неё поворот читается наложением двух картинок: лист висит в воздухе и
+ * ничего вокруг себя не меняет. Тень живёт по законам света - сверху и чуть
+ * спереди: она ложится от корешка в ту сторону, куда наклонён лист, сжимается
+ * вместе с его проекцией (ширина по косинусу угла), гуще всего у самого
+ * корешка и в середине поворота, когда лист стоит торчком.
+ *
+ * Рисуется на неповёрнутом слое той же геометрии, что и лист: повёрнутый слой
+ * унёс бы тень вместе с собой.
+ */
+fun Modifier.leafCast(tones: PaperTones, gutterLeft: Boolean, offset: () -> Float): Modifier =
+    drawBehind {
+        val off = offset()
+        // Лицо листа поворачивается на положительном ходе, оборот - на
+        // отрицательном; тень нужна и там, и там.
+        val t = if (off > 0f) off else -off
+        if (t <= 0.01f || t >= 0.99f) return@drawBehind
+        val angle = (Math.PI * t).toFloat()
+        val w = size.width
+        val h = size.height
+        val dp = 1.dp.toPx()
+        // Проекция листа на страницу: во сколько раз он «укоротился».
+        val span = (w * abs(cos(angle))).coerceAtLeast(2f * dp)
+        // Наклон: до ребра лист висит над своей половиной, после - над соседней.
+        val toRight = gutterLeft == (t < 0.5f)
+        val axis = if (gutterLeft) 0f else w
+        val from = if (toRight) axis else axis - span
+        val dense = sin(angle)                       // гуще всего на ребре
+        drawRect(
+            Brush.horizontalGradient(
+                0f to tones.cast(0.34f * dense),
+                0.35f to tones.cast(0.16f * dense),
+                1f to Color.Transparent,
+                startX = axis,
+                endX = if (toRight) axis + span else axis - span,
+            ),
+            topLeft = Offset(from, 0f),
+            size = Size(span, h),
+        )
+        // Контактная полоса у самого корешка: там лист ещё касается страницы.
+        val touch = 5f * dp
+        drawRect(
+            Brush.horizontalGradient(
+                listOf(tones.cast(0.30f * dense), Color.Transparent),
+                startX = axis,
+                endX = if (toRight) axis + touch else axis - touch,
+            ),
+            topLeft = Offset(if (toRight) axis else axis - touch, 0f),
+            size = Size(touch, h),
+        )
+    }
+
+/**
  * Бумага гнётся.
  *
  * Поворот плоского прямоугольника читается картонкой, поэтому лист при
@@ -1306,10 +1361,13 @@ half4 main(float2 p) {
     float u = clamp(p.x / size.x, 0.0, 1.0);
     float v = p.y / size.y;
     float bow = sin(u * 3.14159265);
-    float2 q = float2(p.x, p.y - (v - 0.5) * bow * amount * size.y * 0.04);
+    float2 q = float2(p.x, p.y - (v - 0.5) * bow * amount * size.y * 0.07);
     half4 c = content.eval(q);
-    half light = half(1.0 - 0.26 * amount * (1.0 - u) + 0.12 * amount * bow);
-    return half4(c.r * light, c.g * light, c.b * light, c.a);
+    // Свет: у корешка тень (там бумага уходит в сгиб), по дуге блик, и весь
+    // лист темнеет к середине поворота - он встаёт ребром к свету.
+    float light = 1.0 - 0.30 * amount * (1.0 - u) + 0.16 * amount * bow - 0.14 * amount;
+    half k = half(clamp(light, 0.0, 1.5));
+    return half4(c.r * k, c.g * k, c.b * k, c.a);
 }
 """
 

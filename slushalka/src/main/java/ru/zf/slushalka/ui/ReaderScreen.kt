@@ -1,6 +1,10 @@
 package ru.zf.slushalka.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
@@ -40,6 +44,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -1251,7 +1256,14 @@ private fun PagedBody(
                                 }
                             }
                             if (to in 0 until pagerState.pageCount) {
-                                scope.launch { pagerState.animateScrollToPage(to) }
+                                scope.launch {
+                                    // Полсекунды с замедлением в конце: рукой
+                                    // страницу переворачивают примерно так.
+                                    pagerState.animateScrollToPage(
+                                        to,
+                                        animationSpec = tween(460, easing = FastOutSlowInEasing),
+                                    )
+                                }
                             }
                         },
                         onLongPress = { pos ->
@@ -1302,7 +1314,26 @@ private fun PagedBody(
             // месте книги, а лист либо заворачивается (одна страница), либо
             // поворачивается вокруг корешка (разворот).
             val book = look.volume
-            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { slot ->
+            // Доводка мягкая, без щелчка: страница должна ложиться, а не
+            // защёлкиваться. Пружина без отскока и средней жёсткости - это
+            // примерно вес бумаги.
+            val fling = PagerDefaults.flingBehavior(
+                state = pagerState,
+                snapAnimationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                ),
+            )
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                flingBehavior = fling,
+                // На половине разворота под переворачиваемым листом лежит
+                // страница из позапрошлого места пейджера - держим её в
+                // композиции, иначе слева видна голая книга. В развороте это
+                // не нужно: соседние страницы и так рядом.
+                beyondViewportPageCount = if (shape.half) 1 else 0,
+            ) { slot ->
                 val off = { pagerState.turnOffset(slot) }
                 val face: @Composable (Page?, PageSide, Modifier, (() -> Float)?) -> Unit =
                     { page, side, modifier, fold ->
@@ -1333,11 +1364,22 @@ private fun PagedBody(
                             else (-o).coerceIn(0f, 1f)
                             kotlin.math.sin(t * Math.PI).toFloat()
                         }
+                        val pad = pagePadding(look, card, side, topInset, bottomInset, true)
+                        // Тень поднятого листа ложится на страницу под ним и
+                        // живёт на неповёрнутом слое: повёрнутый унёс бы её с
+                        // собой.
+                        Box(
+                            z.halfPan(side, BOOK_PEEK, off, position)
+                                .padding(pad)
+                                // Ось тени там же, где корешок: у правой
+                                // страницы он слева, у оборота - справа.
+                                .leafCast(tones, gutterLeft = side == PageSide.RIGHT, offset = off)
+                        )
                         PageFace(
                             page = pages.getOrNull(slot), side = side, app = app, bookId = bookId,
                             palette = palette, hits = hits, tones = tones, look = look,
                             shape = shape,
-                            pad = pagePadding(look, card, side, topInset, bottomInset, true),
+                            pad = pad,
                             margins = margins, style = style, contStyle = contStyle,
                             headingStyle = headingStyle, gap = gap, marksAt = marksAt,
                             highlight = highlight, highlightAlpha = highlightAlpha,
@@ -1362,6 +1404,13 @@ private fun PagedBody(
                         face(pages.getOrNull(slot * 2), PageSide.LEFT, Modifier.weight(1f).fillMaxHeight(), null)
                         Box(Modifier.weight(1f).fillMaxHeight()) {
                             val bend = { val o = off().coerceIn(0f, 1f); kotlin.math.sin(o * Math.PI).toFloat() }
+                            // Тень поднятого листа на страницах под ним.
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .padding(pagePadding(look, card, PageSide.RIGHT, topInset, bottomInset))
+                                    .leafCast(tones, gutterLeft = true, offset = off)
+                            )
                             face(
                                 pages.getOrNull(slot * 2 + 1), PageSide.RIGHT,
                                 Modifier.fillMaxSize().leafTurn(back = false, offset = off)
