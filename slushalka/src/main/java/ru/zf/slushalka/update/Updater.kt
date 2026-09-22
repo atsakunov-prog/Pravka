@@ -1,5 +1,6 @@
-package ru.zf.slushalka.data
+package ru.zf.slushalka.update
 
+import ru.zf.slushalka.data.Settings
 import android.content.Context
 import android.content.Intent
 import android.net.Uri

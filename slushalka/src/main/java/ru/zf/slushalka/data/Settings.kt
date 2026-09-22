@@ -330,32 +330,24 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setCloudSync(v: Boolean) = edit { it[KEY_CLOUD_SYNC] = v }
 
     companion object {
-        const val MODEL_OPUS = "claude-opus-5-5"
-        const val MODEL_SONNET = "claude-sonnet-5"
-        const val MODEL_FABLE = "claude-fable-5-1"
+        // Модели - в ask/Models.kt: там же имена, цены и «по умолчанию».
+        const val MODEL_OPUS = ru.zf.slushalka.ask.Models.OPUS_ID
+        const val MODEL_SONNET = ru.zf.slushalka.ask.Models.SONNET_ID
+        const val MODEL_FABLE = ru.zf.slushalka.ask.Models.FABLE_ID
 
-        /** Что можно выбрать в настройках; порядок — от дешёвой к дорогой. */
-        val MODELS = listOf(MODEL_SONNET, MODEL_OPUS, MODEL_FABLE)
+        /** Что можно выбрать в настройках; порядок - от дешёвой к дорогой. */
+        val MODELS = ru.zf.slushalka.ask.Models.ALL.map { it.id }
 
-        fun modelLabel(model: String): String = when (model) {
-            MODEL_SONNET -> "Сонет 5"
-            MODEL_OPUS -> "Опус 5.5"
-            MODEL_FABLE -> "Fable 5.1"
-            else -> model
-        }
+        fun modelLabel(model: String): String = ru.zf.slushalka.ask.Models.of(model)?.label ?: model
 
         /** output_config.effort; пустая строка — «по умолчанию», см. [defaultEffort]. */
         val EFFORTS = listOf("", "low", "medium", "high", "xhigh", "max")
 
-        /**
-         * Что значит «по умолчанию». У Опуса 5.5 заводское усилие API — medium,
-         * на ступень ниже прежнего high: молча отдать его значило бы сделать
-         * ответы мельче, чем были. Поэтому ему «по умолчанию» — явный high,
-         * остальным — пусто, API и так берёт high.
-         */
-        fun defaultEffort(model: String): String = if (model == MODEL_OPUS) "high" else ""
-
         fun effortLabel(effort: String): String = if (effort.isBlank()) "по умолчанию" else effort
+
+        /** Что значит «по умолчанию» для этой модели - см. [ru.zf.slushalka.ask.Models.Model.defaultEffort]. */
+        fun defaultEffort(model: String): String = ru.zf.slushalka.ask.Models.of(model)?.defaultEffort ?: ""
+
 
         /** Знаков в «странице»: стандартная машинописная - 1800. */
         const val PAGE_CHARS = 1800

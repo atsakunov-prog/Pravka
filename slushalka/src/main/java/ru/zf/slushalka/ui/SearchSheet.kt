@@ -41,7 +41,7 @@ import kotlinx.coroutines.launch
 import ru.zf.slushalka.SlushalkaApp
 import ru.zf.slushalka.ask.GuideState
 import ru.zf.slushalka.ask.MeaningSearch
-import ru.zf.slushalka.ask.VoiceInput
+import ru.zf.slushalka.speech.VoiceInput
 import ru.zf.slushalka.library.Book
 import ru.zf.slushalka.text.BookText
 

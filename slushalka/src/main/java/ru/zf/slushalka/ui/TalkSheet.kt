@@ -48,7 +48,7 @@ import kotlinx.coroutines.launch
 import ru.zf.slushalka.SlushalkaApp
 import ru.zf.slushalka.ask.BookTalk
 import ru.zf.slushalka.ask.GuideState
-import ru.zf.slushalka.ask.VoiceInput
+import ru.zf.slushalka.speech.VoiceInput
 
 /**
  * Разговор о книге: сначала пять тем от Claude, тап по теме - его первая

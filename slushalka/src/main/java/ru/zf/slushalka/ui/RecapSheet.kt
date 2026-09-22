@@ -92,7 +92,7 @@ fun RecapSheet(
 
     AlertDialog(
         onDismissRequest = { app.speaker.stop(); app.ask.cancel(); onClose() },
-        title = { Text("Напомнить содержание") },
+        title = { Text("Напомнить, что было") },
         text = {
             Column(Modifier.heightIn(max = 460.dp)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

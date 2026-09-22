@@ -79,6 +79,8 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 18.dp),
         ) {
+            Group("Библиотека")
+
             Section("Книги")
             Text(
                 if (prefs.libraryUri.isBlank()) "Папка не выбрана"
@@ -114,6 +116,52 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 )
             }
 
+            Section("Кто слушает")
+            OutlinedTextField(
+                value = profile,
+                onValueChange = {
+                    profile = it
+                    scope.launch { state.settings.setProfile(it) }
+                },
+                label = { Text("Имя для синхронизации") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            Note(
+                "В корне библиотеки заводится папка «_Слушалка», и это имя становится твоей " +
+                    "дорожкой в ней. Если папка синхронизируется между устройствами, книга " +
+                    "продолжается там, где остановилась, а на карточке видно, докуда дошёл второй."
+            )
+            Toggle("Синхронизировать позиции", prefs.syncPositions) {
+                scope.launch { state.settings.setSyncPositions(it) }
+            }
+
+            CloudSettings(app)
+
+            Section("Флибуста")
+            OutlinedTextField(
+                value = flibusta,
+                onValueChange = {
+                    flibusta = it
+                    scope.launch { state.settings.setFlibustaUrl(it) }
+                    // Ленты уже открытого каталога вели на прежний адрес.
+                    app.catalog.reset()
+                },
+                label = { Text("Адрес каталога") },
+                placeholder = { Text(Settings.DEFAULT_FLIBUSTA_URL) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            Note(
+                "Каталог открывается лупой на полке. Книга скачивается в папку библиотеки " +
+                    "своей папкой «Автор - Название» с fb2 и обложкой и появляется на полке как " +
+                    "книга без записи: читалка, озвучка, вопросы и пересказ работают, плеера нет. " +
+                    "Появится начитка - положи файлы в ту же папку.\n\n" +
+                    "Если сайт в этой сети не открывается, помогает VPN или адрес зеркала здесь."
+            )
+
+            Group("Чтение и звук")
+
             Section("Внешний вид")
             Toggle("Для электронной книги (e-ink)", prefs.readerEink) {
                 scope.launch { state.settings.setReaderEink(it) }
@@ -148,59 +196,29 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 Text(title, style = MaterialTheme.typography.bodyMedium)
             }
 
-            // Раздел про открытую книгу - здесь, а не только в настройках
-            // читалки: сюда заходят в первую очередь, и «где мои картинки»
-            // спрашивают именно тут.
-            current?.let { book ->
-                Section("Открытая книга")
-                Text(book.title, style = MaterialTheme.typography.bodyLarge)
-                val pics = text?.pictures?.size ?: 0
-                val extracted = state.picturesOnDisk()
-                Text(
-                    when {
-                        text == null -> "Текст книги ещё не разобран."
-                        pics > 0 -> "Картинок в тексте: $pics — стоят на своих местах, " +
-                            "тап открывает во весь экран."
-                        extracted > 0 -> "Вынуто из файла: $extracted, но место в тексте для них " +
-                            "не нашлось — смотри списком."
-                        else -> "Картинок в книге не нашлось."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                if (text != null && pics == 0) {
-                    state.parseReport()?.let { r ->
-                        Note("Разбор увидел: ${r.line()}")
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (extracted > 0) {
-                        TextButton(onClick = { showGallery = true }) { Text("Показать картинки") }
-                    }
-                    TextButton(onClick = { state.reparseText() }) { Text("Разобрать заново") }
+            Section("Плеер")
+            Text("Перемотка кнопками: ${prefs.skipSec} с", style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(10, 15, 20, 30, 60).forEach { s ->
+                    FilterChip(
+                        selected = prefs.skipSec == s,
+                        onClick = { scope.launch { state.settings.setSkipSec(s) } },
+                        label = { Text("$s") },
+                    )
                 }
             }
-
-            Section("Флибуста")
-            OutlinedTextField(
-                value = flibusta,
-                onValueChange = {
-                    flibusta = it
-                    scope.launch { state.settings.setFlibustaUrl(it) }
-                    // Ленты уже открытого каталога вели на прежний адрес.
-                    app.catalog.reset()
-                },
-                label = { Text("Адрес каталога") },
-                placeholder = { Text(Settings.DEFAULT_FLIBUSTA_URL) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-            )
+            Spacer(Modifier.height(8.dp))
+            Toggle("Откатываться назад после паузы", prefs.autoRewind) {
+                scope.launch { state.settings.setAutoRewind(it) }
+            }
             Note(
-                "Каталог открывается лупой на полке. Книга скачивается в папку библиотеки " +
-                    "своей папкой «Автор - Название» с fb2 и обложкой и появляется на полке как " +
-                    "книга без записи: читалка, озвучка, вопросы и пересказ работают, плеера нет. " +
-                    "Появится начитка - положи файлы в ту же папку.\n\n" +
-                    "Если сайт в этой сети не открывается, помогает VPN или адрес зеркала здесь."
+                "Через пять минут паузы книга отматывается на три секунды, через неделю - " +
+                    "на полминуты: иначе включаешься в середину фразы."
             )
+            Toggle("Проглатывать тишину", prefs.skipSilence) {
+                scope.launch { state.settings.setSkipSilence(it) }
+                app.player.setSkipSilence(it)
+            }
 
             Section("Озвучка")
             val speech by app.readAloud.state.collectAsState()
@@ -248,51 +266,39 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 TextButton(onClick = { app.readAloud.openSystemSettings() }) { Text("Голоса системы") }
             }
 
-            Section("Кто слушает")
-            OutlinedTextField(
-                value = profile,
-                onValueChange = {
-                    profile = it
-                    scope.launch { state.settings.setProfile(it) }
-                },
-                label = { Text("Имя для синхронизации") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-            )
-            Note(
-                "В корне библиотеки заводится папка «_Слушалка», и это имя становится твоей " +
-                    "дорожкой в ней. Если папка синхронизируется между устройствами, книга " +
-                    "продолжается там, где остановилась, а на карточке видно, докуда дошёл второй."
-            )
-            Toggle("Синхронизировать позиции", prefs.syncPositions) {
-                scope.launch { state.settings.setSyncPositions(it) }
-            }
-
-            CloudSettings(app)
-
-            Section("Плеер")
-            Text("Перемотка кнопками: ${prefs.skipSec} с", style = MaterialTheme.typography.bodyMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(10, 15, 20, 30, 60).forEach { s ->
-                    FilterChip(
-                        selected = prefs.skipSec == s,
-                        onClick = { scope.launch { state.settings.setSkipSec(s) } },
-                        label = { Text("$s") },
-                    )
+            // Раздел про открытую книгу - здесь, а не только в настройках
+            // читалки: сюда заходят в первую очередь, и «где мои картинки»
+            // спрашивают именно тут.
+            current?.let { book ->
+                Section("Открытая книга")
+                Text(book.title, style = MaterialTheme.typography.bodyLarge)
+                val pics = text?.pictures?.size ?: 0
+                val extracted = state.picturesOnDisk()
+                Text(
+                    when {
+                        text == null -> "Текст книги ещё не разобран."
+                        pics > 0 -> "Картинок в тексте: $pics — стоят на своих местах, " +
+                            "тап открывает во весь экран."
+                        extracted > 0 -> "Вынуто из файла: $extracted, но место в тексте для них " +
+                            "не нашлось — смотри списком."
+                        else -> "Картинок в книге не нашлось."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (text != null && pics == 0) {
+                    state.parseReport()?.let { r ->
+                        Note("Разбор увидел: ${r.line()}")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (extracted > 0) {
+                        TextButton(onClick = { showGallery = true }) { Text("Показать картинки") }
+                    }
+                    TextButton(onClick = { state.reparseText() }) { Text("Разобрать заново") }
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            Toggle("Откатываться назад после паузы", prefs.autoRewind) {
-                scope.launch { state.settings.setAutoRewind(it) }
-            }
-            Note(
-                "Через пять минут паузы книга отматывается на три секунды, через неделю - " +
-                    "на полминуты: иначе включаешься в середину фразы."
-            )
-            Toggle("Проглатывать тишину", prefs.skipSilence) {
-                scope.launch { state.settings.setSkipSilence(it) }
-                app.player.setSkipSilence(it)
-            }
+
+            Group("Claude")
 
             Section("Вопросы")
             OutlinedTextField(
@@ -395,6 +401,8 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                     "Выключатель здесь - заводское положение, в самом листе его можно переключить."
             )
 
+            Group("Приложение")
+
             Section("Обновление")
             val update by app.updater.status.collectAsState()
             // Своя версия - прямо здесь, а не только в «О приложении» внизу:
@@ -405,14 +413,14 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             )
             Text(
                 when (val u = update) {
-                    is ru.zf.slushalka.data.Updater.Status.Ready ->
+                    is ru.zf.slushalka.update.Updater.Status.Ready ->
                         "Есть версия ${u.update.versionName}" +
                             (if (u.update.builtAt.isBlank()) "" else " от ${u.update.builtAt}")
-                    is ru.zf.slushalka.data.Updater.Status.Downloading -> "Качаю: ${u.percent}%"
-                    ru.zf.slushalka.data.Updater.Status.Checking -> "Смотрю…"
-                    is ru.zf.slushalka.data.Updater.Status.UpToDate ->
+                    is ru.zf.slushalka.update.Updater.Status.Downloading -> "Качаю: ${u.percent}%"
+                    ru.zf.slushalka.update.Updater.Status.Checking -> "Смотрю…"
+                    is ru.zf.slushalka.update.Updater.Status.UpToDate ->
                         "Стоит последняя (сборка ${u.code}) · проверено ${formatAgo(u.at)}"
-                    is ru.zf.slushalka.data.Updater.Status.Failed -> u.message
+                    is ru.zf.slushalka.update.Updater.Status.Failed -> u.message
                     else -> "Проверяется само при каждом запуске, не чаще раза в полчаса"
                 },
                 style = MaterialTheme.typography.bodyMedium,
@@ -421,7 +429,7 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 TextButton(onClick = { scope.launch { app.updater.check(manual = true) } }) {
                     Text("Проверить сейчас")
                 }
-                (update as? ru.zf.slushalka.data.Updater.Status.Ready)?.let { ready ->
+                (update as? ru.zf.slushalka.update.Updater.Status.Ready)?.let { ready ->
                     TextButton(onClick = {
                         scope.launch { app.updater.downloadAndInstall(ready.update) }
                     }) { Text("Обновить") }
@@ -491,6 +499,16 @@ private fun voiceLabel(v: android.speech.tts.Voice): String {
         else -> ""
     }
     return raw.ifBlank { v.name } + stars + if (v.isNetworkConnectionRequired) " · сеть" else ""
+}
+
+/**
+ * Группа разделов. Двенадцать разделов подряд искались листанием: теперь их
+ * четыре кучки - библиотека, чтение и звук, Claude, приложение.
+ */
+@Composable
+private fun Group(title: String) {
+    Spacer(Modifier.height(30.dp))
+    Text(title, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
 }
 
 @Composable

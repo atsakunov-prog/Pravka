@@ -219,11 +219,12 @@ fun PlayerScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.Center,
                     ) {
-                        TextButton(onClick = { showChapters = true }) { Text("Главы") }
+                        // Те же слова, что в читалке: одна вещь - одно имя на обоих экранах.
+                        TextButton(onClick = { showChapters = true }) { Text("Содержание") }
                         TextButton(onClick = { showMarks = true }) { Text("Закладки") }
                         if (b.textDocId != null) {
                             TextButton(onClick = { showRecap = true }) {
-                                Text("Напомнить содержание")
+                                Text("Напомнить")
                             }
                             TextButton(onClick = { showGuide = true }) { Text("Справочник") }
                             TextButton(onClick = onTalk) { Text("Поговорить о книге") }

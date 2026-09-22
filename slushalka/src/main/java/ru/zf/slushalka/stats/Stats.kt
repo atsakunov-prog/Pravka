@@ -1,5 +1,6 @@
-package ru.zf.slushalka.data
+package ru.zf.slushalka.stats
 
+import ru.zf.slushalka.data.Settings
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate

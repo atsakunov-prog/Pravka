@@ -163,14 +163,14 @@ fun LibraryScreen(
         ) {
             // Новая версия - первой строкой: чтобы обновиться, не надо ничего
             // никуда закидывать, довольно одной кнопки.
-            (update as? ru.zf.slushalka.data.Updater.Status.Ready)?.let { ready ->
+            (update as? ru.zf.slushalka.update.Updater.Status.Ready)?.let { ready ->
                 item(key = "update", span = { GridItemSpan(maxLineSpan) }) {
                     UpdateCard(ready.update.versionName) {
                         scope.launch { app.updater.downloadAndInstall(ready.update) }
                     }
                 }
             }
-            (update as? ru.zf.slushalka.data.Updater.Status.Downloading)?.let { d ->
+            (update as? ru.zf.slushalka.update.Updater.Status.Downloading)?.let { d ->
                 item(key = "downloading", span = { GridItemSpan(maxLineSpan) }) {
                     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                         Text("Качаю новую версию: ${d.percent}%", style = MaterialTheme.typography.bodyMedium)

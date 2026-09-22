@@ -63,7 +63,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ru.zf.slushalka.SlushalkaApp
 import ru.zf.slushalka.data.Settings
-import ru.zf.slushalka.data.Stats
+import ru.zf.slushalka.stats.Stats
 import ru.zf.slushalka.library.Book
 
 /**

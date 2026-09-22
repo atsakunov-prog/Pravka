@@ -70,7 +70,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ru.zf.slushalka.SlushalkaApp
-import ru.zf.slushalka.ask.VoiceInput
+import ru.zf.slushalka.speech.VoiceInput
 import ru.zf.slushalka.data.Note
 import ru.zf.slushalka.text.Block
 import ru.zf.slushalka.text.BookText

@@ -123,7 +123,7 @@ class Advisor(private val app: SlushalkaApp, private val client: ClaudeClient) {
             // Не только что есть, но и как читалось: дочитал, бросил на трети,
             // сидел запоем, делал пометки - по этому вкус виден точнее, чем по
             // названиям. Всё из журнала подходов и пометок, в сеть не ходит.
-            val report = runCatching { ru.zf.slushalka.data.Stats.report(app.journal.all()) }.getOrNull()
+            val report = runCatching { ru.zf.slushalka.stats.Stats.report(app.journal.all()) }.getOrNull()
             val now = System.currentTimeMillis()
             append("БИБЛИОТЕКА ЧЕЛОВЕКА И КАК ОН ЕЁ ЧИТАЛ (в скобках: докуда дошёл, сколько времени провёл, ")
             append("давно ли открывал, пометки на полях):\n")

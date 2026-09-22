@@ -57,7 +57,7 @@ import kotlinx.coroutines.launch
 import ru.zf.slushalka.SlushalkaApp
 import ru.zf.slushalka.ask.AskEngine
 import ru.zf.slushalka.ask.Prompts
-import ru.zf.slushalka.ask.VoiceInput
+import ru.zf.slushalka.speech.VoiceInput
 import ru.zf.slushalka.data.Settings
 
 /**

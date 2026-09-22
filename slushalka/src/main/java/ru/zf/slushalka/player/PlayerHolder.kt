@@ -15,7 +15,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import ru.zf.slushalka.data.BookState
-import ru.zf.slushalka.data.Journal
+import ru.zf.slushalka.stats.Journal
 import ru.zf.slushalka.data.PositionStore
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book

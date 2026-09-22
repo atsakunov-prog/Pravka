@@ -1,4 +1,4 @@
-package ru.zf.slushalka.ask
+package ru.zf.slushalka.speech
 
 import android.content.Context
 import android.content.Intent

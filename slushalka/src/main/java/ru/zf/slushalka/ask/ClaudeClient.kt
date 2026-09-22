@@ -333,23 +333,8 @@ class ClaudeClient(private val settings: Settings) {
         /** Десять долларов за тысячу поисков. */
         private const val WEB_SEARCH_USD = 0.01
 
-        private class Price(val input: Double, val output: Double, cacheRead: Double? = null) {
-            val cacheRead: Double = cacheRead ?: (input * 0.1)
-        }
-
-        // Доллары за миллион токенов; кэш - производная от входной цены:
-        // запись на час стоит 2x, чтение 0.1x, если у модели нет своей цены.
-        private val PRICES = mapOf(
-            // Сонет 5 дешевле 4.6 ($3/$15): старая цена завышала расход в полтора раза.
-            Settings.MODEL_SONNET to Price(2.0, 10.0),
-            // Опус 5.5 дешевле Опуса 5 ($5/$25), чтение кэша — $0.20.
-            Settings.MODEL_OPUS to Price(4.0, 20.0, cacheRead = 0.20),
-            // Fable 5.1: в два с половиной раза дороже Опуса 5.5, чтение кэша — $0.25 за миллион.
-            Settings.MODEL_FABLE to Price(10.0, 50.0, cacheRead = 0.25),
-        )
-
         /** Цена чтения кэша за миллион токенов - для прикидки «следующие вопросы». */
-        fun cacheReadPerMillion(model: String): Double = PRICES[model]?.cacheRead ?: 0.0
+        fun cacheReadPerMillion(model: String): Double = Models.of(model)?.cacheRead ?: 0.0
 
         fun costUsd(
             model: String,
@@ -358,7 +343,8 @@ class ClaudeClient(private val settings: Settings) {
             cacheWriteTokens: Int = 0,
             cacheReadTokens: Int = 0,
         ): Double {
-            val p = PRICES[model] ?: return 0.0
+            // Цены - в Models: одна таблица на всё приложение.
+            val p = Models.of(model) ?: return 0.0
             val input =
                 (inputTokens + 2.0 * cacheWriteTokens) / 1_000_000.0 * p.input +
                     cacheReadTokens / 1_000_000.0 * p.cacheRead

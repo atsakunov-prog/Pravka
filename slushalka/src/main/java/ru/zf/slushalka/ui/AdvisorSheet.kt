@@ -42,7 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import ru.zf.slushalka.SlushalkaApp
-import ru.zf.slushalka.ask.VoiceInput
+import ru.zf.slushalka.speech.VoiceInput
 import ru.zf.slushalka.catalog.Advisor
 import ru.zf.slushalka.data.Settings
 
