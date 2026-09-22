@@ -19,7 +19,8 @@ import ru.zf.slushalka.library.documentUri
  *
  * Рядом лежит `вопросы-<имя>.json` - история вопросов и ответов той же
  * дорожки. Она, наоборот, сливается: два устройства одного человека
- * дописывают друг друга, и разговор с книгой один на оба.
+ * дописывают друг друга, и разговор с книгой один на оба. Так же сливаются
+ * пометки на полях - `пометки-<имя>.json`.
  */
 class PositionSync(private val context: Context) {
 
@@ -94,6 +95,38 @@ class PositionSync(private val context: Context) {
                 Ask(o.optLong("at"), o.optLong("abs"), o.optString("q"), o.optString("a"), o.optDouble("usd"))
             }
         }
+    }.getOrNull()
+
+    /** Пометки этой дорожки - с надгробиями удалённых, чтобы слияние их не воскресило. */
+    fun pushNotes(treeUri: Uri, profile: String, notes: Map<String, List<Note>>) {
+        if (profile.isBlank()) return
+        runCatching {
+            val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+            val dirId = ensureDir(treeUri, rootId, DIR) ?: return
+            val fileId = ensureFile(treeUri, dirId, fileName(NOTES_PREFIX, profile)) ?: return
+            val body = JSONObject().apply {
+                put("profile", profile)
+                put("at", System.currentTimeMillis())
+                put("books", JSONObject().apply {
+                    notes.forEach { (id, list) -> put(id, Notes.toJson(list)) }
+                })
+            }.toString()
+            context.contentResolver.openOutputStream(documentUri(treeUri, fileId), "wt")?.use {
+                it.write(body.toByteArray())
+            }
+        }
+    }
+
+    /** Пометки своей дорожки, записанные другим устройством; null - файла нет. */
+    fun pullNotes(treeUri: Uri, profile: String): Map<String, List<Note>>? = runCatching {
+        if (profile.isBlank()) return null
+        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+        val dirId = findChild(treeUri, rootId, DIR) ?: return null
+        val docId = findChild(treeUri, dirId, fileName(NOTES_PREFIX, profile)) ?: return null
+        val text = context.contentResolver.openInputStream(documentUri(treeUri, docId))
+            ?.use { it.readBytes().toString(Charsets.UTF_8) } ?: return null
+        val books = JSONObject(text).optJSONObject("books") ?: return emptyMap()
+        books.keys().asSequence().associateWith { id -> Notes.fromJson(books.getJSONArray(id)) }
     }.getOrNull()
 
     /** Всё, что лежит в папке синхронизации, включая чужие дорожки. */
@@ -178,5 +211,6 @@ class PositionSync(private val context: Context) {
         private const val DIR = "_Слушалка"
         private const val PREFIX = "позиции-"
         private const val ASKS_PREFIX = "вопросы-"
+        private const val NOTES_PREFIX = "пометки-"
     }
 }

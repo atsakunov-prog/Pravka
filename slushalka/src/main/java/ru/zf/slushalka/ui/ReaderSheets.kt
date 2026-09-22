@@ -108,7 +108,7 @@ fun ParagraphSheet(
     block: Block,
     hasAudio: Boolean,
     playAbsMs: Long,
-    /** Обведённый пальцем кусок: он уже выбран, фразы не предлагаются. */
+    /** Выделенный кусок (тапами или обводкой): он уже выбран, фразы не предлагаются. */
     lasso: String? = null,
     lassoEnd: Int? = null,
     onAsk: (atChar: Int, question: String?, quote: String) -> Unit,
@@ -152,10 +152,10 @@ fun ParagraphSheet(
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp),
         ) {
-            Text(if (lasso != null) "Обведённое" else "Этот кусок", style = MaterialTheme.typography.titleLarge)
+            Text(if (lasso != null) "Выделенное" else "Этот кусок", style = MaterialTheme.typography.titleLarge)
             Text(
                 when {
-                    lasso != null -> "Спросить про то, что обвёл."
+                    lasso != null -> "Готовые вопросы про выделенное, справочник по тем, кто в нём упомянут."
                     sentences.size > 1 -> "Тапни фразы, о которых спросить, - или спрашивай обо всём абзаце."
                     else -> "Спросить про этот абзац."
                 },

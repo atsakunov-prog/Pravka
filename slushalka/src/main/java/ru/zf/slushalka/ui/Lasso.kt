@@ -79,6 +79,26 @@ class TextHits {
     }
 
     /**
+     * Знак книги под точкой (в координатах корня) - для выделения тапами.
+     *
+     * [prefer] отличает куски на экране от соседних страниц пейджера: при
+     * растворении следующая страница лежит на том же месте прозрачной, и без
+     * этого двойной тап выделял бы слово на ней, а не на видимой.
+     */
+    fun charAt(root: Offset, prefer: (Int) -> Boolean = { true }): Int? {
+        var fallback: Int? = null
+        for (h in map.values) {
+            val b = h.bounds ?: continue
+            val l = h.layout ?: continue
+            if (!b.contains(root)) continue
+            val at = h.start + l.getOffsetForPosition(root - b.topLeft)
+            if (prefer(h.start)) return at
+            if (fallback == null) fallback = at
+        }
+        return fallback
+    }
+
+    /**
      * Знаки книги под прямоугольником (в координатах корня экрана). Внутри
      * каждого задетого куска берётся от знака под левым верхним углом до знака
      * под правым нижним: обвёл три строки - получил с начала первой задетой

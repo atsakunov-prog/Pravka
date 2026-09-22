@@ -793,15 +793,20 @@ class AppState(private val app: SlushalkaApp) {
         // потолще позиций, и переписывать его каждые две минуты незачем.
         val asksRev = app.askLog.revision
         val asks = if (asksRev != pushedAsksRev) app.askLog.all() else null
+        val notesRev = app.notes.revision.value
+        val notes = if (notesRev != pushedNotesRev) app.notes.all() else null
         withContext(Dispatchers.IO) {
             app.sync.push(tree, p.profile, all)
             if (asks != null) app.sync.pushAsks(tree, p.profile, asks)
+            if (notes != null) app.sync.pushNotes(tree, p.profile, notes)
         }
         if (asks != null) pushedAsksRev = asksRev
+        if (notes != null) pushedNotesRev = notesRev
         bump()
     }
 
     private var pushedAsksRev = -1
+    private var pushedNotesRev = -1
 
     fun syncPull() {
         val tree = treeUri() ?: return
@@ -841,6 +846,9 @@ class AppState(private val app: SlushalkaApp) {
             // Вопросы, заданные с другого устройства, - в свою историю.
             val asks = withContext(Dispatchers.IO) { app.sync.pullAsks(tree, p.profile) }
             asks?.forEach { (id, list) -> app.askLog.merge(id, list) }
+            // И пометки на полях: одна книга - одни поля на всех устройствах.
+            val notes = withContext(Dispatchers.IO) { app.sync.pullNotes(tree, p.profile) }
+            notes?.forEach { (id, list) -> app.notes.merge(id, list) }
             bump()
         }
     }

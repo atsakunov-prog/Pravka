@@ -199,6 +199,8 @@ class MainActivity : ComponentActivity() {
                         askQuote = quote
                         asking = true
                     },
+                    hasMic = hasMic,
+                    onNeedMic = onNeedMic,
                 )
 
                 Screen.SETTINGS -> SettingsScreen(

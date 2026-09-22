@@ -18,6 +18,7 @@ import ru.zf.slushalka.data.GuideStore
 import ru.zf.slushalka.data.Journal
 import ru.zf.slushalka.data.LibraryStore
 import ru.zf.slushalka.data.Markup
+import ru.zf.slushalka.data.Notes
 import ru.zf.slushalka.data.PositionStore
 import ru.zf.slushalka.data.PositionSync
 import ru.zf.slushalka.data.Settings
@@ -38,6 +39,7 @@ class SlushalkaApp : Application() {
     lateinit var texts: TextRepo; private set
     lateinit var bookmarks: Bookmarks; private set
     lateinit var askLog: AskLog; private set
+    lateinit var notes: Notes; private set
     lateinit var journal: Journal; private set
     lateinit var sync: PositionSync; private set
     lateinit var markup: Markup; private set
@@ -60,6 +62,7 @@ class SlushalkaApp : Application() {
         texts = TextRepo(this)
         bookmarks = Bookmarks(this)
         askLog = AskLog(this)
+        notes = Notes(this)
         journal = Journal(this)
         sync = PositionSync(this)
         markup = Markup(this)
