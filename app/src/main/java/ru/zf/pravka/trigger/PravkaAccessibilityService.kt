@@ -309,6 +309,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch {
             app.settings.convoContextFlow.collect { cachedConvoContext = it }
         }
+        // Усилие чистки для ряда в меню «П»: меню строится на главном потоке,
+        // а DataStore с него не читают (Fold).
+        scope.launch {
+            app.settings.modelChoiceFlow(ru.zf.pravka.data.ModelRoute.PRAVKA).collect { cachedPravkaEffort = it.effort }
+        }
         // Автообучение снято (владелец, 15.09.2026: «он уже обучился
         // достаточно, оставить только по кнопке»): служба не подписывается на
         // события текста вообще — ни события на каждое нажатие клавиши, ни
@@ -861,6 +866,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal data class ConvoEntry(val pkg: String, val at: Long, val text: String)
     internal val convo = ArrayDeque<ConvoEntry>()
     @Volatile internal var cachedConvoContext: Boolean = true
+    @Volatile internal var cachedPravkaEffort: String = ru.zf.pravka.data.ModelRoute.PRAVKA.defaultEffort
     @Volatile internal var cachedLearnPeriodH: Int = 3
     @Volatile internal var cachedLearnAuto: Boolean = false
 
@@ -1414,8 +1420,20 @@ class PravkaAccessibilityService : AccessibilityService() {
             canUndo -> "↩︎ Откатить последнюю"
             else -> "Готово к правке"
         }
+        // Ряд усилия чистки сверху (владелец, 22.09.2026: «для Опуса надо
+        // варьировать для художки и для обычных текстов… прямо наверху три
+        // кнопки»). Выбор постоянный — та же настройка, что в «Моделях», а не
+        // на один раз: художку правят подряд, и каждый раз жать заново — лишнее.
+        val current = cachedPravkaEffort
+        val efforts = ru.zf.pravka.data.Models.PRAVKA_QUICK_EFFORTS.map { e ->
+            val on = e == current
+            FloatingButtonController.MenuItem(if (on) "● $e" else e, if (on) accent else FloatingButtonController.MUTED) {
+                setPravkaEffort(e)
+            }
+        }
         floatingButton?.toggleMenu(
-            listOf(
+            topRow = efforts,
+            groups = listOf(
                 listOf(
                     FloatingButtonController.MenuItem(state, accent) {
                         if (canUndo && !busy) undoLast()
@@ -1431,6 +1449,14 @@ class PravkaAccessibilityService : AccessibilityService() {
                 ),
             )
         )
+    }
+
+    private fun setPravkaEffort(effort: String) {
+        cachedPravkaEffort = effort
+        scope.launch { app.settings.setEffort(ru.zf.pravka.data.ModelRoute.PRAVKA, effort) }
+        Haptics.start(this)
+        app.eventLog.add("чистка: усилие $effort (меню «П»)")
+        Feedback.toast(this, "Правка: усилие $effort")
     }
 
     /**

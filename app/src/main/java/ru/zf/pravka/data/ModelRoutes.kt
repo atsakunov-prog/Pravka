@@ -190,5 +190,12 @@ object Models {
      */
     val EFFORTS: List<String> = listOf("", "low", "medium", "high", "xhigh", "max")
 
+    /**
+     * Три усилия ряда в меню «П» (22.09.2026): medium — заводское для
+     * обычных текстов, high и xhigh — для художки. low и max не вошли: low
+     * чистке нечего сэкономить, max — это уже настройки, а не быстрый выбор.
+     */
+    val PRAVKA_QUICK_EFFORTS: List<String> = listOf("medium", "high", "xhigh")
+
     fun effortLabel(effort: String): String = if (effort.isBlank()) "по умолчанию" else effort
 }

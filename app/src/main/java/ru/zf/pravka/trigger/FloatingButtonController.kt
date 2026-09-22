@@ -45,6 +45,8 @@ class FloatingButtonController(
         // orange circle, paper-white geometric "П"; deep red while recording.
         val ACCENT = 0xFFEA580C.toInt()
         val REC_RED = 0xFFD8342A.toInt()
+        /** Невыбранная кнопка переключателя в меню: серая, чтобы выбранная читалась сразу. */
+        val MUTED = 0xFF6B6660.toInt()
         private val PAPER = 0xFFF7F3EA.toInt()
     }
 
@@ -515,8 +517,13 @@ class FloatingButtonController(
 
     class MenuItem(val label: String, val color: Int, val onClick: () -> Unit)
 
-    fun toggleMenu(groups: List<List<MenuItem>>) {
-        if (menuVisible) hideMenu() else showMenu(groups)
+    /**
+     * [topRow] — ряд кнопок поперёк над колонками (усилие чистки у «П»,
+     * 22.09.2026): три пилюли в строку читаются как один переключатель, а
+     * не как ещё три пункта списка.
+     */
+    fun toggleMenu(groups: List<List<MenuItem>>, topRow: List<MenuItem> = emptyList()) {
+        if (menuVisible) hideMenu() else showMenu(groups, topRow)
     }
 
     fun hideMenu() {
@@ -527,35 +534,34 @@ class FloatingButtonController(
         menu = null
     }
 
-    private fun showMenu(groups: List<List<MenuItem>>) {
+    private fun showMenu(groups: List<List<MenuItem>>, topRow: List<MenuItem> = emptyList()) {
         hideMenu()
         // Editing actions in red, AI actions in orange - two columns side by
         // side (owner's design).
         val row = android.widget.LinearLayout(service).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
         }
+        fun pill(item: MenuItem, padH: Int = dp(16)) = android.widget.TextView(service).apply {
+            text = item.label
+            setTextColor(PAPER)
+            textSize = 15f
+            background = BubbleSkin().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(item.color)
+            }
+            alpha = 0.92f
+            setPadding(padH, dp(9), padH, dp(9))
+            setOnClickListener {
+                hideMenu()
+                item.onClick()
+            }
+        }
         for (group in groups) {
             val column = android.widget.LinearLayout(service).apply {
                 orientation = android.widget.LinearLayout.VERTICAL
             }
             for (item in group) {
-                val pill = android.widget.TextView(service).apply {
-                    text = item.label
-                    setTextColor(PAPER)
-                    textSize = 15f
-                    background = BubbleSkin().apply {
-                        cornerRadius = dp(18).toFloat()
-                        setColor(item.color)
-                    }
-                    alpha = 0.92f
-                    val padH = dp(16)
-                    val padV = dp(9)
-                    setPadding(padH, padV, padH, padV)
-                    setOnClickListener {
-                        hideMenu()
-                        item.onClick()
-                    }
-                }
+                val pill = pill(item)
                 val lp = android.widget.LinearLayout.LayoutParams(
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -568,7 +574,26 @@ class FloatingButtonController(
             ).apply { marginEnd = dp(8) }
             row.addView(column, clp)
         }
-        val column = row
+        val column: android.widget.LinearLayout = if (topRow.isEmpty()) row else {
+            android.widget.LinearLayout(service).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                val strip = android.widget.LinearLayout(service).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                }
+                for ((i, item) in topRow.withIndex()) {
+                    strip.addView(pill(item, padH = dp(12)), android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = dp(6); if (i > 0) marginStart = dp(6) })
+                }
+                addView(strip)
+                addView(row)
+            }
+        }
+        // Ширина по факту, а не прикидкой: ряд усилия шире колонки, и меню
+        // слева от кнопки легло бы на неё саму.
+        column.measure(android.view.View.MeasureSpec.UNSPECIFIED, android.view.View.MeasureSpec.UNSPECIFIED)
+        val menuW = column.measuredWidth.coerceAtLeast(dp(180))
         val p = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -583,8 +608,8 @@ class FloatingButtonController(
         if (bp != null) {
             val buttonCenterX = bp.x + buttonSize / 2
             p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + dp(8)
-            else (bp.x - dp(180)).coerceAtLeast(0)
-            p.y = bp.y.coerceIn(0, (h - dp(48) * (groups.maxOfOrNull { it.size } ?: 1)).coerceAtLeast(0))
+            else (bp.x - menuW - dp(8)).coerceAtLeast(0)
+            p.y = bp.y.coerceIn(0, (h - column.measuredHeight).coerceAtLeast(0))
         }
         menuParams = p
         menu = column

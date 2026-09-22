@@ -62,6 +62,13 @@ class ModelRoutesTest {
     }
 
     @Test
+    fun `ряд усилия в меню «П» — три допустимых, заводское чистки среди них`() {
+        assertEquals(listOf("medium", "high", "xhigh"), Models.PRAVKA_QUICK_EFFORTS)
+        assertTrue(Models.PRAVKA_QUICK_EFFORTS.all { it in Models.EFFORTS })
+        assertTrue(ModelRoute.PRAVKA.defaultEffort in Models.PRAVKA_QUICK_EFFORTS)
+    }
+
+    @Test
     fun `пустое хранилище даёт заводское`() {
         val c = ModelChoice.of(ModelRoute.ZASECHKA, null, null)
         assertEquals(ModelChoice.defaultOf(ModelRoute.ZASECHKA), c)
