@@ -74,6 +74,8 @@ fun LibraryScreen(
     onSettings: () -> Unit,
     onCatalog: () -> Unit,
     onStats: () -> Unit,
+    /** Облако: книги там и синхронизация без сторонней программы. */
+    onCloud: () -> Unit,
     /** Разговор о дочитанной книге - из меню книги. */
     onTalk: (Book) -> Unit,
 ) {
@@ -119,6 +121,9 @@ fun LibraryScreen(
                     // Статистика: сколько, когда и как быстро. Значок рисуется,
                     // как и кнопки плеера: в базовом наборе иконок графика нет.
                     IconButton(onClick = onStats) { StatsGlyph() }
+                    IconButton(onClick = onCloud) {
+                        Icon(Glyphs.Cloud, contentDescription = "Облако")
+                    }
                     IconButton(onClick = { state.rescan() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Перечитать папку")
                     }
@@ -229,6 +234,7 @@ fun LibraryScreen(
             onOpen = { menuFor = null; onOpen(book) },
             onRemind = { menuFor = null; remind(book) },
             onTalk = { menuFor = null; onTalk(book) },
+            onUpload = if (prefs.cloudReady) { { menuFor = null; app.cloudBooks.upload(book); onCloud() } } else null,
             onClose = { menuFor = null },
         )
     }
@@ -611,6 +617,8 @@ private fun BookMenu(
     onOpen: () -> Unit,
     onRemind: () -> Unit,
     onTalk: () -> Unit,
+    /** Выгрузить в облако; null - облако не настроено. */
+    onUpload: (() -> Unit)?,
     onClose: () -> Unit,
 ) {
     AlertDialog(
@@ -642,6 +650,14 @@ private fun BookMenu(
                         Icon(Glyphs.Forum, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Поговорить о книге")
+                    }
+                }
+                if (onUpload != null) {
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = onUpload, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Glyphs.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Выгрузить в облако")
                     }
                 }
             }

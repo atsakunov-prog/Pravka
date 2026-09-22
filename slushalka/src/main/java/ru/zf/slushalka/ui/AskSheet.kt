@@ -82,6 +82,12 @@ fun AskSheet(
     initialQuestion: String? = null,
     /** Кусок, выделенный в читалке: вопрос - про него. */
     quote: String? = null,
+    /**
+     * Спросили голосом из шторки или с виджета: микрофон включается сразу,
+     * услышанное уходит само, ответ читается вслух - телефон в кармане, в
+     * экран не смотрят.
+     */
+    handsFree: Boolean = false,
 ) {
     val state = app.state
     val book by state.current.collectAsState()
@@ -114,8 +120,26 @@ fun AskSheet(
     val voice = remember { VoiceInput(app) }
     val scroll = rememberScrollState()
 
+    // Озвучка книги без записи тоже замолкает на вопрос: иначе синтез читал
+    // бы книгу прямо в микрофон и поверх ответа.
+    var ttsPausedByUs by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (prefs.pauseWhileAsking) pausedByUs = app.player.pauseForAsking()
+        if (prefs.pauseWhileAsking && app.readAloud.state.value.speaking) {
+            app.readAloud.pause()
+            ttsPausedByUs = true
+        }
+    }
+
+    fun resumeBook() {
+        if (pausedByUs) {
+            app.player.resumeAfterAsking()
+            pausedByUs = false
+        }
+        if (ttsPausedByUs) {
+            app.readAloud.resume()
+            ttsPausedByUs = false
+        }
     }
 
     DisposableEffect(Unit) {
@@ -143,7 +167,7 @@ fun AskSheet(
     fun finish() {
         voice.cancel()
         app.speaker.stop()
-        if (pausedByUs) app.player.resumeAfterAsking()
+        resumeBook()
         onClose()
     }
 
@@ -177,14 +201,11 @@ fun AskSheet(
                 pending = null
                 partial = ""
                 setupOpen = false
-                if (prefs.speakAnswers) {
+                if (prefs.speakAnswers || handsFree) {
                     app.speaker.speak(turn.answer) {
                         // Дочитали вслух - книга сама продолжается: за рулём
                         // в телефон уже не потянешься.
-                        if (pausedByUs) {
-                            app.player.resumeAfterAsking()
-                            pausedByUs = false
-                        }
+                        resumeBook()
                     }
                 }
             }.onFailure {
@@ -219,11 +240,24 @@ fun AskSheet(
         voice.onText = { question = it }
         voice.onEnd = { heard ->
             listening = false
-            if (heard.isNotBlank()) question = heard
+            if (heard.isNotBlank()) {
+                question = heard
+                // Без рук - без кнопки «Спросить»: договорил, и вопрос ушёл.
+                if (handsFree) send(heard)
+            }
         }
         voice.onError = { listening = false; error = it }
         voice.start()
         listening = true
+    }
+
+    // Без рук: слушать, как только собрался контекст, - раньше отправлять некуда.
+    var handsStarted by remember { mutableStateOf(false) }
+    LaunchedEffect(ctx, handsFree) {
+        if (handsFree && !handsStarted && ctx != null) {
+            handsStarted = true
+            startVoice()
+        }
     }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {

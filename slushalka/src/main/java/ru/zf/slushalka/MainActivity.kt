@@ -40,7 +40,7 @@ import ru.zf.slushalka.ui.StatsScreen
 import ru.zf.slushalka.ui.TalkSheet
 import ru.zf.slushalka.widget.ContinueWidget
 
-enum class Screen { LIBRARY, PLAYER, READER, SETTINGS, CATALOG, STATS }
+enum class Screen { LIBRARY, PLAYER, READER, SETTINGS, CATALOG, STATS, CLOUD }
 
 class MainActivity : ComponentActivity() {
 
@@ -61,8 +61,14 @@ class MainActivity : ComponentActivity() {
     /** Тап по виджету «Продолжить»: открыть последнюю книгу, минуя полку. */
     private val continueAsked = kotlinx.coroutines.flow.MutableStateFlow(false)
 
+    /** «Спросить голосом» из шторки или с виджета. */
+    private val voiceAsked = kotlinx.coroutines.flow.MutableStateFlow(false)
+
     private fun takeIntent(intent: Intent?) {
-        if (intent?.action == ContinueWidget.ACTION_CONTINUE) continueAsked.value = true
+        when (intent?.action) {
+            ContinueWidget.ACTION_CONTINUE -> continueAsked.value = true
+            ru.zf.slushalka.player.Shade.ACTION_VOICE_ASK -> voiceAsked.value = true
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -142,6 +148,7 @@ class MainActivity : ComponentActivity() {
         var askAtChar by remember { mutableStateOf<Int?>(null) }
         var askPrefill by remember { mutableStateOf<String?>(null) }
         var askQuote by remember { mutableStateOf<String?>(null) }
+        var askHandsFree by remember { mutableStateOf(false) }
         // Разговор о книге: поверх любого экрана, как вопрос.
         var talking by remember { mutableStateOf(false) }
         var talkAt by remember { mutableStateOf<Int?>(null) }
@@ -178,6 +185,21 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Вопрос голосом: книга та, что играет или была последней; вопрос - с
+        // микрофоном сразу. Книгу без записи спрашиваем с места чтения.
+        val voice by voiceAsked.collectAsState()
+        LaunchedEffect(voice, books) {
+            if (!voice || books.isEmpty()) return@LaunchedEffect
+            voiceAsked.value = false
+            val book = current ?: books.firstOrNull { it.id == app.positions.lastBook() } ?: return@LaunchedEffect
+            if (current?.id != book.id) openBook(book)
+            askAtChar = if (book.hasAudio) null else state.stateOf(book.id).readChar.coerceAtLeast(0)
+            askPrefill = null
+            askQuote = null
+            askHandsFree = true
+            asking = true
+        }
+
         BackHandler(enabled = screen != Screen.LIBRARY || asking || talking) {
             when {
                 talking -> talking = false
@@ -198,6 +220,7 @@ class MainActivity : ComponentActivity() {
                     onSettings = { screen = Screen.SETTINGS },
                     onCatalog = { screen = Screen.CATALOG },
                     onStats = { screen = Screen.STATS },
+                    onCloud = { screen = Screen.CLOUD },
                     onTalk = { book ->
                         openBook(book)
                         talkAt = null
@@ -207,6 +230,12 @@ class MainActivity : ComponentActivity() {
                 )
 
                 Screen.STATS -> StatsScreen(app = app, onBack = { screen = Screen.LIBRARY })
+
+                Screen.CLOUD -> ru.zf.slushalka.ui.CloudScreen(
+                    app = app,
+                    onBack = { screen = Screen.LIBRARY },
+                    onSettings = { screen = Screen.SETTINGS },
+                )
 
                 Screen.CATALOG -> CatalogScreen(
                     app = app,
@@ -288,10 +317,11 @@ class MainActivity : ComponentActivity() {
                     app = app,
                     hasMic = hasMic,
                     onNeedMic = onNeedMic,
-                    onClose = { asking = false; askAtChar = null; askPrefill = null; askQuote = null },
+                    onClose = { asking = false; askAtChar = null; askPrefill = null; askQuote = null; askHandsFree = false },
                     atChar = askAtChar,
                     initialQuestion = askPrefill,
                     quote = askQuote,
+                    handsFree = askHandsFree,
                 )
             }
         }

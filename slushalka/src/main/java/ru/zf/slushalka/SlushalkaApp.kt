@@ -42,6 +42,8 @@ class SlushalkaApp : Application() {
     lateinit var notes: Notes; private set
     lateinit var journal: Journal; private set
     lateinit var sync: PositionSync; private set
+    lateinit var cloud: ru.zf.slushalka.data.Cloud; private set
+    lateinit var cloudBooks: ru.zf.slushalka.data.CloudBooks; private set
     lateinit var markup: Markup; private set
     lateinit var updater: Updater; private set
     lateinit var player: PlayerHolder; private set
@@ -67,6 +69,7 @@ class SlushalkaApp : Application() {
         notes = Notes(this)
         journal = Journal(this)
         sync = PositionSync(this)
+        cloud = ru.zf.slushalka.data.Cloud(settings)
         markup = Markup(this)
         updater = Updater(this, settings)
         speaker = Speaker(this)
@@ -81,6 +84,7 @@ class SlushalkaApp : Application() {
             scope.launch { state.syncPush(bookId) }
         }
         state = AppState(this)
+        cloudBooks = ru.zf.slushalka.data.CloudBooks(this)
         catalog = CatalogState(this)
         readAloud = ReadAloud(this)
         player.artworkFor = { bookId, absMs -> state.pictureUriAt(bookId, absMs) }

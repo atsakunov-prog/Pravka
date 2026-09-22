@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.zf.slushalka.SlushalkaApp
 import ru.zf.slushalka.data.BookState
+import ru.zf.slushalka.data.PositionSync
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
 import ru.zf.slushalka.library.Durations
@@ -823,6 +824,15 @@ class AppState(private val app: SlushalkaApp) {
             if (asks != null) app.sync.pushAsks(tree, p.profile, asks)
             if (notes != null) app.sync.pushNotes(tree, p.profile, notes)
         }
+        // Те же файлы - в облако, если оно настроено: тогда синхронизация
+        // идёт без сторонней программы, которая возит папку библиотеки.
+        if (p.cloudReady && p.cloudSync) {
+            val dir = ru.zf.slushalka.data.Cloud.SYNC_DIR
+            fun path(prefix: String) = dir + "/" + PositionSync.fileName(prefix, p.profile)
+            app.cloud.putText(path(PositionSync.PREFIX), PositionSync.positionsJson(p.profile, all))
+            if (asks != null) app.cloud.putText(path(PositionSync.ASKS_PREFIX), PositionSync.asksJson(p.profile, asks))
+            if (notes != null) app.cloud.putText(path(PositionSync.NOTES_PREFIX), PositionSync.notesJson(p.profile, notes))
+        }
         if (asks != null) pushedAsksRev = asksRev
         if (notes != null) pushedNotesRev = notesRev
         bump()
@@ -836,7 +846,11 @@ class AppState(private val app: SlushalkaApp) {
         val p = prefs.value
         if (!p.syncPositions) return
         app.scope.launch {
-            val remotes = withContext(Dispatchers.IO) { app.sync.pull(tree) }
+            // Дорожки из папки библиотеки и из облака; одна дорожка в двух
+            // местах - берётся свежая.
+            val remotes = (withContext(Dispatchers.IO) { app.sync.pull(tree) } + cloudRemotes(p))
+                .groupBy { it.profile.lowercase() }
+                .map { (_, same) -> same.maxBy { it.at } }
             val mine = remotes.firstOrNull { it.profile.equals(p.profile, true) }
             val others = remotes.filter { !it.profile.equals(p.profile, true) }
             val hasAudio = _books.value.associate { it.id to it.hasAudio }
@@ -872,7 +886,24 @@ class AppState(private val app: SlushalkaApp) {
             // И пометки на полях: одна книга - одни поля на всех устройствах.
             val notes = withContext(Dispatchers.IO) { app.sync.pullNotes(tree, p.profile) }
             notes?.forEach { (id, list) -> app.notes.merge(id, list) }
+            if (p.cloudReady && p.cloudSync && p.profile.isNotBlank()) {
+                val dir = ru.zf.slushalka.data.Cloud.SYNC_DIR
+                app.cloud.getText(dir + "/" + PositionSync.fileName(PositionSync.ASKS_PREFIX, p.profile)).getOrNull()
+                    ?.let(PositionSync::parseAsks)?.forEach { (id, list) -> app.askLog.merge(id, list) }
+                app.cloud.getText(dir + "/" + PositionSync.fileName(PositionSync.NOTES_PREFIX, p.profile)).getOrNull()
+                    ?.let(PositionSync::parseNotes)?.forEach { (id, list) -> app.notes.merge(id, list) }
+            }
             bump()
+        }
+    }
+
+    /** Дорожки позиций из облака; пусто - облако не настроено или не ответило. */
+    private suspend fun cloudRemotes(p: Settings.Prefs): List<PositionSync.Remote> {
+        if (!p.cloudReady || !p.cloudSync) return emptyList()
+        val dir = ru.zf.slushalka.data.Cloud.SYNC_DIR
+        val names = app.cloud.list(dir).getOrNull().orEmpty().filter { !it.dir && PositionSync.isPositions(it.name) }
+        return names.mapNotNull { item ->
+            app.cloud.getText("$dir/${item.name}").getOrNull()?.let(PositionSync::parseRemote)
         }
     }
 

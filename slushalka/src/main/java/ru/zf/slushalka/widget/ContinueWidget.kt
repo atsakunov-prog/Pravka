@@ -72,11 +72,15 @@ class ContinueWidget : AppWidgetProvider() {
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
                 ),
             )
+            // Микрофон - тот же вопрос голосом, что в шторке плеера.
+            views.setOnClickPendingIntent(R.id.widget_mic, ru.zf.slushalka.player.Shade.askByVoice(app))
 
             if (book == null) {
                 views.setTextViewText(R.id.widget_title, app.getString(R.string.app_name))
                 views.setTextViewText(R.id.widget_line, "Открой книгу - она появится здесь")
                 views.setViewVisibility(R.id.widget_progress, View.GONE)
+                // Спрашивать не о чем, пока нет книги.
+                views.setViewVisibility(R.id.widget_mic, View.GONE)
                 manager.updateAppWidget(ids, views)
                 return
             }
@@ -101,6 +105,7 @@ class ContinueWidget : AppWidgetProvider() {
                 },
             )
             views.setViewVisibility(R.id.widget_progress, View.VISIBLE)
+            views.setViewVisibility(R.id.widget_mic, if (book.textDocId != null) View.VISIBLE else View.GONE)
             views.setProgressBar(R.id.widget_progress, 1000, (share * 1000).toInt(), false)
 
             val tree = app.state.treeOf(book)

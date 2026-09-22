@@ -82,6 +82,21 @@ object Stats {
     /** Столбик графика: подпись, итоги и признак «это текущий период». */
     data class Bucket(val label: String, val totals: Totals, val current: Boolean)
 
+    /** Итоги месяца или года - см. [Report.summary]. */
+    data class Summary(
+        val from: LocalDate,
+        val to: LocalDate,
+        val totals: Totals,
+        val activeDays: Int,
+        /** Сколько суток в отрезке уже прошло: от начала до сегодня. */
+        val spanDays: Int,
+        val bestStreak: Int,
+        val longest: Session?,
+        val peakHour: Int?,
+        /** Книги по времени, от самой долгой. */
+        val books: List<Pair<String, Totals>>,
+    )
+
     data class BookStat(
         val bookId: String,
         val totals: Totals,
@@ -172,6 +187,45 @@ object Stats {
         val peakHour: Int? get() = peakOf(hours)
 
         fun book(bookId: String): BookStat? = books.firstOrNull { it.bookId == bookId }
+
+        /**
+         * Итоги за отрезок читательских суток [from]..[to] включительно: время,
+         * дни, лучшая серия внутри отрезка, самый длинный подход, любимый час и
+         * книги по времени. Подход, начатый в отрезке, считается целиком в нём -
+         * резать его по полуночи ради итогов незачем.
+         */
+        fun summary(from: LocalDate, to: LocalDate): Summary {
+            val inside = sessions.filter { readingDay(it.startAt, zone) in from..to }
+            val totals = Totals()
+            val hours = List(24) { Totals() }
+            val byBook = HashMap<String, Totals>()
+            inside.forEach { s ->
+                totals.add(s)
+                byBook.getOrPut(s.bookId) { Totals() }.add(s)
+                spread(s, zone) { z, frac -> hours[z.hour].add(s, frac) }
+            }
+            val range = days.subMap(from, true, to, true)
+            val active = range.filterValues { it.activeMs >= DAY_COUNTS_MS }.keys
+            var best = 0
+            var run = 0
+            var prev: LocalDate? = null
+            for (d in active) {
+                run = if (prev != null && prev.plusDays(1) == d) run + 1 else 1
+                best = maxOf(best, run)
+                prev = d
+            }
+            return Summary(
+                from = from,
+                to = to,
+                totals = totals,
+                activeDays = active.size,
+                spanDays = (ChronoUnit.DAYS.between(from, minOf(to, today)) + 1).toInt().coerceAtLeast(1),
+                bestStreak = best,
+                longest = inside.maxByOrNull { it.activeMs },
+                peakHour = peakOf(hours),
+                books = byBook.entries.sortedByDescending { it.value.activeMs }.map { it.key to it.value },
+            )
+        }
     }
 
     private val MONTHS = listOf("янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")

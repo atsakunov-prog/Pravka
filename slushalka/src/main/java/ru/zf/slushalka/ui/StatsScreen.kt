@@ -3,6 +3,7 @@ package ru.zf.slushalka.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -135,6 +136,10 @@ fun StatsScreen(app: SlushalkaApp, onBack: () -> Unit) {
 
             Spacer(Modifier.height(8.dp))
             Headline(r)
+            Spacer(Modifier.height(14.dp))
+            SummaryCard(app, r, books)
+            Spacer(Modifier.height(14.dp))
+            YearCard(r)
             Spacer(Modifier.height(14.dp))
             DynamicsCard(r)
             Spacer(Modifier.height(14.dp))
@@ -516,6 +521,200 @@ private fun forecastLine(
     val f = Stats.forecastText(leftChars, r.readCpm, recent.readMs / 14, r.today) ?: return null
     return "Осталось ${fmtPages(leftChars / Settings.PAGE_CHARS.toDouble())} стр., это ${formatSpan(f.realLeftMs)} чтения" +
         (f.days?.let { d -> " — при таком темпе ещё $d ${plural(d, "день", "дня", "дней")}, к ${formatDay(f.date!!)}" } ?: "") + "."
+}
+
+// ------------------------------------------------------------------- итоги
+
+/** Отрезок итогов: этот месяц, прошлый, этот год, всё время. */
+private enum class Period(val label: String) { MONTH("Месяц"), LAST_MONTH("Прошлый"), YEAR("Год"), ALL("Всё время") }
+
+private fun rangeOf(p: Period, r: Stats.Report): Pair<LocalDate, LocalDate> {
+    val t = r.today
+    return when (p) {
+        Period.MONTH -> t.withDayOfMonth(1) to t
+        Period.LAST_MONTH -> t.minusMonths(1).withDayOfMonth(1).let { it to it.plusMonths(1).minusDays(1) }
+        Period.YEAR -> t.withDayOfYear(1) to t
+        Period.ALL -> (r.days.keys.firstOrNull() ?: t) to t
+    }
+}
+
+private val MONTH_FMT = DateTimeFormatter.ofPattern("LLLL yyyy", Locale.forLanguageTag("ru"))
+
+/**
+ * Итоги: как «год в музыке», только про книги. Время и из чего оно, дни с
+ * книгой и лучшая серия, книга периода, любимый час, самый долгий подход -
+ * и что было с Claude: вопросы, разговоры, пометки на полях. Всё уже лежит в
+ * журнале и в истории вопросов - здесь только собрано. «Поделиться» отдаёт
+ * итоги текстом.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SummaryCard(app: SlushalkaApp, r: Stats.Report, books: List<ru.zf.slushalka.library.Book>) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var period by remember { mutableStateOf(Period.MONTH) }
+    val (from, to) = rangeOf(period, r)
+    val sum = remember(r, period) { r.summary(from, to) }
+    // Claude за тот же отрезок: вопросы и разговоры - по времени в истории,
+    // пометки - по времени создания.
+    val zone = r.zone
+    fun inRange(at: Long) = Stats.readingDay(at, zone) in from..to
+    val asks = remember(r, period) { app.askLog.all().values.flatten().filter { inRange(it.at) } }
+    val notes = remember(r, period) {
+        app.notes.all().values.flatten().filter { !it.deleted && inRange(it.id) }.size
+    }
+    val title: (String) -> String = { id -> books.firstOrNull { it.id == id }?.title ?: id.substringAfterLast('/') }
+    val headline = when (period) {
+        Period.MONTH, Period.LAST_MONTH -> MONTH_FMT.format(from).replaceFirstChar { it.uppercase() }
+        Period.YEAR -> "${from.year} год"
+        Period.ALL -> "С ${formatDay(from)} ${from.year}"
+    }
+    val lines = buildList {
+        val t = sum.totals
+        if (t.activeMs > 0) {
+            add("С книгами" to formatSpan(t.activeMs))
+            parts(t).takeIf { it.isNotBlank() }?.let { add("Из них" to it) }
+            add(
+                "Дней с книгой" to "${sum.activeDays} из ${sum.spanDays}" +
+                    (if (sum.bestStreak > 1) " · серия ${sum.bestStreak} ${plural(sum.bestStreak, "день", "дня", "дней")}" else "")
+            )
+            if (sum.activeDays > 0) add("В среднем" to "${formatSpan(t.activeMs / sum.activeDays)} в день с книгой")
+            sum.books.firstOrNull()?.let { (id, bt) -> add("Книга периода" to "${title(id)} · ${formatSpan(bt.activeMs)}") }
+            if (sum.books.size > 1) add("Книг в руках" to sum.books.size.toString())
+            sum.peakHour?.let { h -> add("Любимый час" to "%02d:00–%02d:00".format(h, (h + 1) % 24)) }
+            sum.longest?.takeIf { it.activeMs > 0 }?.let { s ->
+                add("Самый долгий подход" to "${formatSpan(s.activeMs)} · ${formatDay(s.startAt)}")
+            }
+        }
+        val questions = asks.count { !it.question.startsWith("Разговор:") && !it.question.startsWith("Поиск:") }
+        val talks = asks.count { it.question.startsWith("Разговор:") }
+        if (questions + talks > 0 || notes > 0) {
+            add(
+                "Claude" to buildList {
+                    if (questions > 0) add("$questions ${plural(questions, "вопрос", "вопроса", "вопросов")}")
+                    if (talks > 0) add("$talks ${plural(talks, "реплика", "реплики", "реплик")} в разговорах")
+                    if (notes > 0) add("$notes ${plural(notes, "пометка", "пометки", "пометок")}")
+                }.joinToString(" · ")
+            )
+            val usd = asks.sumOf { it.costUsd }
+            if (usd > 0) add("Потрачено" to "%.2f $".format(Locale.US, usd))
+        }
+    }
+
+    Section("Итоги") {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Period.entries.forEach { p ->
+                FilterChip(selected = p == period, onClick = { period = p }, label = { Text(p.label) })
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(headline, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(6.dp))
+        if (lines.isEmpty()) {
+            Note("За этот отрезок в журнале пусто.")
+        } else {
+            lines.forEach { (k, v) ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                    Text(
+                        k,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(150.dp),
+                    )
+                    Text(v, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            androidx.compose.material3.TextButton(onClick = {
+                val body = "Слушалка · $headline\n\n" + lines.joinToString("\n") { (k, v) -> "$k: $v" }
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(android.content.Intent.EXTRA_TEXT, body)
+                }
+                runCatching { context.startActivity(android.content.Intent.createChooser(send, "Поделиться итогами")) }
+            }) { Text("Поделиться") }
+        }
+    }
+}
+
+/**
+ * Год клетками: день - квадратик, чем гуще цвет, тем дольше в тот день была
+ * книга. Столбец - неделя, сверху понедельник. Тап по клетке - что было в
+ * тот день. Так видно ритм: провалы, запои, отпуск.
+ */
+@Composable
+private fun YearCard(r: Stats.Report) {
+    val weeks = 53
+    // Правый столбец - текущая неделя; начало - понедельник 52 недели назад.
+    val start = r.today.minusDays((r.today.dayOfWeek.value - 1).toLong()).minusWeeks((weeks - 1).toLong())
+    // Порог густоты - по своим же дням, а не по чужой норме: у одного час в
+    // день - обычный день, у другого - рекорд.
+    val levels = remember(r) {
+        val values = r.days.filterKeys { it >= start }.values.map { it.activeMs }.filter { it >= Stats.DAY_COUNTS_MS }.sorted()
+        if (values.isEmpty()) listOf(1L, 2L, 3L)
+        else listOf(values[values.size / 4], values[values.size / 2], values[values.size * 3 / 4])
+    }
+    var picked by remember(r) { mutableStateOf<LocalDate?>(null) }
+    val base = MaterialTheme.colorScheme.primary
+    val empty = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.07f)
+    Section("Год") {
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(96.dp)
+                .pointerInput(r) {
+                    detectTapGestures { pos ->
+                        val cell = size.width / weeks.toFloat()
+                        val w = (pos.x / cell).toInt().coerceIn(0, weeks - 1)
+                        val d = (pos.y / (size.height / 7f)).toInt().coerceIn(0, 6)
+                        val day = start.plusWeeks(w.toLong()).plusDays(d.toLong())
+                        picked = if (day > r.today) null else day
+                    }
+                },
+        ) {
+            val cell = size.width / weeks
+            val h = size.height / 7
+            val side = minOf(cell, h) * 0.82f
+            for (w in 0 until weeks) for (d in 0 until 7) {
+                val day = start.plusWeeks(w.toLong()).plusDays(d.toLong())
+                if (day > r.today) continue
+                val ms = r.day(day).activeMs
+                val color = when {
+                    ms < Stats.DAY_COUNTS_MS -> empty
+                    ms < levels[0] -> base.copy(alpha = 0.28f)
+                    ms < levels[1] -> base.copy(alpha = 0.48f)
+                    ms < levels[2] -> base.copy(alpha = 0.7f)
+                    else -> base
+                }
+                drawRoundRect(
+                    color,
+                    topLeft = Offset(w * cell + (cell - side) / 2, d * h + (h - side) / 2),
+                    size = Size(side, side),
+                    cornerRadius = CornerRadius(side * 0.22f),
+                )
+                if (day == picked) {
+                    drawRoundRect(
+                        base,
+                        topLeft = Offset(w * cell + (cell - side) / 2 - 1.5f, d * h + (h - side) / 2 - 1.5f),
+                        size = Size(side + 3f, side + 3f),
+                        cornerRadius = CornerRadius(side * 0.22f),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        val p = picked
+        if (p != null) {
+            val t = r.day(p)
+            Note("${formatDay(p)}: " + if (t.activeMs > 0) "${formatSpan(t.activeMs)} · ${parts(t)}" else "без книги")
+        } else {
+            val active = r.days.filterKeys { it >= start }.values.count { it.activeMs >= Stats.DAY_COUNTS_MS }
+            Note("За год - $active ${plural(active, "день", "дня", "дней")} с книгой. Тап по клетке - что было в тот день.")
+        }
+    }
 }
 
 // ------------------------------------------------------------------ подвал

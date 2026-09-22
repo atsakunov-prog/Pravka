@@ -116,6 +116,8 @@ class ReadAloudService : Service() {
             .addAction(R.drawable.ic_shade_book, if (s.speaking) "Пауза" else "Дальше", action(ACTION_TOGGLE))
             .addAction(R.drawable.ic_shade_book, "Вперёд", action(ACTION_FORWARD))
             .addAction(R.drawable.ic_shade_book, "Стоп", action(ACTION_STOP))
+            // Тот же вопрос голосом, что у плеера: книга замолкает, ответ вслух.
+            .addAction(R.drawable.ic_shade_mic, "Спросить", Shade.askByVoice(this))
             .build()
     }
 

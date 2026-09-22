@@ -21,6 +21,10 @@ import ru.zf.slushalka.library.documentUri
  * дорожки. Она, наоборот, сливается: два устройства одного человека
  * дописывают друг друга, и разговор с книгой один на оба. Так же сливаются
  * пометки на полях - `пометки-<имя>.json`.
+ *
+ * Файлы одни и те же для двух дорог: папка библиотеки (SAF, её возит
+ * сторонняя синхронизация) и облако по WebDAV ([Cloud]). Поэтому тела файлов
+ * собираются и разбираются в companion, а SAF здесь - только транспорт.
  */
 class PositionSync(private val context: Context) {
 
@@ -28,136 +32,60 @@ class PositionSync(private val context: Context) {
 
     fun push(treeUri: Uri, profile: String, states: Map<String, BookState>) {
         if (profile.isBlank()) return
-        runCatching {
-            val rootId = DocumentsContract.getTreeDocumentId(treeUri)
-            val dirId = ensureDir(treeUri, rootId, DIR) ?: return
-            val fileId = ensureFile(treeUri, dirId, fileName(PREFIX, profile)) ?: return
-            val body = JSONObject().apply {
-                put("profile", profile)
-                put("at", System.currentTimeMillis())
-                put("books", JSONObject().apply {
-                    states.forEach { (id, s) ->
-                        put(id, JSONObject()
-                            .put("file", s.fileIndex).put("pos", s.posMs).put("abs", s.absMs)
-                            .put("at", s.updatedAt).put("finished", s.finished)
-                            // Место чтения - для книг без записи это единственная
-                            // позиция; у аудиокниги оно и так подтягивает запись.
-                            .put("read", s.readChar))
-                    }
-                })
-            }.toString()
-            context.contentResolver.openOutputStream(documentUri(treeUri, fileId), "wt")?.use {
-                it.write(body.toByteArray())
-            }
-        }
+        write(treeUri, fileName(PREFIX, profile), positionsJson(profile, states))
     }
 
     /** История вопросов этой дорожки - целиком, файл невелик (полсотни на книгу). */
     fun pushAsks(treeUri: Uri, profile: String, asks: Map<String, List<Ask>>) {
         if (profile.isBlank()) return
-        runCatching {
-            val rootId = DocumentsContract.getTreeDocumentId(treeUri)
-            val dirId = ensureDir(treeUri, rootId, DIR) ?: return
-            val fileId = ensureFile(treeUri, dirId, fileName(ASKS_PREFIX, profile)) ?: return
-            val body = JSONObject().apply {
-                put("profile", profile)
-                put("at", System.currentTimeMillis())
-                put("books", JSONObject().apply {
-                    asks.forEach { (id, list) ->
-                        put(id, JSONArray().apply {
-                            list.forEach {
-                                put(JSONObject().put("at", it.at).put("abs", it.absMs)
-                                    .put("q", it.question).put("a", it.answer).put("usd", it.costUsd))
-                            }
-                        })
-                    }
-                })
-            }.toString()
-            context.contentResolver.openOutputStream(documentUri(treeUri, fileId), "wt")?.use {
-                it.write(body.toByteArray())
-            }
-        }
+        write(treeUri, fileName(ASKS_PREFIX, profile), asksJson(profile, asks))
     }
 
     /** Вопросы своей дорожки, записанные другим устройством; null - файла нет. */
-    fun pullAsks(treeUri: Uri, profile: String): Map<String, List<Ask>>? = runCatching {
-        if (profile.isBlank()) return null
-        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
-        val dirId = findChild(treeUri, rootId, DIR) ?: return null
-        val docId = findChild(treeUri, dirId, fileName(ASKS_PREFIX, profile)) ?: return null
-        val text = context.contentResolver.openInputStream(documentUri(treeUri, docId))
-            ?.use { it.readBytes().toString(Charsets.UTF_8) } ?: return null
-        val books = JSONObject(text).optJSONObject("books") ?: return emptyMap()
-        books.keys().asSequence().associateWith { id ->
-            val arr = books.getJSONArray(id)
-            (0 until arr.length()).map {
-                val o = arr.getJSONObject(it)
-                Ask(o.optLong("at"), o.optLong("abs"), o.optString("q"), o.optString("a"), o.optDouble("usd"))
-            }
-        }
-    }.getOrNull()
+    fun pullAsks(treeUri: Uri, profile: String): Map<String, List<Ask>>? =
+        if (profile.isBlank()) null else read(treeUri, fileName(ASKS_PREFIX, profile))?.let(::parseAsks)
 
     /** Пометки этой дорожки - с надгробиями удалённых, чтобы слияние их не воскресило. */
     fun pushNotes(treeUri: Uri, profile: String, notes: Map<String, List<Note>>) {
         if (profile.isBlank()) return
-        runCatching {
-            val rootId = DocumentsContract.getTreeDocumentId(treeUri)
-            val dirId = ensureDir(treeUri, rootId, DIR) ?: return
-            val fileId = ensureFile(treeUri, dirId, fileName(NOTES_PREFIX, profile)) ?: return
-            val body = JSONObject().apply {
-                put("profile", profile)
-                put("at", System.currentTimeMillis())
-                put("books", JSONObject().apply {
-                    notes.forEach { (id, list) -> put(id, Notes.toJson(list)) }
-                })
-            }.toString()
-            context.contentResolver.openOutputStream(documentUri(treeUri, fileId), "wt")?.use {
-                it.write(body.toByteArray())
-            }
-        }
+        write(treeUri, fileName(NOTES_PREFIX, profile), notesJson(profile, notes))
     }
 
     /** Пометки своей дорожки, записанные другим устройством; null - файла нет. */
-    fun pullNotes(treeUri: Uri, profile: String): Map<String, List<Note>>? = runCatching {
-        if (profile.isBlank()) return null
-        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
-        val dirId = findChild(treeUri, rootId, DIR) ?: return null
-        val docId = findChild(treeUri, dirId, fileName(NOTES_PREFIX, profile)) ?: return null
-        val text = context.contentResolver.openInputStream(documentUri(treeUri, docId))
-            ?.use { it.readBytes().toString(Charsets.UTF_8) } ?: return null
-        val books = JSONObject(text).optJSONObject("books") ?: return emptyMap()
-        books.keys().asSequence().associateWith { id -> Notes.fromJson(books.getJSONArray(id)) }
-    }.getOrNull()
+    fun pullNotes(treeUri: Uri, profile: String): Map<String, List<Note>>? =
+        if (profile.isBlank()) null else read(treeUri, fileName(NOTES_PREFIX, profile))?.let(::parseNotes)
 
     /** Всё, что лежит в папке синхронизации, включая чужие дорожки. */
     fun pull(treeUri: Uri): List<Remote> = runCatching {
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)
         val dirId = findChild(treeUri, rootId, DIR) ?: return emptyList()
         children(treeUri, dirId)
-            .filter { it.second.startsWith(PREFIX) && it.second.endsWith(".json") }
+            .filter { isPositions(it.second) }
             .mapNotNull { (docId, _) ->
-                val text = context.contentResolver.openInputStream(documentUri(treeUri, docId))
-                    ?.use { it.readBytes().toString(Charsets.UTF_8) } ?: return@mapNotNull null
-                val o = JSONObject(text)
-                val books = o.optJSONObject("books") ?: JSONObject()
-                Remote(
-                    profile = o.optString("profile"),
-                    at = o.optLong("at"),
-                    states = books.keys().asSequence().associateWith { id ->
-                        val b = books.getJSONObject(id)
-                        BookState(
-                            bookId = id,
-                            fileIndex = b.optInt("file"),
-                            posMs = b.optLong("pos"),
-                            absMs = b.optLong("abs"),
-                            updatedAt = b.optLong("at"),
-                            finished = b.optBoolean("finished"),
-                            readChar = b.optInt("read", -1),
-                        )
-                    }.toMap(),
-                )
+                context.contentResolver.openInputStream(documentUri(treeUri, docId))
+                    ?.use { it.readBytes().toString(Charsets.UTF_8) }
+                    ?.let(::parseRemote)
             }
     }.getOrDefault(emptyList())
+
+    private fun write(treeUri: Uri, name: String, body: String) {
+        runCatching {
+            val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+            val dirId = ensureDir(treeUri, rootId, DIR) ?: return
+            val fileId = ensureFile(treeUri, dirId, name) ?: return
+            context.contentResolver.openOutputStream(documentUri(treeUri, fileId), "wt")?.use {
+                it.write(body.toByteArray())
+            }
+        }
+    }
+
+    private fun read(treeUri: Uri, name: String): String? = runCatching {
+        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+        val dirId = findChild(treeUri, rootId, DIR) ?: return null
+        val docId = findChild(treeUri, dirId, name) ?: return null
+        context.contentResolver.openInputStream(documentUri(treeUri, docId))
+            ?.use { it.readBytes().toString(Charsets.UTF_8) }
+    }.getOrNull()
 
     // ------------------------------------------------------------------ SAF
 
@@ -202,15 +130,90 @@ class PositionSync(private val context: Context) {
         return DocumentsContract.getDocumentId(created)
     }
 
-    private fun fileName(prefix: String, profile: String): String {
-        val safe = profile.filter { it.isLetterOrDigit() || it == ' ' || it == '-' || it == '_' }.trim()
-        return "$prefix${safe.ifBlank { "без-имени" }}.json"
-    }
-
     companion object {
-        private const val DIR = "_Слушалка"
-        private const val PREFIX = "позиции-"
-        private const val ASKS_PREFIX = "вопросы-"
-        private const val NOTES_PREFIX = "пометки-"
+        const val DIR = "_Слушалка"
+        const val PREFIX = "позиции-"
+        const val ASKS_PREFIX = "вопросы-"
+        const val NOTES_PREFIX = "пометки-"
+
+        fun fileName(prefix: String, profile: String): String {
+            val safe = profile.filter { it.isLetterOrDigit() || it == ' ' || it == '-' || it == '_' }.trim()
+            return "$prefix${safe.ifBlank { "без-имени" }}.json"
+        }
+
+        fun isPositions(name: String): Boolean = name.startsWith(PREFIX) && name.endsWith(".json")
+
+        fun positionsJson(profile: String, states: Map<String, BookState>): String = JSONObject().apply {
+            put("profile", profile)
+            put("at", System.currentTimeMillis())
+            put("books", JSONObject().apply {
+                states.forEach { (id, s) ->
+                    put(id, JSONObject()
+                        .put("file", s.fileIndex).put("pos", s.posMs).put("abs", s.absMs)
+                        .put("at", s.updatedAt).put("finished", s.finished)
+                        // Место чтения - для книг без записи это единственная
+                        // позиция; у аудиокниги оно и так подтягивает запись.
+                        .put("read", s.readChar))
+                }
+            })
+        }.toString()
+
+        fun parseRemote(text: String): Remote? = runCatching {
+            val o = JSONObject(text)
+            val books = o.optJSONObject("books") ?: JSONObject()
+            Remote(
+                profile = o.optString("profile"),
+                at = o.optLong("at"),
+                states = books.keys().asSequence().associateWith { id ->
+                    val b = books.getJSONObject(id)
+                    BookState(
+                        bookId = id,
+                        fileIndex = b.optInt("file"),
+                        posMs = b.optLong("pos"),
+                        absMs = b.optLong("abs"),
+                        updatedAt = b.optLong("at"),
+                        finished = b.optBoolean("finished"),
+                        readChar = b.optInt("read", -1),
+                    )
+                }.toMap(),
+            )
+        }.getOrNull()
+
+        fun asksJson(profile: String, asks: Map<String, List<Ask>>): String = JSONObject().apply {
+            put("profile", profile)
+            put("at", System.currentTimeMillis())
+            put("books", JSONObject().apply {
+                asks.forEach { (id, list) ->
+                    put(id, JSONArray().apply {
+                        list.forEach {
+                            put(JSONObject().put("at", it.at).put("abs", it.absMs)
+                                .put("q", it.question).put("a", it.answer).put("usd", it.costUsd))
+                        }
+                    })
+                }
+            })
+        }.toString()
+
+        fun parseAsks(text: String): Map<String, List<Ask>> = runCatching {
+            val books = JSONObject(text).optJSONObject("books") ?: return emptyMap()
+            books.keys().asSequence().associateWith { id ->
+                val arr = books.getJSONArray(id)
+                (0 until arr.length()).map {
+                    val o = arr.getJSONObject(it)
+                    Ask(o.optLong("at"), o.optLong("abs"), o.optString("q"), o.optString("a"), o.optDouble("usd"))
+                }
+            }
+        }.getOrDefault(emptyMap())
+
+        fun notesJson(profile: String, notes: Map<String, List<Note>>): String = JSONObject().apply {
+            put("profile", profile)
+            put("at", System.currentTimeMillis())
+            put("books", JSONObject().apply { notes.forEach { (id, list) -> put(id, Notes.toJson(list)) } })
+        }.toString()
+
+        fun parseNotes(text: String): Map<String, List<Note>> = runCatching {
+            val books = JSONObject(text).optJSONObject("books") ?: return emptyMap()
+            books.keys().asSequence().associateWith { id -> Notes.fromJson(books.getJSONArray(id)) }
+        }.getOrDefault(emptyMap())
     }
 }

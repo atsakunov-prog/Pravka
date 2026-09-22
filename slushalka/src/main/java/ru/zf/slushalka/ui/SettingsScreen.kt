@@ -256,6 +256,8 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 scope.launch { state.settings.setSyncPositions(it) }
             }
 
+            CloudSettings(app)
+
             Section("Плеер")
             Text("Перемотка кнопками: ${prefs.skipSec} с", style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -540,5 +542,72 @@ private fun NumberSlider(
         onValueChangeFinished = { onCommit(local) },
         valueRange = range,
         steps = steps,
+    )
+}
+
+/**
+ * Облако по WebDAV: адрес, логин, пароль приложения, папка - и проверка.
+ * Пароль - именно «пароль приложения» (у Яндекса - id.yandex.ru, «Пароли
+ * приложений», тип «Файлы»): обычный пароль от почты WebDAV не примет.
+ */
+@Composable
+private fun CloudSettings(app: SlushalkaApp) {
+    val prefs by app.state.prefs.collectAsState()
+    val scope = rememberCoroutineScope()
+    var url by remember { mutableStateOf(prefs.cloudUrl) }
+    var user by remember { mutableStateOf(prefs.cloudUser) }
+    var pass by remember { mutableStateOf(prefs.cloudPass) }
+    var dir by remember { mutableStateOf(prefs.cloudDir) }
+    var checking by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+
+    Section("Облако")
+    Note(
+        "Синхронизация без сторонней программы и место для книг. Подходит любой WebDAV: " +
+            "Яндекс.Диск (адрес webdav.yandex.ru, логин - почта, пароль - пароль приложения из " +
+            "id.yandex.ru → «Пароли приложений» → «Файлы»), Nextcloud, Box, Koofr."
+    )
+    OutlinedTextField(
+        value = url, onValueChange = { url = it; scope.launch { app.settings.setCloudUrl(it) } },
+        label = { Text("Адрес WebDAV") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = user, onValueChange = { user = it; scope.launch { app.settings.setCloudUser(it) } },
+        label = { Text("Логин") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = pass, onValueChange = { pass = it; scope.launch { app.settings.setCloudPass(it) } },
+        label = { Text("Пароль приложения") }, singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = dir, onValueChange = { dir = it; scope.launch { app.settings.setCloudDir(it) } },
+        label = { Text("Папка в облаке") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(
+            enabled = !checking && prefs.cloudReady,
+            onClick = {
+                checking = true
+                result = null
+                scope.launch {
+                    result = app.cloud.check().fold(
+                        onSuccess = { "Облако на связи: папка «${prefs.cloudDir}» готова." },
+                        onFailure = { it.message ?: "Облако не ответило" },
+                    )
+                    checking = false
+                }
+            },
+        ) { Text(if (checking) "Проверяю…" else "Проверить") }
+    }
+    result?.let { Note(it) }
+    Toggle("Синхронизировать через облако", prefs.cloudSync) {
+        scope.launch { app.settings.setCloudSync(it) }
+    }
+    Note(
+        "Позиции, вопросы и пометки ездят через «${prefs.cloudDir}/_Слушалка» - те же файлы, что в папке " +
+            "библиотеки, так что обе дороги работают вместе. Книги - в «${prefs.cloudDir}/Книги», экран " +
+            "облака - значок на полке."
     )
 }

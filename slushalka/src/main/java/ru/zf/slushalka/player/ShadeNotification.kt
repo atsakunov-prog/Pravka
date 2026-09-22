@@ -35,6 +35,23 @@ object Shade {
         PendingIntent.FLAG_IMMUTABLE,
     )
 
+    /**
+     * «Спросить голосом» из шторки: приложение открывается сразу в вопрос с
+     * включённым микрофоном. Прямо в activity, как и «Открыть», - из службы
+     * экран с десятой версии Android не поднять.
+     */
+    fun askByVoice(context: Context): PendingIntent = PendingIntent.getActivity(
+        context,
+        2,
+        Intent(context, MainActivity::class.java)
+            .setAction(ACTION_VOICE_ASK)
+            .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    /** С этим действием MainActivity открывает вопрос по книге голосом. */
+    const val ACTION_VOICE_ASK = "ru.zf.slushalka.VOICE_ASK"
+
     fun skipSeconds(context: Context): Int =
         (context.applicationContext as SlushalkaApp).settings.now().skipSec
 
@@ -155,6 +172,15 @@ class ShadeNotificationProvider(private val context: Context) : DefaultMediaNoti
     ): IntArray {
         val indices = super.addNotificationActions(session, mediaButtons, builder, actionFactory)
         runCatching {
+            // Вопрос голосом - первым из дополнительных: на ходу он нужнее, чем
+            // «открыть», туда и так ведёт нажатие на само уведомление.
+            builder.addAction(
+                NotificationCompat.Action.Builder(
+                    IconCompat.createWithResource(context, R.drawable.ic_shade_mic),
+                    "Спросить голосом",
+                    Shade.askByVoice(context),
+                ).build()
+            )
             builder.addAction(
                 NotificationCompat.Action.Builder(
                     IconCompat.createWithResource(context, R.drawable.ic_shade_open),

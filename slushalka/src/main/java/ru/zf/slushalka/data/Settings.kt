@@ -133,7 +133,19 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val adviseModel: String = MODEL_OPUS,
         val adviseEffort: String = "",
         val adviseWeb: Boolean = true,
+        // Облако по WebDAV: Яндекс.Диск (пароль приложения), Nextcloud, Box.
+        // Через него ездят позиции, вопросы и пометки и хранятся книги - без
+        // сторонней программы синхронизации папки.
+        val cloudUrl: String = DEFAULT_CLOUD_URL,
+        val cloudUser: String = "",
+        val cloudPass: String = "",
+        val cloudDir: String = DEFAULT_CLOUD_DIR,
+        val cloudSync: Boolean = true,
     ) {
+        /** Облако настроено: есть куда и с чем ходить. */
+        val cloudReady: Boolean
+            get() = cloudUrl.isNotBlank() && cloudUser.isNotBlank() && cloudPass.isNotBlank()
+
         /** Все папки библиотеки, главная первой. */
         val libraryUris: List<String>
             get() = (listOf(libraryUri) + libraryExtra).filter { it.isNotBlank() }.distinct()
@@ -201,6 +213,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 adviseModel = p[KEY_ADVISE_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
                 adviseEffort = p[KEY_ADVISE_EFFORT]?.takeIf { it in EFFORTS } ?: "",
                 adviseWeb = p[KEY_ADVISE_WEB] ?: true,
+                cloudUrl = p[KEY_CLOUD_URL]?.takeIf { it.isNotBlank() } ?: DEFAULT_CLOUD_URL,
+                cloudUser = p[KEY_CLOUD_USER] ?: "",
+                cloudPass = p[KEY_CLOUD_PASS] ?: "",
+                cloudDir = p[KEY_CLOUD_DIR]?.takeIf { it.isNotBlank() } ?: DEFAULT_CLOUD_DIR,
+                cloudSync = p[KEY_CLOUD_SYNC] ?: true,
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -291,6 +308,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setAdviseModel(v: String) = edit { if (v in MODELS) it[KEY_ADVISE_MODEL] = v }
     suspend fun setAdviseEffort(v: String) = edit { if (v in EFFORTS) it[KEY_ADVISE_EFFORT] = v }
     suspend fun setAdviseWeb(v: Boolean) = edit { it[KEY_ADVISE_WEB] = v }
+    suspend fun setCloudUrl(v: String) = edit { it[KEY_CLOUD_URL] = v.trim().trimEnd('/') }
+    suspend fun setCloudUser(v: String) = edit { it[KEY_CLOUD_USER] = v.trim() }
+    suspend fun setCloudPass(v: String) = edit { it[KEY_CLOUD_PASS] = v.trim() }
+    suspend fun setCloudDir(v: String) = edit { it[KEY_CLOUD_DIR] = v.trim().trim('/') }
+    suspend fun setCloudSync(v: Boolean) = edit { it[KEY_CLOUD_SYNC] = v }
 
     companion object {
         const val MODEL_OPUS = "claude-opus-5-5"
@@ -338,6 +360,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
 
         /** Адрес каталога Флибусты. Ленты OPDS лежат под `/opds`. */
         const val DEFAULT_FLIBUSTA_URL = "https://flibusta.is"
+
+        /** WebDAV Яндекс.Диска: логин - почта, пароль - «пароль приложения» из id.yandex.ru. */
+        const val DEFAULT_CLOUD_URL = "https://webdav.yandex.ru"
+        const val DEFAULT_CLOUD_DIR = "Слушалка"
 
         /**
          * Книжный - Literata, своя гарнитура в ресурсах. Системный «с
@@ -513,5 +539,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_ADVISE_MODEL = stringPreferencesKey("advise_model_55")
         private val KEY_ADVISE_EFFORT = stringPreferencesKey("advise_effort")
         private val KEY_ADVISE_WEB = booleanPreferencesKey("advise_web")
+        private val KEY_CLOUD_URL = stringPreferencesKey("cloud_url")
+        private val KEY_CLOUD_USER = stringPreferencesKey("cloud_user")
+        private val KEY_CLOUD_PASS = stringPreferencesKey("cloud_pass")
+        private val KEY_CLOUD_DIR = stringPreferencesKey("cloud_dir")
+        private val KEY_CLOUD_SYNC = booleanPreferencesKey("cloud_sync")
     }
 }
