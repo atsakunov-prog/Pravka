@@ -47,6 +47,8 @@ class SlushalkaApp : Application() {
     lateinit var player: PlayerHolder; private set
     lateinit var ask: AskEngine; private set
     lateinit var guide: GuideEngine; private set
+    lateinit var search: ru.zf.slushalka.ask.MeaningSearch; private set
+    lateinit var talk: ru.zf.slushalka.ask.BookTalk; private set
     lateinit var speaker: Speaker; private set
     lateinit var recognizer: ChunkRecognizer; private set
     lateinit var state: AppState; private set
@@ -73,6 +75,8 @@ class SlushalkaApp : Application() {
         ask = AskEngine(settings, claude, askLog)
         guide = GuideEngine(this, settings, claude, GuideStore(this), askLog)
         advisor = Advisor(this, claude)
+        search = ru.zf.slushalka.ask.MeaningSearch(claude, settings, askLog)
+        talk = ru.zf.slushalka.ask.BookTalk(claude, settings, askLog)
         player = PlayerHolder(this, settings, positions, journal) { bookId ->
             scope.launch { state.syncPush(bookId) }
         }

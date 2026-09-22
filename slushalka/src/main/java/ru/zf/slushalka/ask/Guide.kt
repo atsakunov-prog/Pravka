@@ -6,6 +6,40 @@ import org.json.JSONObject
 /** Запись о главе: что с героем (местом) случилось именно в ней. */
 data class GuideNote(val chapter: Int, val text: String)
 
+/**
+ * Связь героя с другим: «дочь», «муж», «хозяин», «бывшая невеста». [chapter] -
+ * глава, где связь открывается читателю: до неё её не видно, иначе «внебрачный
+ * сын» в первой главе раскрыл бы всю интригу.
+ */
+data class GuideLink(val to: String, val kind: String, val chapter: Int)
+
+/**
+ * Событие хронологии: что случилось и когда по времени книги ([whenText] -
+ * «весна 1912», «через три года», пусто - если книга не говорит). Привязано к
+ * главе, где о нём узнаёт читатель, а не к дате: воспоминание о войне в
+ * десятой главе - событие десятой главы.
+ */
+data class GuideEvent(val chapter: Int, val whenText: String, val text: String) {
+    fun matches(query: String): Boolean {
+        val q = query.trim().lowercase()
+        return q.isEmpty() || text.lowercase().contains(q) || whenText.lowercase().contains(q)
+    }
+
+    fun toJson(): JSONObject = JSONObject().put("c", chapter).put("w", whenText).put("t", text)
+
+    companion object {
+        fun fromJson(o: JSONObject): GuideEvent? {
+            val text = o.optString("t").ifBlank { o.optString("text") }.trim()
+            if (text.isEmpty()) return null
+            return GuideEvent(
+                chapter = o.optInt("c", o.optInt("chapter", 1)).coerceAtLeast(1),
+                whenText = o.optString("w").ifBlank { o.optString("when") }.trim(),
+                text = text,
+            )
+        }
+    }
+}
+
 /** Краткое содержание главы - абзац-полтора, чтобы вспомнить прочитанное. */
 data class GuideChapter(val chapter: Int, val title: String, val summary: String) {
     fun matches(query: String): Boolean {
@@ -38,6 +72,7 @@ data class GuideEntry(
     val chapter: Int,
     val role: String,
     val notes: List<GuideNote>,
+    val links: List<GuideLink> = emptyList(),
 ) {
     /** Все имена, под которыми статью можно найти. */
     val names: List<String> get() = listOf(name) + aliases
@@ -55,7 +90,7 @@ data class GuideEntry(
      */
     fun visibleAt(upTo: Int): GuideEntry? {
         if (chapter > upTo) return null
-        return copy(notes = notes.filter { it.chapter <= upTo })
+        return copy(notes = notes.filter { it.chapter <= upTo }, links = links.filter { it.chapter <= upTo })
     }
 
     /** Упоминается ли кто-то из имён в этом куске текста - для кнопок под абзацем. */
@@ -70,6 +105,7 @@ data class GuideEntry(
         .put("c", chapter)
         .put("r", role)
         .put("notes", JSONArray().apply { notes.forEach { put(JSONObject().put("c", it.chapter).put("t", it.text)) } })
+        .put("links", JSONArray().apply { links.forEach { put(JSONObject().put("to", it.to).put("k", it.kind).put("c", it.chapter)) } })
 
     companion object {
         fun fromJson(o: JSONObject): GuideEntry? {
@@ -77,6 +113,7 @@ data class GuideEntry(
             if (name.isEmpty()) return null
             val aliases = o.optJSONArray("a") ?: o.optJSONArray("aliases")
             val notes = o.optJSONArray("notes")
+            val links = o.optJSONArray("links")
             return GuideEntry(
                 name = name,
                 aliases = strings(aliases).filter { it.isNotBlank() && !it.equals(name, ignoreCase = true) },
@@ -86,6 +123,13 @@ data class GuideEntry(
                     val n = notes!!.optJSONObject(i) ?: return@mapNotNull null
                     val text = n.optString("t").ifBlank { n.optString("text") }.trim()
                     if (text.isEmpty()) null else GuideNote(n.optInt("c", n.optInt("chapter", 1)).coerceAtLeast(1), text)
+                }.sortedBy { it.chapter },
+                links = (0 until (links?.length() ?: 0)).mapNotNull { i ->
+                    val l = links!!.optJSONObject(i) ?: return@mapNotNull null
+                    val to = l.optString("to").trim()
+                    val kind = l.optString("k").ifBlank { l.optString("kind") }.trim()
+                    if (to.isEmpty() || kind.isEmpty()) null
+                    else GuideLink(to, kind, l.optInt("c", l.optInt("chapter", 1)).coerceAtLeast(1))
                 }.sortedBy { it.chapter },
             )
         }
@@ -101,8 +145,16 @@ data class Guide(
     val places: List<GuideEntry>,
     val terms: List<GuideEntry>,
     val chapters: List<GuideChapter> = emptyList(),
+    val events: List<GuideEvent> = emptyList(),
 ) {
     val isEmpty get() = characters.isEmpty() && places.isEmpty() && terms.isEmpty() && chapters.isEmpty()
+
+    /**
+     * Справочник составлен до того, как в нём появились связи и хронология:
+     * у героев нет ни одной связи и событий нет. Такой не ломается, просто
+     * эти разделы пусты - лист предлагает пересобрать.
+     */
+    val isOld get() = events.isEmpty() && characters.none { it.links.isNotEmpty() }
 
     val all: List<GuideEntry> get() = characters + places + terms
 
@@ -118,6 +170,7 @@ data class Guide(
         .put("characters", JSONArray(characters.map { it.toJson() }))
         .put("places", JSONArray(places.map { it.toJson() }))
         .put("terms", JSONArray(terms.map { it.toJson() }))
+        .put("events", JSONArray(events.map { it.toJson() }))
 
     /**
      * Склейка частей: книга длиннее лимита уезжает несколькими запросами, и
@@ -130,6 +183,7 @@ data class Guide(
         places = mergeEntries(places + other.places),
         terms = mergeEntries(terms + other.terms),
         chapters = (chapters + other.chapters).distinctBy { it.chapter }.sortedBy { it.chapter },
+        events = (events + other.events).distinctBy { it.chapter to it.text }.sortedBy { it.chapter },
     )
 
     /** Что вышло из ответа модели: сам справочник и признак, что JSON пришлось починить. */
@@ -145,6 +199,7 @@ data class Guide(
             places = mergeEntries(entries(o.optJSONArray("places"))),
             terms = mergeEntries(entries(o.optJSONArray("terms"))),
             chapters = chapters(o.optJSONArray("chapters")),
+            events = events(o.optJSONArray("events")),
         )
 
         /**
@@ -213,6 +268,10 @@ data class Guide(
         private fun entries(arr: JSONArray?): List<GuideEntry> =
             (0 until (arr?.length() ?: 0)).mapNotNull { i -> arr!!.optJSONObject(i)?.let { GuideEntry.fromJson(it) } }
 
+        private fun events(arr: JSONArray?): List<GuideEvent> =
+            (0 until (arr?.length() ?: 0)).mapNotNull { i -> arr!!.optJSONObject(i)?.let { GuideEvent.fromJson(it) } }
+                .sortedBy { it.chapter }
+
         private fun chapters(arr: JSONArray?): List<GuideChapter> =
             (0 until (arr?.length() ?: 0)).mapNotNull { i -> arr!!.optJSONObject(i)?.let { GuideChapter.fromJson(it) } }
                 .distinctBy { it.chapter }
@@ -231,6 +290,8 @@ data class Guide(
                             .distinctBy { it.lowercase() },
                         role = k.role.ifBlank { e.role },
                         notes = (k.notes + e.notes).distinctBy { it.chapter to it.text }.sortedBy { it.chapter },
+                        links = (k.links + e.links).distinctBy { it.to.lowercase() to it.kind.lowercase() }
+                            .sortedBy { it.chapter },
                     )
                 }
             }

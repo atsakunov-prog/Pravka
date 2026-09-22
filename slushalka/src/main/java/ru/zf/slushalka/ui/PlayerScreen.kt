@@ -69,6 +69,8 @@ fun PlayerScreen(
     onAsk: (charOffset: Int?, question: String?) -> Unit,
     onRead: () -> Unit,
     onSettings: () -> Unit,
+    /** Разговор о книге; место считает сам лист по позиции. */
+    onTalk: () -> Unit,
 ) {
     val state = app.state
     val book by state.current.collectAsState()
@@ -224,6 +226,7 @@ fun PlayerScreen(
                                 Text("Напомнить содержание")
                             }
                             TextButton(onClick = { showGuide = true }) { Text("Справочник") }
+                            TextButton(onClick = onTalk) { Text("Поговорить о книге") }
                         }
                     }
 

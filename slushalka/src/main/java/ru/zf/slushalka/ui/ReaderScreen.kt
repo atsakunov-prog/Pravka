@@ -215,6 +215,8 @@ fun ReaderScreen(
     onAsk: (charOffset: Int, question: String?, quote: String?) -> Unit,
     hasMic: () -> Boolean,
     onNeedMic: () -> Unit,
+    /** Разговор о книге: место чтения и дочитана ли. */
+    onTalk: (cutoff: Int, finished: Boolean) -> Unit,
 ) {
     val state = app.state
     val book by state.current.collectAsState()
@@ -243,6 +245,9 @@ fun ReaderScreen(
     var showMore by remember { mutableStateOf(false) }
     var showClaude by remember { mutableStateOf(false) }
     var showNotes by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
+    // «Дочитал - поговорим?» спрашивается раз за открытие книги, не на каждой странице.
+    var talkOffered by remember(book?.id) { mutableStateOf(false) }
     // Открытая пометка: новая (из выделения) или прежняя (тап по маркеру).
     var editing by remember { mutableStateOf<ru.zf.slushalka.data.Note?>(null) }
     var editingByVoice by remember { mutableStateOf(false) }
@@ -720,6 +725,7 @@ fun ReaderScreen(
                                 fontSize = 10.sp,
                             )
                         }
+                        BarIcon(Glyphs.ManageSearch, "Найти по смыслу", palette) { showSearch = true }
                         if (hasPictures) BarIcon(Glyphs.Image, "Картинки", palette) { showGallery = true }
                         BarIcon(Glyphs.TextFields, "Вид", palette) { showSettings = true }
                     }
@@ -829,6 +835,32 @@ fun ReaderScreen(
             }
         }
 
+        // Дочитал - предложить поговорить о книге. Раньше дочитанная книга
+        // молча уходила на полку.
+        val atEnd = shownEnd >= t.length * 0.97 && t.length > 0
+        if (atEnd && !talkOffered && !recapOffer) {
+            val drop = with(LocalDensity.current) { if (bars && selection == null) topBarPx.toDp() else 0.dp }
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = drop + 4.dp)
+                    .padding(horizontal = maxOf(card.side, BAR_INSET) + 12.dp),
+            ) {
+                BarCard(palette, Modifier.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 4.dp)) {
+                    Text("Дочитал. Поговорим о книге?", color = palette.fg, fontSize = 13.sp)
+                    Row {
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { talkOffered = true }) { Text("Потом", color = palette.dim) }
+                        TextButton(onClick = {
+                            talkOffered = true
+                            onTalk(t.length, true)
+                        }) { Text("Поговорим", color = palette.fg) }
+                    }
+                }
+            }
+        }
+
         // Вернулся после перерыва - предложить вспомнить, на чём остановился.
         // Раньше это спрашивал только плеер, а книгу без записи - никто.
         if (recapOffer && !showRecap) {
@@ -887,6 +919,13 @@ fun ReaderScreen(
                 },
                 ClaudeAction(Glyphs.Gesture, "Обвести и спросить", "Обведи пальцем кусок - и спроси про него") {
                     lasso = true
+                },
+                ClaudeAction(Glyphs.ManageSearch, "Найти по смыслу", "«Где был разговор про балет» - сначала по справочнику") {
+                    showSearch = true
+                },
+                ClaudeAction(Glyphs.Forum, "Поговорить о книге", "Темы от Claude и разговор - как после книжного клуба") {
+                    val at = readPlace()
+                    onTalk(at, at >= t.length * 0.97)
                 },
                 ClaudeAction(Glyphs.MenuBook, "Справочник", "Герои, места и словарь - по прочитанным главам") {
                     guideQuery = ""
@@ -989,7 +1028,31 @@ fun ReaderScreen(
             cutoffChar = readPlace(),
             initialQuery = guideQuery,
             onAsk = { q -> showGuide = false; onAsk(readPlace(), q, null) },
+            onGoChapter = { n ->
+                t.chapters.getOrNull(n - 1)?.let { c ->
+                    showGuide = false
+                    place = null
+                    target = c.start
+                }
+            },
             onClose = { showGuide = false },
+        )
+    }
+    if (showSearch) {
+        SearchSheet(
+            app = app,
+            book = bk,
+            text = t,
+            cutoff = readPlace().coerceAtLeast(shownEnd),
+            hasMic = hasMic,
+            onNeedMic = onNeedMic,
+            onGo = { at ->
+                showSearch = false
+                place = null
+                target = at
+                pendingHighlight = at
+            },
+            onClose = { showSearch = false },
         )
     }
     picture?.let { shown ->

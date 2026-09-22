@@ -37,6 +37,7 @@ import ru.zf.slushalka.ui.ReaderScreen
 import ru.zf.slushalka.ui.SettingsScreen
 import ru.zf.slushalka.ui.SlushalkaTheme
 import ru.zf.slushalka.ui.StatsScreen
+import ru.zf.slushalka.ui.TalkSheet
 import ru.zf.slushalka.widget.ContinueWidget
 
 enum class Screen { LIBRARY, PLAYER, READER, SETTINGS, CATALOG, STATS }
@@ -141,6 +142,10 @@ class MainActivity : ComponentActivity() {
         var askAtChar by remember { mutableStateOf<Int?>(null) }
         var askPrefill by remember { mutableStateOf<String?>(null) }
         var askQuote by remember { mutableStateOf<String?>(null) }
+        // Разговор о книге: поверх любого экрана, как вопрос.
+        var talking by remember { mutableStateOf(false) }
+        var talkAt by remember { mutableStateOf<Int?>(null) }
+        var talkDone by remember { mutableStateOf<Boolean?>(null) }
         val current by state.current.collectAsState()
 
         // Куда возвращаться из читалки: книге без записи плеер не нужен,
@@ -173,8 +178,9 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        BackHandler(enabled = screen != Screen.LIBRARY || asking) {
+        BackHandler(enabled = screen != Screen.LIBRARY || asking || talking) {
             when {
+                talking -> talking = false
                 asking -> asking = false
                 screen == Screen.READER -> screen = afterReader()
                 // В каталоге «назад» сперва снимает верхнюю ленту, и только с корня уходит.
@@ -192,6 +198,12 @@ class MainActivity : ComponentActivity() {
                     onSettings = { screen = Screen.SETTINGS },
                     onCatalog = { screen = Screen.CATALOG },
                     onStats = { screen = Screen.STATS },
+                    onTalk = { book ->
+                        openBook(book)
+                        talkAt = null
+                        talkDone = null
+                        talking = true
+                    },
                 )
 
                 Screen.STATS -> StatsScreen(app = app, onBack = { screen = Screen.LIBRARY })
@@ -219,6 +231,11 @@ class MainActivity : ComponentActivity() {
                         screen = Screen.READER
                     },
                     onSettings = { screen = Screen.SETTINGS },
+                    onTalk = {
+                        talkAt = null
+                        talkDone = null
+                        talking = true
+                    },
                 )
 
                 Screen.READER -> ReaderScreen(
@@ -233,6 +250,11 @@ class MainActivity : ComponentActivity() {
                     },
                     hasMic = hasMic,
                     onNeedMic = onNeedMic,
+                    onTalk = { at, done ->
+                        talkAt = at
+                        talkDone = done
+                        talking = true
+                    },
                 )
 
                 Screen.SETTINGS -> SettingsScreen(
@@ -247,6 +269,17 @@ class MainActivity : ComponentActivity() {
                     },
                     onPickTree = onPickTree,
                     onPickExtraTree = onPickExtraTree,
+                )
+            }
+
+            if (talking) {
+                TalkSheet(
+                    app = app,
+                    cutoff = talkAt,
+                    finished = talkDone,
+                    hasMic = hasMic,
+                    onNeedMic = onNeedMic,
+                    onClose = { talking = false },
                 )
             }
 

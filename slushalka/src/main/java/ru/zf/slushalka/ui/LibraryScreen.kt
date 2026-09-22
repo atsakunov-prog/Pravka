@@ -74,6 +74,8 @@ fun LibraryScreen(
     onSettings: () -> Unit,
     onCatalog: () -> Unit,
     onStats: () -> Unit,
+    /** Разговор о дочитанной книге - из меню книги. */
+    onTalk: (Book) -> Unit,
 ) {
     val state = app.state
     val books by state.books.collectAsState()
@@ -226,6 +228,7 @@ fun LibraryScreen(
             progress = progressOf(app, book),
             onOpen = { menuFor = null; onOpen(book) },
             onRemind = { menuFor = null; remind(book) },
+            onTalk = { menuFor = null; onTalk(book) },
             onClose = { menuFor = null },
         )
     }
@@ -607,6 +610,7 @@ private fun BookMenu(
     progress: Progress,
     onOpen: () -> Unit,
     onRemind: () -> Unit,
+    onTalk: () -> Unit,
     onClose: () -> Unit,
 ) {
     AlertDialog(
@@ -630,6 +634,14 @@ private fun BookMenu(
                         Icon(Glyphs.History, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Напомнить, о чём там")
+                    }
+                }
+                if (book.textDocId != null && (progress.done || progress.started)) {
+                    Spacer(Modifier.height(6.dp))
+                    FilledTonalButton(onClick = onTalk, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Glyphs.Forum, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Поговорить о книге")
                     }
                 }
             }

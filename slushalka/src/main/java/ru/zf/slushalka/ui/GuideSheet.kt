@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -75,6 +76,8 @@ fun GuideSheet(
     /** С чего начать поиск - имя героя из абзаца, например. */
     initialQuery: String = "",
     onAsk: (question: String) -> Unit,
+    /** Перейти к началу главы (номер с единицы); null - перейти некуда (плеер). */
+    onGoChapter: ((chapter: Int) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
     val book by app.state.current.collectAsState()
@@ -249,17 +252,29 @@ fun GuideSheet(
                     val chapters = guide.chapters.filter { it.chapter <= upTo && it.matches(query) }
                     val lists = listOf(guide.characters, guide.places, guide.terms)
                     val visible = lists.map { list -> list.mapNotNull { it.visibleAt(upTo) }.filter { it.matches(query) } }
-                    val labels = listOf("Главы · ${chapters.size}", "Герои · ${visible[0].size}", "Места · ${visible[1].size}", "Словарь · ${visible[2].size}")
+                    val events = guide.events.filter { it.chapter <= upTo && it.matches(query) }
+                    val labels = listOf(
+                        "Главы · ${chapters.size}", "Герои · ${visible[0].size}", "Места · ${visible[1].size}",
+                        "Словарь · ${visible[2].size}", "Хронология · ${events.size}",
+                    )
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         labels.forEachIndexed { i, label ->
                             FilterChip(selected = tab == i, onClick = { tab = i }, label = { Text(label) })
                         }
                     }
                     Spacer(Modifier.height(4.dp))
-                    val empty = if (tab == 0) chapters.isEmpty() else visible[tab - 1].isEmpty()
+                    val empty = when (tab) {
+                        0 -> chapters.isEmpty()
+                        4 -> events.isEmpty()
+                        else -> visible[tab - 1].isEmpty()
+                    }
                     if (empty) {
                         Text(
                             when {
+                                // Старый справочник: хронологии в нём нет вовсе, а не «пока пусто».
+                                tab == 4 && guide.events.isEmpty() ->
+                                    "Этот справочник составлен до того, как в нём появилась хронология и " +
+                                        "связи героев. «Пересобрать» внизу закажет его заново - с ними."
                                 query.isNotBlank() -> "Ничего похожего в дочитанных главах."
                                 readChapters == 0 -> "Откроется, когда дочитаешь первую главу."
                                 else -> "В дочитанных главах здесь пока пусто."
@@ -270,7 +285,35 @@ fun GuideSheet(
                         )
                     }
                     LazyColumn(Modifier.weight(1f)) {
-                        if (tab == 0) {
+                        if (tab == 4) {
+                            // Хронология: по главам, где о событии узнаёт читатель;
+                            // «когда» - время книги, если она его называет.
+                            items(events) { ev ->
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = onGoChapter != null) { onGoChapter?.invoke(ev.chapter) }
+                                        .padding(vertical = 8.dp),
+                                ) {
+                                    Column(Modifier.width(64.dp)) {
+                                        Text(
+                                            "гл. ${ev.chapter}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                        if (ev.whenText.isNotBlank()) {
+                                            Text(
+                                                ev.whenText,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                    Text(ev.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                }
+                                HorizontalDivider()
+                            }
+                        } else if (tab == 0) {
                             items(chapters) { ch ->
                                 Column(
                                     Modifier
@@ -358,6 +401,7 @@ fun GuideSheet(
 
     open?.let { e ->
         val visibleNotes = e.notes.filter { it.chapter <= upTo }
+        val visibleLinks = e.links.filter { it.chapter <= upTo }
         AlertDialog(
             onDismissRequest = { open = null },
             title = { Text(e.name) },
@@ -372,6 +416,31 @@ fun GuideSheet(
                         Spacer(Modifier.height(6.dp))
                     }
                     Text(e.role, style = MaterialTheme.typography.bodyMedium)
+                    if (visibleLinks.isNotEmpty()) {
+                        // Связи - как в семейном древе на форзаце: кто кому кем
+                        // приходится. Тап по имени - статья того героя.
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "Связи",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        visibleLinks.forEach { l ->
+                            val other = st?.guide?.characters?.firstOrNull { c ->
+                                c.names.any { it.equals(l.to, ignoreCase = true) }
+                            }?.visibleAt(upTo)
+                            Text(
+                                "${l.kind} - ${l.to}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (other != null) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = other != null) { open = other }
+                                    .padding(vertical = 3.dp),
+                            )
+                        }
+                    }
                     visibleNotes.forEach { n ->
                         Spacer(Modifier.height(10.dp))
                         Text(
@@ -411,7 +480,14 @@ fun GuideSheet(
                     Text(ch.summary, style = MaterialTheme.typography.bodyMedium)
                 }
             },
-            confirmButton = { TextButton(onClick = { openChapter = null }) { Text("Закрыть") } },
+            confirmButton = {
+                Row {
+                    if (onGoChapter != null) {
+                        TextButton(onClick = { openChapter = null; onGoChapter(ch.chapter) }) { Text("К главе") }
+                    }
+                    TextButton(onClick = { openChapter = null }) { Text("Закрыть") }
+                }
+            },
             dismissButton = {
                 TextButton(onClick = {
                     askFor = GuideEntry(
