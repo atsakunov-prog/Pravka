@@ -108,8 +108,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         /** Сверять переход «звук → текст» распознаванием последних секунд. */
         val refineOnSwitch: Boolean = true,
         // Модели: кто отвечает на вопрос по книге и кто пересказывает, и с
-        // каким усилием (пусто — параметр не передаётся, решает API). Заводские
-        // — те, что были зашиты: Опус на вопрос, Сонет на пересказ.
+        // каким усилием (пусто — «по умолчанию», см. [defaultEffort]).
+        // Заводская везде — Опус 5.5: владелец так решил.
         val askModel: String = MODEL_OPUS,
         val askEffort: String = "",
         // Сколько книги показывать модели (имя AskEngine.Scope) и держать ли
@@ -117,7 +117,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         // книгу десять раз. Оба выбираются в самом окне вопроса и помнятся.
         val askScope: String = "",
         val askCache: Boolean = true,
-        val recapModel: String = MODEL_SONNET,
+        val recapModel: String = MODEL_OPUS,
         val recapEffort: String = "",
         // Справочник по книге считается пакетным запросом (Batch API, вдвое
         // дешевле): заводская — Опус, книга целиком ему по силам.
@@ -130,8 +130,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val ttsRate: Float = 1.0f,
         val ttsVoice: String = "",
         // Советник в каталоге: кто отвечает, с каким усилием, ходить ли в интернет.
-        // Заводская модель — Fable 5.1: владелец просил именно её.
-        val adviseModel: String = MODEL_FABLE,
+        val adviseModel: String = MODEL_OPUS,
         val adviseEffort: String = "",
         val adviseWeb: Boolean = true,
     ) {
@@ -193,13 +192,13 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 // кто его включал, получает тот же объём и в новом окне.
                 askScope = p[KEY_ASK_SCOPE] ?: if (p[KEY_WHOLE] == true) "WHOLE" else "",
                 askCache = p[KEY_ASK_CACHE] ?: true,
-                recapModel = p[KEY_RECAP_MODEL]?.takeIf { it in MODELS } ?: MODEL_SONNET,
+                recapModel = p[KEY_RECAP_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
                 recapEffort = p[KEY_RECAP_EFFORT]?.takeIf { it in EFFORTS } ?: "",
                 guideModel = p[KEY_GUIDE_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
                 flibustaUrl = p[KEY_FLIBUSTA]?.takeIf { it.isNotBlank() } ?: DEFAULT_FLIBUSTA_URL,
                 ttsRate = p[KEY_TTS_RATE] ?: 1.0f,
                 ttsVoice = p[KEY_TTS_VOICE] ?: "",
-                adviseModel = p[KEY_ADVISE_MODEL]?.takeIf { it in MODELS } ?: MODEL_FABLE,
+                adviseModel = p[KEY_ADVISE_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
                 adviseEffort = p[KEY_ADVISE_EFFORT]?.takeIf { it in EFFORTS } ?: "",
                 adviseWeb = p[KEY_ADVISE_WEB] ?: true,
             )
@@ -294,7 +293,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setAdviseWeb(v: Boolean) = edit { it[KEY_ADVISE_WEB] = v }
 
     companion object {
-        const val MODEL_OPUS = "claude-opus-5"
+        const val MODEL_OPUS = "claude-opus-5-5"
         const val MODEL_SONNET = "claude-sonnet-5"
         const val MODEL_FABLE = "claude-fable-5-1"
 
@@ -303,13 +302,21 @@ class Settings(private val context: Context, scope: CoroutineScope) {
 
         fun modelLabel(model: String): String = when (model) {
             MODEL_SONNET -> "Сонет 5"
-            MODEL_OPUS -> "Опус 5"
+            MODEL_OPUS -> "Опус 5.5"
             MODEL_FABLE -> "Fable 5.1"
             else -> model
         }
 
-        /** output_config.effort; пустая строка — не передавать (API берёт high). */
+        /** output_config.effort; пустая строка — «по умолчанию», см. [defaultEffort]. */
         val EFFORTS = listOf("", "low", "medium", "high", "xhigh", "max")
+
+        /**
+         * Что значит «по умолчанию». У Опуса 5.5 заводское усилие API — medium,
+         * на ступень ниже прежнего high: молча отдать его значило бы сделать
+         * ответы мельче, чем были. Поэтому ему «по умолчанию» — явный high,
+         * остальным — пусто, API и так берёт high.
+         */
+        fun defaultEffort(model: String): String = if (model == MODEL_OPUS) "high" else ""
 
         fun effortLabel(effort: String): String = if (effort.isBlank()) "по умолчанию" else effort
 
@@ -490,17 +497,20 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
         private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")
         private val KEY_REFINE = booleanPreferencesKey("refine_on_switch")
-        private val KEY_ASK_MODEL = stringPreferencesKey("ask_model")
+        // Ключи моделей переименованы при переходе на Опус 5.5: владелец велел
+        // «везде Опус 5.5», а прежний выбор (Сонет на пересказ, Fable
+        // советнику) лежит в старых ключах и перебивал бы заводскую.
+        private val KEY_ASK_MODEL = stringPreferencesKey("ask_model_55")
         private val KEY_ASK_EFFORT = stringPreferencesKey("ask_effort")
         private val KEY_ASK_SCOPE = stringPreferencesKey("ask_scope")
         private val KEY_ASK_CACHE = booleanPreferencesKey("ask_cache")
-        private val KEY_GUIDE_MODEL = stringPreferencesKey("guide_model")
-        private val KEY_RECAP_MODEL = stringPreferencesKey("recap_model")
+        private val KEY_GUIDE_MODEL = stringPreferencesKey("guide_model_55")
+        private val KEY_RECAP_MODEL = stringPreferencesKey("recap_model_55")
         private val KEY_RECAP_EFFORT = stringPreferencesKey("recap_effort")
         private val KEY_FLIBUSTA = stringPreferencesKey("flibusta_url")
         private val KEY_TTS_RATE = floatPreferencesKey("tts_rate")
         private val KEY_TTS_VOICE = stringPreferencesKey("tts_voice")
-        private val KEY_ADVISE_MODEL = stringPreferencesKey("advise_model")
+        private val KEY_ADVISE_MODEL = stringPreferencesKey("advise_model_55")
         private val KEY_ADVISE_EFFORT = stringPreferencesKey("advise_effort")
         private val KEY_ADVISE_WEB = booleanPreferencesKey("advise_web")
     }

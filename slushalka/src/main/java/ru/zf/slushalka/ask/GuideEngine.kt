@@ -98,6 +98,12 @@ class GuideEngine(
                     // содержанием глав тянет на десятки тысяч токенов. Запас
                     // ничего не стоит: платится только написанное.
                     .put("max_tokens", MAX_OUTPUT_TOKENS)
+                    .apply {
+                        // Усилия у справочника в настройках нет - берётся «по
+                        // умолчанию», у Опуса 5.5 это явный high, а не medium API.
+                        val eff = Settings.defaultEffort(model)
+                        if (eff.isNotBlank()) put("output_config", JSONObject().put("effort", eff))
+                    }
                     .put("system", JSONArray().put(JSONObject().put("type", "text").put("text", Prompts.GUIDE_RULES)))
                     .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", body))))
         }

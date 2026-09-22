@@ -1,6 +1,13 @@
 package ru.zf.slushalka.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.border
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -37,6 +44,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -587,118 +595,129 @@ fun ReaderScreen(
         }
         near?.let { pic ->
             val file = app.texts.pictureFile(bk.id, pic.file)
-            PictureChip(file, palette, Modifier.align(Alignment.BottomEnd).padding(14.dp)) {
+            // Пока нижняя плашка на экране, значок картинки стоит над ней, а не под.
+            val lift = with(LocalDensity.current) { if (bars) bottomBarPx.toDp() else 0.dp }
+            PictureChip(file, palette, Modifier.align(Alignment.BottomEnd).padding(bottom = lift).padding(14.dp)) {
                 picture = ShownPicture(file, pic.caption, pic.charOffset)
             }
         }
 
         AnimatedVisibility(
             visible = bars,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = barEnter(fromTop = true),
+            exit = barExit(fromTop = true),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
-            Row(
+            // Высота меряется вместе с отступами: по ней прокрутка решает,
+            // сколько строк закрыто плашкой, а плашка теперь парит не у края.
+            Box(
                 Modifier
                     .onSizeChanged { topBarPx = it.height }
                     .fillMaxWidth()
-                    // Панель лежит на самой карточке, а не на столе: иначе она
-                    // разрезала бы страницу полосой поперёк.
-                    .padding(start = card.side, end = card.side)
-                    .background(palette.bg.copy(alpha = 0.96f))
                     .statusBarsPadding()
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(horizontal = maxOf(card.side, BAR_INSET), vertical = 6.dp),
             ) {
-                // Книге без записи плеер не нужен - «назад» ведёт на полку.
-                TextButton(onClick = onBack) { Text(if (bk.hasAudio) "‹ Плеер" else "‹ Полка", color = palette.fg) }
-                Text(
-                    t.chapterAt(offset)?.title.orEmpty(),
-                    color = palette.dim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    fontSize = 12.sp,
-                    modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
-                )
-                if (hasPictures) {
-                    TextButton(onClick = { showGallery = true }) {
-                        Text("Картинки", color = palette.fg)
+                BarCard(palette) {
+                    Row(
+                        Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // Книге без записи плеер не нужен - «назад» ведёт на полку.
+                        TextButton(onClick = onBack) { Text(if (bk.hasAudio) "‹ Плеер" else "‹ Полка", color = palette.fg) }
+                        Text(
+                            t.chapterAt(offset)?.title.orEmpty(),
+                            color = palette.dim,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontSize = 12.sp,
+                            modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
+                        )
+                        if (hasPictures) {
+                            TextButton(onClick = { showGallery = true }) {
+                                Text("Картинки", color = palette.fg)
+                            }
+                        }
+                        TextButton(onClick = { showSettings = true }) {
+                            Text("Аа  Вид", color = palette.fg)
+                        }
                     }
-                }
-                TextButton(onClick = { showSettings = true }) {
-                    Text("Аа  Вид", color = palette.fg)
                 }
             }
         }
 
         AnimatedVisibility(
             visible = bars,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = barEnter(fromTop = false),
+            exit = barExit(fromTop = false),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            Column(
+            Box(
                 Modifier
                     .onSizeChanged { bottomBarPx = it.height }
                     .fillMaxWidth()
-                    .padding(start = card.side, end = card.side, bottom = card.bottom)
-                    .background(palette.bg.copy(alpha = 0.96f))
                     .navigationBarsPadding()
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                    .padding(
+                        start = maxOf(card.side, BAR_INSET),
+                        end = maxOf(card.side, BAR_INSET),
+                        top = 6.dp,
+                        bottom = maxOf(card.bottom, BAR_INSET),
+                    ),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "стр. ${t.pageOf(offset)} из ${t.pages}",
-                        color = palette.dim,
-                        fontSize = 12.sp,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    LoveLine(alpha = 0.3f, size = 10, color = palette.fg)
-                }
-                if (speakingHere) {
-                    // Озвучка идёт: вместо кнопок - управление ею. Абзац назад и
-                    // вперёд, пауза, темп, выключить.
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
+                BarCard(palette, Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "стр. ${t.pageOf(offset)} из ${t.pages}",
+                            color = palette.dim,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        LoveLine(alpha = 0.3f, size = 10, color = palette.fg)
+                    }
+                    if (speakingHere) {
+                        // Озвучка идёт: вместо кнопок - управление ею. Абзац назад и
+                        // вперёд, пауза, темп, выключить.
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            TextButton(onClick = { app.readAloud.skip(-1) }) { Text("‹ абзац", color = palette.fg) }
+                            PlayPauseButton(speech.speaking, size = 46.dp) { app.readAloud.playPause() }
+                            TextButton(onClick = { app.readAloud.skip(+1) }) { Text("абзац ›", color = palette.fg) }
+                            Spacer(Modifier.weight(1f))
+                            SpeedButton(speech.rate, size = 40.dp) { showRate = true }
+                            TextButton(onClick = { app.readAloud.stop() }) { Text("Стоп", color = palette.fg) }
+                        }
+                        speech.error?.let { err ->
+                            Text(err, color = palette.dim, fontSize = 12.sp)
+                        }
+                    } else androidx.compose.foundation.layout.FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        TextButton(onClick = { app.readAloud.skip(-1) }) { Text("‹ абзац", color = palette.fg) }
-                        PlayPauseButton(speech.speaking, size = 46.dp) { app.readAloud.playPause() }
-                        TextButton(onClick = { app.readAloud.skip(+1) }) { Text("абзац ›", color = palette.fg) }
-                        Spacer(Modifier.weight(1f))
-                        SpeedButton(speech.rate, size = 40.dp) { showRate = true }
-                        TextButton(onClick = { app.readAloud.stop() }) { Text("Стоп", color = palette.fg) }
-                    }
-                    speech.error?.let { err ->
-                        Text(err, color = palette.dim, fontSize = 12.sp)
-                    }
-                } else androidx.compose.foundation.layout.FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    if (bk.hasAudio) {
-                        TextButton(onClick = {
-                            state.listenFrom(readPlace())
-                            onListen()
-                        }) { Text("Слушать отсюда", color = palette.fg) }
-                    } else {
-                        // Записи нет - читает синтез речи, с этой страницы.
-                        TextButton(onClick = { app.readAloud.start(bk, t, readPlace()) }) {
-                            Text("Озвучить", color = palette.fg)
+                        if (bk.hasAudio) {
+                            TextButton(onClick = {
+                                state.listenFrom(readPlace())
+                                onListen()
+                            }) { Text("Слушать отсюда", color = palette.fg) }
+                        } else {
+                            // Записи нет - читает синтез речи, с этой страницы.
+                            TextButton(onClick = { app.readAloud.start(bk, t, readPlace()) }) {
+                                Text("Озвучить", color = palette.fg)
+                            }
                         }
+                        // «Содержание» - главы, тап - переход. Пересказ «что там было»
+                        // раньше жил под этим словом, теперь он - «Напомнить».
+                        TextButton(onClick = { showChapters = true }) { Text("Содержание", color = palette.fg) }
+                        TextButton(onClick = { showRecap = true }) { Text("Напомнить", color = palette.fg) }
+                        TextButton(onClick = { onAsk(readPlace(), null, null) }) { Text("Спросить", color = palette.fg) }
+                        TextButton(onClick = { lasso = !lasso }) {
+                            Text(if (lasso) "Не обводить" else "Обвести", color = if (lasso) palette.dim else palette.fg)
+                        }
+                        TextButton(onClick = { guideQuery = ""; showGuide = true }) { Text("Справочник", color = palette.fg) }
                     }
-                    // «Содержание» - главы, тап - переход. Пересказ «что там было»
-                    // раньше жил под этим словом, теперь он - «Напомнить».
-                    TextButton(onClick = { showChapters = true }) { Text("Содержание", color = palette.fg) }
-                    TextButton(onClick = { showRecap = true }) { Text("Напомнить", color = palette.fg) }
-                    TextButton(onClick = { onAsk(readPlace(), null, null) }) { Text("Спросить", color = palette.fg) }
-                    TextButton(onClick = { lasso = !lasso }) {
-                        Text(if (lasso) "Не обводить" else "Обвести", color = if (lasso) palette.dim else palette.fg)
+                    if (!speakingHere && !bk.hasAudio) {
+                        speech.error?.let { err -> Text(err, color = palette.dim, fontSize = 12.sp) }
                     }
-                    TextButton(onClick = { guideQuery = ""; showGuide = true }) { Text("Справочник", color = palette.fg) }
-                }
-                if (!speakingHere && !bk.hasAudio) {
-                    speech.error?.let { err -> Text(err, color = palette.dim, fontSize = 12.sp) }
                 }
             }
         }
@@ -710,7 +729,7 @@ fun ReaderScreen(
                 fontSize = 12.sp,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 96.dp)
+                    .padding(bottom = with(LocalDensity.current) { if (bars) bottomBarPx.toDp() + 12.dp else 96.dp })
                     .clip(RoundedCornerShape(20.dp))
                     .background(palette.fg.copy(alpha = 0.88f))
                     .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -1306,6 +1325,12 @@ private fun PagedBody(
                 // ездит по нему: читаешь левую страницу - смахнул - книга
                 // доехала до правой. Переворота листа тут нет.
                 Modifier
+                    // Слой шире экрана, а такой Compose ставит по центру: книга
+                    // съезжала на полэкрана, у левой страницы край переплёта
+                    // уходил за экран, у правой книга кончалась посередине.
+                    // Камера считает от левого края - к нему и прижат.
+                    .fillMaxWidth()
+                    .wrapContentWidth(Alignment.Start, unbounded = true)
                     .requiredWidth(screenWidth * 2 - BOOK_PEEK * 2)
                     .fillMaxHeight()
                     .graphicsLayer {
@@ -1981,4 +2006,48 @@ private fun litText(
             from, to,
         )
     }
+}
+
+/** Отступ плашки от края экрана, когда у страницы своего поля нет. */
+private val BAR_INSET = 10.dp
+
+private val BAR_SHAPE = RoundedCornerShape(18.dp)
+
+// Плашки выезжают из-за края, к которому прижаты, а не проявляются на месте:
+// так видно, откуда они и куда уйдут. Уход короче появления - ждать его незачем.
+private fun barEnter(fromTop: Boolean) =
+    slideInVertically(tween(260, easing = FastOutSlowInEasing)) { if (fromTop) -it else it } +
+        fadeIn(tween(180))
+
+private fun barExit(fromTop: Boolean) =
+    slideOutVertically(tween(200, easing = FastOutSlowInEasing)) { if (fromTop) -it else it } +
+        fadeOut(tween(160))
+
+/**
+ * Плашка читалки: карточка над страницей с тенью, а не полоса поперёк неё.
+ * В тёмной теме тень не видна, поэтому карточку там поднимает подсветка фона
+ * и кромка; в светлой кромка еле заметна, работает тень.
+ */
+@Composable
+private fun BarCard(
+    palette: ReaderPalette,
+    inner: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val dark = palette.bg.luminance() < 0.5f
+    val face = if (dark) lerp(palette.bg, palette.fg, 0.07f) else palette.bg
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .shadow(
+                elevation = if (dark) 6.dp else 12.dp,
+                shape = BAR_SHAPE,
+                ambientColor = Color.Black.copy(alpha = 0.25f),
+                spotColor = Color.Black.copy(alpha = 0.35f),
+            )
+            .background(face, BAR_SHAPE)
+            .border(0.5.dp, palette.fg.copy(alpha = if (dark) 0.16f else 0.08f), BAR_SHAPE)
+            .then(inner),
+        content = content,
+    )
 }

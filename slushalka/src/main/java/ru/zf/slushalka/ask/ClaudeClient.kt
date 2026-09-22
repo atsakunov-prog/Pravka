@@ -50,7 +50,7 @@ class ClaudeClient(private val settings: Settings) {
         system: List<Block>,
         question: String,
         maxTokens: Int = DEFAULT_MAX_TOKENS,
-        /** output_config.effort; пусто — не передавать, решает API. */
+        /** output_config.effort; пусто — «по умолчанию» ([Settings.defaultEffort]). */
         effort: String = "",
         onDelta: (String) -> Unit = {},
     ): Result<Reply> = chat(
@@ -95,11 +95,12 @@ class ClaudeClient(private val settings: Settings) {
                 }
                 // Размышления считаются в тот же max_tokens: на глубоком
                 // усилии без запаса ответ обрывался бы на мыслях, не начавшись.
-                put("max_tokens", maxTokens + if (effort in DEEP_EFFORTS) 8000 else 0)
-                if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
+                val eff = effort.ifBlank { Settings.defaultEffort(model) }
+                put("max_tokens", maxTokens + if (eff in DEEP_EFFORTS) 8000 else 0)
+                if (eff.isNotBlank()) put("output_config", JSONObject().put("effort", eff))
                 // Параметр thinking не передаётся: адаптивные мысли — поведение
                 // по умолчанию у всех трёх моделей, а явное «disabled» Fable
-                // отвергает с 400.
+                // и Опус 5.5 отвергают с 400.
                 put("stream", true)
                 put("system", JSONArray().apply {
                     system.filter { it.text.isNotBlank() }.forEach { b ->
@@ -341,8 +342,9 @@ class ClaudeClient(private val settings: Settings) {
         private val PRICES = mapOf(
             // Сонет 5 дешевле 4.6 ($3/$15): старая цена завышала расход в полтора раза.
             Settings.MODEL_SONNET to Price(2.0, 10.0),
-            Settings.MODEL_OPUS to Price(5.0, 25.0),
-            // Fable 5.1: вдвое дороже Опуса, чтение кэша — $0.25 за миллион.
+            // Опус 5.5 дешевле Опуса 5 ($5/$25), чтение кэша — $0.20.
+            Settings.MODEL_OPUS to Price(4.0, 20.0, cacheRead = 0.20),
+            // Fable 5.1: в два с половиной раза дороже Опуса 5.5, чтение кэша — $0.25 за миллион.
             Settings.MODEL_FABLE to Price(10.0, 50.0, cacheRead = 0.25),
         )
 
