@@ -96,6 +96,41 @@ private val DarkColors = darkColorScheme(
     onError = Color(0xFF3A0D06),
 )
 
+/**
+ * Для электронной книги: только чёрный, белый и два серых. Цвет на e-ink
+ * превращается в бледно-серое, и синие кнопки и кремовые карточки там почти
+ * не видны - контраст держит чёрное на белом.
+ */
+private val EinkColors = lightColorScheme(
+    primary = Color.Black,
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFE6E6E6),
+    onPrimaryContainer = Color.Black,
+    secondary = Color(0xFF333333),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFEDEDED),
+    onSecondaryContainer = Color.Black,
+    tertiary = Color.Black,
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFE6E6E6),
+    onTertiaryContainer = Color.Black,
+    background = Color.White,
+    onBackground = Color.Black,
+    surface = Color.White,
+    onSurface = Color.Black,
+    surfaceVariant = Color(0xFFF0F0F0),
+    onSurfaceVariant = Color(0xFF2E2E2E),
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color.White,
+    surfaceContainer = Color(0xFFF2F2F2),
+    surfaceContainerHigh = Color(0xFFF5F5F5),
+    surfaceContainerHighest = Color(0xFFF5F5F5),
+    outline = Color(0xFF555555),
+    outlineVariant = Color(0xFF999999),
+    error = Color.Black,
+    onError = Color.White,
+)
+
 private fun typography(): Typography {
     val base = Typography()
     val serif = FontFamily.Serif
@@ -120,9 +155,13 @@ private val AppShapes = Shapes(
 )
 
 @Composable
-fun SlushalkaTheme(content: @Composable () -> Unit) {
+fun SlushalkaTheme(eink: Boolean = false, content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
+        colorScheme = when {
+            eink -> EinkColors
+            isSystemInDarkTheme() -> DarkColors
+            else -> LightColors
+        },
         typography = typography(),
         shapes = AppShapes,
         content = content,

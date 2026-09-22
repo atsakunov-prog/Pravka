@@ -95,7 +95,8 @@ class MainActivity : ComponentActivity() {
             val base = LocalDensity.current
             val density = remember(base, prefs.uiScale) { Density(base.density * prefs.uiScale, base.fontScale) }
             CompositionLocalProvider(LocalDensity provides density) {
-                SlushalkaTheme {
+                // На электронной книге всё приложение - чёрным по белому, не только читалка.
+                SlushalkaTheme(eink = prefs.readerEink) {
                     Surface(
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.background,
@@ -115,6 +116,25 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Кнопки листания в читалке: PageUp/PageDown электронных книг всегда,
+     * громкость - если включено и ничего не звучит: пока идёт запись или
+     * озвучка, громкость - это громкость.
+     */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val turn = ru.zf.slushalka.ui.PageKeys.listener
+        if (turn != null) {
+            val quiet = !app.player.state.value.playing && !app.readAloud.state.value.speaking
+            val dir = ru.zf.slushalka.ui.PageKeys.direction(event.keyCode, app.settings.now().readerVolumeKeys && quiet)
+            if (dir != 0) {
+                // Зажатая кнопка не листает пачкой: только первое нажатие.
+                if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) turn(dir)
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onStart() {

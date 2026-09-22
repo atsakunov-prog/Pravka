@@ -186,6 +186,33 @@ fun selectionFor(count: Int, text: BookText, blocks: List<Block>, at: Int): IntR
     else -> paragraphAt(text, blocks, at)
 }?.takeIf { it.last > it.first }
 
+// ------------------------------------------------------------- кнопки листания
+
+/** Просьба перелистнуть кнопкой: направление и номер - два нажатия подряд оба срабатывают. */
+data class KeyTurn(val dir: Int, val seq: Int)
+
+/**
+ * Листание кнопками: у электронных книг они физические (PageUp/PageDown, у
+ * некоторых - стрелки), на телефоне - громкость. Activity ловит клавишу и,
+ * если читалка открыта ([listener]), отдаёт ей направление.
+ */
+object PageKeys {
+    @Volatile
+    var listener: ((Int) -> Unit)? = null
+
+    /** +1 - вперёд, -1 - назад, 0 - не наша клавиша. Громкость - только если [volumeKeys]. */
+    fun direction(keyCode: Int, volumeKeys: Boolean): Int = when (keyCode) {
+        android.view.KeyEvent.KEYCODE_PAGE_DOWN,
+        android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+        android.view.KeyEvent.KEYCODE_SPACE -> +1
+        android.view.KeyEvent.KEYCODE_PAGE_UP,
+        android.view.KeyEvent.KEYCODE_DPAD_LEFT -> -1
+        android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> if (volumeKeys) +1 else 0
+        android.view.KeyEvent.KEYCODE_VOLUME_UP -> if (volumeKeys) -1 else 0
+        else -> 0
+    }
+}
+
 // ------------------------------------------------------------------ краска
 
 /**
@@ -199,6 +226,8 @@ data class TextInk(
     val notes: List<IntRange> = emptyList(),
     val selectionColor: Color = Color.Transparent,
     val noteColor: Color = Color.Transparent,
+    /** Подчёркивать пометки - на e-ink, где цветной маркер выходит бледно-серым. */
+    val underlineNotes: Boolean = false,
 )
 
 /**
@@ -206,8 +235,11 @@ data class TextInk(
  * и полупрозрачная: текст под ней читается. Выделение - холодное, чтобы с
  * пометкой не путалось.
  */
-fun inkColors(palette: ReaderPalette): Pair<Color, Color> {
+fun inkColors(palette: ReaderPalette, eink: Boolean = false): Pair<Color, Color> {
     val dark = palette.bg.luminance() < 0.5f
+    // На электронной бумаге цвета нет: выделение - ощутимо серое, пометка -
+    // светло-серая плашка плюс подчёркивание (см. TextInk.underlineNotes).
+    if (eink) return palette.fg.copy(alpha = 0.28f) to palette.fg.copy(alpha = 0.10f)
     val selection = Color(0xFF4A7BD0).copy(alpha = if (dark) 0.38f else 0.26f)
     val note = Color(0xFFE2B84A).copy(alpha = if (dark) 0.26f else 0.34f)
     return selection to note
@@ -222,13 +254,20 @@ private val BAR_SHAPE = RoundedCornerShape(18.dp)
 
 // Плашки выезжают из-за края, к которому прижаты, а не проявляются на месте:
 // так видно, откуда они и куда уйдут. Уход короче появления - ждать его незачем.
-fun barEnter(fromTop: Boolean) =
-    slideInVertically(tween(260, easing = FastOutSlowInEasing)) { if (fromTop) -it else it } +
+fun barEnter(fromTop: Boolean, eink: Boolean = false): androidx.compose.animation.EnterTransition =
+    if (eink) androidx.compose.animation.EnterTransition.None
+    else slideInVertically(tween(260, easing = FastOutSlowInEasing)) { if (fromTop) -it else it } +
         fadeIn(tween(180))
 
-fun barExit(fromTop: Boolean) =
-    slideOutVertically(tween(200, easing = FastOutSlowInEasing)) { if (fromTop) -it else it } +
+// На e-ink плашки появляются и уходят разом: выезд - дюжина перерисовок с
+// шлейфом на электронной бумаге.
+fun barExit(fromTop: Boolean, eink: Boolean = false): androidx.compose.animation.ExitTransition =
+    if (eink) androidx.compose.animation.ExitTransition.None
+    else slideOutVertically(tween(200, easing = FastOutSlowInEasing)) { if (fromTop) -it else it } +
         fadeOut(tween(160))
+
+/** Читалка в режиме e-ink: плашки без теней и анимаций, кромка чёткая. */
+val LocalEink = androidx.compose.runtime.staticCompositionLocalOf { false }
 
 /**
  * Плашка читалки: карточка над страницей с тенью, а не полоса поперёк неё.
@@ -242,18 +281,27 @@ fun BarCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val dark = palette.bg.luminance() < 0.5f
-    val face = if (dark) lerp(palette.bg, palette.fg, 0.07f) else palette.bg
+    val eink = LocalEink.current
+    val face = if (dark && !eink) lerp(palette.bg, palette.fg, 0.07f) else palette.bg
     Column(
         Modifier
             .fillMaxWidth()
-            .shadow(
-                elevation = if (dark) 6.dp else 12.dp,
-                shape = BAR_SHAPE,
-                ambientColor = Color.Black.copy(alpha = 0.25f),
-                spotColor = Color.Black.copy(alpha = 0.35f),
+            // Тень на электронной бумаге - серое пятно: там карточку держит
+            // чёткая чёрная кромка.
+            .then(
+                if (eink) Modifier else Modifier.shadow(
+                    elevation = if (dark) 6.dp else 12.dp,
+                    shape = BAR_SHAPE,
+                    ambientColor = Color.Black.copy(alpha = 0.25f),
+                    spotColor = Color.Black.copy(alpha = 0.35f),
+                )
             )
             .background(face, BAR_SHAPE)
-            .border(0.5.dp, palette.fg.copy(alpha = if (dark) 0.16f else 0.08f), BAR_SHAPE)
+            .border(
+                if (eink) 1.5.dp else 0.5.dp,
+                if (eink) palette.fg else palette.fg.copy(alpha = if (dark) 0.16f else 0.08f),
+                BAR_SHAPE,
+            )
             .then(inner),
         content = content,
     )

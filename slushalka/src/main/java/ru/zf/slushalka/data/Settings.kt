@@ -97,6 +97,15 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerImperfect: Boolean = true,
         /** Абзацы отступом первой строки, как в книге, а не отбивкой между ними. */
         val readerIndent: Boolean = true,
+        /**
+         * Режим для электронной книги (Onyx Boox, PocketBook, Kobo, Hisense):
+         * контрастнее, крупнее и жирнее, без теней, зерна и анимаций, только
+         * страницами. Сохранённые настройки не трогает - подменяет их на
+         * время чтения, см. [readerView].
+         */
+        val readerEink: Boolean = false,
+        /** Листать кнопками громкости, когда ничего не звучит. */
+        val readerVolumeKeys: Boolean = false,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
         // экраном система нередко считает плотность малой, и кнопки с надписями
         // выходят мелкими. Множитель к плотности - растёт всё разом, включая
@@ -192,6 +201,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerTypograph = p[KEY_R_TYPOGRAPH] ?: true,
                 readerImperfect = p[KEY_R_IMPERFECT] ?: true,
                 readerIndent = p[KEY_R_INDENT] ?: true,
+                // На электронной книге режим включён сразу: зерно и тени там
+                // серая грязь, а анимация - мерцание экрана.
+                readerEink = p[KEY_R_EINK] ?: EinkDevice.likely,
+                readerVolumeKeys = p[KEY_R_VOLKEYS] ?: EinkDevice.likely,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
                 updateAuto = p[KEY_UPD_AUTO] ?: true,
@@ -291,6 +304,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         it[KEY_R_PAGE_STYLE] = PAGE_VOLUME
     }
     suspend fun setReaderIndent(v: Boolean) = edit { it[KEY_R_INDENT] = v }
+    suspend fun setReaderEink(v: Boolean) = edit { it[KEY_R_EINK] = v }
+    suspend fun setReaderVolumeKeys(v: Boolean) = edit { it[KEY_R_VOLKEYS] = v }
     suspend fun setUiScale(v: Float) = edit { if (v in UI_SCALES) it[KEY_UI_SCALE] = v }
     suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
     suspend fun setUpdateAuto(v: Boolean) = edit { it[KEY_UPD_AUTO] = v }
@@ -376,6 +391,33 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val FONT_SANS = "sans"
         const val FONT_MONO = "mono"
 
+        // Свои гарнитуры, все под SIL OFL и с полной кириллицей (с «ё»,
+        // ёлочками и «№»), урезанные до латиницы, кириллицы и знаков - чтобы
+        // APK не пух. PT Serif и PT Sans - русская классика ПараТайпа, Lora -
+        // тёплая каллиграфическая, Merriweather и Bitter - крепкие, их и берут
+        // для электронной бумаги: тонкие штрихи там выцветают.
+        const val FONT_PT_SERIF = "pt_serif"
+        const val FONT_LORA = "lora"
+        const val FONT_MERRIWEATHER = "merriweather"
+        const val FONT_BITTER = "bitter"
+        const val FONT_PT_SANS = "pt_sans"
+
+        /** Что предлагается в «Шрифте», по порядку: сначала книжные. */
+        val FONTS = listOf(
+            FONT_BOOK to "Literata",
+            FONT_PT_SERIF to "PT Serif",
+            FONT_LORA to "Lora",
+            FONT_MERRIWEATHER to "Merriweather",
+            FONT_BITTER to "Bitter",
+            FONT_PT_SANS to "PT Sans",
+            FONT_SERIF to "Системный",
+            FONT_SANS to "Рубленый",
+            FONT_MONO to "Машинописный",
+        )
+
+        /** На сколько пунктов крупнее кегль на электронной книге: экран там дальше от глаз и зернистее. */
+        const val EINK_SIZE_BOOST = 3
+
         // Тема читалки живёт отдельно от темы приложения: читают и днём на
         // свету, и ночью в постели, и переключать это хочется одним тапом.
         const val THEME_AUTO = "auto"
@@ -383,6 +425,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val THEME_SEPIA = "sepia"
         const val THEME_GREY = "grey"
         const val THEME_BLACK = "black"
+        // Только для режима e-ink, в выборе бумаги их нет: чистый белый и
+        // чистый чёрный, без тёплого оттенка - на электронной бумаге он серый.
+        const val THEME_EINK = "eink"
+        const val THEME_EINK_NIGHT = "eink_night"
 
         // Вид страницы. Заводской - «стопка»: страница как верхняя карточка
         // колоды, ради этого всё и затевалось. Ключи остались прежними, чтобы
@@ -519,6 +565,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_TYPOGRAPH = booleanPreferencesKey("reader_typograph")
         private val KEY_R_IMPERFECT = booleanPreferencesKey("reader_imperfect")
         private val KEY_R_INDENT = booleanPreferencesKey("reader_indent")
+        private val KEY_R_EINK = booleanPreferencesKey("reader_eink")
+        private val KEY_R_VOLKEYS = booleanPreferencesKey("reader_volume_keys")
         private val KEY_UI_SCALE = floatPreferencesKey("ui_scale")
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
         private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")
@@ -544,5 +592,43 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_CLOUD_PASS = stringPreferencesKey("cloud_pass")
         private val KEY_CLOUD_DIR = stringPreferencesKey("cloud_dir")
         private val KEY_CLOUD_SYNC = booleanPreferencesKey("cloud_sync")
+    }
+}
+
+/**
+ * Настройки глазами читалки. В режиме e-ink поверх сохранённых подменяется
+ * то, что электронная бумага показывает плохо: тени, зерно, фаска, блик и
+ * стол - серая грязь; объём книги и растворение - лишнее мерцание; прокрутка
+ * - шлейф на каждом кадре. Кегль крупнее, бумага - чистый белый (или чистый
+ * чёрный, если выбран «белым по чёрному»), неровности печати выключены.
+ * Выключил режим - всё, что было выбрано, на месте.
+ */
+fun Settings.Prefs.readerView(): Settings.Prefs = if (!readerEink) this else copy(
+    readerPaged = true,
+    readerPageStyle = Settings.PAGE_FLAT,
+    readerShadow = Settings.SHADOW_NONE,
+    readerBevel = false,
+    readerSheen = false,
+    readerGrain = false,
+    readerImperfect = false,
+    readerSize = readerSize + Settings.EINK_SIZE_BOOST,
+    readerTheme = if (readerTheme == Settings.THEME_BLACK) Settings.THEME_EINK_NIGHT else Settings.THEME_EINK,
+)
+
+/**
+ * Похоже ли устройство на электронную книгу. По производителю и модели: у
+ * e-ink читалок на Android своего признака в системе нет.
+ */
+object EinkDevice {
+    private val MARKS = listOf(
+        "onyx", "boox", "pocketbook", "kobo", "tolino", "boyue", "likebook", "meebook",
+        "bigme", "moaan", "inkpalm", "hanvon", "dasung", "remarkable", "supernote", "ratta",
+        "hisense a5", "hisense a7", "hisense a9", "hisense_a5", "hisense_a7", "hisense_a9",
+    )
+
+    val likely: Boolean by lazy {
+        val id = listOf(android.os.Build.MANUFACTURER, android.os.Build.BRAND, android.os.Build.MODEL, android.os.Build.DEVICE)
+            .joinToString(" ") { it.orEmpty() }.lowercase()
+        MARKS.any { it in id }
     }
 }

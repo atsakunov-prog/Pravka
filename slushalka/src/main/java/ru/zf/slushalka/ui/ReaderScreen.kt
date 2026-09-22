@@ -114,6 +114,7 @@ import kotlinx.coroutines.launch
 import ru.zf.slushalka.R
 import ru.zf.slushalka.SlushalkaApp
 import ru.zf.slushalka.data.Settings
+import ru.zf.slushalka.data.readerView
 import ru.zf.slushalka.text.Block
 import ru.zf.slushalka.text.BookText
 
@@ -129,6 +130,10 @@ fun readerPalette(theme: String, dark: Boolean): ReaderPalette = when (theme) {
     Settings.THEME_SEPIA -> ReaderPalette(Color(0xFFF3E6CE), Color(0xFF4A3B26), Color(0xFF8A7550))
     Settings.THEME_GREY -> ReaderPalette(Color(0xFF2A2D33), Color(0xFFCBC8C1), Color(0xFF8B8880))
     Settings.THEME_BLACK -> ReaderPalette(Color(0xFF000000), Color(0xFFB6B3AC), Color(0xFF6E6B65))
+    // Электронная бумага: чистые белый и чёрный, серый для служебного - тёмный,
+    // иначе колонтитул на e-ink выцветает до невидимого.
+    Settings.THEME_EINK -> ReaderPalette(Color(0xFFFFFFFF), Color(0xFF000000), Color(0xFF3A3A3A))
+    Settings.THEME_EINK_NIGHT -> ReaderPalette(Color(0xFF000000), Color(0xFFFFFFFF), Color(0xFFC8C8C8))
     else -> if (dark) ReaderPalette(Color(0xFF000000), Color(0xFFB6B3AC), Color(0xFF6E6B65))
     else ReaderPalette(Color(0xFFF4EFE4), Color(0xFF2E2A25), Color(0xFF6E6659))
 }
@@ -137,17 +142,59 @@ fun fontOf(name: String): FontFamily = when (name) {
     Settings.FONT_SANS -> FontFamily.SansSerif
     Settings.FONT_MONO -> FontFamily.Monospace
     Settings.FONT_SERIF -> FontFamily.Serif
+    Settings.FONT_PT_SERIF -> PT_SERIF
+    Settings.FONT_LORA -> LORA
+    Settings.FONT_MERRIWEATHER -> MERRIWEATHER
+    Settings.FONT_BITTER -> BITTER
+    Settings.FONT_PT_SANS -> PT_SANS
     // Книжная антиква своей гарнитурой: системная «с засечками» на разных
     // прошивках разворачивается в разное, и у владельца книжный вид рисовался
     // гротеском. Literata нарисована для чтения с экрана, кириллица полная.
     else -> LITERATA
 }
 
+// Medium - для режима e-ink: там основной текст набирается на ступень
+// жирнее, тонкий штрих на электронной бумаге выцветает. У кого своего
+// среднего нет (PT, Merriweather), Android берёт обычный - Merriweather и так
+// плотный.
 private val LITERATA = FontFamily(
     Font(R.font.literata_regular, FontWeight.Normal),
+    Font(R.font.literata_medium, FontWeight.Medium),
     Font(R.font.literata_italic, FontWeight.Normal, FontStyle.Italic),
     Font(R.font.literata_bold, FontWeight.SemiBold),
     Font(R.font.literata_bold, FontWeight.Bold),
+)
+
+private val PT_SERIF = FontFamily(
+    Font(R.font.ptserif_regular, FontWeight.Normal),
+    Font(R.font.ptserif_italic, FontWeight.Normal, FontStyle.Italic),
+    Font(R.font.ptserif_bold, FontWeight.Bold),
+)
+
+private val LORA = FontFamily(
+    Font(R.font.lora_regular, FontWeight.Normal),
+    Font(R.font.lora_medium, FontWeight.Medium),
+    Font(R.font.lora_italic, FontWeight.Normal, FontStyle.Italic),
+    Font(R.font.lora_bold, FontWeight.Bold),
+)
+
+private val MERRIWEATHER = FontFamily(
+    Font(R.font.merriweather_regular, FontWeight.Normal),
+    Font(R.font.merriweather_italic, FontWeight.Normal, FontStyle.Italic),
+    Font(R.font.merriweather_bold, FontWeight.Bold),
+)
+
+private val BITTER = FontFamily(
+    Font(R.font.bitter_regular, FontWeight.Normal),
+    Font(R.font.bitter_medium, FontWeight.Medium),
+    Font(R.font.bitter_italic, FontWeight.Normal, FontStyle.Italic),
+    Font(R.font.bitter_bold, FontWeight.Bold),
+)
+
+private val PT_SANS = FontFamily(
+    Font(R.font.ptsans_regular, FontWeight.Normal),
+    Font(R.font.ptsans_italic, FontWeight.Normal, FontStyle.Italic),
+    Font(R.font.ptsans_bold, FontWeight.Bold),
 )
 
 /**
@@ -221,7 +268,11 @@ fun ReaderScreen(
     val state = app.state
     val book by state.current.collectAsState()
     val text by state.text.collectAsState()
-    val prefs by state.prefs.collectAsState()
+    val stored by state.prefs.collectAsState()
+    // Дальше читалка видит настройки через режим e-ink: он подменяет то, что
+    // электронная бумага показывает плохо, а сохранённое не трогает.
+    val prefs = stored.readerView()
+    val eink = stored.readerEink
     val busy by state.busy.collectAsState()
     val play by app.player.state.collectAsState()
     val speech by app.readAloud.state.collectAsState()
@@ -246,6 +297,12 @@ fun ReaderScreen(
     var showClaude by remember { mutableStateOf(false) }
     var showNotes by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
+    // Кнопка листания (громкость, PageDown электронной книги) - просьба телу читалки.
+    var keyTurn by remember { mutableStateOf<KeyTurn?>(null) }
+    DisposableEffect(Unit) {
+        PageKeys.listener = { dir -> keyTurn = KeyTurn(dir, (keyTurn?.seq ?: 0) + 1) }
+        onDispose { PageKeys.listener = null }
+    }
     // «Дочитал - поговорим?» спрашивается раз за открытие книги, не на каждой странице.
     var talkOffered by remember(book?.id) { mutableStateOf(false) }
     // Открытая пометка: новая (из выделения) или прежняя (тап по маркеру).
@@ -375,7 +432,12 @@ fun ReaderScreen(
         fontFamily = fontOf(prefs.readerFont),
         fontSize = (if (heading) prefs.readerSize + 3 else prefs.readerSize).sp,
         lineHeight = (prefs.readerSize * prefs.readerLineHeight).sp,
-        fontWeight = if (heading) FontWeight.Bold else FontWeight.Normal,
+        fontWeight = when {
+            heading -> FontWeight.Bold
+            // На электронной бумаге основной текст - на ступень жирнее.
+            eink -> FontWeight.Medium
+            else -> FontWeight.Normal
+        },
         // Краска чуть растекается по бумаге: еле заметный ореол того же
         // цвета. Без него буквы выглядят вырезанными, а не напечатанными.
         shadow = if (prefs.readerImperfect) {
@@ -434,6 +496,15 @@ fun ReaderScreen(
         // весь абзац: глаз цепляется за неё сразу.
         highlightRange = t.sentenceAt(at)
         highlight.snapTo(1f)
+        if (eink) {
+            // На e-ink плавное угасание - два десятка перерисовок экрана с
+            // мерцанием. Подсветка просто держится и исчезает разом.
+            kotlinx.coroutines.delay(4000)
+            highlight.snapTo(0f)
+            highlightRange = null
+            pendingHighlight = null
+            return@LaunchedEffect
+        }
         highlight.animateTo(
             targetValue = 0f,
             animationSpec = androidx.compose.animation.core.tween(
@@ -564,7 +635,7 @@ fun ReaderScreen(
     // Пометки книги: маркером в тексте и списком за кнопкой «Пометки».
     val notesRev by app.notes.revision.collectAsState()
     val notes = remember(notesRev, bk.id) { app.notes.of(bk.id) }
-    val (selectionColor, noteColor) = inkColors(palette)
+    val (selectionColor, noteColor) = inkColors(palette, eink)
     val ink = TextInk(
         highlight = speechRange ?: highlightRange,
         highlightAlpha = if (speechRange != null) SPEECH_ALPHA else highlight.value,
@@ -572,6 +643,9 @@ fun ReaderScreen(
         notes = remember(notes) { notes.map { it.start..it.end } },
         selectionColor = selectionColor,
         noteColor = noteColor,
+        // Тёплый маркер на e-ink - бледно-серая плашка, её не видно:
+        // пометка там ещё и подчёркнута.
+        underlineNotes = eink,
     )
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 
@@ -609,6 +683,8 @@ fun ReaderScreen(
         editingByVoice = voice
     }
 
+    // Плашки узнают о режиме e-ink отсюда: без теней, анимаций и полутонов.
+    androidx.compose.runtime.CompositionLocalProvider(LocalEink provides eink) {
     Box(Modifier.fillMaxSize().readerBackdrop(tones, look)) {
         if (prefs.readerPaged) {
             PagedBody(
@@ -627,6 +703,8 @@ fun ReaderScreen(
                 onLongPress = { root, fallback -> selectTaps(4, root, fallback) },
                 onPicture = { picture = it },
                 ink = ink,
+                keyTurn = keyTurn,
+                instant = eink,
             )
         } else {
             ScrollBody(
@@ -643,6 +721,7 @@ fun ReaderScreen(
                 onLongPress = { root, fallback -> selectTaps(4, root, fallback) },
                 onPicture = { picture = it },
                 ink = ink,
+                keyTurn = keyTurn,
             )
         }
 
@@ -680,8 +759,8 @@ fun ReaderScreen(
 
         AnimatedVisibility(
             visible = bars && selection == null,
-            enter = barEnter(fromTop = true),
-            exit = barExit(fromTop = true),
+            enter = barEnter(fromTop = true, eink = eink),
+            exit = barExit(fromTop = true, eink = eink),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             // Высота меряется вместе с отступами: по ней прокрутка решает,
@@ -735,8 +814,8 @@ fun ReaderScreen(
 
         AnimatedVisibility(
             visible = bottomShown,
-            enter = barEnter(fromTop = false),
-            exit = barExit(fromTop = false),
+            enter = barEnter(fromTop = false, eink = eink),
+            exit = barExit(fromTop = false, eink = eink),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             Box(
@@ -903,6 +982,7 @@ fun ReaderScreen(
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             )
         }
+    }
     }
 
     // Выделение снимается кнопкой «назад», а не уводит из книги.
@@ -1220,6 +1300,8 @@ private fun ScrollBody(
     onLongPress: (root: Offset, fallback: Int?) -> Unit,
     onPicture: (ShownPicture) -> Unit,
     ink: TextInk,
+    /** Кнопка листания: вперёд или назад на страницу по строкам. */
+    keyTurn: KeyTurn?,
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -1279,6 +1361,10 @@ private fun ScrollBody(
         val top = band().start
         val cut = hits.lines().firstOrNull { (a, b) -> a < top && b > top } ?: return
         listState.animateScrollBy(cut.first - top)
+    }
+    LaunchedEffect(keyTurn) {
+        val k = keyTurn ?: return@LaunchedEffect
+        if (k.dir > 0) listState.animateScrollBy(stepForward()) else pageBack()
     }
     LaunchedEffect(listState) {
         snapshotFlow {
@@ -1428,6 +1514,9 @@ private fun PagedBody(
     onLongPress: (root: Offset, fallback: Int?) -> Unit,
     onPicture: (ShownPicture) -> Unit,
     ink: TextInk,
+    keyTurn: KeyTurn?,
+    /** Листать без анимации - на электронной бумаге каждый кадр мерцает. */
+    instant: Boolean,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -1552,6 +1641,14 @@ private fun PagedBody(
             }
         }
 
+        LaunchedEffect(keyTurn) {
+            val k = keyTurn ?: return@LaunchedEffect
+            val to = pagerState.currentPage + k.dir
+            if (to !in 0 until pagerState.pageCount) return@LaunchedEffect
+            if (instant) pagerState.scrollToPage(to)
+            else pagerState.animateScrollToPage(to, animationSpec = tween(if (look.volume) 240 else 460, easing = FastOutSlowInEasing))
+        }
+
         LaunchedEffect(pagerState, pages) {
             snapshotFlow { pagerState.currentPage }
                 .distinctUntilChanged()
@@ -1592,6 +1689,7 @@ private fun PagedBody(
                             }
                             if (to in 0 until pagerState.pageCount) {
                                 scope.launch {
+                                    if (instant) return@launch pagerState.scrollToPage(to)
                                     // Полсекунды с замедлением в конце: рукой
                                     // страницу переворачивают примерно так.
                                     pagerState.animateScrollToPage(
@@ -1667,7 +1765,9 @@ private fun PagedBody(
                 // В книге страница растворяется, и тянуть это незачем: жёсткая
                 // пружина без отскока даёт короткий, чистый переход. У
                 // карточек ход мягче - там страница едет вбок.
-                snapAnimationSpec = spring(
+                // На e-ink страница встаёт сразу, без доводки: каждый кадр
+                // доводки - мерцание электронной бумаги.
+                snapAnimationSpec = if (instant) androidx.compose.animation.core.snap() else spring(
                     dampingRatio = Spring.DampingRatioNoBouncy,
                     stiffness = if (book) Spring.StiffnessMedium else Spring.StiffnessMediumLow,
                 ),
@@ -2306,7 +2406,13 @@ private fun litText(
         // Порядок - снизу вверх: маркер пометки, поверх найденная фраза, поверх
         // всего выделение - оно то, что сейчас в руках.
         marks.forEach { (a, b) ->
-            addStyle(androidx.compose.ui.text.SpanStyle(background = ink.noteColor), a, b)
+            addStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    background = ink.noteColor,
+                    textDecoration = if (ink.underlineNotes) androidx.compose.ui.text.style.TextDecoration.Underline else null,
+                ),
+                a, b,
+            )
         }
         lit?.let { (a, b) ->
             addStyle(

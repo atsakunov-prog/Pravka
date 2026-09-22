@@ -7,6 +7,7 @@ import ru.zf.slushalka.text.BookText
 import ru.zf.slushalka.text.Chapter
 import ru.zf.slushalka.ui.selectionFor
 import ru.zf.slushalka.ui.wordAt
+import ru.zf.slushalka.data.readerView
 
 /**
  * Выделение тапами: два - слово, три - фраза, четыре - абзац.
@@ -42,5 +43,20 @@ class SelectionTest {
         )
         assertEquals(plain.substringBefore('\n'), cut(selectionFor(4, text, text.blocks, at)))
         assertEquals("Второй абзац тут.", cut(selectionFor(4, text, text.blocks, plain.indexOf("абзац"))))
+    }
+}
+
+/** Режим e-ink подменяет вид, а не настройки: выключил - всё прежнее. */
+class EinkViewTest {
+    @Test
+    fun `e-ink - страницами, плоско, крупнее, без неровностей, а без режима - как было`() {
+        val p = ru.zf.slushalka.data.Settings.Prefs(readerSize = 19, readerPaged = false, readerImperfect = true)
+        assertEquals(p, p.readerView())
+        val e = p.copy(readerEink = true).readerView()
+        assertEquals(true, e.readerPaged)
+        assertEquals(ru.zf.slushalka.data.Settings.PAGE_FLAT, e.readerPageStyle)
+        assertEquals(19 + ru.zf.slushalka.data.Settings.EINK_SIZE_BOOST, e.readerSize)
+        assertEquals(false, e.readerImperfect)
+        assertEquals(ru.zf.slushalka.data.Settings.THEME_EINK, e.readerTheme)
     }
 }

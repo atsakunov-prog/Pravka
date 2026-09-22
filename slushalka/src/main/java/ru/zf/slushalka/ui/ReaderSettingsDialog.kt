@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import ru.zf.slushalka.SlushalkaApp
 import ru.zf.slushalka.data.Settings
+import ru.zf.slushalka.data.readerView
 
 /** Шрифт, кегль, поля, интерлиньяж, цвет бумаги - обычный набор читалки. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -50,6 +51,32 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
         title = { Text("Как читать") },
         text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
+
+                // Первым - режим для электронной книги: он меняет разом всё
+                // остальное, и на Boox его ищут прежде кегля.
+                Toggle("Для электронной книги (e-ink)", prefs.readerEink) {
+                    scope.launch { s.setReaderEink(it) }
+                }
+                Text(
+                    if (prefs.readerEink)
+                        "Чистый чёрный на белом, кегль на ${Settings.EINK_SIZE_BOOST} крупнее и текст на ступень " +
+                            "жирнее, страницами, без теней, зерна и анимаций - они на электронной бумаге " +
+                            "мерцают и серят. Выбранное ниже сохранено и вернётся, когда режим выключишь."
+                    else "Onyx Boox, PocketBook, Kobo, Hisense: контраст, крупный и плотный шрифт, листание " +
+                        "без анимации и физическими кнопками." +
+                        if (ru.zf.slushalka.data.EinkDevice.likely) " Похоже, это как раз электронная книга." else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Toggle("Листать кнопками громкости", prefs.readerVolumeKeys) {
+                    scope.launch { s.setReaderVolumeKeys(it) }
+                }
+                Text(
+                    "Громкость вниз - вперёд, вверх - назад, пока ничего не звучит: при записи и озвучке " +
+                        "кнопки снова про громкость. Кнопки листания электронных книг работают всегда.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 Label("Как листать")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -75,12 +102,7 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
 
                 Label("Шрифт")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(
-                        Settings.FONT_BOOK to "Книжный",
-                        Settings.FONT_SERIF to "С засечками",
-                        Settings.FONT_SANS to "Рубленый",
-                        Settings.FONT_MONO to "Машинописный",
-                    ).forEach { (id, title) ->
+                    Settings.FONTS.forEach { (id, title) ->
                         FilterChip(
                             selected = prefs.readerFont == id,
                             onClick = { scope.launch { s.setReaderFont(id) } },
@@ -89,11 +111,19 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
                     }
                 }
 
+                Text(
+                    fontNote(prefs.readerFont),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
                 // Сколько знаков в строке - главная мерка книжного набора.
                 // В книге их 45-55: короче строка - глаз скачет, длиннее -
                 // теряет начало следующей. На телефоне столько выходит только
                 // мелким кеглем, поэтому число показываем, а решает владелец.
-                val perLine = charsPerLine(prefs)
+                // Знаки считаются тем кеглем, каким книга правда набрана: в режиме
+                // e-ink он крупнее сохранённого.
+                val perLine = charsPerLine(prefs.readerView())
                 Label("Кегль: ${prefs.readerSize}" + (perLine?.let { " · ≈$it знаков в строке" } ?: ""))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { scope.launch { s.setReaderSize(prefs.readerSize - 1) } }) {
@@ -255,6 +285,14 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
     val s = app.state.settings
 
     labels("Вид страницы")
+    if (prefs.readerEink) {
+        Text(
+            "Сейчас включён режим e-ink: страница плоская, без теней и зерна. Выбранное здесь " +
+                "вернётся, когда режим выключишь.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Settings.PAGE_STYLES.forEach { id ->
             FilterChip(
@@ -560,4 +598,17 @@ private fun charsPerLine(prefs: Settings.Prefs): Int? {
         val per = width / sample.length
         if (per <= 0f) null else (with(density) { line.toPx() } / per).toInt()
     }
+}
+
+/** Чем гарнитура хороша - одной строкой под выбором, чтобы выбирать не вслепую. */
+private fun fontNote(font: String): String = when (font) {
+    Settings.FONT_BOOK -> "Literata: нарисована для чтения с экрана, спокойная книжная антиква."
+    Settings.FONT_PT_SERIF -> "PT Serif: русская классика ПараТайпа, строгая и ясная - как в хорошем издании."
+    Settings.FONT_LORA -> "Lora: тёплая, с каллиграфическим ходом - для романа вечером."
+    Settings.FONT_MERRIWEATHER -> "Merriweather: крупное очко и плотный штрих - лучшая для e-ink и мелкого экрана."
+    Settings.FONT_BITTER -> "Bitter: брусковые засечки, очень чёткая - на электронной бумаге не выцветает."
+    Settings.FONT_PT_SANS -> "PT Sans: рубленая ПараТайпа, для тех, кто читает без засечек."
+    Settings.FONT_SERIF -> "Системная с засечками: на разных телефонах своя."
+    Settings.FONT_SANS -> "Системная рубленая."
+    else -> "Машинописная: как рукопись."
 }

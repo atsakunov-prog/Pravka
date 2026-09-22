@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -114,6 +115,17 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             }
 
             Section("Внешний вид")
+            Toggle("Для электронной книги (e-ink)", prefs.readerEink) {
+                scope.launch { state.settings.setReaderEink(it) }
+            }
+            Note(
+                "Всё приложение - чёрным по белому, читалка - крупнее, жирнее, страницами, без теней и " +
+                    "анимаций. Листать можно кнопками громкости и кнопками самой книги." +
+                    if (ru.zf.slushalka.data.EinkDevice.likely) " Это устройство похоже на электронную книгу." else ""
+            )
+            Toggle("Листать кнопками громкости", prefs.readerVolumeKeys) {
+                scope.launch { state.settings.setReaderVolumeKeys(it) }
+            }
             Text("Масштаб интерфейса", style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Settings.UI_SCALES.forEach { k ->
@@ -433,6 +445,27 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // Лицензия шрифтов едет с приложением: OFL требует копирайт и текст
+            // лицензии при каждой копии шрифта.
+            var showFonts by remember { mutableStateOf(false) }
+            TextButton(onClick = { showFonts = true }) { Text("Шрифты и их лицензия") }
+            if (showFonts) {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val text = remember {
+                    runCatching { context.assets.open("fonts-OFL.txt").bufferedReader().readText() }
+                        .getOrDefault("Файл лицензии не нашёлся.")
+                }
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showFonts = false },
+                    title = { Text("Шрифты") },
+                    text = {
+                        Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+                            Text(text, style = MaterialTheme.typography.bodySmall)
+                        }
+                    },
+                    confirmButton = { TextButton(onClick = { showFonts = false }) { Text("Закрыть") } },
+                )
+            }
             Spacer(Modifier.height(14.dp))
             LoveLine(alpha = 0.45f, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(48.dp))
