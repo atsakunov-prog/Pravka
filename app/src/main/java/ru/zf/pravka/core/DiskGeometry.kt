@@ -1,11 +1,13 @@
 package ru.zf.pravka.core
 
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 
 /**
  * Геометрия диска плавающих кнопок: шестерёнка в центре, кнопки по кольцу
@@ -71,7 +73,7 @@ object DiskGeometry {
     /**
      * Насколько центр тарелки уходит ЗА край экрана у убранного диска: весь
      * радиус минус краешек. Дальше это число идёт в [dock] отрицательным
-     * отступом — тем же путём, что и утопание.
+     * отступом.
      */
     fun tuckDepth(plateRadius: Float): Int = (plateRadius * (1f - SLIVER)).roundToInt()
 
@@ -224,6 +226,51 @@ object DiskGeometry {
     /** Угол точки ([x], [y]) относительно центра, в [0, 360). */
     fun angleOf(cx: Float, cy: Float, x: Float, y: Float): Float =
         norm(Math.toDegrees(atan2((y - cy).toDouble(), (x - cx).toDouble())).toFloat())
+
+    /** Что делает палец, поведший кнопку на диске. */
+    enum class Pull {
+        /** Крутит диск — как было. */
+        TURN,
+        /** Везёт диск вдоль края: докованный остаётся у края, убранный — убранным. */
+        EDGE,
+        /** Везёт диск целиком: тот отцепляется от края и едет за пальцем. */
+        CARRY,
+    }
+
+    /**
+     * Конус «вертикально»: палец отклонился от отвеса не больше чем на
+     * столько градусов. Диагональ (45°) — уже «везу целиком», как и просили;
+     * тридцать пять оставляют запас на дугу большого пальца у края.
+     */
+    const val UPRIGHT_DEG = 35f
+
+    /**
+     * Кнопка ближе этого к высоте центра кольца (доля радиуса) — ни верхняя,
+     * ни нижняя: вертикальный ход у неё идёт ПО кольцу, то есть это поворот.
+     */
+    const val LEVEL = 0.3f
+
+    /**
+     * Что значит ход пальца по кнопке. Владелец (22.09.2026): «когда я тащу
+     * вниз, то я тащу вертикально от нижней кнопки. Когда тащу наверх — то
+     * вертикально от верхней кнопки. В этом случае надо сделать только ездить
+     * по краю. Когда я беру какую-то кнопку и тащу горизонтально или по
+     * диагонали, значит, я хочу перетащить целиком диск».
+     *
+     * Отсюда три исхода по первым миллиметрам хода ([dx], [dy]):
+     * горизонталь и диагональ — [Pull.CARRY]; вертикаль ПРОЧЬ от центра
+     * (верхняя кнопка вверх, нижняя вниз; [buttonDy] — кнопка от центра
+     * кольца по высоте) — [Pull.EDGE]; вертикаль К центру (от верхней вниз,
+     * к нижней) — [Pull.TURN], это прежнее смахивание, которым диск крутят.
+     * Решается один раз на касание: иначе поворот, чуть вильнувший вбок,
+     * посреди жеста отрывал бы диск.
+     */
+    fun pull(dx: Float, dy: Float, buttonDy: Float, ringRadius: Float): Pull {
+        val upright = abs(dx) <= abs(dy) * tan(Math.toRadians(UPRIGHT_DEG.toDouble())).toFloat()
+        if (!upright) return Pull.CARRY
+        if (abs(buttonDy) < ringRadius * LEVEL) return Pull.TURN
+        return if ((dy < 0f) == (buttonDy < 0f)) Pull.EDGE else Pull.TURN
+    }
 
     /** Кратчайший поворот от [from] к [to], в (−180, 180]. */
     fun delta(from: Float, to: Float): Float {

@@ -120,6 +120,17 @@ object DiskPhysics {
     const val SLIDE_STIFFNESS = 300f
     const val SLIDE_DAMPING = 0.82f
 
+    /**
+     * Отрыв от края: кнопку повели вбок, и убранный диск становится диском —
+     * выдавленные кнопки садятся в стекло за десятую долю секунды и без
+     * перелёта. Обычная пружина вдвигала бы их треть секунды, а палец за это
+     * время уводит диск от края, и спина тарелки, ещё не подъехавшей под
+     * кнопки, успела бы показаться из-за обреза окна стекла.
+     */
+    const val QUICK_STIFFNESS = 1600f
+    const val QUICK_DAMPING = 1f
+
     fun turn(position: Float): Spring = Spring(position, TURN_STIFFNESS, TURN_DAMPING)
     fun slide(position: Float): Spring = Spring(position, SLIDE_STIFFNESS, SLIDE_DAMPING)
+    fun quick(position: Float): Spring = Spring(position, QUICK_STIFFNESS, QUICK_DAMPING)
 }

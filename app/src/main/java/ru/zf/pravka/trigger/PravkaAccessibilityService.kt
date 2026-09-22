@@ -198,9 +198,6 @@ class PravkaAccessibilityService : AccessibilityService() {
     private var diskModeApplied = false
     /** Автоуборка диска: полминуты без касаний — к ближайшему краю и домой. */
     @Volatile internal var cachedDiskTuck = true
-    /** Утопить диск после долгого простоя и через сколько минут. */
-    @Volatile internal var cachedDiskSink = true
-    @Volatile internal var cachedDiskSinkMin = Settings.DISK_SINK_MIN_DEFAULT
     internal var eSession: GoogleSpeechSession? = null
     @Volatile internal var eWhisperRecording = false
     @Volatile internal var eTypeInstead = false
@@ -506,8 +503,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch { app.settings.diskTuckFlow.collect { cachedDiskTuck = it } }
-        scope.launch { app.settings.diskSinkFlow.collect { cachedDiskSink = it } }
-        scope.launch { app.settings.diskSinkMinutesFlow.collect { cachedDiskSinkMin = it } }
         scope.launch { app.settings.restSecFlow.collect { cachedRestSec = it } }
         scope.launch {
             app.settings.modeIconsFlow.collect {
@@ -2238,12 +2233,11 @@ class PravkaAccessibilityService : AccessibilityService() {
             // тумблер («Автоматически убирать диск к краю»); стопочный его
             // не касается.
             if (cachedDiskTuck && quiet) disk?.tuck()
-            // И глубже: не трогали минутами — диск утопает за край так, что
-            // остаётся четверть кнопок (владелец, 20.09.2026). Тап по этому
-            // краю его достаёт, а кнопку не нажимает.
-            val longQuiet = !working && !screenLocked &&
-                now - lastTouchAt >= cachedDiskSinkMin * 60_000L
-            if (cachedDiskSink && longQuiet) disk?.sink()
+            // Утопания глубже уборки больше нет (владелец, 22.09.2026: «убери
+            // ещё полный док, когда он через 5 минут ещё больше засовывает
+            // кнопки подальше. Это не нужно»): убранный диск и так отдаёт
+            // «П» и «З» целиком, а прятать их глубже значило бы прятать
+            // инструмент.
         } else if (!stacked && cachedStackIdle && quiet) {
             collapseButtons()
         }
@@ -2262,8 +2256,6 @@ class PravkaAccessibilityService : AccessibilityService() {
     /** Любое касание любой кнопки — отсчёт до стопки начинается заново. */
     internal fun touched() {
         lastTouchAt = System.currentTimeMillis()
-        // Трогали что угодно — утопание считается с этого мига заново.
-        disk?.awake()
     }
 
     /**

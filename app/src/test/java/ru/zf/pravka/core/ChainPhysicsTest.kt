@@ -86,4 +86,24 @@ class ChainPhysicsTest {
         assertEquals(a.position, b.position, 0f)
         assertEquals(a.velocity, b.velocity, 0f)
     }
+
+    @Test
+    fun `отрыв от края - кнопки садятся в стекло за десятую секунды и без перелёта`() {
+        val s = DiskPhysics.quick(60f)
+        var t = 0f
+        var min = 60f
+        while (t < 0.1f) {
+            s.step(0f, 1f / 120f)
+            t += 1f / 120f
+            min = minOf(min, s.position)
+        }
+        // К десятой доле секунды — меньше десятой пути…
+        assertTrue("осталось ${s.position}", s.position < 6f)
+        // …и ни разу за ноль: перелёт выдавил бы кнопки наружу ещё раз.
+        repeat(60) {
+            s.step(0f, 1f / 120f)
+            min = minOf(min, s.position)
+        }
+        assertTrue("перелёт $min", min > -0.5f)
+    }
 }

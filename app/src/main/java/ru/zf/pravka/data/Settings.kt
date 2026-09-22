@@ -73,9 +73,6 @@ class Settings(private val context: Context) {
         private val KEY_DISK_RAIL = booleanPreferencesKey("disk_rail")
         private val KEY_DISK_INERTIA = booleanPreferencesKey("disk_inertia")
         private val KEY_DISK_ROLL = floatPreferencesKey("disk_roll_k")
-        private val KEY_DISK_SINK = booleanPreferencesKey("disk_sink")
-        private val KEY_DISK_SINK_PCT = intPreferencesKey("disk_sink_pct")
-        private val KEY_DISK_SINK_MIN = intPreferencesKey("disk_sink_minutes")
         // Плашки приложения: те же слои, что у стекла, и своя темнота.
         private val KEY_CARD_DARK = floatPreferencesKey("card_darken")
         private val KEY_CARD_BEVEL = booleanPreferencesKey("card_bevel")
@@ -167,19 +164,6 @@ class Settings(private val context: Context) {
          * полтора оборота, и кнопки успевают уехать из-под руки.
          */
         const val DISK_ROLL_DEFAULT = 0.5f
-
-        /**
-         * Утопание: насколько глубже за край уходит диск, который давно не
-         * трогали, — в процентах от кнопки, и через сколько минут. Владелец
-         * (20.09.2026): «если я не использую правку пять минут и больше, то
-         * она залезает ещё дальше в край: на 75 % кнопок где-то».
-         */
-        const val DISK_SINK_PCT_DEFAULT = 75
-        const val DISK_SINK_PCT_MIN = 10
-        const val DISK_SINK_PCT_MAX = 140
-        const val DISK_SINK_MIN_DEFAULT = 5
-        const val DISK_SINK_MIN_MIN = 1
-        const val DISK_SINK_MIN_MAX = 60
 
         /**
          * Насколько плашки приложения темнее заводского тона. Владелец
@@ -555,30 +539,6 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_DISK_ROLL] = value.coerceIn(0f, 1.5f) }
     }
 
-    /**
-     * Утопить диск после долгого простоя (владелец, 20.09.2026): «если я не
-     * использую правку пять минут и больше, то она залезает ещё дальше в
-     * край… и я тапаю по ней, и она вылезает». Продолжение автоуборки, а не
-     * её замена: утопает только уже докованный диск — тот, что владелец
-     * нарочно оставил посреди экрана, никуда не уезжает.
-     */
-    val diskSinkFlow = context.dataStore.data.map { it[KEY_DISK_SINK] ?: true }
-    suspend fun setDiskSink(value: Boolean) {
-        context.dataStore.edit { it[KEY_DISK_SINK] = value }
-    }
-
-    /** Глубина утопания — проценты от кнопки. */
-    val diskSinkPctFlow = context.dataStore.data.map { it[KEY_DISK_SINK_PCT] ?: DISK_SINK_PCT_DEFAULT }
-    suspend fun setDiskSinkPct(value: Int) {
-        context.dataStore.edit { it[KEY_DISK_SINK_PCT] = value.coerceIn(DISK_SINK_PCT_MIN, DISK_SINK_PCT_MAX) }
-    }
-
-    /** Через сколько минут простоя утопать. */
-    val diskSinkMinutesFlow = context.dataStore.data.map { it[KEY_DISK_SINK_MIN] ?: DISK_SINK_MIN_DEFAULT }
-    suspend fun setDiskSinkMinutes(value: Int) {
-        context.dataStore.edit { it[KEY_DISK_SINK_MIN] = value.coerceIn(DISK_SINK_MIN_MIN, DISK_SINK_MIN_MAX) }
-    }
-
     /** Насколько затемнять плашки приложения (0 — заводской тон). */
     val cardDarkFlow = context.dataStore.data.map { it[KEY_CARD_DARK] ?: CARD_DARK_DEFAULT }
     suspend fun setCardDark(value: Float) {
@@ -612,8 +572,6 @@ class Settings(private val context: Context) {
             it.remove(KEY_DISK_FACE_ALPHA)
             it.remove(KEY_DISK_SOCKET_ALPHA)
             it.remove(KEY_DISK_ROLL)
-            it.remove(KEY_DISK_SINK_PCT)
-            it.remove(KEY_DISK_SINK_MIN)
         }
     }
 

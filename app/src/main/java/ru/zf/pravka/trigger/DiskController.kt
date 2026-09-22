@@ -146,6 +146,13 @@ class DiskController(
          * тап делается не вслепую, а в ответ на увиденное движение.
          */
         private const val ARROW_AGAIN_MS = 500L
+        /**
+         * Во сколько порогов касания должен уйти палец по кнопке, чтобы ход
+         * получил направление (`DiskGeometry.pull`). На самом пороге вертикаль
+         * от диагонали отличает пара пикселей — решать там значило бы решать
+         * наугад.
+         */
+        private const val PULL_DECIDE = 1.5f
         /** Долгое нажатие на стекло — выдвинуть диск целиком (или убрать обратно). Как у кнопок. */
         private const val LONG_PRESS_MS = 450L
         /**
@@ -196,9 +203,6 @@ class DiskController(
     private var rail = true
     private var inertia = true
     private var rollK = Settings.DISK_ROLL_DEFAULT
-    /** Диск утоплен за край глубже обычного: первое касание его достаёт. */
-    private var sunk = false
-    private var sinkPct = Settings.DISK_SINK_PCT_DEFAULT
     /**
      * Диск убран к краю: стекло ушло за край, на экране остался краешек со
      * стрелкой, а «П» и «З» ВЫДАВЛЕНЫ из стекла и видны целиком (владелец,
@@ -229,6 +233,10 @@ class DiskController(
     // Иначе, схватив убранный диск, владелец увидел бы, как кнопки прыгают
     // в стекло на первом же миллиметре.
     private val push = DiskPhysics.slide(0f)
+    // Та же работа быстрее — на отрыве от края (`DiskPhysics.quick`); какая из
+    // двух сейчас ведёт выдавливание — [pushSpring].
+    private val pushQuick = DiskPhysics.quick(0f)
+    private var pushSpring = push
     private var turnTarget = 0f
     private var slideTargetX = 0f
     private var slideTargetY = 0f
@@ -255,7 +263,22 @@ class DiskController(
     private var turned = false
     private var lastDetent = 0
 
-    // Палец везёт за шестерёнку или за стекло.
+    // Палец повёл кнопку: крутит, везёт по краю или везёт целиком
+    // (`DiskGeometry.pull`) — решается один раз на касание, null — ещё нет.
+    private var pull: DiskGeometry.Pull? = null
+    /** Кнопка от центра кольца по высоте в миг касания: верхняя она или нижняя. */
+    private var pullButtonDy = 0f
+    /** Центр диска в миг касания: по краю едет только высота. */
+    private var pullStartCx = 0f
+    private var pullStartCy = 0f
+    /** Центр кольца от пальца: диск везут за кнопку — кнопка остаётся под пальцем. */
+    private var ringOffX = 0f
+    private var ringOffY = 0f
+    /** Куда палец ведёт центр кольца, пока диск везут за кнопку целиком. */
+    private var carryX = 0f
+    private var carryY = 0f
+
+    // Палец везёт за шестерёнку или за стекло (и за кнопку).
     private var sliding = false
     private var slideFacing = 0f
 
@@ -332,7 +355,6 @@ class DiskController(
         }
         scope.launch { settings.diskInertiaFlow.collect { inertia = it } }
         scope.launch { settings.diskRollFlow.collect { rollK = it } }
-        scope.launch { settings.diskSinkPctFlow.collect { sinkPct = it } }
     }
 
     /**
@@ -487,10 +509,9 @@ class DiskController(
             facing = null
             placed = true
             // Экран сменился (сложили, повернули) — диск приезжает выехавшим
-            // на половину: уборка и утопание считаются от свежего простоя, а
-            // не тащатся из прежней геометрии.
+            // на половину: уборка считается от свежего простоя, а не тащится
+            // из прежней геометрии.
             tucked = false
-            sunk = false
             extrude = 0f
             stopAll()
             showPlate()
@@ -504,9 +525,9 @@ class DiskController(
         placed = false
         stopAll()
         tucked = false
-        sunk = false
         extrude = 0f
         turning = null
+        pull = null
         sliding = false
         pinch = false
         fingers.clear()
@@ -535,7 +556,6 @@ class DiskController(
             // вернётся он выехавшим, иначе кнопки встали бы вокруг центра,
             // сдвинутого под давно уехавший край.
             tucked = false
-            sunk = false
             extrude = 0f
             hidePlate()
             placeHead()
@@ -602,7 +622,7 @@ class DiskController(
         // видимому полукругу, сверху и до низу (владелец, 20.09.2026).
         plate?.let {
             it.allHiddenView = allHidden
-            it.setFacing(f, cx - d.plate < 0f || cx + d.plate > w, tucked || sunk)
+            it.setFacing(f, cx - d.plate < 0f || cx + d.plate > w, tucked)
         }
     }
 
@@ -639,16 +659,10 @@ class DiskController(
     /**
      * Отступ докования для текущего состояния: обычный диск встаёт центром
      * ровно на край, убранный уходит за край на глубину уборки (на экране
-     * остаётся краешек со стрелкой), утопленный — ещё глубже, вместе с
-     * кнопками.
+     * остаётся краешек со стрелкой).
      */
-    private fun dockInset(d: Dims): Int = when {
-        sunk -> -(DiskGeometry.tuckDepth(d.plate) + sinkDeep())
-        tucked -> -DiskGeometry.tuckDepth(d.plate)
-        else -> DiskGeometry.DOCK_INSET
-    }
-
-    private fun sinkDeep(): Int = (buttonSize() * sinkPct / 100f).roundToInt()
+    private fun dockInset(d: Dims): Int =
+        if (tucked) -DiskGeometry.tuckDepth(d.plate) else DiskGeometry.DOCK_INSET
 
     /**
      * Самолечение по тику службы: кнопка не там, где ей быть (включили
@@ -702,11 +716,9 @@ class DiskController(
         if (pinch) return
         when (action) {
             MotionEvent.ACTION_DOWN -> {
-                // Утопленный диск это касание ДОСТАЁТ — и больше ничего.
-                if (wakeIfSunk()) return
                 // Второй тап подряд после стрелки — «покажи диск целиком», даже
                 // если под палец к этому мигу подъехала кнопка: он целился в
-                // стрелку, а не в запись (то же правило, что у спящего диска).
+                // стрелку, а не в запись.
                 if (arrowAgain()) {
                     slots.forEach { it.button.cancelGesture() }
                     head?.cancelGesture()
@@ -730,15 +742,47 @@ class DiskController(
                 turnVelocity = 0f
                 turned = false
                 val (tx, ty) = turnCentre()
+                pull = null
+                pullButtonDy = by + button.buttonSizePx() / 2f - ty
+                pullStartCx = cx
+                pullStartCy = cy
+                ringOffX = tx - (rawX + fingerOffX)
+                ringOffY = ty - (rawY + fingerOffY)
                 lastAngle = DiskGeometry.angleOf(tx, ty, rawX + fingerOffX, rawY + fingerOffY)
                 lastAngleAt = SystemClock.uptimeMillis()
                 lastDetent = detent(rotation)
             }
             MotionEvent.ACTION_MOVE -> {
                 if (turning !== button) return
-                // Порог свой: кнопка докладывает каждый сдвиг, а поворот
-                // начинается, когда палец действительно поехал.
-                if (!turned && abs(rawX - downRawX) <= touchSlop && abs(rawY - downRawY) <= touchSlop) return
+                // Что это за ход — решаем один раз, когда палец отошёл
+                // достаточно, чтобы у хода было направление: на самом пороге
+                // вертикаль от диагонали по двум-трём пикселям не отличить.
+                if (pull == null) {
+                    val mdx = rawX - downRawX
+                    val mdy = rawY - downRawY
+                    if (hypot(mdx, mdy) < touchSlop * PULL_DECIDE) return
+                    var p = DiskGeometry.pull(mdx, mdy, pullButtonDy, dims().ring)
+                    // «По краю» бывает только у диска, стоящего у края; посреди
+                    // экрана такой ход — просто переезд.
+                    if (p == DiskGeometry.Pull.EDGE && !atEdge()) p = DiskGeometry.Pull.CARRY
+                    pull = p
+                    if (p != DiskGeometry.Pull.TURN) beginPull(p)
+                }
+                when (pull) {
+                    DiskGeometry.Pull.EDGE -> {
+                        // Вдоль края: высота за пальцем, место у края прежнее.
+                        slide(pullStartCx, pullStartCy + (rawY - downRawY), dropped = false, roll = false)
+                        return
+                    }
+                    DiskGeometry.Pull.CARRY -> {
+                        carryX = rawX + fingerOffX + ringOffX
+                        carryY = rawY + fingerOffY + ringOffY
+                        carryPlate()
+                        slide(cx, cy, dropped = false, roll = false)
+                        return
+                    }
+                    else -> {}
+                }
                 val (tx, ty) = turnCentre()
                 val angle = DiskGeometry.angleOf(tx, ty, rawX + fingerOffX, rawY + fingerOffY)
                 val delta = DiskGeometry.delta(lastAngle, angle)
@@ -765,6 +809,14 @@ class DiskController(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (turning !== button) return
                 turning = null
+                val was = pull
+                pull = null
+                if (was == DiskGeometry.Pull.EDGE || was == DiskGeometry.Pull.CARRY) {
+                    // Отпустили — как любой переезд: у края докуется (убранный
+                    // остаётся убранным), посреди экрана стоит, где оставили.
+                    slide(cx, cy, dropped = true)
+                    return
+                }
                 // Палец замер и только потом отпустил — это не бросок:
                 // скорость последних миллиметров уже ничего не значит.
                 val paused = SystemClock.uptimeMillis() - lastAngleAt > FLICK_PAUSE_MS
@@ -799,6 +851,50 @@ class DiskController(
         return DiskGeometry.dock(cx, cy, w, h, d.plate, dockInset(d))
     }
 
+    // ---- Палец везёт за кнопку ----
+
+    /**
+     * Ход по кнопке решён, и это переезд, а не поворот. Лицо замирает на весь
+     * переезд, как у переезда за стекло; [turning] остаётся — отпускание
+     * придёт сюда же, через кнопку.
+     *
+     * Целиком ([DiskGeometry.Pull.CARRY]) — диск отцепляется от края:
+     * убранный перестаёт быть убранным, и выдавленные кнопки садятся в
+     * стекло быстрой пружиной, пока палец уводит диск (почему быстрой —
+     * `DiskPhysics.quick`). Щелчок в руке — «отцепился».
+     */
+    private fun beginPull(p: DiskGeometry.Pull) {
+        val docked = atEdge()
+        sliding = true
+        stopMotion()
+        slideFacing = facing ?: DiskGeometry.facing(cx, frame().first)
+        if (p != DiskGeometry.Pull.CARRY) return
+        if (tucked) {
+            tucked = false
+            pushTo(0f, quick = true)
+        }
+        if (docked) Haptics.tick(service)
+    }
+
+    /**
+     * Центр тарелки, пока диск везут за кнопку: кнопка под пальцем, значит
+     * под пальцем кольцо, а тарелка отстаёт от него на то, что кнопкам ещё
+     * вдвигаться. Зовётся и с касания, и с кадра — выдавливание гаснет между
+     * касаниями, и без кадра кнопка уползала бы из-под пальца.
+     */
+    private fun carryPlate() {
+        val a = Math.toRadians(slideFacing.toDouble())
+        cx = carryX - extrude * cos(a).toFloat()
+        cy = carryY - extrude * sin(a).toFloat()
+    }
+
+    /** Тарелка заходит за левый или правый край: диск стоит у края — половиной или убранным. */
+    private fun atEdge(): Boolean {
+        val d = dims()
+        val (w, _) = frame()
+        return cx - d.plate < 0f || cx + d.plate > w
+    }
+
     // ---- Палец везёт за шестерёнку ----
 
     /**
@@ -816,11 +912,8 @@ class DiskController(
      * — докование и, если диск переехал на другую половину экрана, доворот
      * домой: лицом внутрь.
      */
-    private fun slide(nx: Float, ny: Float, dropped: Boolean) {
+    private fun slide(nx: Float, ny: Float, dropped: Boolean, roll: Boolean = true) {
         if (!shown || !placed || folded) return
-        // Диск везут — значит он уже не спит: следующий простой отсчитается
-        // заново, и утопание не догонит его посреди переезда.
-        sunk = false
         onTouched?.invoke()
         val (w, _) = frame()
         if (!sliding) {
@@ -847,7 +940,8 @@ class DiskController(
         // Инерция: диск катится по экрану, как колесо (`DiskGeometry.roll`).
         // Считаем от пройденного пути, а не от скорости: путь ровно тот, что
         // видит глаз, и на рывке пальца кольцо не дёргается лишнего.
-        if (inertia && !allHidden) rotation = DiskGeometry.norm(rotation + DiskGeometry.roll(nx - cx, dims().plate, rollK))
+        // За кнопку диск не катится: кнопка обязана остаться под пальцем.
+        if (roll && inertia && !allHidden) rotation = DiskGeometry.norm(rotation + DiskGeometry.roll(nx - cx, dims().plate, rollK))
         cx = nx
         cy = ny
         if (allHidden) placeHead() else layout()
@@ -882,6 +976,7 @@ class DiskController(
             cy += extrude * sin(a).toFloat()
             extrude = 0f
             pushing = false
+            pushSpring = push
             push.reset(0f)
         }
         facing = newFacing
@@ -941,6 +1036,8 @@ class DiskController(
         onTouched?.invoke()
         stopMotion()
         turning = null
+        // Кнопку вели одним пальцем — теперь диск везут двое.
+        pull = null
         // Жесты окон гасятся: палец, который только что крутил или ждал
         // долгого нажатия, теперь везёт диск вместе со вторым.
         slots.forEach { it.button.cancelGesture() }
@@ -991,7 +1088,7 @@ class DiskController(
         private var startCy = 0f
         private var dragging = false
         private var lastTapAt = 0L
-        /** Касание началось на стрелке: на отпускании диск утопает. */
+        /** Касание началось на стрелке: на отпускании — её дело (убрать или достать). */
         private var onArrow = false
         /** В этом касании был щипок — одиночная логика стекла молчит до следующего DOWN. */
         private var pinched = false
@@ -1036,7 +1133,6 @@ class DiskController(
                 MotionEvent.ACTION_DOWN -> {
                     if (!inside(v, event.x, event.y)) return false
                     if (allHidden) return false
-                    if (wakeIfSunk()) return true
                     onTouched?.invoke()
                     // Стрелка на кромке — единственное место стекла со своим
                     // смыслом: убрать диск досрочно. Остальные жесты стекла на
@@ -1124,7 +1220,7 @@ class DiskController(
      * правка»). Уже там или под пальцем — ничего.
      */
     fun tuck() {
-        if (!shown || !placed || folded || allHidden || sunk) return
+        if (!shown || !placed || folded || allHidden) return
         if (animating || turning != null || sliding || pinch) return
         retract()
     }
@@ -1223,77 +1319,6 @@ class DiskController(
         arrowTapAt > 0L && SystemClock.uptimeMillis() - arrowTapAt < ARROW_AGAIN_MS
 
     /**
-     * Утопить: уйти за край ещё глубже, на долю кнопки [Settings.diskSinkPctFlow].
-     * Владелец (20.09.2026): «если я не использую правку пять минут и больше,
-     * то она залезает ещё дальше в край: на 75 % кнопок где-то. И я тапаю по
-     * ней, и она вылезает».
-     *
-     * Только «ЕЩЁ дальше»: диск, стоящий посреди экрана, не трогаем — его там
-     * оставили нарочно, и уехать он должен сам, автоуборкой, если она
-     * включена. Поэтому утопание — продолжение уборки, а не вторая её копия.
-     */
-    fun sink() {
-        if (!shown || !placed || folded || allHidden || sunk) return
-        if (animating || turning != null || sliding || pinch) return
-        val d = dims()
-        val (w, h) = frame()
-        // Диск, оставленный посреди экрана, не трогаем совсем: он там
-        // нарочно, а уборка — свой тумблер. Раньше сюда приходила ещё и
-        // стрелка, и ей эту середину приходилось дотягивать до края; теперь у
-        // стрелки своё дело — она диск ДОСТАЁТ, — и утопание осталось ровно
-        // тем, чем обещано в настройках: продолжением уборки.
-        if (cx > 0.5f && cx < w - 0.5f) return
-        val deep = sinkDeep()
-        if (deep <= 0) return
-        sunk = true
-        // Утопание идёт ОТ убранного диска: кнопки остаются выдавленными и
-        // уходят за край вместе со стеклом — от них видна полоска, как и
-        // просили. Уборка при этом могла и не случиться (свой тумблер), так
-        // что состояние доводим здесь.
-        tucked = true
-        val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, dockInset(d))
-        animateTo(rotation, dx, dy)
-    }
-
-    /**
-     * Достать утопленный диск обратно к краю. Возвращает true, если он и
-     * правда спал: тогда это касание его ДОСТАЁТ, а не нажимает кнопку, на
-     * которую пришлось. Иначе первый тап после простоя запускал бы запись
-     * из-за края экрана — ровно то, чего от него не ждут.
-     */
-    private fun wakeIfSunk(): Boolean {
-        if (!sunk) return false
-        slots.forEach { it.button.cancelGesture() }
-        head?.cancelGesture()
-        turning = null
-        sliding = false
-        stopMotion()
-        awake()
-        Haptics.tick(service)
-        // Отсчёт простоя — после пробуждения: `touched` зовёт `awake`, а он
-        // к этому мигу уже ничего не делает, и круга не получается.
-        onTouched?.invoke()
-        return true
-    }
-
-    /**
-     * Диск трогали — не обязательно его самого: владелец мог ответить на
-     * уведомление или коснуться метки. Утопленный выезжает обратно к краю;
-     * не утопленный не двигается. Зовётся с каждого `touched()` службы.
-     */
-    fun awake() {
-        if (!sunk) return
-        sunk = false
-        if (!shown || !placed || folded) return
-        val d = dims()
-        val (w, h) = frame()
-        // Достаётся диск в состояние покоя — убранным: кнопки целиком на
-        // экране, стекло за краем. Выезжать целиком он не просился.
-        val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, dockInset(d))
-        animateTo(rotation, dx, dy)
-    }
-
-    /**
      * Выдвинуть диск целиком на экран — или, если он уже целиком виден,
      * убрать к краю. Долгое нажатие на стекло; владелец согласился на
      * «выдвижение по удержанию»: убранный диск показывает две кнопки, а за
@@ -1332,8 +1357,11 @@ class DiskController(
                 }
             }
             if (pushing) {
-                if (push.step(pushTarget, dt)) pushing = false
-                extrude = push.position
+                if (pushSpring.step(pushTarget, dt)) pushing = false
+                extrude = pushSpring.position
+                // Диск везут за кнопку, а кнопки ещё вдвигаются: тарелка
+                // подъезжает под них и между касаниями.
+                if (pull == DiskGeometry.Pull.CARRY && turning != null) carryPlate()
             }
             layout()
             if (animating || pushing) {
@@ -1361,14 +1389,16 @@ class DiskController(
      * уезжает вперёд, — кнопки опережали бы стекло. Едет в другую сторону —
      * разворачивается со своей скоростью, а не замирает.
      */
-    private fun pushTo(target: Float) {
-        if (pushing && pushTarget == target) return
-        if (abs(target - extrude) < 0.5f && (!pushing || abs(push.velocity) < Spring.REST_SPEED)) {
+    private fun pushTo(target: Float, quick: Boolean = false) {
+        val spring = if (quick) pushQuick else push
+        if (pushing && pushTarget == target && pushSpring === spring) return
+        if (abs(target - extrude) < 0.5f && (!pushing || abs(pushSpring.velocity) < Spring.REST_SPEED)) {
             extrude = target
             pushing = false
             return
         }
-        push.reset(extrude, if (pushing) push.velocity else 0f)
+        spring.reset(extrude, if (pushing) pushSpring.velocity else 0f)
+        pushSpring = spring
         pushTarget = target
         pushing = true
         startFrames()
@@ -1641,9 +1671,9 @@ class DiskController(
         }
 
         /**
-         * Куда смотрит диск, торчит ли он за край и убран ли (убран или
-         * утоплен — для стекла одно и то же: стрелка зовёт достать). От этого
-         * зависит и дуга прогресса, и стрелка на кромке.
+         * Куда смотрит диск, торчит ли он за край и убран ли (тогда стрелка
+         * зовёт достать). От этого зависит и дуга прогресса, и стрелка на
+         * кромке.
          */
         fun setFacing(facing: Float, atEdge: Boolean, retracted: Boolean) {
             if (this.facing == facing && this.atEdge == atEdge && this.retracted == retracted) return
@@ -1955,7 +1985,7 @@ class DiskController(
          *
          * Стоит она на кромке со стороны ЛИЦА — то есть в самой дальней от
          * края экрана точке тарелки. Это единственное место, которое видно и
-         * у торчащего диска, и у утопленного, и оно же всегда свободно: лицо
+         * у торчащего диска, и у убранного, и оно же всегда свободно: лицо
          * лежит ровно между «П» и «З», а кольцо кнопок проходит ближе к
          * центру. Смотрит стрелка туда, куда поедет диск: наружу — убрать,
          * внутрь — достать.

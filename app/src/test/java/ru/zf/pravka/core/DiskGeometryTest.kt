@@ -361,6 +361,33 @@ class DiskGeometryTest {
     }
 
     @Test
+    fun `ход по кнопке - по краю, целиком или поворот`() {
+        val ring = DiskGeometry.ringRadius(button, gear, gap)
+        // Правый край: «П» вверху-слева, «З» внизу-слева (ось y вниз).
+        val top = -ring * 0.87f
+        val bottom = ring * 0.87f
+        val pull = DiskGeometry.Pull.values()
+        // Верхняя вверх, нижняя вниз — по краю.
+        assertEquals(DiskGeometry.Pull.EDGE, DiskGeometry.pull(0f, -20f, top, ring))
+        assertEquals(DiskGeometry.Pull.EDGE, DiskGeometry.pull(0f, 20f, bottom, ring))
+        // Большой палец у края ведёт не по линейке: чуть вбок — всё ещё вертикаль.
+        assertEquals(DiskGeometry.Pull.EDGE, DiskGeometry.pull(-8f, -20f, top, ring))
+        // Верхняя вниз, нижняя вверх — к другой кнопке: это поворот, как был.
+        assertEquals(DiskGeometry.Pull.TURN, DiskGeometry.pull(0f, 20f, top, ring))
+        assertEquals(DiskGeometry.Pull.TURN, DiskGeometry.pull(0f, -20f, bottom, ring))
+        // Горизонталь и диагональ — диск целиком, с какой кнопки ни возьми.
+        assertEquals(DiskGeometry.Pull.CARRY, DiskGeometry.pull(-20f, 0f, top, ring))
+        assertEquals(DiskGeometry.Pull.CARRY, DiskGeometry.pull(-20f, -20f, top, ring))
+        assertEquals(DiskGeometry.Pull.CARRY, DiskGeometry.pull(-20f, 20f, bottom, ring))
+        assertEquals(DiskGeometry.Pull.CARRY, DiskGeometry.pull(20f, 5f, bottom, ring))
+        // Кнопка на высоте центра ни верхняя, ни нижняя: вертикаль у неё идёт
+        // по кольцу — поворот в обе стороны.
+        assertEquals(DiskGeometry.Pull.TURN, DiskGeometry.pull(0f, -20f, 0f, ring))
+        assertEquals(DiskGeometry.Pull.TURN, DiskGeometry.pull(0f, 20f, ring * 0.1f, ring))
+        assertEquals(3, pull.size)
+    }
+
+    @Test
     fun `окно за краем целиком - невидимо, торчит краем - видимо`() {
         assertFalse(DiskGeometry.onScreen(x = 1080, y = 500, size = 48, frameW = 1080, frameH = 2000, margin = 4))
         assertFalse(DiskGeometry.onScreen(x = 1078, y = 500, size = 48, frameW = 1080, frameH = 2000, margin = 4))
