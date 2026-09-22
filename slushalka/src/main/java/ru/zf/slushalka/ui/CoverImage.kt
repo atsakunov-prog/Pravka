@@ -11,6 +11,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -66,5 +68,46 @@ fun CoverImage(app: SlushalkaApp, book: Book, modifier: Modifier = Modifier, tex
                 )
             }
         }
+    }
+}
+
+/**
+ * Обложка в книжной плитке 2:3. У аудиокниг обложки квадратные, у fb2 -
+ * книжные; обрезать квадрат под книгу значит срезать треть картинки. Поэтому
+ * картинка вписывается целиком, а поля под ней заливает она же - растянутая,
+ * размытая и притушенная: плитка выглядит книгой, а обложка остаётся целой.
+ * Размытие есть с Android 12; ниже - просто притушенная подложка.
+ */
+@Composable
+fun CoverTile(app: SlushalkaApp, book: Book, modifier: Modifier = Modifier) {
+    val tree = app.state.treeOf(book)
+    val bitmap by produceState<Bitmap?>(Covers.cached(book.id), book.id) {
+        value = Covers.cached(book.id)
+            ?: tree?.let { runCatching { Covers.load(app, it, book, app.texts) }.getOrNull() }
+    }
+    val bmp = bitmap
+    if (bmp == null) {
+        CoverImage(app, book, modifier, textSize = 12)
+        return
+    }
+    val image = remember(bmp) { bmp.asImageBitmap() }
+    // Книжная обложка и так ложится в плитку - подложка ей не нужна.
+    val bookish = bmp.height > bmp.width * 1.25f
+    Box(modifier, contentAlignment = Alignment.Center) {
+        if (!bookish) {
+            Image(
+                bitmap = image,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                alpha = 0.55f,
+                modifier = Modifier.fillMaxSize().blur(18.dp),
+            )
+        }
+        Image(
+            bitmap = image,
+            contentDescription = book.title,
+            contentScale = if (bookish) ContentScale.Crop else ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }

@@ -200,6 +200,8 @@ class AppState(private val app: SlushalkaApp) {
             if (_resumeOffer.value?.bookId == ready.id) _resumeOffer.value = null
             offerRecapIfDue(ready)
             loadText(ready)
+            // Открытая книга - теперь последняя: виджет показывает её.
+            ru.zf.slushalka.widget.ContinueWidget.refresh(app)
         }
     }
 
@@ -226,7 +228,11 @@ class AppState(private val app: SlushalkaApp) {
     private fun offerRecapIfDue(book: Book) {
         val s = app.positions.get(book.id)
         val hours = prefs.value.recapAfterHours
-        _recapOffer.value = s.absMs > 5 * 60_000 &&
+        // Есть что напоминать: послушали хоть пять минут или прочли хоть три
+        // страницы. Книгу без записи раньше не спрашивали вовсе - у неё
+        // секунд записи нет, есть только страницы.
+        val progressed = s.absMs > 5 * 60_000 || s.readChar > 3 * Settings.PAGE_CHARS
+        _recapOffer.value = progressed &&
             s.updatedAt > 0 &&
             System.currentTimeMillis() - s.updatedAt > hours * 3600_000L &&
             book.textDocId != null
@@ -274,6 +280,23 @@ class AppState(private val app: SlushalkaApp) {
 
     fun dismissRecap() {
         _recapOffer.value = false
+    }
+
+    // Пересказ, заказанный с полки: книга открывается, и экран, на который
+    // она попала, - плеер или читалка - сам показывает «Напомнить».
+    private val _recapRequest = MutableStateFlow<String?>(null)
+    val recapRequest: StateFlow<String?> = _recapRequest
+
+    fun requestRecap(bookId: String) {
+        _recapRequest.value = bookId
+    }
+
+    /** Заказ этой книги взят - второй экран его уже не покажет. */
+    fun takeRecapRequest(bookId: String): Boolean {
+        if (_recapRequest.value != bookId) return false
+        _recapRequest.value = null
+        _recapOffer.value = false
+        return true
     }
 
     fun closeBook() {
@@ -710,7 +733,7 @@ class AppState(private val app: SlushalkaApp) {
     fun saveReadChar(offset: Int) {
         val book = _current.value ?: return
         followReading(book, offset)
-        app.positions.setReadChar(book.id, offset)
+        app.positions.setReadChar(book.id, offset, _text.value?.length ?: 0)
         noteReading(book, offset)
         // В папку библиотеки - тем же шагом, что плеер на ходу: раз в две
         // минуты. Иначе после часа чтения второе устройство знало бы место

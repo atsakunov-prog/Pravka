@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +37,7 @@ import ru.zf.slushalka.ui.ReaderScreen
 import ru.zf.slushalka.ui.SettingsScreen
 import ru.zf.slushalka.ui.SlushalkaTheme
 import ru.zf.slushalka.ui.StatsScreen
+import ru.zf.slushalka.widget.ContinueWidget
 
 enum class Screen { LIBRARY, PLAYER, READER, SETTINGS, CATALOG, STATS }
 
@@ -55,8 +57,21 @@ class MainActivity : ComponentActivity() {
     private val askPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    /** Тап по виджету «Продолжить»: открыть последнюю книгу, минуя полку. */
+    private val continueAsked = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    private fun takeIntent(intent: Intent?) {
+        if (intent?.action == ContinueWidget.ACTION_CONTINUE) continueAsked.value = true
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        takeIntent(intent)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) takeIntent(intent)
         // Уведомление - это и есть плеер на экране блокировки; без него книга
         // играет вслепую.
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -109,6 +124,8 @@ class MainActivity : ComponentActivity() {
         // И журнал подходов тоже: идущий подход лежит на диске не старше минуты.
         app.journal.saveNow()
         app.positions.flush()
+        // Виджет - последней строкой: место уже записано, он покажет свежее.
+        ContinueWidget.refresh(app)
     }
 
     @Composable
@@ -138,6 +155,21 @@ class MainActivity : ComponentActivity() {
                 screen = Screen.PLAYER
             } else {
                 screen = Screen.READER
+            }
+        }
+
+        // Виджет «Продолжить»: книга открывается там же, где открылась бы с
+        // полки, - только без полки. Уже открытая не переоткрывается.
+        val asked by continueAsked.collectAsState()
+        val books by state.books.collectAsState()
+        LaunchedEffect(asked, books) {
+            if (!asked || books.isEmpty()) return@LaunchedEffect
+            continueAsked.value = false
+            val last = books.firstOrNull { it.id == app.positions.lastBook() } ?: return@LaunchedEffect
+            if (current?.id == last.id) {
+                screen = if (last.hasAudio) Screen.PLAYER else Screen.READER
+            } else {
+                openBook(last)
             }
         }
 

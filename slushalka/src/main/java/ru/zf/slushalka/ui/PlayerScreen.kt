@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -78,6 +79,7 @@ fun PlayerScreen(
     val alignment by state.alignment.collectAsState()
     val markup by state.markupProgress.collectAsState()
     val bookText by state.text.collectAsState()
+    val recapRequest by state.recapRequest.collectAsState()
     val scope = rememberCoroutineScope()
 
     var showChapters by remember { mutableStateOf(false) }
@@ -90,6 +92,11 @@ fun PlayerScreen(
     var fullPicture by remember { mutableStateOf<ShownPicture?>(null) }
 
     val b = book
+    // «Напомнить» с полки: пересказ открывается, как только разобран текст.
+    LaunchedEffect(recapRequest, bookText, b?.id) {
+        val id = b?.id ?: return@LaunchedEffect
+        if (bookText != null && state.takeRecapRequest(id)) showRecap = true
+    }
     if (b == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Книга не выбрана") }
         return

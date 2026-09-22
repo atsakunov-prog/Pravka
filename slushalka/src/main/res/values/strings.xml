@@ -2,4 +2,7 @@
 <resources>
     <string name="app_name">Слушалка</string>
     <string name="playback_channel">Книга в шторке</string>
+    <string name="widget_label">ПРОДОЛЖИТЬ</string>
+    <string name="widget_name">Продолжить книгу</string>
+    <string name="widget_description">Последняя книга: тап - и ты на своём месте</string>
 </resources>

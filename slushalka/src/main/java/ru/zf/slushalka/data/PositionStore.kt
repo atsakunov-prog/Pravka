@@ -27,7 +27,17 @@ data class BookState(
     val finished: Boolean = false,
     /** Где остановились глазами. -1 - читалку в этой книге ещё не открывали. */
     val readChar: Int = -1,
+    /**
+     * Длина текста книги в знаках, как её видела читалка. Нужна полке: без
+     * неё у книги без записи не посчитать, сколько прочитано, - текст на
+     * полке не разбирают, это долго.
+     */
+    val textChars: Int = 0,
 ) {
+    /** Доля прочитанного глазами; 0 - не открывали или длина неизвестна. */
+    val readShare: Float
+        get() = if (textChars > 0 && readChar > 0) (readChar.toFloat() / textChars).coerceIn(0f, 1f) else 0f
+
     fun toJson(): JSONObject = JSONObject()
         .put("file", fileIndex)
         .put("pos", posMs)
@@ -38,6 +48,7 @@ data class BookState(
         .put("listened", listenedMs)
         .put("finished", finished)
         .put("read", readChar)
+        .put("chars", textChars)
         .put("history", JSONArray().apply {
             history.forEach { put(JSONObject().put("abs", it.absMs).put("at", it.at)) }
         })
@@ -56,6 +67,7 @@ data class BookState(
                 listenedMs = o.optLong("listened"),
                 finished = o.optBoolean("finished"),
                 readChar = o.optInt("read", -1),
+                textChars = o.optInt("chars"),
                 history = (0 until h.length()).map {
                     val m = h.getJSONObject(it)
                     Mark(m.optLong("abs"), m.optLong("at"))
@@ -138,10 +150,14 @@ class PositionStore(context: Context) {
 
     /** Место в читалке пишется тем же порядком, что и место в записи. */
     @Synchronized
-    fun setReadChar(bookId: String, offset: Int) {
+    fun setReadChar(bookId: String, offset: Int, textChars: Int = 0) {
         val s = states[bookId] ?: BookState(bookId)
-        if (s.readChar == offset) return
-        states[bookId] = s.copy(readChar = offset, updatedAt = System.currentTimeMillis())
+        if (s.readChar == offset && (textChars <= 0 || s.textChars == textChars)) return
+        states[bookId] = s.copy(
+            readChar = offset,
+            textChars = if (textChars > 0) textChars else s.textChars,
+            updatedAt = System.currentTimeMillis(),
+        )
         lastBookId = bookId
         persist()
     }

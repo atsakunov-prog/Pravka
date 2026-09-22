@@ -223,6 +223,8 @@ fun ReaderScreen(
     val busy by state.busy.collectAsState()
     val play by app.player.state.collectAsState()
     val speech by app.readAloud.state.collectAsState()
+    val recapOffer by state.recapOffer.collectAsState()
+    val recapRequest by state.recapRequest.collectAsState()
 
     var bars by remember { mutableStateOf(true) }
     var showRate by remember { mutableStateOf(false) }
@@ -483,6 +485,12 @@ fun ReaderScreen(
             // Ушли с экрана - чтение глазами кончилось, журнал подходов об этом узнаёт.
             state.readerClosed()
         }
+    }
+
+    // «Напомнить» с полки: пересказ открывается сам, когда место уже встало,
+    // - иначе он пересказал бы книгу до первой страницы.
+    LaunchedEffect(recapRequest, shownEnd) {
+        if (shownEnd > 0 && state.takeRecapRequest(bk.id)) showRecap = true
     }
 
     LaunchedEffect(notice) {
@@ -816,6 +824,35 @@ fun ReaderScreen(
                                 speech.error?.let { err -> Text(err, color = palette.dim, fontSize = 12.sp) }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Вернулся после перерыва - предложить вспомнить, на чём остановился.
+        // Раньше это спрашивал только плеер, а книгу без записи - никто.
+        if (recapOffer && !showRecap) {
+            val drop = with(LocalDensity.current) { if (bars && selection == null) topBarPx.toDp() else 0.dp }
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = drop + 4.dp)
+                    .padding(horizontal = maxOf(card.side, BAR_INSET) + 12.dp),
+            ) {
+                BarCard(palette, Modifier.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 4.dp)) {
+                    Text(
+                        "Давно не открывал. Напомнить, на чём остановился?",
+                        color = palette.fg,
+                        fontSize = 13.sp,
+                    )
+                    Row {
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { state.dismissRecap() }) { Text("Не надо", color = palette.dim) }
+                        TextButton(onClick = {
+                            state.dismissRecap()
+                            showRecap = true
+                        }) { Text("Напомни", color = palette.fg) }
                     }
                 }
             }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Виджет живёт вне Compose, поэтому цвета бумаги и краски повторены здесь. -->
+    <color name="widget_bg">#FFF4EFE4</color>
+    <color name="widget_fg">#FF2E2A25</color>
+    <color name="widget_dim">#FF6E6659</color>
+    <color name="widget_accent">#FF3F5A8A</color>
+    <color name="widget_track">#332E2A25</color>
+</resources>
