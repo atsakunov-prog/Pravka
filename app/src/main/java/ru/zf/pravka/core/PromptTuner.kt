@@ -25,7 +25,6 @@ import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.provider.ClaudeBatches
 import ru.zf.pravka.provider.ClaudeProvider
-import ru.zf.pravka.provider.Pricing
 
 /**
  * Недельная правка промпта CLEAN (17.09.2026). Владелец: «раз в неделю Fable
@@ -231,7 +230,7 @@ class PromptTuner(
         val items = batches.results(url)
         val route = if (propose) ModelRoute.PROMPT_TUNE else ModelRoute.SHADOW_JUDGE
         val model = settings.modelChoice(route).model
-        val cost = items.sumOf { Pricing.costUsd(model, it.inputTokens, it.outputTokens, it.cacheWrite, it.cacheRead) } * ClaudeBatches.DISCOUNT
+        val cost = ClaudeBatches.costUsd(items, model)
         val tokensIn = items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }
         stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens }, route = route.key)
         stats.recordCache(items.sumOf { it.cacheRead }, items.sumOf { it.cacheWrite })

@@ -89,4 +89,25 @@ class ClaudeBatchesTest {
         assertTrue(single.ok)
         assertEquals("ok", single.text)
     }
+
+    @Test
+    fun `цена батча — по модели, что ответила, со скидкой и кэшем`() {
+        // Батч ушёл Fable, а настройку за ночь сменили на Опус 5.5: цена — Fable.
+        val line = JSONObject("""{"custom_id":"all","result":{"type":"succeeded","message":{"model":"claude-fable-5-1","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1000000,"output_tokens":1000000,"cache_read_input_tokens":1000000,"cache_creation_input_tokens":1000000}}}}""")
+        val item = ClaudeBatches.parseItem(line)
+        assertEquals(Settings.MODEL_FABLE, item.model)
+        // Fable: вход 10 + запись кэша на час 2×10 + чтение 0,25 + выход 50 = 80,25; батч — половина.
+        assertEquals(40.125, ClaudeBatches.costUsd(listOf(item), Settings.MODEL_OPUS), 1e-9)
+        // Незнакомое прайсу имя — считаем моделью, которой батч уходил.
+        val odd = item.copy(model = "claude-нечто")
+        // Опус 5.5: 4 + 2×4 + 0,2 (чтение — $0.20, своя цена) + 20 = 32,2; батч — 16,1.
+        assertEquals(16.1, ClaudeBatches.costUsd(listOf(odd), Settings.MODEL_OPUS), 1e-9)
+    }
+
+    @Test
+    fun `прайс Опуса 5_5 и прежнего Опуса 5`() {
+        assertEquals(24.0, Pricing.costUsd(Settings.MODEL_OPUS, 1_000_000, 1_000_000), 1e-9)
+        assertEquals(30.0, Pricing.costUsd(Settings.MODEL_OPUS_5, 1_000_000, 1_000_000), 1e-9)
+        assertEquals(0.2, Pricing.costUsd(Settings.MODEL_OPUS, 0, 0, cacheReadTokens = 1_000_000), 1e-9)
+    }
 }

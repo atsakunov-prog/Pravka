@@ -264,7 +264,7 @@ class NightReview(
         val items = batches.results(url)
         val route = if (r.stage == "analysis") ModelRoute.NIGHT_REVIEW else ModelRoute.NIGHT_CHECK
         val choice = settings.modelChoice(route)
-        val cost = items.sumOf { Pricing.costUsd(choice.model, it.inputTokens, it.outputTokens, it.cacheWrite, it.cacheRead) } * ClaudeBatches.DISCOUNT
+        val cost = ClaudeBatches.costUsd(items, choice.model)
         val tokensIn = items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }
         val cacheRead = items.sumOf { it.cacheRead }
         val cacheWrite = items.sumOf { it.cacheWrite }

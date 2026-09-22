@@ -1,6 +1,7 @@
 package ru.zf.pravka.core
 
 import ru.zf.pravka.data.ModelRoute
+import ru.zf.pravka.data.Models
 import ru.zf.pravka.data.Settings
 
 /**
@@ -61,8 +62,33 @@ object PaceSeed {
      */
     fun guess(model: String): Guess = BY_MODEL[model] ?: SONNET
 
-    /** Заводской накопитель дороги: та же прямая, весом в несколько замеров. */
-    fun prior(model: String): Pace.Acc = guess(model).let { Pace.prior(it.baseMs, it.msPerChar) }
+    /**
+     * Во сколько раз усилие растягивает ожидание против high. Замеры Опуса в
+     * таблице выше сняты на high («по умолчанию» у Опуса 5), Сонета — без
+     * размышлений. Сами множители — прикидка, не замер (22.09.2026, владелец:
+     * «в прогресс-баре чтобы учитывалась модель и усилие»): мысли на xhigh у
+     * Опуса 5.5 длятся заметно дольше, чем на medium, и одна прямая на все
+     * усилия врала бы в обе стороны. Живут они, как и вся прикидка, до своих
+     * замеров на тройке «дорога + модель + усилие».
+     */
+    fun effortFactor(model: String, effort: String): Double {
+        val e = Models.effectiveEffort(model, effort)
+        // Сонет до high отвечает без размышлений — усилие ему время не меняет.
+        if (model == Settings.MODEL_SONNET && e !in setOf("xhigh", "max")) return 1.0
+        return when (e) {
+            "low" -> 0.6
+            "medium" -> 0.8
+            "xhigh" -> 1.5
+            "max" -> 2.2
+            else -> 1.0
+        } * if (model == Settings.MODEL_SONNET) 2.0 else 1.0
+    }
+
+    /** Заводской накопитель дороги: та же прямая, весом в несколько замеров, с поправкой на усилие. */
+    fun prior(model: String, effort: String = ""): Pace.Acc = guess(model).let {
+        val f = effortFactor(model, effort)
+        Pace.prior(it.baseMs * f, it.msPerChar * f)
+    }
 
     /** Модели с заводской прикидкой — строкой для настроек, по убыванию цены знака. */
     fun factoryLine(): String = BY_MODEL.entries

@@ -67,4 +67,21 @@ class PaceSeedTest {
         assertTrue(line, line.contains("opus-5") && line.contains("sonnet-5"))
         assertTrue(line, line.indexOf("opus-5") < line.indexOf("sonnet-5"))
     }
+
+    @Test
+    fun `усилие растягивает прикидку, «по умолчанию» — это действующее усилие`() {
+        fun ms(model: String, effort: String) = Pace.estimate(PaceSeed.prior(model, effort), 300)
+        val o = Settings.MODEL_OPUS
+        assertTrue(ms(o, "low") < ms(o, "medium"))
+        assertTrue(ms(o, "medium") < ms(o, "high"))
+        assertTrue(ms(o, "high") < ms(o, "xhigh"))
+        assertTrue(ms(o, "xhigh") < ms(o, "max"))
+        // У Опуса 5.5 пустое усилие — medium, у остальных — high.
+        assertEquals(ms(o, "medium"), ms(o, ""))
+        assertEquals(PaceSeed.effortFactor(Settings.MODEL_FABLE, "high"), PaceSeed.effortFactor(Settings.MODEL_FABLE, ""), 0.0)
+        // Сонет до high не думает — усилие ему время не меняет; xhigh включает мысли.
+        assertEquals(1.0, PaceSeed.effortFactor(Settings.MODEL_SONNET, "low"), 0.0)
+        assertEquals(1.0, PaceSeed.effortFactor(Settings.MODEL_SONNET, "high"), 0.0)
+        assertTrue(PaceSeed.effortFactor(Settings.MODEL_SONNET, "xhigh") > 1.0)
+    }
 }

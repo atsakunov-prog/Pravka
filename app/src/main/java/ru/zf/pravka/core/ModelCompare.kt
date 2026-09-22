@@ -21,7 +21,6 @@ import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.provider.ClaudeBatches
 import ru.zf.pravka.provider.ClaudeProvider
-import ru.zf.pravka.provider.Pricing
 
 /**
  * Сравнение моделей (18.09.2026) — ручная тень. Владелец: «вернём тень, но без
@@ -192,7 +191,7 @@ class ModelCompare(
         val url = st.resultsUrl ?: throw IllegalStateException("батч судьи завершён без результатов (ошибок ${st.errored}, истекло ${st.expired})")
         val items = batches.results(url)
         val model = runCatching { JSONObject(r.evidence["models"].orEmpty()).optString("judge") }.getOrDefault("").ifBlank { ModelRoute.SHADOW_JUDGE.defaultModel }
-        val cost = items.sumOf { Pricing.costUsd(model, it.inputTokens, it.outputTokens, it.cacheWrite, it.cacheRead) } * ClaudeBatches.DISCOUNT
+        val cost = ClaudeBatches.costUsd(items, model)
         val tokensIn = items.sumOf { it.inputTokens + it.cacheRead + it.cacheWrite }
         stats.recordAux(cost, tokensIn, items.sumOf { it.outputTokens }, route = ModelRoute.SHADOW_JUDGE.key)
         stats.recordCache(items.sumOf { it.cacheRead }, items.sumOf { it.cacheWrite })

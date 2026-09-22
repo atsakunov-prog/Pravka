@@ -46,6 +46,8 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
         val outputTokens: Int,
         val cacheRead: Int,
         val cacheWrite: Int,
+        /** Какая модель ответила — из самого ответа: по ней и цена (см. [costUsd]). */
+        val model: String = "",
     ) {
         /**
          * Fable может ответить отказом (stop_reason=refusal, HTTP 200) — это не
@@ -163,8 +165,21 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
                 outputTokens = u?.optInt("output_tokens") ?: 0,
                 cacheRead = u?.optInt("cache_read_input_tokens") ?: 0,
                 cacheWrite = u?.optInt("cache_creation_input_tokens") ?: 0,
+                model = msg?.optString("model").orEmpty(),
             )
         }
+
+        /**
+         * Цена пачки ответов батча, со скидкой. Модель — та, что ОТВЕТИЛА
+         * (поле model в ответе), а не нынешняя настройка дороги: батч живёт
+         * до суток, и сменённая за это время модель (Fable → Опус 5.5 22.09)
+         * пересчитала бы уже отработанный батч по чужому прайсу. Незнакомое
+         * прайсу имя — модель, которой батч уходил ([sentModel]).
+         */
+        fun costUsd(items: List<Item>, sentModel: String): Double = items.sumOf {
+            val model = it.model.takeIf(Pricing::knows) ?: sentModel
+            Pricing.costUsd(model, it.inputTokens, it.outputTokens, it.cacheWrite, it.cacheRead)
+        } * DISCOUNT
     }
 
     private suspend fun apiKey(): String {

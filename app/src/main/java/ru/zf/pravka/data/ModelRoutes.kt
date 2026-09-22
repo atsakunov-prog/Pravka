@@ -197,5 +197,13 @@ object Models {
      */
     val PRAVKA_QUICK_EFFORTS: List<String> = listOf("medium", "high", "xhigh")
 
+    /**
+     * Какое усилие на деле стоит за выбором: пустое — это «по умолчанию API»,
+     * у Опуса 5.5 medium, у остальных high. Дуге прогресса и её истории нужно
+     * именно действующее: «по умолчанию» и явный medium у Опуса — одно и то же.
+     */
+    fun effectiveEffort(model: String, effort: String): String =
+        effort.trim().ifBlank { if (model == Settings.MODEL_OPUS) "medium" else "high" }
+
     fun effortLabel(effort: String): String = if (effort.isBlank()) "по умолчанию" else effort
 }

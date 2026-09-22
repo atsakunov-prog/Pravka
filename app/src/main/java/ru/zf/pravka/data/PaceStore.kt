@@ -9,7 +9,9 @@ import ru.zf.pravka.core.Pace
 import ru.zf.pravka.core.PaceSeed
 
 /**
- * История «сколько идёт запрос» по парам «дорога + модель». Считает
+ * История «сколько идёт запрос» по тройкам «дорога + модель + усилие»
+ * (усилие — с 22.09.2026: на xhigh Опус думает в разы дольше, чем на medium,
+ * и общая прямая врала бы обоим). Считает
  * `core/Pace.kt`, здесь только хранение.
  *
  * Читают это с ГЛАВНОГО потока службы: дуга прогресса на стекле спрашивает
@@ -40,7 +42,7 @@ class PaceStore(private val context: Context) {
 
     private val file: File by lazy { File(context.filesDir, FILE_NAME) }
 
-    /** Ключ — «дорога|модель»; пустая дорога тоже ключ, просто общий. */
+    /** Ключ — «дорога|модель|усилие»; пустая дорога тоже ключ, просто общий. */
     private val acc = HashMap<String, Pace.Acc>()
     private var seed = 0
     private var loaded = false
@@ -55,8 +57,13 @@ class PaceStore(private val context: Context) {
             seed = root.optInt("seed", 0)
             // До 20.09.2026 в корне лежали сразу дороги — читаем и так.
             val roads = root.optJSONObject("roads") ?: root
-            for (key in roads.keys()) {
-                val o = roads.optJSONObject(key) ?: continue
+            for (stored in roads.keys()) {
+                val o = roads.optJSONObject(stored) ?: continue
+                // До 22.09.2026 ключ был «дорога|модель», без усилия: те замеры
+                // сняты на усилии по умолчанию, туда и ложатся.
+                val key = if (stored.count { it == '|' } == 1) {
+                    stored + "|" + Models.effectiveEffort(stored.substringAfter('|'), "")
+                } else stored
                 acc[key] = Pace.Acc(
                     n = o.optDouble("n", 0.0),
                     sumX = o.optDouble("x", 0.0),
@@ -93,7 +100,8 @@ class PaceStore(private val context: Context) {
         for (t in rows) {
             if (!PaceSeed.counts(t.model)) continue
             val route = PaceSeed.route(t.mode) ?: continue
-            val k = key(route, t.model)
+            // В журнале усилия нет: его записи сняты на «по умолчанию».
+            val k = key(route, t.model, "")
             acc[k] = Pace.add(acc[k] ?: Pace.Acc(), t.chars, t.ms)
         }
         seed = SEED_VERSION
@@ -101,18 +109,18 @@ class PaceStore(private val context: Context) {
         DiskWriter.post { persist(snapshot, SEED_VERSION) }
     }
 
-    /** Сколько ждать запроса на [chars] символах по дороге [route] моделью [model]. */
+    /** Сколько ждать запроса на [chars] символах по дороге [route] моделью [model] с усилием [effort]. */
     @Synchronized
-    fun expect(route: String, model: String, chars: Int): Long {
+    fun expect(route: String, model: String, effort: String, chars: Int): Long {
         load()
-        return Pace.estimate(Pace.mix(acc[key(route, model)], PaceSeed.prior(model)), chars)
+        return Pace.estimate(Pace.mix(acc[key(route, model, effort)], PaceSeed.prior(model, effort)), chars)
     }
 
     /** Ответ пришёл: запомнить, сколько он шёл. */
     @Synchronized
-    fun record(route: String, model: String, chars: Int, ms: Long) {
+    fun record(route: String, model: String, effort: String, chars: Int, ms: Long) {
         load()
-        val k = key(route, model)
+        val k = key(route, model, effort)
         // В накопителе только свои замеры: прикидка подмешивается на оценке
         // и тает, а не оседает в сумме навсегда.
         acc[k] = Pace.add(acc[k] ?: Pace.Acc(), chars, ms)
@@ -135,12 +143,11 @@ class PaceStore(private val context: Context) {
         val roads = acc.entries
             .sortedByDescending { it.value.n }
             .map { (key, a) ->
-                val road = key.substringBefore('|')
-                val modelId = key.substringAfter('|')
-                val model = PaceSeed.shortModel(modelId)
+                val (road, modelId, effort) = key.split('|').let { Triple(it[0], it.getOrElse(1) { "" }, it.getOrElse(2) { "" }) }
+                val model = PaceSeed.shortModel(modelId) + if (effort.isNotBlank()) " $effort" else ""
                 // Показываем ту самую прямую, по которой дуга и считает, —
                 // со всем, что в неё сейчас подмешано.
-                val l = Pace.line(Pace.mix(a, PaceSeed.prior(modelId)))
+                val l = Pace.line(Pace.mix(a, PaceSeed.prior(modelId, effort)))
                 val body = when {
                     l == null -> "замеров нет"
                     l.straight -> "%.1f с + %.1f мс на знак".format(Locale.US, l.baseMs / 1000.0, l.msPerChar)
@@ -153,8 +160,8 @@ class PaceStore(private val context: Context) {
         return roads + "с завода, пока замеров нет: ${PaceSeed.factoryLine()}"
     }
 
-    private fun key(route: String, model: String): String =
-        (route.ifBlank { "общая" }) + "|" + model
+    private fun key(route: String, model: String, effort: String): String =
+        (route.ifBlank { "общая" }) + "|" + model + "|" + Models.effectiveEffort(model, effort)
 
     private fun persist(snapshot: Map<String, Pace.Acc>, seedAt: Int) {
         runCatching {

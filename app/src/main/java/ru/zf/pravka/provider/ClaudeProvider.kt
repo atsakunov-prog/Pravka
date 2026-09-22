@@ -692,8 +692,8 @@ $listing
      * Зовётся с потока запроса (IO): и служба, и хранилище сами решают, куда
      * это переложить.
      */
-    internal var workStart: ((route: String, model: String, chars: Int) -> Unit)? = null
-    internal var workDone: ((route: String, model: String, chars: Int, ms: Long, ok: Boolean) -> Unit)? = null
+    internal var workStart: ((route: String, model: String, effort: String, chars: Int) -> Unit)? = null
+    internal var workDone: ((route: String, model: String, effort: String, chars: Int, ms: Long, ok: Boolean) -> Unit)? = null
 
     internal fun requestWithOneRetry(
         apiKey: String,
@@ -715,7 +715,7 @@ $listing
         // re-POST into the same dead socket just fails the same way.
         val chars = input.length
         val startedAt = System.currentTimeMillis()
-        runCatching { workStart?.invoke(routeKey, model, chars) }
+        runCatching { workStart?.invoke(routeKey, model, effortOverride, chars) }
         val raw = try {
             request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
         } catch (e: IOException) {
@@ -729,10 +729,10 @@ $listing
             // Сорвалось — дугу надо погасить, иначе она останется висеть на
             // стекле до следующего запроса. Замер при этом НЕ пишем: время
             // упавшего запроса не про то, сколько идёт нормальный.
-            runCatching { workDone?.invoke(routeKey, model, chars, System.currentTimeMillis() - startedAt, false) }
+            runCatching { workDone?.invoke(routeKey, model, effortOverride, chars, System.currentTimeMillis() - startedAt, false) }
             throw e
         }
-        runCatching { workDone?.invoke(routeKey, model, chars, System.currentTimeMillis() - startedAt, true) }
+        runCatching { workDone?.invoke(routeKey, model, effortOverride, chars, System.currentTimeMillis() - startedAt, true) }
         val reply = raw.copy(route = routeKey)
         // Ответ — в тот же лог отладки, что и запрос (владелец, 18.09.2026: «надо
         // проверить, что точно промпт кэшируется»): единственная правда о кэше —

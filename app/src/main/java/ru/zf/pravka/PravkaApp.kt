@@ -67,9 +67,9 @@ class PravkaApp : Application() {
         }
         // Сколько идёт запрос — в историю, а ход запроса — тому, кто его
         // показывает (20.09.2026). Та же одна точка на все дороги: здесь
-        // известны и дорога, и модель, и длина входа.
-        claudeProvider.workStart = { route, model, chars ->
-            val expect = paceStore.expect(route, model, chars)
+        // известны и дорога, и модель с усилием, и длина входа.
+        claudeProvider.workStart = { route, model, effort, chars ->
+            val expect = paceStore.expect(route, model, effort, chars)
             workWatcher?.invoke(route, expect, false, true)
         }
         // Прошлое дуги — из журнала правок, один раз после обновления
@@ -79,10 +79,10 @@ class PravkaApp : Application() {
         appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching { paceStore.seedFromHistory(historyLog) }
         }
-        claudeProvider.workDone = { route, model, chars, ms, ok ->
+        claudeProvider.workDone = { route, model, effort, chars, ms, ok ->
             // Замер пишем только с удачного ответа: время упавшего запроса —
             // это время сети, а не время модели.
-            if (ok) paceStore.record(route, model, chars, ms)
+            if (ok) paceStore.record(route, model, effort, chars, ms)
             workWatcher?.invoke(route, 0L, true, ok)
         }
         // Кэш промпта виден в статистике: транспорт отдаёт расход каждого ответа,
@@ -105,7 +105,7 @@ class PravkaApp : Application() {
     var workWatcher: ((route: String, expectMs: Long, done: Boolean, ok: Boolean) -> Unit)? = null
 
     val settings by lazy { Settings(this) }
-    /** История «сколько идёт запрос» по парам «дорога + модель». */
+    /** История «сколько идёт запрос» по тройкам «дорога + модель + усилие». */
     val paceStore by lazy { PaceStore(this) }
     val promptStore by lazy { PromptStore(this) }
     val stats by lazy { Stats(this) }
