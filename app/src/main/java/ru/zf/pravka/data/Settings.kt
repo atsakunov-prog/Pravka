@@ -22,7 +22,10 @@ class Settings(private val context: Context) {
         // Каталог моделей. Кто где работает — не здесь: заводские значения
         // дорог лежат в ModelRoute, выбор владельца читается modelChoice().
         const val MODEL_SONNET = "claude-sonnet-5"
-        const val MODEL_OPUS = "claude-opus-5"
+        const val MODEL_OPUS = "claude-opus-5-5"
+        // Прежний Опус (до 22.09.2026): не в каталоге выбора, но живёт в
+        // хранилище старых сборок и в батчах, отправленных до обновления.
+        const val MODEL_OPUS_5 = "claude-opus-5"
         const val MODEL_FABLE = "claude-fable-5-1"
 
         // Dictation engines.
@@ -52,6 +55,7 @@ class Settings(private val context: Context) {
         private val KEY_PROMPT_TUNE = booleanPreferencesKey("prompt_tune_enabled")
         private val KEY_NIGHT_BUDGET = intPreferencesKey("night_budget_usd")
         private val KEY_MIGRATED_OPUS = booleanPreferencesKey("migrated_pravka_opus_1")
+        private val KEY_MIGRATED_OPUS_55 = booleanPreferencesKey("migrated_opus_5_5")
         private val KEY_MIGRATED_SPEECH_NET = booleanPreferencesKey("migrated_speech_network_1")
         private val KEY_PLAN_RULES_LAST_RUN = longPreferencesKey("plan_rules_last_run")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
@@ -379,6 +383,30 @@ class Settings(private val context: Context) {
             p[KEY_MIGRATED_OPUS] = true
             val key = modelKey(ModelRoute.PRAVKA)
             if (p[key] == null || p[key] == MODEL_SONNET) p[key] = MODEL_OPUS
+        }
+    }
+
+    /**
+     * Разовая миграция 22.09.2026: Опус 5.5 и новые усилия по режимам. Владелец
+     * просил «везде заменить», поэтому на дорогах, где заводская теперь Опус 5.5,
+     * явный выбор прежнего Опуса или Fable снимается целиком — вместе с
+     * усилием — и дорога берёт новые заводские (правка medium, засечка и еда
+     * xhigh, спорт medium, разборы max). Явный Сонет — осознанный выбор
+     * дешёвой модели (веер переключает на него чистку) — не трогаем.
+     * Метка — чтобы миграция не спорила с его будущими настройками.
+     */
+    suspend fun migrateToOpus55() {
+        context.dataStore.edit { p ->
+            if (p[KEY_MIGRATED_OPUS_55] == true) return@edit
+            p[KEY_MIGRATED_OPUS_55] = true
+            for (route in ModelRoute.entries) {
+                if (route.defaultModel != MODEL_OPUS) continue
+                val saved = p[modelKey(route)]
+                if (saved == null || saved == MODEL_OPUS_5 || saved == MODEL_OPUS || saved == MODEL_FABLE) {
+                    p.remove(modelKey(route))
+                    p.remove(effortKey(route))
+                }
+            }
         }
     }
 

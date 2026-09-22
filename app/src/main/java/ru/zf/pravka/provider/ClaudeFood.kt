@@ -98,12 +98,12 @@ suspend fun ClaudeProvider.parseFood(
             Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
         }
         val started = System.currentTimeMillis()
-        val choice = settings.modelChoice(ModelRoute.BODY)
+        val choice = settings.modelChoice(ModelRoute.FOOD)
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", null,
             images = listOfNotNull(image),
             effortOverride = choice.effort,
-            routeKey = ModelRoute.BODY.key,
+            routeKey = ModelRoute.FOOD.key,
         )
         val parsed = parseFoodReply(reply.text)
         FoodParse(

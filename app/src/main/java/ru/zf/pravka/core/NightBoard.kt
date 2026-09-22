@@ -36,7 +36,7 @@ object NightBoard {
         "audit" -> "согласование"
         ShadowPolicy.STAGE_CLEAN -> "вторая модель чистит"
         ShadowPolicy.STAGE_JUDGE -> "судья сравнивает"
-        PromptTunePolicy.STAGE_PROPOSE -> "Fable предлагает правку"
+        PromptTunePolicy.STAGE_PROPOSE -> "модель предлагает правку"
         PromptTunePolicy.STAGE_MEASURE -> "новый промпт перечищает диктовки недели"
         PromptTunePolicy.STAGE_JUDGE -> "судья сравнивает промпты"
         ComparePolicy.STAGE_CLEAN -> "три модели чистят"

@@ -128,10 +128,10 @@ class ComparePolicyTest {
         val s = ComparePolicy.summary(ComparePolicy.tally(items), 0L, 86_400_000L, "Fable 5.1", 0.12, listOf("Пунктуация хромала."))
         assertTrue(s, s.contains("3 диктовок, судья Fable 5.1"))
         assertTrue(s, s.contains("Все три совпали слово в слово: 1."))
-        assertTrue(s, s.contains("Лучше всех: Опус 5 — 2, Сонет 5 — 0, Опус 5 low — 0."))
-        assertTrue(s, s.contains("Хуже всех: Сонет 5 — 1, Опус 5 low — 1, Опус 5 — 0."))
-        assertTrue(s, s.contains("Сонет 5 — 1.0 с, Опус 5 — 3.0 с, Опус 5 low — 2.0 с"))
-        assertTrue(s, s.contains("Сонет 5 — $0.03, Опус 5 — $0.09, Опус 5 low — $0.06; судья — $0.12"))
+        assertTrue(s, s.contains("Лучше всех: Опус 5.5 — 2, Сонет 5 — 0, Опус 5.5 low — 0."))
+        assertTrue(s, s.contains("Хуже всех: Сонет 5 — 1, Опус 5.5 low — 1, Опус 5.5 — 0."))
+        assertTrue(s, s.contains("Сонет 5 — 1.0 с, Опус 5.5 — 3.0 с, Опус 5.5 low — 2.0 с"))
+        assertTrue(s, s.contains("Сонет 5 — $0.03, Опус 5.5 — $0.09, Опус 5.5 low — $0.06; судья — $0.12"))
         assertTrue(s, s.contains("Изъяны Сонет 5, где он худший: ${ShadowPolicy.flawLabel("negation")} 1."))
         assertTrue(s, s.contains("Судья: Пунктуация хромала."))
     }
@@ -159,8 +159,8 @@ class ComparePolicyTest {
         )
         assertEquals(items, ComparePolicy.fromJson(ComparePolicy.toJson(items)))
         assertEquals(emptyList<ComparePolicy.Item>(), ComparePolicy.fromJson("мусор"))
-        val texts = ComparePolicy.armTexts("""{"Опус 5 low":"в","Сонет 5":"а","Опус 5":""}""")
-        assertEquals(listOf("Сонет 5" to "а", "Опус 5 low" to "в"), texts)
+        val texts = ComparePolicy.armTexts("""{"Опус 5.5 low":"в","Сонет 5":"а","Опус 5.5":""}""")
+        assertEquals(listOf("Сонет 5" to "а", "Опус 5.5 low" to "в"), texts)
         assertEquals(emptyList<Pair<String, String>>(), ComparePolicy.armTexts("не json"))
     }
 }

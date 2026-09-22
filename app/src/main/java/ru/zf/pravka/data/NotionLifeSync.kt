@@ -690,7 +690,7 @@ class NotionLifeSync(
                     "или -1, по одному числу на каждую новую формулировку, в том же порядке."
             )
         }
-        // Заводская — Fable 5.1 на среднем усилии; меняется в настройках → «Модели».
+        // Заводская — Опус 5.5 на max (с 22.09.2026); меняется в настройках → «Модели».
         val choice = settings.modelChoice(ModelRoute.PATTERNS_DUPES)
         val id = ask.submitBatch(system, user, choice.model, maxTokens = 2000, effort = choice.effort)
             .getOrElse { e ->

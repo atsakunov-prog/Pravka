@@ -35,8 +35,8 @@ object ComparePolicy {
     /** Плечи фиксированы — владелец так и просил: «сравнивай всегда» эти три. */
     val ARMS = listOf(
         Arm("sonnet", "Сонет 5", Settings.MODEL_SONNET, ""),
-        Arm("opus", "Опус 5", Settings.MODEL_OPUS, ""),
-        Arm("opus_low", "Опус 5 low", Settings.MODEL_OPUS, "low"),
+        Arm("opus", "Опус 5.5", Settings.MODEL_OPUS, ""),
+        Arm("opus_low", "Опус 5.5 low", Settings.MODEL_OPUS, "low"),
     )
 
     fun arm(key: String): Arm? = ARMS.firstOrNull { it.key == key }

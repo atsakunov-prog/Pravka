@@ -105,7 +105,7 @@ class FoodEngine(
             return Result.failure(e)
         }
         runCatching { dictionaryStore.incrementHits(prepared.firedIds) }
-        runCatching { stats.recordAux(parse.costUsd, parse.tokensIn, parse.tokensOut, route = ru.zf.pravka.data.ModelRoute.BODY.key) }
+        runCatching { stats.recordAux(parse.costUsd, parse.tokensIn, parse.tokensOut, route = ru.zf.pravka.data.ModelRoute.FOOD.key) }
         if (parse.items.isEmpty()) {
             eventLog.add("еда: в сказанном еды не нашлось" + noteTail(parse.note))
             return Result.failure(

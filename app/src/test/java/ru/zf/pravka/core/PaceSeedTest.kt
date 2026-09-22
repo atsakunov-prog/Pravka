@@ -59,7 +59,7 @@ class PaceSeedTest {
 
     @Test
     fun `короткое имя модели читается`() {
-        assertEquals("opus-5", PaceSeed.shortModel(Settings.MODEL_OPUS))
+        assertEquals("opus-5-5", PaceSeed.shortModel(Settings.MODEL_OPUS))
         assertEquals("sonnet-5", PaceSeed.shortModel(Settings.MODEL_SONNET))
         assertEquals("fable-5-1", PaceSeed.shortModel(Settings.MODEL_FABLE))
         // Строка настроек называет все три модели и цену знака у каждой.

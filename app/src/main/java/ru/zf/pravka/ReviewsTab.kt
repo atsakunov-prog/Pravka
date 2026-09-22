@@ -167,7 +167,7 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = tuneOn, onCheckedChange = { on -> scope.launch { settings.setPromptTuneEnabled(on) } })
             Spacer(Modifier.width(8.dp))
-            Text("Правка промпта раз в неделю: Fable по идеям недели, с измерением", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text("Правка промпта раз в неделю: Опус 5.5 по идеям недели, с измерением", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         }
         HintText("В ночь на субботу. Новый промпт перечищает диктовки недели, слепой судья сравнивает с прежним; принимается только заметный перевес; через неделю откат, если правок руками стало больше.")
         Spacer(Modifier.height(6.dp))

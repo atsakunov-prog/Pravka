@@ -71,7 +71,7 @@ object PaceSeed {
             "%s %.1f с + %.1f".format(java.util.Locale.US, shortModel(model), g.baseMs / 1000.0, g.msPerChar)
         }
 
-    /** «claude-opus-5» → «opus-5»: в настройках читается, а место экономит. */
+    /** «claude-opus-5-5» → «opus-5-5»: в настройках читается, а место экономит. */
     fun shortModel(model: String): String = model.removePrefix("claude-").ifBlank { model }
 
     /**

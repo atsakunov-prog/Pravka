@@ -25,20 +25,40 @@ class ModelRoutesTest {
     }
 
     @Test
-    fun `заводские — как было зашито до настроек`() {
-        // Опус с 18.09.2026: тень 17.09 — 17:2 против Сонета.
-        assertEquals(Settings.MODEL_OPUS, ModelRoute.PRAVKA.defaultModel)
-        assertEquals(Settings.MODEL_OPUS, ModelRoute.PRAVKA_STRONG.defaultModel)
-        assertEquals(Settings.MODEL_OPUS, ModelRoute.ZASECHKA.defaultModel)
-        assertEquals(Settings.MODEL_OPUS, ModelRoute.BODY.defaultModel)
+    fun `заводские — Опус 5_5 с усилиями владельца от 22_09`() {
+        assertEquals("claude-opus-5-5", Settings.MODEL_OPUS)
+        // Правка и спорт — medium, засечка и еда — xhigh, Дела держат high.
+        val expected = mapOf(
+            ModelRoute.PRAVKA to "medium",
+            ModelRoute.PRAVKA_STRONG to "medium",
+            ModelRoute.PRAVKA_LEARN to "medium",
+            ModelRoute.ZASECHKA to "xhigh",
+            ModelRoute.FOOD to "xhigh",
+            ModelRoute.BODY to "medium",
+            ModelRoute.RAZNOSKA to "high",
+            // Разборы — Опус 5.5 на max вместо Fable.
+            ModelRoute.NIGHT_REVIEW to "max",
+            ModelRoute.NIGHT_CHECK to "max",
+            ModelRoute.SHADOW_JUDGE to "max",
+            ModelRoute.PROMPT_TUNE to "max",
+            ModelRoute.PATTERNS_DUPES to "max",
+        )
+        for ((route, effort) in expected) {
+            assertEquals(route.name, Settings.MODEL_OPUS, route.defaultModel)
+            assertEquals(route.name, effort, route.defaultEffort)
+        }
         assertEquals(Settings.MODEL_SONNET, ModelRoute.BODY_LIGHT.defaultModel)
-        assertEquals(Settings.MODEL_FABLE, ModelRoute.PATTERNS_DUPES.defaultModel)
-        // Судья слепого сравнения — Fable high.
-        assertEquals(Settings.MODEL_FABLE, ModelRoute.SHADOW_JUDGE.defaultModel)
-        assertEquals("high", ModelRoute.SHADOW_JUDGE.defaultEffort)
-        assertEquals(Settings.MODEL_FABLE, ModelRoute.PROMPT_TUNE.defaultModel)
-        assertEquals("high", ModelRoute.PROMPT_TUNE.defaultEffort)
-        assertEquals("medium", ModelRoute.PATTERNS_DUPES.defaultEffort)
+        // Fable нигде не заводской, но остаётся в каталоге выбора.
+        assertTrue(ModelRoute.entries.none { it.defaultModel == Settings.MODEL_FABLE })
+        assertTrue(Settings.MODEL_FABLE in Models.ALL)
+    }
+
+    @Test
+    fun `явный Опус 5 в хранилище читается как Опус 5_5, не как заводская`() {
+        val c = ModelChoice.of(ModelRoute.RAZNOSKA, Settings.MODEL_OPUS_5, "low")
+        assertEquals(Settings.MODEL_OPUS, c.model)
+        assertEquals("low", c.effort)
+        assertFalse(Settings.MODEL_OPUS_5 in Models.ALL)
     }
 
     @Test
@@ -60,7 +80,7 @@ class ModelRoutesTest {
     fun `модель не из каталога откатывается к заводской, а не уезжает в запрос`() {
         val c = ModelChoice.of(ModelRoute.PRAVKA, "claude-3-opus-20240229", "turbo")
         assertEquals(Settings.MODEL_OPUS, c.model)
-        assertEquals("", c.effort)
+        assertEquals("medium", c.effort)
     }
 
     @Test

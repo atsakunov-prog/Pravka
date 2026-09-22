@@ -100,7 +100,9 @@ suspend fun ClaudeProvider.submitBatch(
         if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
         val params = JSONObject().apply {
             put("model", model)
-            put("max_tokens", maxTokens)
+            // Мысли считаются в тот же бюджет: сверка паттернов звала с
+            // maxTokens=2000 без запаса, и на max ответ обрезался бы весь.
+            put("max_tokens", maxTokens + RequestPolicy.batchThinkingHeadroom(model, effort))
             if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
             put("system", JSONArray().put(JSONObject().apply {
                 put("type", "text")
