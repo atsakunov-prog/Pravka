@@ -879,14 +879,22 @@ internal fun SpeechSection(
         e == Settings.SPEECH_GOOGLE ->
             if (ru.zf.pravka.provider.GoogleSpeechSession.isAvailable(context)) {
                 val onDevice = ru.zf.pravka.provider.GoogleSpeechSession.isOnDevice(context)
-                context.getString(R.string.google_ready) + when {
+                val path = when {
                     // Сетевой путь — тот, каким клавиатура Google идёт на русском;
                     // офлайн-пакет остаётся и её, и нашим запасом без сети.
-                    network && onDevice -> " · путь: сеть, офлайн-пакет — запас"
-                    network -> " · путь: сеть; офлайн-пакета нет — без сети распознавать нечем"
+                    network && onDevice -> " · путь: облако, офлайн-пакет — запас"
+                    network -> " · путь: облако; офлайн-пакета нет — без сети распознавать нечем"
                     onDevice -> " · путь: офлайн-пакет на устройстве"
                     else -> " · офлайн-пакета нет — пока распознаёт сетевой сервис, скачай русскую модель"
                 }
+                // Кто именно распознаёт по сети: «облако» в настройке ещё не
+                // значит «Google» — системная служба по умолчанию на части
+                // телефонов своя. Владелец спросил прямо: точно ли главный
+                // гугловский? Значит, это должно быть видно, а не угадываться.
+                val service =
+                    if (network) "\nСлужба: " + ru.zf.pravka.provider.GoogleSpeechSession.networkServiceLabel(context)
+                    else ""
+                context.getString(R.string.google_ready) + path + service
             } else context.getString(R.string.google_unavailable)
         else -> whisperProvider.statusText(e)
     }
@@ -958,21 +966,24 @@ internal fun SpeechSection(
             val formatting by settings.speechFormattingFlow.collectAsState(initial = false)
             HintText("Путь распознавания")
             ModelOption(
-                label = "Офлайн-пакет на телефоне — без сети, голос не уходит (заводское)",
-                selected = !network,
-                onSelect = { scope.launch { settings.setSpeechNetwork(false) } },
-            )
-            ModelOption(
-                label = "Системный с сетью — как голосовой ввод клавиатуры Google на русском",
+                label = "Облачный Google — как голосовой ввод клавиатуры на русском (заводское)",
                 selected = network,
                 onSelect = { scope.launch { settings.setSpeechNetwork(true) } },
+            )
+            ModelOption(
+                label = "Офлайн-пакет на телефоне — без сети, голос не уходит",
+                selected = !network,
+                onSelect = { scope.launch { settings.setSpeechNetwork(false) } },
             )
             HintText(
                 "Клавиатура Google на русском распознаёт на серверах Google (пиксельная модель " +
                     "Assistant русского не знает) — поэтому она чётче на именах, редких словах и " +
-                    "английских терминах. Сетевой путь — та же дорога; без сети сам падает на " +
-                    "офлайн-пакет. В «Расшифровках» такие тейки значатся «Google (сеть)». " +
-                    "Действует со следующей диктовки."
+                    "английских терминах. Облачный путь — та же дорога; без сети сам падает на " +
+                    "офлайн-пакет. Службу при этом называем явно (пакет Google), а не полагаемся " +
+                    "на выбранную системой: на части телефонов там стоит своя, и «сеть» в " +
+                    "настройке ещё не значила бы «Google» — строка «Служба» выше показывает, " +
+                    "кто отвечает на самом деле. В «Расшифровках» такие тейки значатся " +
+                    "«Google (сеть)». Действует со следующей диктовки."
             )
             Spacer(Modifier.height(8.dp))
             HintText("Режим распознавания")

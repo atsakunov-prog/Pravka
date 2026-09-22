@@ -1,5 +1,6 @@
 package ru.zf.pravka.provider
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
@@ -8,6 +9,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import ru.zf.pravka.core.MicPlan
@@ -137,10 +139,78 @@ class GoogleSpeechSession(
         private var warmNetwork = false
         private val warmDrop = Runnable { dropWarm() }
 
+        // ---- Кто именно распознаёт ----
+        //
+        // `createSpeechRecognizer(context)` берёт службу, назначенную системой
+        // по умолчанию (Secure.voice_recognition_service). На Pixel это Google,
+        // а на Samsung там запросто стоит своя — и тогда «сетевой путь Google»
+        // оказывается вовсе не Google, хотя в настройках написано «сеть».
+        // Владелец (22.09.2026): «важно, чтобы облачный гугловский был главным,
+        // а то чуть-чуть ухудшилось качество распознавания». Поэтому на сетевом
+        // пути службу называем ЯВНО — тот самый пакет, которым распознаёт
+        // голосовой ввод клавиатуры Google. Нет его на телефоне — работаем через
+        // системную, как раньше, и пишем об этом в журнал.
+        private const val GOOGLE_RECOGNIZER_PKG = "com.google.android.googlequicksearchbox"
+
+        @Volatile private var googleServiceCached: ComponentName? = null
+        @Volatile private var googleServiceProbed = false
+
+        /** Явная служба подвела (не отвечает) — до перезагрузки движка не просим. */
+        @Volatile private var googleServiceBad = false
+
+        private fun googleService(context: Context): ComponentName? {
+            if (googleServiceBad) return null
+            if (googleServiceProbed) return googleServiceCached
+            googleServiceProbed = true
+            // Список служб виден благодаря <queries> в манифесте — без него
+            // Android 11+ прячет чужие службы, и здесь был бы пустой список.
+            googleServiceCached = runCatching {
+                context.packageManager
+                    .queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
+                    .mapNotNull { it.serviceInfo }
+                    .firstOrNull { it.packageName == GOOGLE_RECOGNIZER_PKG }
+                    ?.let { ComponentName(it.packageName, it.name) }
+            }.getOrNull()
+            return googleServiceCached
+        }
+
+        /** Просить явную службу Google больше не будем — до перезагрузки движка. */
+        private fun forgetGoogleService() {
+            googleServiceBad = true
+            googleServiceCached = null
+        }
+
+        /** Кого просим распознавать: явная служба Google на сетевом пути или системная. */
+        private fun serviceFor(context: Context, network: Boolean): ComponentName? =
+            if (network) googleService(context) else null
+
+        /** Системная служба распознавания по умолчанию — короткой строкой. */
+        private fun systemService(context: Context): String? = runCatching {
+            android.provider.Settings.Secure
+                .getString(context.contentResolver, "voice_recognition_service")
+                ?.substringBefore('/')
+        }.getOrNull()
+
+        /**
+         * Кто на самом деле распознаёт по сетевому пути. Нужна и настройкам, и
+         * журналу: вопрос «а точно ли главный гугловский?» должен отвечаться
+         * взглядом, а не верой.
+         */
+        fun networkServiceLabel(context: Context): String {
+            val explicit = googleService(context)
+            if (explicit != null) return "Google (${explicit.packageName})"
+            val system = systemService(context)
+            return if (system.isNullOrBlank()) "системная по умолчанию"
+            else "системная по умолчанию — $system"
+        }
+
         private fun newRecognizer(context: Context, network: Boolean): SpeechRecognizer? = runCatching {
+            val explicit = serviceFor(context, network)
             when {
-                // Сетевой путь: обычный системный распознаватель, даже когда офлайн
-                // доступен, — сеть решает он сам, пакет остаётся его запасом.
+                // Сетевой путь: сначала явная служба Google, иначе системная —
+                // даже когда офлайн доступен: сеть решает служба сама, пакет
+                // остаётся её запасом.
+                explicit != null -> SpeechRecognizer.createSpeechRecognizer(context, explicit)
                 network && anyAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
                 onDeviceAvailable(context) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
                 anyAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
@@ -222,6 +292,11 @@ class GoogleSpeechSession(
             dropWarm()
             onDeviceCached = null
             anyCached = null
+            // И про службу тоже: её могли обновить, а мы — один раз отвернуться
+            // от неё после сбоя и с тех пор ходить через системную.
+            googleServiceCached = null
+            googleServiceProbed = false
+            googleServiceBad = false
             warmMain.postDelayed({ warmUp(context, network, log) }, 300)
         }
 
@@ -244,7 +319,7 @@ class GoogleSpeechSession(
             }.getOrDefault(false).also { anyCached = it }
 
         fun isAvailable(context: Context): Boolean =
-            onDeviceAvailable(context) || anyAvailable(context)
+            onDeviceAvailable(context) || anyAvailable(context) || googleService(context) != null
 
         /** Работает ли распознавание на устройстве (тот же путь, что у клавиатуры Google). */
         fun isOnDevice(context: Context): Boolean = onDeviceAvailable(context)
@@ -299,6 +374,7 @@ class GoogleSpeechSession(
             startedAtMs = android.os.SystemClock.elapsedRealtime()
             onLog(
                 "start путь=${if (network) "сеть" else "офлайн-пакет"} " +
+                    "служба=${if (network) networkServiceLabel(context) else "офлайн-пакет устройства"} " +
                     "onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} " +
                     "formatting=$formatting segmentedRequested=$segmentedSession"
             )
@@ -361,10 +437,16 @@ class GoogleSpeechSession(
         }
     }
 
+    /** Тейк ушёл в ЯВНУЮ службу Google, а не в системную по умолчанию. */
+    private var boundGoogle = false
+
     // Свой клиент на каждый тейк: тёплый (см. companion) только будит службу и
     // слушать не даётся — startListening поверх его проверки поддержки ловил бы
     // ERROR_RECOGNIZER_BUSY.
-    private fun createRecognizer(): SpeechRecognizer? = newRecognizer(context, network)
+    private fun createRecognizer(): SpeechRecognizer? {
+        boundGoogle = serviceFor(context, network) != null
+        return newRecognizer(context, network)
+    }
 
     // Invariant for the whole session (language and biasing never change), so
     // build it once. It used to be rebuilt per restart, copying the bias list
@@ -618,6 +700,13 @@ class GoogleSpeechSession(
                 error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED
             if (!producedAny && wedged && errorStreak >= 4) {
                 onLog("giveUp (never started, wedged) streak=$errorStreak code=$error")
+                // Мы сами назвали службу Google, и она не отвечает — дальше
+                // ходим через системную по умолчанию, а не упираемся в стену
+                // каждый тейк. Обратно всё вернёт «Перезагрузить микрофон».
+                if (boundGoogle) {
+                    forgetGoogleService()
+                    onLog("явная служба Google не отвечает — следующий тейк пойдёт через системную")
+                }
                 active = false
                 val r = recognizer; recognizer = null
                 runCatching { r?.destroy() }
@@ -647,6 +736,12 @@ class GoogleSpeechSession(
         SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
             "Русский офлайн-пакет не установлен. Открой Правку → «Подготовить модель»."
         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Нет доступа к микрофону"
+        // Облачный путь стал заводским (22.09.2026), и «нет сети» теперь не
+        // абстракция, а лифт и подземный паркинг. Ошибка обязана называть
+        // причину и выход, а не оставлять владельца с кодом на руках.
+        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+            "Сеть не отвечает, а путь распознавания — облачный. " +
+                "Настройки → Правка → «Путь распознавания» → офлайн-пакет."
         else -> "Ошибка распознавания ($code)"
     }
 }

@@ -44,9 +44,16 @@ class PravkaAccessibilityService : AccessibilityService() {
         // A reply chain: entries closer than this are one conversation.
         internal const val CONVO_GAP_MS = 10L * 60 * 1000
 
-        /** Бегущая строка, пока движок ещё не слышит, и когда уже слышит. */
-        private const val HINT_WAIT = "секунду…"
-        private const val HINT_SPEAK = "говори"
+        /**
+         * Бегущая строка, пока движок ещё не слышит, и когда уже слышит.
+         * Владелец (22.09.2026): «сделай эти «подожди» и «говори» на всех
+         * кнопках». У «З», «Д» и «Т» роль второй подсказки играет их
+         * собственное приглашение («🎙 говори…», «🎙 наговори дела…»): оно и
+         * зовёт говорить, и напоминает, что именно. Врало оно ровно так же —
+         * висело с первого мига, когда движок ещё глух.
+         */
+        internal const val HINT_WAIT = "секунду…"
+        internal const val HINT_SPEAK = "🎙 говори"
 
         /** Окно двойного тапа по «З» на локскрине. */
         internal const val LOCK_DOUBLE_TAP_MS = 1_500L
@@ -225,9 +232,12 @@ class PravkaAccessibilityService : AccessibilityService() {
      * службы, поднимается модель), и владелец в это окно успевает сказать
      * первые слова в никуда. Совсем окно не убрать — микрофон не наш, — но
      * молчать о нём нельзя: бегущая строка говорит «секунду…», а на готовности
-     * меняется на «говори» (вместе с тиком, который был и раньше).
+     * меняется на приглашение говорить (вместе с тиком, который был и раньше).
+     *
+     * Флаг ОДИН на все четыре кнопки, а не по флагу на режим: микрофон один,
+     * и живой тейк в любой миг ровно один — это же правило стережёт [micBusy].
      */
-    private var googleReady = false
+    internal var speechReady = false
     // Precomputed vocabulary bias and engine choice, so starting a take is
     // instant: no DataStore read and no dictionary load on the tap -> speak
     // path, which was clipping the first words.
@@ -776,7 +786,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             return
         }
         googleStartedAt = SystemClock.elapsedRealtime()
-        googleReady = false
+        speechReady = false
         lastDraftAt = 0L
         discardTake = false
         // Путь фиксируем на старте: настройку могут переключить посреди тейка,
@@ -798,7 +808,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             // A distinct tick the moment the recognizer is actually listening,
             // so the owner knows when to start and stops clipping first words.
             onReady = {
-                googleReady = true
+                speechReady = true
                 floatingButton?.updateTicker(HINT_SPEAK, force = true)
                 Haptics.success(this)
             },
@@ -830,7 +840,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Строка открывается пустой, и эта пустота врёт: слышать движок
         // начинает позже. Пишем в неё, чего ждём, — если он уже успел
         // отозваться, там к этому мигу стоит «говори».
-        if (!googleReady) floatingButton?.updateTicker(HINT_WAIT)
+        if (!speechReady) floatingButton?.updateTicker(HINT_WAIT)
         floatingButton?.showCancelBubble { cancelLiveDictation() }
         Haptics.start(this)
         // Foreground-mic holder so the recognizer survives app switches. If it

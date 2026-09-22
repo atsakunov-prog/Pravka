@@ -186,8 +186,14 @@ internal fun PravkaAccessibilityService.startZasechkaGoogle() {
         network = cachedNetwork,
     )
     zSession = session
+    speechReady = false
     session.start(
-        onReady = { Haptics.success(this) },
+        onReady = {
+            // Движок услышал — только теперь приглашение говорить правда.
+            speechReady = true
+            zButton?.updateTicker(zTickerPrompt(), force = true)
+            Haptics.success(this)
+        },
         onPartial = { live -> zButton?.updateTicker(live) },
         // No recovery draft here: a lost 5-second take is re-spoken in
         // seconds, unlike a lost dictation paragraph.
@@ -198,7 +204,8 @@ internal fun PravkaAccessibilityService.startZasechkaGoogle() {
     )
     zButton?.setRecording(true)
     zButton?.showTicker()
-    zButton?.updateTicker(zTickerPrompt())
+    // Пока движок глух, строка говорит об этом, а не зовёт говорить в пустоту.
+    if (!speechReady) zButton?.updateTicker(PravkaAccessibilityService.HINT_WAIT)
     zButton?.showCancelBubble { cancelZasechkaTake() }
     Haptics.start(this)
     runCatching { startMicHold() }

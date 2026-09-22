@@ -52,6 +52,7 @@ class Settings(private val context: Context) {
         private val KEY_PROMPT_TUNE = booleanPreferencesKey("prompt_tune_enabled")
         private val KEY_NIGHT_BUDGET = intPreferencesKey("night_budget_usd")
         private val KEY_MIGRATED_OPUS = booleanPreferencesKey("migrated_pravka_opus_1")
+        private val KEY_MIGRATED_SPEECH_NET = booleanPreferencesKey("migrated_speech_network_1")
         private val KEY_PLAN_RULES_LAST_RUN = longPreferencesKey("plan_rules_last_run")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
@@ -274,16 +275,34 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_SPEECH_BIASING] = value }
     }
 
-    // Путь распознавания Google (16.09.2026). Заводское — офлайн-пакет на
-    // телефоне: работает без сети, голос не уходит. Сетевой путь — тот, каким
-    // идёт голосовой ввод клавиатуры Google на русском (пиксельная модель
-    // Assistant voice typing русского не знает): серверная модель чётче
-    // офлайн-пакета на именах, редких словах и английских терминах, а без
-    // сети система сама падает на пакет. Владелец сравнивает оба на своих
-    // диктовках; заводское не меняем, пока он не выбрал.
-    val speechNetworkFlow = context.dataStore.data.map { it[KEY_SPEECH_NETWORK] ?: false }
+    // Путь распознавания Google (16.09.2026, заводское изменено 22.09.2026).
+    // Сетевой путь — тот, каким идёт голосовой ввод клавиатуры Google на
+    // русском (пиксельная модель Assistant voice typing русского не знает):
+    // серверная модель чётче офлайн-пакета на именах, редких словах и
+    // английских терминах, а без сети система сама падает на пакет. Офлайн —
+    // работает без сети, голос не уходит с телефона.
+    //
+    // Заводское теперь СЕТЬ. Владелец (22.09.2026): «гугловский движок
+    // облачный — и важно, чтобы он был главным, а то чуть-чуть ухудшилось
+    // качество распознавания». Сравнение он провёл, выбор сделан; офлайн
+    // остаётся тумблером и запасом, на который система падает сама.
+    val speechNetworkFlow = context.dataStore.data.map { it[KEY_SPEECH_NETWORK] ?: true }
     suspend fun setSpeechNetwork(value: Boolean) {
         context.dataStore.edit { it[KEY_SPEECH_NETWORK] = value }
+    }
+
+    /**
+     * Сетевой путь — один раз и на уже стоящем телефоне. Смена заводского
+     * значения сама по себе ничего не переключает: в DataStore лежит выбор,
+     * сделанный 16.09, и он сильнее любого нового «по умолчанию». Ровно та же
+     * история, что с чисткой на Опусе ([migratePravkaToOpus]).
+     */
+    suspend fun migrateSpeechToNetwork() {
+        context.dataStore.edit { p ->
+            if (p[KEY_MIGRATED_SPEECH_NET] == true) return@edit
+            p[KEY_MIGRATED_SPEECH_NET] = true
+            if (p[KEY_SPEECH_NETWORK] != true) p[KEY_SPEECH_NETWORK] = true
+        }
     }
 
     val speechFormattingFlow = context.dataStore.data.map { it[KEY_SPEECH_FORMATTING] ?: false }

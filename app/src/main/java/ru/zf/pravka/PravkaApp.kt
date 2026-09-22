@@ -45,6 +45,10 @@ class PravkaApp : Application() {
         appScope.launch { settings.phoneMicOnlyFlow.collect { phoneMicOnly = it } }
         // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет.
         appScope.launch { runCatching { settings.migratePravkaToOpus() } }
+        // Распознавание — по сетевому пути Google (22.09.2026): владелец выбрал
+        // облачный движок главным, а лежащее в DataStore старое «офлайн»
+        // сильнее нового заводского.
+        appScope.launch { runCatching { settings.migrateSpeechToNetwork() } }
         // Тень снята (18.09.2026; владелец: «убери эту тень, она снова запустилась
         // и ест деньги»): её прогоны, застрявшие активными, закрываются, движка
         // больше нет. Затем — ревизия батчей у Anthropic: всё идущее, за чем в

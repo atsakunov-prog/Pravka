@@ -59,6 +59,9 @@ fun PravkaAccessibilityService.onRaznoskaTap() {
     startRaznoskaCapture()
 }
 
+/** Приглашение говорить в бегущей строке «Д» — одно на оба движка. */
+internal fun raznoskaTickerPrompt(): String = "🎙 наговори дела… (тап сюда — набрать текстом)"
+
 internal fun PravkaAccessibilityService.startRaznoskaCapture() {
     rButton?.hideInput()
     rButton?.hidePlate()
@@ -69,7 +72,7 @@ internal fun PravkaAccessibilityService.startRaznoskaCapture() {
         // У Whisper живых слов нет, но плашка нужна: это ещё и цель тапа
         // «набрать текстом».
         rButton?.showTicker()
-        rButton?.updateTicker("🎙 наговори дела… (тап сюда — набрать текстом)")
+        rButton?.updateTicker(raznoskaTickerPrompt())
         rButton?.showCancelBubble { cancelRaznoskaTake() }
         Haptics.start(this)
         startDictation()
@@ -103,8 +106,14 @@ internal fun PravkaAccessibilityService.startRaznoskaGoogle() {
         network = cachedNetwork,
     )
     rSession = session
+    speechReady = false
     session.start(
-        onReady = { Haptics.success(this) },
+        onReady = {
+            // Движок услышал — только теперь приглашение говорить правда.
+            speechReady = true
+            rButton?.updateTicker(raznoskaTickerPrompt(), force = true)
+            Haptics.success(this)
+        },
         onPartial = { live -> rButton?.updateTicker(live) },
         // Наговор длиннее засечки, но короче диктовки главы: черновик на
         // диск не пишем, повторить его дешевле, чем чинить.
@@ -115,7 +124,8 @@ internal fun PravkaAccessibilityService.startRaznoskaGoogle() {
     )
     rButton?.setRecording(true)
     rButton?.showTicker()
-    rButton?.updateTicker("🎙 наговори дела… (тап сюда — набрать текстом)")
+    // Пока движок глух, строка говорит об этом, а не зовёт говорить в пустоту.
+    if (!speechReady) rButton?.updateTicker(PravkaAccessibilityService.HINT_WAIT)
     rButton?.showCancelBubble { cancelRaznoskaTake() }
     Haptics.start(this)
     runCatching { startMicHold() }

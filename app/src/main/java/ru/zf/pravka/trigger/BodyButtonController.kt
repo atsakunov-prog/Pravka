@@ -503,11 +503,14 @@ class BodyButtonController(
     private var lastTickerText = ""
     private var lastTickerAt = 0L
 
-    fun updateTicker(text: String) {
+    fun updateTicker(text: String, force: Boolean = false) {
         val tv = tickerText ?: return
         if (text == lastTickerText) return
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTickerAt < 60) return
+        // [force] — для подсказки службы («секунду…» и приглашение говорить):
+        // она приходит ровно одна за тейк, и проглотить её потолком частоты
+        // значит соврать о том, слышит движок или ещё нет.
+        if (!force && now - lastTickerAt < 60) return
         lastTickerAt = now
         lastTickerText = text
         tv.setTickerText(text)
