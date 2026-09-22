@@ -45,6 +45,8 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.StackGeometry
 import ru.zf.pravka.data.Settings
+import ru.zf.pravka.trigger.micStateNow
+import ru.zf.pravka.trigger.reloadMicrophone
 
 // Все настройки в одном месте, разложенные по режимам.
 //
@@ -913,12 +915,43 @@ private fun CommonSettings(app: PravkaApp, serviceEnabled: Boolean) {
         Text("Микрофон телефона (выкл. — гарнитура Bluetooth)", style = MaterialTheme.typography.bodyMedium)
     }
     HintText(
-        "То же самое переключает плашка между «П» и «З»: телефончик — слушает " +
-            "телефон, Bluetooth машины и наушники диктовку не перехватывают, в " +
+        "То же самое переключает кружок микрофона в веере шестерёнки: телефончик — " +
+            "слушает телефон, Bluetooth машины и наушники диктовку не перехватывают, в " +
             "дороге Правка слышит тебя, а не салон; наушники — перед тейком " +
             "поднимается канал гарнитуры и слушает её микрофон, после тейка " +
             "канал опускается. Выбирает не подключение, а ты: гарнитура на шее " +
-            "слышит хуже кармана. Не подключена — плашка бледная, слушает телефон."
+            "слышит хуже кармана. Не подключена — кружок бледный, слушает телефон."
+    )
+
+    // «Перезагрузить микрофон» (владелец, 22.09.2026: «подключаюсь к машине, и
+    // он не слышит… а потом каким-то странным образом начинает»). Кнопка
+    // рассказывает, что нашла и что сделала: тишина после нажатия читалась бы
+    // как вторая поломка поверх первой.
+    Spacer(Modifier.height(12.dp))
+    val micContext = LocalContext.current
+    var micReport by remember { mutableStateOf("") }
+    OutlinedButton(onClick = {
+        micReport = reloadMicrophone(micContext)
+        scope.launch {
+            // Маршрут переезжает не мгновенно — состояние спрашиваем, когда он встал.
+            kotlinx.coroutines.delay(900)
+            micReport = micReport + "\nСтало: " + micStateNow(micContext)
+        }
+    }) {
+        Text("Перезагрузить микрофон")
+    }
+    if (micReport.isNotBlank()) {
+        Spacer(Modifier.height(6.dp))
+        Text(micReport, style = MaterialTheme.typography.bodySmall)
+    }
+    HintText(
+        "Возвращает маршрут звука системе (машина держит канал хендс-фри — и " +
+            "распознаватель слушает микрофон у лобового, а не тебя), снимает " +
+            "заглушку с микрофона, снимает залипшее удержание и заново заводит " +
+            "распознаватель. Идёт запись — сначала останови тейк. Во время " +
+            "разговора маршрут не трогается вовсе. То же самое — долгим нажатием " +
+            "на кружок микрофона в веере шестерёнки: в машине это ближе, чем " +
+            "настройки."
     )
 
     Spacer(Modifier.height(18.dp))

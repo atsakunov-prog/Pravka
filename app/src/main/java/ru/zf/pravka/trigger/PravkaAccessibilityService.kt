@@ -44,6 +44,10 @@ class PravkaAccessibilityService : AccessibilityService() {
         // A reply chain: entries closer than this are one conversation.
         internal const val CONVO_GAP_MS = 10L * 60 * 1000
 
+        /** Бегущая строка, пока движок ещё не слышит, и когда уже слышит. */
+        private const val HINT_WAIT = "секунду…"
+        private const val HINT_SPEAK = "говори"
+
         /** Окно двойного тапа по «З» на локскрине. */
         internal const val LOCK_DOUBLE_TAP_MS = 1_500L
         /** Сколько якорь времени ждёт свой тейк (см. `onZasechkaTap`). */
@@ -215,6 +219,15 @@ class PravkaAccessibilityService : AccessibilityService() {
     // Live streaming dictation session.
     internal var googleSession: GoogleSpeechSession? = null
     internal var googleStartedAt = 0L
+
+    /**
+     * Движок уже слышит. Между тапом и этим мигом он ГЛУХ (будится процесс
+     * службы, поднимается модель), и владелец в это окно успевает сказать
+     * первые слова в никуда. Совсем окно не убрать — микрофон не наш, — но
+     * молчать о нём нельзя: бегущая строка говорит «секунду…», а на готовности
+     * меняется на «говори» (вместе с тиком, который был и раньше).
+     */
+    private var googleReady = false
     // Precomputed vocabulary bias and engine choice, so starting a take is
     // instant: no DataStore read and no dictionary load on the tap -> speak
     // path, which was clipping the first words.
@@ -268,7 +281,13 @@ class PravkaAccessibilityService : AccessibilityService() {
             app.settings.speechBiasingFlow.collect { cachedBiasingOn = it }
         }
         scope.launch {
-            app.settings.speechNetworkFlow.collect { cachedNetwork = it }
+            app.settings.speechNetworkFlow.collect {
+                cachedNetwork = it
+                // Первый прогрев — как только известен путь: служба
+                // распознавания просыпается заранее, и первому тейку не
+                // приходится ждать её на своих первых словах.
+                warmSpeech()
+            }
         }
         scope.launch {
             app.settings.tickerWidthFlow.collect {
@@ -620,9 +639,31 @@ class PravkaAccessibilityService : AccessibilityService() {
     fun isLockedIdle(): Boolean {
         val locked = runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)
         if (!locked) return false
-        return googleSession == null && zSession == null && rSession == null &&
-            eSession == null && !zWhisperRecording && !rWhisperRecording &&
-            !eWhisperRecording && !DictationService.recording
+        return !micBusy()
+    }
+
+    /**
+     * Микрофон занят тейком — любого режима и любого движка. Одна точка на
+     * всех, кто про это спрашивает: карманный сторож на замке, прогрев движка
+     * и «перезагрузить микрофон».
+     */
+    fun micBusy(): Boolean =
+        googleSession != null || zSession != null || rSession != null || eSession != null ||
+            zWhisperRecording || rWhisperRecording || eWhisperRecording ||
+            DictationService.recording
+
+    /**
+     * Палец ЛЁГ на кнопку — будим движок распознавания, не дожидаясь, чем
+     * касание кончится. Владелец (22.09.2026): «первые несколько слов он не
+     * слышит». Между `startListening()` и готовностью движок глух, и дороже
+     * всего там разбудить процесс службы распознавания — эту часть и платим
+     * заранее, пока палец ещё на стекле. Дёшево и идемпотентно: тёплый клиент
+     * живёт две минуты и продлевается сам.
+     */
+    fun warmSpeech() {
+        if (cachedEngine.startsWith("whisper")) return
+        if (micBusy()) return
+        GoogleSpeechSession.warmUp(this, cachedNetwork) { line -> app.eventLog.add(line) }
     }
 
     /** Short tap: stop the active session if any, else start per the engine. */
@@ -735,6 +776,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             return
         }
         googleStartedAt = SystemClock.elapsedRealtime()
+        googleReady = false
         lastDraftAt = 0L
         discardTake = false
         // Путь фиксируем на старте: настройку могут переключить посреди тейка,
@@ -755,7 +797,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         session.start(
             // A distinct tick the moment the recognizer is actually listening,
             // so the owner knows when to start and stops clipping first words.
-            onReady = { Haptics.success(this) },
+            onReady = {
+                googleReady = true
+                floatingButton?.updateTicker(HINT_SPEAK, force = true)
+                Haptics.success(this)
+            },
             // Live text feeds the on-screen ticker; a throttled copy goes to disk
             // so an interrupted take (phone dies, killed) can still be recovered.
             onPartial = { live ->
@@ -781,6 +827,10 @@ class PravkaAccessibilityService : AccessibilityService() {
         probeFieldEdits(dictationTarget?.get())
         floatingButton?.setRecording(true)
         floatingButton?.showTicker()
+        // Строка открывается пустой, и эта пустота врёт: слышать движок
+        // начинает позже. Пишем в неё, чего ждём, — если он уже успел
+        // отозваться, там к этому мигу стоит «говори».
+        if (!googleReady) floatingButton?.updateTicker(HINT_WAIT)
         floatingButton?.showCancelBubble { cancelLiveDictation() }
         Haptics.start(this)
         // Foreground-mic holder so the recognizer survives app switches. If it

@@ -643,6 +643,17 @@ class StackSettingsController(
                 }
             }
         }
+        // Долгое нажатие на микрофон — перезагрузить тракт. Тап отвечает на
+        // вопрос «кто слушает», долгое нажатие — на «почему не слышит»; в
+        // машине до вкладки настроек владелец не доберётся, а до веера — да.
+        if (knob == Knob.MIC) {
+            bubble.setOnLongClickListener {
+                onTouched?.invoke()
+                keepFan()
+                reloadMic()
+                true
+            }
+        }
         return bubble
     }
 
@@ -688,6 +699,20 @@ class StackSettingsController(
         Haptics.start(service)
         service.app.eventLog.add("чистка: модель ${Models.label(next)} (кружок шестерёнки)")
         showNote("Чистка: ${Models.label(next)}")
+    }
+
+    /**
+     * Перезагрузка микрофонного тракта: маршрут, движок, залипшее удержание
+     * (`MicReload.kt` — там причины). Сначала записка о том, что сделали,
+     * потом — что в итоге слышит телефон: молчаливая механика читается как
+     * поломка, а тут владелец как раз проверяет, ожил микрофон или нет.
+     */
+    private fun reloadMic() {
+        Haptics.start(service)
+        // Что сделали и почему — уже в журнале, его пишет сама перезагрузка.
+        val report = reloadMicrophone(service)
+        showNote(report.lineSequence().first())
+        main.postDelayed({ showNote(micStateNow(service), holdMs = 3_000L) }, 900)
     }
 
     private fun flipMic() {

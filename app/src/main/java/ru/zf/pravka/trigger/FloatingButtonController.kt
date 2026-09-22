@@ -462,14 +462,17 @@ class FloatingButtonController(
     private var lastTickerText = ""
     private var lastTickerAt = 0L
 
-    fun updateTicker(text: String) {
+    fun updateTicker(text: String, force: Boolean = false) {
         val tv = tickerText ?: return
         // Partials arrive several times a second; the marquee measures the text
         // on each set, so skip identical text and cap the rate lightly - the
         // motion itself is smoothed per frame inside the view.
         if (text == lastTickerText) return
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTickerAt < 60) return
+        // [force] — для коротких подсказок службы («говори»): их ровно одна за
+        // тейк, и проглотить её потолком частоты значит соврать владельцу о
+        // том, слышит его движок или ещё нет.
+        if (!force && now - lastTickerAt < 60) return
         lastTickerAt = now
         lastTickerText = text
         tv.setTickerText(text)
@@ -896,6 +899,10 @@ class FloatingButtonController(
                     view.alpha = 1f
                     // Сжалась под пальцем (`BubbleMotion`): кнопка отвечает на касание телом.
                     BubbleMotion.press(view)
+                    // Палец лёг — будим движок распознавания, не дожидаясь, чем
+                    // кончится касание: между тапом и «слышу» движок глух, и
+                    // самое дорогое в этом окне можно оплатить прямо сейчас.
+                    service.warmSpeech()
                     view.postDelayed(longPressRunnable, LONG_PRESS_MS)
                     if (ringMode) onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_DOWN)
                 }

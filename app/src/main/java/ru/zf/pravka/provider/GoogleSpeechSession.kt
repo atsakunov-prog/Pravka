@@ -10,6 +10,7 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import ru.zf.pravka.core.MicPlan
 
 // Live, streaming speech recognition via Android's SpeechRecognizer - the same
 // system engine (Speech Services by Google) that Gboard's voice typing uses.
@@ -71,7 +72,7 @@ class GoogleSpeechSession(
     private var segmented = false     // segmented mode confirmed working
     private var startedAtMs = 0L      // для замера: сколько ждали готовности и первого слова
     private var firstPartialLogged = false
-    private var scoRaised = false     // канал гарнитуры подняли мы — нам и опускать
+    private var routeOurs = false     // маршрут заказали мы — нам его и возвращать
 
     private var onReady: () -> Unit = {}
     private var onPartial: (String) -> Unit = {}
@@ -110,6 +111,119 @@ class GoogleSpeechSession(
         // стартовать распознаватель: обычно полсекунды-секунда, дольше —
         // стартуем как есть, и в журнале видно почему.
         private const val SCO_WAIT_MS = 1_500L
+
+        // ---- Прогрев: чтобы первые слова не терялись ----
+        //
+        // Между startListening() и onReadyForSpeech распознаватель ГЛУХ: пока
+        // система будит процесс движка, привязывает службу и поднимает модель,
+        // сказанное не слышит никто. Владелец (22.09.2026): «когда я начинаю
+        // говорить, первые несколько слов он не слышит». Убрать это окно совсем
+        // нельзя — микрофон не наш, — но самую дорогую его часть можно оплатить
+        // заранее: разбудить и привязать службу распознавания ДО тейка, пока
+        // палец ещё лежит на кнопке.
+        //
+        // Греет ОТДЕЛЬНЫЙ клиент, не тот, что потом слушает: проверка поддержки
+        // идёт асинхронно, а startListening поверх неё — это
+        // ERROR_RECOGNIZER_BUSY, с которого в этом файле начиналась целая сага.
+        // Тёплый клиент микрофона не трогает и в «недавних» не светится, он
+        // просто держит службу живой — и сам отпускает её через WARM_TTL_MS.
+        private const val WARM_TTL_MS = 2 * 60_000L
+
+        /** Греть заново после тейка — но не в тот же миг: пусть уляжется destroy. */
+        private const val WARM_AFTER_TAKE_MS = 1_200L
+
+        private val warmMain = Handler(Looper.getMainLooper())
+        private var warmClient: SpeechRecognizer? = null
+        private var warmNetwork = false
+        private val warmDrop = Runnable { dropWarm() }
+
+        private fun newRecognizer(context: Context, network: Boolean): SpeechRecognizer? = runCatching {
+            when {
+                // Сетевой путь: обычный системный распознаватель, даже когда офлайн
+                // доступен, — сеть решает он сам, пакет остаётся его запасом.
+                network && anyAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
+                onDeviceAvailable(context) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+                anyAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
+                else -> null
+            }
+        }.getOrNull()
+
+        /**
+         * Разбудить движок заранее. Зовётся, когда палец ЛЁГ на кнопку (а не
+         * когда тап состоялся), на подъёме службы и после каждого тейка.
+         * Дёшево и идемпотентно: тёплый клиент того же пути просто продлевается.
+         */
+        fun warmUp(context: Context, network: Boolean, log: (String) -> Unit = {}) {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                warmMain.post { warmUp(context, network, log) }
+                return
+            }
+            if (warmClient != null && warmNetwork == network) {
+                // Уже тёплый: просто продлеваем, не трогая привязку.
+                warmMain.removeCallbacks(warmDrop)
+                warmMain.postDelayed(warmDrop, WARM_TTL_MS)
+                return
+            }
+            dropWarm()
+            // Контекст приложения, а не службы: тёплый клиент живёт дольше
+            // тейка и пережил бы службу доступности, утащив её за собой.
+            val app = context.applicationContext
+            val fresh = newRecognizer(app, network) ?: return
+            warmClient = fresh
+            warmNetwork = network
+            warmMain.postDelayed(warmDrop, WARM_TTL_MS)
+            // Служба привязывается на ПЕРВОМ вызове, а не при создании объекта:
+            // checkRecognitionSupport будит процесс движка и микрофона не
+            // трогает. До 33 такого вызова нет — остаётся хотя бы объект,
+            // созданный не в тейке.
+            if (Build.VERSION.SDK_INT >= 33) {
+                runCatching {
+                    fresh.checkRecognitionSupport(
+                        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
+                        },
+                        app.mainExecutor,
+                        object : android.speech.RecognitionSupportCallback {
+                            override fun onSupportResult(support: android.speech.RecognitionSupport) {
+                                log("прогрев: движок отозвался")
+                            }
+
+                            override fun onError(error: Int) {
+                                // Отказ проверки — не беда: служба к этому мигу
+                                // уже разбужена, ради неё всё и затевалось.
+                                log("прогрев: движок отозвался кодом $error")
+                            }
+                        },
+                    )
+                }.onFailure { log("прогрев не вышел: ${it.javaClass.simpleName}") }
+            }
+        }
+
+        /** Отпустить тёплого клиента: он держит службу распознавания живой. */
+        fun dropWarm() {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                warmMain.post { dropWarm() }
+                return
+            }
+            warmMain.removeCallbacks(warmDrop)
+            val client = warmClient ?: return
+            warmClient = null
+            runCatching { client.destroy() }
+        }
+
+        /**
+         * «Перезагрузить микрофон» со стороны движка: забыть, что знали о
+         * распознавателе (доступность спрашивается один раз за жизнь процесса,
+         * а после падения службы ответ уже неверен), отпустить тёплого клиента
+         * и завести нового.
+         */
+        fun reloadEngine(context: Context, network: Boolean, log: (String) -> Unit = {}) {
+            dropWarm()
+            onDeviceCached = null
+            anyCached = null
+            warmMain.postDelayed({ warmUp(context, network, log) }, 300)
+        }
 
         private fun onDeviceSupported() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
@@ -188,36 +302,48 @@ class GoogleSpeechSession(
                     "onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} " +
                     "formatting=$formatting segmentedRequested=$segmentedSession"
             )
-            // Системному распознавателю входное устройство не укажешь, но
-            // Bluetooth-микрофон он берёт только при поднятом SCO-канале
-            // (машина после звонка, гарнитура). Куда смотреть, решает владелец
-            // значком между «П» и «З». Телефон: роняем SCO перед стартом — и
-            // распознаватель слышит телефон, а не салон. Гарнитура: поднимаем
-            // канал и ЖДЁМ, пока он встанет, — стартовав раньше, первые слова
-            // услышим телефоном из кармана.
+            // Системному распознавателю входное устройство не укажешь: он
+            // слушает то, куда смотрит общий маршрут связи. Куда смотреть,
+            // решает владелец кружком в веере шестерёнки, а что для этого
+            // сделать — `MicPlan` (там же причины). Три исхода:
+            //  · AS_IS — трогать нечего, стартуем сразу (обычный случай, и он
+            //    самый быстрый: любой переезд маршрута стоит миллисекунд);
+            //  · BUILTIN — канал держит машина, а слушать велено телефон:
+            //    забираем вход себе и ЖДЁМ переезда;
+            //  · HEADSET — поднимаем канал гарнитуры и ждём его.
+            // Ждём в обоих случаях по одной причине: стартовав раньше, первые
+            // слова услышим прежним входом — салоном или карманом.
             val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             val phone = (context.applicationContext as? ru.zf.pravka.PravkaApp)?.phoneMicOnly != false
-            when {
-                phone -> {
-                    runCatching {
-                        @Suppress("DEPRECATION")
-                        if (am.isBluetoothScoOn) {
-                            am.stopBluetoothSco()
-                            onLog("BT SCO был поднят — уронил: слушаем микрофон телефона")
-                        }
+            val headsetPresent = MicRouting.headsetMic(am) != null
+            val inCall = MicRouting.callInProgress(am)
+            val plan = MicPlan.choose(
+                phoneMic = phone,
+                headsetPresent = headsetPresent,
+                btRouteUp = MicRouting.isScoUp(am),
+                callInProgress = inCall,
+            )
+            when (plan) {
+                MicPlan.Route.AS_IS -> {
+                    // Молчать тут нельзя: «не слышит» и «слышит не то» снаружи
+                    // одинаковы, а разбираться потом по журналу.
+                    if (inCall) onLog("идёт разговор — маршрут не трогаем")
+                    else if (!phone && !headsetPresent) {
+                        onLog("выбрана гарнитура, но её нет среди входов — слушаем телефон")
                     }
                     startListening()
                 }
-                MicRouting.headsetMic(am) == null -> {
-                    onLog("выбрана гарнитура, но её нет среди входов — слушаем как есть")
-                    startListening()
-                }
-                else -> {
-                    scoRaised = MicRouting.raise(am, onLog)
-                    MicRouting.awaitSco(context, am, main, SCO_WAIT_MS, onLog) {
-                        if (recognizer != null && !stopping) startListening()
-                        else onLog("BT SCO встал, но сессию уже остановили — не стартуем")
+                MicPlan.Route.BUILTIN -> {
+                    routeOurs = MicRouting.forceBuiltin(am, onLog)
+                    if (MicPlan.waitsForRoute(plan, routeOurs)) {
+                        MicRouting.awaitBuiltin(am, main, MicRouting.BUILTIN_WAIT_MS, onLog) { startIfAlive() }
+                    } else {
+                        startListening()
                     }
+                }
+                MicPlan.Route.HEADSET -> {
+                    routeOurs = MicRouting.raise(am, onLog)
+                    MicRouting.awaitSco(context, am, main, SCO_WAIT_MS, onLog) { startIfAlive() }
                 }
             }
         }
@@ -235,16 +361,10 @@ class GoogleSpeechSession(
         }
     }
 
-    private fun createRecognizer(): SpeechRecognizer? = runCatching {
-        when {
-            // Сетевой путь: обычный системный распознаватель, даже когда офлайн
-            // доступен, — сеть решает он сам, пакет остаётся его запасом.
-            network && anyAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
-            onDeviceAvailable(context) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-            anyAvailable(context) -> SpeechRecognizer.createSpeechRecognizer(context)
-            else -> null
-        }
-    }.getOrNull()
+    // Свой клиент на каждый тейк: тёплый (см. companion) только будит службу и
+    // слушать не даётся — startListening поверх его проверки поддержки ловил бы
+    // ERROR_RECOGNIZER_BUSY.
+    private fun createRecognizer(): SpeechRecognizer? = newRecognizer(context, network)
 
     // Invariant for the whole session (language and biasing never change), so
     // build it once. It used to be rebuilt per restart, copying the bias list
@@ -304,6 +424,12 @@ class GoogleSpeechSession(
     private fun startListening() {
         val r = recognizer ?: return
         runCatching { r.startListening(intent) }.onFailure { restartSoon(afterError = true) }
+    }
+
+    /** Маршрут переехал — слушаем, если тейк к этому мигу ещё жив. */
+    private fun startIfAlive() {
+        if (recognizer != null && !stopping) startListening()
+        else onLog("маршрут встал, но сессию уже остановили — не стартуем")
     }
 
     private fun restartSoon(afterError: Boolean = false) {
@@ -409,12 +535,16 @@ class GoogleSpeechSession(
         val r = recognizer
         recognizer = null
         runCatching { r?.destroy() }
-        if (scoRaised) {
-            scoRaised = false
+        if (routeOurs) {
+            routeOurs = false
             runCatching {
                 MicRouting.drop(context.getSystemService(Context.AUDIO_SERVICE) as AudioManager, onLog)
             }
         }
+        // Следующий тейк начнётся с тёплого движка: служба распознавания уже
+        // разбужена, и глухое окно на старте короче. Не сразу — сперва пусть
+        // уляжется destroy только что отработавшего клиента.
+        warmMain.postDelayed({ warmUp(context, network) }, WARM_AFTER_TAKE_MS)
         onLog("finish len=${text.length} segmented=$segmented")
         onDone(text)
     }

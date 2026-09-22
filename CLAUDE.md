@@ -37,8 +37,13 @@
   Тикер диктовки — бегущая строка `trigger/MarqueeTickerView.kt`.
   Кто слушает — телефон или Bluetooth-гарнитура — выбирает владелец кружком
   в веере шестерёнки над «П» (`trigger/StackSettingsController.kt`,
-  состояние — `settings.phoneMicOnlyFlow`); канал SCO поднимает и опускает
-  `provider/MicRouting.kt`. Геометрия стопки — `core/StackGeometry.kt`,
+  состояние — `settings.phoneMicOnlyFlow`); маршрутом звука (канал гарнитуры,
+  встроенный вход, перезагрузка тракта) ведает `provider/MicRouting.kt`, что
+  делать в этом тейке — решает `core/MicPlan.kt`, «перезагрузить микрофон» —
+  `trigger/MicReload.kt` (Настройки → Общее и долгое нажатие на кружок
+  микрофона в веере). Движок будится заранее (`GoogleSpeechSession.warmUp`) —
+  палец на кнопке, подъём службы, конец тейка: между тапом и «слышу»
+  распознаватель глух, и это окно платится до тейка, а не первыми словами. Геометрия стопки — `core/StackGeometry.kt`,
   пружины и сжатие кнопок — `core/ChainPhysics.kt` + `trigger/BubbleMotion.kt`,
   серая «отмена» у любой записи — `trigger/CancelBubble.kt`.
 - **Claude:** `provider/ClaudeProvider.kt` — только транспорт (HTTP, SSE-стрим,

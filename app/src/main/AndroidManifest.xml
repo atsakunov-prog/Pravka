@@ -5,6 +5,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Маршрут микрофона: поднять и опустить канал гарнитуры, попросить
+         встроенный вход, снять заглушку. Без этого разрешения система НЕ
+         ругается - она молча отказывает (AudioService пишет в свой лог
+         "Audio Settings Permission Denial" и возвращает управление), и
+         выглядит это ровно как "в машине Правка меня не слышит": канал
+         хендс-фри остаётся поднятым, распознаватель слушает салонный
+         микрофон у лобового. Разрешение обычное, спрашивать нечего -
+         выдаётся при установке (22.09.2026). -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

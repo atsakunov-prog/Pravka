@@ -45,6 +45,14 @@ class DictationService : Service() {
         @Volatile var recording: Boolean = false
             private set
 
+        /**
+         * Пустое удержание микрофона под живую диктовку Google (см. HOLD_*).
+         * Наружу — чтобы «перезагрузить микрофон» знала, есть ли что снимать:
+         * дёргать службу вслепую из фона нельзя, а залипшее удержание — ровно
+         * тот случай, когда владелец жмёт перезагрузку.
+         */
+        @Volatile var holding: Boolean = false
+            private set
     }
 
     private var record: AudioRecord? = null
@@ -74,8 +82,6 @@ class DictationService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
-
-    private var holding = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {

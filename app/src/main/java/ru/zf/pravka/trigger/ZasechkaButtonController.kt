@@ -1120,6 +1120,10 @@ class ZasechkaButtonController(
                     view.alpha = 1f
                     // Сжалась под пальцем (`BubbleMotion`): кнопка отвечает на касание телом.
                     BubbleMotion.press(view)
+                    // Палец лёг — будим движок распознавания, не дожидаясь, чем
+                    // кончится касание: между тапом и «слышу» движок глух, и
+                    // самое дорогое в этом окне можно оплатить прямо сейчас.
+                    service.warmSpeech()
                     view.postDelayed(longPressRunnable, LONG_PRESS_MS)
                     if (ringMode) onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_DOWN)
                 }
