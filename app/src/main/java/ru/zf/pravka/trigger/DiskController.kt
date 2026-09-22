@@ -96,6 +96,8 @@ class DiskController(
         private const val SOCKET_SPREAD = 1.5f
         /** Угол кнопки сдвинулся меньше этого — стекло не перерисовываем. */
         private const val SOCKET_STEP_DEG = 0.25f
+        /** То же для выдавливания: полпикселя глазу не видно, а перерисовка стоит. */
+        private const val SOCKET_STEP_PX = 0.5f
         /** Сколько замкнувшаяся дуга висит, прежде чем погаснуть. */
         private const val WORK_FADE_MS = 700L
         /**
@@ -186,6 +188,14 @@ class DiskController(
     /** Диск утоплен за край глубже обычного: первое касание его достаёт. */
     private var sunk = false
     private var sinkPct = Settings.DISK_SINK_PCT_DEFAULT
+    /**
+     * Диск убран к краю: стекло ушло за край, на экране остался краешек со
+     * стрелкой, а «П» и «З» ВЫДАВЛЕНЫ из стекла и видны целиком (владелец,
+     * 22.09.2026). Это состояние покоя — в него приходит автоуборка.
+     */
+    private var tucked = false
+    /** На сколько кнопки сейчас выдавлены из стекла, вдоль лица; своя пружина. */
+    private var extrude = 0f
 
     // Дуга прогресса: что идёт, когда началось и сколько обещано.
     private var workAt = 0L
@@ -203,11 +213,24 @@ class DiskController(
     private val turn = DiskPhysics.turn(0f)
     private val slideX = DiskPhysics.slide(0f)
     private val slideY = DiskPhysics.slide(0f)
+    // Выдавливание кнопок — ОТДЕЛЬНАЯ пружина от тела диска: кнопки должны
+    // доезжать и под пальцем, который в этот миг везёт диск за краешек.
+    // Иначе, схватив убранный диск, владелец увидел бы, как кнопки прыгают
+    // в стекло на первом же миллиметре.
+    private val push = DiskPhysics.slide(0f)
     private var turnTarget = 0f
     private var slideTargetX = 0f
     private var slideTargetY = 0f
+    private var pushTarget = 0f
+    /** Тело диска едет (поворот и центр). */
     private var animating = false
+    /** Кнопки выдавливаются или вдвигаются обратно. */
+    private var pushing = false
+    /** Кадр уже заказан — Choreographer не просят дважды. */
+    private var framing = false
     private var lastFrameNs = 0L
+    /** Когда последний раз тапнули стрелку: второй тап подряд выводит весь диск. */
+    private var arrowTapAt = 0L
 
     // Палец крутит за кнопку.
     private var turning: RingButton? = null
@@ -355,6 +378,9 @@ class DiskController(
         if (!shown || !placed || folded || allHidden) return
         hidePlate()
         showPlate()
+        // Тарелка и кольцо стали другого размера — выдавливание считалось от
+        // прежних: у убранного диска довести его до нового.
+        if (tucked) pushTo(extrusion(dims()))
         layout()
     }
 
@@ -367,7 +393,6 @@ class DiskController(
     private class Dims(val button: Int, val gear: Int, val gap: Int, val shadow: Int) {
         val ring = DiskGeometry.ringRadius(button, gear, gap)
         val plate = DiskGeometry.plateRadius(button, gear, gap)
-        val inset = DiskGeometry.DOCK_INSET
         /** Окно стекла — тарелка плюс тень по кругу. */
         val window = ((plate + shadow) * 2).roundToInt()
     }
@@ -431,13 +456,19 @@ class DiskController(
             if (!shown) return@launch
             val d = dims()
             val (w, h) = frame()
-            val (dx, dy) = DiskGeometry.dock(fx * w, fy * h, w, h, d.plate, d.inset)
+            val (dx, dy) = DiskGeometry.dock(fx * w, fy * h, w, h, d.plate, DiskGeometry.DOCK_INSET)
             cx = dx
             cy = dy
             rotation = DiskGeometry.norm(r)
             facing = null
             placed = true
-            stopMotion()
+            // Экран сменился (сложили, повернули) — диск приезжает выехавшим
+            // на половину: уборка и утопание считаются от свежего простоя, а
+            // не тащатся из прежней геометрии.
+            tucked = false
+            sunk = false
+            extrude = 0f
+            stopAll()
             showPlate()
             layout()
         }
@@ -447,7 +478,10 @@ class DiskController(
     fun hide() {
         shown = false
         placed = false
-        stopMotion()
+        stopAll()
+        tucked = false
+        sunk = false
+        extrude = 0f
         turning = null
         sliding = false
         pinch = false
@@ -472,7 +506,13 @@ class DiskController(
     fun setAllHidden(value: Boolean) {
         allHidden = value
         if (value) {
-            stopMotion()
+            stopAll()
+            // Всё убрано в точку — уборка диска кончилась вместе с ним:
+            // вернётся он выехавшим, иначе кнопки встали бы вокруг центра,
+            // сдвинутого под давно уехавший край.
+            tucked = false
+            sunk = false
+            extrude = 0f
             hidePlate()
             placeHead()
         } else if (shown && placed && !folded) {
@@ -502,19 +542,22 @@ class DiskController(
         if (!allHidden) {
             val live = liveSlots()
             val margin = dp(OFFSCREEN_MARGIN_DP)
+            val (bx, by) = ringCentre(f)
             if (socketAngles.size != live.size) socketAngles = FloatArray(live.size)
             live.forEachIndexed { i, slot ->
                 val angle = DiskGeometry.slotAngle(i, live.size, f, rotation)
                 socketAngles[i] = angle
-                val (x, y) = DiskGeometry.slotOrigin(cx, cy, d.ring, angle, d.button)
+                val (x, y) = DiskGeometry.slotOrigin(bx, by, d.ring, angle, d.button)
                 // Сначала место, потом окно: снятое окно ставится на место в
                 // параметрах и вешается уже там, где надо.
                 slot.button.followTo(x, y, settle = false, link = 1, snap = true)
                 slot.button.setOffscreen(!DiskGeometry.onScreen(x, y, d.button, w, h, margin))
             }
             // Тени кнопок рисует стекло: своё окно кнопки у неё ровно по
-            // кружку и наружу ничего не выпустит (см. `BubbleSkin`).
-            plate?.setSockets(d.ring, d.button / 2f, socketAngles)
+            // кружку и наружу ничего не выпустит (см. `BubbleSkin`). Кнопки
+            // выдавлены — тени едут за ними, иначе на выезде пятна остались
+            // бы лежать там, где кнопок уже нет.
+            plate?.setSockets(d.ring, d.button / 2f, socketAngles, bx - cx, by - cy)
         }
         placeHead()
         placePlate(d)
@@ -522,7 +565,7 @@ class DiskController(
         // видимому полукругу, сверху и до низу (владелец, 20.09.2026).
         plate?.let {
             it.allHiddenView = allHidden
-            it.setFacing(f, cx - d.plate < 0f || cx + d.plate > w, sunk)
+            it.setFacing(f, cx - d.plate < 0f || cx + d.plate > w, tucked || sunk)
         }
     }
 
@@ -534,9 +577,41 @@ class DiskController(
         if (index < 0) return null
         val d = dims()
         val (w, _) = frame()
-        val angle = DiskGeometry.slotAngle(index, live.size, facing ?: DiskGeometry.facing(cx, w), rotation)
-        return DiskGeometry.slotOrigin(cx, cy, d.ring, angle, d.button)
+        val f = facing ?: DiskGeometry.facing(cx, w)
+        val angle = DiskGeometry.slotAngle(index, live.size, f, rotation)
+        val (bx, by) = ringCentre(f)
+        return DiskGeometry.slotOrigin(bx, by, d.ring, angle, d.button)
     }
+
+    /**
+     * Центр, ВОКРУГ КОТОРОГО стоят кнопки. Обычно это центр тарелки; у
+     * убранного диска он сдвинут вдоль лица (внутрь экрана) на выдавливание:
+     * стекло за краем, а «П» и «З» на экране целиком. Тарелка, шестерёнка и
+     * дуга живут по-прежнему вокруг `cx, cy` — сдвинуто только кольцо.
+     */
+    private fun ringCentre(f: Float): Pair<Float, Float> {
+        if (extrude <= 0f) return cx to cy
+        val a = Math.toRadians(f.toDouble())
+        return (cx + extrude * cos(a).toFloat()) to (cy + extrude * sin(a).toFloat())
+    }
+
+    /** Насколько кнопки выдавлены из стекла в убранном диске: считает геометрия. */
+    private fun extrusion(d: Dims): Float =
+        DiskGeometry.extrusion(d.plate, d.ring, d.button, liveSlots().size, d.gap)
+
+    /**
+     * Отступ докования для текущего состояния: обычный диск встаёт центром
+     * ровно на край, убранный уходит за край на глубину уборки (на экране
+     * остаётся краешек со стрелкой), утопленный — ещё глубже, вместе с
+     * кнопками.
+     */
+    private fun dockInset(d: Dims): Int = when {
+        sunk -> -(DiskGeometry.tuckDepth(d.plate) + sinkDeep())
+        tucked -> -DiskGeometry.tuckDepth(d.plate)
+        else -> DiskGeometry.DOCK_INSET
+    }
+
+    private fun sinkDeep(): Int = (buttonSize() * sinkPct / 100f).roundToInt()
 
     /**
      * Самолечение по тику службы: кнопка не там, где ей быть (включили
@@ -555,9 +630,10 @@ class DiskController(
         val (w, _) = frame()
         val f = DiskGeometry.facing(cx, w)
         val live = liveSlots()
+        val (bx, by) = ringCentre(f)
         val drifted = live.withIndex().any { (i, slot) ->
             val angle = DiskGeometry.slotAngle(i, live.size, f, rotation)
-            val (x, y) = DiskGeometry.slotOrigin(cx, cy, d.ring, angle, d.button)
+            val (x, y) = DiskGeometry.slotOrigin(bx, by, d.ring, angle, d.button)
             val (px, py) = slot.button.currentPosition() ?: return@any true
             abs(px - x) > DRIFT_PX || abs(py - y) > DRIFT_PX
         }
@@ -606,7 +682,8 @@ class DiskController(
                 turnDelta = 0f
                 turnVelocity = 0f
                 turned = false
-                lastAngle = DiskGeometry.angleOf(cx, cy, rawX + fingerOffX, rawY + fingerOffY)
+                val (tx, ty) = turnCentre()
+                lastAngle = DiskGeometry.angleOf(tx, ty, rawX + fingerOffX, rawY + fingerOffY)
                 lastAngleAt = SystemClock.uptimeMillis()
                 lastDetent = detent(rotation)
             }
@@ -615,7 +692,8 @@ class DiskController(
                 // Порог свой: кнопка докладывает каждый сдвиг, а поворот
                 // начинается, когда палец действительно поехал.
                 if (!turned && abs(rawX - downRawX) <= touchSlop && abs(rawY - downRawY) <= touchSlop) return
-                val angle = DiskGeometry.angleOf(cx, cy, rawX + fingerOffX, rawY + fingerOffY)
+                val (tx, ty) = turnCentre()
+                val angle = DiskGeometry.angleOf(tx, ty, rawX + fingerOffX, rawY + fingerOffY)
                 val delta = DiskGeometry.delta(lastAngle, angle)
                 val now = SystemClock.uptimeMillis()
                 val dt = (now - lastAngleAt) / 1000f
@@ -655,11 +733,23 @@ class DiskController(
 
     private fun detent(rotation: Float): Int = (rotation / step()).roundToInt()
 
-    /** Куда докуется центр из текущего места: у края — к краю, посреди экрана — где стоит. */
+    /**
+     * Вокруг чего считать угол пальца: вокруг центра КОЛЬЦА, а не тарелки. У
+     * убранного диска они разные (кнопки выдавлены), и считать угол вокруг
+     * стекла значило бы, что кнопка под пальцем едет не за ним.
+     */
+    private fun turnCentre(): Pair<Float, Float> =
+        ringCentre(facing ?: DiskGeometry.facing(cx, frame().first))
+
+    /**
+     * Куда докуется центр из текущего места: у края — к краю, посреди экрана
+     * — где стоит. Отступ берётся по состоянию ([dockInset]): убранный диск
+     * возвращается за край, а не выезжает на половину.
+     */
     private fun docked(): Pair<Float, Float> {
         val d = dims()
         val (w, h) = frame()
-        return DiskGeometry.dock(cx, cy, w, h, d.plate, d.inset)
+        return DiskGeometry.dock(cx, cy, w, h, d.plate, dockInset(d))
     }
 
     // ---- Палец везёт за шестерёнку ----
@@ -691,6 +781,12 @@ class DiskController(
             turning = null
             stopMotion()
             slideFacing = DiskGeometry.facing(cx, w)
+        }
+        // Диск взяли в руку — он больше не убран: кнопки возвращаются в
+        // стекло своей пружиной, не дожидаясь, пока палец отпустит.
+        if (tucked) {
+            tucked = false
+            pushTo(0f)
         }
         // Инерция: диск катится по экрану, как колесо (`DiskGeometry.roll`).
         // Считаем от пройденного пути, а не от скорости: путь ровно тот, что
@@ -923,7 +1019,7 @@ class DiskController(
                         onArrow = false
                         if (!dragging && event.actionMasked == MotionEvent.ACTION_UP) {
                             Haptics.tick(service)
-                            sink()
+                            arrowTap()
                         } else if (dragging) {
                             slide(cx, cy, dropped = true)
                         }
@@ -956,14 +1052,90 @@ class DiskController(
     fun tuck() {
         if (!shown || !placed || folded || allHidden || sunk) return
         if (animating || turning != null || sliding || pinch) return
+        retract()
+    }
+
+    /**
+     * Сама уборка, без оглядки на автоматику: стекло за край до краешка со
+     * стрелкой, кнопки выдавлены из него на экран целиком, поворот домой.
+     * Владелец (22.09.2026): «когда они убираются, они должны выдавливаться
+     * из диска наружу так, чтобы кнопки были целиком видны (правка и
+     * засечка). И между ними был бы краешек диска со стрелкой».
+     *
+     * Почему выдавливание, а не просто «диск поглубже»: у докованного диска
+     * кнопки сидят на кольце вокруг центра, и стоило центру уйти за край,
+     * как край срезал бы и кнопки. Кольцо поэтому едет отдельно от стекла —
+     * на столько, чтобы дальняя кромка «П» и «З» встала у края экрана
+     * (`DiskGeometry.extrusion`). Ровно между ними остаётся тот краешек,
+     * в котором живёт стрелка.
+     */
+    private fun retract() {
+        if (!shown || !placed || folded || allHidden) return
         val d = dims()
         val (w, h) = frame()
         val f = facing ?: DiskGeometry.facing(cx, w)
         val edge = if (f == 0f) 0f else w.toFloat()
-        val (dx, dy) = DiskGeometry.dock(edge, cy, w, h, d.plate, d.inset)
+        val (dx, dy) = DiskGeometry.dock(edge, cy, w, h, d.plate, -DiskGeometry.tuckDepth(d.plate))
         val target = DiskGeometry.home(rotation)
-        if (abs(target - rotation) < 0.5f && abs(dx - cx) < 0.5f && abs(dy - cy) < 0.5f) return
+        // Уже убран и стоит ровно там — не тревожим диск и не пишем место:
+        // тик простоя приходит каждые полминуты.
+        if (tucked && abs(target - rotation) < 0.5f && abs(dx - cx) < 0.5f && abs(dy - cy) < 0.5f) return
+        tucked = true
+        stopMotion()
+        turning = null
         animateTo(target, dx, dy)
+    }
+
+    /**
+     * Половина диска — как у докованного после переезда: центр ровно на краю,
+     * шестерёнка видна до середины. Первый тап по стрелке убранного диска.
+     */
+    private fun halfOut() {
+        if (!shown || !placed || folded || allHidden) return
+        val d = dims()
+        val (w, h) = frame()
+        tucked = false
+        stopMotion()
+        turning = null
+        val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, DiskGeometry.DOCK_INSET)
+        animateTo(DiskGeometry.snap(rotation, step()), dx, dy)
+    }
+
+    /** Весь диск на экран, с просветом от края. Двойной тап по стрелке и долгое нажатие. */
+    private fun wholeOut() {
+        if (!shown || !placed || folded || allHidden) return
+        val d = dims()
+        val (w, h) = frame()
+        val f = facing ?: DiskGeometry.facing(cx, w)
+        tucked = false
+        stopMotion()
+        turning = null
+        val tx = if (f == 0f) d.plate + d.gap else w - d.plate - d.gap
+        val (dx, dy) = DiskGeometry.dock(tx, cy, w, h, d.plate, DiskGeometry.DOCK_INSET)
+        animateTo(DiskGeometry.snap(rotation, step()), dx, dy)
+    }
+
+    /**
+     * Тап по стрелке на краешке. Убранный диск ВЫЕЗЖАЕТ: первый тап —
+     * половина, второй сразу за ним — весь диск (владелец, 22.09.2026: «один
+     * тап по стрелке — вылезает половина диска, двойной тап — весь диск
+     * вылезает»). Выехавший — убирается обратно.
+     *
+     * Первый тап срабатывает СРАЗУ, а не ждёт, не будет ли второго: половина
+     * лежит по дороге к целому, и второй тап просто продолжает движение.
+     * Ждать триста миллисекунд ради двойного значило бы платить задержкой на
+     * каждом обычном тапе — а тапают тут одной рукой, на ходу.
+     */
+    private fun arrowTap() {
+        val now = SystemClock.uptimeMillis()
+        val second = now - arrowTapAt < DOUBLE_TAP_MS
+        arrowTapAt = now
+        onTouched?.invoke()
+        when {
+            tucked -> halfOut()
+            second -> wholeOut()
+            else -> retract()
+        }
     }
 
     /**
@@ -981,23 +1153,22 @@ class DiskController(
         if (animating || turning != null || sliding || pinch) return
         val d = dims()
         val (w, h) = frame()
-        // Стрелкой диск убирают и с середины экрана: это ручное действие, а
-        // не автоматика, и ждать автоуборки владелец не просил. Автоматика
-        // сюда же приходит уже докованной, так что ей эта ветка не мешает.
-        if (cx > 0.5f && cx < w - 0.5f) {
-            val f = facing ?: DiskGeometry.facing(cx, w)
-            cxToEdge(if (f == 0f) 0f else w.toFloat())
-        }
-        val deep = (buttonSize() * sinkPct / 100f).roundToInt()
+        // Диск, оставленный посреди экрана, не трогаем совсем: он там
+        // нарочно, а уборка — свой тумблер. Раньше сюда приходила ещё и
+        // стрелка, и ей эту середину приходилось дотягивать до края; теперь у
+        // стрелки своё дело — она диск ДОСТАЁТ, — и утопание осталось ровно
+        // тем, чем обещано в настройках: продолжением уборки.
+        if (cx > 0.5f && cx < w - 0.5f) return
+        val deep = sinkDeep()
         if (deep <= 0) return
         sunk = true
-        val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, -deep)
+        // Утопание идёт ОТ убранного диска: кнопки остаются выдавленными и
+        // уходят за край вместе со стеклом — от них видна полоска, как и
+        // просили. Уборка при этом могла и не случиться (свой тумблер), так
+        // что состояние доводим здесь.
+        tucked = true
+        val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, dockInset(d))
         animateTo(rotation, dx, dy)
-    }
-
-    /** Поставить центр на край без анимации — дальше утопание доведёт его глубже. */
-    private fun cxToEdge(edge: Float) {
-        cx = edge
     }
 
     /**
@@ -1032,60 +1203,93 @@ class DiskController(
         if (!shown || !placed || folded) return
         val d = dims()
         val (w, h) = frame()
-        val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, d.inset)
+        // Достаётся диск в состояние покоя — убранным: кнопки целиком на
+        // экране, стекло за краем. Выезжать целиком он не просился.
+        val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, dockInset(d))
         animateTo(rotation, dx, dy)
     }
 
     /**
      * Выдвинуть диск целиком на экран — или, если он уже целиком виден,
-     * убрать к краю (поворот не трогая). Долгое нажатие на стекло; владелец
-     * согласился на «выдвижение по удержанию»: докованный диск показывает две
-     * кнопки, а за третьей иначе надо крутить.
+     * убрать к краю. Долгое нажатие на стекло; владелец согласился на
+     * «выдвижение по удержанию»: убранный диск показывает две кнопки, а за
+     * третьей иначе надо крутить.
      */
     private fun togglePullOut() {
         if (!shown || !placed || folded || allHidden) return
         onTouched?.invoke()
         val d = dims()
-        val (w, h) = frame()
-        val f = facing ?: DiskGeometry.facing(cx, w)
-        val whole = cx - d.plate >= 0f && cx + d.plate <= w
-        val tx = when {
-            whole -> if (f == 0f) 0f else w.toFloat()
-            f == 0f -> d.plate + d.gap
-            else -> w - d.plate - d.gap
-        }
-        val (dx, dy) = DiskGeometry.dock(tx, cy, w, h, d.plate, d.inset)
-        stopMotion()
-        turning = null
-        animateTo(DiskGeometry.snap(rotation, step()), dx, dy)
+        val (w, _) = frame()
+        val whole = !tucked && cx - d.plate >= 0f && cx + d.plate <= w
+        if (whole) retract() else wholeOut()
     }
 
     // ---- Пружины ----
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            if (!animating) return
+            if (!animating && !pushing) {
+                framing = false
+                return
+            }
             val dt = if (lastFrameNs == 0L) 1f / 60f else (frameTimeNanos - lastFrameNs) / 1_000_000_000f
             lastFrameNs = frameTimeNanos
-            val doneTurn = turn.step(turnTarget, dt)
-            val doneX = slideX.step(slideTargetX, dt)
-            val doneY = slideY.step(slideTargetY, dt)
-            rotation = turn.position
-            cx = slideX.position
-            cy = slideY.position
+            if (animating) {
+                val doneTurn = turn.step(turnTarget, dt)
+                val doneX = slideX.step(slideTargetX, dt)
+                val doneY = slideY.step(slideTargetY, dt)
+                rotation = turn.position
+                cx = slideX.position
+                cy = slideY.position
+                if (doneTurn && doneX && doneY) {
+                    animating = false
+                    rotation = DiskGeometry.norm(rotation)
+                    persist()
+                }
+            }
+            if (pushing) {
+                if (push.step(pushTarget, dt)) pushing = false
+                extrude = push.position
+            }
             layout()
-            if (doneTurn && doneX && doneY) {
-                animating = false
-                rotation = DiskGeometry.norm(rotation)
-                persist()
-            } else {
+            if (animating || pushing) {
                 Choreographer.getInstance().postFrameCallback(this)
+            } else {
+                framing = false
             }
         }
     }
 
+    /** Кадры нужны — заказать, если ещё не заказаны. */
+    private fun startFrames() {
+        if (framing) return
+        framing = true
+        lastFrameNs = 0L
+        Choreographer.getInstance().postFrameCallback(frameCallback)
+    }
+
+    /**
+     * Выдавить кнопки из стекла (или вдвинуть обратно) — своей пружиной.
+     * Она живёт отдельно от тела: диск может в этот миг ехать под пальцем.
+     */
+    private fun pushTo(target: Float) {
+        if (abs(target - extrude) < 0.5f) {
+            extrude = target
+            pushing = false
+            return
+        }
+        pushTarget = target
+        push.reset(extrude)
+        pushing = true
+        startFrames()
+    }
+
     private fun animateTo(rotTarget: Float, toX: Float, toY: Float, launch: Float = 0f) {
-        val still = abs(rotTarget - rotation) < 0.5f && abs(toX - cx) < 0.5f && abs(toY - cy) < 0.5f
+        // Куда ехать выдавливанию, решает состояние: убранный диск выдавливает
+        // кнопки на экран, любой другой держит их на кольце.
+        val pushGoal = if (tucked) extrusion(dims()) else 0f
+        val still = abs(rotTarget - rotation) < 0.5f && abs(toX - cx) < 0.5f &&
+            abs(toY - cy) < 0.5f && abs(pushGoal - extrude) < 0.5f
         if (still && abs(launch) < 1f) {
             rotation = DiskGeometry.norm(rotation)
             persist()
@@ -1097,17 +1301,29 @@ class DiskController(
         turn.reset(rotation, launch)
         slideX.reset(cx)
         slideY.reset(cy)
-        if (!animating) {
-            animating = true
-            lastFrameNs = 0L
-            Choreographer.getInstance().postFrameCallback(frameCallback)
-        }
+        animating = true
+        pushTo(pushGoal)
+        startFrames()
     }
 
+    /** Тело диска встало. Выдавливание своей пружиной доезжает само. */
     private fun stopMotion() {
         if (!animating) return
         animating = false
-        Choreographer.getInstance().removeFrameCallback(frameCallback)
+        if (!pushing && framing) {
+            framing = false
+            Choreographer.getInstance().removeFrameCallback(frameCallback)
+        }
+    }
+
+    /** Всё разом: и тело, и выдавливание — на выключении диска. */
+    private fun stopAll() {
+        pushing = false
+        animating = false
+        if (framing) {
+            framing = false
+            Choreographer.getInstance().removeFrameCallback(frameCallback)
+        }
     }
 
     private fun persist() {
@@ -1179,7 +1395,7 @@ class DiskController(
     fun windowCount(): Int = if (plate != null) 1 else 0
 
     fun destroy() {
-        stopMotion()
+        stopAll()
         hidePlate()
         shown = false
         placed = false
@@ -1246,7 +1462,8 @@ class DiskController(
         private var workProgress = 0f
         private var facing = 180f
         private var atEdge = false
-        private var sunk = false
+        /** Диск убран за край: стрелка смотрит внутрь — «тапни, и выеду». */
+        private var retracted = false
         /** Всё убрано в точку — стекла нет, и стрелки тоже. */
         var allHiddenView = false
         private val arrow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1258,9 +1475,13 @@ class DiskController(
 
         // Где стоят кнопки: радиус кольца, радиус кнопки и углы. Диск
         // называет их на каждой расстановке; стекло рисует под ними тени.
+        // Сдвиг — выдавливание убранного диска: кольцо уезжает из стекла на
+        // экран, и тени обязаны уехать с ним.
         private var ring = 0f
         private var socketR = 0f
         private var angles = FloatArray(0)
+        private var shiftX = 0f
+        private var shiftY = 0f
 
         fun setLook(fillAlpha: Float, light: Boolean, socketAlpha: Float?, frost: Boolean, rail: Boolean) {
             this.fillAlpha = fillAlpha
@@ -1283,14 +1504,15 @@ class DiskController(
         }
 
         /**
-         * Куда смотрит диск, торчит ли он за край и утоплен ли. От этого
+         * Куда смотрит диск, торчит ли он за край и убран ли (убран или
+         * утоплен — для стекла одно и то же: стрелка зовёт достать). От этого
          * зависит и дуга прогресса, и стрелка на кромке.
          */
-        fun setFacing(facing: Float, atEdge: Boolean, sunk: Boolean) {
-            if (this.facing == facing && this.atEdge == atEdge && this.sunk == sunk) return
+        fun setFacing(facing: Float, atEdge: Boolean, retracted: Boolean) {
+            if (this.facing == facing && this.atEdge == atEdge && this.retracted == retracted) return
             this.facing = facing
             this.atEdge = atEdge
-            this.sunk = sunk
+            this.retracted = retracted
             invalidate()
         }
 
@@ -1312,8 +1534,9 @@ class DiskController(
          * когда картинка правда поехала: диск зовёт это кадр за кадром, пока
          * крутится, и четверть градуса глазу не видна, а перерисовка стоит.
          */
-        fun setSockets(ring: Float, radius: Float, src: FloatArray) {
-            var moved = this.ring != ring || socketR != radius || angles.size != src.size
+        fun setSockets(ring: Float, radius: Float, src: FloatArray, shiftX: Float, shiftY: Float) {
+            var moved = this.ring != ring || socketR != radius || angles.size != src.size ||
+                abs(this.shiftX - shiftX) > SOCKET_STEP_PX || abs(this.shiftY - shiftY) > SOCKET_STEP_PX
             if (!moved) {
                 for (i in src.indices) {
                     if (abs(DiskGeometry.delta(angles[i], src[i])) > SOCKET_STEP_DEG) {
@@ -1325,6 +1548,8 @@ class DiskController(
             if (!moved) return
             this.ring = ring
             this.socketR = radius
+            this.shiftX = shiftX
+            this.shiftY = shiftY
             if (angles.size != src.size) angles = FloatArray(src.size)
             src.copyInto(angles)
             invalidate()
@@ -1451,7 +1676,7 @@ class DiskController(
             val (ax, ay) = arrowAt()
             val size = (r * ARROW_SIZE).coerceAtLeast(4f)
             // Наружу — значит против лица; внутрь — по лицу.
-            val dir = if (sunk) facing else facing + 180f
+            val dir = if (retracted) facing else facing + 180f
             arrow.strokeWidth = (size * 0.38f).coerceAtLeast(2f)
             arrowPath.reset()
             // Шеврон: два луча от кончика назад, под 40° к направлению.
@@ -1603,8 +1828,8 @@ class DiskController(
                 val rad = Math.toRadians(a.toDouble())
                 val save = canvas.save()
                 canvas.translate(
-                    cx + ring * cos(rad).toFloat(),
-                    cy + ring * sin(rad).toFloat() + drop,
+                    cx + shiftX + ring * cos(rad).toFloat(),
+                    cy + shiftY + ring * sin(rad).toFloat() + drop,
                 )
                 canvas.drawCircle(0f, 0f, socketR * SOCKET_SPREAD, socket)
                 canvas.restoreToCount(save)

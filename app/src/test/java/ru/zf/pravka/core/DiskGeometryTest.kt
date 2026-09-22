@@ -137,6 +137,73 @@ class DiskGeometryTest {
         assertEquals(540f to (2000f - 83f), DiskGeometry.dock(540f, 1990f, 1080, 2000, plate, inset))
     }
 
+    // Убранный диск (владелец, 22.09.2026): стекло за краем, «П» и «З»
+    // выдавлены из него на экран целиком, между ними — краешек со стрелкой.
+    @Test
+    fun `убранный диск оставляет на экране четверть радиуса - краешек со стрелкой`() {
+        val plate = DiskGeometry.plateRadius(button, gear, gap)   // 83
+        assertEquals(0.25f, DiskGeometry.SLIVER, 0f)
+        assertEquals(62, DiskGeometry.tuckDepth(plate))           // 83 − четверть
+        // Краешек шире стрелки: та сидит на 0,09 радиуса от кромки и сама
+        // размером 0,065 — вместе меньше четверти.
+        assertTrue(plate * DiskGeometry.SLIVER > plate * (0.09f + 0.065f))
+    }
+
+    @Test
+    fun `вынос передних кнопок вдоль лица - косинус полушага`() {
+        val ring = DiskGeometry.ringRadius(button, gear, gap)     // 53
+        assertEquals(ring * 0.7071f, DiskGeometry.frontReach(ring, 4), 0.01f)
+        assertEquals(ring * 0.7071f, DiskGeometry.frontReach(ring, 2), 0.01f)
+        assertEquals(ring * 0.5f, DiskGeometry.frontReach(ring, 3), 0.01f)
+        // Одна кнопка стоит прямо на лице — весь радиус кольца.
+        assertEquals(ring, DiskGeometry.frontReach(ring, 1), 0.01f)
+    }
+
+    @Test
+    fun `выдавливание ставит переднюю кнопку у края экрана целиком`() {
+        val w = 1080
+        val plate = DiskGeometry.plateRadius(button, gear, gap)   // 83
+        val ring = DiskGeometry.ringRadius(button, gear, gap)     // 53
+        val edge = gap
+        val push = DiskGeometry.extrusion(plate, ring, button, 4, edge)
+        // Правый край: центр тарелки ушёл за экран на глубину уборки.
+        val (cx, cy) = DiskGeometry.dock(1040f, 900f, w, 2000, plate, -DiskGeometry.tuckDepth(plate))
+        assertEquals((w + DiskGeometry.tuckDepth(plate)).toFloat(), cx, 0.01f)
+        // Кнопки стоят вокруг СДВИНУТОГО центра: лицо смотрит влево.
+        val bx = cx - push
+        val (px, py) = DiskGeometry.slotOrigin(bx, cy, ring, DiskGeometry.slotAngle(0, 4, 180f, 0f), button)
+        val (zx, zy) = DiskGeometry.slotOrigin(bx, cy, ring, DiskGeometry.slotAngle(1, 4, 180f, 0f), button)
+        // Целиком на экране, дальней кромкой в зазоре от края.
+        assertEquals(w - edge, px + button)
+        assertEquals(w - edge, zx + button)
+        assertTrue(DiskGeometry.onScreen(px, py, button, w, 2000, margin = 4))
+        assertTrue(DiskGeometry.onScreen(zx, zy, button, w, 2000, margin = 4))
+        // «П» сверху, «З» снизу, и между ними остаётся просвет под краешек.
+        assertTrue(py + button < zy)
+        // А стекла на экране остаётся ровно краешек — четверть радиуса.
+        assertEquals(plate * DiskGeometry.SLIVER, w - (cx - plate), 0.6f)
+    }
+
+    @Test
+    fun `у левого края выдавливание зеркально`() {
+        val w = 1080
+        val plate = DiskGeometry.plateRadius(button, gear, gap)
+        val ring = DiskGeometry.ringRadius(button, gear, gap)
+        val push = DiskGeometry.extrusion(plate, ring, button, 4, gap)
+        val (cx, cy) = DiskGeometry.dock(40f, 900f, w, 2000, plate, -DiskGeometry.tuckDepth(plate))
+        assertEquals(-DiskGeometry.tuckDepth(plate).toFloat(), cx, 0.01f)
+        val bx = cx + push   // лицо смотрит вправо
+        val (px, _) = DiskGeometry.slotOrigin(bx, cy, ring, DiskGeometry.slotAngle(0, 4, 0f, 0f), button)
+        assertEquals(gap, px)
+    }
+
+    @Test
+    fun `кольцо, вынесшее кнопки на экран само, обратно их не вдавливает`() {
+        // Выдуманный диск: кольцо больше тарелки — так не бывает, но формула
+        // не должна тащить кнопки к краю, если запас уже есть.
+        assertEquals(0f, DiskGeometry.extrusion(80f, 400f, 48, 4, 8), 0f)
+    }
+
     @Test
     fun `окно за краем целиком - невидимо, торчит краем - видимо`() {
         assertFalse(DiskGeometry.onScreen(x = 1080, y = 500, size = 48, frameW = 1080, frameH = 2000, margin = 4))
