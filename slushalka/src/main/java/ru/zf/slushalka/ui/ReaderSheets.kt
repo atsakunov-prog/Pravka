@@ -115,6 +115,8 @@ fun ParagraphSheet(
     onAnchor: () -> Unit,
     onListen: () -> Unit,
     onGuide: (query: String) -> Unit,
+    /** Цитата картинкой - нарисовать выделенное карточкой и отдать. */
+    onQuoteCard: ((String) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
     val book by app.state.current.collectAsState()
@@ -202,6 +204,10 @@ fun ParagraphSheet(
                     AssistChip(onClick = { onAsk(at, prompt, selection) }, label = { Text(label) })
                 }
                 AssistChip(onClick = { onAsk(at, null, selection) }, label = { Text("Свой вопрос…") })
+            }
+            if (onQuoteCard != null) {
+                Spacer(Modifier.height(6.dp))
+                TextButton(onClick = { onQuoteCard(selection) }) { Text("Цитата картинкой") }
             }
 
             if (mentioned.isNotEmpty()) {

@@ -53,6 +53,8 @@ fun RecapSheet(
     val scope = rememberCoroutineScope()
 
     var depth by remember { mutableStateOf(AskEngine.Depth.TWO) }
+    // «Для ребёнка»: те же главы, но словами для семилетки - и сразу вслух.
+    var kid by remember { mutableStateOf(false) }
     var answer by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -60,13 +62,13 @@ fun RecapSheet(
     val b = book
     val t = text
 
-    fun keyFor(d: AskEngine.Depth) = "${b?.id}|${d.name}|${cutoffChar / 2000}"
+    fun keyFor(d: AskEngine.Depth) = "${b?.id}|${d.name}|${cutoffChar / 2000}|$kid"
 
     fun run(d: AskEngine.Depth) {
         if (b == null || t == null || busy) return
         cache[keyFor(d)]?.let {
             answer = it
-            if (prefs.speakAnswers) app.speaker.speak(it)
+            if (prefs.speakAnswers || kid) app.speaker.speak(it)
             return
         }
         busy = true
@@ -74,12 +76,12 @@ fun RecapSheet(
         answer = ""
         scope.launch {
             val range = app.ask.recapRange(t, cutoffChar, d)
-            val result = app.ask.recap(b, t, range, absMs) { partial -> answer = partial }
+            val result = app.ask.recap(b, t, range, absMs, forKid = kid) { partial -> answer = partial }
             busy = false
             result.onSuccess {
                 answer = it
                 if (it.isNotBlank()) cache[keyFor(d)] = it
-                if (prefs.speakAnswers && it.isNotBlank()) app.speaker.speak(it)
+                if ((prefs.speakAnswers || kid) && it.isNotBlank()) app.speaker.speak(it)
             }.onFailure { error = it.message ?: "Не вышло напомнить" }
         }
     }
@@ -102,6 +104,12 @@ fun RecapSheet(
                             label = { Text(d.label) },
                         )
                     }
+                    FilterChip(
+                        selected = kid,
+                        enabled = !busy,
+                        onClick = { kid = !kid; run(depth) },
+                        label = { Text("Для ребёнка") },
+                    )
                 }
                 Spacer(Modifier.height(10.dp))
                 Column(Modifier.verticalScroll(rememberScrollState())) {

@@ -204,6 +204,8 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
                         Settings.THEME_SEPIA to "Сепия",
                         Settings.THEME_GREY to "Серая",
                         Settings.THEME_BLACK to "Белым по чёрному",
+                        Settings.THEME_WARM to "Тёплая ночная",
+                        Settings.THEME_TIME to "По времени суток",
                     ).forEach { (id, title) ->
                         FilterChip(
                             selected = prefs.readerTheme == id,

@@ -425,6 +425,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val THEME_SEPIA = "sepia"
         const val THEME_GREY = "grey"
         const val THEME_BLACK = "black"
+        /** Тёплая ночная: тёмно-коричневая бумага и песочные буквы - меньше синего в постели. */
+        const val THEME_WARM = "warm"
+        /** По времени суток: днём бумага, вечером сепия, ночью тёплая. */
+        const val THEME_TIME = "time"
         // Только для режима e-ink, в выборе бумаги их нет: чистый белый и
         // чистый чёрный, без тёплого оттенка - на электронной бумаге он серый.
         const val THEME_EINK = "eink"

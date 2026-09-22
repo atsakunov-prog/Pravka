@@ -121,7 +121,26 @@ import ru.zf.slushalka.text.BookText
 /** Цвета читалки живут отдельно от темы приложения: их переключают по свету, а не по системе. */
 data class ReaderPalette(val bg: Color, val fg: Color, val dim: Color)
 
-fun readerPalette(theme: String, dark: Boolean): ReaderPalette = when (theme) {
+/**
+ * Бумага «по времени суток»: с семи до семи вечера - обычная, до десяти -
+ * сепия, ночью - тёплая тёмная. Читают и днём на свету, и ночью в постели, и
+ * переключать руками каждый вечер незачем.
+ */
+fun themeAt(hour: Int): String = when (hour) {
+    in 7 until 19 -> Settings.THEME_PAPER
+    in 19 until 22 -> Settings.THEME_SEPIA
+    else -> Settings.THEME_WARM
+}
+
+fun readerPalette(
+    theme: String,
+    dark: Boolean,
+    hour: Int = java.time.LocalTime.now().hour,
+): ReaderPalette = when (theme) {
+    Settings.THEME_TIME -> readerPalette(themeAt(hour), dark)
+    // Меньше синего к ночи: коричневая бумага и песочная краска, яркость
+    // букв приглушена - глаза в темноте не режет.
+    Settings.THEME_WARM -> ReaderPalette(Color(0xFF1C1813), Color(0xFFD2C1A1), Color(0xFF8A7B63))
     // Краска, а не чернила: в книге буквы не угольно-чёрные, а тёмно-серые с
     // тёплым уходом - владелец попросил «шрифт как в книге, чуть более серый».
     // Абсолютный чёрный на светлой бумаге к тому же режет глаз на экране.
@@ -325,7 +344,16 @@ fun ReaderScreen(
     var highlightRange by remember { mutableStateOf<IntRange?>(null) }
     val highlight = remember { androidx.compose.animation.core.Animatable(0f) }
 
-    val palette = readerPalette(prefs.readerTheme, isSystemInDarkTheme())
+    // Бумага по времени суток сверяется с часами раз в пять минут: вечером
+    // книга сама переходит на сепию, ночью - на тёплую.
+    var hour by remember { mutableIntStateOf(java.time.LocalTime.now().hour) }
+    LaunchedEffect(prefs.readerTheme) {
+        while (prefs.readerTheme == Settings.THEME_TIME) {
+            hour = java.time.LocalTime.now().hour
+            kotlinx.coroutines.delay(5 * 60_000L)
+        }
+    }
+    val palette = readerPalette(prefs.readerTheme, isSystemInDarkTheme(), hour)
     // Объём страницы считается от цвета бумаги: на белой он держится на тенях,
     // на чёрной - на засветах (см. BookPage.kt).
     // Переплёт красится по обложке книги: владелец просил, чтобы цвет книги
@@ -1183,6 +1211,11 @@ fun ReaderScreen(
                     selection = null
                     guideQuery = q
                     showGuide = true
+                },
+                onQuoteCard = { quote ->
+                    showMore = false
+                    selection = null
+                    QuoteCard.share(context, quote, t.title.ifBlank { bk.title }, t.author.ifBlank { bk.author }, palette, prefs.readerFont)
                 },
                 onClose = { showMore = false },
             )

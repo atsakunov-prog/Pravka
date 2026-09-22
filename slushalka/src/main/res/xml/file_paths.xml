@@ -3,4 +3,7 @@
     <!-- Скачанный APK отдаётся системному установщику через FileProvider:
          напрямую file:// система от приложений уже не принимает. -->
     <files-path name="updates" path="updates/" />
+    <!-- Пометки в Word, конспект, цитата картинкой - отдаются другим
+         приложениям тем же FileProvider. -->
+    <cache-path name="shared" path="shared/" />
 </paths>

@@ -44,6 +44,7 @@ class Advisor(private val app: SlushalkaApp, private val client: ClaudeClient) {
     fun quickPrompts(scope: Scope): List<Pair<String, Boolean>> = when (scope) {
         Scope.Library -> listOf(
             "Что почитать дальше, судя по моей библиотеке?" to false,
+            "Что дальше - по тому, что я дочитал, бросил и где сидел запоем?" to false,
             "Что-то похожее на то, что я дослушал до конца" to false,
             "Что почитать ребёнку семи лет?" to false,
             "Что почитать подростку тринадцати лет?" to false,
@@ -119,20 +120,44 @@ class Advisor(private val app: SlushalkaApp, private val client: ClaudeClient) {
 
     private fun context(scope: Scope): String = when (scope) {
         Scope.Library -> buildString {
-            append("БИБЛИОТЕКА ЧЕЛОВЕКА (что уже есть; в скобках - докуда дослушано или дочитано):\n")
+            // Не только что есть, но и как читалось: дочитал, бросил на трети,
+            // сидел запоем, делал пометки - по этому вкус виден точнее, чем по
+            // названиям. Всё из журнала подходов и пометок, в сеть не ходит.
+            val report = runCatching { ru.zf.slushalka.data.Stats.report(app.journal.all()) }.getOrNull()
+            val now = System.currentTimeMillis()
+            append("БИБЛИОТЕКА ЧЕЛОВЕКА И КАК ОН ЕЁ ЧИТАЛ (в скобках: докуда дошёл, сколько времени провёл, ")
+            append("давно ли открывал, пометки на полях):\n")
             val books = app.state.books.value.take(120)
             if (books.isEmpty()) append("(пока пусто)\n")
             books.forEach { b ->
                 val st = app.state.stateOf(b.id)
+                val share = when {
+                    b.hasAudio && b.totalMs > 0 -> st.absMs.toFloat() / b.totalMs
+                    else -> st.readShare
+                }
+                val stat = report?.book(b.id)
+                val idleDays = if (st.updatedAt > 0) ((now - st.updatedAt) / 86_400_000L).toInt() else -1
                 val progress = when {
-                    st.finished -> "дослушано"
-                    b.totalMs > 0 && st.absMs > 0 -> "${(st.absMs * 100 / b.totalMs).toInt()}%"
+                    st.finished || share >= 0.98f -> "дочитано"
+                    share > 0.02f && idleDays > 30 -> "брошена на ${(share * 100).toInt()}%, не открывал $idleDays дн"
+                    share > 0.02f -> "${(share * 100).toInt()}%"
                     !b.hasAudio && st.readChar > 0 -> "читает"
                     else -> "не начата"
                 }
+                val bits = buildList {
+                    add(progress)
+                    stat?.let { s ->
+                        val hours = s.totals.activeMs / 3_600_000.0
+                        if (hours >= 0.5) add("%.0f ч".format(java.util.Locale.US, hours))
+                        // Запоем: много часов за мало дней.
+                        if (s.days in 1..7 && hours >= 6) add("запоем")
+                    }
+                    val notes = app.notes.count(b.id)
+                    if (notes > 0) add("пометок: $notes")
+                }
                 append("- ")
                 if (b.author.isNotBlank()) append(b.author).append(" — ")
-                append(b.title).append(" (").append(progress).append(")\n")
+                append(b.title).append(" (").append(bits.joinToString(", ")).append(")\n")
             }
         }
         is Scope.Author -> buildString {

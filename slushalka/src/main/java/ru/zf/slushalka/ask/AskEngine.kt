@@ -262,6 +262,8 @@ class AskEngine(
         text: BookText,
         range: IntRange,
         absMs: Long,
+        /** Для ребёнка: те же главы, словами для семилетки - прочитать вслух. */
+        forKid: Boolean = false,
         onDelta: (String) -> Unit = {},
     ): Result<String> {
         val fragment = text.slice(range.first, range.last)
@@ -271,17 +273,50 @@ class AskEngine(
         return client.ask(
             model = p.recapModel,
             system = listOf(
-                ClaudeClient.Block(Prompts.RECAP_RULES, cache = true),
+                ClaudeClient.Block(if (forKid) Prompts.RECAP_KIDS_RULES else Prompts.RECAP_RULES, cache = true),
                 ClaudeClient.Block(
                     Prompts.place(book.title, book.author, chapter, 0, if (book.hasAudio) formatClock(absMs) else "") +
                         "\n\n" + Prompts.fragment(fragment)
                 ),
             ),
-            question = "Напомни, что было в этом куске.",
+            question = if (forKid) "Расскажи ребёнку, что было в этом куске." else "Напомни, что было в этом куске.",
             maxTokens = 4000,
             effort = p.recapEffort,
             onDelta = onDelta,
         ).map { it.text }
+    }
+
+    /**
+     * Конспект по пометкам (см. [Prompts.DIGEST_RULES]). Пометок бывает под
+     * сотню, текста в них немного - уходит вместе с главами, к которым они
+     * относятся.
+     */
+    suspend fun digest(book: Book, text: BookText, notes: List<ru.zf.slushalka.data.Note>): Result<Pair<String, Double>> {
+        val p = settings.now()
+        val body = buildString {
+            append(Prompts.bookLine(book.title, book.author)).append("\n\nПОМЕТКИ ПО ПОРЯДКУ КНИГИ\n")
+            var chapter = -1
+            notes.sortedBy { it.start }.forEach { n ->
+                val c = text.chapterIndexAt(n.start)
+                if (c != chapter) {
+                    chapter = c
+                    append("\n=== ГЛАВА ").append(c + 1).append(": ")
+                        .append(text.chapters.getOrNull(c)?.title?.ifBlank { "без названия" } ?: "без названия").append(" ===\n")
+                }
+                append("Цитата: «").append(n.quote.trim()).append("»\n")
+                if (n.text.isNotBlank()) append("Мысль читателя: ").append(n.text.trim()).append('\n')
+            }
+        }
+        return client.ask(
+            model = p.askModel,
+            system = listOf(ClaudeClient.Block(Prompts.DIGEST_RULES), ClaudeClient.Block(body)),
+            question = "Собери конспект моего чтения по этим пометкам.",
+            maxTokens = 8000,
+            effort = p.askEffort,
+        ).map { reply ->
+            askLog.add(book.id, Ask(System.currentTimeMillis(), 0, "Конспект пометок", reply.text, reply.costUsd))
+            reply.text to reply.costUsd
+        }
     }
 
     fun cancel() = client.cancel()

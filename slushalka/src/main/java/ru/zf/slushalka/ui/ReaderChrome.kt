@@ -586,11 +586,36 @@ fun NotesSheet(
 ) {
     val context = LocalContext.current
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var busy by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val book = app.state.current.value
+
+    /** Пометки (или конспект) - в Word и сразу отдать: почта, мессенджер, Диск. */
+    fun toWord(digest: String?) {
+        val file = Share.file(context, (if (digest != null) "Конспект - " else "Пометки - ") + title + ".docx")
+        ru.zf.slushalka.data.Docx.write(file, Share.notesDocx(text, title, notes, digest))
+        Share.send(context, file, Share.DOCX, (if (digest != null) "Конспект: " else "Пометки: ") + title)
+    }
+
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+            // Три выгрузки рядом с заголовком на узком экране не влезают - строкой ниже.
+            Text("Пометки", style = MaterialTheme.typography.titleLarge)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Пометки", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 if (notes.isNotEmpty()) {
+                    TextButton(enabled = busy == null, onClick = { toWord(null) }) { Text("В Word") }
+                    TextButton(enabled = busy == null && book != null, onClick = {
+                        val b = book ?: return@TextButton
+                        busy = "Claude собирает конспект…"
+                        error = null
+                        scope.launch {
+                            app.ask.digest(b, text, notes)
+                                .onSuccess { (digest, _) -> toWord(digest) }
+                                .onFailure { error = it.message ?: "Не вышло" }
+                            busy = null
+                        }
+                    }) { Text("Конспект") }
                     TextButton(onClick = {
                         val body = notesAsText(text, notes, title)
                         val send = Intent(Intent.ACTION_SEND).apply {
@@ -599,8 +624,20 @@ fun NotesSheet(
                             putExtra(Intent.EXTRA_TEXT, body)
                         }
                         runCatching { context.startActivity(Intent.createChooser(send, "Поделиться пометками")) }
-                    }) { Text("Поделиться") }
+                    }) { Text("Текстом") }
                 }
+            }
+            busy?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall)
+                androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+            error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            if (notes.isNotEmpty() && busy == null) {
+                Text(
+                    "«В Word» - пометки как есть. «Конспект» - Claude свяжет цитаты и твои мысли в текст по главам.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (notes.isEmpty()) {
                 Text(
