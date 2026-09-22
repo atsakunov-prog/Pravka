@@ -21,7 +21,9 @@ import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +31,7 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.core.DiskGeometry
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.DiskPhysics
+import ru.zf.pravka.core.DiskSwing
 import ru.zf.pravka.core.Spring
 import ru.zf.pravka.core.StackGeometry
 import ru.zf.pravka.data.Settings
@@ -50,7 +53,10 @@ import ru.zf.pravka.ui.Haptics
  *
  * Жесты. Тап и долгое нажатие по кнопке — как были. Палец повёл кнопку —
  * крутится весь диск (`onRingDrag`), кнопка сама не двигается; на отпускании
- * диск щёлкает по ближайшей четверти, бросок доворачивает дальше. Шестерёнка:
+ * диск щёлкает по ближайшей четверти, бросок доворачивает дальше. Вытянул
+ * кнопку со стекла — диск отрывается и повисает на ней, как взятый за
+ * шкирку, и едет за пальцем, покачиваясь (`hang`, маятник —
+ * `core/DiskSwing.kt`). Шестерёнка:
  * тап — веер, долгое нажатие и потом тянуть — диск переезжает; отпустили у
  * края — прижался к нему так, что шестерёнка целиком на экране, а дальние
  * кнопки — за краем. Полминуты без касаний — диск возвращается домой
@@ -150,6 +156,19 @@ class DiskController(
          * иначе следующее одиночное касание считалось бы вторым пальцем.
          */
         private const val FINGER_STALE_MS = 6_000L
+        /**
+         * Окно стекла выросло под растяжку — сколько кадров самое большее
+         * движение ждёт, пока стекло нарисуется в новом размере. Обычно
+         * хватает двух; потолок — чтобы уборка не встала, если кадр так и не
+         * пришёл (окно сняли, экран сложили).
+         */
+        private const val ROOM_WAIT_FRAMES = 6
+        /**
+         * Потолок скорости, с которой диск уходит с пальца после «за шкирку»,
+         * dp в секунду. Пружина докования подхватывает её, и диск не замирает
+         * на отпускании; но резкий взмах не должен швырять его через экран.
+         */
+        private const val MAX_THROW_DP = 1200f
     }
 
     private class Slot(val button: RingButton, val enabled: () -> Boolean)
@@ -213,6 +232,19 @@ class DiskController(
     // Тарелка.
     private var plate: PlateView? = null
     private var plateParams: WindowManager.LayoutParams? = null
+    /**
+     * Запас окна стекла под растяжку — в сторону лица, пикселей; ноль — окно
+     * ровно по тарелке с тенью. Меняется только НЕ на ходу: растёт перед
+     * уборкой, пока диск ещё стоит, и отдаётся, когда всё встало (см.
+     * [placePlate]).
+     */
+    private var plateRoom = 0
+    /** Окно стекла только что выросло: сколько кадров движение ещё готово его подождать. */
+    private var roomWait = 0
+    /** Ширина, в которой стекло должно нарисоваться, прежде чем диск тронется. */
+    private var roomWidth = 0
+    /** Стекло уже нарисовалось в новом размере — ждём ещё кадр, пока система поставит окно. */
+    private var roomSeen = false
     /** Углы кнопок для теней на стекле — буфер, чтобы не сорить кадр за кадром. */
     private var socketAngles = FloatArray(0)
 
@@ -251,7 +283,19 @@ class DiskController(
     private var turned = false
     private var lastDetent = 0
 
-    // Палец везёт за шестерёнку или за стекло.
+    // Палец вытянул кнопку со стекла — диск висит на ней (`core/DiskSwing.kt`).
+    private var hanging = false
+    private var swing: DiskSwing? = null
+    /** Какая по счёту кнопка держит диск: её угол ведёт маятник. */
+    private var hangIndex = 0
+    /** Куда палец ведёт подвес — центр схваченной кнопки, в координатах окон. */
+    private var hangTargetX = 0f
+    private var hangTargetY = 0f
+    /** Где в кнопке лёг палец — от её центра: кнопка остаётся под той же точкой пальца. */
+    private var grabX = 0f
+    private var grabY = 0f
+
+    // Палец везёт за шестерёнку или за стекло (и за кнопку, пока диск висит).
     private var sliding = false
     private var slideFacing = 0f
 
@@ -403,20 +447,28 @@ class DiskController(
     }
 
     /**
-     * Сторона окна стекла: тарелка, тень и запас под растяжку — стекло тянется
-     * за выдавленными кнопками и вылезает за круг тарелки. Дальше кнопки не
-     * уедут: карман плюс кольцо — это ровно радиус тарелки.
-     *
-     * Размер КВАНТУЕТСЯ. Окно меняет его через `updateViewLayout`, а это
-     * пересоздание поверхности: считать по живому выдавливанию значило бы
-     * менять поверхность каждый кадр уборки. Шаг в четверть кнопки — четыре
-     * смены за весь выезд вместо шестидесяти.
+     * Сторона окна стекла без запаса: тарелка и тень с обеих сторон. Чётная —
+     * центр тарелки тогда на целом пикселе окна.
      */
-    private fun plateWindow(d: Dims): Int {
-        val step = (d.button / 4).coerceAtLeast(1)
-        val need = ((d.plate + extrude + d.shadow) * 2).roundToInt()
-        return ((need + step - 1) / step) * step
-    }
+    private fun plateSide(d: Dims): Int = 2 * ceil(d.plate + d.shadow).toInt()
+
+    /**
+     * Запас окна под растяжку у убранного диска: ровно выдавливание и ТОЛЬКО в
+     * сторону лица. Кольцо сдвигается вдоль лица, а карман кнопки от центра
+     * кольца кончается ровно на радиусе тарелки, поэтому поперёк лица и назад
+     * стекло за тарелку не выходит (проверено тестом на всех поворотах).
+     * Прежнее квадратное окно росло во все стороны и держало над и под
+     * убранным диском полосы, где касание не доходило до приложения.
+     */
+    private fun roomFor(d: Dims): Int = ceil(extrusion(d)).toInt()
+
+    /**
+     * Где центр тарелки в окне стекла: запас лежит со стороны лица, поэтому у
+     * диска с лицом вправо центр стоит у левого края окна, с лицом влево — у
+     * правого.
+     */
+    private fun plateOrigin(side: Int, f: Float): Pair<Int, Int> =
+        (if (f == 0f) side / 2 else side / 2 + plateRoom) to side / 2
 
     private fun dims(): Dims {
         val b = buttonSize().coerceAtLeast(1)
@@ -515,6 +567,9 @@ class DiskController(
     fun setFolded(value: Boolean) {
         folded = value
         if (value) {
+            // Диск, висевший на пальце, отпускается без броска: кнопку под
+            // пальцем снимут вместе с окнами, и её отпускания можно не дождаться.
+            letGo()
             stopMotion()
             hidePlate()
         } else if (shown && placed) {
@@ -570,8 +625,13 @@ class DiskController(
                 socketAngles[i] = angle
                 val (x, y) = DiskGeometry.slotOrigin(bx, by, d.ring, angle, d.button)
                 // Сначала место, потом окно: снятое окно ставится на место в
-                // параметрах и вешается уже там, где надо.
-                slot.button.followTo(x, y, settle = false, link = 1, snap = true)
+                // параметрах и вешается уже там, где надо. Кнопка уже там —
+                // WindowManager не зовём: пока выдавливание тянет стекло, кольцо
+                // почти стоит, а каждый пустой вызов — это перекладка окна
+                // системой в том же кадре, где ей и так есть что делать.
+                if (slot.button.currentPosition() != (x to y)) {
+                    slot.button.followTo(x, y, settle = false, link = 1, snap = true)
+                }
                 slot.button.setOffscreen(!DiskGeometry.onScreen(x, y, d.button, w, h, margin))
             }
             // Стекло знает, где тело диска: по этим числам оно и тени под
@@ -717,6 +777,11 @@ class DiskController(
                 // кнопки, а кнопка — там, где мы её поставили.
                 fingerOffX = bx + localX - rawX
                 fingerOffY = by + localY - rawY
+                // Где в кнопке лёг палец: если диск повиснет на ней, кнопка
+                // поедет под той же точкой пальца, а не прыгнет центром в него.
+                val size = button.buttonSizePx()
+                grabX = localX - size / 2f
+                grabY = localY - size / 2f
                 turning = button
                 turnStart = rotation
                 turnDelta = 0f
@@ -729,11 +794,26 @@ class DiskController(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (turning !== button) return
+                val fx = rawX + fingerOffX
+                val fy = rawY + fingerOffY
+                // Диск висит — палец только ведёт подвес; ставит диск кадр.
+                if (hanging) {
+                    hangTargetX = fx - grabX
+                    hangTargetY = fy - grabY
+                    return
+                }
                 // Порог свой: кнопка докладывает каждый сдвиг, а поворот
                 // начинается, когда палец действительно поехал.
                 if (!turned && abs(rawX - downRawX) <= touchSlop && abs(rawY - downRawY) <= touchSlop) return
                 val (tx, ty) = turnCentre()
-                val angle = DiskGeometry.angleOf(tx, ty, rawX + fingerOffX, rawY + fingerOffY)
+                // Палец ушёл со стекла — это уже не поворот, а «тяну»: диск
+                // отрывается и повисает на кнопке (`DiskGeometry.tornOff`).
+                val d = dims()
+                if (DiskGeometry.tornOff(hypot(fx - tx, fy - ty), d.ring, DiskGeometry.podRadius(d.button, d.gap), d.button)) {
+                    hang(button, fx, fy)
+                    return
+                }
+                val angle = DiskGeometry.angleOf(tx, ty, fx, fy)
                 val delta = DiskGeometry.delta(lastAngle, angle)
                 val now = SystemClock.uptimeMillis()
                 val dt = (now - lastAngleAt) / 1000f
@@ -758,6 +838,10 @@ class DiskController(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (turning !== button) return
                 turning = null
+                if (hanging) {
+                    dropHang()
+                    return
+                }
                 // Палец замер и только потом отпустил — это не бросок:
                 // скорость последних миллиметров уже ничего не значит.
                 val paused = SystemClock.uptimeMillis() - lastAngleAt > FLICK_PAUSE_MS
@@ -790,6 +874,141 @@ class DiskController(
         val d = dims()
         val (w, h) = frame()
         return DiskGeometry.dock(cx, cy, w, h, d.plate, dockInset(d))
+    }
+
+    // ---- Палец тянет за кнопку: диск за шкирку ----
+
+    /**
+     * Палец вытянул кнопку со стекла — диск отрывается и повисает на ней.
+     * Владелец (22.09.2026): «беру за какую-то иконку и тащу, а сам диск как
+     * будто виснет на ней… как будто я взял за шкирку диск».
+     *
+     * Подвес — центр схваченной кнопки, груз — центр кольца (у убранного
+     * диска он сдвинут выдавливанием, но кнопка от него всегда на радиусе
+     * кольца — отсюда и длина стержня). Стартует маятник оттуда, где диск
+     * стоял, и неподвижным: дальше тяжесть поворачивает его так, что
+     * схваченная кнопка встаёт наверх, а палец ведёт подвес. Поворот диска
+     * на это время считает маятник, не палец.
+     *
+     * Для остального диска это переезд: лицо замирает до броска, как у
+     * переезда за стекло ([sliding], [slideFacing]), уборка и утопание
+     * кончаются, недовдвинутые кнопки вдвигаются своей пружиной.
+     */
+    private fun hang(button: RingButton, fx: Float, fy: Float) {
+        val live = liveSlots()
+        val index = live.indexOfFirst { it.button === button }
+        if (index < 0) return
+        val d = dims()
+        val f = facing ?: DiskGeometry.facing(cx, frame().first)
+        val (bx, by) = ringCentre(f)
+        val a = Math.toRadians(DiskGeometry.slotAngle(index, live.size, f, rotation).toDouble())
+        swing = DiskSwing(d.ring).also {
+            it.start(bx + d.ring * cos(a).toFloat(), by + d.ring * sin(a).toFloat(), bx, by)
+        }
+        hangIndex = index
+        hangTargetX = fx - grabX
+        hangTargetY = fy - grabY
+        hanging = true
+        sliding = true
+        slideFacing = f
+        sunk = false
+        roomWait = 0
+        stopMotion()
+        if (tucked) {
+            tucked = false
+            pushTo(0f)
+        }
+        // Щелчок в руке: диск оторвался — дальше он едет, а не крутится.
+        Haptics.tick(service)
+        startFrames()
+    }
+
+    /**
+     * Кадр висящего диска: маятник шагает за подвесом, поворот диска — по
+     * стержню (схваченная кнопка смотрит на подвес), центр тарелки — за
+     * центром кольца на столько, сколько кнопкам ещё вдвигаться.
+     */
+    private fun hangFrame(dt: Float) {
+        val s = swing ?: return
+        s.step(hangTargetX, hangTargetY, dt)
+        val now = DiskGeometry.slotAngle(hangIndex, liveSlots().size, slideFacing, rotation)
+        rotation += DiskGeometry.delta(now, s.angle())
+        val a = Math.toRadians(slideFacing.toDouble())
+        cx = s.bobX - extrude * cos(a).toFloat()
+        cy = s.bobY - extrude * sin(a).toFloat()
+    }
+
+    /**
+     * Палец отпустил висящий диск. Дальше — как у любого переезда: у края
+     * докуется, посреди экрана остаётся, — но с двумя отличиями. Поворот идёт
+     * ДОМОЙ («П» и «З» к лицу): висел диск схваченной кнопкой вверх, и
+     * щёлкать его по ближайшей четверти оставило бы раскладку случайной. И
+     * диск уходит с пальца со своей скоростью и махом: пружины докования
+     * подхватывают их, и он не замирает на отпускании, чтобы потом поехать.
+     */
+    private fun dropHang() {
+        val s = swing
+        letGo()
+        if (s == null) return
+        val (w, _) = frame()
+        var (dx, dy) = docked()
+        val newFacing = DiskGeometry.facing(dx, w)
+        if (newFacing != slideFacing) {
+            // Переехал на другую половину: раскладка зеркалится. Схваченная
+            // кнопка остаётся под пальцем на своём угле — прыгают только
+            // остальные, — а дальше диск доворачивает домой.
+            val n = liveSlots().size
+            val keep = DiskGeometry.slotAngle(hangIndex, n, slideFacing, rotation)
+            rotation = keep - DiskGeometry.slotAngle(hangIndex, n, newFacing, 0f)
+            flip(newFacing)
+            val again = docked()
+            dx = again.first
+            dy = again.second
+        }
+        // Скорость пальца отдаём, только если диск докуется к краю: перелёт
+        // тогда уходит за край и возвращается. Отпущенный посреди экрана
+        // остаётся где отпустили, как и раньше: пружина с броском могла бы
+        // перенести его через середину, и раскладка перескочила бы дважды.
+        val docks = abs(dx - cx) > 0.5f
+        val cap = MAX_THROW_DP * density
+        animateTo(
+            DiskGeometry.home(rotation),
+            dx,
+            dy,
+            launch = s.spin().coerceIn(-MAX_LAUNCH, MAX_LAUNCH),
+            vx = if (docks) s.velocityX().coerceIn(-cap, cap) else 0f,
+            vy = if (docks) s.velocityY().coerceIn(-cap, cap) else 0f,
+        )
+    }
+
+    /**
+     * Диск больше не висит — без броска и докования: его снимают, складывают
+     * экран или берут вторым пальцем. Лицо, замороженное на время виса,
+     * отпускается вместе с ним.
+     */
+    private fun letGo() {
+        if (hanging) sliding = false
+        hanging = false
+        swing = null
+    }
+
+    /**
+     * Лицо сменилось на броске — раскладка зеркалится. Недовдвинутые кнопки
+     * встают на кольцо сразу, а стекло подъезжает под них: кольцо, сдвинутое
+     * вдоль СТАРОГО лица, иначе прыгнуло бы на двойной сдвиг вдоль нового.
+     * Запас окна отдаётся тут же — он лежал со старой стороны.
+     */
+    private fun flip(newFacing: Float) {
+        if (extrude > 0f) {
+            val a = Math.toRadians(slideFacing.toDouble())
+            cx += extrude * cos(a).toFloat()
+            cy += extrude * sin(a).toFloat()
+            extrude = 0f
+            pushing = false
+            push.reset(0f)
+        }
+        plateRoom = 0
+        facing = newFacing
     }
 
     // ---- Палец везёт за шестерёнку ----
@@ -837,7 +1056,7 @@ class DiskController(
         if (allHidden) placeHead() else layout()
         if (!dropped) return
         sliding = false
-        val (dx, dy) = docked()
+        var (dx, dy) = docked()
         val newFacing = DiskGeometry.facing(dx, w)
         if (newFacing != slideFacing) {
             // Переехал на другую половину экрана: раскладка зеркалится
@@ -845,7 +1064,10 @@ class DiskController(
             // снизу, лицом внутрь. Перескок кнопок здесь, на броске, а не
             // посреди жеста.
             rotation = 0f
-            facing = newFacing
+            flip(newFacing)
+            val again = docked()
+            dx = again.first
+            dy = again.second
         }
         animateTo(DiskGeometry.snap(rotation, step()), dx, dy)
     }
@@ -904,6 +1126,11 @@ class DiskController(
         onTouched?.invoke()
         stopMotion()
         turning = null
+        // Висел на кнопке — теперь его везут двое: маятник снимается, а
+        // замороженное лицо остаётся тем же, иначе раскладка перескочила бы
+        // посреди жеста.
+        hanging = false
+        swing = null
         // Жесты окон гасятся: палец, который только что крутил или ждал
         // долгого нажатия, теперь везёт диск вместе со вторым.
         slots.forEach { it.button.cancelGesture() }
@@ -1119,7 +1346,8 @@ class DiskController(
         // тик простоя приходит каждые полминуты.
         if (tucked && abs(target - rotation) < 0.5f && abs(dx - cx) < 0.5f && abs(dy - cy) < 0.5f) return
         tucked = true
-        stopMotion()
+        // Без stopMotion: диск, пойманный стрелкой на ходу, продолжает с той
+        // скоростью, с какой ехал (см. [animateTo]), а не замирает на кадр.
         turning = null
         animateTo(target, dx, dy)
     }
@@ -1133,7 +1361,6 @@ class DiskController(
         val d = dims()
         val (w, h) = frame()
         tucked = false
-        stopMotion()
         turning = null
         val (dx, dy) = DiskGeometry.dock(cx, cy, w, h, d.plate, DiskGeometry.DOCK_INSET)
         animateTo(DiskGeometry.snap(rotation, step()), dx, dy)
@@ -1146,7 +1373,8 @@ class DiskController(
         val (w, h) = frame()
         val f = facing ?: DiskGeometry.facing(cx, w)
         tucked = false
-        stopMotion()
+        // Второй тап по стрелке приходит, пока диск ещё выезжает на половину:
+        // новая цель подхватывает его ход, а не начинает с места.
         turning = null
         val tx = if (f == 0f) d.plate + d.gap else w - d.plate - d.gap
         val (dx, dy) = DiskGeometry.dock(tx, cy, w, h, d.plate, DiskGeometry.DOCK_INSET)
@@ -1275,12 +1503,18 @@ class DiskController(
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            if (!animating && !pushing) {
+            if (!animating && !pushing && !hanging) {
                 framing = false
                 return
             }
             val dt = if (lastFrameNs == 0L) 1f / 60f else (frameTimeNanos - lastFrameNs) / 1_000_000_000f
             lastFrameNs = frameTimeNanos
+            // Окно стекла только что выросло — стоим, пока оно не встанет:
+            // время ожидания в dt не копится, первый шаг будет шагом кадра.
+            if (roomWait > 0 && waitRoom()) {
+                Choreographer.getInstance().postFrameCallback(this)
+                return
+            }
             if (animating) {
                 val doneTurn = turn.step(turnTarget, dt)
                 val doneX = slideX.step(slideTargetX, dt)
@@ -1298,13 +1532,32 @@ class DiskController(
                 if (push.step(pushTarget, dt)) pushing = false
                 extrude = push.position
             }
+            if (hanging) hangFrame(dt)
             layout()
-            if (animating || pushing) {
+            if (animating || pushing || hanging) {
                 Choreographer.getInstance().postFrameCallback(this)
             } else {
                 framing = false
             }
         }
+    }
+
+    /**
+     * Ждать ли ещё кадр выросшего окна стекла. Размер окна система ставит
+     * вместе со следующим кадром его рисунка, а кнопки — свои окна, и им ждать
+     * нечего: тронься диск сразу, кнопки уехали бы, а стекло догоняло бы их.
+     * Поэтому ждём, пока стекло нарисуется в новой ширине, и ещё кадр — пока
+     * система его поставит; потолок — [ROOM_WAIT_FRAMES].
+     */
+    private fun waitRoom(): Boolean {
+        roomWait--
+        val drawn = plate != null && plate?.drawnWidth == roomWidth
+        if ((drawn && roomSeen) || roomWait <= 0 || plate == null) {
+            roomWait = 0
+            return false
+        }
+        if (drawn) roomSeen = true
+        return true
     }
 
     /** Кадры нужны — заказать, если ещё не заказаны. */
@@ -1318,55 +1571,119 @@ class DiskController(
     /**
      * Выдавить кнопки из стекла (или вдвинуть обратно) — своей пружиной.
      * Она живёт отдельно от тела: диск может в этот миг ехать под пальцем.
+     *
+     * Уже едет туда же — не трогаем: второй тап по стрелке зовёт сюда ту же
+     * цель, и перезапуск с места растягивал бы вдвигание, пока тело диска
+     * уезжает вперёд, — кнопки опережали бы стекло. Едет в другую сторону —
+     * разворачивается со своей скоростью, а не замирает.
      */
     private fun pushTo(target: Float) {
-        if (abs(target - extrude) < 0.5f) {
+        if (pushing && pushTarget == target) return
+        if (abs(target - extrude) < 0.5f && (!pushing || abs(push.velocity) < Spring.REST_SPEED)) {
             extrude = target
             pushing = false
             return
         }
+        push.reset(extrude, if (pushing) push.velocity else 0f)
         pushTarget = target
-        push.reset(extrude)
         pushing = true
+        if (target > 0.5f) growRoom()
         startFrames()
     }
 
-    private fun animateTo(rotTarget: Float, toX: Float, toY: Float, launch: Float = 0f) {
+    /**
+     * Окну стекла нужен запас под растяжку — дать его СЕЙЧАС, пока диск стоит,
+     * и придержать движение, пока окно не встанет в новом размере ([waitRoom]).
+     *
+     * Почему не по ходу. Прежде окно росло ступеньками по четверти кнопки
+     * вместе с выдавливанием. Смена размера — это новая поверхность, и
+     * система ставит окно не сразу, а со следующим кадром его рисунка; кнопки
+     * же — свои окна и едут без задержки. На каждой ступеньке стекло
+     * отставало от кнопок на кадр-другой: выдавливание шло рывками, а на
+     * двойном тапе по стрелке кнопки уезжали вперёд, и стекло их догоняло
+     * (владелец, 22.09.2026: «сначала выезжают четыре иконки, а потом диск, и
+     * потом иконки как будто возвращаются на него»). Теперь размер меняется
+     * дважды за уборку и оба раза на месте: перед выездом и после того, как
+     * всё встало.
+     */
+    private fun growRoom() {
+        val d = dims()
+        val want = roomFor(d)
+        if (plateRoom >= want) return
+        plateRoom = want
+        if (plate == null) return
+        placePlate(d)
+        roomWait = ROOM_WAIT_FRAMES
+        roomWidth = plateParams?.width ?: 0
+        roomSeen = false
+    }
+
+    /**
+     * Поехать к цели. Диск УЖЕ едет — новая цель подхватывает его скорость, а
+     * не гасит её: второй тап по стрелке приходит посреди выезда на половину,
+     * и перезапуск пружин с нуля останавливал бы диск на кадр, чтобы потом
+     * поехать заново, — рывок ровно там, где жест должен быть одним
+     * движением. Палец, взявший диск, скорость гасит сам ([stopMotion]).
+     * [launch], [vx], [vy] — явная скорость (бросок пальца, уход с подвеса).
+     */
+    private fun animateTo(
+        rotTarget: Float,
+        toX: Float,
+        toY: Float,
+        launch: Float = 0f,
+        vx: Float? = null,
+        vy: Float? = null,
+    ) {
         // Куда ехать выдавливанию, решает состояние: убранный диск выдавливает
         // кнопки на экран, любой другой держит их на кольце.
         val pushGoal = if (tucked) extrusion(dims()) else 0f
         val still = abs(rotTarget - rotation) < 0.5f && abs(toX - cx) < 0.5f &&
             abs(toY - cy) < 0.5f && abs(pushGoal - extrude) < 0.5f
-        if (still && abs(launch) < 1f) {
+        val thrown = abs(launch) >= 1f || abs(vx ?: 0f) >= 1f || abs(vy ?: 0f) >= 1f
+        if (still && !thrown && !animating) {
             rotation = DiskGeometry.norm(rotation)
             persist()
             return
         }
+        val carry = animating
         turnTarget = rotTarget
         slideTargetX = toX
         slideTargetY = toY
-        turn.reset(rotation, launch)
-        slideX.reset(cx)
-        slideY.reset(cy)
+        turn.reset(rotation, if (launch != 0f) launch else if (carry) turn.velocity else 0f)
+        slideX.reset(cx, vx ?: if (carry) slideX.velocity else 0f)
+        slideY.reset(cy, vy ?: if (carry) slideY.velocity else 0f)
         animating = true
         pushTo(pushGoal)
         startFrames()
     }
 
-    /** Тело диска встало. Выдавливание своей пружиной доезжает само. */
+    /**
+     * Тело диска встало — его взял палец. Скорость пружин гасится вместе с
+     * движением: следующая цель ([animateTo]) начнёт с места. Выдавливание
+     * своей пружиной доезжает само.
+     */
     private fun stopMotion() {
         if (!animating) return
         animating = false
-        if (!pushing && framing) {
+        turn.reset(rotation)
+        slideX.reset(cx)
+        slideY.reset(cy)
+        if (!pushing && !hanging && framing) {
             framing = false
             Choreographer.getInstance().removeFrameCallback(frameCallback)
         }
     }
 
-    /** Всё разом: и тело, и выдавливание — на выключении диска. */
+    /** Всё разом: и тело, и выдавливание, и вис — на выключении диска. */
     private fun stopAll() {
+        letGo()
         pushing = false
         animating = false
+        roomWait = 0
+        turn.reset(rotation)
+        slideX.reset(cx)
+        slideY.reset(cy)
+        push.reset(extrude)
         if (framing) {
             framing = false
             Choreographer.getInstance().removeFrameCallback(frameCallback)
@@ -1387,28 +1704,36 @@ class DiskController(
 
     private fun plateAlpha(): Float = plateOverride ?: DiskLook.plateAlpha(idleAlpha, lightGlass)
 
+    /** Диск стоит: ни пружин, ни пальца. Только тогда окну стекла можно менять размер. */
+    private fun still(): Boolean =
+        !animating && !pushing && !hanging && !sliding && !pinch && turning == null
+
     private fun showPlate() {
         if (plate != null || allHidden || folded) return
         val d = dims()
-        val size = plateWindow(d)
+        // Показываемся убранными (смена размеров ползунком) — запас нужен сразу.
+        plateRoom = if (extrude > 0.5f || (pushing && pushTarget > 0.5f)) roomFor(d) else 0
+        val side = plateSide(d)
+        val (ox, oy) = plateOrigin(side, facing ?: DiskGeometry.facing(cx, frame().first))
         val v = PlateView(service, d.shadow.toFloat(), dp(SHADOW_DROP_DP).toFloat()).apply {
             setLook(plateAlpha(), lightGlass, socketOverride, frost, rail)
+            setCentre(ox.toFloat(), oy.toFloat())
             setOnTouchListener(PlateTouch())
         }
         // Стекло трогаемое: за него везут диск. Углы квадрата окна вне круга
         // касание не принимают (PlateTouch), но и в приложение под ними оно не
         // проходит — окно круглым не бывает; это цена, и она принята.
         val p = WindowManager.LayoutParams(
-            size,
-            size,
+            side + plateRoom,
+            side,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (cx - size / 2f).roundToInt()
-            y = (cy - size / 2f).roundToInt()
+            x = (cx - ox).roundToInt()
+            y = (cy - oy).roundToInt()
         }
         plate = v
         plateParams = p
@@ -1421,14 +1746,27 @@ class DiskController(
         head?.reattach()
     }
 
+    /**
+     * Поставить окно стекла по центру тарелки. Запас под растяжку отдаётся
+     * только в покое ([still]) — пока диск едет, окно меняет лишь место, не
+     * размер (почему — [growRoom]). И если ни место, ни размер не поменялись,
+     * WindowManager не зовём: поворот диска стекло не двигает.
+     */
     private fun placePlate(d: Dims) {
         val v = plate ?: return
         val p = plateParams ?: return
-        val size = plateWindow(d)
-        p.width = size
-        p.height = size
-        p.x = (cx - size / 2f).roundToInt()
-        p.y = (cy - size / 2f).roundToInt()
+        if (plateRoom > 0 && extrude <= 0.5f && still()) plateRoom = 0
+        val side = plateSide(d)
+        val (ox, oy) = plateOrigin(side, facing ?: DiskGeometry.facing(cx, frame().first))
+        v.setCentre(ox.toFloat(), oy.toFloat())
+        val width = side + plateRoom
+        val x = (cx - ox).roundToInt()
+        val y = (cy - oy).roundToInt()
+        if (p.x == x && p.y == y && p.width == width && p.height == side) return
+        p.width = width
+        p.height = side
+        p.x = x
+        p.y = y
         runCatching { windowManager.updateViewLayout(v, p) }
     }
 
@@ -1453,8 +1791,8 @@ class DiskController(
      * Стекло диска: круг бумаги (или чернил — тумблер «Светлее · Темнее»), к
      * краю плотнее, по кромке фаска, под ним мягкая тень — чуть шире тарелки
      * и сдвинута вниз, как от света сверху. Вид больше тарелки на тень с
-     * каждой стороны; рисуется от центра, как все глифы стопки —
-     * центрируется по построению.
+     * каждой стороны (у убранного диска — ещё на растяжку в сторону лица);
+     * рисуется от центра тарелки, который ставит диск (`setCentre`).
      *
      * Светлое стекло появилось 19.09 ночью: «давай его сделаем наоборот,
      * светлее, чем бэкграунд. А то теряется иногда». Тёмная тарелка пропадала
@@ -1544,8 +1882,31 @@ class DiskController(
         private val shape = Path()
         private var shapeAt = Float.NaN
         private val shadeFlat = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private var shaderCentreY = Float.NaN
+
+        // Где центр тарелки в окне. Окно не всегда квадрат с центром
+        // посередине: у убранного диска оно шире на растяжку, и только в
+        // сторону лица (`DiskController.plateOrigin`).
+        private var centreX = Float.NaN
+        private var centreY = Float.NaN
+
+        /** В какой ширине стекло нарисовалось последний раз: диск ждёт его после смены размера окна. */
+        var drawnWidth = 0
+            private set
         private val fringe = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val podFringe = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+        /** Центр тарелки в координатах вида — его ставит диск вместе с окном. */
+        fun setCentre(x: Float, y: Float) {
+            if (centreX == x && centreY == y) return
+            centreX = x
+            centreY = y
+            shapeAt = Float.NaN
+            invalidate()
+        }
+
+        private fun centreX(): Float = if (centreX.isNaN()) width / 2f else centreX
+        private fun centreY(): Float = if (centreY.isNaN()) height / 2f else centreY
 
         fun setLook(fillAlpha: Float, light: Boolean, socketAlpha: Float?, frost: Boolean, rail: Boolean) {
             this.fillAlpha = fillAlpha
@@ -1582,12 +1943,10 @@ class DiskController(
 
         /** Где стрелка в координатах вида: у кромки ТАРЕЛКИ со стороны лица диска. */
         fun arrowAt(): Pair<Float, Float> {
-            val w = width.toFloat()
-            val h = height.toFloat()
             val r = plateR
             val a = Math.toRadians(facing.toDouble())
-            return (w / 2f + (r - r * ARROW_INSET) * cos(a).toFloat()) to
-                (h / 2f + (r - r * ARROW_INSET) * sin(a).toFloat())
+            return (centreX() + (r - r * ARROW_INSET) * cos(a).toFloat()) to
+                (centreY() + (r - r * ARROW_INSET) * sin(a).toFloat())
         }
 
         /** Стрелка сейчас видна — значит по ней и жмут. */
@@ -1665,8 +2024,8 @@ class DiskController(
          * кнопки — берут, это то же стекло.
          */
         fun inBody(x: Float, y: Float): Boolean {
-            val cx = width / 2f
-            val cy = height / 2f
+            val cx = centreX()
+            val cy = centreY()
             val dx = x - cx
             val dy = y - cy
             if (dx * dx + dy * dy <= plateR * plateR) return true
@@ -1688,19 +2047,21 @@ class DiskController(
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
-            val cx = w / 2f
-            val cy = h / 2f
+            drawnWidth = width
+            val cx = centreX()
+            val cy = centreY()
             val r = plateR
             if (r <= 0f) return
             // Центр в ключе кэша: окно шире, когда стекло растянуто под
-            // кнопки, и градиенты, посчитанные от прежнего центра, поехали бы
-            // вместе с ним.
-            if (shaderFor != r || shaderCentre != cx || shaderAlpha != fillAlpha || shaderLight != light ||
+            // кнопки, центр в нём стоит не посередине, и градиенты,
+            // посчитанные от прежнего центра, поехали бы вместе с ним.
+            if (shaderFor != r || shaderCentre != cx || shaderCentreY != cy || shaderAlpha != fillAlpha || shaderLight != light ||
                 shaderSocket != socketR || shaderSocketAlpha != socketAlpha ||
                 shaderRail != rail || shaderFrost != frost
             ) {
                 shaderFor = r
                 shaderCentre = cx
+                shaderCentreY = cy
                 shaderAlpha = fillAlpha
                 shaderLight = light
                 shaderSocket = socketR
@@ -1797,18 +2158,20 @@ class DiskController(
                 )
             }
             drawShade(canvas, cx, cy, r)
-            // Тело — по контуру: растянутое стекло рисуется путём, ровный
-            // круг остаётся кругом, как рисовался.
+            // Тело — по контуру: растянутое стекло — ОДНОЙ обрезкой, под
+            // которой заливка, иней и свет ложатся на всё полотно; ровный
+            // круг остаётся кругом, как рисовался. Контур меняется кадр в кадр,
+            // пока кнопки выдавливаются, и каждый путь, отданный на рисование,
+            // обсчитывается заново — одна обрезка вместо четырёх путей.
             val body = canvas.save()
             if (blobbed) {
-                val path = shape(cx, cy)
-                canvas.clipPath(path)
-                canvas.drawPath(path, fill)
+                canvas.clipPath(shape(cx, cy))
+                canvas.drawPaint(fill)
             } else {
                 canvas.drawCircle(cx, cy, r, fill)
             }
             if (frost) drawFrost(canvas, cx, cy, r)
-            if (blobbed) canvas.drawPath(shape(cx, cy), topLight) else canvas.drawCircle(cx, cy, r, topLight)
+            if (blobbed) canvas.drawPaint(topLight) else canvas.drawCircle(cx, cy, r, topLight)
             if (rail && railPaint.shader != null) canvas.drawCircle(cx, cy, ring, railPaint)
             drawSockets(canvas, cx, cy)
             canvas.restoreToCount(body)
@@ -1977,7 +2340,7 @@ class DiskController(
         }
 
         /**
-         * Иней: мелкое зерно по стеклу, плиткой 64×64 и с обрезкой по кругу.
+         * Иней: мелкое зерно по стеклу, плиткой 64×64 и с обрезкой по стеклу.
          * Зерно одно на все размеры и все шкурки — меняется только его
          * плотность: это шум, его незачем пересчитывать под каждую тарелку.
          */
@@ -1985,15 +2348,18 @@ class DiskController(
             val grain = grain ?: makeGrain().also { grain = it }
             frostPaint.shader = frostPaint.shader ?: BitmapShader(grain, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
             frostPaint.alpha = (255 * DiskLook.frostAlpha(fillAlpha, light)).toInt().coerceIn(0, 255)
-            // Обрезка своя, хотя тело уже обрезано по контуру: иней красит
-            // ВСЁ полотно, а полотно шире стекла на тень и на запас растяжки.
+            // Иней красит ВСЁ полотно, а оно шире стекла на тень и на запас
+            // растяжки. Растянутое тело уже обрезано по контуру — вторая
+            // обрезка тем же путём ничего бы не дала; круг обрезаем сами.
+            if (blobbed) {
+                canvas.drawPaint(frostPaint)
+                return
+            }
             val save = canvas.save()
-            canvas.clipPath(
-                if (blobbed) shape(cx, cy) else clip.also {
-                    it.reset()
-                    it.addCircle(cx, cy, r, Path.Direction.CW)
-                }
-            )
+            canvas.clipPath(clip.also {
+                it.reset()
+                it.addCircle(cx, cy, r, Path.Direction.CW)
+            })
             canvas.drawPaint(frostPaint)
             canvas.restoreToCount(save)
         }
