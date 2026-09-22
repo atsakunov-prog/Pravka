@@ -123,7 +123,7 @@ object MicRouting {
             } else {
                 val ok = am.setCommunicationDevice(dev)
                 log(
-                    if (ok) "маршрут: забрали вход телефону («${dev.productName}»), канал гарнитуры был поднят"
+                    if (ok) "маршрут: связь смотрела на гарнитуру — забрали вход телефону («${dev.productName}»)"
                     else "маршрут: система отказала — проверь разрешение MODIFY_AUDIO_SETTINGS"
                 )
                 ok
@@ -295,7 +295,10 @@ object MicRouting {
             if (am.isBluetoothScoOn) am.stopBluetoothSco()
         }
         return buildString {
-            append(if (wasUp) "Канал гарнитуры был поднят — вернул маршрут системе." else "Маршрут был системный.")
+            append(
+                if (wasUp) "Связь смотрела на гарнитуру — сбросил маршрут и опустил канал."
+                else "Маршрут был системный — сбросил на всякий случай."
+            )
             if (wasMuted) append(" Микрофон был заглушен — снял заглушку.")
             append('\n')
             append("Было: ").append(before)
