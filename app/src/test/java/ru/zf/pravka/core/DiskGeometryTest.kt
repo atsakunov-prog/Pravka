@@ -314,22 +314,25 @@ class DiskGeometryTest {
     }
 
     @Test
-    fun `растянутое стекло не выходит за тарелку поперёк лица и назад`() {
-        // Окно стекла растёт на выдавливание ТОЛЬКО в сторону лица: так у
-        // убранного диска меньше мёртвой зоны над и под ним. Держится это на
-        // том, что кольцо сдвигается вдоль лица, а карман от центра кольца
-        // кончается ровно на радиусе тарелки, — при любом повороте и числе
-        // кнопок (поворачивать убранный диск пальцем можно).
+    fun `окно стекла по центру кольца накрывает растяжку, а режет только спину тарелки за краем`() {
+        // Окно стекла одного размера (тарелка плюс тень) стоит по центру
+        // КОЛЬЦА: размер окна на ходу не меняется (владелец, 22.09.2026: «сначала
+        // вырастают уши и потом дерганием он прячется»). Держится это на двух
+        // вещах, при любом повороте и числе кнопок (крутить убранный диск можно):
+        // растянутое стекло не выходит за радиус тарелки от центра кольца, а
+        // то, что окно обрезает, — спина самой тарелки, и у убранного диска
+        // она за краем экрана.
         val rays = DiskGeometry.BLOB_RAYS
         val plate = DiskGeometry.plateRadius(button, gear, gap)
         val ring = DiskGeometry.ringRadius(button, gear, gap)
         val podR = DiskGeometry.podRadius(button, gap)
+        val tuck = DiskGeometry.tuckDepth(plate)
         val out = FloatArray(rays)
         val tmp = FloatArray(rays)
         for (count in 1..4) {
             val push = DiskGeometry.extrusion(plate, ring, button, count, gap)
             for (turn in 0 until 360 step 5) {
-                // Лицо вправо (0°): растяжка идёт по +x.
+                // Лицо вправо (0°): кольцо сдвинуто на push по +x.
                 val pods = FloatArray(count * 2)
                 for (i in 0 until count) {
                     val a = Math.toRadians(DiskGeometry.slotAngle(i, count, 0f, turn.toFloat()).toDouble())
@@ -339,38 +342,22 @@ class DiskGeometryTest {
                 DiskGeometry.blob(out, tmp, plate, pods, podR)
                 for (i in 0 until rays) {
                     val a = i * 2.0 * Math.PI / rays
-                    val x = (out[i] * kotlin.math.cos(a)).toFloat()
+                    // От центра КОЛЬЦА — там центр окна.
+                    val x = (out[i] * kotlin.math.cos(a)).toFloat() - push
                     val y = (out[i] * kotlin.math.sin(a)).toFloat()
                     val at = "кнопок $count, поворот $turn, луч $i"
-                    assertTrue("$at: x $x", x <= plate + push + 0.5f)
-                    assertTrue("$at: назад $x", x >= -plate - 0.5f)
+                    assertTrue("$at: вперёд $x", x <= plate + 0.5f)
                     assertTrue("$at: поперёк $y", kotlin.math.abs(y) <= plate + 0.5f)
+                    if (x < -plate - 0.5f) {
+                        // За задней стенкой окна — только сама тарелка, не растяжка…
+                        assertEquals("$at: режется растяжка", plate, out[i], 0.5f)
+                        // …и у убранного диска это за краем экрана (край — там,
+                        // где центр тарелки плюс глубина уборки).
+                        assertTrue("$at: видно обрез", x + push - tuck < 0f)
+                    }
                 }
             }
         }
-    }
-
-    @Test
-    fun `палец на кольце крутит, ушёл со стекла за полкнопки - тянет`() {
-        val ring = DiskGeometry.ringRadius(button, gear, gap)
-        val podR = DiskGeometry.podRadius(button, gap)
-        val plate = DiskGeometry.plateRadius(button, gear, gap)
-        // На кнопке и по всей её ширине — поворот.
-        assertFalse(DiskGeometry.tornOff(ring, ring, podR, button))
-        assertFalse(DiskGeometry.tornOff(ring + button / 2f, ring, podR, button))
-        // Длинный поворот ПО кольцу — всё ещё поворот: путь не считается.
-        assertFalse(DiskGeometry.tornOff(ring - button / 3f, ring, podR, button))
-        // У самой кромки стекла — ещё поворот: рука у края не решила.
-        assertFalse(DiskGeometry.tornOff(plate, ring, podR, button))
-        // За кромкой на полкнопки с лишним — переезд.
-        assertTrue(DiskGeometry.tornOff(plate + button * 0.6f, ring, podR, button))
-        // Короткое смахивание вверх от «П» у правого края (вверх-влево от
-        // центра) остаётся поворотом, вытянутый вверх палец — уже переезд.
-        val a = Math.toRadians(DiskGeometry.slotAngle(0, 4, 180f, 0f).toDouble())
-        val px = (ring * kotlin.math.cos(a)).toFloat()
-        val py = (ring * kotlin.math.sin(a)).toFloat()
-        assertFalse(DiskGeometry.tornOff(kotlin.math.hypot(px, py - button * 0.6f), ring, podR, button))
-        assertTrue(DiskGeometry.tornOff(kotlin.math.hypot(px, py - button * 2f), ring, podR, button))
     }
 
     @Test
