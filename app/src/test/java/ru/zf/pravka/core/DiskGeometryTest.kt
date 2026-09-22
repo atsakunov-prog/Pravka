@@ -204,6 +204,115 @@ class DiskGeometryTest {
         assertEquals(0f, DiskGeometry.extrusion(80f, 400f, 48, 4, 8), 0f)
     }
 
+    // Контур стекла: круг, растянутый под выдавленные кнопки (владелец,
+    // 22.09.2026: «надо чтобы они выдавливались вместе с краем!»).
+    private fun tuckedPods(): FloatArray {
+        val plate = DiskGeometry.plateRadius(button, gear, gap)
+        val ring = DiskGeometry.ringRadius(button, gear, gap)
+        val push = DiskGeometry.extrusion(plate, ring, button, 4, gap)
+        // Правый край: лицо влево, «П» вверху-слева, «З» внизу-слева.
+        val out = FloatArray(4)
+        listOf(0, 1).forEachIndexed { k, index ->
+            val a = Math.toRadians(DiskGeometry.slotAngle(index, 4, 180f, 0f).toDouble())
+            out[k * 2] = (-push + ring * kotlin.math.cos(a)).toFloat()
+            out[k * 2 + 1] = (ring * kotlin.math.sin(a)).toFloat()
+        }
+        return out
+    }
+
+    /** Докуда от центра тарелки достаёт сама КНОПКА по лучу [i] — ноль, если луч мимо. */
+    private fun buttonReach(pods: FloatArray, pod: Int, i: Int, rays: Int): Float {
+        val px = pods[pod * 2]
+        val py = pods[pod * 2 + 1]
+        val d = kotlin.math.hypot(px, py)
+        val phi = kotlin.math.atan2(py, px)
+        val a = i * 2.0 * Math.PI / rays - phi
+        val across = d * kotlin.math.sin(a)
+        val k = (button / 2f) * (button / 2f) - across * across
+        if (k <= 0.0) return 0f
+        return (d * kotlin.math.cos(a) + kotlin.math.sqrt(k)).toFloat().coerceAtLeast(0f)
+    }
+
+    @Test
+    fun `невыдавленный диск - ровный круг, контур считать незачем`() {
+        val plate = DiskGeometry.plateRadius(button, gear, gap)
+        val ring = DiskGeometry.ringRadius(button, gear, gap)
+        val podR = DiskGeometry.podRadius(button, gap)
+        // Карман кнопки касается кромки изнутри — в этом весь смысл радиуса.
+        assertEquals(plate, ring + podR, 0.01f)
+        val out = FloatArray(DiskGeometry.BLOB_RAYS)
+        val tmp = FloatArray(DiskGeometry.BLOB_RAYS)
+        val pods = FloatArray(4)
+        listOf(0, 1).forEachIndexed { k, index ->
+            val a = Math.toRadians(DiskGeometry.slotAngle(index, 4, 180f, 0f).toDouble())
+            pods[k * 2] = (ring * kotlin.math.cos(a)).toFloat()
+            pods[k * 2 + 1] = (ring * kotlin.math.sin(a)).toFloat()
+        }
+        assertFalse(DiskGeometry.blob(out, tmp, plate, pods, podR))
+        assertEquals(plate, out[0], 0.01f)
+        assertEquals(plate, out[90], 0.01f)
+    }
+
+    @Test
+    fun `выдавленные кнопки тянут стекло за собой и остаются под ним`() {
+        val rays = DiskGeometry.BLOB_RAYS
+        val plate = DiskGeometry.plateRadius(button, gear, gap)
+        val podR = DiskGeometry.podRadius(button, gap)
+        val pods = tuckedPods()
+        val out = FloatArray(rays)
+        val tmp = FloatArray(rays)
+        assertTrue(DiskGeometry.blob(out, tmp, plate, pods, podR))
+        for (pod in 0..1) {
+            for (i in 0 until rays) {
+                // Стекло нигде не тоньше самой кнопки: кнопка не торчит из него.
+                assertTrue(
+                    "луч $i, кнопка $pod: стекло ${out[i]}, кнопка ${buttonReach(pods, pod, i, rays)}",
+                    out[i] >= buttonReach(pods, pod, i, rays) - 0.01f,
+                )
+            }
+            // И над кнопкой стекло ещё есть — карман, а не обрез по кромке.
+            val d = kotlin.math.hypot(pods[pod * 2], pods[pod * 2 + 1])
+            val at = Math.toDegrees(
+                kotlin.math.atan2(pods[pod * 2 + 1], pods[pod * 2]).toDouble(),
+            ).let { DiskGeometry.norm(it.toFloat()) }
+            val i = (at / 360f * rays).toInt() % rays
+            assertTrue(out[i] > d + button / 2f)
+        }
+    }
+
+    @Test
+    fun `контур нигде не тоньше тарелки и без обрывов`() {
+        val rays = DiskGeometry.BLOB_RAYS
+        val plate = DiskGeometry.plateRadius(button, gear, gap)
+        val out = FloatArray(rays)
+        val tmp = FloatArray(rays)
+        DiskGeometry.blob(out, tmp, plate, tuckedPods(), DiskGeometry.podRadius(button, gap))
+        var jump = 0f
+        for (i in 0 until rays) {
+            assertTrue(out[i] >= plate - 0.01f)
+            jump = maxOf(jump, kotlin.math.abs(out[i] - out[(i + 1) % rays]))
+        }
+        // Сглаживание превращает обрыв в плечо: сырой максимум прыгал бы на
+        // добрых два десятка точек, а приклеенный шарик читается сразу.
+        assertTrue("скачок $jump", jump < 10f)
+    }
+
+    @Test
+    fun `краешек между кнопками остаётся краешком`() {
+        val rays = DiskGeometry.BLOB_RAYS
+        val plate = DiskGeometry.plateRadius(button, gear, gap)
+        val out = FloatArray(rays)
+        val tmp = FloatArray(rays)
+        DiskGeometry.blob(out, tmp, plate, tuckedPods(), DiskGeometry.podRadius(button, gap))
+        // Луч на лице (180°) — ровно между «П» и «З».
+        val face = out[rays / 2]
+        assertTrue(face >= plate)
+        // Растяжка сюда добирается, но краешек не съедает: он всё ещё тоньше
+        // трети радиуса, и стрелке на кромке есть где стоять.
+        assertTrue("лицо $face", face < plate * 1.3f)
+        assertTrue(face - DiskGeometry.tuckDepth(plate) > plate * DiskGeometry.SLIVER)
+    }
+
     @Test
     fun `окно за краем целиком - невидимо, торчит краем - видимо`() {
         assertFalse(DiskGeometry.onScreen(x = 1080, y = 500, size = 48, frameW = 1080, frameH = 2000, margin = 4))

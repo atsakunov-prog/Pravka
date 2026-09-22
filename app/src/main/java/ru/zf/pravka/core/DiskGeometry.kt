@@ -2,8 +2,10 @@ package ru.zf.pravka.core
 
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * Геометрия диска плавающих кнопок: шестерёнка в центре, кнопки по кольцу
@@ -96,6 +98,89 @@ object DiskGeometry {
      */
     fun extrusion(plateRadius: Float, ringRadius: Float, buttonSize: Int, count: Int, edge: Int): Float =
         (tuckDepth(plateRadius) + buttonSize / 2f + edge - frontReach(ringRadius, count)).coerceAtLeast(0f)
+
+    /** Сколько лучей у контура стекла: два градуса на луч — глазу хватает с запасом. */
+    const val BLOB_RAYS = 180
+
+    /**
+     * Сколько раз пройтись сглаживанием по кольцу лучей. Шесть проходов
+     * трёхточечным окном — это разброс около четырёх градусов: ступенька,
+     * с которой начинается кнопка, размазывается в плечо градусов на
+     * восемь, а макушка над самой кнопкой оседает меньше чем на пиксель.
+     */
+    const val BLOB_SMOOTH = 6
+
+    /**
+     * Радиус «кармана» стекла под кнопкой: полкнопки плюс те же поля, что
+     * тарелка даёт кнопке у своей кромки. Отсюда главное свойство: у
+     * невыдавленного диска карман касается кромки изнутри
+     * (`ringRadius + podRadius == plateRadius`), то есть контур остаётся
+     * ровным кругом — растягивать нечего.
+     */
+    fun podRadius(buttonSize: Int, gap: Int): Float = buttonSize / 2f + gap * 0.75f
+
+    /**
+     * Контур стекла: круг тарелки, РАСТЯНУТЫЙ под каждую выдавленную кнопку.
+     * Владелец (22.09.2026): «надо сделать так, чтобы кнопки растягивали диск
+     * под собой. А то сейчас они выезжают. Надо чтобы они выдавливались
+     * вместе с краем!»
+     *
+     * Считается лучами из центра тарелки: по каждому лучу берём самое дальнее
+     * из того, что на нём есть, — кромка тарелки или дальний край кармана
+     * кнопки. Так контур получается заведомо цельным и без самопересечений,
+     * какими бы ни были размеры и поворот; объединять окружности честной
+     * геометрией пришлось бы с разбором вырожденных случаев, а ошибка там
+     * стоит дырки в стекле.
+     *
+     * Сырой максимум даёт обрыв там, где луч перестаёт задевать карман, —
+     * это читалось бы как приклеенный шарик. Поэтому кольцо лучей
+     * СГЛАЖИВАЕТСЯ: обрыв превращается в плечо, и стекло тянется за кнопкой,
+     * как резина. Макушка при этом почти не оседает — над кнопкой профиль
+     * пологий.
+     *
+     * [pods] — центры карманов парами (x, y) от центра тарелки. Возвращает
+     * true, если стекло и правда растянуто: иначе контур — ровный круг, и
+     * звать его лучами незачем. Буферы [out] и [tmp] — снаружи: контур
+     * считается кадр в кадр, и мусорить массивами тут нельзя.
+     */
+    fun blob(out: FloatArray, tmp: FloatArray, plateRadius: Float, pods: FloatArray, podRadius: Float): Boolean {
+        val n = out.size
+        for (i in 0 until n) out[i] = plateRadius
+        var stretched = false
+        var p = 0
+        while (p + 1 < pods.size) {
+            val px = pods[p]
+            val py = pods[p + 1]
+            p += 2
+            val d = hypot(px, py)
+            // Карман целиком под тарелкой — тянуть нечего.
+            if (d + podRadius <= plateRadius + 0.5f) continue
+            stretched = true
+            val phi = atan2(py, px)
+            for (i in 0 until n) {
+                val a = i * 2.0 * Math.PI / n - phi
+                val across = d * sin(a)
+                val k = podRadius * podRadius - across * across
+                if (k <= 0.0) continue
+                val far = (d * cos(a) + sqrt(k)).toFloat()
+                if (far > out[i]) out[i] = far
+            }
+        }
+        if (!stretched) return false
+        repeat(BLOB_SMOOTH) { smoothRing(out, tmp) }
+        return true
+    }
+
+    /** Один проход сглаживания по кольцу: среднее с соседями, через ноль. */
+    private fun smoothRing(r: FloatArray, tmp: FloatArray) {
+        val n = r.size
+        for (i in 0 until n) {
+            val prev = r[if (i == 0) n - 1 else i - 1]
+            val next = r[if (i == n - 1) 0 else i + 1]
+            tmp[i] = (prev + r[i] + next) / 3f
+        }
+        tmp.copyInto(r, 0, 0, n)
+    }
 
     /**
      * Куда смотрит диск — внутрь экрана: в левой половине вправо (0°), в

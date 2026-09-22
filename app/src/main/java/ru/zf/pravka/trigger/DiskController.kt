@@ -135,6 +135,13 @@ class DiskController(
         private const val FLICK_PAUSE_MS = 90L
         /** Второй тап по стеклу не позже этого — двойной: веер быстрых настроек. */
         private const val DOUBLE_TAP_MS = 320L
+        /**
+         * Столько после тапа по стрелке следующий тап значит «ещё»: диск от
+         * первого тапа уже ПОЕХАЛ, и под пальцем стоит не стрелка, а то, что
+         * на её место приехало. Окно длиннее обычного двойного тапа: второй
+         * тап делается не вслепую, а в ответ на увиденное движение.
+         */
+        private const val ARROW_AGAIN_MS = 500L
         /** Долгое нажатие на стекло — выдвинуть диск целиком (или убрать обратно). Как у кнопок. */
         private const val LONG_PRESS_MS = 450L
         /**
@@ -393,8 +400,22 @@ class DiskController(
     private class Dims(val button: Int, val gear: Int, val gap: Int, val shadow: Int) {
         val ring = DiskGeometry.ringRadius(button, gear, gap)
         val plate = DiskGeometry.plateRadius(button, gear, gap)
-        /** Окно стекла — тарелка плюс тень по кругу. */
-        val window = ((plate + shadow) * 2).roundToInt()
+    }
+
+    /**
+     * Сторона окна стекла: тарелка, тень и запас под растяжку — стекло тянется
+     * за выдавленными кнопками и вылезает за круг тарелки. Дальше кнопки не
+     * уедут: карман плюс кольцо — это ровно радиус тарелки.
+     *
+     * Размер КВАНТУЕТСЯ. Окно меняет его через `updateViewLayout`, а это
+     * пересоздание поверхности: считать по живому выдавливанию значило бы
+     * менять поверхность каждый кадр уборки. Шаг в четверть кнопки — четыре
+     * смены за весь выезд вместо шестидесяти.
+     */
+    private fun plateWindow(d: Dims): Int {
+        val step = (d.button / 4).coerceAtLeast(1)
+        val need = ((d.plate + extrude + d.shadow) * 2).roundToInt()
+        return ((need + step - 1) / step) * step
     }
 
     private fun dims(): Dims {
@@ -553,11 +574,20 @@ class DiskController(
                 slot.button.followTo(x, y, settle = false, link = 1, snap = true)
                 slot.button.setOffscreen(!DiskGeometry.onScreen(x, y, d.button, w, h, margin))
             }
-            // Тени кнопок рисует стекло: своё окно кнопки у неё ровно по
-            // кружку и наружу ничего не выпустит (см. `BubbleSkin`). Кнопки
-            // выдавлены — тени едут за ними, иначе на выезде пятна остались
-            // бы лежать там, где кнопок уже нет.
-            plate?.setSockets(d.ring, d.button / 2f, socketAngles, bx - cx, by - cy)
+            // Стекло знает, где тело диска: по этим числам оно и тени под
+            // кнопками кладёт, и СВОЙ КОНТУР тянет за выдавленными кнопками
+            // (владелец, 22.09.2026: «надо чтобы они выдавливались вместе с
+            // краем»). Одни данные на оба — иначе карман и тень разъехались
+            // бы на первом кадре поворота.
+            plate?.setBody(
+                d.plate,
+                d.ring,
+                d.button / 2f,
+                DiskGeometry.podRadius(d.button, d.gap),
+                socketAngles,
+                bx - cx,
+                by - cy,
+            )
         }
         placeHead()
         placePlate(d)
@@ -667,6 +697,16 @@ class DiskController(
             MotionEvent.ACTION_DOWN -> {
                 // Утопленный диск это касание ДОСТАЁТ — и больше ничего.
                 if (wakeIfSunk()) return
+                // Второй тап подряд после стрелки — «покажи диск целиком», даже
+                // если под палец к этому мигу подъехала кнопка: он целился в
+                // стрелку, а не в запись (то же правило, что у спящего диска).
+                if (arrowAgain()) {
+                    slots.forEach { it.button.cancelGesture() }
+                    head?.cancelGesture()
+                    Haptics.tick(service)
+                    arrowTap()
+                    return
+                }
                 if (sliding) return
                 stopMotion()
                 downRawX = rawX
@@ -935,20 +975,19 @@ class DiskController(
             val p = plate ?: return false
             if (!p.arrowShown()) return false
             val (ax, ay) = p.arrowAt()
-            val reach = (minOf(v.width, v.height) / 2f) * ARROW_TOUCH
+            val reach = p.arrowReach()
             val dx = x - ax
             val dy = y - ay
             return dx * dx + dy * dy <= reach * reach
         }
 
-        /** Внутри тарелки — без тени: тень не предмет, за неё не берут. */
-        private fun inside(v: View, x: Float, y: Float): Boolean {
-            val half = v.width / 2f
-            val r = half - dp(SHADOW_DP)
-            val dx = x - half
-            val dy = y - half
-            return dx * dx + dy * dy <= r * r
-        }
+        /**
+         * Внутри стекла — без тени: тень не предмет, за неё не берут. Считает
+         * сам вид: у него контур, растянутый под кнопки, и карман кнопки —
+         * такое же стекло, как тарелка.
+         */
+        private fun inside(v: View, x: Float, y: Float): Boolean =
+            (v as? PlateView)?.inBody(x, y) ?: false
 
         // Сырые координаты второго указателя: getRawX(index) есть только с
         // API 29, а сдвиг между указателями в окне тот же, что на экране.
@@ -1013,21 +1052,20 @@ class DiskController(
                         finger(key(event.getPointerId(i)), rawX(event, i), rawY(event, i), MotionEvent.ACTION_UP)
                     }
                     if (pinched || held) return true
-                    if (onArrow) {
-                        // Стрелка сработала на отпускании, а не на нажатии:
-                        // палец, поехавший со стрелки, всё ещё везёт диск.
-                        onArrow = false
-                        if (!dragging && event.actionMasked == MotionEvent.ACTION_UP) {
-                            Haptics.tick(service)
-                            arrowTap()
-                        } else if (dragging) {
-                            slide(cx, cy, dropped = true)
-                        }
-                        return true
-                    }
+                    // Стрелка срабатывает на ОТПУСКАНИИ, а не на нажатии:
+                    // палец, поехавший со стрелки, всё ещё везёт диск.
+                    val arrow = onArrow
+                    onArrow = false
                     if (dragging) {
                         slide(cx, cy, dropped = true)
                     } else if (event.actionMasked == MotionEvent.ACTION_UP) {
+                        // Сюда же — второй тап подряд после стрелки: он пришёл
+                        // по стеклу, потому что стрелка от первого уже уехала.
+                        if (arrow || arrowAgain()) {
+                            Haptics.tick(service)
+                            arrowTap()
+                            return true
+                        }
                         val now = SystemClock.uptimeMillis()
                         if (now - lastTapAt < DOUBLE_TAP_MS) {
                             lastTapAt = 0L
@@ -1127,9 +1165,8 @@ class DiskController(
      * каждом обычном тапе — а тапают тут одной рукой, на ходу.
      */
     private fun arrowTap() {
-        val now = SystemClock.uptimeMillis()
-        val second = now - arrowTapAt < DOUBLE_TAP_MS
-        arrowTapAt = now
+        val second = arrowAgain()
+        arrowTapAt = SystemClock.uptimeMillis()
         onTouched?.invoke()
         when {
             tucked -> halfOut()
@@ -1137,6 +1174,16 @@ class DiskController(
             else -> retract()
         }
     }
+
+    /**
+     * Идёт ли окно «ещё» — второй тап подряд после стрелки. Считается от
+     * ПЕРВОГО ТАПА, а не от места: к этому мигу стрелка уехала вместе с
+     * диском, и второй тап честно попадает мимо неё — по стеклу или по
+     * подъехавшей кнопке. Ждать окна перед первым тапом нельзя (задержка на
+     * каждом обычном), поэтому ждём после него.
+     */
+    private fun arrowAgain(): Boolean =
+        arrowTapAt > 0L && SystemClock.uptimeMillis() - arrowTapAt < ARROW_AGAIN_MS
 
     /**
      * Утопить: уйти за край ещё глубже, на долю кнопки [Settings.diskSinkPctFlow].
@@ -1343,7 +1390,7 @@ class DiskController(
     private fun showPlate() {
         if (plate != null || allHidden || folded) return
         val d = dims()
-        val size = d.window
+        val size = plateWindow(d)
         val v = PlateView(service, d.shadow.toFloat(), dp(SHADOW_DROP_DP).toFloat()).apply {
             setLook(plateAlpha(), lightGlass, socketOverride, frost, rail)
             setOnTouchListener(PlateTouch())
@@ -1360,8 +1407,8 @@ class DiskController(
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (cx - d.plate - d.shadow).roundToInt()
-            y = (cy - d.plate - d.shadow).roundToInt()
+            x = (cx - size / 2f).roundToInt()
+            y = (cy - size / 2f).roundToInt()
         }
         plate = v
         plateParams = p
@@ -1377,10 +1424,11 @@ class DiskController(
     private fun placePlate(d: Dims) {
         val v = plate ?: return
         val p = plateParams ?: return
-        p.width = d.window
-        p.height = d.window
-        p.x = (cx - d.plate - d.shadow).roundToInt()
-        p.y = (cy - d.plate - d.shadow).roundToInt()
+        val size = plateWindow(d)
+        p.width = size
+        p.height = size
+        p.x = (cx - size / 2f).roundToInt()
+        p.y = (cy - size / 2f).roundToInt()
         runCatching { windowManager.updateViewLayout(v, p) }
     }
 
@@ -1427,7 +1475,6 @@ class DiskController(
      */
     private class PlateView(context: Context, private val shadow: Float, private val drop: Float) : View(context) {
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        private val shade = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
         private val socket = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val topLight = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -1440,6 +1487,7 @@ class DiskController(
         private var frost = true
         private var rail = true
         private var shaderFor = 0f
+        private var shaderCentre = Float.NaN
         private var shaderAlpha = -1f
         private var shaderLight = true
         private var shaderSocket = -1f
@@ -1473,15 +1521,31 @@ class DiskController(
         }
         private val arrowPath = Path()
 
-        // Где стоят кнопки: радиус кольца, радиус кнопки и углы. Диск
-        // называет их на каждой расстановке; стекло рисует под ними тени.
-        // Сдвиг — выдавливание убранного диска: кольцо уезжает из стекла на
-        // экран, и тени обязаны уехать с ним.
+        // Где стоит тело диска: тарелка, кольцо кнопок с их углами, радиус
+        // кнопки (под неё тень) и радиус кармана (под неё стекло). Диск
+        // называет это на каждой расстановке. Сдвиг — выдавливание убранного
+        // диска: кольцо уезжает из стекла на экран, и тени с карманами едут
+        // за ним.
+        private var plateR = 0f
         private var ring = 0f
         private var socketR = 0f
+        private var podR = 0f
         private var angles = FloatArray(0)
         private var shiftX = 0f
         private var shiftY = 0f
+
+        // Контур стекла: радиусы по лучам (`DiskGeometry.blob`) и путь по ним.
+        // `blobbed` — стекло правда растянуто; ровный круг рисуется как
+        // рисовался, без пути и без обрезки.
+        private val blobR = FloatArray(DiskGeometry.BLOB_RAYS)
+        private val blobTmp = FloatArray(DiskGeometry.BLOB_RAYS)
+        private var pods = FloatArray(0)
+        private var blobbed = false
+        private val shape = Path()
+        private var shapeAt = Float.NaN
+        private val shadeFlat = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val fringe = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val podFringe = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
         fun setLook(fillAlpha: Float, light: Boolean, socketAlpha: Float?, frost: Boolean, rail: Boolean) {
             this.fillAlpha = fillAlpha
@@ -1516,11 +1580,11 @@ class DiskController(
             invalidate()
         }
 
-        /** Где стрелка в координатах вида: у кромки со стороны лица диска. */
+        /** Где стрелка в координатах вида: у кромки ТАРЕЛКИ со стороны лица диска. */
         fun arrowAt(): Pair<Float, Float> {
             val w = width.toFloat()
             val h = height.toFloat()
-            val r = minOf(w, h) / 2f - shadow
+            val r = plateR
             val a = Math.toRadians(facing.toDouble())
             return (w / 2f + (r - r * ARROW_INSET) * cos(a).toFloat()) to
                 (h / 2f + (r - r * ARROW_INSET) * sin(a).toFloat())
@@ -1530,12 +1594,19 @@ class DiskController(
         fun arrowShown(): Boolean = atEdge && !allHiddenView
 
         /**
-         * Куда класть тени кнопок. Перерисовываемся не на каждый вызов, а
-         * когда картинка правда поехала: диск зовёт это кадр за кадром, пока
-         * крутится, и четверть градуса глазу не видна, а перерисовка стоит.
+         * Где тело диска: тарелка [plate], кольцо кнопок [ring] с углами
+         * [src] и сдвигом выдавливания, радиус кнопки [radius] (под неё
+         * тень) и радиус кармана [pod] (под неё стекло). Отсюда стекло берёт
+         * И тени под кнопками, И свой контур — один источник на оба, иначе
+         * карман и тень разъехались бы на первом же кадре поворота.
+         *
+         * Перерисовываемся не на каждый вызов, а когда картинка правда
+         * поехала: диск зовёт это кадр за кадром, пока крутится, и четверть
+         * градуса глазу не видна, а пересчёт контура и перерисовка стоят.
          */
-        fun setSockets(ring: Float, radius: Float, src: FloatArray, shiftX: Float, shiftY: Float) {
-            var moved = this.ring != ring || socketR != radius || angles.size != src.size ||
+        fun setBody(plate: Float, ring: Float, radius: Float, pod: Float, src: FloatArray, shiftX: Float, shiftY: Float) {
+            var moved = plateR != plate || this.ring != ring || socketR != radius || podR != pod ||
+                angles.size != src.size ||
                 abs(this.shiftX - shiftX) > SOCKET_STEP_PX || abs(this.shiftY - shiftY) > SOCKET_STEP_PX
             if (!moved) {
                 for (i in src.indices) {
@@ -1546,14 +1617,72 @@ class DiskController(
                 }
             }
             if (!moved) return
+            plateR = plate
             this.ring = ring
             this.socketR = radius
+            this.podR = pod
             this.shiftX = shiftX
             this.shiftY = shiftY
             if (angles.size != src.size) angles = FloatArray(src.size)
             src.copyInto(angles)
+            reshape()
             invalidate()
         }
+
+        /** Пересчитать карманы и контур: тело поехало. */
+        private fun reshape() {
+            if (pods.size != angles.size * 2) pods = FloatArray(angles.size * 2)
+            for (i in angles.indices) {
+                val a = Math.toRadians(angles[i].toDouble())
+                pods[i * 2] = shiftX + ring * cos(a).toFloat()
+                pods[i * 2 + 1] = shiftY + ring * sin(a).toFloat()
+            }
+            blobbed = DiskGeometry.blob(blobR, blobTmp, plateR, pods, podR)
+            shapeAt = Float.NaN
+        }
+
+        /**
+         * Путь по лучам контура. Строится на смену формы или центра вида
+         * (окно шире, когда стекло растянуто) и живёт до следующей.
+         */
+        private fun shape(cx: Float, cy: Float): Path {
+            if (shapeAt == cx) return shape
+            shape.reset()
+            val n = blobR.size
+            for (i in 0 until n) {
+                val a = i * 2.0 * Math.PI / n
+                val x = cx + blobR[i] * cos(a).toFloat()
+                val y = cy + blobR[i] * sin(a).toFloat()
+                if (i == 0) shape.moveTo(x, y) else shape.lineTo(x, y)
+            }
+            shape.close()
+            shapeAt = cx
+            return shape
+        }
+
+        /**
+         * Тело стекла под точкой вида: за тень диск не берут, за карман
+         * кнопки — берут, это то же стекло.
+         */
+        fun inBody(x: Float, y: Float): Boolean {
+            val cx = width / 2f
+            val cy = height / 2f
+            val dx = x - cx
+            val dy = y - cy
+            if (dx * dx + dy * dy <= plateR * plateR) return true
+            if (!blobbed) return false
+            var p = 0
+            while (p + 1 < pods.size) {
+                val px = dx - pods[p]
+                val py = dy - pods[p + 1]
+                p += 2
+                if (px * px + py * py <= podR * podR) return true
+            }
+            return false
+        }
+
+        /** Мишень стрелки: шире рисунка, и считается от ТАРЕЛКИ, а не от окна. */
+        fun arrowReach(): Float = (plateR + shadow) * ARROW_TOUCH
 
         override fun onDraw(canvas: Canvas) {
             val w = width.toFloat()
@@ -1561,13 +1690,17 @@ class DiskController(
             if (w <= 0f || h <= 0f) return
             val cx = w / 2f
             val cy = h / 2f
-            val r = minOf(w, h) / 2f - shadow
+            val r = plateR
             if (r <= 0f) return
-            if (shaderFor != r || shaderAlpha != fillAlpha || shaderLight != light ||
+            // Центр в ключе кэша: окно шире, когда стекло растянуто под
+            // кнопки, и градиенты, посчитанные от прежнего центра, поехали бы
+            // вместе с ним.
+            if (shaderFor != r || shaderCentre != cx || shaderAlpha != fillAlpha || shaderLight != light ||
                 shaderSocket != socketR || shaderSocketAlpha != socketAlpha ||
                 shaderRail != rail || shaderFrost != frost
             ) {
                 shaderFor = r
+                shaderCentre = cx
                 shaderAlpha = fillAlpha
                 shaderLight = light
                 shaderSocket = socketR
@@ -1583,13 +1716,28 @@ class DiskController(
                     floatArrayOf(0f, 0.55f, 1f),
                     Shader.TileMode.CLAMP,
                 )
-                // Тень: плотная под тарелкой, к внешнему краю сходит в ноль.
+                // Тень: под телом ровная, снаружи мягкая бахрома. Раньше это
+                // был один радиальный градиент от центра тарелки; с
+                // растянутым стеклом так нельзя — два градиента внахлёст дали
+                // бы под перемычкой пятно вдвое плотнее. Тело поэтому
+                // закрашивается РОВНО (один путь — нахлёста нет), а бахрома
+                // рисуется только за его пределами.
                 val dark = DiskLook.black(DiskLook.shadowAlpha(fillAlpha))
+                shadeFlat.color = dark
                 val outer = r + shadow
-                shade.shader = RadialGradient(
-                    cx, cy + drop, outer,
+                fringe.shader = RadialGradient(
+                    cx, cy, outer,
                     intArrayOf(dark, dark, 0),
-                    floatArrayOf(0f, (r - drop) / outer, 1f),
+                    floatArrayOf(0f, r / outer, 1f),
+                    Shader.TileMode.CLAMP,
+                )
+                // Бахрома кармана строится ВОКРУГ НУЛЯ и одна на все карманы:
+                // холст под каждый сдвигается сам, как у теней кнопок.
+                val podOuter = podR + shadow
+                podFringe.shader = if (podR <= 0f) null else RadialGradient(
+                    0f, 0f, podOuter,
+                    intArrayOf(dark, dark, 0),
+                    floatArrayOf(0f, podR / podOuter, 1f),
                     Shader.TileMode.CLAMP,
                 )
                 // Свет сверху: верх тарелки ярче, низ уходит в ноль. Мягкая
@@ -1648,15 +1796,58 @@ class DiskController(
                     Shader.TileMode.CLAMP,
                 )
             }
-            canvas.drawCircle(cx, cy + drop, r + shadow, shade)
-            canvas.drawCircle(cx, cy, r, fill)
+            drawShade(canvas, cx, cy, r)
+            // Тело — по контуру: растянутое стекло рисуется путём, ровный
+            // круг остаётся кругом, как рисовался.
+            val body = canvas.save()
+            if (blobbed) {
+                val path = shape(cx, cy)
+                canvas.clipPath(path)
+                canvas.drawPath(path, fill)
+            } else {
+                canvas.drawCircle(cx, cy, r, fill)
+            }
             if (frost) drawFrost(canvas, cx, cy, r)
-            canvas.drawCircle(cx, cy, r, topLight)
+            if (blobbed) canvas.drawPath(shape(cx, cy), topLight) else canvas.drawCircle(cx, cy, r, topLight)
             if (rail && railPaint.shader != null) canvas.drawCircle(cx, cy, ring, railPaint)
             drawSockets(canvas, cx, cy)
-            canvas.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
+            canvas.restoreToCount(body)
+            if (blobbed) canvas.drawPath(shape(cx, cy), rim)
+            else canvas.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
             if (workOn > 0f && workProgress > 0f) drawWork(canvas, cx, cy, r)
             if (arrowShown()) drawArrow(canvas, cx, cy, r)
+        }
+
+        /**
+         * Тень под стеклом: ровная плотность под всем телом и мягкая бахрома
+         * снаружи. Тело закрашивается одним путём, поэтому нахлёста плотностей
+         * внутри него нет; бахрома идёт за вычетом тела (`clipOutPath`), и
+         * там, где карман кнопки подходит к тарелке, она лишь чуть густеет —
+         * складка в месте, где стекло растянуто, глазу как раз понятна.
+         */
+        private fun drawShade(canvas: Canvas, cx: Float, cy: Float, r: Float) {
+            val save = canvas.save()
+            canvas.translate(0f, drop)
+            val path = if (blobbed) shape(cx, cy) else clip.also {
+                it.reset()
+                it.addCircle(cx, cy, r, Path.Direction.CW)
+            }
+            canvas.drawPath(path, shadeFlat)
+            canvas.clipOutPath(path)
+            canvas.drawCircle(cx, cy, r + shadow, fringe)
+            if (blobbed && podFringe.shader != null) {
+                var p = 0
+                while (p + 1 < pods.size) {
+                    val px = pods[p]
+                    val py = pods[p + 1]
+                    p += 2
+                    val at = canvas.save()
+                    canvas.translate(cx + px, cy + py)
+                    canvas.drawCircle(0f, 0f, podR + shadow, podFringe)
+                    canvas.restoreToCount(at)
+                }
+            }
+            canvas.restoreToCount(save)
         }
 
         /**
@@ -1794,11 +1985,15 @@ class DiskController(
             val grain = grain ?: makeGrain().also { grain = it }
             frostPaint.shader = frostPaint.shader ?: BitmapShader(grain, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
             frostPaint.alpha = (255 * DiskLook.frostAlpha(fillAlpha, light)).toInt().coerceIn(0, 255)
+            // Обрезка своя, хотя тело уже обрезано по контуру: иней красит
+            // ВСЁ полотно, а полотно шире стекла на тень и на запас растяжки.
             val save = canvas.save()
-            canvas.clipPath(clip.also {
-                it.reset()
-                it.addCircle(cx, cy, r, Path.Direction.CW)
-            })
+            canvas.clipPath(
+                if (blobbed) shape(cx, cy) else clip.also {
+                    it.reset()
+                    it.addCircle(cx, cy, r, Path.Direction.CW)
+                }
+            )
             canvas.drawPaint(frostPaint)
             canvas.restoreToCount(save)
         }
