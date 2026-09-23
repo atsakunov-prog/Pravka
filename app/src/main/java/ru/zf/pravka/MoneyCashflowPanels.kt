@@ -180,8 +180,10 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
     val loans = remember(entries) { MoneyCashflow.loanDebt(entries, now) }
     var editing by remember { mutableStateOf<String?>(null) }
 
-    val assets = accounts.filter { (it.kop ?: -1) >= 0 }
-    val debts = accounts.filter { (it.kop ?: 0) < 0 }
+    // Долговой счёт — в обязательствах и с нулём: «Займ от ЗФ 0» в активах читался как деньги.
+    val assets = accounts.filter { it.kop != null && it.kop >= 0 && !MoneyCashflow.isDebtAccount(it.name) }
+    val debts = accounts.filter { it.kop != null && (it.kop < 0 || MoneyCashflow.isDebtAccount(it.name)) }
+    val lenders = remember(entries) { MoneyCashflow.loansByLender(entries, now) }
     val unknown = accounts.filter { it.kop == null }
     val assetSum = assets.sumOf { it.kop ?: 0 }
     val debtSum = debts.sumOf { it.kop ?: 0 } - loans
@@ -193,13 +195,14 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
         Spacer(Modifier.height(8.dp))
         Text("Обязательства", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
         for (a in debts) AccountRow(a) { editing = a.name }
-        if (loans > 0) {
+        // Займы у людей — по каждому, кто давал: получено минус возвращено по журналу.
+        for ((who, kop) in lenders.filter { it.second > 0 }) {
             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Text("Займы у людей", style = MaterialTheme.typography.bodyMedium)
+                    Text("Займ: $who", style = MaterialTheme.typography.bodyMedium)
                     PaperHint("получено минус возвращено, по журналу с первой выписки")
                 }
-                Text(MoneyFormat.k(-loans), style = MaterialTheme.typography.bodyMedium, color = spentColor())
+                Text(MoneyFormat.k(-kop), style = MaterialTheme.typography.bodyMedium, color = spentColor())
             }
         }
         TotalRow("Итого долги", debtSum, spentColor())

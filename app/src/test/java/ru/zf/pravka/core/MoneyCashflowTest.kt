@@ -216,4 +216,21 @@ class MoneyCashflowTest {
         // Клиент: 2 000 000 + 3 750 000; выдано Саше: 2 000 000 + 3 880 000.
         assertEquals(-13_000_000L, acc.kop)
     }
+
+    @Test fun loansGroupByLender() {
+        fun l(id: String, d: String, rub: Long, what: String) =
+            MoneyEntry(id = id, owner = "marianna", source = MoneyEntry.Source.ALFA, ts = at(d), rubKop = rub * 100, what = what, category = "loan")
+        val list = listOf(
+            l("a", "2026-02-08", -300_000, "Марианна Б."),
+            l("b", "2026-02-08", 300_000, "Белоусова Марианна Евгеньевна"),
+            l("c", "2026-03-31", 70_000, "Белоусова Марианна Евгеньевна"),
+            l("d", "2026-09-18", 100_000, "Сергей Ц."),
+            l("e", "2026-09-23", -100_000, "Папе: возврат долга"),
+        )
+        // Белоусова одна, как бы её ни писал банк; папин долг закрыт — строки нет.
+        assertEquals(listOf("Марианна Белоусова" to 7_000_000L), MoneyCashflow.loansByLender(list, at("2026-09-30")))
+        assertEquals(7_000_000L, MoneyCashflow.loanDebt(list, at("2026-09-30")))
+        assertTrue(MoneyCashflow.isDebtAccount(MoneyCashflow.LOAN_DEBT) && MoneyCashflow.isDebtAccount("Т-Банк · Платинум"))
+        assertTrue(!MoneyCashflow.isDebtAccount("Т-Банк · Black Premium"))
+    }
 }

@@ -424,5 +424,30 @@ object MoneyCashflow {
      * и экран это говорит.
      */
     fun loanDebt(entries: List<MoneyEntry>, at: Long): Long =
-        entries.filter { it.live() && it.category == "loan" && it.ts <= at }.sumOf { it.rubKop }.coerceAtLeast(0L)
+        loansByLender(entries, at).filter { it.second > 0 }.sumOf { it.second }
+
+    /**
+     * Один человек — одна строка займа, как бы его ни писали банки: у Альфы
+     * «Марианна Б.» уходит, а «Белоусова Марианна Евгеньевна» приходит; папа —
+     * «Сергей Ц.» переводом и «Папе» наличными.
+     */
+    private val LENDERS = listOf(
+        Regex("белоусова|марианна б\\.", RegexOption.IGNORE_CASE) to "Марианна Белоусова",
+        Regex("сергей ц\\.|папе|папа", RegexOption.IGNORE_CASE) to "Папа",
+    )
+
+    fun lenderOf(what: String): String = LENDERS.firstOrNull { it.first.containsMatchIn(what) }?.second ?: what.trim()
+
+    /** Займы у людей по заимодавцу: получено минус возвращено; ненулевые, крупные первыми. */
+    fun loansByLender(entries: List<MoneyEntry>, at: Long): List<Pair<String, Long>> =
+        entries.filter { it.live() && it.category == "loan" && it.ts <= at }
+            .groupBy { lenderOf(it.what) }
+            .map { (k, v) -> k to v.sumOf { it.rubKop } }
+            .filter { it.second != 0L }
+            .sortedByDescending { kotlin.math.abs(it.second) }
+
+    /** Счета, которые по природе долг: и с нулём стоят в обязательствах, не в активах. */
+    fun isDebtAccount(name: String): Boolean =
+        name == LOAN_DEBT || name == NATASHA_DEBT || name.contains("кредит", true) || name.contains("Долями") || name.contains("Платинум")
+
 }
