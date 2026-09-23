@@ -78,6 +78,8 @@ data class MoneyEntry(
         TINKOFF("tinkoff", "Тиньков"),
         ALFA("alfa", "Альфа"),
         MKB("mkb", "МКБ"),
+        /** Расчётный счёт ООО «Знакомый финансист» в Т-Бизнесе: сторона ЗФ. */
+        TBIZ("tbiz", "ЗФ"),
         PLATI("plati", "Плати по миру"),
         /** Пуш Т-Банка: живая картина недели до выписки, выписка его потом заменяет. */
         PUSH("push", "пуш"),
@@ -105,7 +107,7 @@ data class MoneyEntry(
     }
 
     val expense: Boolean get() = rubKop < 0
-    val fromBank: Boolean get() = source == Source.TINKOFF || source == Source.ALFA || source == Source.MKB || source == Source.PLATI ||
+    val fromBank: Boolean get() = source == Source.TINKOFF || source == Source.ALFA || source == Source.MKB || source == Source.PLATI || source == Source.TBIZ ||
         source == Source.PUSH
 
     /**

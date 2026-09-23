@@ -27,7 +27,8 @@ object BankPush {
     /** Откуда уведомление: Т-Банк, чат «Плати по миру» или чужое. */
     enum class From { TBANK, PLATI_CHAT, OTHER }
 
-    private val TBANK_PACKAGES = listOf("com.idamob.tinkoff.android", "ru.tinkoff", "ru.tbank", "com.tbank")
+    // «com.idamob.tinkoff» — и личное приложение, и Т-Бизнес (пуши карты ЗФ *8958 — старого вида).
+    private val TBANK_PACKAGES = listOf("com.idamob.tinkoff", "ru.tinkoff", "ru.tbank", "com.tbank")
     private val TELEGRAM_PACKAGES = listOf("org.telegram", "org.thunderdog.challegram", "nekox", "tw.nekomimi")
 
     fun from(pkg: String, title: String): From = when {

@@ -216,6 +216,9 @@ object MoneyRules {
                 }
                 left = left.substring(colon + 1).trim()
             }
+            // Знак можно писать и после приставок: «ЗФ: − ЦАКУНОВ АЛЕКСАНДР».
+            if (sign == 0 && (left.startsWith("−") || left.startsWith("-"))) { sign = -1; left = left.drop(1).trim() }
+            else if (sign == 0 && left.startsWith("+")) { sign = 1; left = left.drop(1).trim() }
             var mcc = ""
             MCC_TOKEN.find(left)?.let { mcc = it.groupValues[1]; left = left.replace(it.value, " ") }
             var amount = 0L

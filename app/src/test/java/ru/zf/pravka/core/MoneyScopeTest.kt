@@ -19,7 +19,8 @@ class MoneyScopeTest {
         what = id, category = cat, account = acc,
     )
 
-    private val entries = listOf(
+    // Выплата ЗФ владельцу и её приход на его счёт склеены сверкой — это и делает их ВГО.
+    private val entries = MoneyMatch.linkZf(listOf(
         e("coffee_biz", -1_000, "cafe", "Счет для бизнеса *7008"),       // личное с бизнес-карты
         e("lawyer_own", -30_000, "zf", "Black Premium *1519"),           // ЗФ с личной карты
         e("client", 500_000, "zf_revenue", "Счет для бизнеса *7008"),    // выручка ЗФ
@@ -27,7 +28,7 @@ class MoneyScopeTest {
         e("food", -20_000, "groceries", "Black Premium *1519"),          // личное с личной
         e("payout_zf", -200_000, "zf_owner", "Счет для бизнеса *7008"),  // ЗФ → владельцу
         e("payout_me", 200_000, "inc_zf", "Black Premium *1519"),        // та же выплата у владельца
-    )
+    ))
 
     private fun scope(p: Boolean, z: Boolean) = MoneyScope.of(p, z, entries, setOf(biz))
 

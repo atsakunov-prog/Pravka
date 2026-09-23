@@ -20,6 +20,10 @@ import java.time.format.DateTimeFormatter
 //    сумма со знаком, дата в двух видах («22.09.2026 21:23:36» и
 //    «11.09.2026, 12:48»), описание в двух видах («CITY\\адрес*МАГАЗИН*…»
 //    и «RUS\\CITY\\МАГАЗИН,адрес,…»), внизу строки итогов «Доход в RUB:»;
+//  - Т-Бизнес (счёт ООО «Знакомый финансист»): CSV, «;», запятая в дробях,
+//    только день проведения, сумма без знака — направление в «Дебет/Кредит»,
+//    у платежа своя колонка «Номер платежа»; карточные операции — «Оплата в
+//    YANDEX*4121*TAXI Moscow RUS», карта — в назначении («2200...8958»);
 //  - «Плати по миру»: не файл, а текст чата бота — см. [PlatiChat].
 //
 // Колонки ищутся по названию, не по номеру: банк переставит колонку — разбор
@@ -36,13 +40,14 @@ object BankStatements {
     )
 
     /** Что за файл: по шапке, а не по имени — имя у выписки меняется каждый раз. */
-    enum class Kind { TINKOFF, ALFA, MKB, UNKNOWN }
+    enum class Kind { TINKOFF, ALFA, MKB, TBIZ, UNKNOWN }
 
     fun detect(text: String): Kind {
         val head = text.trimStart('\uFEFF').lineSequence().firstOrNull().orEmpty()
         return when {
             head.contains("Сумма в валюте счёта") && head.contains("Дата операции") -> Kind.TINKOFF
             head.contains("operationDate") && head.contains("merchant") -> Kind.ALFA
+            head.contains("Тип операции") && head.contains("Дата проведения") && head.contains("Номер платежа") -> Kind.TBIZ
             else -> Kind.UNKNOWN
         }
     }
@@ -96,6 +101,75 @@ object BankStatements {
             )
         }
         return Parsed(out, skipped, if (skipped > 0) "не «Ок» или без даты/суммы" else "")
+    }
+
+    // ---- Т-Бизнес (ЗФ) ----
+
+    /** Счёт ЗФ в балансе и в «ЗФ:» справочника; карта из назначения — после звёздочки. */
+    const val TBIZ_ACCOUNT = "ЗФ"
+
+    private val TBIZ_CARD = Regex("""карте номер \d{4}\.{3}(\d{4})""")
+    // «… Moscow RUS», «… G.Moskva RUS», «… MOSCOW R» (банк обрезает): город и страна — не магазин.
+    private val TBIZ_TAIL = Regex("""\s+[A-Za-zА-Яа-я.\-]+\s+[A-Z]{1,3}$""")
+
+    /**
+     * Карточная операция — магазин из «Оплата в …» без города и страны;
+     * перевод — контрагент; внутреннее (реестр зарплаты, депозит, возвраты
+     * банка) — описание: там контрагент — сам банк или сама ЗФ.
+     */
+    private fun tbizWhat(desc: String, counterparty: String): String {
+        if (desc.startsWith("Оплата в ")) return desc.removePrefix("Оплата в ").replace(TBIZ_TAIL, "").trim()
+        val own = counterparty.contains("ЗНАКОМЫЙ ФИНАНСИСТ", ignoreCase = true) || counterparty.contains("ТБанк", ignoreCase = true)
+        return if (own || counterparty.isBlank()) desc.trim() else counterparty.trim()
+    }
+
+    fun tbiz(text: String, owner: String = "sasha"): Parsed {
+        val rows = Csv.parse(text.trimStart('\uFEFF'), ';')
+        if (rows.isEmpty()) return Parsed(emptyList())
+        val h = Csv.header(rows.first())
+        fun col(r: List<String>, name: String): String = h[name]?.let { r.getOrNull(it) }.orEmpty().trim()
+        val typeCol = h.keys.firstOrNull { it.startsWith("Тип операции") }
+        require(typeCol != null && "Дата проведения" in h && "Сумма в валюте счёта" in h) {
+            "Это не выписка Т-Бизнеса: нет колонок «Тип операции», «Дата проведения», «Сумма в валюте счёта»"
+        }
+        val fmt = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+        val out = mutableListOf<MoneyEntry>()
+        val seen = HashMap<String, Int>()
+        var skipped = 0
+        for (r in rows.drop(1)) {
+            if (r.all { it.isBlank() }) continue
+            val day = runCatching { LocalDate.parse(col(r, "Дата проведения"), fmt) }.getOrNull() ?: run { skipped++; continue }
+            val abs = MoneyFormat.parseKop(col(r, "Сумма в валюте счёта"))?.let { kotlin.math.abs(it) } ?: run { skipped++; continue }
+            val type = col(r, typeCol!!)
+            val rub = when {
+                type.startsWith("Дебет", true) || type.startsWith("списан", true) -> -abs
+                type.startsWith("Кредит", true) || type.startsWith("пополн", true) -> abs
+                else -> { skipped++; continue }
+            }
+            val desc = col(r, "Описание операции")
+            val purpose = col(r, "Назначение платежа")
+            val counterparty = col(r, "Наименование контрагента").ifBlank { if (rub < 0) col(r, "Наименование получателя") else col(r, "Наименование плательщика") }
+            val card = TBIZ_CARD.find(purpose)?.groupValues?.get(1).orEmpty()
+            val number = col(r, "Номер платежа")
+            val base = listOf("z", col(r, "Номер счёта"), number, col(r, "Дата проведения"), rub.toString(), desc).joinToString("|")
+            out.add(
+                MoneyEntry(
+                    id = stableId(base, seen),
+                    owner = owner,
+                    source = MoneyEntry.Source.TBIZ,
+                    // Банк даёт только день проведения; карточная операция бывает днём-двумя раньше.
+                    ts = day.atTime(12, 0).atZone(MSK).toInstant().toEpochMilli(),
+                    timeKnown = false,
+                    rubKop = rub,
+                    currency = "RUB",
+                    rubBasis = MoneyEntry.RubBasis.BANK,
+                    what = tbizWhat(desc, counterparty),
+                    note = if (desc.startsWith("Оплата в ")) "" else purpose.take(200),
+                    account = if (card.isNotEmpty()) "$TBIZ_ACCOUNT *$card" else TBIZ_ACCOUNT,
+                )
+            )
+        }
+        return Parsed(out, skipped, if (skipped > 0) "без даты, суммы или типа" else "")
     }
 
     // ---- Альфа ----

@@ -61,7 +61,10 @@ object MoneyCashflow {
         val v = e.rubKop
         return when {
             scope.both -> when {
-                (k == "inc_zf" && scope.zfBooks) || k == "zf_owner" -> emptyList()
+                // Пара «ЗФ заплатила — владелец получил» — внутри, исключается целиком.
+                (k == "inc_zf" || k == "zf_owner") && e.matchId.isNotBlank() -> emptyList()
+                // Выплата без пары: деньги ушли из ЗФ туда, чего в журнале нет.
+                k == "zf_owner" -> listOf(Part(e, "vgo:payout", v))
                 else -> listOf(Part(e, k, v))
             }
             scope.personal -> when {
@@ -185,6 +188,7 @@ object MoneyCashflow {
         MoneyEntry.Source.PUSH -> cardToAccount[BankPush.cardOf(e.account)] ?: "Т-Банк · счёт"
         MoneyEntry.Source.ALFA -> "Альфа · " + stripCard(e.account).ifBlank { "счёт" }
         MoneyEntry.Source.MKB -> "МКБ"
+        MoneyEntry.Source.TBIZ -> TBIZ_NAME
         else -> null // голос и наличные — не счёт банка; «Плати по миру» — в валюте, отдельно
     }
 
@@ -248,9 +252,16 @@ object MoneyCashflow {
 
     /** Карта Т-Банка → счёт, по строкам выписки: «1519» → «Т-Банк · Black Premium». */
     fun cardMap(entries: List<MoneyEntry>): Map<String, String> =
-        entries.filter { it.source == MoneyEntry.Source.TINKOFF }
-            .mapNotNull { e -> BankPush.cardOf(e.account).takeIf { it.isNotEmpty() }?.let { it to "Т-Банк · " + stripCard(e.account) } }
+        entries.filter { it.source == MoneyEntry.Source.TINKOFF || it.source == MoneyEntry.Source.TBIZ }
+            .mapNotNull { e ->
+                BankPush.cardOf(e.account).takeIf { it.isNotEmpty() }?.let {
+                    it to if (e.source == MoneyEntry.Source.TBIZ) TBIZ_NAME else "Т-Банк · " + stripCard(e.account)
+                }
+            }
             .toMap()
+
+    /** Расчётный счёт ЗФ в Т-Бизнесе — в балансе, «Счетах» и списке счетов ЗФ. */
+    const val TBIZ_NAME = "Т-Бизнес · ЗФ"
 
     data class Account(
         val name: String,

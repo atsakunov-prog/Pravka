@@ -52,7 +52,8 @@ object MoneyMatch {
         }
         val (withPush, pushLinked) = linkPush(list)
         val (withVoice, voiceLinked) = linkVoice(withPush)
-        val (withSpouse, spouseLinked) = linkSpouse(withVoice)
+        val (withSpouse0, spouseLinked) = linkSpouse(withVoice)
+        val withSpouse = linkZf(withSpouse0)
         return Result(ask(withSpouse, now), voiceLinked, pushLinked, spouseLinked, classified)
     }
 
@@ -73,13 +74,15 @@ object MoneyMatch {
         if (pushes.isEmpty()) return entries to 0
         val byId = entries.associateBy { it.id }.toMutableMap()
         val taken = entries.filter { it.source == MoneyEntry.Source.PUSH }.map { it.replacedBy }.filter { it.isNotEmpty() }.toMutableSet()
-        val bank = entries.filter { it.source == MoneyEntry.Source.TINKOFF && !it.dropped }
+        // Т-Бизнес (карта ЗФ *8958) даёт только день ПРОВЕДЕНИЯ — он бывает на
+        // два-три дня позже покупки, поэтому окно шире.
+        val bank = entries.filter { (it.source == MoneyEntry.Source.TINKOFF || it.source == MoneyEntry.Source.TBIZ) && !it.dropped }
         var linked = 0
         for (p in pushes.sortedBy { it.ts }) {
             val pc = BankPush.cardOf(p.account)
             val hit = bank.asSequence()
                 .filter { it.id !in taken && it.owner == p.owner && it.rubKop == p.rubKop }
-                .filter { abs(it.ts - p.ts) <= DAY + DAY / 2 }
+                .filter { b -> if (b.source == MoneyEntry.Source.TBIZ) b.ts - p.ts in -DAY..4 * DAY else abs(b.ts - p.ts) <= DAY + DAY / 2 }
                 .filter { b -> BankPush.cardOf(b.account).let { bc -> pc.isEmpty() || bc.isEmpty() || bc == pc } }
                 .minByOrNull { abs(it.ts - p.ts) } ?: continue
             taken.add(hit.id)
@@ -142,6 +145,33 @@ object MoneyMatch {
         return entries.map { byId[it.id] ?: it } to linked
     }
 
+    // ---- 3а. ЗФ ↔ владелец ----
+
+    /**
+     * Выплата ЗФ владельцу («ЗФ: выплата владельцу» на счёте ЗФ) и её приход
+     * на личный счёт («Доход от ЗФ» и любое поступление с тем же рублём) —
+     * пара ВГО: та же сумма, три дня. При обеих кнопках «Личное · ЗФ» пара
+     * исключается с двух сторон; непарная остаётся — деньги ушли туда, чего
+     * в журнале нет (или пришли наличными).
+     */
+    fun linkZf(entries: List<MoneyEntry>): List<MoneyEntry> {
+        // Сторона ЗФ — по категории, не по банку: счёт ЗФ бывает и в Т-Бизнесе, и «Счётом для бизнеса» в Т-Банке.
+        val zf = entries.filter { it.fromBank && it.category == "zf_owner" && !it.dropped && it.replacedBy.isEmpty() && it.matchId.isBlank() }
+        if (zf.isEmpty()) return entries
+        val byId = entries.associateBy { it.id }.toMutableMap()
+        val mine = entries.filter {
+            it.fromBank && it.category == "inc_zf" && !it.dropped &&
+                it.replacedBy.isEmpty() && it.matchId.isBlank()
+        }.toMutableList()
+        for (z in zf.sortedBy { it.ts }) {
+            val pair = mine.filter { it.rubKop == -z.rubKop && abs(it.ts - z.ts) <= 3 * DAY }.minByOrNull { abs(it.ts - z.ts) } ?: continue
+            mine.remove(pair)
+            byId[z.id] = z.copy(matchId = pair.id)
+            byId[pair.id] = pair.copy(matchId = z.id)
+        }
+        return entries.map { byId[it.id] ?: it }
+    }
+
     // ---- 3. Саша ↔ Марианна ----
 
     fun linkSpouse(entries: List<MoneyEntry>): Pair<List<MoneyEntry>, Int> {
@@ -178,12 +208,19 @@ object MoneyMatch {
             .mapValues { (_, v) -> (v.minOf { it.ts }) to (v.maxOf { it.ts }) }
         // Покрытие выписками Т-Банка: пуш старше суток до её конца, так и не
         // нашедший пары, — скорее всего отменённая операция.
-        val tbank = entries.filter { it.source == MoneyEntry.Source.TINKOFF }.groupBy { it.owner }
+        // Пуш карты ЗФ сверяется с выпиской Т-Бизнеса, личной — с Тиньковом.
+        val cardSource = entries.filter { it.source == MoneyEntry.Source.TINKOFF || it.source == MoneyEntry.Source.TBIZ }
+            .mapNotNull { e -> BankPush.cardOf(e.account).takeIf { it.isNotEmpty() }?.let { it to e.source } }.toMap()
+        val tbank = entries.filter { it.source == MoneyEntry.Source.TINKOFF || it.source == MoneyEntry.Source.TBIZ }
+            .groupBy { it.owner to it.source }
             .mapValues { (_, v) -> (v.minOf { it.ts }) to (v.maxOf { it.ts }) }
         fun orphan(e: MoneyEntry): Boolean {
             if (e.source != MoneyEntry.Source.PUSH || e.replacedBy.isNotEmpty()) return false
-            val span = tbank[e.owner] ?: return false
-            return e.ts >= span.first && e.ts < span.second - DAY
+            val src = cardSource[BankPush.cardOf(e.account)] ?: MoneyEntry.Source.TINKOFF
+            val span = tbank[e.owner to src] ?: return false
+            // Т-Бизнес проводит позже — пуш «без пары» только за неделю до конца его выписки.
+            val lag = if (src == MoneyEntry.Source.TBIZ) 7 * DAY else DAY
+            return e.ts >= span.first && e.ts < span.second - lag
         }
         val groups = entries.filter { it.fromBank && !it.dropped && it.replacedBy.isEmpty() && it.category.isBlank() && it.matchId.isBlank() }
             .groupBy { MoneyRules.norm(it.what) }

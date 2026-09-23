@@ -160,6 +160,7 @@ class MoneyEngine(
         when {
             BankStatements.detect(clean) == BankStatements.Kind.TINKOFF -> importBank("Тиньков", BankStatements.tinkoff(clean, owner()))
             BankStatements.detect(clean) == BankStatements.Kind.ALFA -> importBank("Альфа", BankStatements.alfa(clean, "marianna"))
+            BankStatements.detect(clean) == BankStatements.Kind.TBIZ -> importBank("ЗФ", BankStatements.tbiz(clean, owner()))
             PlatiChat.looksLike(clean) -> importPlati(clean)
             else -> throw IllegalArgumentException(
                 "Не узнал формат: жду CSV Тинькова (с колонкой «Сумма в валюте счёта»), CSV Альфы (operationDate…) или текст чата «Плати по миру»"

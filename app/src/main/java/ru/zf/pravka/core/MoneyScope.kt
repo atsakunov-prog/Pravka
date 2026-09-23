@@ -71,8 +71,8 @@ data class MoneyScope(
     fun countsStat(e: MoneyEntry): Boolean {
         if (e.category.isBlank()) return both || entityZf(e) == zf
         val purpose = purposeZf(e) ?: return false
-        // Общая картина при книгах ЗФ: выплата владельцу — ВГО, не доход.
-        if (both) return !(e.category == "inc_zf" && zfBooks)
+        // Общая картина: выплата ЗФ владельцу, у которой нашлась пара на счёте ЗФ, — ВГО, не доход.
+        if (both) return !(e.category == "inc_zf" && e.matchId.isNotBlank())
         return if (personal) !purpose else purpose
     }
 
