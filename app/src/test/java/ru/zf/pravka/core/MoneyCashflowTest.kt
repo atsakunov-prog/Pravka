@@ -251,4 +251,16 @@ class MoneyCashflowTest {
         assertEquals(0L, MoneyCashflow.loanDebt(r, at("2026-09-24")))
         assertEquals("inc_other", r.first { it.id == "c" }.category)
     }
+
+    @Test fun editedManualLineReplacesOldVersion() {
+        val v1 = MoneyCashflow.parseManual("22.09.2026 | 3750000 | zf_revenue | Клиент: оплата наличными | Касса ЗФ |", "sasha")
+        val v2 = MoneyCashflow.parseManual("22.09.2026 | 3880000 | zf_revenue | Клиент: оплата наличными | Касса ЗФ |", "sasha")
+        val (add, stale) = MoneyCashflow.syncManual(v1, v2)
+        // Новая версия добавляется, прежняя вычёркивается — сентябрь не задваивается.
+        assertEquals(v2.map { it.id }, add.map { it.id })
+        assertEquals(v1.map { it.id }.toSet(), stale)
+        // Тот же файл второй раз — ничего.
+        val (add2, stale2) = MoneyCashflow.syncManual(v2, v2)
+        assertTrue(add2.isEmpty() && stale2.isEmpty())
+    }
 }

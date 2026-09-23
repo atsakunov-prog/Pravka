@@ -256,6 +256,23 @@ object MoneyCashflow {
             )
         }
 
+    /**
+     * Записи со слов владельца — версия файла: что добавить и что вычеркнуть.
+     * Номер записи — из её строки, поэтому ПРАВКА строки в файле (3 750 000 →
+     * 3 880 000) давала новый номер, а старая запись оставалась рядом — и
+     * сентябрь задвоился до 8 млн (владелец, 23.09.2026: «какие 8? Не
+     * мудри»). Теперь запись из файла, которой в файле больше нет,
+     * вычёркивается (не удаляется — журнал только растёт).
+     */
+    fun syncManual(existing: List<MoneyEntry>, fresh: List<MoneyEntry>): Pair<List<MoneyEntry>, Set<String>> {
+        val known = existing.map { it.id }.toHashSet()
+        val want = fresh.map { it.id }.toHashSet()
+        val add = fresh.filter { it.id !in known }
+        val stale = existing.filter { it.source == MoneyEntry.Source.MANUAL && it.id.startsWith("manual-") && it.id !in want && !it.dropped }
+            .map { it.id }.toSet()
+        return add to stale
+    }
+
     private fun stripCard(account: String) = account.replace(Regex("""\s*\*\d{4}\b"""), "").trim()
 
     /** Карта Т-Банка → счёт, по строкам выписки: «1519» → «Т-Банк · Black Premium». */

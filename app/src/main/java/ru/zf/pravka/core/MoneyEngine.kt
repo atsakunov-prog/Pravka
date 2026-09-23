@@ -332,10 +332,13 @@ class MoneyEngine(
      */
     suspend fun seedManual() {
         val list = MoneyCashflow.parseManual(factoryManual(), owner())
-        if (list.isEmpty()) return
-        val added = store.addMissing(list)
-        if (added > 0) {
-            eventLog.add("деньги: со слов владельца добавлено $added")
+        val (add, stale) = MoneyCashflow.syncManual(store.load().entries, list)
+        val added = if (add.isNotEmpty()) store.addMissing(add) else 0
+        if (stale.isNotEmpty()) store.update(stale) { it.copy(dropped = true, matchId = "", question = "") }
+        if (added > 0 || stale.isNotEmpty()) {
+            eventLog.add("деньги: со слов владельца — добавлено $added, прежних версий вычеркнуто ${stale.size}")
+            // Пары прежних версий — с другой стороны снимаем тоже: пусть сверка склеит заново.
+            if (stale.isNotEmpty()) store.update(store.stateFlow.value.entries.filter { it.matchId in stale }.map { it.id }) { it.copy(matchId = "") }
             reconcile()
         }
     }
