@@ -1,36 +1,40 @@
 package ru.zf.slushalka.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -42,6 +46,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -67,7 +73,7 @@ import ru.zf.slushalka.data.Settings
  * справочника нет - кнопка заказать (пакетом, вдвое дешевле, обычно в течение
  * часа); пока считается - лист сам проверяет раз в минуту.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GuideSheet(
     app: SlushalkaApp,
@@ -85,7 +91,6 @@ fun GuideSheet(
     val prefs by app.state.prefs.collectAsState()
     val states by app.guide.states.collectAsState()
     val coroutine = rememberCoroutineScope()
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -122,462 +127,406 @@ fun GuideSheet(
     val readChapters = t?.chapterIndexAt(cutoffChar) ?: 0
     val upTo = if (showAll) Int.MAX_VALUE else readChapters
 
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet) {
+    val ready = st?.status == GuideState.Status.READY
+    // Статья, глава и вопрос открываются в том же листе, а не диалогом
+    // поверх него: стрелка назад возвращает к списку на том же месте.
+    val detailTitle = when {
+        askFor != null -> "Спросить про «${askFor!!.first.name}»"
+        open != null -> open!!.name
+        openChapter != null -> "Глава ${openChapter!!.chapter}" +
+            (if (openChapter!!.title.isNotBlank()) ". ${openChapter!!.title}" else "")
+        else -> null
+    }
+    fun back() {
+        when {
+            askFor != null -> askFor = null
+            open != null -> open = null
+            else -> openChapter = null
+        }
+    }
+
+    PaperSheet(
+        app = app,
+        onClose = onClose,
+        icon = if (detailTitle != null) null else Glyphs.MenuBook,
+        title = detailTitle ?: "Справочник",
+        subtitle = if (detailTitle != null) null
+        else if (b != null && t != null) "${b.title} · дочитано глав: $readChapters из ${t.chapters.size}" else null,
         // Во весь рост - только когда есть что листать; предложение заказать
         // справочник во весь экран смотрелось бы пустым.
-        val tall = st?.status == GuideState.Status.READY
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .then(if (tall) Modifier.fillMaxHeight(0.94f) else Modifier)
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 16.dp),
-        ) {
-            Text("Справочник", style = MaterialTheme.typography.titleLarge)
-            if (b == null || t == null) {
-                Text("Текст книги ещё разбирается…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                return@Column
+        tall = ready,
+        scroll = !ready,
+        actions = {
+            if (detailTitle != null) {
+                PaperIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Назад") { back() }
             }
-            Text(
-                "«${b.title}» · дочитано глав: $readChapters из ${t.chapters.size}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(10.dp))
+        },
+    ) {
+        if (b == null || t == null) {
+            PaperBusy("Текст книги ещё разбирается…")
+            return@PaperSheet
+        }
+        Spacer(Modifier.height(12.dp))
 
-            when (st?.status) {
-                null -> {
-                    val est = remember(t, prefs.guideModel) { app.guide.estimate(t, prefs.guideModel) }
-                    Text(
-                        "Справочника по этой книге ещё нет. ${Settings.modelLabel(prefs.guideModel)} прочтёт её " +
-                            "целиком - ${est.pages} стр." + (if (est.parts > 1) " в ${est.parts} частях" else "") +
-                            " - и составит краткое содержание каждой главы и статьи о героях, местах и словах, " +
-                            "каждую с привязкой к главе. Ты увидишь только то, что уже дочитал.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Считается пакетным запросом: вдвое дешевле обычного, готово обычно в течение часа, " +
-                            "самое позднее к завтрашнему дню. Приложение можно закрыть - справочник заберётся " +
-                            "при следующем открытии книги и лягет файлом в её папку: кто читает ту же книгу с " +
-                            "той же папки, получит его даром. Модель меняется в настройках, раздел «Модели».",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    Button(
-                        enabled = !busy,
-                        onClick = {
-                            busy = true
-                            error = null
-                            coroutine.launch {
-                                app.guide.start(b, t).onFailure { error = it.message ?: "Не вышло заказать" }
-                                busy = false
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(if (busy) "Отправляю книгу…" else "Составить справочник · ≈ %.2f $".format(est.usd)) }
-                }
-
-                GuideState.Status.PENDING -> {
-                    Text("Готовится…", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Заказан ${stamp(st.createdAt)}, проверено ${stamp(st.checkedAt)}. " +
-                            "Обычно час; лист проверяет сам, пока открыт.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(8.dp))
-                    Row {
-                        TextButton(
-                            enabled = !busy,
-                            onClick = {
-                                busy = true
-                                coroutine.launch {
-                                    app.guide.refresh(b, t).onFailure { error = it.message }
-                                    busy = false
-                                }
-                            },
-                        ) { Text("Проверить сейчас") }
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = { app.guide.forget(b) }) { Text("Забыть заказ") }
+        when (st?.status) {
+            null -> {
+                val est = remember(t, prefs.guideModel) { app.guide.estimate(t, prefs.guideModel) }
+                Text(
+                    "Справочника по этой книге ещё нет. ${Settings.modelLabel(prefs.guideModel)} прочтёт её " +
+                        "целиком - ${est.pages} стр." + (if (est.parts > 1) " в ${est.parts} частях" else "") +
+                        " - и составит краткое содержание каждой главы и статьи о героях, местах и словах, " +
+                        "каждую с привязкой к главе. Ты увидишь только то, что уже дочитал.",
+                    style = bookBody(),
+                )
+                Spacer(Modifier.height(10.dp))
+                PaperNote(
+                    "Считается пакетным запросом: вдвое дешевле обычного, готово обычно в течение часа, " +
+                        "самое позднее к завтрашнему дню. Приложение можно закрыть - справочник заберётся " +
+                        "при следующем открытии книги и ляжет файлом в её папку: кто читает ту же книгу с " +
+                        "той же папки, получит его даром. Модель меняется в настройках, раздел «Модели».",
+                )
+                Spacer(Modifier.height(16.dp))
+                PaperButton(
+                    if (busy) "Отправляю книгу…" else "Составить справочник · ≈ %.2f $".format(est.usd),
+                    icon = Glyphs.AutoAwesome,
+                    primary = true,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    busy = true
+                    error = null
+                    coroutine.launch {
+                        app.guide.start(b, t).onFailure { error = it.message ?: "Не вышло заказать" }
+                        busy = false
                     }
                 }
+            }
 
-                GuideState.Status.FAILED -> {
-                    Text("Не вышло", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
-                    Text(
-                        "Пакет посчитался, но справочник из ответа не собрался. Что именно случилось:",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(6.dp))
+            GuideState.Status.PENDING -> {
+                Text("Готовится…", style = MaterialTheme.typography.titleMedium)
+                PaperNote("Заказан ${stamp(st.createdAt)}, проверено ${stamp(st.checkedAt)}. Обычно час; лист проверяет сам, пока открыт.")
+                PaperBusy(if (busy) "Проверяю…" else "Жду пакет")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PaperButton("Проверить сейчас", icon = Icons.Default.Refresh, enabled = !busy, modifier = Modifier.weight(1f)) {
+                        busy = true
+                        coroutine.launch {
+                            app.guide.refresh(b, t).onFailure { error = it.message }
+                            busy = false
+                        }
+                    }
+                    PaperButton("Забыть заказ", icon = Icons.Default.Delete, modifier = Modifier.weight(1f)) { app.guide.forget(b) }
+                }
+            }
+
+            GuideState.Status.FAILED -> {
+                Text("Не вышло", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+                PaperNote("Пакет посчитался, но справочник из ответа не собрался. Что именно случилось:")
+                Spacer(Modifier.height(6.dp))
+                PaperCard {
                     Column(Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())) {
                         Text(st.error.ifBlank { "Причина неизвестна" }, style = MaterialTheme.typography.bodySmall)
                     }
-                    if (st.costUsd > 0) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "Списано %.2f $ · ${Settings.modelLabel(st.model)} · ${stamp(st.createdAt)}".format(st.costUsd),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Button(onClick = { app.guide.forget(b) }) { Text("Заказать заново") }
                 }
+                if (st.costUsd > 0) {
+                    PaperNote(
+                        "Списано %.2f $ · ${Settings.modelLabel(st.model)} · ${stamp(st.createdAt)}".format(st.costUsd),
+                        Modifier.padding(top = 6.dp),
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                PaperButton("Заказать заново", icon = Icons.Default.Refresh, primary = true) { app.guide.forget(b) }
+            }
 
-                GuideState.Status.READY -> {
-                    val guide = st.guide ?: return@Column
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            if (showAll) "Вся книга - со спойлерами"
-                            else if (readChapters == 0) "Первая глава ещё не дочитана - пока пусто"
-                            else "Главы 1–$readChapters, без спойлеров",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Switch(checked = showAll, onCheckedChange = { showAll = it })
+            GuideState.Status.READY -> {
+                val guide = st.guide ?: return@PaperSheet
+                val a = askFor
+                val e = open
+                val ch = openChapter
+                when {
+                    a != null -> AskPage(app, b, a.first, a.second, upTo, readChapters, suggestCache) { q ->
+                        askFor = null
+                        onAsk(Prompts.aboutEntry(a.first.name, a.first.aliases, q))
                     }
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        placeholder = { Text("Имя, место, слово") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    val chapters = guide.chapters.filter { it.chapter <= upTo && it.matches(query) }
-                    val lists = listOf(guide.characters, guide.places, guide.terms)
-                    val visible = lists.map { list -> list.mapNotNull { it.visibleAt(upTo) }.filter { it.matches(query) } }
-                    val events = guide.events.filter { it.chapter <= upTo && it.matches(query) }
-                    val labels = listOf(
-                        "Главы · ${chapters.size}", "Герои · ${visible[0].size}", "Места · ${visible[1].size}",
-                        "Словарь · ${visible[2].size}", "Хронология · ${events.size}",
-                    )
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        labels.forEachIndexed { i, label ->
-                            FilterChip(selected = tab == i, onClick = { tab = i }, label = { Text(label) })
+                    e != null -> Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                        EntryPage(e, guide, upTo, showAll) { other -> open = other }
+                        Spacer(Modifier.height(16.dp))
+                        PaperButton("Спросить Claude", icon = Glyphs.QuestionAnswer, primary = true, modifier = Modifier.fillMaxWidth()) {
+                            askFor = e to guide.kindOf(e)
                         }
+                        Spacer(Modifier.height(8.dp))
                     }
-                    Spacer(Modifier.height(4.dp))
-                    val empty = when (tab) {
-                        0 -> chapters.isEmpty()
-                        4 -> events.isEmpty()
-                        else -> visible[tab - 1].isEmpty()
+                    ch != null -> Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                        Text(ch.summary, style = bookBody())
+                        Spacer(Modifier.height(16.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (onGoChapter != null) {
+                                PaperButton("К главе", icon = Glyphs.AutoStories, modifier = Modifier.weight(1f)) {
+                                    openChapter = null
+                                    onGoChapter(ch.chapter)
+                                }
+                            }
+                            // Глава для вопроса притворяется статьёй: имя - номер и
+                            // название, роль - содержание.
+                            PaperButton("Спросить", icon = Glyphs.QuestionAnswer, primary = true, modifier = Modifier.weight(1f)) {
+                                askFor = GuideEntry(
+                                    name = "Глава ${ch.chapter}" + (if (ch.title.isNotBlank()) " («${ch.title}»)" else ""),
+                                    aliases = emptyList(),
+                                    chapter = ch.chapter,
+                                    role = ch.summary,
+                                    notes = emptyList(),
+                                ) to 3
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
                     }
-                    if (empty) {
-                        Text(
+                    else -> {
+                        PaperField(
+                            value = query,
+                            onValue = { query = it },
+                            placeholder = "Имя, место, слово",
+                            maxLines = 1,
+                            leading = Icons.Default.Search,
+                        ) {
+                            PaperIconButton(
+                                if (showAll) Glyphs.LockOpen else Icons.Default.Lock,
+                                if (showAll) "Спрятать спойлеры" else "Показать всё",
+                                active = showAll,
+                            ) { showAll = !showAll }
+                        }
+                        PaperNote(
                             when {
-                                // Старый справочник: хронологии в нём нет вовсе, а не «пока пусто».
-                                tab == 4 && guide.events.isEmpty() ->
-                                    "Этот справочник составлен до того, как в нём появилась хронология и " +
-                                        "связи героев. «Пересобрать» внизу закажет его заново - с ними."
-                                query.isNotBlank() -> "Ничего похожего в дочитанных главах."
-                                readChapters == 0 -> "Откроется, когда дочитаешь первую главу."
-                                else -> "В дочитанных главах здесь пока пусто."
+                                showAll -> "Вся книга - со спойлерами. Замок - спрятать обратно."
+                                readChapters == 0 -> "Первая глава ещё не дочитана - пока пусто."
+                                else -> "Главы 1–$readChapters, без спойлеров."
                             },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 12.dp),
+                            Modifier.padding(start = 6.dp, top = 6.dp, bottom = 10.dp),
+                            color = if (showAll) MaterialTheme.colorScheme.tertiary else Color.Unspecified,
                         )
-                    }
-                    LazyColumn(Modifier.weight(1f)) {
-                        if (tab == 4) {
-                            // Хронология: по главам, где о событии узнаёт читатель;
-                            // «когда» - время книги, если она его называет.
-                            items(events) { ev ->
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable(enabled = onGoChapter != null) { onGoChapter?.invoke(ev.chapter) }
-                                        .padding(vertical = 8.dp),
-                                ) {
-                                    Column(Modifier.width(64.dp)) {
-                                        Text(
-                                            "гл. ${ev.chapter}",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.primary,
-                                        )
-                                        if (ev.whenText.isNotBlank()) {
-                                            Text(
-                                                ev.whenText,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
+                        val chapters = guide.chapters.filter { it.chapter <= upTo && it.matches(query) }
+                        val lists = listOf(guide.characters, guide.places, guide.terms)
+                        val visible = lists.map { list -> list.mapNotNull { it.visibleAt(upTo) }.filter { it.matches(query) } }
+                        val events = guide.events.filter { it.chapter <= upTo && it.matches(query) }
+                        val tabs = listOf(
+                            Triple(Glyphs.Toc, "Главы", chapters.size),
+                            Triple(Icons.Default.Person, "Герои", visible[0].size),
+                            Triple(Icons.Default.Place, "Места", visible[1].size),
+                            Triple(Glyphs.Translate, "Словарь", visible[2].size),
+                            Triple(Glyphs.Timeline, "Хронология", events.size),
+                        )
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            tabs.forEachIndexed { i, (icon, label, n) ->
+                                PaperChip("$label · $n", selected = tab == i, icon = icon) { tab = i }
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        val empty = when (tab) {
+                            0 -> chapters.isEmpty()
+                            4 -> events.isEmpty()
+                            else -> visible[tab - 1].isEmpty()
+                        }
+                        if (empty) {
+                            PaperNote(
+                                when {
+                                    // Старый справочник: хронологии в нём нет вовсе, а не «пока пусто».
+                                    tab == 4 && guide.events.isEmpty() ->
+                                        "Этот справочник составлен до того, как в нём появилась хронология и " +
+                                            "связи героев. «Пересобрать» внизу закажет его заново - с ними."
+                                    query.isNotBlank() -> "Ничего похожего в дочитанных главах."
+                                    readChapters == 0 -> "Откроется, когда дочитаешь первую главу."
+                                    else -> "В дочитанных главах здесь пока пусто."
+                                },
+                                Modifier.padding(vertical = 12.dp),
+                            )
+                        }
+                        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            when (tab) {
+                                // Хронология: по главам, где о событии узнаёт читатель;
+                                // «когда» - время книги, если она его называет.
+                                4 -> items(events) { ev ->
+                                    PaperCard(onClick = onGoChapter?.let { go -> { go(ev.chapter) } }) {
+                                        Row {
+                                            Column(Modifier.width(70.dp)) {
+                                                Text("гл. ${ev.chapter}", style = MaterialTheme.typography.labelLarge)
+                                                if (ev.whenText.isNotBlank()) {
+                                                    Text(ev.whenText, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                            }
+                                            Text(ev.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                                         }
                                     }
-                                    Text(ev.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                                 }
-                                HorizontalDivider()
-                            }
-                        } else if (tab == 0) {
-                            items(chapters) { ch ->
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable { openChapter = ch }
-                                        .padding(vertical = 8.dp),
-                                ) {
-                                    Text(
-                                        "Глава ${ch.chapter}" + (if (ch.title.isNotBlank()) ". ${ch.title}" else ""),
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(ch.summary, style = MaterialTheme.typography.bodyMedium)
-                                }
-                                HorizontalDivider()
-                            }
-                        } else {
-                            items(visible[tab - 1]) { e ->
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable { open = e }
-                                        .padding(vertical = 8.dp),
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(e.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                                        Spacer(Modifier.weight(1f))
+                                0 -> items(chapters) { c ->
+                                    PaperCard(onClick = { openChapter = c }) {
                                         Text(
-                                            "гл. ${e.chapter}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            "Глава ${c.chapter}" + (if (c.title.isNotBlank()) ". ${c.title}" else ""),
+                                            style = MaterialTheme.typography.titleMedium,
                                         )
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(c.summary, style = MaterialTheme.typography.bodyMedium, maxLines = 4, overflow = TextOverflow.Ellipsis)
                                     }
-                                    if (e.aliases.isNotEmpty()) {
-                                        Text(
-                                            e.aliases.joinToString(", "),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                    Text(
-                                        e.role,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
                                 }
-                                HorizontalDivider()
+                                else -> items(visible[tab - 1]) { en ->
+                                    PaperCard(onClick = { open = en }) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(en.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                                            Text("гл. ${en.chapter}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        if (en.aliases.isNotEmpty()) {
+                                            PaperNote(en.aliases.joinToString(", "))
+                                        }
+                                        Text(en.role, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
                             }
                         }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "${Settings.modelLabel(st.model)} · ${stamp(st.createdAt)}" +
-                                (if (st.by.isNotBlank()) " · ${st.by}" else "") +
-                                (if (st.costUsd > 0) " · %.2f $".format(st.costUsd) else "") +
-                                (if (st.error.isNotBlank()) " · с оговорками" else ""),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = { app.guide.forget(b) }) { Text("Пересобрать") }
-                    }
-                    if (st.error.isNotBlank()) {
-                        Text(
-                            st.error,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "${Settings.modelLabel(st.model)} · ${stamp(st.createdAt)}" +
+                                    (if (st.by.isNotBlank()) " · ${st.by}" else "") +
+                                    (if (st.costUsd > 0) " · %.2f $".format(st.costUsd) else "") +
+                                    (if (st.error.isNotBlank()) " · с оговорками" else ""),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            MiniAction(Icons.Default.Refresh, "Пересобрать") { app.guide.forget(b) }
+                        }
+                        if (st.error.isNotBlank()) {
+                            Text(
+                                st.error,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }
+        }
 
-            error?.let {
-                Spacer(Modifier.height(8.dp))
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        error?.let { PaperError(it) }
+    }
+}
+
+/** Статья справочника: имена, роль книжным шрифтом, связи, записи по главам. */
+@Composable
+private fun EntryPage(e: GuideEntry, guide: ru.zf.slushalka.ask.Guide, upTo: Int, showAll: Boolean, onOpen: (GuideEntry) -> Unit) {
+    val visibleNotes = e.notes.filter { it.chapter <= upTo }
+    val visibleLinks = e.links.filter { it.chapter <= upTo }
+    if (e.aliases.isNotEmpty()) {
+        PaperNote(e.aliases.joinToString(", "))
+        Spacer(Modifier.height(8.dp))
+    }
+    Text(e.role, style = bookBody())
+    if (visibleLinks.isNotEmpty()) {
+        // Связи - как в семейном древе на форзаце: кто кому кем приходится.
+        // Тап по имени - статья того героя.
+        PaperLabel("Связи")
+        visibleLinks.forEach { l ->
+            val other = guide.characters.firstOrNull { c ->
+                c.names.any { it.equals(l.to, ignoreCase = true) }
+            }?.visibleAt(upTo)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(enabled = other != null) { other?.let(onOpen) }
+                    .padding(vertical = 6.dp, horizontal = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(l.kind, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(120.dp))
+                Text(
+                    l.to,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (other != null) FontWeight.SemiBold else FontWeight.Normal,
+                    modifier = Modifier.weight(1f),
+                )
+                if (other != null) Icon(Glyphs.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
-
-    open?.let { e ->
-        val visibleNotes = e.notes.filter { it.chapter <= upTo }
-        val visibleLinks = e.links.filter { it.chapter <= upTo }
-        AlertDialog(
-            onDismissRequest = { open = null },
-            title = { Text(e.name) },
-            text = {
-                Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
-                    if (e.aliases.isNotEmpty()) {
-                        Text(
-                            e.aliases.joinToString(", "),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                    }
-                    Text(e.role, style = MaterialTheme.typography.bodyMedium)
-                    if (visibleLinks.isNotEmpty()) {
-                        // Связи - как в семейном древе на форзаце: кто кому кем
-                        // приходится. Тап по имени - статья того героя.
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            "Связи",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        visibleLinks.forEach { l ->
-                            val other = st?.guide?.characters?.firstOrNull { c ->
-                                c.names.any { it.equals(l.to, ignoreCase = true) }
-                            }?.visibleAt(upTo)
-                            Text(
-                                "${l.kind} - ${l.to}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (other != null) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable(enabled = other != null) { open = other }
-                                    .padding(vertical = 3.dp),
-                            )
-                        }
-                    }
-                    visibleNotes.forEach { n ->
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            "Глава ${n.chapter}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(n.text, style = MaterialTheme.typography.bodyMedium)
-                    }
-                    if (!showAll) {
-                        // Одна и та же строка у всех статей: сказать «дальше о нём ещё
-                        // три записи» - значит выдать, что герой ещё сыграет.
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            "Записи о следующих главах откроются по мере чтения.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { open = null }) { Text("Закрыть") } },
-            dismissButton = {
-                TextButton(onClick = { askFor = e to (st?.guide?.kindOf(e) ?: 0); open = null }) { Text("Спросить…") }
-            },
-        )
+    visibleNotes.forEach { n ->
+        PaperLabel("Глава ${n.chapter}")
+        Text(n.text, style = MaterialTheme.typography.bodyLarge)
     }
-
-    // Глава: содержание целиком и «Спросить…» - как у героя. Глава для вопроса
-    // притворяется статьёй: имя - номер и название, роль - содержание.
-    openChapter?.let { ch ->
-        AlertDialog(
-            onDismissRequest = { openChapter = null },
-            title = { Text("Глава ${ch.chapter}" + (if (ch.title.isNotBlank()) ". ${ch.title}" else "")) },
-            text = {
-                Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
-                    Text(ch.summary, style = MaterialTheme.typography.bodyMedium)
-                }
-            },
-            confirmButton = {
-                Row {
-                    if (onGoChapter != null) {
-                        TextButton(onClick = { openChapter = null; onGoChapter(ch.chapter) }) { Text("К главе") }
-                    }
-                    TextButton(onClick = { openChapter = null }) { Text("Закрыть") }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    askFor = GuideEntry(
-                        name = "Глава ${ch.chapter}" + (if (ch.title.isNotBlank()) " («${ch.title}»)" else ""),
-                        aliases = emptyList(),
-                        chapter = ch.chapter,
-                        role = ch.summary,
-                        notes = emptyList(),
-                    ) to 3
-                    openChapter = null
-                }) { Text("Спросить…") }
-            },
-        )
+    if (!showAll) {
+        // Одна и та же строка у всех статей: сказать «дальше о нём ещё три
+        // записи» - значит выдать, что герой ещё сыграет.
+        PaperNote("Записи о следующих главах откроются по мере чтения.", Modifier.padding(top = 14.dp))
     }
+}
 
-    // Что именно спросить про статью: свой вопрос сверху, ниже - три вопроса,
-    // которые модель придумала по этой статье (урезанной до дочитанных глав);
-    // пока думает или не вышло - готовые по виду статьи.
-    askFor?.let { (e, kind) ->
-        var own by remember(e) { mutableStateOf("") }
-        val key = "${e.name}|$upTo"
-        var suggested by remember(e, upTo) { mutableStateOf(suggestCache[key]) }
-        var thinking by remember(e, upTo) { mutableStateOf(false) }
-        LaunchedEffect(e, upTo) {
-            if (suggested != null || b == null) return@LaunchedEffect
-            thinking = true
-            app.ask.suggest(b, e.visibleAt(upTo) ?: e, kind, readChapters)
-                .onSuccess { list -> if (list.isNotEmpty()) { suggestCache[key] = list; suggested = list } }
-            thinking = false
+/**
+ * Что именно спросить про статью: свой вопрос сверху, ниже - три вопроса,
+ * которые модель придумала по этой статье (урезанной до дочитанных глав);
+ * пока думает или не вышло - готовые по виду статьи.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ColumnScope.AskPage(
+    app: SlushalkaApp,
+    b: ru.zf.slushalka.library.Book,
+    e: GuideEntry,
+    kind: Int,
+    upTo: Int,
+    readChapters: Int,
+    suggestCache: HashMap<String, List<String>>,
+    go: (String) -> Unit,
+) {
+    var own by remember(e) { mutableStateOf("") }
+    val key = "${e.name}|$upTo"
+    var suggested by remember(e, upTo) { mutableStateOf(suggestCache[key]) }
+    var thinking by remember(e, upTo) { mutableStateOf(false) }
+    LaunchedEffect(e, upTo) {
+        if (suggested != null) return@LaunchedEffect
+        thinking = true
+        app.ask.suggest(b, e.visibleAt(upTo) ?: e, kind, readChapters)
+            .onSuccess { list -> if (list.isNotEmpty()) { suggestCache[key] = list; suggested = list } }
+        thinking = false
+    }
+    Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+        PaperField(value = own, onValue = { own = it }, placeholder = "Свой вопрос", maxLines = 4) {
+            val can = own.isNotBlank()
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(if (can) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest)
+                    .clickable(enabled = can) { go(own) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Спросить",
+                    tint = if (can) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
-        fun go(q: String) {
-            askFor = null
-            onAsk(Prompts.aboutEntry(e.name, e.aliases, q))
-        }
-        AlertDialog(
-            onDismissRequest = { askFor = null },
-            title = { Text("Спросить про «${e.name}»") },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    OutlinedTextField(
-                        value = own,
-                        onValueChange = { own = it },
-                        placeholder = { Text("Свой вопрос") },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 1,
-                        maxLines = 4,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    val list = suggested
-                    when {
-                        list != null -> {
-                            Text(
-                                "Или один из этих:",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            list.forEach { q ->
-                                TextButton(onClick = { go(q) }, modifier = Modifier.fillMaxWidth()) {
-                                    Text(q, modifier = Modifier.fillMaxWidth())
-                                }
-                            }
-                        }
-                        thinking -> {
-                            Text(
-                                "Придумываю вопросы по статье…",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            LinearProgressIndicator(Modifier.fillMaxWidth())
-                        }
-                        else -> FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Prompts.guidePresets(kind).forEach { q ->
-                                AssistChip(onClick = { go(q) }, label = { Text(q) })
-                            }
+        val list = suggested
+        when {
+            list != null -> {
+                PaperLabel("Или один из этих")
+                list.forEach { q ->
+                    PaperCard(onClick = { go(q) }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(q, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                            Icon(Glyphs.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Вопрос уйдёт с текстом книги до этого места, без спойлеров.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Spacer(Modifier.height(8.dp))
                 }
-            },
-            confirmButton = {
-                TextButton(enabled = own.isNotBlank(), onClick = { go(own) }) { Text("Спросить") }
-            },
-            dismissButton = { TextButton(onClick = { askFor = null }) { Text("Отмена") } },
-        )
+            }
+            thinking -> PaperBusy("Придумываю вопросы по статье…")
+            else -> {
+                PaperLabel("Готовые")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Prompts.guidePresets(kind).forEach { q -> PaperChip(q, selected = false) { go(q) } }
+                }
+            }
+        }
+        PaperNote("Вопрос уйдёт с текстом книги до этого места, без спойлеров.", Modifier.padding(top = 10.dp))
     }
 }
 

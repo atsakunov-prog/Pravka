@@ -17,15 +17,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -35,12 +32,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.zf.slushalka.SlushalkaApp
 import ru.zf.slushalka.ask.GuideState
 import ru.zf.slushalka.ask.Prompts
+import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.text.Block
 import ru.zf.slushalka.text.BookText
 
@@ -50,6 +49,7 @@ import ru.zf.slushalka.text.BookText
  */
 @Composable
 fun ContentsSheet(
+    app: SlushalkaApp,
     text: BookText,
     currentOffset: Int,
     onPick: (charOffset: Int) -> Unit,
@@ -57,41 +57,52 @@ fun ContentsSheet(
 ) {
     val here = text.chapterIndexAt(currentOffset)
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = (here - 2).coerceAtLeast(0))
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text("Содержание") },
-        text = {
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp), state = listState) {
-                itemsIndexed(text.chapters) { i, ch ->
-                    val current = i == here
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(MaterialTheme.shapes.small)
-                            .clickable { onPick(ch.start) }
-                            .padding(vertical = 10.dp, horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            ch.title.ifBlank { "Глава ${i + 1}" },
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            color = if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                            fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "стр. ${text.pageOf(ch.start)}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+    val c = MaterialTheme.colorScheme
+    PaperSheet(
+        app = app,
+        onClose = onClose,
+        icon = Glyphs.Toc,
+        title = "Содержание",
+        subtitle = text.title.takeIf { it.isNotBlank() }?.let { "$it · ${text.chapters.size} гл." },
+        tall = text.chapters.size > 10,
+        scroll = false,
+    ) {
+        LazyColumn(
+            Modifier.fillMaxWidth().then(if (text.chapters.size > 10) Modifier.weight(1f) else Modifier.heightIn(max = 520.dp)),
+            state = listState,
+        ) {
+            itemsIndexed(text.chapters) { i, ch ->
+                val current = i == here
+                // Как оглавление в конце книги: название, отточие, страница; своя
+                // глава - закрашена, прочитанные - тише.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (current) c.primaryContainer else Color.Transparent)
+                        .clickable { onPick(ch.start) }
+                        .padding(vertical = 12.dp, horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        ch.title.ifBlank { "Глава ${i + 1}" },
+                        style = MaterialTheme.typography.bodyLarge.copy(fontFamily = fontOf(Settings.FONT_BOOK)),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        color = if (i < here) c.onSurfaceVariant else c.onSurface,
+                        fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "${text.pageOf(ch.start)}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = c.onSurfaceVariant,
+                    )
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
-    )
+        }
+    }
 }
 
 /**
@@ -100,7 +111,7 @@ fun ContentsSheet(
  * выделено). Тут же - справочник по упомянутым героям и, у аудиокниги,
  * прежние «Я тут» и «Слушать отсюда».
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ParagraphSheet(
     app: SlushalkaApp,
@@ -120,7 +131,6 @@ fun ParagraphSheet(
     onClose: () -> Unit,
 ) {
     val book by app.state.current.collectAsState()
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val sentences = remember(block) { splitSentences(block.text) }
     var selected by remember { mutableStateOf(setOf<Int>()) }
 
@@ -146,98 +156,67 @@ fun ParagraphSheet(
             .take(6)
     }
 
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp),
-        ) {
-            Text(if (lasso != null) "Выделенное" else "Этот кусок", style = MaterialTheme.typography.titleLarge)
-            Text(
-                when {
-                    lasso != null -> "Готовые вопросы про выделенное, справочник по тем, кто в нём упомянут."
-                    sentences.size > 1 -> "Тапни фразы, о которых спросить, - или спрашивай обо всём абзаце."
-                    else -> "Спросить про этот абзац."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
-                if (lasso != null) {
-                    Text(
-                        "«$selection»",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(MaterialTheme.shapes.small)
-                            .background(MaterialTheme.colorScheme.primaryContainer)
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                    )
-                }
-                if (lasso == null) sentences.forEachIndexed { i, s ->
+    val c = MaterialTheme.colorScheme
+    PaperSheet(
+        app = app,
+        onClose = onClose,
+        icon = Glyphs.FormatQuote,
+        title = if (lasso != null) "Выделенное" else "Этот кусок",
+        subtitle = text.chapterAt(block.start)?.title?.takeIf { it.isNotBlank() },
+    ) {
+        Spacer(Modifier.height(12.dp))
+        Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
+            if (lasso != null) {
+                PaperQuote(selection, maxLines = 12)
+            } else {
+                if (sentences.size > 1) PaperNote("Тапни фразы, о которых спросить, - или спрашивай обо всём абзаце.", Modifier.padding(bottom = 6.dp))
+                sentences.forEachIndexed { i, s ->
                     val on = i in selected
                     Text(
                         s,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = fontOf(Settings.FONT_BOOK)),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(MaterialTheme.shapes.small)
-                            .background(
-                                if (on) MaterialTheme.colorScheme.primaryContainer
-                                else MaterialTheme.colorScheme.surfaceContainerHigh
-                            )
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (on) c.primaryContainer else Color.Transparent)
                             .clickable(enabled = sentences.size > 1) {
                                 selected = if (on) selected - i else selected + i
                             }
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                     )
-                    Spacer(Modifier.height(4.dp))
                 }
             }
-            Spacer(Modifier.height(10.dp))
+        }
 
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Prompts.FRAGMENT_PRESETS.forEach { (label, prompt) ->
-                    AssistChip(onClick = { onAsk(at, prompt, selection) }, label = { Text(label) })
-                }
-                AssistChip(onClick = { onAsk(at, null, selection) }, label = { Text("Свой вопрос…") })
+        PaperLabel("Спросить")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Prompts.FRAGMENT_PRESETS.forEach { (label, prompt) ->
+                PaperChip(label, selected = false) { onAsk(at, prompt, selection) }
             }
-            if (onQuoteCard != null) {
-                Spacer(Modifier.height(6.dp))
-                TextButton(onClick = { onQuoteCard(selection) }) { Text("Цитата картинкой") }
-            }
+            PaperChip("Свой вопрос…", selected = false, icon = Glyphs.QuestionAnswer) { onAsk(at, null, selection) }
+        }
 
-            if (mentioned.isNotEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "В справочнике:",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    mentioned.forEach { e ->
-                        AssistChip(onClick = { onGuide(e.name) }, label = { Text(e.name) })
-                    }
+        if (mentioned.isNotEmpty()) {
+            PaperLabel("В справочнике")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                mentioned.forEach { e ->
+                    PaperChip(e.name, selected = false, icon = Glyphs.MenuBook) { onGuide(e.name) }
                 }
             }
+        }
 
-            if (hasAudio) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    if (playAbsMs > 0)
-                        "«Я тут» скажет карте, что на ${formatClock(playAbsMs)} записи читают это место - " +
-                            "и переходы со звука станут точными."
-                    else "Запись ещё не играла, сверять не с чем.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row {
-                    if (playAbsMs > 0) TextButton(onClick = onAnchor) { Text("Я тут") }
-                    TextButton(onClick = onListen) { Text("Слушать отсюда") }
-                }
+        PaperLabel("Ещё")
+        if (onQuoteCard != null) {
+            PaperRow(Glyphs.Image, "Цитата картинкой", "Карточкой на бумаге книги - в мессенджер или сторис") { onQuoteCard(selection) }
+        }
+        if (hasAudio) {
+            PaperRow(Glyphs.Headphones, "Слушать отсюда", "Запись с этого места") { onListen() }
+            if (playAbsMs > 0) {
+                PaperRow(
+                    Icons.Default.Place,
+                    "Я тут",
+                    "На ${formatClock(playAbsMs)} записи читают это место - переходы со звука станут точнее",
+                ) { onAnchor() }
             }
         }
     }

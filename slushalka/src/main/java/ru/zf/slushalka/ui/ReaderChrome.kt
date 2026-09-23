@@ -33,6 +33,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -408,55 +412,21 @@ fun BookProgress(text: BookText, offset: Int, palette: ReaderPalette, modifier: 
 /** Что умеет Claude из читалки - одним листом, а не россыпью кнопок на плашке. */
 data class ClaudeAction(val icon: ImageVector, val title: String, val hint: String, val run: () -> Unit)
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ClaudeSheet(actions: List<ClaudeAction>, onClose: () -> Unit) {
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 24.dp)) {
-            Text(
-                "Claude",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(horizontal = 8.dp),
-            )
-            Text(
-                "Знает книгу до этой страницы и не знает, что дальше. Выдели слово двумя тапами, " +
-                    "фразу тремя, абзац четырьмя - и спроси прямо про кусок.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 8.dp),
-            )
-            Spacer(Modifier.height(8.dp))
-            actions.forEach { a ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .clickable { onClose(); a.run() }
-                        .padding(horizontal = 8.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.secondaryContainer),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(a.icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(a.title, style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            a.hint,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
+fun ClaudeSheet(app: SlushalkaApp, actions: List<ClaudeAction>, onClose: () -> Unit) {
+    PaperSheet(
+        app = app,
+        onClose = onClose,
+        icon = Glyphs.AutoAwesome,
+        title = "Claude",
+        subtitle = "Знает книгу до этой страницы - и не знает, что дальше",
+    ) {
+        Spacer(Modifier.height(6.dp))
+        actions.forEach { a ->
+            PaperRow(a.icon, a.title, a.hint) { onClose(); a.run() }
         }
+        Spacer(Modifier.height(8.dp))
+        PaperNote("Выдели слово двумя тапами, фразу - тремя, абзац - четырьмя, и спроси прямо про кусок.")
     }
 }
 
@@ -469,6 +439,7 @@ fun ClaudeSheet(actions: List<ClaudeAction>, onClose: () -> Unit) {
  */
 @Composable
 fun NoteEditor(
+    app: SlushalkaApp,
     note: Note,
     hasMic: () -> Boolean,
     onNeedMic: () -> Unit,
@@ -506,74 +477,55 @@ fun NoteEditor(
     }
     LaunchedEffect(Unit) { if (listenAtOnce) toggleVoice() }
 
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text(if (note.text.isBlank()) "Пометка" else "Пометка на полях") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text(
-                    "«${note.quote.take(400)}${if (note.quote.length > 400) "…" else ""}»",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontStyle = FontStyle.Italic,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .padding(10.dp),
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
+    PaperSheet(
+        app = app,
+        onClose = onClose,
+        icon = Glyphs.EditNote,
+        title = if (note.text.isBlank()) "Пометка" else "Пометка на полях",
+        actions = {
+            if (onDelete != null) PaperIconButton(Icons.Default.Delete, "Удалить", onClick = onDelete)
+        },
+    ) {
+        Spacer(Modifier.height(10.dp))
+        PaperQuote(note.quote.take(400) + if (note.quote.length > 400) "…" else "", maxLines = 5)
+        Spacer(Modifier.height(12.dp))
+        val c = MaterialTheme.colorScheme
+        Row(verticalAlignment = Alignment.Top) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 110.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(c.surfaceContainerHigh)
+                    .border(if (LocalEink.current) 1.dp else 0.5.dp, c.outlineVariant, RoundedCornerShape(16.dp))
+                    .padding(14.dp),
+            ) {
+                if (text.isEmpty()) {
+                    Text(if (listening) "Слушаю…" else "Что подумалось…", style = bookBody(), color = c.onSurfaceVariant)
+                }
+                androidx.compose.foundation.text.BasicTextField(
                     value = text,
                     onValueChange = { text = it },
-                    placeholder = { Text("Что подумалось…") },
-                    minLines = 3,
+                    textStyle = bookBody().copy(color = c.onSurface),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(c.onSurface),
                     modifier = Modifier.fillMaxWidth(),
-                    trailingIcon = {
-                        Box(
-                            Modifier
-                                .clip(CircleShape)
-                                .background(
-                                    if (listening) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                                )
-                                .clickable { toggleVoice() }
-                                .padding(8.dp),
-                        ) {
-                            Icon(
-                                Glyphs.Mic,
-                                contentDescription = if (listening) "Хватит" else "Надиктовать",
-                                tint = if (listening) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    },
                 )
-                if (listening) {
-                    Text(
-                        "Слушаю… тапни микрофон, когда договоришь.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-                if (onAsk != null || onDelete != null) {
-                    Row {
-                        if (onAsk != null) TextButton(onClick = { onAsk(text) }) { Text("Спросить Claude") }
-                        Spacer(Modifier.weight(1f))
-                        if (onDelete != null) TextButton(onClick = onDelete) {
-                            Text("Удалить", color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
             }
-        },
-        confirmButton = { TextButton(onClick = { voice.cancel(); onSave(text.trim()) }) { Text("Сохранить") } },
-        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
-    )
+            Spacer(Modifier.width(8.dp))
+            PaperIconButton(Glyphs.Mic, if (listening) "Хватит" else "Надиктовать", active = listening) { toggleVoice() }
+        }
+        if (listening) PaperNote("Слушаю… тапни микрофон, когда договоришь.", Modifier.padding(top = 6.dp))
+        error?.let { PaperError(it) }
+        Spacer(Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (onAsk != null) PaperButton("Спросить", icon = Glyphs.QuestionAnswer) { voice.cancel(); onAsk(text) }
+            Spacer(Modifier.weight(1f))
+            PaperButton("Сохранить", icon = Glyphs.Bookmark, primary = true) { voice.cancel(); onSave(text.trim()) }
+        }
+    }
 }
 
 /** Все пометки книги: по порядку текста, тап - перейти, отсюда же - поделиться всеми. */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotesSheet(
     app: SlushalkaApp,
@@ -585,7 +537,6 @@ fun NotesSheet(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var busy by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -598,91 +549,84 @@ fun NotesSheet(
         Share.send(context, file, Share.DOCX, (if (digest != null) "Конспект: " else "Пометки: ") + title)
     }
 
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
-            // Три выгрузки рядом с заголовком на узком экране не влезают - строкой ниже.
-            Text("Пометки", style = MaterialTheme.typography.titleLarge)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (notes.isNotEmpty()) {
-                    TextButton(enabled = busy == null, onClick = { toWord(null) }) { Text("В Word") }
-                    TextButton(enabled = busy == null && book != null, onClick = {
-                        val b = book ?: return@TextButton
-                        busy = "Claude собирает конспект…"
-                        error = null
-                        scope.launch {
-                            app.ask.digest(b, text, notes)
-                                .onSuccess { (digest, _) -> toWord(digest) }
-                                .onFailure { error = it.message ?: "Не вышло" }
-                            busy = null
-                        }
-                    }) { Text("Конспект") }
-                    TextButton(onClick = {
-                        val body = notesAsText(text, notes, title)
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_SUBJECT, "Пометки: $title")
-                            putExtra(Intent.EXTRA_TEXT, body)
-                        }
-                        runCatching { context.startActivity(Intent.createChooser(send, "Поделиться пометками")) }
-                    }) { Text("Текстом") }
-                }
-            }
-            busy?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall)
-                androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
-            }
-            error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-            if (notes.isNotEmpty() && busy == null) {
-                Text(
-                    "«В Word» - пометки как есть. «Конспект» - Claude свяжет цитаты и твои мысли в текст по главам.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (notes.isEmpty()) {
-                Text(
-                    "Пока пусто. Выдели кусок - двойной тап по слову, тройной по фразе, четверной по " +
-                        "абзацу - и нажми «Пометка». Её можно надиктовать.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                return@Column
-            }
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
-                items(notes, key = { it.id }) { n ->
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { onGo(n) }
-                            .padding(vertical = 10.dp, horizontal = 4.dp),
-                    ) {
-                        Text(
-                            "«${n.quote}»",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontStyle = FontStyle.Italic,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        if (n.text.isNotBlank()) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(n.text, style = MaterialTheme.typography.bodyLarge)
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text.chapterAt(n.start)?.title?.takeIf { it.isNotBlank() }
-                                    ?.let { "$it · " }.orEmpty() + "${percentOf(text, n.start)}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
-                            TextButton(onClick = { onEdit(n) }) { Text("Править") }
-                        }
+    fun digest() {
+        val b = book ?: return
+        busy = "Claude собирает конспект…"
+        error = null
+        scope.launch {
+            app.ask.digest(b, text, notes)
+                .onSuccess { (digest, _) -> toWord(digest) }
+                .onFailure { error = it.message ?: "Не вышло" }
+            busy = null
+        }
+    }
+
+    fun asText() {
+        val body = notesAsText(text, notes, title)
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Пометки: $title")
+            putExtra(Intent.EXTRA_TEXT, body)
+        }
+        runCatching { context.startActivity(Intent.createChooser(send, "Поделиться пометками")) }
+    }
+
+    PaperSheet(
+        app = app,
+        onClose = onClose,
+        icon = Glyphs.EditNote,
+        title = "Пометки",
+        subtitle = if (notes.isEmpty()) title else "$title · ${notes.size}",
+        tall = notes.size > 4,
+        scroll = false,
+    ) {
+        if (notes.isEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            PaperNote(
+                "Пока пусто. Выдели кусок - двойной тап по слову, тройной по фразе, четверной по " +
+                    "абзацу - и нажми «Пометка». Её можно надиктовать.",
+            )
+            return@PaperSheet
+        }
+        // Выгрузки - одной строкой кнопок под шапкой: что сделать со всеми разом.
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PaperButton("В Word", icon = Glyphs.Notes, enabled = busy == null, modifier = Modifier.weight(1f)) { toWord(null) }
+            PaperButton("Конспект", icon = Glyphs.AutoAwesome, enabled = busy == null && book != null, modifier = Modifier.weight(1f)) { digest() }
+            PaperButton("Текстом", icon = Icons.Default.Share, enabled = busy == null, modifier = Modifier.weight(1f)) { asText() }
+        }
+        busy?.let { PaperBusy(it) }
+        error?.let { PaperError(it) }
+        if (busy == null) {
+            PaperNote(
+                "«В Word» - пометки как есть. «Конспект» - Claude свяжет цитаты и твои мысли в текст по главам.",
+                Modifier.padding(top = 8.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(
+            Modifier.fillMaxWidth().then(if (notes.size > 4) Modifier.weight(1f) else Modifier.heightIn(max = 560.dp)),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(notes, key = { it.id }) { n ->
+                PaperCard(onClick = { onGo(n) }) {
+                    PaperQuote(n.quote, maxLines = 3)
+                    if (n.text.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(n.text, style = MaterialTheme.typography.bodyLarge)
                     }
-                    HorizontalDivider()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text.chapterAt(n.start)?.title?.takeIf { it.isNotBlank() }
+                                ?.let { "$it · " }.orEmpty() + "${percentOf(text, n.start)}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        MiniAction(Icons.Default.Edit, "Править") { onEdit(n) }
+                    }
                 }
             }
         }

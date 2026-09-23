@@ -1,21 +1,13 @@
 package ru.zf.slushalka.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -24,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -90,63 +83,49 @@ fun RecapSheet(
     // «а теперь точно?» незачем.
     LaunchedEffect(Unit) { run(depth) }
 
-    AlertDialog(
-        onDismissRequest = { app.speaker.stop(); app.ask.cancel(); onClose() },
-        title = { Text("Напомнить, что было") },
-        text = {
-            Column(Modifier.heightIn(max = 460.dp)) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AskEngine.Depth.entries.forEach { d ->
-                        FilterChip(
-                            selected = depth == d,
-                            enabled = !busy,
-                            onClick = { depth = d; run(d) },
-                            label = { Text(d.label) },
-                        )
-                    }
-                    FilterChip(
-                        selected = kid,
-                        enabled = !busy,
-                        onClick = { kid = !kid; run(depth) },
-                        label = { Text("Для ребёнка") },
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    when {
-                        error != null -> Text(
-                            error!!,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                        answer.isBlank() && busy -> Text(
-                            "Вспоминаю…",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        answer.isBlank() -> Text(
-                            "В этом куске текста слишком мало, чтобы пересказывать.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        else -> Text(answer, style = MaterialTheme.typography.bodyLarge)
-                    }
-                    if (answer.isNotBlank() && remember(answer) { Love.rarely() }) {
-                        Spacer(Modifier.height(10.dp))
-                        LoveLine(alpha = 0.4f, modifier = Modifier.fillMaxWidth())
-                    }
-                }
+    fun close() {
+        app.speaker.stop()
+        app.ask.cancel()
+        onClose()
+    }
+
+    PaperSheet(
+        app = app,
+        onClose = { close() },
+        icon = Glyphs.History,
+        title = "Напомнить, что было",
+        subtitle = b?.title,
+    ) {
+        PaperLabel("Сколько вспомнить")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AskEngine.Depth.entries.forEach { d ->
+                PaperChip(d.label, selected = depth == d, enabled = !busy) { depth = d; run(d) }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { app.speaker.stop(); app.ask.cancel(); onClose() }) {
-                Text("Дальше")
+            PaperChip("Для ребёнка", selected = kid, icon = Glyphs.ChildCare, enabled = !busy) { kid = !kid; run(depth) }
+        }
+        Spacer(Modifier.height(16.dp))
+        when {
+            error != null -> PaperError(error!!)
+            answer.isBlank() && busy -> PaperBusy("Вспоминаю…")
+            answer.isBlank() -> PaperNote("В этом куске текста слишком мало, чтобы пересказывать.")
+            else -> {
+                // Пересказ читают, как страницу: шрифтом и кеглем книги.
+                Text(answer, style = bookBody())
+                if (busy) PaperBusy("Пишу…")
             }
-        },
-        dismissButton = {
+        }
+        if (answer.isNotBlank() && remember(answer) { Love.rarely() }) {
+            Spacer(Modifier.height(10.dp))
+            LoveLine(alpha = 0.4f, modifier = Modifier.fillMaxWidth())
+        }
+        Spacer(Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
             if (answer.isNotBlank()) {
-                Row {
-                    TextButton(onClick = { app.speaker.speak(answer) }) { Text("Вслух") }
-                    TextButton(onClick = { app.speaker.stop() }) { Text("Тише") }
-                }
+                MiniAction(Glyphs.VolumeUp, "Вслух") { app.speaker.speak(answer) }
+                MiniAction(Glyphs.StopCircle, "Тише") { app.speaker.stop() }
             }
-        },
-    )
+            Spacer(Modifier.weight(1f))
+            PaperButton("Дальше", icon = if (b?.hasAudio == false) Glyphs.AutoStories else Glyphs.Headphones, primary = true) { close() }
+        }
+    }
 }

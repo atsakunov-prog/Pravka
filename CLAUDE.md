@@ -116,7 +116,11 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     `TalkSheet.kt` (поверх любого экрана из `MainActivity`, как вопрос); пометки — `NoteEditor` с голосом и
     `NotesSheet`, хранилище `data/Notes.kt`, синк — `пометки-<имя>.json`;
     значки — `Glyphs.kt`, контуры Material поштучно, не вся библиотека: APK без
-    R8; выгрузки — `Share.kt` (FileProvider, `cache/shared/`), Word —
+    R8; окна поверх читалки — на бумаге читалки набором `Paper.kt`
+    (`PaperTheme` из `readerView().readerTheme`, `PaperSheet` снизу,
+    `PaperScreen` во весь экран для вопроса и разговора, `PaperCard/Chip/
+    Button/Toggle/Field/Quote`, `ChatBubble` + `ChatInput`); новые окна
+    читалки собирать из него, не из голого Material; выгрузки — `Share.kt` (FileProvider, `cache/shared/`), Word —
     `data/Docx.kt` (zip из XML, без библиотек), цитата картинкой —
     `QuoteCard.kt`; бумага по времени суток — `themeAt(hour)`;`BookPage.kt` — два вида
     страницы: **книжный** (том целиком в экране: переплёт цветом с обложки

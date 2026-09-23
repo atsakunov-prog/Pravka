@@ -1,29 +1,16 @@
 package ru.zf.slushalka.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -32,10 +19,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import ru.zf.slushalka.SlushalkaApp
@@ -50,7 +37,6 @@ import ru.zf.slushalka.text.BookText
  * по приметам даром, иначе одним коротким запросом про эту главу. Без
  * справочника - по тексту прочитанного, с ценой на кнопке (см. MeaningSearch).
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchSheet(
     app: SlushalkaApp,
@@ -64,7 +50,6 @@ fun SearchSheet(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     val states by app.guide.states.collectAsState()
     val guide = states[book.id]?.takeIf { it.status == GuideState.Status.READY }?.guide
@@ -141,131 +126,92 @@ fun SearchSheet(
         listening = true
     }
 
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 24.dp),
+    val c = MaterialTheme.colorScheme
+    PaperSheet(
+        app = app,
+        onClose = onClose,
+        icon = Glyphs.ManageSearch,
+        title = "Найти по смыслу",
+        subtitle = "Только в прочитанном",
+    ) {
+        Spacer(Modifier.height(14.dp))
+        // Поле - такое же, как строка вопроса: бумага, микрофон рядом.
+        PaperField(
+            value = query,
+            onValue = { query = it },
+            placeholder = if (listening) "Слушаю…" else "Где был разговор про балет…",
+            leading = Glyphs.ManageSearch,
         ) {
-            Text("Найти по смыслу", style = MaterialTheme.typography.titleLarge)
-            Text(
-                "«Где Анна впервые говорит про Лизл», «где был разговор про балет». Только в прочитанном.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Что ищешь") },
-                minLines = 1,
-                maxLines = 3,
+            PaperIconButton(Glyphs.Mic, if (listening) "Хватит" else "Сказать", active = listening) { toggleVoice() }
+        }
+        Spacer(Modifier.height(12.dp))
+        when {
+            guide != null && readChapters > 0 -> PaperButton(
+                "Найти по справочнику",
+                icon = Glyphs.MenuBook,
+                primary = true,
+                enabled = busy == null && query.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
-                trailingIcon = {
-                    IconButton(onClick = { toggleVoice() }) {
-                        Icon(
-                            Glyphs.Mic,
-                            contentDescription = if (listening) "Хватит" else "Сказать",
-                            tint = if (listening) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
+            ) { runGuide() }
+            guide != null -> PaperNote("Справочник откроется, когда дочитаешь первую главу. Пока можно искать по тексту.")
+            else -> PaperNote(
+                "Справочника по этой книге ещё нет, а поиск по нему в десятки раз дешевле: " +
+                    "закажи его в «Справочнике». Пока - по тексту прочитанного.",
             )
-            Spacer(Modifier.height(10.dp))
-            when {
-                guide != null && readChapters > 0 -> {
-                    Button(
-                        enabled = busy == null && query.isNotBlank(),
-                        onClick = { runGuide() },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Найти по справочнику") }
-                }
-                guide != null -> Text(
-                    "Справочник откроется, когда дочитаешь первую главу. Пока можно искать по тексту.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                else -> Text(
-                    "Справочника по этой книге ещё нет, а поиск по нему в десятки раз дешевле: " +
-                        "закажи его в «Справочнике». Пока - по тексту прочитанного.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        }
 
-            busy?.let {
-                Spacer(Modifier.height(10.dp))
-                Text(it, style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.height(6.dp))
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-            }
-            error?.let {
-                Spacer(Modifier.height(8.dp))
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            }
+        busy?.let { PaperBusy(it) }
+        error?.let { PaperError(it) }
 
-            hits?.let { list ->
-                Spacer(Modifier.height(12.dp))
-                if (list.isEmpty()) {
-                    Text(
-                        if (byText) "В прочитанном ничего похожего не нашлось."
-                        else "По справочнику ничего похожего - попробуй по тексту.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Column(Modifier.heightIn(max = 420.dp)) {
-                    list.forEach { h ->
-                        val ch = text.chapters.getOrNull(h.chapter - 1)
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                .clickable(enabled = busy == null) { go(h) }
-                                .padding(12.dp),
-                        ) {
+        hits?.let { list ->
+            if (list.isEmpty()) {
+                PaperNote(
+                    if (byText) "В прочитанном ничего похожего не нашлось."
+                    else "По справочнику ничего похожего - попробуй по тексту.",
+                    Modifier.padding(top = 12.dp),
+                )
+            } else {
+                PaperLabel("Нашлось")
+            }
+            Column(Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                list.forEach { h ->
+                    val ch = text.chapters.getOrNull(h.chapter - 1)
+                    PaperCard(onClick = if (busy == null) ({ go(h) }) else null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 "Глава ${h.chapter}" + (ch?.title?.takeIf { it.isNotBlank() }?.let { ". $it" } ?: ""),
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
                             )
-                            if (h.why.isNotBlank()) Text(h.why, style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                if (h.charOffset != null) "тап - к этому месту" else "тап - найти место в главе",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            Icon(Glyphs.ChevronRight, contentDescription = null, tint = c.onSurfaceVariant)
                         }
+                        if (h.why.isNotBlank()) Text(h.why, style = MaterialTheme.typography.bodyMedium)
+                        PaperNote(if (h.charOffset != null) "к этому месту" else "найти место в главе")
                     }
                 }
             }
+        }
 
-            // По тексту - отдельной кнопкой и с ценой: это уже не центы.
-            if (cutoff > 0 && (guide == null || hits != null || readChapters == 0)) {
-                Spacer(Modifier.height(10.dp))
-                OutlinedButton(
-                    enabled = busy == null && query.isNotBlank(),
-                    onClick = { runText() },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Искать по тексту прочитанного · ≈ %.2f $".format(textUsd)) }
-            }
-            if (spent > 0) {
-                Row {
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        "потрачено %.3f $".format(spent),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+        // По тексту - отдельной кнопкой и с ценой: это уже не центы.
+        if (cutoff > 0 && (guide == null || hits != null || readChapters == 0)) {
+            Spacer(Modifier.height(12.dp))
+            PaperButton(
+                "По тексту прочитанного · ≈ %.2f $".format(textUsd),
+                icon = Glyphs.AutoStories,
+                primary = guide == null || readChapters == 0,
+                enabled = busy == null && query.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) { runText() }
+        }
+        if (spent > 0) {
+            Text(
+                "потрачено %.3f $".format(spent),
+                style = MaterialTheme.typography.labelSmall,
+                color = c.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.End).padding(top = 6.dp),
+            )
         }
     }
 }

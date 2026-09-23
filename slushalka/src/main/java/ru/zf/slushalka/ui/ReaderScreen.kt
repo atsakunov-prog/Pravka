@@ -870,8 +870,9 @@ fun ReaderScreen(
 
     if (showClaude) {
         ClaudeSheet(
+            app = app,
             actions = listOf(
-                ClaudeAction(Glyphs.Forum, "Спросить о книге", "Любой вопрос о прочитанном - без спойлеров") {
+                ClaudeAction(Glyphs.QuestionAnswer, "Спросить о книге", "Любой вопрос о прочитанном - без спойлеров") {
                     onAsk(readPlace(), null, null)
                 },
                 ClaudeAction(Glyphs.History, "Напомнить, что было", "Пересказ последних глав до этой страницы") {
@@ -914,6 +915,7 @@ fun ReaderScreen(
     editing?.let { n ->
         val known = notes.any { it.id == n.id }
         NoteEditor(
+            app = app,
             note = n,
             hasMic = hasMic,
             onNeedMic = onNeedMic,
@@ -972,6 +974,7 @@ fun ReaderScreen(
     }
     if (showChapters) {
         ContentsSheet(
+            app = app,
             text = t,
             currentOffset = offset,
             onPick = { start ->
@@ -1109,7 +1112,7 @@ private fun ColumnScope.SelectionBar(
         TextButton(onClick = onClear) { Text("Снять", color = palette.fg, fontSize = 12.sp) }
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        BarAction(Glyphs.AutoAwesome, "Спросить", palette, onClick = onAsk)
+        BarAction(Glyphs.QuestionAnswer, "Спросить", palette, onClick = onAsk)
         BarAction(Glyphs.TravelExplore, "Контекст", palette, onClick = onContext)
         BarAction(Glyphs.EditNote, "Пометка", palette, onClick = onNote)
         BarAction(Glyphs.Mic, "Голосом", palette, onClick = onVoiceNote)
@@ -1125,25 +1128,19 @@ private const val SPEECH_ALPHA = 0.42f
 @Composable
 private fun ReadAloudRateDialog(app: SlushalkaApp, rate: Float, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text("Темп озвучки") },
-        text = {
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                listOf(0.7f, 0.85f, 1.0f, 1.15f, 1.3f, 1.5f, 1.75f, 2.0f).forEach { r ->
-                    androidx.compose.material3.FilterChip(
-                        selected = kotlin.math.abs(rate - r) < 0.01f,
-                        onClick = {
-                            app.readAloud.setRate(r)
-                            scope.launch { app.settings.setTtsRate(r) }
-                        },
-                        label = { Text(formatSpeed(r)) },
-                    )
+    PaperSheet(app = app, onClose = onClose, icon = Glyphs.Speed, title = "Темп озвучки", subtitle = formatSpeed(rate)) {
+        Spacer(Modifier.height(14.dp))
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf(0.7f, 0.85f, 1.0f, 1.15f, 1.3f, 1.5f, 1.75f, 2.0f).forEach { r ->
+                PaperChip(formatSpeed(r), selected = kotlin.math.abs(rate - r) < 0.01f) {
+                    app.readAloud.setRate(r)
+                    scope.launch { app.settings.setTtsRate(r) }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onClose) { Text("Готово") } },
-    )
+        }
+        PaperNote("Голос и тембр - в настройках, раздел «Озвучка».", Modifier.padding(top = 12.dp))
+    }
 }

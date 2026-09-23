@@ -1,6 +1,6 @@
 package ru.zf.slushalka.ui
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,32 +11,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -49,7 +38,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
@@ -69,7 +59,7 @@ import ru.zf.slushalka.data.Settings
  * виден расход. После ответа разговор продолжается: уточнить, спросить про
  * ответ - реплики уезжают вместе, а книга-контекст с кэшем платится один раз.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AskSheet(
     app: SlushalkaApp,
@@ -111,7 +101,7 @@ fun AskSheet(
     var scope by remember { mutableStateOf(AskEngine.Scope.of(prefs.askScope)) }
     var cache by remember { mutableStateOf(prefs.askCache) }
     var spoilers by remember { mutableStateOf(false) }
-    var setupOpen by remember { mutableStateOf(true) }
+    var setupOpen by remember { mutableStateOf(false) }
     // Место фиксируется на момент открытия окна: пока набираешь вопрос,
     // книга уже стоит, и «сейчас» никуда не уезжает.
     // У книги без записи плеер может держать чужую книгу - её секунды сюда не берём.
@@ -200,7 +190,6 @@ fun AskSheet(
                 turns = turns + turn
                 pending = null
                 partial = ""
-                setupOpen = false
                 if (prefs.speakAnswers || handsFree) {
                     app.speaker.speak(turn.answer) {
                         // Дочитали вслух - книга сама продолжается: за рулём
@@ -260,296 +249,260 @@ fun AskSheet(
         }
     }
 
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text(if (quote != null) "Вопрос о фрагменте" else "Вопрос по книге") },
-                    navigationIcon = {
-                        IconButton(onClick = { finish() }) {
-                            Icon(Icons.Default.Close, contentDescription = "Закрыть")
-                        }
+    val clipboard = LocalClipboardManager.current
+    // «Назад» - то же, что крестик: книга, поставленная на паузу ради
+    // вопроса, продолжается. Раньше его ловил общий обработчик и просто
+    // закрывал окно, а книга так и стояла.
+    androidx.activity.compose.BackHandler { finish() }
+    val t = book?.textDocId
+    PaperScreen(
+        app = app,
+        icon = Glyphs.QuestionAnswer,
+        title = if (quote != null) "Спросить о фрагменте" else "Спросить по книге",
+        subtitle = ctx?.let {
+            buildString {
+                if (it.chapter.isNotBlank()) append(it.chapter).append(" · ")
+                append("${it.percent}%")
+                if (it.elapsed.isNotBlank()) append(" · ").append(it.elapsed)
+            }
+        } ?: book?.title,
+        onClose = { finish() },
+        bottom = {
+            if (t != null && ctx != null) {
+                ChatInput(
+                    value = question,
+                    onValue = { question = it },
+                    placeholder = when {
+                        turns.isNotEmpty() -> "Уточнить или спросить про ответ"
+                        quote != null -> "Что спросить про этот кусок?"
+                        else -> "Спроси о прочитанном"
                     },
+                    listening = listening,
+                    enabled = !busy,
+                    onMic = { startVoice() },
+                    onSend = { send(question) },
                 )
-            },
-        ) { padding ->
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .imePadding()
-                    .verticalScroll(scroll)
-                    .padding(horizontal = 18.dp),
-            ) {
-                if (book?.textDocId == null) {
-                    NoTextNote()
-                    return@Column
-                }
-                if (ctx == null) {
-                    Text(
-                        "Разбираю текст книги…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    return@Column
-                }
+            }
+        },
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(scroll)
+                .padding(horizontal = 18.dp),
+        ) {
+            if (t == null) {
+                NoTextNote()
+                return@Column
+            }
+            if (ctx == null) {
+                PaperBusy("Разбираю текст книги…")
+                return@Column
+            }
+            Spacer(Modifier.height(10.dp))
 
-                Text(
-                    buildString {
-                        if (ctx.chapter.isNotBlank()) append(ctx.chapter).append(" · ")
-                        append("${ctx.percent}%")
-                        if (ctx.elapsed.isNotBlank()) append(" · ").append(ctx.elapsed)
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            quote?.let {
+                PaperQuote(it)
+                Spacer(Modifier.height(6.dp))
+            }
 
-                quote?.let { q ->
+            // Рукоятки - одной строкой: кто отвечает, сколько книги видит, во
+            // что обойдётся. Раньше они стояли простынёй над вопросом и
+            // заслоняли главное; теперь раскрываются тапом.
+            SetupLine(
+                text = buildString {
+                    append(Settings.modelLabel(model)).append(" · ").append(scope.short)
+                    if (cache) append(" · кэш")
+                    if (spoilers) append(" · спойлеры")
+                    val spent = turns.sumOf { it.costUsd }
+                    if (spent > 0) append(" · потрачено %.2f $".format(spent))
+                    else append(" · ≈ %.2f $".format(ctx.estFirstUsd(model, cache)))
+                },
+                open = setupOpen,
+                warn = spoilers,
+                onClick = { setupOpen = !setupOpen },
+            )
+            if (setupOpen) {
+                PaperCard {
+                    Text("Кто отвечает", style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        "«" + q.trim() + "»",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontStyle = FontStyle.Italic,
-                        maxLines = 6,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(MaterialTheme.shapes.medium)
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-
-                if (turns.isEmpty()) {
-                    OutlinedTextField(
-                        value = question,
-                        onValueChange = { question = it },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp),
-                        placeholder = { Text(if (quote != null) "Что спросить про этот кусок?" else "Наговори или набери вопрос") },
-                        label = null,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Button(onClick = { startVoice() }) { Text(if (listening) "Стоп" else "Наговорить") }
-                        Button(
-                            enabled = question.isNotBlank() && !busy,
-                            onClick = { send(question) },
-                            modifier = Modifier.weight(1f),
-                        ) { Text(if (busy) "Спрашиваю…" else "Спросить") }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        (if (quote != null) Prompts.FRAGMENT_PRESETS else Prompts.PRESETS).forEach { (label, prompt) ->
-                            AssistChip(
-                                enabled = !busy,
-                                onClick = { send(prompt) },
-                                label = { Text(label) },
-                            )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Settings.MODELS.forEach { m ->
+                            PaperChip(Settings.modelLabel(m), selected = model == m) {
+                                model = m
+                                coroutine.launch { state.settings.setAskModel(m) }
+                            }
                         }
                     }
                     Spacer(Modifier.height(14.dp))
-                }
-
-                // Модель, объём, кэш и цена. После первого ответа сворачивается в
-                // строку: разговор важнее рукояток, но они в одном тапе.
-                if (setupOpen) {
-                    Text("Кто отвечает", style = MaterialTheme.typography.labelMedium)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Settings.MODELS.forEach { m ->
-                            FilterChip(
-                                selected = model == m,
-                                onClick = {
-                                    model = m
-                                    coroutine.launch { state.settings.setAskModel(m) }
-                                },
-                                label = { Text(Settings.modelLabel(m)) },
-                            )
-                        }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Сколько книги показать", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                        Text(scope.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Что показать модели: ${scope.label}",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
                     Slider(
                         value = scope.ordinal.toFloat(),
                         onValueChange = { scope = AskEngine.Scope.entries[it.roundToInt().coerceIn(0, AskEngine.Scope.entries.lastIndex)] },
                         onValueChangeFinished = { coroutine.launch { state.settings.setAskScope(scope.name) } },
                         valueRange = 0f..AskEngine.Scope.entries.lastIndex.toFloat(),
                         steps = AskEngine.Scope.entries.size - 2,
-                    )
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = cache,
-                            onClick = {
-                                cache = !cache
-                                coroutine.launch { state.settings.setAskCache(cache) }
-                            },
-                            label = { Text("держать в кэше час") },
-                        )
-                        FilterChip(
-                            selected = spoilers,
-                            onClick = { spoilers = !spoilers },
-                            label = { Text(if (spoilers) "спойлеры разрешены" else "спойлеры") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MaterialTheme.colorScheme.errorContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onErrorContainer,
-                            ),
-                        )
-                        FilterChip(
-                            selected = prefs.speakAnswers,
-                            onClick = { coroutine.launch { state.settings.setSpeakAnswers(!prefs.speakAnswers) } },
-                            label = { Text("вслух") },
-                        )
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        costLine(ctx, model, cache),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (spoilers) {
-                        Text(
-                            "Барьер снят: модель ответит и о том, что будет дальше. Выключается тем же чипом.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                    if (turns.isNotEmpty()) {
-                        TextButton(onClick = { setupOpen = false }) { Text("Свернуть") }
-                    }
-                } else {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            buildString {
-                                append(Settings.modelLabel(model)).append(" · ").append(scope.short)
-                                if (cache) append(" · кэш")
-                                if (spoilers) append(" · спойлеры")
-                                val spent = turns.sumOf { it.costUsd }
-                                if (spent > 0) append(" · %.2f $".format(spent))
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = { setupOpen = true }) { Text("Изменить") }
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                turns.forEachIndexed { i, turn ->
-                    QuestionBubble(turn.shown)
-                    val last = i == turns.lastIndex
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        colors = SliderDefaults.colors(
+                            thumbColor = MaterialTheme.colorScheme.primary,
+                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                            inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            activeTickColor = MaterialTheme.colorScheme.onPrimary,
+                            inactiveTickColor = MaterialTheme.colorScheme.outline,
                         ),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(Modifier.padding(14.dp)) {
-                            Text(turn.answer, style = MaterialTheme.typography.bodyLarge)
-                            if (turn.truncated) {
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    "Ответ упёрся в потолок длины. Напиши «продолжи» - договорит.",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                            Spacer(Modifier.height(6.dp))
-                            Row {
-                                TextButton(onClick = { app.speaker.speak(turn.answer) }) { Text("Вслух") }
-                                TextButton(onClick = { app.speaker.stop() }) { Text("Тише") }
-                                Spacer(Modifier.weight(1f))
-                                if (last) TextButton(onClick = { finish() }) { Text("Дальше слушать") }
-                            }
-                            if (last && remember(turn.answer) { Love.rarely() }) {
-                                LoveLine(alpha = 0.4f, modifier = Modifier.fillMaxWidth())
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                }
-
-                pending?.let { q ->
-                    QuestionBubble(q)
-                    if (partial.isBlank()) {
-                        Text(
-                            "Думаю…",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        Text(partial, style = MaterialTheme.typography.bodyLarge)
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                    TextButton(onClick = { app.ask.cancel() }) { Text("Хватит") }
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                error?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error)
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                if (turns.isNotEmpty()) {
-                    // Разговор продолжается: уточнить, спросить про ответ. Реплики
-                    // уезжают вместе с историей, книга-контекст - из кэша.
-                    OutlinedTextField(
-                        value = question,
-                        onValueChange = { question = it },
-                        placeholder = { Text("Уточнить или спросить про ответ") },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 1,
-                        maxLines = 4,
-                        trailingIcon = {
-                            IconButton(onClick = { send(question) }, enabled = !busy && question.isNotBlank()) {
-                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Спросить")
-                            }
-                        },
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(enabled = !busy, onClick = { startVoice() }) {
-                            Text(if (listening) "Стоп" else "Наговорить")
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        PaperChip("Кэш на час", selected = cache, icon = Glyphs.Speed) {
+                            cache = !cache
+                            coroutine.launch { state.settings.setAskCache(cache) }
                         }
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            "следующий ≈ %.2f $".format(ctx.estNextUsd(model, cache)),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        PaperChip(
+                            if (spoilers) "Спойлеры можно" else "Без спойлеров",
+                            selected = spoilers,
+                            icon = if (spoilers) Glyphs.LockOpen else Icons.Default.Lock,
+                            warn = true,
+                        ) { spoilers = !spoilers }
+                        PaperChip("Ответ вслух", selected = prefs.speakAnswers, icon = Glyphs.VolumeUp) {
+                            coroutine.launch { state.settings.setSpeakAnswers(!prefs.speakAnswers) }
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    PaperNote(costLine(ctx, model, cache))
+                    if (spoilers) {
+                        Spacer(Modifier.height(4.dp))
+                        PaperNote(
+                            "Барьер снят: модель ответит и о том, что будет дальше. Только на этот разговор.",
+                            color = MaterialTheme.colorScheme.tertiary,
                         )
                     }
                 }
+            }
+            Spacer(Modifier.height(12.dp))
 
-                // Прошлые разговоры по этой книге - без тех реплик, что уже на экране.
-                val history = book?.let { app.askLog.of(it.id) }.orEmpty()
-                    .filter { it.answer.isNotBlank() }
-                    .dropLast(turns.size)
-                if (history.isNotEmpty()) {
-                    Spacer(Modifier.height(18.dp))
-                    Text("Спрашивали раньше", style = MaterialTheme.typography.labelMedium)
-                    history.takeLast(6).reversed().forEach { a ->
-                        Spacer(Modifier.height(8.dp))
-                        Column {
-                            Text(
-                                (if (a.absMs > 0) formatClock(a.absMs) + " · " else "") + a.question,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(a.answer, style = MaterialTheme.typography.bodySmall, maxLines = 4)
-                        }
+            if (turns.isEmpty() && pending == null) {
+                PaperLabel("С чего начать")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (if (quote != null) Prompts.FRAGMENT_PRESETS else Prompts.PRESETS).forEach { (label, prompt) ->
+                        PaperChip(label, selected = false, enabled = !busy) { send(prompt) }
                     }
                 }
-                Spacer(Modifier.height(40.dp))
+                Spacer(Modifier.height(8.dp))
+                PaperNote(
+                    if (handsFree) "Говори - вопрос уйдёт сам, ответ прочитаю вслух."
+                    else "Или спроси своё снизу - словами или голосом. Отвечу без спойлеров: только по тому, что уже прочитано.",
+                )
             }
+
+            turns.forEachIndexed { i, turn ->
+                val last = i == turns.lastIndex
+                ChatBubble(turn.shown, mine = true)
+                Spacer(Modifier.height(8.dp))
+                ChatBubble(turn.answer, mine = false) {
+                    MiniAction(Glyphs.VolumeUp, "Вслух") { app.speaker.speak(turn.answer) }
+                    MiniAction(Glyphs.StopCircle, "Тише") { app.speaker.stop() }
+                    MiniAction(Glyphs.ContentCopy, "Копия") { clipboard.setText(AnnotatedString(turn.answer)) }
+                }
+                if (turn.truncated) {
+                    PaperNote(
+                        "Ответ упёрся в потолок длины. Напиши «продолжи» - договорит.",
+                        Modifier.padding(start = 6.dp, top = 4.dp),
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+                if (last) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        PaperButton(if (book?.hasAudio == false) "Дальше читать" else "Дальше слушать", icon = Glyphs.Headphones) { finish() }
+                    }
+                    if (remember(turn.answer) { Love.rarely() }) {
+                        LoveLine(alpha = 0.4f, modifier = Modifier.fillMaxWidth())
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+            }
+
+            pending?.let { q ->
+                ChatBubble(q, mine = true)
+                Spacer(Modifier.height(8.dp))
+                if (partial.isNotBlank()) ChatBubble(partial, mine = false)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { PaperBusy(if (partial.isBlank()) "Думаю…" else "Пишу…") }
+                    Spacer(Modifier.width(8.dp))
+                    MiniAction(Glyphs.StopCircle, "Хватит") { app.ask.cancel() }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            error?.let { PaperError(it) }
+
+            // Прошлые разговоры по этой книге - без тех реплик, что уже на экране.
+            val history = book?.let { app.askLog.of(it.id) }.orEmpty()
+                .filter { it.answer.isNotBlank() }
+                .dropLast(turns.size)
+            if (history.isNotEmpty()) {
+                PaperLabel("Спрашивали раньше", Modifier.padding(top = 8.dp))
+                history.takeLast(6).reversed().forEach { a ->
+                    var open by remember(a) { mutableStateOf(false) }
+                    PaperCard(onClick = { open = !open }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Glyphs.History, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                a.question,
+                                style = MaterialTheme.typography.labelLarge,
+                                maxLines = if (open) 6 else 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (a.absMs > 0) {
+                                Text(formatClock(a.absMs), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            a.answer,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = if (open) Int.MAX_VALUE else 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+            Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+/** Свёрнутые рукоятки: значок, сводка, стрелка. Предупреждение о спойлерах - тёплым. */
+@Composable
+private fun SetupLine(text: String, open: Boolean, warn: Boolean, onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Glyphs.Tune, contentDescription = null, modifier = Modifier.size(18.dp), tint = if (warn) c.tertiary else c.onSurfaceVariant)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (warn) c.tertiary else c.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Icon(
+            if (open) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = if (open) "Свернуть" else "Настроить",
+            tint = c.onSurfaceVariant,
+        )
     }
 }
 
@@ -562,21 +515,6 @@ private fun costLine(ctx: AskEngine.Ctx, model: String, cache: Boolean): String 
     } else {
         "В промпт уедет %d стр. · каждый вопрос ≈ %.2f $".format(ctx.pages, first)
     }
-}
-
-@Composable
-private fun QuestionBubble(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onPrimaryContainer,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.primaryContainer)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-    )
-    Spacer(Modifier.height(8.dp))
 }
 
 @Composable

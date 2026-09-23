@@ -184,30 +184,33 @@ fun PictureGallery(
     val byFile = remember(text) {
         text?.picturesWithCaptions?.filter { it.file.isNotBlank() }?.associateBy { it.file }.orEmpty()
     }
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text("Картинки книги") },
-        text = {
-            if (files.isEmpty()) {
-                Text("В файле книги картинок не нашлось.")
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(96.dp),
-                    modifier = Modifier.heightIn(max = 420.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    items(files) { file ->
-                        val pic = byFile[file.name]
-                        Thumb(file, pic?.caption.orEmpty()) {
-                            open = ShownPicture(file, pic?.caption.orEmpty(), pic?.charOffset ?: 0)
-                        }
+    PaperSheet(
+        app = app,
+        onClose = onClose,
+        icon = Glyphs.PhotoLibrary,
+        title = "Картинки книги",
+        subtitle = if (files.isEmpty()) book.title else "${book.title} · ${files.size}",
+        scroll = false,
+    ) {
+        if (files.isEmpty()) {
+            PaperNote("В файле книги картинок не нашлось.", Modifier.padding(vertical = 16.dp))
+        } else {
+            Spacer(Modifier.height(12.dp))
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(104.dp),
+                modifier = Modifier.heightIn(max = 560.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(files) { file ->
+                    val pic = byFile[file.name]
+                    Thumb(file, pic?.caption.orEmpty()) {
+                        open = ShownPicture(file, pic?.caption.orEmpty(), pic?.charOffset ?: 0)
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
-    )
+        }
+    }
     open?.let { shown ->
         ImageViewer(
             shown = shown,
@@ -222,12 +225,15 @@ fun PictureGallery(
 @Composable
 internal fun Thumb(file: File, caption: String, onOpen: () -> Unit) {
     val bitmap = rememberPicture(file, target = 300)
-    Column(Modifier.clickable(onClick = onOpen)) {
+    val c = MaterialTheme.colorScheme
+    Column(Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onOpen)) {
         Box(
             Modifier
-                .height(96.dp)
+                .height(120.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp)),
+                .clip(RoundedCornerShape(12.dp))
+                .background(c.surfaceContainerHigh)
+                .border(0.5.dp, c.outlineVariant, RoundedCornerShape(12.dp)),
         ) {
             bitmap?.let {
                 Image(
@@ -241,10 +247,11 @@ internal fun Thumb(file: File, caption: String, onOpen: () -> Unit) {
         if (caption.isNotBlank()) {
             Text(
                 caption,
-                fontSize = 10.sp,
+                style = MaterialTheme.typography.labelSmall,
+                color = c.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 2.dp),
+                modifier = Modifier.padding(top = 4.dp, start = 2.dp),
             )
         }
     }
