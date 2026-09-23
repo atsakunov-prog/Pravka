@@ -263,3 +263,68 @@ private fun TotalRow(title: String, kop: Long, color: androidx.compose.ui.graphi
         Text(MoneyFormat.rub(kop), style = if (big) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = color)
     }
 }
+
+/**
+ * Счета за период: куда пришло и откуда ушло (владелец, 23.09.2026: «счета,
+ * на которые приходит всё это и откуда списывается — кеш, Тиньков, Альфа»).
+ * На строке — остаток на конец (или «?»), под ним «было · пришло · ушло»;
+ * тап раскрывает по категориям. Наличные и долг Наташе — такие же счета.
+ */
+@Composable
+internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: MoneyStats.Period) {
+    val anchors = remember(entries, app.moneyStore.stateFlow.value.balances) { app.moneyEngine.anchors() }
+    val flows = remember(entries, anchors, period) {
+        MoneyCashflow.accountFlows(entries, anchors, period.from, period.to, System.currentTimeMillis())
+            .filter { it.inKop != 0L || it.outKop != 0L || it.endKop != null }
+    }
+    var open by remember { mutableStateOf(setOf<String>()) }
+    PaperCard(label = "счета · откуда и куда") {
+        if (flows.isEmpty()) {
+            PaperHint("За период движений нет.")
+            return@PaperCard
+        }
+        for (f in flows) {
+            val expanded = f.name in open
+            Column(
+                Modifier.fillMaxWidth()
+                    .clickable { open = if (expanded) open - f.name else open + f.name }
+                    .padding(vertical = 5.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        f.name + if (expanded) "  ▾" else "  ▸",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        f.endKop?.let { MoneyFormat.rub(it) } ?: "?",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if ((f.endKop ?: 0) < 0) spentColor() else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                Row {
+                    PaperHint("было " + (f.startKop?.let { MoneyFormat.short(it) } ?: "?") + "   ")
+                    if (f.inKop != 0L) Text("+" + MoneyFormat.short(f.inKop) + "   ", style = MaterialTheme.typography.bodySmall, color = incomeColor())
+                    if (f.outKop != 0L) Text(MoneyFormat.short(f.outKop), style = MaterialTheme.typography.bodySmall, color = spentColor())
+                }
+                if (expanded) {
+                    for ((cat, kop) in f.byCategory.take(12)) {
+                        Row(Modifier.fillMaxWidth().padding(start = 12.dp, top = 2.dp)) {
+                            Text(cat, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                MoneyFormat.rub(kop, sign = true),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (kop < 0) spentColor() else incomeColor(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        PaperHint("Остаток — от якоря (снимок, вписанное, «Доступно» из пуша); «?» — впиши в «балансе» тапом по счёту.")
+    }
+}

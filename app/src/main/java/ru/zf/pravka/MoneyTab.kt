@@ -258,6 +258,7 @@ internal fun MoneyTab(app: PravkaApp) {
 
         // ---- ДДС по месяцу и баланс (владелец, 23.09.2026) ----
         CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), withZf)
+        AccountsCard(app, entries, period)
         BalanceCard(app, entries)
 
         // ---- Регулярные платежи ----

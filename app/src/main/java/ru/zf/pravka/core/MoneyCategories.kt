@@ -72,6 +72,10 @@ object MoneyCategories {
         Category("inc_zf", "Доход от ЗФ", G_INCOME, Shelf.FAMILY, income = true),
         Category("inc_marianna", "Доход Марианны", G_INCOME, Shelf.FAMILY, income = true),
         Category("inc_other", "Прочие поступления", G_INCOME, Shelf.FAMILY, income = true),
+        // Доля партнёра из выплаты ЗФ: не трата семьи, а меньше дохода —
+        // «30 % после её расходов» (владелец, 23.09.2026). Стоит в доходах со
+        // знаком минус; невыплаченное — долг в балансе (`MoneyCashflow`).
+        Category("zf_share", "Доля Наташи (ЗФ)", G_INCOME, Shelf.FAMILY, income = true),
 
         // «ИИ и софт для работы» — на полке ЗФ: Anthropic, Zoom, Todoist,
         // Notion и прочее — это мастерская, а не семья (22.09 предложено,
@@ -84,6 +88,9 @@ object MoneyCategories {
         Category("loan", "Займы", G_SERVICE, Shelf.SERVICE),
         Category("plati", "Плати по миру: пополнение", G_SERVICE, Shelf.SERVICE),
         Category("cash", "Наличные", G_SERVICE, Shelf.SERVICE),
+        // Начисленный долг — не движение денег, а обязательство (доля Наташи
+        // из выплаты ЗФ): в ДДС и итогах его нет, в балансе он растит долг.
+        Category("owed", "Долг: начислено", G_SERVICE, Shelf.SERVICE),
     )
 
     private val byKey = ALL.associateBy { it.key }

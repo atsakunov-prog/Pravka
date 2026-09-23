@@ -38,7 +38,7 @@ class MoneyCashflowTest {
         assertEquals(26_400_000L, row(rows, "Операционный поток").values[1])
         assertEquals(6_000_000L, row(rows, "Финансовый поток").values[1])
         assertEquals(32_400_000L, row(rows, "Чистый денежный поток").values[1])
-        assertEquals(-3_800_000L, row(rows, "Перемещения, нетто").values[1])
+        assertEquals(-3_800_000L, row(rows, "Мимо журнала, нетто").values[1])
         val withZf = MoneyCashflow.build(entries, months, withZf = true)
         assertEquals(-4_100_000L, row(withZf, "Выплаты").values[1])
     }
@@ -78,7 +78,8 @@ class MoneyCashflowTest {
     @Test fun factoryBalancesFileParses() {
         val f = java.io.File("src/main/assets/money_balances.txt").takeIf { it.exists() } ?: java.io.File("app/src/main/assets/money_balances.txt")
         val a = MoneyCashflow.parseAnchors(f.readText())
-        assertEquals(8, a.size)
+        assertEquals(9, a.size)
+        assertTrue(a.any { it.account == MoneyCashflow.NATASHA_DEBT && it.kop == 0L })
         // Снимок 70 743,72 плюс дневные операции после выписки — якорь на её конце, с секундами.
         val bp = a.single { it.account == "Т-Банк · Black Premium" }
         assertEquals(49_331_382L, bp.kop)
@@ -95,14 +96,15 @@ class MoneyCashflowTest {
 
     @Test fun ownerCashFactsAndWallet() {
         val manual = MoneyCashflow.parseManual(asset("money_manual.txt"), "sasha")
-        assertEquals(3, manual.size)
-        assertEquals(listOf("inc_zf", "loan", "gifts"), manual.map { it.category })
-        assertTrue(manual.all { it.account == MoneyEntry.CASH && it.categoryBy == MoneyEntry.CategoryBy.OWNER })
+        assertEquals(6, manual.size)
+        assertEquals(listOf("inc_zf", "owed", "inc_zf", "owed", "loan", "gifts"), manual.map { it.category })
+        assertTrue(manual.filter { it.category != "owed" }.all { it.account == MoneyEntry.CASH && it.categoryBy == MoneyEntry.CategoryBy.OWNER })
+        assertTrue(manual.filter { it.category == "owed" }.all { it.account == MoneyCashflow.NATASHA_DEBT })
         // Номер постоянный: второе чтение даёт те же записи.
         assertEquals(manual.map { it.id }, MoneyCashflow.parseManual(asset("money_manual.txt"), "sasha").map { it.id })
 
         val deposit = e("dep", "2026-09-23", 480_000, "cash")
-        val all = manual + deposit
+        val all = manual.filter { it.ts >= at("2026-09-01") } + deposit
         val rows = MoneyCashflow.build(all, listOf(YearMonth.of(2026, 9)), withZf = false)
         assertEquals(388_000_000L, row(rows, "Поступления").values[0])
         assertEquals(-20_000_000L, row(rows, "Займы возвращены").values[0])
@@ -119,5 +121,35 @@ class MoneyCashflowTest {
         val r = MoneyMatch.run(listOf(inPapa, outSummer), rules, at("2026-09-24")).entries.associateBy { it.id }
         assertEquals("loan", r["p"]!!.category)
         assertEquals("summer", r["f"]!!.category)
+    }
+
+    @Test fun natashaShareCutsIncomeAndDebt() {
+        val income = MoneyEntry(
+            id = "zf", owner = "sasha", source = MoneyEntry.Source.MANUAL, ts = at("2026-09-22"), rubKop = 388_000_000,
+            what = "ЗФ", account = MoneyEntry.CASH, category = "inc_zf", categoryBy = MoneyEntry.CategoryBy.OWNER,
+        )
+        val paid = e("nat", "2026-09-23", -400_000, "zf_share")
+        val rows = MoneyCashflow.build(listOf(income, paid), listOf(YearMonth.of(2026, 9)), withZf = false)
+        // Доля партнёра — минус в доходах, не трата семьи.
+        assertEquals(348_000_000L, row(rows, "Поступления").values[0])
+        assertEquals(0L, row(rows, "Выплаты").values[0])
+        val owedAug = MoneyEntry(id = "oa", owner = "sasha", source = MoneyEntry.Source.MANUAL, ts = at("2026-08-20"), rubKop = -55_200_000, what = "доля", account = MoneyCashflow.NATASHA_DEBT, category = "owed")
+        val paidAug = e("nat8", "2026-08-20", -552_000, "zf_share").copy(ts = at("2026-08-20", 21))
+        val owedSep = owedAug.copy(id = "os", ts = at("2026-09-22"), rubKop = -112_500_000)
+        val all = listOf(income, paid, owedAug, paidAug, owedSep)
+        val debt = MoneyCashflow.Anchor(MoneyCashflow.NATASHA_DEBT, at("2026-01-01", 0), 0, "с нуля")
+        // Август: начислено и выплачено — ноль; сентябрь: 1 125 000 − 400 000.
+        assertEquals(0L, MoneyCashflow.balances(all, listOf(debt), at("2026-09-01", 0), at("2026-08-01")).first { it.name == MoneyCashflow.NATASHA_DEBT }.kop)
+        // Начисление — не деньги: в ДДС его нет.
+        assertEquals(0L, row(MoneyCashflow.build(all, listOf(YearMonth.of(2026, 9)), false), "Выплаты").values[0])
+        val acc = MoneyCashflow.balances(all, listOf(debt), at("2026-09-24"), at("2026-09-01"))
+            .first { it.name == MoneyCashflow.NATASHA_DEBT }
+        assertEquals(-72_500_000L, acc.kop)
+        val flows = MoneyCashflow.accountFlows(listOf(income, paid), listOf(debt), at("2026-09-01", 0), at("2026-10-01", 0), at("2026-09-24"))
+        assertEquals(MoneyCashflow.WALLET, flows.first().name)
+        assertEquals(388_000_000L, flows.first().inKop)
+        val bp = flows.first { it.name == "Т-Банк · Black Premium" }
+        assertEquals(-40_000_000L, bp.outKop)
+        assertEquals("Доля Наташи (ЗФ)", bp.byCategory.single().first)
     }
 }

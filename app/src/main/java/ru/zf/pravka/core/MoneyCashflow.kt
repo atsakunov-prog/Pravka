@@ -88,11 +88,21 @@ object MoneyCashflow {
         rows += Row("Чистый денежный поток", Kind.TOTAL, months.indices.map { i -> op[i] + fin[i] }, "net")
 
         // ---- Перемещения ----
+        // Банкомат и «Плати по миру» — внутри семьи: вторая сторона —
+        // кошелёк и карта Плати, оба в журнале. Нетто «мимо журнала» — только
+        // между своими счетами и супругами: там вторая сторона бывает в банке
+        // без выписки.
         val moves = listOf("own", "spouse", "plati", "cash").map { k -> k to sum { it.category == k } }.filter { nonZero(it.second) }
         if (moves.isNotEmpty()) {
             rows += Row("Перемещения (не трата)", Kind.SECTION, emptyList())
-            moves.forEach { (k, v) -> rows += Row(MoneyCategories.title(k), Kind.LINE, v, k) }
-            rows += Row("Перемещения, нетто", Kind.TOTAL, months.indices.map { i -> moves.sumOf { it.second[i] } }, "moves")
+            moves.forEach { (k, v) ->
+                val title = when (k) { "cash" -> "Банкомат (банк ↔ кошелёк)"; "plati" -> "Пополнение Плати по миру"; else -> MoneyCategories.title(k) }
+                rows += Row(title, Kind.LINE, v, k)
+            }
+            val outside = moves.filter { it.first == "own" || it.first == "spouse" }
+            if (outside.isNotEmpty()) {
+                rows += Row("Мимо журнала, нетто", Kind.TOTAL, months.indices.map { i -> outside.sumOf { it.second[i] } }, "moves")
+            }
         }
         return rows
     }
@@ -192,37 +202,96 @@ object MoneyCashflow {
      * [recentFrom]…[at] или есть якорь; движение по счёту — любые записи
      * (и «не трата» тоже: перевод жене уменьшает остаток так же, как кофе).
      */
-    fun balances(entries: List<MoneyEntry>, anchors: List<Anchor>, at: Long, recentFrom: Long): List<Account> {
+    /** Долг Наташе — её доля из выплат ЗФ: переводы «Доля Наташи» его гасят. */
+    const val NATASHA_DEBT = "Долг Наташе (доля ЗФ)"
+
+    /**
+     * Все движения по счетам: банковские строки — своим счетам, наличные и
+     * банкомат — кошельку, выплаты доли Наташи — ещё и долгу ей (с обратным
+     * знаком: заплатил 400 000 — долг меньше на 400 000).
+     */
+    fun movesByAccount(entries: List<MoneyEntry>): Map<String, List<MoneyEntry>> {
         val cards = cardMap(entries)
-        // Для остатка — все движения, кроме черновиков, вычеркнутых и пушей, заменённых выпиской.
-        val moves = entries.filter { !it.draft && !it.dropped && it.replacedBy.isEmpty() }
-            .mapNotNull { e -> accountOf(e, cards)?.let { it to e } }
-            .groupBy({ it.first }, { it.second })
-            .let { m -> walletMoves(entries).takeIf { it.isNotEmpty() }?.let { w -> m + (WALLET to w) } ?: m }
-        val latest = anchors.groupBy { it.account }.mapValues { (_, v) -> v.maxBy { it.ts } }
+        val usable = entries.filter { !it.draft && !it.dropped && it.replacedBy.isEmpty() }
+        val bank = usable.mapNotNull { e -> accountOf(e, cards)?.let { it to e } }.groupBy({ it.first }, { it.second })
+        val wallet = walletMoves(entries)
+        // Долг Наташе: начисления доли (записи «Долг: начислено» на этот счёт)
+        // минус переводы ей — с нуля, а не от якоря: так он верен в любой месяц.
+        val share = usable.filter { it.category == "zf_share" && !(it.source == MoneyEntry.Source.VOICE && it.matchId.isNotBlank()) }
+            .map { it.copy(id = it.id + "~долг", rubKop = -it.rubKop) } +
+            usable.filter { it.account == NATASHA_DEBT }
+        return bank +
+            (if (wallet.isNotEmpty()) mapOf(WALLET to wallet) else emptyMap()) +
+            (if (share.isNotEmpty()) mapOf(NATASHA_DEBT to share) else emptyMap())
+    }
+
+    /** Остаток счёта на [at] от якоря [anchor] по его движениям [list]; null — якоря нет. */
+    private fun balanceAt(list: List<MoneyEntry>, anchor: Anchor?, at: Long, entries: List<MoneyEntry>): Long? = anchor?.let { a ->
+        // Пуш-якорь и строка выписки, его заменившая, — одна операция, уже в числе.
+        val covered = a.covers + entries.filter { it.id in a.covers }.map { it.replacedBy }.filter { it.isNotEmpty() }
+        val after = list.filter { it.id !in covered && it.ts > a.ts && it.ts <= at }.sumOf { it.rubKop }
+        val before = list.filter { it.id !in covered && it.ts > at && it.ts <= a.ts }.sumOf { it.rubKop }
+        // Операции, вошедшие в якорь, но случившиеся позже [at], вычитаются тоже.
+        val coveredLater = list.filter { it.id in covered && it.ts > at }.sumOf { it.rubKop }
+        a.kop + after - before - coveredLater
+    }
+
+    private fun latestAnchors(anchors: List<Anchor>) = anchors.groupBy { it.account }.mapValues { (_, v) -> v.maxBy { it.ts } }
+
+    fun balances(entries: List<MoneyEntry>, anchors: List<Anchor>, at: Long, recentFrom: Long): List<Account> {
+        val moves = movesByAccount(entries)
+        val latest = latestAnchors(anchors)
         val names = (moves.filter { (_, l) -> l.any { it.ts in recentFrom..at } }.keys + latest.keys).toSortedSet()
         return names.map { name ->
             val list = moves[name].orEmpty()
-            val a = latest[name]
-            val flow = list.filter { it.ts in recentFrom..at }.sumOf { it.rubKop }
-            val kop = a?.let { anchor ->
-                // Пуш-якорь и строка выписки, его заменившая, — одна операция, уже в числе.
-                val covered = anchor.covers + entries.filter { it.id in anchor.covers }.map { it.replacedBy }.filter { it.isNotEmpty() }
-                val after = list.filter { it.id !in covered && it.ts > anchor.ts && it.ts <= at }.sumOf { it.rubKop }
-                val before = list.filter { it.id !in covered && it.ts > at && it.ts <= anchor.ts }.sumOf { it.rubKop }
-                // Операции, вошедшие в якорь, но случившиеся позже [at], вычитаются тоже.
-                val coveredLater = list.filter { it.id in covered && it.ts > at }.sumOf { it.rubKop }
-                anchor.kop + after - before - coveredLater
-            }
-            Account(name, kop, a, flow)
+            Account(name, balanceAt(list, latest[name], at, entries), latest[name], list.filter { it.ts in recentFrom..at }.sumOf { it.rubKop })
         }
     }
 
+    /** Движение по одному счёту за период: откуда пришло и куда ушло, по категориям. */
+    data class AccountFlow(
+        val name: String,
+        val startKop: Long?,
+        val endKop: Long?,
+        val inKop: Long,
+        val outKop: Long,
+        /** Категория (название) → сумма со знаком, крупные первыми. */
+        val byCategory: List<Pair<String, Long>>,
+    )
+
     /**
-     * Долг по займам по журналу: получено минус возвращено. «По журналу» —
-     * значит, с первой строки выписки: заём, взятый до неё, здесь не виден,
-     * и экран это говорит.
+     * Счета за период [from]…[to): начало, пришло, ушло, конец. Кошелёк и
+     * долг Наташе — такие же счета. Порядок: наличные, Т-Банк, Альфа, МКБ,
+     * долги — как владелец их держит в голове.
      */
+    fun accountFlows(entries: List<MoneyEntry>, anchors: List<Anchor>, from: Long, to: Long, now: Long): List<AccountFlow> {
+        val moves = movesByAccount(entries)
+        val latest = latestAnchors(anchors)
+        val end = minOf(to - 1, now)
+        val names = (moves.filter { (_, l) -> l.any { it.ts in from until to } }.keys + latest.keys).distinct()
+        fun order(n: String) = when {
+            n == WALLET -> 0
+            n.startsWith("Т-Банк") -> 1
+            n.startsWith("Альфа") -> 2
+            n == "МКБ" -> 3
+            else -> 4
+        }
+        return names.sortedWith(compareBy({ order(it) }, { it })).map { name ->
+            val list = moves[name].orEmpty()
+            val span = list.filter { it.ts in from until to }
+            AccountFlow(
+                name = name,
+                startKop = balanceAt(list, latest[name], from - 1, entries),
+                endKop = balanceAt(list, latest[name], end, entries),
+                inKop = span.filter { it.rubKop > 0 }.sumOf { it.rubKop },
+                outKop = span.filter { it.rubKop < 0 }.sumOf { it.rubKop },
+                byCategory = span.groupBy { MoneyCategories.title(it.category) }
+                    .map { (k, v) -> k to v.sumOf { it.rubKop } }
+                    .sortedByDescending { kotlin.math.abs(it.second) },
+            )
+        }
+    }
+
     /**
      * Файл якорей («дата время | счёт | остаток | пояснение») — заводские
      * остатки из `assets/money_balances.txt`. Строки с ошибкой пропускаются.
@@ -244,6 +313,11 @@ object MoneyCashflow {
             Anchor(p[1], ts, kop, p.getOrNull(3)?.ifBlank { null } ?: "файл остатков")
         }
 
+    /**
+     * Долг по займам по журналу: получено минус возвращено. «По журналу» —
+     * значит, с первой строки выписки: заём, взятый до неё, здесь не виден,
+     * и экран это говорит.
+     */
     fun loanDebt(entries: List<MoneyEntry>, at: Long): Long =
         entries.filter { it.live() && it.category == "loan" && it.ts <= at }.sumOf { it.rubKop }.coerceAtLeast(0L)
 }
