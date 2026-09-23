@@ -68,11 +68,13 @@ object PlatiChat {
     // точку конца фразы («комиссия €0.25.») вместе с числом.
     private const val N = """-?\d+(?:[.,]\d+)?"""
     private val TIME = Regex("""^(\d{2}\.\d{2}\.\d{4}) (\d{2}:\d{2})$""")
+    // Знак валюты бывает и после числа («24.25 €», чат до осени), и перед
+    // ним («$87.20», уведомления бота с 23.09.2026) — принимаем оба.
     private val PURCHASE = Regex(
-        """Покупка:\s*($N)\s*([€$])\.\s*Карта:\s*\*(\d{4})\.\s*(.+?)\.\s*Остаток:\s*($N)\s*([€$])"""
+        """Покупка:\s*([€$])?\s*($N)\s*([€$])?\.\s*Карта:\s*\*(\d{4})\.\s*(.+?)\.\s*Остаток:\s*([€$])?\s*($N)"""
     )
     private val REQUEST = Regex("""Заявка на пополнение карты \*(\d{4}) принята, ожидаем оплаты:\s*($N)\s*₽""")
-    private val TOPUP = Regex("""Пополнение карты \*(\d{4}) на сумму ($N)\s*([€$]) прошло успешно""")
+    private val TOPUP = Regex("""Пополнение карты \*(\d{4}) на сумму\s*([€$])?\s*($N)\s*([€$])?\s*прошло успешно""")
     private val FEE = Regex("""Списана комиссия\s*([€$])\s*($N)""")
     private val FEE_CARD = Regex("""Карта:\s*\*(\d{4})\.""")
     private val FEE_REST = Regex("""Остаток:\s*([€$])\s*($N)""")
@@ -108,14 +110,18 @@ object PlatiChat {
             }
             val block = body.joinToString("\n")
             // Отказ: денег не списали, а вот комиссия за попытку — списали.
+            // «Оплата не прошла» — НЕ отсев: в том же сообщении бывает списанная
+            // комиссия за попытку, а сама попытка «Покупкой» не пишется.
             if (block.contains("Операция отклонена")) continue
 
             PURCHASE.findAll(block).forEach { m ->
-                val minor = MoneyFormat.parseKop(m.groupValues[1]) ?: return@forEach
-                val currency = cur(m.groupValues[2])
-                val card = m.groupValues[3]
-                val merchant = m.groupValues[4].trim()
-                val rest = MoneyFormat.parseKop(m.groupValues[5]) ?: 0L
+                val symbol = m.groupValues[1].ifEmpty { m.groupValues[3] }
+                if (symbol.isEmpty()) return@forEach
+                val minor = MoneyFormat.parseKop(m.groupValues[2]) ?: return@forEach
+                val currency = cur(symbol)
+                val card = m.groupValues[4]
+                val merchant = m.groupValues[5].trim()
+                val rest = MoneyFormat.parseKop(m.groupValues[7]) ?: 0L
                 if (seenKeys.add("p|$card|$minor|$currency|$merchant|$rest")) {
                     out.add(Event.Purchase(card, seq++, ts, minor, currency, merchant, rest))
                 }
@@ -131,9 +137,11 @@ object PlatiChat {
                 }
             }
             TOPUP.findAll(block).forEach { m ->
-                val minor = MoneyFormat.parseKop(m.groupValues[2]) ?: return@forEach
+                val symbol = m.groupValues[2].ifEmpty { m.groupValues[4] }
+                if (symbol.isEmpty()) return@forEach
+                val minor = MoneyFormat.parseKop(m.groupValues[3]) ?: return@forEach
                 val card = m.groupValues[1]
-                val currency = cur(m.groupValues[3])
+                val currency = cur(symbol)
                 // Повтор пополнения узнаём по заявке перед ним: одна заявка —
                 // одно пополнение.
                 if (seenKeys.add("u|$card|$minor|$currency|${lastRequestRub[card]}")) {

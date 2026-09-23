@@ -243,6 +243,19 @@
             </intent-filter>
         </activity>
 
+        <!-- Деньги: пуши Т-Банка и чата «Плати по миру» → журнал. Своя служба,
+             не служба доступности (Fold: на оконные события не подписываемся);
+             доступ выдаёт владелец в «Доступе к уведомлениям». -->
+        <service
+            android:name=".trigger.MoneyNotificationListener"
+            android:label="@string/money_push_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <activity
             android:name=".trigger.ProcessTextActivity"
             android:label="@string/action_label"

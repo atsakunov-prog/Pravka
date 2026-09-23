@@ -62,6 +62,11 @@ data class MoneyEntry(
     val takeId: Long = 0L,
     /** Сомнение модели в сумме («полтинник: 50 или 50 000?») — показывается на плашке до «ОК». */
     val doubt: String = "",
+    /**
+     * Пуш, который заменила строка выписки (её номер): выписка — правда о
+     * сумме и времени, пуш остаётся в журнале следом, но в итоги не идёт.
+     */
+    val replacedBy: String = "",
 ) {
     companion object {
         /** Счёт надиктованной траты «наличными»: её не ищут в выписке и о ней не спрашивают. */
@@ -74,6 +79,8 @@ data class MoneyEntry(
         ALFA("alfa", "Альфа"),
         MKB("mkb", "МКБ"),
         PLATI("plati", "Плати по миру"),
+        /** Пуш Т-Банка: живая картина недели до выписки, выписка его потом заменяет. */
+        PUSH("push", "пуш"),
         MANUAL("manual", "руками");
 
         companion object {
@@ -98,10 +105,14 @@ data class MoneyEntry(
     }
 
     val expense: Boolean get() = rubKop < 0
-    val fromBank: Boolean get() = source == Source.TINKOFF || source == Source.ALFA || source == Source.MKB || source == Source.PLATI
+    val fromBank: Boolean get() = source == Source.TINKOFF || source == Source.ALFA || source == Source.MKB || source == Source.PLATI ||
+        source == Source.PUSH
 
-    /** Идёт ли запись в итоги: не черновик, не вычеркнута, и голос, уже слитый с выпиской, не считается второй раз. */
-    fun live(): Boolean = !draft && !dropped && !(source == Source.VOICE && matchId.isNotBlank())
+    /**
+     * Идёт ли запись в итоги: не черновик, не вычеркнута, голос, уже слитый с
+     * выпиской, не считается второй раз, и пуш, заменённый выпиской, — тоже.
+     */
+    fun live(): Boolean = !draft && !dropped && replacedBy.isEmpty() && !(source == Source.VOICE && matchId.isNotBlank())
 }
 
 /** Рубли для экрана: «1 782 ₽», «−380 ₽». */

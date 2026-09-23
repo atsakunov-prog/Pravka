@@ -234,8 +234,11 @@ class MoneyEngine(
     private suspend fun rebuildPlati(): PlatiBuilt {
         val s = store.load()
         val events = PlatiChat.parse(s.platiLog)
+        // Пуш об оплате «Плати по миру» — тоже списание: заявка из чата
+        // узнаётся оплаченной сразу, не дожидаясь выписки. Заменённый выпиской
+        // пуш не в счёт — там уже есть его строка.
         val debits = s.entries.filter {
-            it.source == MoneyEntry.Source.TINKOFF && it.rubKop < 0 &&
+            (it.source == MoneyEntry.Source.TINKOFF || (it.source == MoneyEntry.Source.PUSH && it.replacedBy.isEmpty())) && it.rubKop < 0 &&
                 MoneyRules.norm(it.what).let { w -> w.contains("плати по миру") || w.contains("platipomiru") }
         }.map { PlatiChat.BankDebit(it.id, it.ts, -it.rubKop) }
         val built = PlatiChat.build(events, debits, owner(), importedAt = System.currentTimeMillis())
@@ -255,6 +258,48 @@ class MoneyEngine(
         return PlatiBuilt(built.entries, added, built.unpaidRequests, built.roughRate)
     }
 
+    // ---- Пуши ----
+
+    /**
+     * Уведомление от Т-Банка или из чата «Плати по миру» (служба
+     * `MoneyNotificationListener`). Сырьё ложится всегда (кроме чужих
+     * приложений), запись — если разбор узнал операцию. Возвращает, что
+     * вышло, словами — для журнала событий.
+     */
+    suspend fun onPush(pkg: String, title: String, text: String, postedAt: Long): String = withContext(Dispatchers.Default) {
+        when (BankPush.from(pkg, title)) {
+            BankPush.From.OTHER -> "не банк"
+            BankPush.From.TBANK -> {
+                val out = BankPush.parse(title, text)
+                val entry = (out as? BankPush.Outcome.Money)?.let { BankPush.entry(it.p, postedAt, owner(), title, text) }
+                val result = if (entry != null) MoneyStore.MONEY else (out as BankPush.Outcome.Skip).why
+                val fresh = store.addPush(MoneyStore.Push(BankPush.key(title, text), postedAt, pkg, title, text, result), entry)
+                if (!fresh) return@withContext "уже был"
+                if (entry != null) {
+                    if (MoneyRules.norm(entry.what).contains("плати по миру") && store.stateFlow.value.platiLog.isNotBlank()) rebuildPlati()
+                    reconcile()
+                    eventLog.add("деньги: пуш — ${entry.what} ${MoneyFormat.rub(entry.rubKop, sign = true)}")
+                }
+                result
+            }
+            BankPush.From.PLATI_CHAT -> {
+                // Сообщение бота без своей строки времени получает время уведомления:
+                // по нему `PlatiChat` ставит дату покупке и пополнению.
+                val first = text.trim().lineSequence().firstOrNull().orEmpty()
+                val stamped = if (Regex("""^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$""").matches(first)) text.trim()
+                else java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")
+                    .format(Instant.ofEpochMilli(postedAt).atZone(BankStatements.MSK)) + "\n" + text.trim()
+                val events = PlatiChat.parse(stamped)
+                val result = if (events.isEmpty()) "чат: не денежное" else "чат: событий ${events.size}"
+                // Коды привязки к Apple Pay / Google Pay в чате есть — их сырьём не храним.
+                val keep = if (events.isEmpty()) "" else PlatiChat.canonical(events)
+                val fresh = store.addPush(MoneyStore.Push(BankPush.key(title, text), postedAt, pkg, title, keep, result), null)
+                if (fresh && events.isNotEmpty()) importPlati(stamped)
+                if (fresh) result else "уже был"
+            }
+        }
+    }
+
     // ---- Сверка ----
 
     suspend fun reconcile(): MoneyMatch.Result {
@@ -262,7 +307,7 @@ class MoneyEngine(
         withContext(Dispatchers.Default) {
             store.transform { st -> MoneyMatch.run(st.entries, st.rules + factory(), System.currentTimeMillis()).also { result = it }.entries }
         }
-        return result ?: MoneyMatch.Result(store.stateFlow.value.entries, 0, 0, 0)
+        return result ?: MoneyMatch.Result(store.stateFlow.value.entries, 0, 0, 0, 0)
     }
 
     /** Открытые вопросы группами: один получатель — один вопрос, свежие сверху. */
@@ -270,7 +315,14 @@ class MoneyEngine(
 
     fun questions(): List<Question> {
         val open = store.stateFlow.value.entries.filter { it.question.isNotBlank() && !it.dropped && !it.draft }
-        return open.groupBy { if (it.fromBank) "b:" + MoneyRules.norm(it.what) else "v:" + it.id }
+        return open.groupBy {
+            when {
+                // «Пуш без пары в выписке» — вопрос про одну операцию, не про получателя.
+                it.question == MoneyMatch.ORPHAN_PUSH -> "o:" + it.id
+                it.fromBank -> "b:" + MoneyRules.norm(it.what)
+                else -> "v:" + it.id
+            }
+        }
             .map { (k, v) ->
                 val model = v.firstOrNull { it.categoryBy == MoneyEntry.CategoryBy.MODEL && it.category.isNotBlank() }
                 Question(k, v.first().question, v.sortedByDescending { it.ts }, model?.category.orEmpty(), model?.who.orEmpty())

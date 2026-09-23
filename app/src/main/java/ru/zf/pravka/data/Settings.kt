@@ -95,6 +95,7 @@ class Settings(private val context: Context) {
         // Деньги: кнопка «₽» и тумблер «+ ЗФ» во вкладке.
         private val KEY_M_ENABLED = booleanPreferencesKey("m_enabled")
         private val KEY_M_WITH_ZF = booleanPreferencesKey("m_with_zf")
+        private val KEY_M_PUSH = booleanPreferencesKey("m_push")
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
         private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
@@ -727,6 +728,16 @@ class Settings(private val context: Context) {
     val mWithZfFlow = context.dataStore.data.map { it[KEY_M_WITH_ZF] ?: false }
     suspend fun setMWithZf(value: Boolean) {
         context.dataStore.edit { it[KEY_M_WITH_ZF] = value }
+    }
+
+    /**
+     * Ловить пуши Т-Банка и чата «Плати по миру» (владелец, 23.09.2026). С
+     * завода включено, но без «Доступа к уведомлениям» ничего не делает —
+     * тумблер для того, чтобы выключить, не отзывая доступ.
+     */
+    val mPushFlow = context.dataStore.data.map { it[KEY_M_PUSH] ?: true }
+    suspend fun setMPush(value: Boolean) {
+        context.dataStore.edit { it[KEY_M_PUSH] = value }
     }
 
     // ---- Notion: правила блока ----

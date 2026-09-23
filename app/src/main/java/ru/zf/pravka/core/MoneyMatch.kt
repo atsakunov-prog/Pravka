@@ -13,6 +13,8 @@ import kotlin.math.abs
 //     итоги идёт выписка (правда о сумме), голос отдаёт ей категорию и слова;
 //  3. склеивает переводы Саша ↔ Марианна с двух сторон (из 44 переводов в
 //     Альфе 42 нашли пару в Тинькове до рубля — 23.09.2026);
+//  2а. пуш Т-Банка заменяется строкой выписки: та же сумма до копейки, та же
+//     карта, время рядом. Выписка — правда, пуш отдаёт ей решённую категорию;
 //  4. задаёт вопросы: неразложенные строки — группой по получателю
 //     («Иван П., 17 раз, 102 000 ₽ — кто это?»), надиктованное без пары в
 //     выписке — «не нашёл, это наличные?».
@@ -24,6 +26,7 @@ object MoneyMatch {
     data class Result(
         val entries: List<MoneyEntry>,
         val voiceLinked: Int,
+        val pushLinked: Int,
         val spouseLinked: Int,
         val classified: Int,
     )
@@ -47,9 +50,56 @@ object MoneyMatch {
                 else -> e
             }
         }
-        val (withVoice, voiceLinked) = linkVoice(list)
+        val (withPush, pushLinked) = linkPush(list)
+        val (withVoice, voiceLinked) = linkVoice(withPush)
         val (withSpouse, spouseLinked) = linkSpouse(withVoice)
-        return Result(ask(withSpouse, now), voiceLinked, spouseLinked, classified)
+        return Result(ask(withSpouse, now), voiceLinked, pushLinked, spouseLinked, classified)
+    }
+
+    // ---- 2а. Пуш ↔ выписка ----
+
+    /** Вопрос о пуше, которому в пришедшей выписке пары нет. */
+    const val ORPHAN_PUSH = "Пуш был, а в выписке Т-Банка его нет. Операцию отменили?"
+
+    /**
+     * Пуш и строка Тинькова — одна операция, если сумма та же ДО КОПЕЙКИ
+     * (пуш пишет копейки, как банк), карта не противоречит и время в
+     * пределах полутора суток (пуш — минута в минуту, но строка выписки
+     * иногда встаёт датой проведения). Из кандидатов — ближайший по времени.
+     * Пуш не удаляется: он остаётся следом, с номером заменившей его строки.
+     */
+    fun linkPush(entries: List<MoneyEntry>): Pair<List<MoneyEntry>, Int> {
+        val pushes = entries.filter { it.source == MoneyEntry.Source.PUSH && it.replacedBy.isEmpty() && !it.dropped }
+        if (pushes.isEmpty()) return entries to 0
+        val byId = entries.associateBy { it.id }.toMutableMap()
+        val taken = entries.filter { it.source == MoneyEntry.Source.PUSH }.map { it.replacedBy }.filter { it.isNotEmpty() }.toMutableSet()
+        val bank = entries.filter { it.source == MoneyEntry.Source.TINKOFF && !it.dropped }
+        var linked = 0
+        for (p in pushes.sortedBy { it.ts }) {
+            val pc = BankPush.cardOf(p.account)
+            val hit = bank.asSequence()
+                .filter { it.id !in taken && it.owner == p.owner && it.rubKop == p.rubKop }
+                .filter { abs(it.ts - p.ts) <= DAY + DAY / 2 }
+                .filter { b -> BankPush.cardOf(b.account).let { bc -> pc.isEmpty() || bc.isEmpty() || bc == pc } }
+                .minByOrNull { abs(it.ts - p.ts) } ?: continue
+            taken.add(hit.id)
+            linked++
+            val b = byId[hit.id] ?: hit
+            val takeCategory = b.categoryBy != MoneyEntry.CategoryBy.OWNER && p.category.isNotBlank() &&
+                (p.categoryBy == MoneyEntry.CategoryBy.OWNER || b.category.isBlank())
+            // Голос, уже слитый с пушем, переезжает на строку выписки.
+            val voice = p.matchId.takeIf { it.isNotEmpty() && b.matchId.isEmpty() }
+            byId[b.id] = b.copy(
+                category = if (takeCategory) p.category else b.category,
+                who = b.who.ifBlank { p.who },
+                categoryBy = if (takeCategory) p.categoryBy else b.categoryBy,
+                note = b.note.ifBlank { p.note },
+                matchId = voice ?: b.matchId,
+            )
+            if (voice != null) byId[voice]?.let { v -> byId[voice] = v.copy(matchId = b.id) }
+            byId[p.id] = p.copy(replacedBy = b.id, question = "")
+        }
+        return entries.map { byId[it.id] ?: it } to linked
     }
 
     // ---- 2. Голос ↔ выписка ----
@@ -71,7 +121,7 @@ object MoneyMatch {
         for (v in voices) {
             val tolerance = if (v.currency == "RUB") 100L else abs(v.rubKop) * 8 / 100
             val cand = entries.asSequence()
-                .filter { it.fromBank && !it.dropped && it.id !in taken }
+                .filter { it.fromBank && !it.dropped && it.replacedBy.isEmpty() && it.id !in taken }
                 .filter { (it.rubKop < 0) == (v.rubKop < 0) }
                 .filter { abs(abs(it.rubKop) - abs(v.rubKop)) <= tolerance }
                 .filter { it.ts >= v.ts - DAY - DAY / 2 && it.ts <= v.ts + 4 * DAY }
@@ -96,7 +146,7 @@ object MoneyMatch {
 
     fun linkSpouse(entries: List<MoneyEntry>): Pair<List<MoneyEntry>, Int> {
         val byId = entries.associateBy { it.id }.toMutableMap()
-        val spouse = entries.filter { it.fromBank && it.category == "spouse" && !it.dropped }
+        val spouse = entries.filter { it.fromBank && it.category == "spouse" && !it.dropped && it.replacedBy.isEmpty() }
         val mine = spouse.filter { it.owner == "sasha" && it.matchId.isBlank() }
         val hers = spouse.filter { it.owner == "marianna" && it.matchId.isBlank() }.toMutableList()
         var linked = 0
@@ -122,10 +172,20 @@ object MoneyMatch {
     fun ask(entries: List<MoneyEntry>, now: Long): List<MoneyEntry> {
         // Какие дни покрыты выписками: надиктованное без пары спрашиваем,
         // только если выписка за тот день уже пришла, иначе вопрос преждевремен.
-        val covered = entries.filter { it.fromBank && it.source != MoneyEntry.Source.PLATI }
+        // Пуши выпиской не считаются: они теряются, и «не нашлось среди пушей» — ещё не вопрос.
+        val covered = entries.filter { it.fromBank && it.source != MoneyEntry.Source.PLATI && it.source != MoneyEntry.Source.PUSH }
             .groupBy { it.owner }
             .mapValues { (_, v) -> (v.minOf { it.ts }) to (v.maxOf { it.ts }) }
-        val groups = entries.filter { it.fromBank && !it.dropped && it.category.isBlank() && it.matchId.isBlank() }
+        // Покрытие выписками Т-Банка: пуш старше суток до её конца, так и не
+        // нашедший пары, — скорее всего отменённая операция.
+        val tbank = entries.filter { it.source == MoneyEntry.Source.TINKOFF }.groupBy { it.owner }
+            .mapValues { (_, v) -> (v.minOf { it.ts }) to (v.maxOf { it.ts }) }
+        fun orphan(e: MoneyEntry): Boolean {
+            if (e.source != MoneyEntry.Source.PUSH || e.replacedBy.isNotEmpty()) return false
+            val span = tbank[e.owner] ?: return false
+            return e.ts >= span.first && e.ts < span.second - DAY
+        }
+        val groups = entries.filter { it.fromBank && !it.dropped && it.replacedBy.isEmpty() && it.category.isBlank() && it.matchId.isBlank() }
             .groupBy { MoneyRules.norm(it.what) }
         val groupText = groups.mapValues { (_, v) ->
             val sum = v.sumOf { it.rubKop }
@@ -134,7 +194,8 @@ object MoneyMatch {
         }
         return entries.map { e ->
             when {
-                e.dropped || e.draft -> e.copy(question = "")
+                e.dropped || e.draft || e.replacedBy.isNotEmpty() -> e.copy(question = "")
+                orphan(e) -> e.copy(question = ORPHAN_PUSH)
                 e.fromBank && e.category.isBlank() && e.matchId.isBlank() ->
                     e.copy(question = groupText[MoneyRules.norm(e.what)].orEmpty())
                 e.source == MoneyEntry.Source.VOICE && e.matchId.isBlank() && e.account != MoneyEntry.CASH -> {

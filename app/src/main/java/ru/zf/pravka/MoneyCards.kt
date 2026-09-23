@@ -40,6 +40,7 @@ import ru.zf.pravka.core.MoneyCategories
 import ru.zf.pravka.core.MoneyEngine
 import ru.zf.pravka.core.MoneyEntry
 import ru.zf.pravka.core.MoneyFormat
+import ru.zf.pravka.core.MoneyMatch
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
@@ -97,6 +98,7 @@ private fun QuestionCard(app: PravkaApp, q: MoneyEngine.Question, position: Stri
     var typed by remember(q.key) { mutableStateOf("") }
     var result by remember(q.key) { mutableStateOf("") }
     val voice = q.entries.first().source == MoneyEntry.Source.VOICE
+    val orphan = q.text == MoneyMatch.ORPHAN_PUSH
 
     fun submit(spoken: String) {
         if (spoken.isBlank()) return
@@ -172,6 +174,16 @@ private fun QuestionCard(app: PravkaApp, q: MoneyEngine.Question, position: Stri
             Text(result, style = MaterialTheme.typography.bodyMedium)
         }
         Spacer(Modifier.height(8.dp))
+        if (orphan) {
+            // Пуш был, выписка пришла, а пары нет: обычно отмена или возврат день в день.
+            PaperHint(q.text)
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { scope.launch { app.moneyEngine.drop(q.entries.map { it.id }) } }) { Text("Отменили — вычеркнуть") }
+                OutlinedButton(onClick = onSkip) { Text("Не знаю") }
+            }
+            return@Column
+        }
         if (voice) {
             // Надиктовано, а в выписке не нашлось: тут вопрос один — наличные ли.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

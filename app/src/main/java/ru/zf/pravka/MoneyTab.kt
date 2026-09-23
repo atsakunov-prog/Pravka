@@ -519,10 +519,81 @@ internal fun MoneySettings(app: PravkaApp) {
             }
             Switch(checked = on, onCheckedChange = { v -> app.appScope.launch { app.settings.setMEnabled(v) } })
         }
+        Spacer(Modifier.height(12.dp))
+        PushSettings(app)
         Spacer(Modifier.height(8.dp))
         PaperHint("Модели — в «Моделях», дороги «Деньги»: траты голосом и подсказки сверки. Промпты — во вкладке «Промпты».")
     }
 }
+
+/**
+ * Пуши банка: тумблер, есть ли «Доступ к уведомлениям» и что поймано.
+ * Отозванный доступ — не «пушей просто нет», а строка словами и кнопка
+ * (железное правило 6: молчаливая механика читается как поломка).
+ */
+@Composable
+private fun PushSettings(app: PravkaApp) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val on by app.settings.mPushFlow.collectAsState(initial = true)
+    val state by app.moneyStore.stateFlow.collectAsState()
+    var granted by remember { mutableStateOf(pushAccess(context)) }
+    // Доступ выдают в системных настройках и возвращаются «назад» — проверяем
+    // по кругу, пока группа открыта: это чтение одной строки настроек.
+    LaunchedEffect(Unit) {
+        while (true) {
+            granted = pushAccess(context)
+            kotlinx.coroutines.delay(1500)
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Ловить пуши банка", style = MaterialTheme.typography.bodyMedium)
+            PaperHint("Т-Банк и чат «Плати по миру» в Телеграме: трата ложится в журнал сразу, выписка потом её заменяет.")
+        }
+        Switch(checked = on, onCheckedChange = { v -> scope.launch { app.settings.setMPush(v) } })
+    }
+    if (!on) return
+    Spacer(Modifier.height(6.dp))
+    if (!granted) {
+        PaperHint(
+            "Нет доступа к уведомлениям — пуши не ловятся. Если Android не даёт включить: " +
+                "«О приложении» → ⋮ → «Разрешить ограниченные настройки», как было со службой доступности.",
+            color = MaterialTheme.colorScheme.error,
+        )
+        OutlinedButton(onClick = {
+            runCatching {
+                context.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }) { Text("Открыть доступ к уведомлениям") }
+        return
+    }
+    val pushes = state.pushes
+    val money = pushes.count { it.result == ru.zf.pravka.data.MoneyStore.MONEY }
+    val replaced = state.entries.count { it.source == MoneyEntry.Source.PUSH && it.replacedBy.isNotEmpty() }
+    PaperHint(
+        if (pushes.isEmpty()) "Доступ есть. Пока ничего не поймано — первый пуш Т-Банка появится здесь."
+        else "Поймано ${pushes.size}, из них операций $money; выпиской уже заменено $replaced."
+    )
+    for (p in pushes.takeLast(6).reversed()) {
+        Row(Modifier.fillMaxWidth().padding(top = 3.dp)) {
+            Text(
+                stamp(p.ts) + "  " + p.title.ifBlank { p.pkg.substringAfterLast('.') },
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            PaperHint(p.result)
+        }
+    }
+}
+
+private fun pushAccess(context: android.content.Context): Boolean =
+    androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
 
 private fun periodTitle(p: MoneyStats.Period): String {
     val ru = Locale.forLanguageTag("ru")

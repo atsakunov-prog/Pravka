@@ -31,6 +31,8 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
 
     companion object {
         const val FILE_NAME = "money.json"
+        /** [Push.result] пуша, ставшего записью. */
+        const val MONEY = "запись"
     }
 
     /** Одна надиктовка: что сказано, во что обошёлся разбор. */
@@ -53,6 +55,20 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         val note: String = "",
     )
 
+    /**
+     * Пойманное уведомление банка как есть — сырьё, как надиктовка: разбор
+     * мог ошибиться, правда — в тексте. [result] — что из него вышло
+     * («запись», «отказ — денег не списали», «не денежный…»).
+     */
+    data class Push(
+        val key: String,
+        val ts: Long,
+        val pkg: String,
+        val title: String,
+        val text: String,
+        val result: String,
+    )
+
     data class State(
         val entries: List<MoneyEntry> = emptyList(),
         val takes: List<Take> = emptyList(),
@@ -68,6 +84,7 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         /** Последние паттерны от Claude и когда они посчитаны: вкладка не платит за них при каждом открытии. */
         val insight: String = "",
         val insightTs: Long = 0L,
+        val pushes: List<Push> = emptyList(),
     )
 
     private val mutex = Mutex()
@@ -144,6 +161,24 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         }
         write(s.copy(entries = updated, imports = s.imports + info.copy(added = added)))
         added
+    }
+
+    /**
+     * Пуш банка: сырьё — в [State.pushes], запись (если вышла) — в журнал.
+     * Тот же пуш второй раз (обновление уведомления, обход шторки при
+     * подключении службы) ничего не добавляет: false.
+     */
+    suspend fun addPush(push: Push, entry: MoneyEntry?): Boolean = mutex.withLock {
+        ensureLoaded()
+        val s = _state.value
+        if (s.pushes.any { it.key == push.key }) return@withLock false
+        // Незнакомые и не денежные храним последние 300 — чтобы было на чём
+        // научить разбор новому виду; денежные — все, это сырьё записей.
+        val skipped = s.pushes.filter { it.result != MONEY }
+        val trimmed = if (push.result != MONEY && skipped.size >= 300) s.pushes - skipped.first() else s.pushes
+        val entries = if (entry != null && s.entries.none { it.id == entry.id }) s.entries + entry else s.entries
+        write(s.copy(pushes = trimmed + push, entries = entries))
+        true
     }
 
     suspend fun setInsight(text: String, ts: Long) = mutex.withLock {
@@ -239,7 +274,13 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
                 )
             }
         }
-        return State(entries, takes, rules, imports, o.optString("plati"), o.optString("insight"), o.optLong("insightTs"))
+        val pushes = mutableListOf<Push>()
+        o.optJSONArray("pushes")?.let { a ->
+            for (i in 0 until a.length()) a.optJSONObject(i)?.let {
+                pushes.add(Push(it.optString("k"), it.optLong("ts"), it.optString("pkg"), it.optString("t"), it.optString("x"), it.optString("r")))
+            }
+        }
+        return State(entries, takes, rules, imports, o.optString("plati"), o.optString("insight"), o.optLong("insightTs"), pushes)
     }
 
     private fun entryOf(o: JSONObject) = MoneyEntry(
@@ -266,6 +307,7 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         question = o.optString("q"),
         takeId = o.optLong("take"),
         doubt = o.optString("doubt"),
+        replacedBy = o.optString("repl"),
     )
 
     private fun serialize(s: State): JSONObject = JSONObject().apply {
@@ -289,6 +331,7 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
                 if (e.question.isNotEmpty()) put("q", e.question)
                 if (e.takeId != 0L) put("take", e.takeId)
                 if (e.doubt.isNotEmpty()) put("doubt", e.doubt)
+                if (e.replacedBy.isNotEmpty()) put("repl", e.replacedBy)
             })
         })
         put("takes", JSONArray().apply {
@@ -307,6 +350,11 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         })
         if (s.platiLog.isNotEmpty()) put("plati", s.platiLog)
         if (s.insight.isNotEmpty()) { put("insight", s.insight); put("insightTs", s.insightTs) }
+        put("pushes", JSONArray().apply {
+            for (p in s.pushes) put(JSONObject().apply {
+                put("k", p.key); put("ts", p.ts); put("pkg", p.pkg); put("t", p.title); put("x", p.text); put("r", p.result)
+            })
+        })
         put("imports", JSONArray().apply {
             for (i in s.imports) put(JSONObject().apply {
                 put("ts", i.ts); put("kind", i.kind); put("owner", i.owner); put("rows", i.rows)
