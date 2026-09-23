@@ -58,6 +58,8 @@ class PravkaApp : Application() {
         // больше нет. Затем — ревизия батчей у Anthropic: всё идущее, за чем в
         // приложении нет живого прогона, гасится.
         appScope.launch { runCatching { ru.zf.pravka.core.NightSweep.onStart(this@PravkaApp) } }
+        // Деньги: записи со слов владельца (наличные мимо выписок) — в журнал, один раз.
+        appScope.launch { runCatching { moneyEngine.seedManual() } }
         // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
         // свой лог, пока тумблер включён (Настройки → Общее).
         appScope.launch {
@@ -239,6 +241,7 @@ class PravkaApp : Application() {
             eventLog = eventLog,
             factory = { moneyFactoryRules },
             factoryBalances = { moneyFactoryBalances },
+            factoryManual = { runCatching { assets.open("money_manual.txt").bufferedReader().use { it.readText() } }.getOrDefault("") },
         )
     }
 

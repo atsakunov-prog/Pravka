@@ -121,6 +121,55 @@ object MoneyCashflow {
         else -> null // голос и наличные — не счёт банка; «Плати по миру» — в валюте, отдельно
     }
 
+    /** Кошелёк наличных — отдельный счёт баланса. */
+    const val WALLET = "Наличные"
+
+    /**
+     * Движения кошелька: траты и доходы «наличными» (голос, записи со слов
+     * владельца) плюс строки банка «наличные» с обратным знаком — снял в
+     * банкомате 50 000: банк −50 000, кошелёк +50 000; внёс 480 000: наоборот.
+     */
+    fun walletMoves(entries: List<MoneyEntry>): List<MoneyEntry> =
+        entries.filter { !it.draft && !it.dropped && it.replacedBy.isEmpty() }.mapNotNull { e ->
+            when {
+                e.account == MoneyEntry.CASH && !(e.source == MoneyEntry.Source.VOICE && e.matchId.isNotBlank()) -> e
+                e.fromBank && e.category == "cash" -> e.copy(id = e.id + "~кошелёк", rubKop = -e.rubKop)
+                else -> null
+            }
+        }
+
+    /**
+     * Записи со слов владельца (`assets/money_manual.txt`): «дата | сумма |
+     * категория | что | счёт | для кого». Номер — из самой строки: файл,
+     * прочитанный дважды, записи не удваивает.
+     */
+    fun parseManual(text: String, owner: String): List<MoneyEntry> = text.lines()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+        .mapNotNull { line ->
+            val p = line.split('|').map { it.trim() }
+            if (p.size < 4) return@mapNotNull null
+            val day = runCatching {
+                java.time.LocalDate.parse(p[0], java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+            }.getOrNull() ?: return@mapNotNull null
+            val kop = MoneyFormat.parseKop(p[1]) ?: return@mapNotNull null
+            val cat = MoneyCategories.find(p[2])?.key ?: return@mapNotNull null
+            val account = p.getOrNull(4).orEmpty().let { if (it.equals("наличные", true)) MoneyEntry.CASH else it }
+            MoneyEntry(
+                id = "manual-" + BankPush.key(p[0] + "|" + p[1] + "|" + p[3], owner),
+                owner = owner,
+                source = MoneyEntry.Source.MANUAL,
+                ts = day.atTime(12, 0).atZone(BankStatements.MSK).toInstant().toEpochMilli(),
+                timeKnown = false,
+                rubKop = kop,
+                what = p[3],
+                account = account,
+                category = cat,
+                who = MoneyCategories.findWho(p.getOrNull(5).orEmpty()),
+                categoryBy = MoneyEntry.CategoryBy.OWNER,
+            )
+        }
+
     private fun stripCard(account: String) = account.replace(Regex("""\s*\*\d{4}\b"""), "").trim()
 
     /** Карта Т-Банка → счёт, по строкам выписки: «1519» → «Т-Банк · Black Premium». */
@@ -149,6 +198,7 @@ object MoneyCashflow {
         val moves = entries.filter { !it.draft && !it.dropped && it.replacedBy.isEmpty() }
             .mapNotNull { e -> accountOf(e, cards)?.let { it to e } }
             .groupBy({ it.first }, { it.second })
+            .let { m -> walletMoves(entries).takeIf { it.isNotEmpty() }?.let { w -> m + (WALLET to w) } ?: m }
         val latest = anchors.groupBy { it.account }.mapValues { (_, v) -> v.maxBy { it.ts } }
         val names = (moves.filter { (_, l) -> l.any { it.ts in recentFrom..at } }.keys + latest.keys).toSortedSet()
         return names.map { name ->

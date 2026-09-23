@@ -41,6 +41,8 @@ class MoneyEngine(
     private val factory: () -> List<MoneyRules.Rule> = { emptyList() },
     /** Заводские остатки счетов (`assets/money_balances.txt`): якоря баланса до первого пуша. */
     private val factoryBalances: () -> List<MoneyCashflow.Anchor> = { emptyList() },
+    /** Записи со слов владельца (`assets/money_manual.txt`): наличные и прочее мимо выписок. */
+    private val factoryManual: () -> String = { "" },
 ) {
 
     /**
@@ -319,6 +321,20 @@ class MoneyEngine(
             MoneyCashflow.Anchor(account, p.ts, bal, "пуш «${p.title}»", covers = setOf("push-" + p.key))
         }
         return factoryBalances() + s.balances + fromPushes
+    }
+
+    /**
+     * На старте: записи со слов владельца, которых в журнале ещё нет, — туда.
+     * Один раз на номер: вычеркнутую владельцем файл не воскрешает.
+     */
+    suspend fun seedManual() {
+        val list = MoneyCashflow.parseManual(factoryManual(), owner())
+        if (list.isEmpty()) return
+        val added = store.addMissing(list)
+        if (added > 0) {
+            eventLog.add("деньги: со слов владельца добавлено $added")
+            reconcile()
+        }
     }
 
     /** Владелец вписал остаток счёта сейчас. */

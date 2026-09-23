@@ -189,6 +189,16 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         write(_state.value.copy(balances = _state.value.balances + a))
     }
 
+    /** Добавить записи, которых ещё нет (по номеру); знакомые не трогаются вовсе. */
+    suspend fun addMissing(incoming: List<MoneyEntry>): Int = mutex.withLock {
+        ensureLoaded()
+        val s = _state.value
+        val known = s.entries.map { it.id }.toHashSet()
+        val fresh = incoming.filter { it.id !in known }
+        if (fresh.isNotEmpty()) write(s.copy(entries = s.entries + fresh))
+        fresh.size
+    }
+
     suspend fun setInsight(text: String, ts: Long) = mutex.withLock {
         ensureLoaded()
         write(_state.value.copy(insight = text, insightTs = ts))
