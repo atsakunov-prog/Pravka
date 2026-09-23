@@ -74,6 +74,13 @@ class GoogleSpeechSession(
     private var hardErrorStreak = 0
     // Когда пришло последнее новое слово — от него считает сторож тишины.
     private var lastWordsAtMs = 0L
+    // Когда в последний раз звали startListening и сколько раз подряд сессия
+    // кончалась, толком не начавшись. Тишина теперь поднимает сессию заново, и
+    // это ровно та петля, которая в этом файле уже устраивала шторм: движок,
+    // закрывающий сессию мгновенно (отобрали микрофон, служба не в себе), без
+    // сторожа крутился бы так десять минут подряд.
+    private var listenAtMs = 0L
+    private var quickEnds = 0
     private val idleWatch = object : Runnable {
         override fun run() {
             if (!active || stopping) return
@@ -116,6 +123,7 @@ class GoogleSpeechSession(
         // Only give up after a long run of pure errors with no speech at all
         // (a genuinely dead mic), never on a transient blip mid-dictation.
         private const val MAX_ERROR_STREAK = 40
+
 
         // In segmented mode this is what ends the RECOGNIZER's session. It no
         // longer ends the take: on onEndOfSegmentedSession we start listening
@@ -527,6 +535,7 @@ class GoogleSpeechSession(
 
     private fun startListening() {
         val r = recognizer ?: return
+        listenAtMs = android.os.SystemClock.elapsedRealtime()
         runCatching { r.startListening(intent) }.onFailure { restartSoon(afterError = true) }
     }
 
@@ -573,6 +582,7 @@ class GoogleSpeechSession(
     private fun commitSegment(bundle: Bundle?, tag: String) {
         errorStreak = 0
         hardErrorStreak = 0
+        quickEnds = 0
         producedAny = true
         var text = firstResult(bundle)?.trim().orEmpty()
         // The engine sometimes finalizes LESS than the partial the owner already
@@ -663,7 +673,13 @@ class GoogleSpeechSession(
             // restart (that vibrated repeatedly through a silent lead-in).
             if (!readyFired) { readyFired = true; onReady() }
         }
-        override fun onBeginningOfSpeech() { errorStreak = 0; hardErrorStreak = 0; producedAny = true; onLog("beginSpeech") }
+        override fun onBeginningOfSpeech() {
+            errorStreak = 0
+            hardErrorStreak = 0
+            quickEnds = 0
+            producedAny = true
+            onLog("beginSpeech")
+        }
         override fun onRmsChanged(rmsdB: Float) {
             levelSink?.let { sink -> runCatching { sink(ru.zf.pravka.core.MicLevel.normalise(rmsdB)) } }
         }
@@ -699,9 +715,21 @@ class GoogleSpeechSession(
         override fun onEndOfSegmentedSession() {
             val now = android.os.SystemClock.elapsedRealtime()
             if (ListenPolicy.resumeAfterSessionEnd(active, stopping, lastWordsAtMs, now)) {
+                // Сессия, кончившаяся не дослушав своей тишины, — это срыв, а
+                // не пауза владельца. Поднимать её бесконечно значит устроить
+                // тот же шторм, из-за которого в этом файле нельзя пересоздавать
+                // распознаватель: пять срывов подряд без слов — отдаём, что есть.
+                quickEnds = ListenPolicy.countCollapse(quickEnds, now - listenAtMs)
+                if (ListenPolicy.giveUpOnCollapses(quickEnds)) {
+                    onLog("endOfSegmentedSession $quickEnds раз подряд без слов — закрываю тейк")
+                    finish()
+                    return
+                }
                 onLog("endOfSegmentedSession — тишина, слушаю дальше")
                 promoteOrphanedPartial("end of segmented session")
-                main.post { if (active && !stopping) startListening() }
+                // С паузой, а не следующим сообщением очереди: движку дают
+                // закрыть своё, и петля срывов не крутится на полной скорости.
+                main.postDelayed({ if (active && !stopping) startListening() }, ListenPolicy.RESUME_DELAY_MS)
                 return
             }
             onLog("endOfSegmentedSession")

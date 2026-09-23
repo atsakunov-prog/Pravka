@@ -1,5 +1,6 @@
 package ru.zf.pravka.core
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -33,6 +34,24 @@ class ListenPolicyTest {
     fun `считается от последнего слова, а не от старта`() {
         // Двадцать минут диктовки, последнее слово минуту назад — живо.
         assertTrue(ListenPolicy.resumeAfterSessionEnd(true, false, lastWordsAtMs = 19 * 60_000, nowMs = 20 * 60_000))
+    }
+
+    @Test
+    fun `сорвавшаяся сессия считается, отработавшая обнуляет счёт`() {
+        // Движок закрыл сессию, не дослушав своей тишины, — это срыв.
+        assertEquals(1, ListenPolicy.countCollapse(0, ranMs = 50))
+        assertEquals(3, ListenPolicy.countCollapse(2, ranMs = ListenPolicy.SESSION_MIN_MS - 1))
+        // Сессия честно отстояла свою тишину — счёт срывов ни при чём.
+        assertEquals(0, ListenPolicy.countCollapse(4, ranMs = 30_000))
+        assertEquals(0, ListenPolicy.countCollapse(4, ranMs = ListenPolicy.SESSION_MIN_MS))
+    }
+
+    @Test
+    fun `пять срывов подряд — поднимать больше нечего`() {
+        assertFalse(ListenPolicy.giveUpOnCollapses(0))
+        assertFalse(ListenPolicy.giveUpOnCollapses(ListenPolicy.MAX_QUICK_ENDS - 1))
+        assertTrue(ListenPolicy.giveUpOnCollapses(ListenPolicy.MAX_QUICK_ENDS))
+        assertTrue(ListenPolicy.giveUpOnCollapses(ListenPolicy.MAX_QUICK_ENDS + 1))
     }
 
     @Test

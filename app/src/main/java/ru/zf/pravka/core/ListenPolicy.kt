@@ -26,6 +26,15 @@ object ListenPolicy {
     /** Как часто сторож тишины смотрит на часы: точность тут не нужна. */
     const val IDLE_CHECK_MS = 30_000L
 
+    /** Короче этого сессия не «поработала», а сорвалась. */
+    const val SESSION_MIN_MS = 2_000L
+
+    /** Столько срывов подряд без единого слова — поднимать больше нечего. */
+    const val MAX_QUICK_ENDS = 5
+
+    /** Пауза перед подъёмом сессии: движку дают выдохнуть, и петля не горячая. */
+    const val RESUME_DELAY_MS = 200L
+
     // Коды SpeechRecognizer: ERROR_SPEECH_TIMEOUT = 6, ERROR_NO_MATCH = 7.
     // Числа, а не константы Android, — чтобы решение жило под JVM-тестом.
     private const val SPEECH_TIMEOUT = 6
@@ -48,4 +57,18 @@ object ListenPolicy {
      */
     fun resumeAfterSessionEnd(active: Boolean, stopping: Boolean, lastWordsAtMs: Long, nowMs: Long): Boolean =
         active && !stopping && !idleExpired(lastWordsAtMs, nowMs)
+
+    /**
+     * Сессия, кончившаяся раньше собственной тишины, — это срыв, а не пауза
+     * владельца (у движка отобрали микрофон, служба не в себе). Поднимать её
+     * бесконечно значит устроить тот самый шторм, из-за которого в
+     * `GoogleSpeechSession` нельзя пересоздавать распознаватель на ошибке.
+     * Возвращает число срывов подряд: слово или нормально отработавшая сессия
+     * обнуляют счёт.
+     */
+    fun countCollapse(previous: Int, ranMs: Long): Int =
+        if (ranMs < SESSION_MIN_MS) previous + 1 else 0
+
+    /** Срывов подряд столько, что поднимать больше нечего — отдаём, что есть. */
+    fun giveUpOnCollapses(collapses: Int): Boolean = collapses >= MAX_QUICK_ENDS
 }
