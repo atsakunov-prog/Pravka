@@ -82,10 +82,10 @@ class MoneyCashflowTest {
         val a = MoneyCashflow.parseAnchors(f.readText())
         assertEquals(15, a.size)
         assertTrue(a.any { it.account == MoneyCashflow.NATASHA_DEBT && it.kop == 0L })
-        // Снимок 70 743,72 плюс дневные операции после выписки — якорь на её конце, с секундами.
+        // Снимок 70 743,72 — на секунде пуша, где «Доступно» совпало со снимком.
         val bp = a.single { it.account == "Т-Банк · Black Premium" }
-        assertEquals(49_331_382L, bp.kop)
-        assertEquals(MoneyStats.startOf(LocalDate.parse("2026-09-23")) + (11 * 3600 + 41 * 60 + 18) * 1000L, bp.ts)
+        assertEquals(7_074_372L, bp.kop)
+        assertEquals(MoneyStats.startOf(LocalDate.parse("2026-09-23")) + (18 * 3600 + 50 * 60 + 32) * 1000L, bp.ts)
     }
 
     @Test fun pushCarriesAvailable() {
@@ -185,13 +185,28 @@ class MoneyCashflowTest {
         assertTrue(both.none { it.key == "zf_loan" })
     }
 
-    @Test fun thousandsEverywhere() {
-        assertEquals("1\u00A0782", MoneyFormat.k(178_234_500))
-        assertEquals("48", MoneyFormat.k(4_812_300))
-        assertEquals("4,5", MoneyFormat.k(450_000))
-        assertEquals("−0,4", MoneyFormat.k(-38_000))
-        assertEquals("+12", MoneyFormat.k(1_200_000, sign = true))
-        assertEquals("0,0", MoneyFormat.k(0))
+    @Test fun rublesEverywhere() {
+        // «Надо в руб, а не в тыс. руб. И без копеек».
+        assertEquals("1\u00A0782\u00A0345", MoneyFormat.k(178_234_500))
+        assertEquals("380", MoneyFormat.k(38_000))
+        assertEquals("−1\u00A0782", MoneyFormat.k(-178_184))
+        assertEquals("+12\u00A0000", MoneyFormat.k(1_200_000, sign = true))
+        assertEquals("руб", MoneyFormat.K)
+    }
+
+    @Test fun roundupsLeaveTheCardAccount() {
+        val buy = e("buy", "2026-09-23", -1_782, "groceries").copy(rubKop = -178_184)
+        val round = MoneyEntry(
+            id = "r", owner = "sasha", source = MoneyEntry.Source.TINKOFF, ts = buy.ts + 1_000, rubKop = 1_816,
+            what = "Перевод округлений", category = "roundup", account = "Накопительный счет *0110",
+        )
+        val anchor = MoneyCashflow.Anchor("Т-Банк · Black Premium", buy.ts - 1, 1_000_000, "снимок")
+        val bp = MoneyCashflow.balances(listOf(buy, round), listOf(anchor), buy.ts + 5_000, buy.ts - 86_400_000).first { it.name == "Т-Банк · Black Premium" }
+        // Покупка 1 781,84 + округление 18,16 = 1 800 — ровно на столько меняется «Доступно».
+        assertEquals(1_000_000L - 180_000L, bp.kop)
+        // В ДДС и итогах округлений нет: это перемещение между своими.
+        val rows = MoneyCashflow.build(listOf(buy, round), listOf(YearMonth.of(2026, 9)), false)
+        assertEquals(0L, row(rows, "Поступления").values[0])
     }
 
     @Test fun zfCashDeskCountsOnce() {

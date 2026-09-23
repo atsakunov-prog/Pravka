@@ -309,8 +309,19 @@ object MoneyCashflow {
             usable.filter { it.account == NATASHA_DEBT }
         // Займ — со стороны ЗФ (там он весь): выдала 200 000 — у Саши долг −200 000, у ЗФ требование +200 000.
         val loan = usable.filter { it.category == "zf_loan" && MoneyMatch.zfSide(it) }
-        // Записи со слов владельца на именованный счёт (касса ЗФ) уже в `bank`: их счёт даёт `accountOf`.
-        return bank +
+        // Округления: копилка получила — счёт покупки отдал ту же сумму в ту же
+        // секунду (строки на нём нет). Чей счёт — по покупке рядом по времени.
+        val tinkoff = usable.filter { it.source == MoneyEntry.Source.TINKOFF && it.category != "roundup" }.sortedBy { it.ts }
+        val fallback = tinkoff.groupingBy { accountOf(it, cards) }.eachCount().maxByOrNull { it.value }?.key
+        val rounds = usable.filter { it.category == "roundup" && it.source == MoneyEntry.Source.TINKOFF }.mapNotNull { r ->
+            val buy = tinkoff.lastOrNull { it.ts in (r.ts - 10_000)..r.ts && it.rubKop < 0 && accountOf(it, cards) != accountOf(r, cards) }
+            val acc = buy?.let { accountOf(it, cards) } ?: fallback ?: return@mapNotNull null
+            acc to r.copy(id = r.id + "~округление", rubKop = -r.rubKop)
+        }.groupBy({ it.first }, { it.second })
+        val withRounds = bank.toMutableMap()
+        rounds.forEach { (acc, list) -> withRounds[acc] = withRounds[acc].orEmpty() + list }
+        // Записи со слов владельца на именованный счёт (касса ЗФ) уже здесь: их счёт даёт `accountOf`.
+        return withRounds +
             (if (wallet.isNotEmpty()) mapOf(WALLET to wallet) else emptyMap()) +
             (if (share.isNotEmpty()) mapOf(NATASHA_DEBT to share) else emptyMap()) +
             (if (loan.isNotEmpty()) mapOf(
