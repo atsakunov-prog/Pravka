@@ -12,6 +12,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import ru.zf.pravka.core.ListenPolicy
 import ru.zf.pravka.core.MicPlan
 
 // Live, streaming speech recognition via Android's SpeechRecognizer - the same
@@ -68,6 +69,22 @@ class GoogleSpeechSession(
     @Volatile private var active = false
     private var stopping = false
     private var errorStreak = 0
+    // Подряд ошибок, которые НЕ тишина: только они ведут к «сдаться».
+    // Тишина кончает тейк лишь через ListenPolicy.IDLE_CAP_MS без слов.
+    private var hardErrorStreak = 0
+    // Когда пришло последнее новое слово — от него считает сторож тишины.
+    private var lastWordsAtMs = 0L
+    private val idleWatch = object : Runnable {
+        override fun run() {
+            if (!active || stopping) return
+            if (ListenPolicy.idleExpired(lastWordsAtMs, android.os.SystemClock.elapsedRealtime())) {
+                onLog("${ListenPolicy.IDLE_CAP_MS / 60_000} мин без слов — закрываю запись (случайное нажатие?)")
+                stop()
+            } else {
+                main.postDelayed(this, ListenPolicy.IDLE_CHECK_MS)
+            }
+        }
+    }
     private var restartPending = false
     private var producedAny = false   // did this session ever start recognizing?
     private var readyFired = false
@@ -100,9 +117,10 @@ class GoogleSpeechSession(
         // (a genuinely dead mic), never on a transient blip mid-dictation.
         private const val MAX_ERROR_STREAK = 40
 
-        // In segmented mode this is what ends the whole session, so it must be
-        // far longer than any thinking pause (the owner dictates while reading).
-        // An explicit stop is the normal way a take ends; this is just a backstop.
+        // In segmented mode this is what ends the RECOGNIZER's session. It no
+        // longer ends the take: on onEndOfSegmentedSession we start listening
+        // again (ListenPolicy, owner 23.09.2026: «если я замолк, не надо
+        // убивать сессию»). Long, so a thinking pause costs no resume at all.
         // MUST be an Int: the framework reads the extra with getInt(), and a
         // Long silently reads back as "not set" - that single character (30_000L)
         // is why segmented mode never engaged (112 takes, segmented=false on all)
@@ -371,7 +389,11 @@ class GoogleSpeechSession(
             active = true
             stopping = false
             errorStreak = 0
+            hardErrorStreak = 0
             startedAtMs = android.os.SystemClock.elapsedRealtime()
+            lastWordsAtMs = startedAtMs
+            main.removeCallbacks(idleWatch)
+            main.postDelayed(idleWatch, ListenPolicy.IDLE_CHECK_MS)
             onLog(
                 "start путь=${if (network) "сеть" else "офлайн-пакет"} " +
                     "служба=${if (network) networkServiceLabel(context) else "офлайн-пакет устройства"} " +
@@ -550,6 +572,7 @@ class GoogleSpeechSession(
     /** Appends a finalized chunk and publishes a durable checkpoint. */
     private fun commitSegment(bundle: Bundle?, tag: String) {
         errorStreak = 0
+        hardErrorStreak = 0
         producedAny = true
         var text = firstResult(bundle)?.trim().orEmpty()
         // The engine sometimes finalizes LESS than the partial the owner already
@@ -564,6 +587,7 @@ class GoogleSpeechSession(
             text = watched
         }
         if (text.isNotEmpty()) {
+            lastWordsAtMs = android.os.SystemClock.elapsedRealtime()
             if (finalized.isNotEmpty()) finalized.append(' ')
             finalized.append(text)
             head = finalized.toString()
@@ -611,6 +635,7 @@ class GoogleSpeechSession(
         if (finished) return
         finished = true
         active = false
+        main.removeCallbacks(idleWatch)
         // Include a partial that never got finalized, so the last utterance is
         // never silently dropped when the session ends mid-phrase.
         val text = liveText().trim()
@@ -638,7 +663,7 @@ class GoogleSpeechSession(
             // restart (that vibrated repeatedly through a silent lead-in).
             if (!readyFired) { readyFired = true; onReady() }
         }
-        override fun onBeginningOfSpeech() { errorStreak = 0; producedAny = true; onLog("beginSpeech") }
+        override fun onBeginningOfSpeech() { errorStreak = 0; hardErrorStreak = 0; producedAny = true; onLog("beginSpeech") }
         override fun onRmsChanged(rmsdB: Float) {
             levelSink?.let { sink -> runCatching { sink(ru.zf.pravka.core.MicLevel.normalise(rmsdB)) } }
         }
@@ -651,6 +676,7 @@ class GoogleSpeechSession(
                 firstPartialLogged = true
                 onLog("first partial +${android.os.SystemClock.elapsedRealtime() - startedAtMs} ms")
             }
+            if (partial != lastPartial) lastWordsAtMs = android.os.SystemClock.elapsedRealtime()
             lastPartial = partial
             onPartial(liveText())
         }
@@ -667,7 +693,17 @@ class GoogleSpeechSession(
             onPartial(head)
         }
 
+        // Распознаватель сам закрыл сессию после долгой тишины. Тейк от этого
+        // не кончается (ListenPolicy): владелец не жал «стоп» — слушаем
+        // дальше тем же клиентом, накопленный текст на месте.
         override fun onEndOfSegmentedSession() {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (ListenPolicy.resumeAfterSessionEnd(active, stopping, lastWordsAtMs, now)) {
+                onLog("endOfSegmentedSession — тишина, слушаю дальше")
+                promoteOrphanedPartial("end of segmented session")
+                main.post { if (active && !stopping) startListening() }
+                return
+            }
             onLog("endOfSegmentedSession")
             finish()
         }
@@ -692,6 +728,9 @@ class GoogleSpeechSession(
             // are still in lastPartial - rescue them before anything else.
             promoteOrphanedPartial("error $error")
             errorStreak++
+            // Тишина (NO_MATCH / SPEECH_TIMEOUT) к «сдаться» не ведёт: сорок
+            // пауз подряд — это человек думает, а не мёртвый микрофон.
+            if (!ListenPolicy.isSilence(error)) hardErrorStreak++
             // Wedged system recognizer (busy/client/disconnected) that never
             // starts: fail fast with an actionable message instead of churning
             // silently. Plain silence (NO_MATCH / SPEECH_TIMEOUT) is NOT this.
@@ -708,15 +747,17 @@ class GoogleSpeechSession(
                     onLog("явная служба Google не отвечает — следующий тейк пойдёт через системную")
                 }
                 active = false
+                main.removeCallbacks(idleWatch)
                 val r = recognizer; recognizer = null
                 runCatching { r?.destroy() }
                 onError("Системный распознаватель занят. Выключи и включи «Правку» в Спец. возможностях (или перезагрузи телефон) и попробуй снова.")
                 return
             }
-            if (errorStreak >= MAX_ERROR_STREAK) {
-                onLog("giveUp streak=$errorStreak len=${head.length}")
+            if (hardErrorStreak >= MAX_ERROR_STREAK) {
+                onLog("giveUp streak=$hardErrorStreak len=${head.length}")
                 if (liveText().isBlank()) {
                     active = false
+                    main.removeCallbacks(idleWatch)
                     val r = recognizer; recognizer = null
                     runCatching { r?.destroy() }
                     onError(errorText(error))
