@@ -96,6 +96,8 @@ class Settings(private val context: Context) {
         private val KEY_M_ENABLED = booleanPreferencesKey("m_enabled")
         private val KEY_M_WITH_ZF = booleanPreferencesKey("m_with_zf")
         private val KEY_M_PUSH = booleanPreferencesKey("m_push")
+        private val KEY_M_SCOPE_P = booleanPreferencesKey("m_scope_personal")
+        private val KEY_M_SCOPE_Z = booleanPreferencesKey("m_scope_zf")
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
         private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
@@ -735,6 +737,16 @@ class Settings(private val context: Context) {
      * завода включено, но без «Доступа к уведомлениям» ничего не делает —
      * тумблер для того, чтобы выключить, не отзывая доступ.
      */
+    /**
+     * Кнопки «Личное · ЗФ» наверху Денег (владелец, 23.09.2026). С завода —
+     * личное; «ЗФ» с завода — как был прежний тумблер «+ ЗФ».
+     */
+    val mScopePersonalFlow = context.dataStore.data.map { it[KEY_M_SCOPE_P] ?: true }
+    val mScopeZfFlow = context.dataStore.data.map { it[KEY_M_SCOPE_Z] ?: (it[KEY_M_WITH_ZF] ?: false) }
+    suspend fun setMScope(personal: Boolean, zf: Boolean) {
+        context.dataStore.edit { it[KEY_M_SCOPE_P] = personal; it[KEY_M_SCOPE_Z] = zf }
+    }
+
     val mPushFlow = context.dataStore.data.map { it[KEY_M_PUSH] ?: true }
     suspend fun setMPush(value: Boolean) {
         context.dataStore.edit { it[KEY_M_PUSH] = value }

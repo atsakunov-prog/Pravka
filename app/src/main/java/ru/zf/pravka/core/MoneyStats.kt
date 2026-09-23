@@ -44,21 +44,21 @@ object MoneyStats {
         }
     }
 
-    /** Считается ли запись тратой/доходом в итогах при тумблере «+ ЗФ». */
-    private fun counted(e: MoneyEntry, withZf: Boolean) =
-        e.live() && e.category.isNotBlank() && MoneyCategories.counts(e.category, withZf)
+    /** Считается ли запись тратой/доходом в итогах при кнопках «Личное · ЗФ» (по назначению). */
+    private fun counted(e: MoneyEntry, scope: MoneyScope) =
+        e.live() && e.category.isNotBlank() && scope.countsStat(e)
 
     private fun isIncome(e: MoneyEntry) = MoneyCategories.of(e.category)?.income == true
 
     /** Траты периода: учтённые категории и неразложенные расходы (они тоже ушли). */
-    fun spending(entries: List<MoneyEntry>, p: Period, withZf: Boolean): List<MoneyEntry> =
+    fun spending(entries: List<MoneyEntry>, p: Period, scope: MoneyScope): List<MoneyEntry> =
         entries.filter { e ->
             e.ts >= p.from && e.ts < p.to && e.live() && e.rubKop < 0 &&
-                ((counted(e, withZf) && !isIncome(e)) || e.category.isBlank())
+                ((counted(e, scope) && !isIncome(e)) || (e.category.isBlank() && scope.countsStat(e)))
         }
 
-    fun income(entries: List<MoneyEntry>, p: Period, withZf: Boolean): List<MoneyEntry> =
-        entries.filter { e -> e.ts >= p.from && e.ts < p.to && counted(e, withZf) && isIncome(e) }
+    fun income(entries: List<MoneyEntry>, p: Period, scope: MoneyScope): List<MoneyEntry> =
+        entries.filter { e -> e.ts >= p.from && e.ts < p.to && counted(e, scope) && isIncome(e) }
 
     /** Итоги периода и того же периода раньше: для «+12 % к прошлой неделе». */
     data class Totals(val spentKop: Long, val incomeKop: Long, val prevSpentKop: Long, val prevIncomeKop: Long, val count: Int) {
@@ -67,21 +67,21 @@ object MoneyStats {
         val balanceKop: Long get() = incomeKop - spentKop
     }
 
-    fun totals(entries: List<MoneyEntry>, p: Period, withZf: Boolean): Totals {
+    fun totals(entries: List<MoneyEntry>, p: Period, scope: MoneyScope): Totals {
         val prev = p.prev()
         return Totals(
-            spentKop = -spending(entries, p, withZf).sumOf { it.rubKop },
-            incomeKop = income(entries, p, withZf).sumOf { it.rubKop },
-            prevSpentKop = -spending(entries, prev, withZf).sumOf { it.rubKop },
-            prevIncomeKop = income(entries, prev, withZf).sumOf { it.rubKop },
-            count = spending(entries, p, withZf).size,
+            spentKop = -spending(entries, p, scope).sumOf { it.rubKop },
+            incomeKop = income(entries, p, scope).sumOf { it.rubKop },
+            prevSpentKop = -spending(entries, prev, scope).sumOf { it.rubKop },
+            prevIncomeKop = income(entries, prev, scope).sumOf { it.rubKop },
+            count = spending(entries, p, scope).size,
         )
     }
 
     /** Траты по дням периода, рубли (положительные): для столбиков. */
-    fun daily(entries: List<MoneyEntry>, p: Period, withZf: Boolean): List<Long> {
+    fun daily(entries: List<MoneyEntry>, p: Period, scope: MoneyScope): List<Long> {
         val out = LongArray(p.days)
-        for (e in spending(entries, p, withZf)) {
+        for (e in spending(entries, p, scope)) {
             val i = ChronoUnit.DAYS.between(p.firstDay, dayOf(e.ts)).toInt()
             if (i in out.indices) out[i] += -e.rubKop
         }
@@ -91,8 +91,8 @@ object MoneyStats {
     /** Средний день и прогноз месяца по темпу: сколько уйдёт до конца, если тратить так же. */
     data class Pace(val perDayKop: Long, val daysPassed: Int, val forecastKop: Long?)
 
-    fun pace(entries: List<MoneyEntry>, p: Period, withZf: Boolean, today: LocalDate): Pace {
-        val spent = -spending(entries, p, withZf).sumOf { it.rubKop }
+    fun pace(entries: List<MoneyEntry>, p: Period, scope: MoneyScope, today: LocalDate): Pace {
+        val spent = -spending(entries, p, scope).sumOf { it.rubKop }
         val passed = when {
             today < p.firstDay -> 0
             today >= p.firstDay.plusDays(p.days.toLong()) -> p.days
@@ -107,11 +107,11 @@ object MoneyStats {
     /** Один месяц тренда: сколько ушло и пришло. */
     data class Month(val month: YearMonth, val spentKop: Long, val incomeKop: Long)
 
-    fun trend(entries: List<MoneyEntry>, today: LocalDate, months: Int, withZf: Boolean): List<Month> =
+    fun trend(entries: List<MoneyEntry>, today: LocalDate, months: Int, scope: MoneyScope): List<Month> =
         (months - 1 downTo 0).map { back ->
             val first = today.withDayOfMonth(1).minusMonths(back.toLong())
             val p = of(Kind.MONTH, first)
-            Month(YearMonth.from(first), -spending(entries, p, withZf).sumOf { it.rubKop }, income(entries, p, withZf).sumOf { it.rubKop })
+            Month(YearMonth.from(first), -spending(entries, p, scope).sumOf { it.rubKop }, income(entries, p, scope).sumOf { it.rubKop })
         }
 
     /** Категория периода: сумма, число трат, доля и разбивка по магазинам/получателям. */
@@ -125,9 +125,9 @@ object MoneyStats {
 
     data class Merchant(val name: String, val kop: Long, val count: Int)
 
-    fun categories(entries: List<MoneyEntry>, p: Period, withZf: Boolean): List<Category> {
-        val prev = spending(entries, p.prev(), withZf).groupBy { it.category }
-        return spending(entries, p, withZf).groupBy { it.category }
+    fun categories(entries: List<MoneyEntry>, p: Period, scope: MoneyScope): List<Category> {
+        val prev = spending(entries, p.prev(), scope).groupBy { it.category }
+        return spending(entries, p, scope).groupBy { it.category }
             .map { (key, list) ->
                 Category(
                     key = key,
@@ -148,8 +148,8 @@ object MoneyStats {
             .map { (g, l) -> g to l.sumOf { it.kop } }
             .sortedByDescending { it.second }
 
-    fun biggest(entries: List<MoneyEntry>, p: Period, withZf: Boolean, n: Int = 5): List<MoneyEntry> =
-        spending(entries, p, withZf).sortedBy { it.rubKop }.take(n)
+    fun biggest(entries: List<MoneyEntry>, p: Period, scope: MoneyScope, n: Int = 5): List<MoneyEntry> =
+        spending(entries, p, scope).sortedBy { it.rubKop }.take(n)
 
     /**
      * Регулярные платежи: один получатель в трёх и более разных месяцах из
@@ -158,11 +158,11 @@ object MoneyStats {
      */
     data class Recurring(val name: String, val avgKop: Long, val months: Int, val lastTs: Long, val category: String)
 
-    fun recurring(entries: List<MoneyEntry>, today: LocalDate, withZf: Boolean): List<Recurring> {
+    fun recurring(entries: List<MoneyEntry>, today: LocalDate, scope: MoneyScope): List<Recurring> {
         val from = startOf(today.withDayOfMonth(1).minusMonths(5))
         val pool = entries.filter { e ->
             e.ts >= from && e.live() && e.rubKop < 0 && e.category.isNotBlank() &&
-                MoneyCategories.counts(e.category, withZf) && !isIncome(e)
+                scope.countsStat(e) && !isIncome(e)
         }
         return pool.groupBy { MoneyMerchants.canonical(it.what) }
             .mapNotNull { (name, list) ->

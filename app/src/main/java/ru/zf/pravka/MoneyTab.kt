@@ -60,6 +60,7 @@ import ru.zf.pravka.core.MoneyEngine
 import ru.zf.pravka.core.MoneyEntry
 import ru.zf.pravka.core.MoneyFormat
 import ru.zf.pravka.core.MoneyMerchants
+import ru.zf.pravka.core.MoneyScope
 import ru.zf.pravka.core.MoneyStats
 import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.trigger.onMoneyTap
@@ -82,7 +83,10 @@ import ru.zf.pravka.ui.PaperHint
 @Composable
 internal fun MoneyTab(app: PravkaApp) {
     val state by app.moneyStore.stateFlow.collectAsState()
-    val withZf by app.settings.mWithZfFlow.collectAsState(initial = false)
+    val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
+    val zOn by app.settings.mScopeZfFlow.collectAsState(initial = false)
+    // «Личное · ЗФ»: итоги — по назначению, ДДС и счета — по стороне (см. `MoneyScope`).
+    val ms = remember(state, pOn, zOn) { app.moneyEngine.scope(pOn, zOn) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -109,13 +113,13 @@ internal fun MoneyTab(app: PravkaApp) {
     }
 
     val entries = state.entries
-    val totals = remember(state, period, withZf) { MoneyStats.totals(entries, period, withZf) }
-    val cats = remember(state, period, withZf) { MoneyStats.categories(entries, period, withZf) }
-    val daily = remember(state, period, withZf) { MoneyStats.daily(entries, period, withZf) }
-    val pace = remember(state, period, withZf) { MoneyStats.pace(entries, period, withZf, today) }
-    val trend = remember(state, withZf) { MoneyStats.trend(entries, today, 6, withZf) }
-    val recurring = remember(state, withZf) { MoneyStats.recurring(entries, today, withZf) }
-    val biggest = remember(state, period, withZf) { MoneyStats.biggest(entries, period, withZf) }
+    val totals = remember(state, period, ms) { MoneyStats.totals(entries, period, ms) }
+    val cats = remember(state, period, ms) { MoneyStats.categories(entries, period, ms) }
+    val daily = remember(state, period, ms) { MoneyStats.daily(entries, period, ms) }
+    val pace = remember(state, period, ms) { MoneyStats.pace(entries, period, ms, today) }
+    val trend = remember(state, ms) { MoneyStats.trend(entries, today, 6, ms) }
+    val recurring = remember(state, ms) { MoneyStats.recurring(entries, today, ms) }
+    val biggest = remember(state, period, ms) { MoneyStats.biggest(entries, period, ms) }
     val drafts = remember(state) { entries.filter { it.draft && !it.dropped }.sortedByDescending { it.ts } }
     val questions = remember(state) { app.moneyEngine.questions() }
     val journal = remember(state, period) {
@@ -130,6 +134,23 @@ internal fun MoneyTab(app: PravkaApp) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         // ---- Спросить Claude — наверху, как просил владелец ----
+        // ---- Личное · ЗФ — сверху: от них зависит вся вкладка ----
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            FilterChip(
+                selected = ms.personal,
+                onClick = { if (ms.zf) scope.launch { app.settings.setMScope(personal = !ms.personal, zf = true) } },
+                label = { Text("Личное") },
+            )
+            Spacer(Modifier.width(6.dp))
+            FilterChip(
+                selected = ms.zf,
+                onClick = { if (ms.personal) scope.launch { app.settings.setMScope(personal = true, zf = !ms.zf) } },
+                label = { Text("ЗФ") },
+            )
+            Spacer(Modifier.width(10.dp))
+            // Последнюю включённую не выключить: пустая вкладка читается как поломка.
+            PaperHint(if (ms.both) "всё вместе, без ВГО" else if (ms.zf) "только ЗФ" else "только личное")
+        }
         AskCard(app)
         // Траты голосом прямо отсюда — тот же тап, что по «₽»: плашка с суммами и «ОК».
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -146,12 +167,6 @@ internal fun MoneyTab(app: PravkaApp) {
                 FilterChip(selected = kind == MoneyStats.Kind.WEEK, onClick = { kind = MoneyStats.Kind.WEEK }, label = { Text("Неделя") })
                 Spacer(Modifier.width(6.dp))
                 FilterChip(selected = kind == MoneyStats.Kind.MONTH, onClick = { kind = MoneyStats.Kind.MONTH }, label = { Text("Месяц") })
-                Spacer(Modifier.weight(1f))
-                FilterChip(
-                    selected = withZf,
-                    onClick = { scope.launch { app.settings.setMWithZf(!withZf) } },
-                    label = { Text("+ ЗФ") },
-                )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { period = period.prev() }) { Icon(Icons.Filled.KeyboardArrowLeft, "раньше") }
@@ -257,9 +272,9 @@ internal fun MoneyTab(app: PravkaApp) {
         }
 
         // ---- ДДС по месяцу и баланс (владелец, 23.09.2026) ----
-        CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), withZf)
-        AccountsCard(app, entries, period)
-        BalanceCard(app, entries)
+        CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), ms)
+        AccountsCard(app, entries, period, ms)
+        BalanceCard(app, entries, ms)
 
         // ---- Регулярные платежи ----
         if (recurring.isNotEmpty()) {

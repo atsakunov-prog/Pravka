@@ -37,7 +37,9 @@ class MoneyCashflowTest {
         assertEquals(listOf(-1_000_000L, -3_600_000L), row(rows, "Выплаты").values)
         assertEquals(26_400_000L, row(rows, "Операционный поток").values[1])
         assertEquals(6_000_000L, row(rows, "Финансовый поток").values[1])
-        assertEquals(32_400_000L, row(rows, "Чистый денежный поток").values[1])
+        // Трата ЗФ с личной карты при кнопке «Личное» — ВГО «за ЗФ со своих»: деньги ушли, но не на семью.
+        assertEquals(-500_000L, row(rows, "За ЗФ со своих карт").values[1])
+        assertEquals(31_900_000L, row(rows, "Чистый денежный поток").values[1])
         assertEquals(-3_800_000L, row(rows, "Мимо журнала, нетто").values[1])
         val withZf = MoneyCashflow.build(entries, months, withZf = true)
         assertEquals(-4_100_000L, row(withZf, "Выплаты").values[1])
@@ -78,7 +80,7 @@ class MoneyCashflowTest {
     @Test fun factoryBalancesFileParses() {
         val f = java.io.File("src/main/assets/money_balances.txt").takeIf { it.exists() } ?: java.io.File("app/src/main/assets/money_balances.txt")
         val a = MoneyCashflow.parseAnchors(f.readText())
-        assertEquals(9, a.size)
+        assertEquals(11, a.size)
         assertTrue(a.any { it.account == MoneyCashflow.NATASHA_DEBT && it.kop == 0L })
         // Снимок 70 743,72 плюс дневные операции после выписки — якорь на её конце, с секундами.
         val bp = a.single { it.account == "Т-Банк · Black Premium" }

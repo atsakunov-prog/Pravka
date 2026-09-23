@@ -33,41 +33,89 @@ object MoneyCashflow {
         return e.ts >= p.from && e.ts < p.to
     }
 
-    fun build(entries: List<MoneyEntry>, months: List<YearMonth>, withZf: Boolean): List<Row> {
-        val live = entries.filter { it.live() }
-        val byMonth = months.map { ym -> live.filter { inMonth(it, ym) } }
-        fun sum(pred: (MoneyEntry) -> Boolean) = byMonth.map { l -> l.filter(pred).sumOf { it.rubKop } }
+    /** Прежний вызов: «+ ЗФ» выключен — личное, включён — всё. */
+    fun build(entries: List<MoneyEntry>, months: List<YearMonth>, withZf: Boolean): List<Row> =
+        build(entries, months, MoneyScope.of(withZf))
+
+    /** Вклад записи в ячейку ДДС: категория или строка ВГО («vgo:…»). */
+    private data class Part(val e: MoneyEntry, val key: String, val kop: Long)
+
+    private val VGO_TITLES = linkedMapOf(
+        "vgo:paid_for_zf" to "За ЗФ со своих карт",
+        "vgo:zf_paid_for_me" to "Личное, оплаченное с бизнес-карты",
+        "vgo:owner_paid" to "Оплачено владельцем со своих карт",
+        "vgo:owner_personal" to "Личное владельца с бизнес-карты",
+        "vgo:payout" to "Выплаты владельцу",
+    )
+
+    /**
+     * Во что превращается запись при кнопках [scope]. Сторона — чьи деньги,
+     * назначение — на что; где они расходятся, появляется ВГО. При обеих
+     * кнопках ВГО нет: трата — по назначению, выплата владельцу при книгах
+     * ЗФ исключается с обеих сторон.
+     */
+    private fun partsOf(e: MoneyEntry, scope: MoneyScope): List<Part> {
+        val ez = scope.entityZf(e)
+        val pz = scope.purposeZf(e)
+        val k = e.category
+        val v = e.rubKop
+        return when {
+            scope.both -> when {
+                (k == "inc_zf" && scope.zfBooks) || k == "zf_owner" -> emptyList()
+                else -> listOf(Part(e, k, v))
+            }
+            scope.personal -> when {
+                !ez && pz == true -> listOf(Part(e, "vgo:paid_for_zf", v))
+                !ez -> listOf(Part(e, k, v))
+                pz == false -> listOf(Part(e, k, v), Part(e, "vgo:zf_paid_for_me", -v))
+                else -> emptyList()
+            }
+            else -> when {
+                ez && pz == false -> listOf(Part(e, "vgo:owner_personal", v))
+                ez && k == "zf_owner" -> listOf(Part(e, "vgo:payout", v))
+                ez -> listOf(Part(e, k, v))
+                pz == true -> listOf(Part(e, k, v), Part(e, "vgo:owner_paid", -v))
+                // Без книг ЗФ её выплату владельцу видно только с его стороны.
+                k == "inc_zf" && !scope.zfBooks -> listOf(Part(e, "vgo:payout", -v))
+                else -> emptyList()
+            }
+        }
+    }
+
+    fun build(entries: List<MoneyEntry>, months: List<YearMonth>, scope: MoneyScope): List<Row> {
+        val parts = entries.filter { it.live() }.flatMap { partsOf(it, scope) }
+        val byMonth = months.map { ym -> parts.filter { inMonth(it.e, ym) } }
+        fun sum(pred: (Part) -> Boolean) = byMonth.map { l -> l.filter(pred).sumOf { it.kop } }
         val rows = mutableListOf<Row>()
         fun nonZero(v: List<Long>) = v.any { it != 0L }
 
         // ---- Операционный ----
         rows += Row("Операционная деятельность", Kind.SECTION, emptyList())
         val incomeKeys = MoneyCategories.ALL.filter { it.income }
-        val income = incomeKeys.map { c -> c to sum { it.category == c.key } }.filter { nonZero(it.second) }
-        val unknownIn = sum { it.category.isBlank() && it.rubKop > 0 }
+        val income = incomeKeys.map { c -> c to sum { it.key == c.key } }.filter { nonZero(it.second) }
+        val unknownIn = sum { it.key.isBlank() && it.kop > 0 }
         val inTotal = months.indices.map { i -> income.sumOf { it.second[i] } + unknownIn[i] }
         rows += Row("Поступления", Kind.GROUP, inTotal)
         income.forEach { (c, v) -> rows += Row(c.title, Kind.LINE, v, c.key) }
         if (nonZero(unknownIn)) rows += Row("без категории", Kind.LINE, unknownIn)
 
-        val groups = listOf(MoneyCategories.G_HOME, MoneyCategories.G_KIDS, MoneyCategories.G_HEALTH, MoneyCategories.G_LIFE) +
-            if (withZf) listOf(MoneyCategories.G_ZF) else emptyList()
+        val groups = listOf(MoneyCategories.G_HOME, MoneyCategories.G_KIDS, MoneyCategories.G_HEALTH, MoneyCategories.G_LIFE, MoneyCategories.G_ZF)
         val outTotal = MutableList(months.size) { 0L }
         val outRows = mutableListOf<Row>()
         for (g in groups) {
             val cats = MoneyCategories.ALL.filter { it.group == g && !it.income }
-                .map { c -> c to sum { it.category == c.key } }
+                .map { c -> c to sum { it.key == c.key } }
                 .filter { nonZero(it.second) }
             if (cats.isEmpty()) continue
             val gv = months.indices.map { i -> cats.sumOf { it.second[i] } }
-            gv.forEachIndexed { i, v -> outTotal[i] += v }
+            gv.forEachIndexed { i, x -> outTotal[i] += x }
             outRows += Row(g, Kind.GROUP, gv)
             // Крупные категории выше: так читают, где деньги.
-            cats.sortedBy { it.second.sum() }.forEach { (c, v) -> outRows += Row(c.title, Kind.LINE, v, c.key) }
+            cats.sortedBy { it.second.sum() }.forEach { (c, x) -> outRows += Row(c.title, Kind.LINE, x, c.key) }
         }
-        val unknownOut = sum { it.category.isBlank() && it.rubKop < 0 }
+        val unknownOut = sum { it.key.isBlank() && it.kop < 0 }
         if (nonZero(unknownOut)) {
-            unknownOut.forEachIndexed { i, v -> outTotal[i] += v }
+            unknownOut.forEachIndexed { i, x -> outTotal[i] += x }
             outRows += Row("Без категории", Kind.GROUP, unknownOut)
         }
         rows += Row("Выплаты", Kind.GROUP, outTotal)
@@ -76,8 +124,8 @@ object MoneyCashflow {
         rows += Row("Операционный поток", Kind.TOTAL, op)
 
         // ---- Финансовый ----
-        val got = sum { it.category == "loan" && it.rubKop > 0 }
-        val paid = sum { it.category == "loan" && it.rubKop < 0 }
+        val got = sum { it.key == "loan" && it.kop > 0 }
+        val paid = sum { it.key == "loan" && it.kop < 0 }
         val fin = months.indices.map { i -> got[i] + paid[i] }
         if (nonZero(got) || nonZero(paid)) {
             rows += Row("Финансовая деятельность", Kind.SECTION, emptyList())
@@ -85,19 +133,28 @@ object MoneyCashflow {
             if (nonZero(paid)) rows += Row("Займы возвращены", Kind.LINE, paid)
             rows += Row("Финансовый поток", Kind.TOTAL, fin)
         }
-        rows += Row("Чистый денежный поток", Kind.TOTAL, months.indices.map { i -> op[i] + fin[i] }, "net")
+
+        // ---- ВГО: между ЗФ и владельцем (только когда включена одна кнопка) ----
+        val vgo = VGO_TITLES.map { (k, t) -> Triple(k, t, sum { it.key == k }) }.filter { nonZero(it.third) }
+        val vgoNet = months.indices.map { i -> vgo.sumOf { it.third[i] } }
+        if (vgo.isNotEmpty()) {
+            rows += Row("ВГО: между ЗФ и владельцем", Kind.SECTION, emptyList())
+            vgo.forEach { (k, t, x) -> rows += Row(t, Kind.LINE, x, k) }
+            rows += Row("ВГО, нетто", Kind.TOTAL, vgoNet, "vgo")
+        }
+        rows += Row("Чистый денежный поток", Kind.TOTAL, months.indices.map { i -> op[i] + fin[i] + vgoNet[i] }, "net")
 
         // ---- Перемещения ----
         // Банкомат и «Плати по миру» — внутри семьи: вторая сторона —
         // кошелёк и карта Плати, оба в журнале. Нетто «мимо журнала» — только
         // между своими счетами и супругами: там вторая сторона бывает в банке
         // без выписки.
-        val moves = listOf("own", "spouse", "plati", "cash").map { k -> k to sum { it.category == k } }.filter { nonZero(it.second) }
+        val moves = listOf("own", "spouse", "plati", "cash").map { k -> k to sum { it.key == k } }.filter { nonZero(it.second) }
         if (moves.isNotEmpty()) {
             rows += Row("Перемещения (не трата)", Kind.SECTION, emptyList())
-            moves.forEach { (k, v) ->
+            moves.forEach { (k, x) ->
                 val title = when (k) { "cash" -> "Банкомат (банк ↔ кошелёк)"; "plati" -> "Пополнение Плати по миру"; else -> MoneyCategories.title(k) }
-                rows += Row(title, Kind.LINE, v, k)
+                rows += Row(title, Kind.LINE, x, k)
             }
             val outside = moves.filter { it.first == "own" || it.first == "spouse" }
             if (outside.isNotEmpty()) {
@@ -130,6 +187,13 @@ object MoneyCashflow {
         MoneyEntry.Source.MKB -> "МКБ"
         else -> null // голос и наличные — не счёт банка; «Плати по миру» — в валюте, отдельно
     }
+
+    /** Счета ЗФ из файла остатков: строки «счёт ЗФ | Т-Банк · Счет для бизнеса». */
+    fun parseZfAccounts(text: String): Set<String> = text.lines()
+        .map { it.split('|').map { p -> p.trim() } }
+        .filter { it.size >= 2 && it[0].equals("счёт ЗФ", ignoreCase = true) }
+        .map { it[1] }
+        .toSet()
 
     /** Кошелёк наличных — отдельный счёт баланса. */
     const val WALLET = "Наличные"

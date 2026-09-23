@@ -82,6 +82,9 @@ object MoneyCategories {
         // владелец не возразил). Перенести в семью — сменить полку здесь.
         Category("zf", "ЗФ: расходы", G_ZF, Shelf.ZF),
         Category("subs_work", "ИИ и софт для работы", G_ZF, Shelf.ZF),
+        // Книги самой ЗФ (счета ЗФ в журнале): выручка от клиентов — доход ЗФ;
+        // выплата владельцу — ВГО, парная «Доходу от ЗФ» на его счёте.
+        Category("zf_revenue", "Выручка ЗФ", G_ZF, Shelf.ZF, income = true),
 
         Category("own", "Между своими", G_SERVICE, Shelf.SERVICE),
         Category("spouse", "Между нами", G_SERVICE, Shelf.SERVICE),
@@ -91,6 +94,7 @@ object MoneyCategories {
         // Начисленный долг — не движение денег, а обязательство (доля Наташи
         // из выплаты ЗФ): в ДДС и итогах его нет, в балансе он растит долг.
         Category("owed", "Долг: начислено", G_SERVICE, Shelf.SERVICE),
+        Category("zf_owner", "ЗФ: выплата владельцу", G_SERVICE, Shelf.SERVICE),
     )
 
     private val byKey = ALL.associateBy { it.key }

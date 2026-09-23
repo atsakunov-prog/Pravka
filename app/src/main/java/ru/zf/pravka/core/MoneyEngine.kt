@@ -43,6 +43,8 @@ class MoneyEngine(
     private val factoryBalances: () -> List<MoneyCashflow.Anchor> = { emptyList() },
     /** Записи со слов владельца (`assets/money_manual.txt`): наличные и прочее мимо выписок. */
     private val factoryManual: () -> String = { "" },
+    /** Текст файла остатков — из него же строки «счёт ЗФ | …». */
+    private val factoryAccountsText: () -> String = { "" },
 ) {
 
     /**
@@ -336,6 +338,21 @@ class MoneyEngine(
             reconcile()
         }
     }
+
+    /** Счета ЗФ: заводские (файл остатков) плюс отмеченные владельцем, минус снятые им. */
+    fun zfAccounts(): Set<String> {
+        val s = store.stateFlow.value
+        return (MoneyCashflow.parseZfAccounts(factoryAccountsText()) + s.zfAccounts) - s.notZfAccounts
+    }
+
+    suspend fun setZfAccount(name: String, zf: Boolean) {
+        store.setZfAccount(name, zf)
+        eventLog.add("деньги: счёт $name — " + if (zf) "ЗФ" else "личный")
+    }
+
+    /** Кнопки «Личное · ЗФ» → фильтр для итогов, ДДС и счетов. */
+    fun scope(personal: Boolean, zf: Boolean): MoneyScope =
+        MoneyScope.of(personal, zf, store.stateFlow.value.entries, zfAccounts())
 
     /** Владелец вписал остаток счёта сейчас. */
     suspend fun setBalance(account: String, kop: Long) {

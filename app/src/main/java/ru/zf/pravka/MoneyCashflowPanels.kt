@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.core.MoneyCashflow
 import ru.zf.pravka.core.MoneyEntry
 import ru.zf.pravka.core.MoneyFormat
+import ru.zf.pravka.core.MoneyScope
 import ru.zf.pravka.core.MoneyStats
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
@@ -52,14 +53,15 @@ private val COL = 62.dp
  * остатком на начало и конец выбранного месяца.
  */
 @Composable
-internal fun CashflowCard(app: PravkaApp, entries: List<MoneyEntry>, month: YearMonth, withZf: Boolean) {
+internal fun CashflowCard(app: PravkaApp, entries: List<MoneyEntry>, month: YearMonth, ms: MoneyScope) {
     val months = remember(month) { listOf(month.minusMonths(2), month.minusMonths(1), month) }
-    val rows = remember(entries, month, withZf) { MoneyCashflow.build(entries, months, withZf) }
+    val rows = remember(entries, month, ms) { MoneyCashflow.build(entries, months, ms) }
     val anchors = remember(entries) { app.moneyEngine.anchors() }
-    val bounds = remember(entries, month, anchors) {
+    val bounds = remember(entries, month, anchors, ms) {
         months.map { ym ->
             val p = MoneyStats.of(MoneyStats.Kind.MONTH, ym.atDay(1))
-            fun known(at: Long) = MoneyCashflow.balances(entries, anchors, at, at).mapNotNull { it.kop }.takeIf { it.isNotEmpty() }?.sum()
+            fun known(at: Long) = MoneyCashflow.balances(entries, anchors, at, at).filter { ms.showsAccount(it.name) }
+                .mapNotNull { it.kop }.takeIf { it.isNotEmpty() }?.sum()
             known(p.from - 1) to known(minOf(p.to - 1, System.currentTimeMillis()))
         }
     }
@@ -168,11 +170,13 @@ private fun CashLine(
  * вписать остаток руками. Счёт без якоря — «?», не ноль.
  */
 @Composable
-internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>) {
+internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneyScope) {
     val scope = app.appScope
     val now = System.currentTimeMillis()
     val anchors = remember(entries, app.moneyStore.stateFlow.value.balances) { app.moneyEngine.anchors() }
-    val accounts = remember(entries, anchors) { MoneyCashflow.balances(entries, anchors, now, now - 90L * 86_400_000L) }
+    val accounts = remember(entries, anchors, ms) {
+        MoneyCashflow.balances(entries, anchors, now, now - 90L * 86_400_000L).filter { ms.showsAccount(it.name) }
+    }
     val loans = remember(entries) { MoneyCashflow.loanDebt(entries, now) }
     var editing by remember { mutableStateOf<String?>(null) }
 
@@ -182,7 +186,7 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>) {
     val assetSum = assets.sumOf { it.kop ?: 0 }
     val debtSum = debts.sumOf { it.kop ?: 0 } - loans
 
-    PaperCard(label = "баланс · сейчас") {
+    PaperCard(label = "баланс · сейчас · " + if (ms.both) "всё" else if (ms.zf) "ЗФ" else "личное") {
         Text("Активы", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
         for (a in assets) AccountRow(a) { editing = a.name }
         TotalRow("Итого активы", assetSum, incomeColor())
@@ -271,11 +275,13 @@ private fun TotalRow(title: String, kop: Long, color: androidx.compose.ui.graphi
  * тап раскрывает по категориям. Наличные и долг Наташе — такие же счета.
  */
 @Composable
-internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: MoneyStats.Period) {
+internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: MoneyStats.Period, ms: MoneyScope) {
+    val scope = app.appScope
     val anchors = remember(entries, app.moneyStore.stateFlow.value.balances) { app.moneyEngine.anchors() }
-    val flows = remember(entries, anchors, period) {
+    val flows = remember(entries, anchors, period, ms) {
         MoneyCashflow.accountFlows(entries, anchors, period.from, period.to, System.currentTimeMillis())
             .filter { it.inKop != 0L || it.outKop != 0L || it.endKop != null }
+            .filter { ms.showsAccount(it.name) }
     }
     var open by remember { mutableStateOf(setOf<String>()) }
     PaperCard(label = "счета · откуда и куда") {
@@ -312,6 +318,13 @@ internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: Mon
                     if (f.outKop != 0L) Text(MoneyFormat.short(f.outKop), style = MaterialTheme.typography.bodySmall, color = spentColor())
                 }
                 if (expanded) {
+                    // Чей счёт: отметка владельца решает, куда он встанет — в «Личное» или в «ЗФ».
+                    if (f.name != MoneyCashflow.NATASHA_DEBT && f.name != MoneyCashflow.WALLET) {
+                        val isZf = f.name in ms.zfAccounts
+                        TextButton(onClick = { scope.launch { app.moneyEngine.setZfAccount(f.name, !isZf) } }) {
+                            Text(if (isZf) "счёт ЗФ · сделать личным" else "личный счёт · это счёт ЗФ")
+                        }
+                    }
                     for ((cat, kop) in f.byCategory.take(12)) {
                         Row(Modifier.fillMaxWidth().padding(start = 12.dp, top = 2.dp)) {
                             Text(cat, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)

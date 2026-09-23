@@ -17,6 +17,7 @@ object MoneyContext {
 
     fun build(entries: List<MoneyEntry>, today: LocalDate, withZf: Boolean = true, maxLines: Int = 1500): String = buildString {
         val live = entries.filter { it.live() }
+        val scope = MoneyScope.of(withZf)
         append("Сегодня: ").append(today).append('\n')
         append("Журнал: ").append(live.size).append(" записей, с ")
             .append(live.minOfOrNull { it.ts }?.let { MoneyStats.dayOf(it) } ?: "—").append('\n')
@@ -29,7 +30,7 @@ object MoneyContext {
             .filter { firstMonth == null || it >= firstMonth }
         val byMonth = months.associateWith { ym ->
             val p = MoneyStats.of(MoneyStats.Kind.MONTH, ym.atDay(1))
-            MoneyStats.categories(live, p, withZf)
+            MoneyStats.categories(live, p, scope)
         }
         append("## Траты по месяцам и категориям, ₽ (семья").append(if (withZf) " и ЗФ" else "").append(")\n")
         append("категория | ").append(months.joinToString(" | ")).append('\n')
@@ -43,7 +44,7 @@ object MoneyContext {
         append("ИТОГО | ").append(months.joinToString(" | ") { m -> rub(byMonth[m].orEmpty().sumOf { it.kop }) }).append("\n\n")
 
         append("## Доходы по месяцам, ₽\n")
-        for (m in MoneyStats.trend(live, today, 12, withZf).filter { firstMonth == null || it.month >= firstMonth }) append(m.month).append(": ").append(rub(m.incomeKop)).append('\n')
+        for (m in MoneyStats.trend(live, today, 12, scope).filter { firstMonth == null || it.month >= firstMonth }) append(m.month).append(": ").append(rub(m.incomeKop)).append('\n')
         append('\n')
 
         // Главные получатели по категориям за три месяца.
@@ -55,13 +56,13 @@ object MoneyContext {
             90,
         )
         append("## Главные получатели по категориям за три месяца\n")
-        for (c in MoneyStats.categories(live, three, withZf).take(25)) {
+        for (c in MoneyStats.categories(live, three, scope).take(25)) {
             append(if (c.key.isBlank()) "без категории" else MoneyCategories.title(c.key)).append(": ")
             append(c.merchants.take(6).joinToString("; ") { "${it.name} ${rub(it.kop)} (${it.count})" }).append('\n')
         }
         append('\n')
 
-        val rec = MoneyStats.recurring(live, today, withZf)
+        val rec = MoneyStats.recurring(live, today, scope)
         if (rec.isNotEmpty()) {
             append("## Регулярные платежи (≥3 месяцев из 6)\n")
             for (r in rec.take(30)) append("${r.name}: в среднем ${rub(r.avgKop)} в месяц, ${r.months} мес., ${MoneyCategories.title(r.category)}\n")

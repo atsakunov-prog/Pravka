@@ -39,29 +39,29 @@ class MoneyStatsTest {
 
     @Test fun totalsSkipServiceAndCountUnknown() {
         val w = MoneyStats.of(MoneyStats.Kind.WEEK, LocalDate.parse("2026-09-23"))
-        val t = MoneyStats.totals(entries, w, withZf = false)
+        val t = MoneyStats.totals(entries, w, MoneyScope.PERSONAL)
         // 1000+500+300+2000 и неразложенные 400; ЗФ и «между нами» — нет.
         assertEquals(420_000L, t.spentKop)
         assertEquals(90_000L, t.prevSpentKop)
         assertEquals(0L, t.incomeKop)
-        assertEquals(1_420_000L, MoneyStats.totals(entries, w, withZf = true).spentKop)
+        assertEquals(1_420_000L, MoneyStats.totals(entries, w, MoneyScope.BOTH).spentKop)
         val m = MoneyStats.of(MoneyStats.Kind.MONTH, LocalDate.parse("2026-09-23"))
-        assertEquals(10_000_000L, MoneyStats.totals(entries, m, withZf = false).incomeKop)
+        assertEquals(10_000_000L, MoneyStats.totals(entries, m, MoneyScope.PERSONAL).incomeKop)
     }
 
     @Test fun dailyAndPace() {
         val w = MoneyStats.of(MoneyStats.Kind.WEEK, LocalDate.parse("2026-09-23"))
-        assertEquals(listOf(100_000L, 80_000L, 240_000L, 0L, 0L, 0L, 0L), MoneyStats.daily(entries, w, false))
-        val pace = MoneyStats.pace(entries, w, false, LocalDate.parse("2026-09-23"))
+        assertEquals(listOf(100_000L, 80_000L, 240_000L, 0L, 0L, 0L, 0L), MoneyStats.daily(entries, w, MoneyScope.PERSONAL))
+        val pace = MoneyStats.pace(entries, w, MoneyScope.PERSONAL, LocalDate.parse("2026-09-23"))
         assertEquals(3, pace.daysPassed)
         assertEquals(140_000L, pace.perDayKop)
         assertEquals(980_000L, pace.forecastKop)
-        assertNull(MoneyStats.pace(entries, w.prev(), false, LocalDate.parse("2026-09-23")).forecastKop)
+        assertNull(MoneyStats.pace(entries, w.prev(), MoneyScope.PERSONAL, LocalDate.parse("2026-09-23")).forecastKop)
     }
 
     @Test fun merchantsFoldStores() {
         val w = MoneyStats.of(MoneyStats.Kind.WEEK, LocalDate.parse("2026-09-23"))
-        val groceries = MoneyStats.categories(entries, w, false).first { it.key == "groceries" }
+        val groceries = MoneyStats.categories(entries, w, MoneyScope.PERSONAL).first { it.key == "groceries" }
         assertEquals(listOf("ВкусВилл" to 150_000L, "Яндекс Лавка" to 30_000L), groceries.merchants.map { it.name to it.kop })
         assertEquals(90_000L, groceries.prevKop)
         assertEquals("MAGAZIN", MoneyMerchants.canonical("MAGAZIN 382"))
@@ -73,10 +73,10 @@ class MoneyStatsTest {
             e("n3", "2026-08-05", -25_000, "help", "Няня"), e("x1", "2026-07-01", -100, "cafe", "Кафе"),
             e("x2", "2026-08-01", -9_000, "cafe", "Кафе"), e("x3", "2026-09-01", -300, "cafe", "Кафе"),
         )
-        val r = MoneyStats.recurring(list, LocalDate.parse("2026-09-23"), false)
+        val r = MoneyStats.recurring(list, LocalDate.parse("2026-09-23"), MoneyScope.PERSONAL)
         assertEquals(listOf("Няня"), r.map { it.name })
         assertEquals(3, r[0].months)
-        assertTrue(MoneyStats.trend(list, LocalDate.parse("2026-09-23"), 6, false).size == 6)
+        assertTrue(MoneyStats.trend(list, LocalDate.parse("2026-09-23"), 6, MoneyScope.PERSONAL).size == 6)
     }
 
     @Test fun contextStartsAtFirstMonthAndRoundsRubles() {

@@ -241,6 +241,7 @@ class PravkaApp : Application() {
             eventLog = eventLog,
             factory = { moneyFactoryRules },
             factoryBalances = { moneyFactoryBalances },
+            factoryAccountsText = { runCatching { assets.open("money_balances.txt").bufferedReader().use { it.readText() } }.getOrDefault("") },
             factoryManual = { runCatching { assets.open("money_manual.txt").bufferedReader().use { it.readText() } }.getOrDefault("") },
         )
     }
