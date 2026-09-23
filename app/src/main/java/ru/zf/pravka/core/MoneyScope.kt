@@ -78,6 +78,8 @@ data class MoneyScope(
 
     /** Показывать ли счёт баланса: долг Наташе — общий для обеих сторон. */
     fun showsAccount(name: String): Boolean = when {
+        // Касса ЗФ — транзит наличных клиента к владельцу, всегда ноль: в балансе и «Счетах» её нет.
+        name == MoneyMatch.ZF_CASH -> false
         // Займ ЗФ владельцу внутри группы — ноль: при обеих кнопках его нет.
         name == MoneyCashflow.LOAN_DEBT -> personal && !zf
         name == MoneyCashflow.LOAN_ASSET -> zf && !personal

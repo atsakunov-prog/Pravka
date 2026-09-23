@@ -101,8 +101,8 @@ class MoneyCashflowTest {
         assertEquals(10, manual.size)
         assertEquals(listOf("inc_zf", "zf_revenue", "zf_owner", "owed", "inc_zf", "zf_revenue", "zf_owner", "owed", "loan", "gifts"), manual.map { it.category })
         assertTrue(manual.filter { it.category in setOf("inc_zf", "loan", "gifts") }.all { it.account == MoneyEntry.CASH && it.categoryBy == MoneyEntry.CategoryBy.OWNER })
-        // Касса ЗФ: клиент заплатил 5 750 000 наличными.
-        assertEquals(575_000_000L, manual.filter { it.account == MoneyMatch.ZF_CASH && it.category == "zf_revenue" }.sumOf { it.rubKop })
+        // Касса ЗФ — транзит: сколько пришло от клиента, столько выдано Саше.
+        assertEquals(0L, manual.filter { it.account == MoneyMatch.ZF_CASH }.sumOf { it.rubKop })
         assertTrue(manual.filter { it.category == "owed" }.all { it.account == MoneyCashflow.NATASHA_DEBT })
         // Номер постоянный: второе чтение даёт те же записи.
         assertEquals(manual.map { it.id }, MoneyCashflow.parseManual(asset("money_manual.txt"), "sasha").map { it.id })
@@ -213,8 +213,9 @@ class MoneyCashflowTest {
         val manual = MoneyCashflow.parseManual(asset("money_manual.txt"), "sasha")
         val desk = MoneyCashflow.Anchor(MoneyMatch.ZF_CASH, at("2026-01-01", 0), 0, "0")
         val acc = MoneyCashflow.balances(manual, listOf(desk), at("2026-09-30"), at("2026-08-01")).first { it.name == MoneyMatch.ZF_CASH }
-        // Клиент: 2 000 000 + 3 750 000; выдано Саше: 2 000 000 + 3 880 000.
-        assertEquals(-13_000_000L, acc.kop)
+        // Транзит: остаток кассы всегда ноль, и в балансе её не показываем.
+        assertEquals(0L, acc.kop)
+        assertTrue(!MoneyScope.BOTH.showsAccount(MoneyMatch.ZF_CASH))
     }
 
     @Test fun loansGroupByLender() {
@@ -232,5 +233,22 @@ class MoneyCashflowTest {
         assertEquals(7_000_000L, MoneyCashflow.loanDebt(list, at("2026-09-30")))
         assertTrue(MoneyCashflow.isDebtAccount(MoneyCashflow.LOAN_DEBT) && MoneyCashflow.isDebtAccount("Т-Банк · Платинум"))
         assertTrue(!MoneyCashflow.isDebtAccount("Т-Банк · Black Premium"))
+    }
+
+    @Test fun belousovaIsSettled() {
+        val rules = MoneyRules.parseText(asset("money_payees.txt")).rules
+        fun alfa(id: String, d: String, rub: Long, what: String) =
+            MoneyEntry(id = id, owner = "marianna", source = MoneyEntry.Source.ALFA, ts = at(d), rubKop = rub * 100, what = what)
+        val list = listOf(
+            alfa("a", "2026-03-31", 70_000, "Белоусова Марианна Евгеньевна"),
+            alfa("b", "2026-06-16", 100_000, "Белоусова Марианна Евгеньевна"),
+            alfa("c", "2026-07-02", 3_500, "Белоусова Марианна Евгеньевна"),
+            e("s1", "2026-03-25", -70_000, "").copy(what = "Марианна Б."),
+            e("s2", "2026-06-13", -100_000, "").copy(what = "Марианна Б."),
+        )
+        val r = MoneyMatch.run(list, rules, at("2026-09-24")).entries
+        // «Марианне мы все долги отдали. Там ноль».
+        assertEquals(0L, MoneyCashflow.loanDebt(r, at("2026-09-24")))
+        assertEquals("inc_other", r.first { it.id == "c" }.category)
     }
 }

@@ -36,7 +36,8 @@ class FactoryPayeesTest {
         assertEquals("spouse", MoneyRules.classify(e("Марианна Ц.", -20_000_00, "sasha", MoneyEntry.Source.TINKOFF), r)?.category)
         assertEquals("spouse", MoneyRules.classify(e("Пополнение через СБП от Александр Сергеевич Ц", 20_000_00, "marianna", MoneyEntry.Source.MKB), r)?.category)
         // Агентские со счёта Саши — ЗФ; тот же человек на счетах Марианны — займы.
-        assertEquals("zf", MoneyRules.classify(e("Марианна Б.", -170_000_00, "sasha", MoneyEntry.Source.TINKOFF), r)?.category)
+        // Перевод Саши Белоусовой — возврат займа (владелец, 23.09.2026: «долги отдали, там ноль»), не агентские ЗФ.
+        assertEquals("loan", MoneyRules.classify(e("Марианна Б.", -170_000_00, "sasha", MoneyEntry.Source.TINKOFF), r)?.category)
         assertEquals("loan", MoneyRules.classify(e("Белоусова Марианна Евгеньевна", 300_000_00, "marianna", MoneyEntry.Source.ALFA), r)?.category)
     }
 
