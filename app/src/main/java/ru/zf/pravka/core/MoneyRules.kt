@@ -12,16 +12,22 @@ package ru.zf.pravka.core
 //  3. MCC;
 //  4. категория банка.
 //
-// ПОЧЕМУ правил владельца нет в коде: репозиторий публичный, а справочник —
-// это имена терапевтов, няни, родных и кто кому даёт в долг. Он живёт только
-// на телефоне (`MoneyStore`), заводится вставкой текста и растёт от ответов
-// на вопросы сверки. Здесь — только то, что можно показать кому угодно.
+// Справочник владельца — два слоя: заводской `assets/money_payees.txt` (кто
+// есть кто в его выписках, собран с ним 23.09.2026; репозиторий публичный, и
+// это его решение: «никаких там нет секретов, я этому доверяю») и правила на
+// телефоне (`MoneyStore`) — вписанные и запомненные ответами. Телефонные
+// стоят впереди и перебивают заводские. Здесь, в коде, — безличное.
 object MoneyRules {
 
     /**
      * Одно правило. [pattern] — кусок названия получателя, без регистра и
      * «ё»; «|» — или. [sign]: -1 — только списания, +1 — только поступления,
      * 0 — оба. [owner] — только на счетах этого человека (пусто — на всех).
+     * [source] — только этот банк (`MoneyEntry.Source.key`), [mcc] — только
+     * этот MCC, [amountKop] — только эта сумма (по модулю). Шаблон может быть
+     * пустым, если задан MCC или сумма: банкомат МКБ в описании каждый раз
+     * называется по-своему, а «MCC 6011, сумма 23 000» — это всегда зарплата
+     * няни (владелец, 23.09.2026).
      */
     data class Rule(
         val pattern: String,
@@ -30,16 +36,33 @@ object MoneyRules {
         val sign: Int = 0,
         val owner: String = "",
         val comment: String = "",
+        val source: String = "",
+        val mcc: String = "",
+        val amountKop: Long = 0L,
     ) {
         private val parts: List<String> = pattern.split('|').map { norm(it) }.filter { it.isNotEmpty() }
 
-        /** Длина самого длинного совпавшего куска: из двух правил побеждает более точное. */
+        /**
+         * Насколько правило подходит записи, 0 — не подходит. Длина самого
+         * длинного совпавшего куска названия; MCC добавляет немного, точная
+         * сумма — много: «MCC 6011, сумма 23 000» точнее, чем просто «MCC 6011».
+         */
         fun score(entry: MoneyEntry): Int {
             if (sign < 0 && entry.rubKop >= 0) return 0
             if (sign > 0 && entry.rubKop <= 0) return 0
             if (owner.isNotEmpty() && owner != entry.owner) return 0
-            val hay = norm(entry.what)
-            return parts.filter { hay.contains(it) }.maxOfOrNull { it.length } ?: 0
+            if (source.isNotEmpty() && source != entry.source.key) return 0
+            if (mcc.isNotEmpty() && mcc != entry.mcc.trim().removeSuffix(".0")) return 0
+            if (amountKop > 0 && amountKop != kotlin.math.abs(entry.rubKop)) return 0
+            val name = if (parts.isEmpty()) {
+                if (mcc.isEmpty() && amountKop == 0L) return 0
+                1
+            } else {
+                val hay = norm(entry.what)
+                parts.filter { hay.contains(it) }.maxOfOrNull { it.length } ?: return 0
+            }
+            return name + (if (mcc.isNotEmpty()) 4 else 0) + (if (amountKop > 0) 50 else 0) +
+                (if (source.isNotEmpty()) 2 else 0)
         }
     }
 
@@ -155,6 +178,7 @@ object MoneyRules {
     //   − Пётр С. = Лето и лагеря · Серёжа        (только списания)
     //   + Сидор | Сидоров С. = Займы           (только поступления)
     //   Марианна: Муж М. = Между нами         (только на счетах Марианны)
+    //   Марианна: МКБ: MCC 6011, сумма 23000 = Помощь по дому   (MCC и сумма — без названия)
     //   # строка-комментарий
     //
     // Категорию можно назвать словами или ключом, «для кого» — именем.
@@ -176,26 +200,53 @@ object MoneyRules {
             var sign = 0
             if (left.startsWith("−") || left.startsWith("-")) { sign = -1; left = left.drop(1).trim() }
             else if (left.startsWith("+")) { sign = 1; left = left.drop(1).trim() }
+            // Приставки «Марианна:», «Саша:», «МКБ:», «Альфа:», «Тиньков:» — в любом порядке.
             var owner = ""
-            val colon = left.indexOf(':')
-            if (colon > 0) {
-                val o = MoneyCategories.findWho(left.substring(0, colon))
-                if (o == "sasha" || o == "marianna") { owner = o; left = left.substring(colon + 1).trim() }
+            var source = ""
+            while (true) {
+                val colon = left.indexOf(':')
+                if (colon <= 0) break
+                val head = left.substring(0, colon).trim()
+                val o = MoneyCategories.findWho(head)
+                val src = MoneyEntry.Source.entries.firstOrNull { it.title.equals(head, ignoreCase = true) || it.key == head.lowercase() }
+                when {
+                    (o == "sasha" || o == "marianna") && owner.isEmpty() -> owner = o
+                    src != null && source.isEmpty() -> source = src.key
+                    else -> break
+                }
+                left = left.substring(colon + 1).trim()
             }
+            var mcc = ""
+            MCC_TOKEN.find(left)?.let { mcc = it.groupValues[1]; left = left.replace(it.value, " ") }
+            var amount = 0L
+            AMOUNT_TOKEN.find(left)?.let { m ->
+                amount = MoneyFormat.parseKop(m.groupValues[1].replace(" ", ""))?.let { kotlin.math.abs(it) } ?: 0L
+                left = left.replace(m.value, " ")
+            }
+            left = left.trim().trim(',').trim()
             val cat = MoneyCategories.find(right.getOrNull(0).orEmpty())
-            if (left.isEmpty()) { errors.add("строка ${i + 1}: пустой шаблон"); continue }
+            if (left.isEmpty() && mcc.isEmpty() && amount == 0L) { errors.add("строка ${i + 1}: пустой шаблон"); continue }
             if (cat == null) { errors.add("строка ${i + 1}: не знаю категорию «${right.getOrNull(0).orEmpty()}»"); continue }
             val who = right.getOrNull(1)?.let { MoneyCategories.findWho(it) }.orEmpty()
-            rules.add(Rule(left, cat.key, who, sign, owner, comment))
+            rules.add(Rule(left, cat.key, who, sign, owner, comment, source, mcc, amount))
         }
         return ParseResult(rules, errors)
     }
 
+    private val MCC_TOKEN = Regex("(?i)\\bMCC\\s*(\\d{4})\\b")
+    private val AMOUNT_TOKEN = Regex("(?i)сумма\\s*([\\d][\\d\\s]*(?:[.,]\\d{1,2})?)")
+
     fun toText(rules: List<Rule>): String = rules.joinToString("\n") { r ->
         val sign = when (r.sign) { -1 -> "− "; 1 -> "+ "; else -> "" }
         val owner = if (r.owner.isNotEmpty()) MoneyCategories.whoTitle(r.owner) + ": " else ""
+        val source = if (r.source.isNotEmpty()) MoneyEntry.Source.of(r.source).title + ": " else ""
+        val filters = listOfNotNull(
+            r.pattern.takeIf { it.isNotBlank() },
+            r.mcc.takeIf { it.isNotEmpty() }?.let { "MCC $it" },
+            r.amountKop.takeIf { it > 0 }?.let { "сумма " + (it / 100) + (if (it % 100 == 0L) "" else "." + (it % 100).toString().padStart(2, '0')) },
+        ).joinToString(", ")
         val who = if (r.who.isNotEmpty()) " · " + MoneyCategories.whoTitle(r.who) else ""
         val comment = if (r.comment.isNotEmpty()) " # " + r.comment else ""
-        "$sign$owner${r.pattern} = ${MoneyCategories.title(r.category)}$who$comment"
+        "$sign$owner$source$filters = ${MoneyCategories.title(r.category)}$who$comment"
     }
 }

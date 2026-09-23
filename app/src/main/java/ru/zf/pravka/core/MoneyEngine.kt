@@ -34,7 +34,17 @@ class MoneyEngine(
     private val eventLog: EventLog,
     /** Чей это телефон: пока приложение одно — Саши. */
     private val owner: () -> String = { "sasha" },
+    /** Заводской справочник (`assets/money_payees.txt`): идёт ПОСЛЕ правил владельца. */
+    private val factory: () -> List<MoneyRules.Rule> = { emptyList() },
 ) {
+
+    /**
+     * Все правила: сначала владельца (вписанные и запомненные ответами), потом
+     * заводские. Из двух одинаково точных побеждает первое — то есть его.
+     */
+    fun allRules(): List<MoneyRules.Rule> = store.stateFlow.value.rules + factory()
+
+    fun factoryCount(): Int = factory().size
 
     private fun noon(day: LocalDate): Long =
         day.atTime(12, 0).atZone(BankStatements.MSK).toInstant().toEpochMilli()
@@ -52,7 +62,7 @@ class MoneyEngine(
         val parse = claude.parseMoney(
             transcript = prepared.text,
             dictBlock = prepared.dictBlock,
-            payeesBlock = MoneyRules.toText(state.rules),
+            payeesBlock = MoneyRules.toText(state.rules + factory()),
         ).getOrElse { e ->
             eventLog.add("деньги: разбор не вышел — ${e.message}")
             // Сырой наговор не теряется и без разбора: он в журнале тейков.
@@ -247,7 +257,7 @@ class MoneyEngine(
     suspend fun reconcile(): MoneyMatch.Result {
         var result: MoneyMatch.Result? = null
         withContext(Dispatchers.Default) {
-            store.transform { st -> MoneyMatch.run(st.entries, st.rules, System.currentTimeMillis()).also { result = it }.entries }
+            store.transform { st -> MoneyMatch.run(st.entries, st.rules + factory(), System.currentTimeMillis()).also { result = it }.entries }
         }
         return result ?: MoneyMatch.Result(store.stateFlow.value.entries, 0, 0, 0)
     }
@@ -308,7 +318,7 @@ class MoneyEngine(
                 e.mcc, e.bankCategory,
             ).joinToString(" | ")
         }
-        val hints = claude.hintPayees(block, MoneyRules.toText(s.rules)).getOrElse { return Result.failure(it) }
+        val hints = claude.hintPayees(block, MoneyRules.toText(s.rules + factory())).getOrElse { return Result.failure(it) }
         runCatching { stats.recordAux(hints.costUsd, hints.tokensIn, hints.tokensOut, route = ModelRoute.MONEY_MATCH.key) }
         val byKey = hints.groups.associateBy { it.key }
         val ids = top.flatMap { it.value }.map { it.id }

@@ -25,8 +25,8 @@ import ru.zf.pravka.core.MoneyRules
 //  - сырая надиктовка (`takes`) не удаляется никогда: модель могла ошибиться
 //    в сумме, и правда — в том, что сказано.
 //
-// Справочник получателей живёт здесь же, а не в коде: в нём имена людей, а
-// репозиторий публичный (см. `core/MoneyRules.kt`).
+// Здесь же — правила справочника с телефона (вписанные и запомненные
+// ответами); они перебивают заводские из `assets/money_payees.txt`.
 class MoneyStore(private val context: Context, private val log: (String) -> Unit = {}) {
 
     companion object {

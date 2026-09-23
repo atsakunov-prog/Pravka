@@ -72,8 +72,8 @@ import ru.zf.pravka.ui.PaperHint
 // недели и справочник получателей. Всё тяжёлое — в `MoneyEngine`, здесь
 // только показать и передать ответ.
 //
-// Справочник — текстом на экране, не в коде: репозиторий публичный, а в
-// справочнике имена людей (см. `core/MoneyRules.kt`).
+// Справочник — два слоя: заводской в assets и свои правила текстом на
+// экране; свои перебивают заводские (см. `core/MoneyRules.kt`).
 
 private val WEEK = 7L * 86_400_000L
 
@@ -442,7 +442,7 @@ private fun EntryDialog(app: PravkaApp, e: MoneyEntry, onDismiss: () -> Unit) {
 /**
  * Справочник получателей текстом. Одна строка — одно правило:
  * «Иван П. = Помощь по дому · дети», «− Пётр С. = Лето и лагеря · Серёжа»,
- * «Марианна: Сидор С. = Между нами». Живёт только на телефоне.
+ * «Марианна: Сидор С. = Между нами». Свои правила — поверх заводских.
  */
 @Composable
 private fun PayeesCard(app: PravkaApp) {
@@ -453,10 +453,10 @@ private fun PayeesCard(app: PravkaApp) {
     var draft by remember(state.rules) { mutableStateOf(app.moneyEngine.rulesText()) }
     var errors by remember { mutableStateOf(emptyList<String>()) }
     PaperCard(
-        label = "справочник получателей · " + state.rules.size,
+        label = "справочник получателей · " + state.rules.size + " свои + " + app.moneyEngine.factoryCount() + " с завода",
         trailing = { TextButton(onClick = { open = !open }) { Text(if (open) "Свернуть" else "Открыть") } },
     ) {
-        PaperHint("Кто есть кто в выписках. Хранится только на телефоне. Растёт сам от ответов на вопросы.")
+        PaperHint("Кто есть кто в выписках. Здесь — твои правила: они растут от ответов на вопросы и перебивают заводские (assets/money_payees.txt в репозитории).")
         if (!open) return@PaperCard
         Spacer(Modifier.height(6.dp))
         OutlinedTextField(

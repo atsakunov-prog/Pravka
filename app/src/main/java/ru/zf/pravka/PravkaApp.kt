@@ -223,8 +223,8 @@ class PravkaApp : Application() {
     }
 
     // Деньги: журнал трат и выписок (money.json) — незаменимые данные, как
-    // лента. Справочник получателей живёт там же, а не в коде: имена людей в
-    // публичный репозиторий не кладём.
+    // лента. Там же — правила справочника, которые владелец вписал или
+    // запомнил ответами; заводские — в assets (moneyFactoryRules ниже).
     val moneyStore by lazy { ru.zf.pravka.data.MoneyStore(this) { eventLog.add(it) } }
     val moneyExport by lazy { ru.zf.pravka.data.MoneyExport(this, moneyStore) }
     val cbrRates by lazy { ru.zf.pravka.data.CbrRates(httpClient) { eventLog.add(it) } }
@@ -237,7 +237,22 @@ class PravkaApp : Application() {
             rates = cbrRates,
             stats = stats,
             eventLog = eventLog,
+            factory = { moneyFactoryRules },
         )
+    }
+
+    /**
+     * Заводской справочник получателей (владелец, 23.09.2026: «сделай всё в
+     * публичном репозитории»). Читается один раз; не прочитался — пусто, и
+     * работают правила владельца и безличные.
+     */
+    val moneyFactoryRules: List<ru.zf.pravka.core.MoneyRules.Rule> by lazy {
+        runCatching {
+            assets.open("money_payees.txt").bufferedReader().use { it.readText() }
+                .let { ru.zf.pravka.core.MoneyRules.parseText(it) }
+                .also { r -> if (r.errors.isNotEmpty()) eventLog.add("деньги: заводской справочник — ${r.errors}") }
+                .rules
+        }.getOrElse { e -> eventLog.add("деньги: заводской справочник не прочитался — ${e.message}"); emptyList() }
     }
 
     // Спорт: кэш тренировочной жизни из intervals.icu и разбор своих

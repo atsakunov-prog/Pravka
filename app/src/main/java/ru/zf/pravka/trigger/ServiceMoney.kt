@@ -73,7 +73,7 @@ internal fun PravkaAccessibilityService.startMoneyCapture() {
  * людей и мест («Даблби») должны слышаться как есть, а не созвучием.
  */
 internal fun PravkaAccessibilityService.moneyBiasing(): List<String> = runCatching {
-    app.moneyStore.stateFlow.value.rules
+    app.moneyEngine.allRules()
         .flatMap { it.pattern.split('|') }
         .map { it.trim() }
         .filter { it.length in 3..30 && it.any { c -> c.isLetter() } }

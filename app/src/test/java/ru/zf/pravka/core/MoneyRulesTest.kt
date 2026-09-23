@@ -5,8 +5,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-// Раскладка по справочнику. Имена вымышленные: настоящий справочник владельца
-// живёт только на телефоне (репозиторий публичный).
+// Раскладка по справочнику — на вымышленных именах; настоящий заводской
+// справочник проверяет FactoryPayeesTest.
 class MoneyRulesTest {
 
     private fun e(what: String, rub: Long = -100_00, owner: String = "sasha", mcc: String = "", bank: String = "") =

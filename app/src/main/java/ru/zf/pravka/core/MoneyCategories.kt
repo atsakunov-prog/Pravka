@@ -49,6 +49,9 @@ object MoneyCategories {
         Category("groceries", "Продукты", G_HOME, Shelf.FAMILY),
         Category("utilities", "ЖКХ и связь", G_HOME, Shelf.FAMILY),
         Category("dacha", "Дача", G_HOME, Shelf.FAMILY),
+        // Быт — то, что няня снимает наличными на расходы по дому (владелец,
+        // 23.09.2026), и хозяйственное вообще: не продукты и не ремонт дачи.
+        Category("household", "Быт и хозяйство", G_HOME, Shelf.FAMILY),
 
         Category("therapy", "Терапия", G_HEALTH, Shelf.FAMILY),
         Category("health", "Медицина и аптеки", G_HEALTH, Shelf.FAMILY),
