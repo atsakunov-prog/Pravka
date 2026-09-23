@@ -1,7 +1,5 @@
 package ru.zf.pravka
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -61,7 +59,7 @@ internal fun LegendDot(color: Color) {
 /**
  * «Спросить Claude» — поле наверху вкладки (владелец, 23.09.2026: «достаточно
  * высоко должен быть текстбокс, где можно спросить у Клода что-то про
- * расходы»). Голосом — тем же распознавателем Google; ответ — по выжимке
+ * расходы»). Голосом — нашим движком, как у кнопок; ответ — по выжимке
  * журнала за год и строкам за 90 дней (`MoneyContext`).
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -79,15 +77,10 @@ internal fun AskCard(app: PravkaApp) {
         busy = true
         asked = text
         answer = ""
-        scope.launch {
+        app.appScope.launch {
             answer = app.moneyEngine.ask(text).getOrElse { e -> "Не вышло: ${e.message}" }
             busy = false
         }
-    }
-
-    val listen = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        val spoken = spokenText(r.data)
-        if (spoken.isNotBlank()) { question = spoken; send(spoken) }
     }
 
     PaperCard(label = "спросить Claude") {
@@ -98,8 +91,11 @@ internal fun AskCard(app: PravkaApp) {
             placeholder = { Text("Сколько я трачу на кафе в месяц?") },
             maxLines = 4,
         )
+        MoneyVoiceBar("ask")
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { runCatching { listen.launch(speechIntent("Спроси про деньги")) } }) { Text("🎙 Голосом") }
+            TextButton(onClick = {
+                startMoneyVoice(app, "ask", "спроси про деньги") { spoken -> question = spoken; send(spoken) }
+            }) { Text("🎙 Голосом") }
             Spacer(Modifier.weight(1f))
             if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             Button(enabled = !busy && question.isNotBlank(), onClick = { send(question) }) { Text("Спросить") }

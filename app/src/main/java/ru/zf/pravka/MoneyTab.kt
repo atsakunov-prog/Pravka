@@ -62,6 +62,7 @@ import ru.zf.pravka.core.MoneyFormat
 import ru.zf.pravka.core.MoneyMerchants
 import ru.zf.pravka.core.MoneyStats
 import ru.zf.pravka.trigger.PravkaAccessibilityService
+import ru.zf.pravka.trigger.onMoneyTap
 import ru.zf.pravka.trigger.showMoneyPlate
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PaperCard
@@ -130,6 +131,14 @@ internal fun MoneyTab(app: PravkaApp) {
     ) {
         // ---- Спросить Claude — наверху, как просил владелец ----
         AskCard(app)
+        // Траты голосом прямо отсюда — тот же тап, что по «₽»: плашка с суммами и «ОК».
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = {
+                val service = PravkaAccessibilityService.instance
+                if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+                else service.onMoneyTap()
+            }) { Text("🎙 Наговорить траты") }
+        }
 
         // ---- Период: неделя или месяц, «ушло» и «пришло» по краям ----
         PaperCard {
@@ -246,6 +255,10 @@ internal fun MoneyTab(app: PravkaApp) {
             val avgSpent = trend.dropLast(1).filter { it.spentKop > 0 }.map { it.spentKop }.average().takeIf { !it.isNaN() }
             if (avgSpent != null) PaperHint("средний месяц (без текущего): " + MoneyFormat.rub(avgSpent.toLong()))
         }
+
+        // ---- ДДС по месяцу и баланс (владелец, 23.09.2026) ----
+        CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), withZf)
+        BalanceCard(app, entries)
 
         // ---- Регулярные платежи ----
         if (recurring.isNotEmpty()) {

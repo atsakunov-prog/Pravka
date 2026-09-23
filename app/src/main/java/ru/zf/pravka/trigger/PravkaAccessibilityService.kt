@@ -176,6 +176,14 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var mTypeInstead = false
     /** Серая «отмена» у «₽»: ближайший итог тейка выбрасывается. */
     @Volatile internal var mDiscard = false
+    /**
+     * Наговор, заказанный вкладкой «Деньги» (ответ на карточку, вопрос
+     * Claude): текст уходит сюда, а не в разбор трат. Движок тот же, что у
+     * «₽», — не системный диалог Google (владелец, 23.09.2026: «надо
+     * использовать тот голосовой, что у нас есть»).
+     */
+    internal var mTabSink: ((String) -> Unit)? = null
+    internal var mTabPrompt: String = ""
     @Volatile internal var cachedMEnabled = true
     internal var micRequestForMoney = false
 

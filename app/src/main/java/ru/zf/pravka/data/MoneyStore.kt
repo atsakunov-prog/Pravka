@@ -85,6 +85,8 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         val insight: String = "",
         val insightTs: Long = 0L,
         val pushes: List<Push> = emptyList(),
+        /** Остатки, вписанные владельцем: якоря баланса (`MoneyCashflow.Anchor`). */
+        val balances: List<ru.zf.pravka.core.MoneyCashflow.Anchor> = emptyList(),
     )
 
     private val mutex = Mutex()
@@ -179,6 +181,12 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         val entries = if (entry != null && s.entries.none { it.id == entry.id }) s.entries + entry else s.entries
         write(s.copy(pushes = trimmed + push, entries = entries))
         true
+    }
+
+    /** Владелец вписал остаток счёта: новый якорь, прежние остаются историей. */
+    suspend fun addBalance(a: ru.zf.pravka.core.MoneyCashflow.Anchor) = mutex.withLock {
+        ensureLoaded()
+        write(_state.value.copy(balances = _state.value.balances + a))
     }
 
     suspend fun setInsight(text: String, ts: Long) = mutex.withLock {
@@ -280,7 +288,13 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
                 pushes.add(Push(it.optString("k"), it.optLong("ts"), it.optString("pkg"), it.optString("t"), it.optString("x"), it.optString("r")))
             }
         }
-        return State(entries, takes, rules, imports, o.optString("plati"), o.optString("insight"), o.optLong("insightTs"), pushes)
+        val balances = mutableListOf<ru.zf.pravka.core.MoneyCashflow.Anchor>()
+        o.optJSONArray("balances")?.let { a ->
+            for (i in 0 until a.length()) a.optJSONObject(i)?.let {
+                balances.add(ru.zf.pravka.core.MoneyCashflow.Anchor(it.optString("acc"), it.optLong("ts"), it.optLong("kop"), it.optString("src")))
+            }
+        }
+        return State(entries, takes, rules, imports, o.optString("plati"), o.optString("insight"), o.optLong("insightTs"), pushes, balances)
     }
 
     private fun entryOf(o: JSONObject) = MoneyEntry(
@@ -350,6 +364,11 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         })
         if (s.platiLog.isNotEmpty()) put("plati", s.platiLog)
         if (s.insight.isNotEmpty()) { put("insight", s.insight); put("insightTs", s.insightTs) }
+        put("balances", JSONArray().apply {
+            for (b in s.balances) put(JSONObject().apply {
+                put("acc", b.account); put("ts", b.ts); put("kop", b.kop); put("src", b.source)
+            })
+        })
         put("pushes", JSONArray().apply {
             for (p in s.pushes) put(JSONObject().apply {
                 put("k", p.key); put("ts", p.ts); put("pkg", p.pkg); put("t", p.title); put("x", p.text); put("r", p.result)

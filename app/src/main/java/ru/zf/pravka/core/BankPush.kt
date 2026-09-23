@@ -43,6 +43,8 @@ object BankPush {
         val card: String,
         val note: String,
         val kind: String,
+        /** «Доступно 13 630,02 ₽» — остаток счёта после операции: якорь баланса. */
+        val balanceKop: Long? = null,
     )
 
     /** Почему пуш не стал записью — для журнала событий и экрана «пойманные пуши». */
@@ -61,6 +63,7 @@ object BankPush {
     // Не «\b»: у Java он кириллицу буквами не считает.
     private val FROM = Regex("""(?<![А-ЯЁа-яё])от\s+([^,]+),""")
     // Старый вид: «Карта *8958. 14.00 RUB. … YANDEX*HELP»
+    private val AVAILABLE = Regex("""Доступно\s+(-?$N)\s*$RUB""")
     private val OLD = Regex("""Карта\s*\*(\d{4})\.\s*($N)\s*$RUB\.""")
 
     private val EXPENSE = listOf("покупка", "оплата", "перевод", "списание", "платеж", "платёж", "снятие", "выдача")
@@ -107,7 +110,8 @@ object BankPush {
                 if (holder.isNotBlank()) add("картой: $holder")
                 if (verb.contains("сбп")) add("СБП")
             }.joinToString(", ")
-            return Outcome.Money(Parsed(sign * amount, what, card, note, verb))
+            val available = AVAILABLE.find(body)?.let { kop(it.groupValues[1]) }
+            return Outcome.Money(Parsed(sign * amount, what, card, note, verb, available))
         }
 
         OLD.find(body)?.let { m ->

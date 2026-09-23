@@ -39,6 +39,8 @@ class MoneyEngine(
     private val owner: () -> String = { "sasha" },
     /** Заводской справочник (`assets/money_payees.txt`): идёт ПОСЛЕ правил владельца. */
     private val factory: () -> List<MoneyRules.Rule> = { emptyList() },
+    /** Заводские остатки счетов (`assets/money_balances.txt`): якоря баланса до первого пуша. */
+    private val factoryBalances: () -> List<MoneyCashflow.Anchor> = { emptyList() },
 ) {
 
     /**
@@ -298,6 +300,31 @@ class MoneyEngine(
                 if (fresh) result else "уже был"
             }
         }
+    }
+
+    // ---- Баланс ----
+
+    /**
+     * Все якоря остатков: заводской снимок, вписанные владельцем и «Доступно»
+     * из пушей Т-Банка. У каждого счёта берётся самый поздний.
+     */
+    fun anchors(): List<MoneyCashflow.Anchor> {
+        val s = store.stateFlow.value
+        val cards = MoneyCashflow.cardMap(s.entries)
+        val fromPushes = s.pushes.filter { it.result == MoneyStore.MONEY }.mapNotNull { p ->
+            val parsed = (BankPush.parse(p.title, p.text) as? BankPush.Outcome.Money)?.p ?: return@mapNotNull null
+            val bal = parsed.balanceKop ?: return@mapNotNull null
+            // Без карты («счет RUB») не знаем, какой это счёт, — не гадаем.
+            val account = cards[parsed.card] ?: return@mapNotNull null
+            MoneyCashflow.Anchor(account, p.ts, bal, "пуш «${p.title}»", covers = setOf("push-" + p.key))
+        }
+        return factoryBalances() + s.balances + fromPushes
+    }
+
+    /** Владелец вписал остаток счёта сейчас. */
+    suspend fun setBalance(account: String, kop: Long) {
+        store.addBalance(MoneyCashflow.Anchor(account, System.currentTimeMillis(), kop, "вписано"))
+        eventLog.add("деньги: остаток $account — ${MoneyFormat.rub(kop)}")
     }
 
     // ---- Сверка ----

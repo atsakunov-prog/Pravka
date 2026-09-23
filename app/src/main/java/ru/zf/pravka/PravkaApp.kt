@@ -238,6 +238,7 @@ class PravkaApp : Application() {
             stats = stats,
             eventLog = eventLog,
             factory = { moneyFactoryRules },
+            factoryBalances = { moneyFactoryBalances },
         )
     }
 
@@ -246,6 +247,13 @@ class PravkaApp : Application() {
      * публичном репозитории»). Читается один раз; не прочитался — пусто, и
      * работают правила владельца и безличные.
      */
+    /** Заводские остатки счетов — снимок владельца (`assets/money_balances.txt`). */
+    val moneyFactoryBalances: List<ru.zf.pravka.core.MoneyCashflow.Anchor> by lazy {
+        runCatching {
+            ru.zf.pravka.core.MoneyCashflow.parseAnchors(assets.open("money_balances.txt").bufferedReader().use { it.readText() })
+        }.getOrDefault(emptyList())
+    }
+
     val moneyFactoryRules: List<ru.zf.pravka.core.MoneyRules.Rule> by lazy {
         runCatching {
             assets.open("money_payees.txt").bufferedReader().use { it.readText() }

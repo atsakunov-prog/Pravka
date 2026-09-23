@@ -1,9 +1,5 @@
 package ru.zf.pravka
 
-import android.content.Intent
-import android.speech.RecognizerIntent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +17,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +38,10 @@ import ru.zf.pravka.core.MoneyEngine
 import ru.zf.pravka.core.MoneyEntry
 import ru.zf.pravka.core.MoneyFormat
 import ru.zf.pravka.core.MoneyMatch
+import ru.zf.pravka.trigger.MoneyTabVoice
+import ru.zf.pravka.trigger.PravkaAccessibilityService
+import ru.zf.pravka.trigger.finishMoneyTab
+import ru.zf.pravka.trigger.listenForMoneyTab
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
@@ -50,17 +51,46 @@ import ru.zf.pravka.ui.PaperHint
 // «Не знаю» (карточка остаётся, листаем дальше) и «Сказать»: наговорил, что
 // это, — Claude сам понял категорию и запомнил получателя. Карточки листаются
 // пальцем: смахнул — значит, пока не знаешь, она вернётся на своё место в
-// стопке. Голос — системный распознаватель Google, тот же движок, что у кнопок.
+// стопке.
+//
+// Голос — НАШ движок, тот же, что у «П», «З», «Д» и «₽» (служба,
+// `listenForMoneyTab`): со словарём, подсказками справочника, серой
+// «отменой» и выбором микрофона. Не системный диалог Google — первая версия
+// звала его, и владелец поймал это сразу (23.09.2026: «Ты что?!»).
 
-/** Интент распознавания речи по-русски: системный диалог Google. */
-internal fun speechIntent(prompt: String): Intent =
-    Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
-        .putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
+/**
+ * Попросить службу послушать для вкладки. [owner] — кто просит (карточка,
+ * поле вопроса): по нему [MoneyVoiceBar] понимает, что слушают для него.
+ */
+internal fun startMoneyVoice(app: PravkaApp, owner: String, prompt: String, onText: (String) -> Unit): Boolean {
+    val service = PravkaAccessibilityService.instance
+    if (service == null) {
+        Feedback.toast(app, app.getString(R.string.toast_no_service))
+        return false
+    }
+    return service.listenForMoneyTab(owner, prompt, onText)
+}
 
-internal fun spokenText(data: Intent?): String =
-    data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
+/**
+ * «Слушаю…» во вкладке: живой текст и две кнопки — «Готово» (текст уходит
+ * в разбор) и «Отмена». Видно и тогда, когда кнопки «₽» на экране нет.
+ */
+@Composable
+internal fun MoneyVoiceBar(owner: String) {
+    val live by MoneyTabVoice.live.collectAsState()
+    val mine = live?.takeIf { it.owner == owner } ?: return
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text(
+            "🎙 " + mine.text.ifBlank { "слушаю…" },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { PravkaAccessibilityService.instance?.finishMoneyTab(keep = true) }) { Text("Готово") }
+            OutlinedButton(onClick = { PravkaAccessibilityService.instance?.finishMoneyTab(keep = false) }) { Text("Отмена") }
+        }
+    }
+}
 
 @Composable
 internal fun QuestionCards(app: PravkaApp, questions: List<MoneyEngine.Question>) {
@@ -104,7 +134,8 @@ private fun QuestionCard(app: PravkaApp, q: MoneyEngine.Question, position: Stri
         if (spoken.isBlank()) return
         busy = true
         result = "«$spoken» — Claude разбирает…"
-        scope.launch {
+        // Не scope карточки: её могли смахнуть, пока говорили, а ответ терять нельзя.
+        app.appScope.launch {
             app.moneyEngine.answerByVoice(q, spoken)
                 .onSuccess { a ->
                     result = if (a.unsure) "Не понял, что это — скажи иначе или «Не знаю»."
@@ -116,10 +147,6 @@ private fun QuestionCard(app: PravkaApp, q: MoneyEngine.Question, position: Stri
                 .onFailure { e -> result = "Не вышло: ${e.message}" }
             busy = false
         }
-    }
-
-    val listen = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        submit(spokenText(r.data))
     }
 
     val first = q.entries.first()
@@ -205,14 +232,12 @@ private fun QuestionCard(app: PravkaApp, q: MoneyEngine.Question, position: Stri
                 TextButton(onClick = { typing = false }) { Text("Отмена") }
             }
         }
+        MoneyVoiceBar("card:" + q.key)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(enabled = !busy, onClick = onSkip) { Text("Не знаю") }
             Button(
                 enabled = !busy,
-                onClick = {
-                    runCatching { listen.launch(speechIntent("Что это: ${first.what}?")) }
-                        .onFailure { typing = true; Feedback.toast(context, "Распознавание недоступно — напиши текстом") }
-                },
+                onClick = { startMoneyVoice(app, "card:" + q.key, "что это: ${first.what}?") { submit(it) } },
             ) { Text(if (busy) "Разбираю…" else "🎙 Сказать") }
             TextButton(enabled = !busy, onClick = { typing = !typing }) { Text("текстом") }
         }

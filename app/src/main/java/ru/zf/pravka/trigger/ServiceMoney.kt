@@ -46,7 +46,56 @@ fun PravkaAccessibilityService.onMoneyTap() {
 }
 
 /** Приглашение говорить в бегущей строке «₽». */
-internal fun moneyTickerPrompt(): String = "🎙 наговори траты… (тап сюда — набрать текстом)"
+internal fun PravkaAccessibilityService.moneyTickerPrompt(): String =
+    if (mTabSink != null) "🎙 $mTabPrompt" else "🎙 наговори траты… (тап сюда — набрать текстом)"
+
+/**
+ * Наговор для вкладки «Деньги»: тот же движок и та же бегущая строка, что у
+ * «₽», но текст отдаётся [onText], а не в разбор трат. Ход записи вкладка
+ * видит через [MoneyTabVoice]. false — не стартовало (микрофон занят,
+ * нет разрешения), причина уже сказана тостом.
+ */
+fun PravkaAccessibilityService.listenForMoneyTab(owner: String, prompt: String, onText: (String) -> Unit): Boolean {
+    if (mSession != null || mWhisperRecording) {
+        Haptics.error(this)
+        Feedback.toast(this, getString(R.string.r_busy))
+        return false
+    }
+    if (googleSession != null || zSession != null || zWhisperRecording ||
+        rSession != null || rWhisperRecording || eSession != null || eWhisperRecording ||
+        DictationService.recording
+    ) {
+        Haptics.error(this)
+        Feedback.toast(this, getString(R.string.r_busy))
+        return false
+    }
+    if (!hasMicPermission()) {
+        requestMicPermission()
+        return false
+    }
+    mTabSink = onText
+    mTabPrompt = prompt
+    MoneyTabVoice.live.value = MoneyTabVoice.Live(owner, "")
+    startMoneyCapture()
+    // Движок недоступен — startMoneyGoogle сказал тостом; заявка снимается.
+    if (mSession == null && !mWhisperRecording) endMoneyTab()
+    return mSession != null || mWhisperRecording
+}
+
+/** Вкладка сама остановила запись: «Готово» — текст придёт, «Отмена» — нет. */
+fun PravkaAccessibilityService.finishMoneyTab(keep: Boolean) {
+    if (!keep) cancelMoneyTake() else if (mSession != null) stopMoneyLive() else if (mWhisperRecording && DictationService.recording) {
+        mButton?.setBusy(true)
+        stopDictation()
+    }
+}
+
+/** Заявка вкладки снята: запись кончилась так или иначе. */
+internal fun PravkaAccessibilityService.endMoneyTab() {
+    mTabSink = null
+    mTabPrompt = ""
+    MoneyTabVoice.live.value = null
+}
 
 internal fun PravkaAccessibilityService.startMoneyCapture() {
     mButton?.hideInput()
@@ -103,7 +152,10 @@ internal fun PravkaAccessibilityService.startMoneyGoogle() {
             mButton?.updateTicker(moneyTickerPrompt(), force = true)
             Haptics.success(this)
         },
-        onPartial = { live -> mButton?.updateTicker(live) },
+        onPartial = { live ->
+            mButton?.updateTicker(live)
+            MoneyTabVoice.live.value?.let { MoneyTabVoice.live.value = it.copy(text = live) }
+        },
         onCheckpoint = { },
         onDone = { text -> onMoneyLiveDone(text) },
         onError = { msg -> onMoneyLiveError(msg) },
@@ -157,7 +209,8 @@ internal fun PravkaAccessibilityService.onMoneyTickerTap() {
 }
 
 internal fun PravkaAccessibilityService.openMoneyTypeIn(prefill: String) {
-    mButton?.showInput(prefill = prefill, hint = "Траты текстом: «кофе 380, такси 700»") { typed ->
+    val hint = if (mTabSink != null) mTabPrompt else "Траты текстом: «кофе 380, такси 700»"
+    mButton?.showInput(prefill = prefill, hint = hint) { typed ->
         val text = typed.trim()
         if (text.isNotEmpty()) onMoneyText(text)
     }
@@ -173,21 +226,26 @@ internal fun PravkaAccessibilityService.onMoneyLiveDone(text: String) {
         mDiscard = false
         mTypeInstead = false
         mButton?.setBusy(false)
+        endMoneyTab()
         app.eventLog.add("деньги: наговор отменён (${text.length} зн.)")
         Feedback.toast(this, "Отменено")
         return
     }
-    if (mTypeInstead) {
+    // У заказа вкладки поле для текста — во вкладке: тап по строке просто
+    // заканчивает запись, и услышанное уходит туда.
+    if (mTypeInstead && mTabSink == null) {
         mTypeInstead = false
         mButton?.setBusy(false)
         openMoneyTypeIn(text.trim())
         return
     }
+    mTypeInstead = false
     onMoneyText(text)
 }
 
 internal fun PravkaAccessibilityService.onMoneyLiveError(msg: String) {
     mSession = null
+    endMoneyTab()
     mDiscard = false
     runCatching { stopMicHold() }
     mButton?.hideTicker()
@@ -209,11 +267,12 @@ internal fun PravkaAccessibilityService.onMoneyWhisperSaved(file: File?) {
         file?.let { app.recordings.delete(it.name) }
         mButton?.hideTicker()
         mButton?.setBusy(false)
+        endMoneyTab()
         app.eventLog.add("деньги: наговор отменён (whisper)")
         Feedback.toast(this, "Отменено")
         return
     }
-    if (mTypeInstead) {
+    if (mTypeInstead && mTabSink == null) {
         mTypeInstead = false
         file?.let { app.recordings.delete(it.name) }
         mButton?.hideTicker()
@@ -221,9 +280,11 @@ internal fun PravkaAccessibilityService.onMoneyWhisperSaved(file: File?) {
         openMoneyTypeIn("")
         return
     }
+    mTypeInstead = false
     mButton?.hideTicker()
     if (file == null) {
         mButton?.setBusy(false)
+        endMoneyTab()
         Haptics.error(this)
         Feedback.toast(this, getString(R.string.dictation_empty))
         return
@@ -237,6 +298,7 @@ internal fun PravkaAccessibilityService.onMoneyWhisperSaved(file: File?) {
             }
             .onFailure { e ->
                 mButton?.setBusy(false)
+                endMoneyTab()
                 // Аудио остаётся в «Записях», как у неудачной Правки.
                 Haptics.error(this@onMoneyWhisperSaved)
                 Feedback.toast(
@@ -250,6 +312,19 @@ internal fun PravkaAccessibilityService.onMoneyWhisperSaved(file: File?) {
 /** Текст наговора в руках: Опус разбирает, плашка показывает траты. */
 internal fun PravkaAccessibilityService.onMoneyText(raw: String) {
     val text = raw.trim()
+    // Заказ вкладки: текст — ей, в разбор трат он не идёт.
+    mTabSink?.let { sink ->
+        mButton?.setBusy(false)
+        endMoneyTab()
+        if (text.isBlank()) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.dictation_empty))
+        } else {
+            Haptics.success(this)
+            sink(text)
+        }
+        return
+    }
     if (text.isBlank()) {
         mButton?.setBusy(false)
         Haptics.error(this)
