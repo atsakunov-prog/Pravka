@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
@@ -33,6 +34,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.MoneyCashflow
+import ru.zf.pravka.core.MoneyCategories
 import ru.zf.pravka.core.MoneyEntry
 import ru.zf.pravka.core.MoneyFormat
 import ru.zf.pravka.core.MoneyScope
@@ -44,7 +46,84 @@ import ru.zf.pravka.ui.PaperHint
 // классический и баланс»). Считает `core/MoneyCashflow.kt`; здесь — только
 // таблица и карточка.
 
-private val COL = 62.dp
+private val COL = 78.dp
+
+/** Тонкая линия под строкой: «к каждой строке — аккуратная линия, иначе не видно, что к чему» (владелец). */
+@Composable
+internal fun RowLine() {
+    HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+}
+
+/** Что показать во всплывающем окне: цифра и операции, из которых она сложилась. */
+internal data class Breakdown(
+    val title: String,
+    val subtitle: String,
+    val items: List<MoneyCashflow.Item>,
+    val onEdit: (() -> Unit)? = null,
+)
+
+/**
+ * Окно «из чего это состоит» (владелец, 23.09.2026: «нажимаю на цифру —
+ * всплывает окно, и всё видно, из чего это состоит в конкретный месяц»):
+ * итог, дальше по категориям с подытогом, в каждой — операции с датой.
+ */
+@Composable
+internal fun BreakdownDialog(b: Breakdown, onDismiss: () -> Unit) {
+    val ru = Locale.forLanguageTag("ru")
+    val groups = remember(b) {
+        b.items.groupBy { MoneyCategories.title(it.entry.category) }
+            .map { (t, l) -> Triple(t, l.sumOf { it.kop }, l) }
+            .sortedByDescending { kotlin.math.abs(it.second) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(b.title, style = MaterialTheme.typography.titleMedium)
+                if (b.subtitle.isNotBlank()) PaperHint(b.subtitle)
+            }
+        },
+        text = {
+            androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max = 460.dp)) {
+                item {
+                    Row(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                        Text("Итого · ${b.items.size} опер.", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(MoneyFormat.k(b.items.sumOf { it.kop }, sign = true) + " " + MoneyFormat.K, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                    RowLine()
+                }
+                if (b.items.isEmpty()) item { PaperHint("Операций нет.") }
+                for ((title, sum, list) in groups) {
+                    item {
+                        Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp)) {
+                            Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                            Text(MoneyFormat.k(sum, sign = true), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                    items(list.size) { i ->
+                        val it = list[i]
+                        Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(SimpleDateFormat("d MMM", ru).format(Date(it.entry.ts)), style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(52.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(it.entry.what, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                val acc = it.entry.account.ifBlank { it.entry.source.title }
+                                if (acc.isNotBlank()) PaperHint(acc)
+                            }
+                            Text(
+                                MoneyFormat.k(it.kop, sign = true),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (it.kop < 0) spentColor() else incomeColor(),
+                            )
+                        }
+                        RowLine()
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
+        dismissButton = b.onEdit?.let { edit -> { TextButton(onClick = { onDismiss(); edit() }) { Text("Вписать остаток") } } },
+    )
+}
 
 /**
  * ДДС: три месяца столбцами (выбранный — последним и жирным), разделы
@@ -66,8 +145,14 @@ internal fun CashflowCard(app: PravkaApp, entries: List<MoneyEntry>, month: Year
         }
     }
     var open by remember { mutableStateOf(setOf<String>()) }
+    var shown by remember { mutableStateOf<Breakdown?>(null) }
     val ru = Locale.forLanguageTag("ru")
+    fun monthName(m: YearMonth) = java.time.format.DateTimeFormatter.ofPattern("LLLL yyyy", ru).format(m.atDay(1))
+    fun cell(r: MoneyCashflow.Row): (Int) -> Unit = { i ->
+        shown = Breakdown(r.title, monthName(months[i]), MoneyCashflow.cellItems(entries, months[i], ms, r))
+    }
 
+    shown?.let { BreakdownDialog(it) { shown = null } }
     PaperCard(label = "ДДС · движение денег · " + MoneyFormat.K) {
         Row(Modifier.fillMaxWidth()) {
             Spacer(Modifier.weight(1f))
@@ -98,14 +183,15 @@ internal fun CashflowCard(app: PravkaApp, entries: List<MoneyEntry>, month: Year
                     CashLine(
                         r.title + if (expanded) "  ▾" else "  ▸", r.values.map { it }, bold = true,
                         onClick = { open = if (expanded) open - r.title else open + r.title },
+                        onCell = cell(r),
                     )
                 }
                 MoneyCashflow.Kind.LINE -> if (group.isEmpty() || group in open) {
-                    CashLine(r.title, r.values.map { it }, bold = false, indent = group.isNotEmpty())
+                    CashLine(r.title, r.values.map { it }, bold = false, indent = group.isNotEmpty(), onCell = cell(r))
                 }
                 MoneyCashflow.Kind.TOTAL -> {
                     HorizontalDivider(Modifier.padding(vertical = 2.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                    CashLine(r.title, r.values.map { it }, bold = true, colored = r.key != "moves")
+                    CashLine(r.title, r.values.map { it }, bold = true, colored = r.key != "moves", onCell = cell(r))
                     group = ""
                 }
                 MoneyCashflow.Kind.NOTE -> PaperHint(r.title)
@@ -132,9 +218,10 @@ private fun CashLine(
     colored: Boolean = false,
     hint: Boolean = false,
     onClick: (() -> Unit)? = null,
+    onCell: ((Int) -> Unit)? = null,
 ) {
     val base = Modifier.fillMaxWidth().let { if (onClick != null) it.clickable(onClick = onClick) else it }
-    Row(base.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(base.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
             title,
             style = MaterialTheme.typography.bodySmall,
@@ -157,10 +244,12 @@ private fun CashLine(
                 fontWeight = if (bold || i == values.lastIndex) FontWeight.SemiBold else FontWeight.Normal,
                 color = color,
                 textAlign = TextAlign.End,
-                modifier = Modifier.width(COL),
+                // Тап по цифре — окно с операциями этой ячейки.
+                modifier = Modifier.width(COL).let { m -> if (onCell != null && v != null && v != 0L) m.clickable { onCell(i) } else m },
             )
         }
     }
+    RowLine()
 }
 
 /**
@@ -179,6 +268,15 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
     }
     val loans = remember(entries) { MoneyCashflow.loanDebt(entries, now) }
     var editing by remember { mutableStateOf<String?>(null) }
+    var shown by remember { mutableStateOf<Breakdown?>(null) }
+    fun open(a: MoneyCashflow.Account) {
+        val from = a.anchor?.ts?.plus(1) ?: (now - 90L * 86_400_000L)
+        val sub = a.anchor?.let {
+            "от остатка " + MoneyFormat.k(it.kop) + " на " + SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("ru")).format(Date(it.ts)) + " (" + it.source + ")"
+        } ?: "остаток неизвестен — движения за 90 дней"
+        shown = Breakdown(a.name, sub, MoneyCashflow.accountItems(entries, a.name, from, now + 1)) { editing = a.name }
+    }
+    shown?.let { BreakdownDialog(it) { shown = null } }
 
     // Долговой счёт — в обязательствах и с нулём: «Займ от ЗФ 0» в активах читался как деньги.
     val assets = accounts.filter { it.kop != null && it.kop >= 0 && !MoneyCashflow.isDebtAccount(it.name) }
@@ -190,11 +288,11 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
 
     PaperCard(label = "баланс · сейчас · " + (if (ms.both) "всё" else if (ms.zf) "ЗФ" else "личное") + " · " + MoneyFormat.K) {
         Text("Активы", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-        for (a in assets) AccountRow(a) { editing = a.name }
+        for (a in assets) AccountRow(a) { open(a) }
         TotalRow("Итого активы", assetSum, incomeColor())
         Spacer(Modifier.height(8.dp))
         Text("Обязательства", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-        for (a in debts) AccountRow(a) { editing = a.name }
+        for (a in debts) AccountRow(a) { open(a) }
         // Займы у людей — по каждому, кто давал: получено минус возвращено по журналу.
         for ((who, kop) in lenders.filter { it.second > 0 }) {
             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
@@ -211,7 +309,7 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
         if (unknown.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
             Text("Остаток неизвестен", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            for (a in unknown) AccountRow(a) { editing = a.name }
+            for (a in unknown) AccountRow(a) { open(a) }
             PaperHint("В выписках остатков нет — тапни счёт и впиши, сколько на нём сейчас; дальше посчитается по движениям.")
         }
     }
@@ -261,6 +359,7 @@ private fun AccountRow(a: MoneyCashflow.Account, onClick: () -> Unit) {
             color = if ((a.kop ?: 0) < 0) spentColor() else MaterialTheme.colorScheme.onSurface,
         )
     }
+    RowLine()
 }
 
 @Composable
@@ -287,6 +386,13 @@ internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: Mon
             .filter { ms.showsAccount(it.name) }
     }
     var open by remember { mutableStateOf(setOf<String>()) }
+    var shown by remember { mutableStateOf<Breakdown?>(null) }
+    val ru = Locale.forLanguageTag("ru")
+    val span = SimpleDateFormat("d MMM", ru).format(Date(period.from)) + " — " + SimpleDateFormat("d MMM", ru).format(Date(period.to - 1))
+    fun show(name: String, what: String, pred: (MoneyCashflow.Item) -> Boolean) {
+        shown = Breakdown("$name · $what", span, MoneyCashflow.accountItems(entries, name, period.from, period.to).filter(pred))
+    }
+    shown?.let { BreakdownDialog(it) { shown = null } }
     PaperCard(label = "счета · откуда и куда · " + MoneyFormat.K) {
         if (flows.isEmpty()) {
             PaperHint("За период движений нет.")
@@ -313,12 +419,20 @@ internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: Mon
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = if ((f.endKop ?: 0) < 0) spentColor() else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.clickable { show(f.name, "все движения") { true } },
                     )
                 }
                 Row {
                     PaperHint("было " + (f.startKop?.let { MoneyFormat.k(it) } ?: "?") + "   ")
-                    if (f.inKop != 0L) Text("+" + MoneyFormat.k(f.inKop) + "   ", style = MaterialTheme.typography.bodySmall, color = incomeColor())
-                    if (f.outKop != 0L) Text(MoneyFormat.k(f.outKop), style = MaterialTheme.typography.bodySmall, color = spentColor())
+                    // Тап по «пришло» или «ушло» — из чего это состоит за период.
+                    if (f.inKop != 0L) Text(
+                        "+" + MoneyFormat.k(f.inKop) + "   ", style = MaterialTheme.typography.bodySmall, color = incomeColor(),
+                        modifier = Modifier.clickable { show(f.name, "пришло") { it.kop > 0 } },
+                    )
+                    if (f.outKop != 0L) Text(
+                        MoneyFormat.k(f.outKop), style = MaterialTheme.typography.bodySmall, color = spentColor(),
+                        modifier = Modifier.clickable { show(f.name, "ушло") { it.kop < 0 } },
+                    )
                 }
                 if (expanded) {
                     // Чей счёт: отметка владельца решает, куда он встанет — в «Личное» или в «ЗФ».
@@ -329,7 +443,11 @@ internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: Mon
                         }
                     }
                     for ((cat, kop) in f.byCategory.take(12)) {
-                        Row(Modifier.fillMaxWidth().padding(start = 12.dp, top = 2.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable { show(f.name, cat) { MoneyCategories.title(it.entry.category) == cat } }
+                                .padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
+                        ) {
                             Text(cat, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
                                 MoneyFormat.k(kop, sign = true),
@@ -337,9 +455,11 @@ internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: Mon
                                 color = if (kop < 0) spentColor() else incomeColor(),
                             )
                         }
+                        RowLine()
                     }
                 }
             }
+            RowLine()
         }
         PaperHint("Остаток — от якоря (снимок, вписанное, «Доступно» из пуша); «?» — впиши в «балансе» тапом по счёту.")
     }

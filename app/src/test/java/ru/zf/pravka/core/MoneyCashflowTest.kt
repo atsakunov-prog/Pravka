@@ -263,4 +263,17 @@ class MoneyCashflowTest {
         val (add2, stale2) = MoneyCashflow.syncManual(v2, v2)
         assertTrue(add2.isEmpty() && stale2.isEmpty())
     }
+
+    @Test fun everyCellExplainsItself() {
+        val months = listOf(YearMonth.of(2026, 8), YearMonth.of(2026, 9))
+        val rows = MoneyCashflow.build(entries, months, withZf = true)
+        // Каждая цифра — сумма своих операций: окно «из чего состоит» сходится с таблицей до копейки.
+        for (r in rows.filter { it.pick != null }) {
+            months.forEachIndexed { i, m ->
+                assertEquals("${r.title} ${m}", r.values[i], MoneyCashflow.cellItems(entries, m, MoneyScope.BOTH, r).sumOf { it.kop })
+            }
+        }
+        val food = rows.first { it.title == "Продукты" }
+        assertEquals(listOf("food"), MoneyCashflow.cellItems(entries, YearMonth.of(2026, 9), MoneyScope.BOTH, food).map { it.entry.id })
+    }
 }

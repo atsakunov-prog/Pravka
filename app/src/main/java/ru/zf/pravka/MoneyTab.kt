@@ -200,6 +200,11 @@ internal fun MoneyTab(app: PravkaApp) {
             }
         }
 
+        // ---- ДДС и баланс — сразу под периодом (владелец, 23.09.2026: «кеш и баланс должны быть выше») ----
+        CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), ms)
+        BalanceCard(app, entries, ms)
+        AccountsCard(app, entries, period, ms)
+
         // ---- Плитки ----
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ru.zf.pravka.ui.KpiTile("в день", MoneyFormat.k(pace.perDayKop), Modifier.weight(1f), hint = "${MoneyFormat.K} · за ${pace.daysPassed} дн.")
@@ -271,10 +276,6 @@ internal fun MoneyTab(app: PravkaApp) {
             if (avgSpent != null) PaperHint("средний месяц (без текущего): " + MoneyFormat.k(avgSpent.toLong()) + " " + MoneyFormat.K)
         }
 
-        // ---- ДДС по месяцу и баланс (владелец, 23.09.2026) ----
-        CashflowCard(app, entries, java.time.YearMonth.from(period.firstDay.plusDays((period.days - 1).toLong())), ms)
-        AccountsCard(app, entries, period, ms)
-        BalanceCard(app, entries, ms)
 
         // ---- Регулярные платежи ----
         if (recurring.isNotEmpty()) {
