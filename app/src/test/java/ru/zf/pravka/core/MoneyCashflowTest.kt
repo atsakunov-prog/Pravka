@@ -89,4 +89,35 @@ class MoneyCashflowTest {
         val p = (BankPush.parse("ВкусВилл", "Покупка на 1 781,84 ₽, счет карты *1519\nДоступно 13 630,02 ₽") as BankPush.Outcome.Money).p
         assertEquals(1_363_002L, p.balanceKop)
     }
+
+    private fun asset(name: String) =
+        (java.io.File("src/main/assets/$name").takeIf { it.exists() } ?: java.io.File("app/src/main/assets/$name")).readText()
+
+    @Test fun ownerCashFactsAndWallet() {
+        val manual = MoneyCashflow.parseManual(asset("money_manual.txt"), "sasha")
+        assertEquals(3, manual.size)
+        assertEquals(listOf("inc_zf", "loan", "gifts"), manual.map { it.category })
+        assertTrue(manual.all { it.account == MoneyEntry.CASH && it.categoryBy == MoneyEntry.CategoryBy.OWNER })
+        // Номер постоянный: второе чтение даёт те же записи.
+        assertEquals(manual.map { it.id }, MoneyCashflow.parseManual(asset("money_manual.txt"), "sasha").map { it.id })
+
+        val deposit = e("dep", "2026-09-23", 480_000, "cash")
+        val all = manual + deposit
+        val rows = MoneyCashflow.build(all, listOf(YearMonth.of(2026, 9)), withZf = false)
+        assertEquals(388_000_000L, row(rows, "Поступления").values[0])
+        assertEquals(-20_000_000L, row(rows, "Займы возвращены").values[0])
+        // Кошелёк: +3 880 000 от ЗФ, −400 000 папе, −480 000 внесено в банк.
+        val wallet = MoneyCashflow.balances(all, emptyList(), at("2026-09-30"), at("2026-09-01")).first { it.name == MoneyCashflow.WALLET }
+        assertNull(wallet.kop)
+        assertEquals(300_000_000L, wallet.flowKop)
+    }
+
+    @Test fun papaTransfersAreLoan() {
+        val rules = MoneyRules.parseText(asset("money_payees.txt")).rules
+        val inPapa = MoneyEntry(id = "p", owner = "sasha", source = MoneyEntry.Source.TINKOFF, ts = at("2026-09-18"), rubKop = 10_000_000, what = "Сергей Ц.")
+        val outSummer = inPapa.copy(id = "f", rubKop = -6_500_000)
+        val r = MoneyMatch.run(listOf(inPapa, outSummer), rules, at("2026-09-24")).entries.associateBy { it.id }
+        assertEquals("loan", r["p"]!!.category)
+        assertEquals("summer", r["f"]!!.category)
+    }
 }
