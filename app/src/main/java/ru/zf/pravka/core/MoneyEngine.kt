@@ -11,7 +11,10 @@ import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.MoneyStore
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.provider.ClaudeProvider
+import ru.zf.pravka.provider.askMoney
 import ru.zf.pravka.provider.hintPayees
+import ru.zf.pravka.provider.interpretMoneyAnswer
+import ru.zf.pravka.provider.moneyPatterns
 import ru.zf.pravka.provider.parseMoney
 
 // Деньги: четвёртый движок рядом с Правкой, Засечкой и Разноской. Три дороги
@@ -334,6 +337,60 @@ class MoneyEngine(
         }
         eventLog.add("деньги: подсказки — групп ${top.size}, уверенных ${hints.groups.count { it.sure }}")
         return Result.success(hints.groups.size)
+    }
+
+    // ---- Спросить Claude и паттерны ----
+
+    private suspend fun context(): String {
+        val s = store.load()
+        return withContext(Dispatchers.Default) { MoneyContext.build(s.entries, today()) }
+    }
+
+    /** Вопрос владельца по его деньгам: ответ текстом, по выжимке журнала. */
+    suspend fun ask(question: String): Result<String> {
+        val data = context()
+        val r = claude.askMoney(question, data).getOrElse { return Result.failure(it) }
+        runCatching { stats.recordAux(r.costUsd, r.tokensIn, r.tokensOut, route = ModelRoute.MONEY_ASK.key) }
+        eventLog.add("деньги: вопрос ${question.length} зн. → ответ ${r.text.length} зн.")
+        return Result.success(r.text)
+    }
+
+    /** Паттерны за год — считаются по кнопке и лежат в журнале до следующего раза. */
+    suspend fun patterns(): Result<String> {
+        val data = context()
+        val r = claude.moneyPatterns(data).getOrElse { return Result.failure(it) }
+        runCatching { stats.recordAux(r.costUsd, r.tokensIn, r.tokensOut, route = ModelRoute.MONEY_PATTERNS.key) }
+        store.setInsight(r.text, System.currentTimeMillis())
+        return Result.success(r.text)
+    }
+
+    /**
+     * «Сказать» на карточке вопроса: владелец объясняет голосом, Claude
+     * превращает это в категорию и «для кого»; постоянный получатель
+     * запоминается правилом с комментарием его словами.
+     */
+    suspend fun answerByVoice(q: Question, spoken: String): Result<ClaudeProvider.MoneyAnswer> {
+        val a = claude.interpretMoneyAnswer(MoneyContext.card(q.entries), spoken, MoneyRules.toText(allRules()))
+            .getOrElse { return Result.failure(it) }
+        runCatching { stats.recordAux(a.costUsd, a.tokensIn, a.tokensOut, route = ModelRoute.MONEY.key) }
+        if (a.unsure || a.category.isBlank()) return Result.success(a)
+        store.update(q.entries.map { it.id }) {
+            it.copy(category = a.category, who = a.who, categoryBy = MoneyEntry.CategoryBy.OWNER, question = "")
+        }
+        val first = q.entries.first()
+        if (a.remember && first.fromBank) {
+            val sign = if (q.entries.all { it.rubKop < 0 }) -1 else if (q.entries.all { it.rubKop > 0 }) 1 else 0
+            store.addRule(
+                MoneyRules.Rule(
+                    pattern = first.what.trim(), category = a.category, who = a.who, sign = sign,
+                    // Получатель на счетах обоих — правило на оба; на одном — только на его.
+                    owner = q.entries.map { it.owner }.distinct().singleOrNull().orEmpty(), comment = a.comment,
+                )
+            )
+        }
+        eventLog.add("деньги: голосом ответ — ${first.what} → ${a.category}" + if (a.remember) ", запомнил" else "")
+        reconcile()
+        return Result.success(a)
     }
 
     // ---- Справочник ----

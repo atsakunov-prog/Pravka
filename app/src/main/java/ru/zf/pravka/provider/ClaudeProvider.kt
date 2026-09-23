@@ -502,6 +502,27 @@ $listing
         data class Hint(val key: String, val category: String, val who: String, val sure: Boolean, val question: String)
     }
 
+    /** Деньги: ответ текстом — на вопрос из вкладки или паттерны (`ClaudeMoney`). */
+    data class MoneyText(
+        val text: String,
+        val costUsd: Double,
+        val model: String,
+        val tokensIn: Int = 0,
+        val tokensOut: Int = 0,
+    )
+
+    /** Деньги: голосовой ответ владельца на карточку вопроса, разобранный в раскладку. */
+    data class MoneyAnswer(
+        val category: String,
+        val who: String,
+        val remember: Boolean,
+        val comment: String,
+        val unsure: Boolean,
+        val costUsd: Double,
+        val tokensIn: Int = 0,
+        val tokensOut: Int = 0,
+    )
+
     /** «суббота, 22 августа 2026 (2026-08-22)»: модели нужны оба вида. */
     internal fun todayContext(): String {
         val now = java.util.Date()

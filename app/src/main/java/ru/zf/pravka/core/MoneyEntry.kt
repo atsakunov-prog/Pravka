@@ -104,21 +104,35 @@ data class MoneyEntry(
     fun live(): Boolean = !draft && !dropped && !(source == Source.VOICE && matchId.isNotBlank())
 }
 
-/** Рубли для экрана: «1 781,84 ₽», «−380 ₽». Копейки — только если они есть. */
+/** Рубли для экрана: «1 782 ₽», «−380 ₽». */
 object MoneyFormat {
+    /**
+     * Без копеек (владелец, 23.09.2026: «убираем копейки»): на экране рубли,
+     * округлённые до целого. В журнале копейки остаются — сверка с банком
+     * идёт до копейки, округляется только показ.
+     */
     fun rub(kop: Long, sign: Boolean = false): String {
         val neg = kop < 0
-        val abs = kotlin.math.abs(kop)
-        val whole = abs / 100
-        val frac = abs % 100
+        val whole = (kotlin.math.abs(kop) + 50) / 100
         val grouped = whole.toString().reversed().chunked(3).joinToString("\u00A0").reversed()
-        val body = if (frac == 0L) grouped else grouped + "," + frac.toString().padStart(2, '0')
         val prefix = when {
-            neg -> "−"
-            sign && kop > 0 -> "+"
+            neg && whole > 0 -> "−"
+            sign && kop > 0 && whole > 0 -> "+"
             else -> ""
         }
-        return "$prefix$body\u00A0₽"
+        return "$prefix$grouped\u00A0₽"
+    }
+
+    /** Коротко для подписей графиков: «1,2 млн», «48 тыс», «900». */
+    fun short(kop: Long): String {
+        val r = kotlin.math.abs(kop) / 100.0
+        val s = when {
+            r >= 1_000_000 -> String.format(java.util.Locale("ru"), "%.1f млн", r / 1_000_000).replace(",0 ", " ")
+            r >= 10_000 -> "${(r / 1000).toLong()} тыс"
+            r >= 1_000 -> String.format(java.util.Locale("ru"), "%.1f тыс", r / 1000).replace(",0 ", " ")
+            else -> r.toLong().toString()
+        }
+        return if (kop < 0) "−$s" else s
     }
 
     /** Валюта для экрана: «24,25 €», «120,25 $». */

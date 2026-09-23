@@ -52,6 +52,12 @@ object Prompts {
 
     val MONEY_MATCH: String get() = ru.zf.pravka.core.prompts.PromptsMoney.MONEY_MATCH
 
+    val MONEY_ASK: String get() = ru.zf.pravka.core.prompts.PromptsMoney.MONEY_ASK
+
+    val MONEY_PATTERNS: String get() = ru.zf.pravka.core.prompts.PromptsMoney.MONEY_PATTERNS
+
+    val MONEY_ANSWER: String get() = ru.zf.pravka.core.prompts.PromptsMoney.MONEY_ANSWER
+
     // ---- Еда: сказанное -> КБЖУ. Работает на Сонете: это не суждение, а (…см. prompts/PromptsFood.kt)
     val FOOD: String get() = ru.zf.pravka.core.prompts.PromptsFood.FOOD
 

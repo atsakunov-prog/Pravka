@@ -11,7 +11,9 @@ import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.provider.ClaudeProvider.ApiException
 import ru.zf.pravka.provider.ClaudeProvider.MoneyHints
+import ru.zf.pravka.provider.ClaudeProvider.MoneyAnswer
 import ru.zf.pravka.provider.ClaudeProvider.MoneyParse
+import ru.zf.pravka.provider.ClaudeProvider.MoneyText
 
 // Деньги: наговор → траты и подсказки сверки. Расширения ClaudeProvider:
 // транспорт там, разбор здесь. Заводская модель — Опус 5.5 (голос — high,
@@ -149,3 +151,82 @@ suspend fun ClaudeProvider.hintPayees(
         )
     }
 }
+
+/** Текстовый ответ по выжимке журнала: вопрос владельца или паттерны. */
+private suspend fun ClaudeProvider.moneyText(
+    promptId: PromptStore.PromptId,
+    route: ModelRoute,
+    data: String,
+    input: String,
+): Result<MoneyText> = withContext(Dispatchers.IO) {
+    runCatchingApi {
+        val apiKey = settings.apiKey()
+        if (apiKey.isBlank()) throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+        val template = promptStore.effective(promptId)
+        // Выжимка журнала — в голове под кэшем: второй вопрос подряд её не оплачивает заново.
+        val parts = moneyParts(template, "{TODAY}", { s ->
+            s.replace("{CATEGORIES}", moneyCatalogBlock())
+                .replace("{DATA}", data)
+                .replace("{TODAY}", todayContext())
+        }, input)
+        val choice = settings.modelChoice(route)
+        val reply = requestWithOneRetry(
+            apiKey, choice.model, parts, "", null,
+            effortOverride = choice.effort,
+            routeKey = route.key,
+        )
+        MoneyText(
+            reply.text.trim(), costUsd(choice.model, reply), choice.model,
+            tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+            tokensOut = reply.outputTokens,
+        )
+    }
+}
+
+/** «Сколько я трачу на кофе?» — ответ по данным журнала. */
+suspend fun ClaudeProvider.askMoney(question: String, data: String): Result<MoneyText> {
+    if (question.isBlank()) return Result.failure(IllegalArgumentException("Пустой вопрос"))
+    return moneyText(PromptStore.PromptId.MONEY_ASK, ModelRoute.MONEY_ASK, data, question.trim())
+}
+
+/** Паттерны за год: структура, ритм, тренды, утечки, советы. */
+suspend fun ClaudeProvider.moneyPatterns(data: String): Result<MoneyText> =
+    moneyText(PromptStore.PromptId.MONEY_PATTERNS, ModelRoute.MONEY_PATTERNS, data, "")
+
+/**
+ * Голосовой ответ на карточку вопроса → категория, «для кого», запомнить ли.
+ * Дорога — `MONEY` (та же, что траты голосом): это тот же навык — понять
+ * сказанное владельцем про деньги.
+ */
+suspend fun ClaudeProvider.interpretMoneyAnswer(card: String, spoken: String, payeesBlock: String): Result<MoneyAnswer> =
+    withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+            require(spoken.isNotBlank()) { "Ответ пустой — скажи ещё раз." }
+            val template = promptStore.effective(PromptStore.PromptId.MONEY_ANSWER)
+            val parts = moneyParts(template, Prompts.PLACEHOLDER_INPUT, { s ->
+                s.replace("{CATEGORIES}", moneyCatalogBlock())
+                    .replace("{PAYEES}", payeesBlock.ifBlank { "— пока пусто" })
+            }, "КАРТОЧКА\n$card\nОТВЕТ ВЛАДЕЛЬЦА\n$spoken")
+            val choice = settings.modelChoice(ModelRoute.MONEY)
+            val reply = requestWithOneRetry(
+                apiKey, choice.model, parts, "", null,
+                effortOverride = choice.effort,
+                routeKey = ModelRoute.MONEY.key,
+            )
+            val o = jsonObjectOf(reply.text, "Модель ответила не JSON — скажи ещё раз.")
+            val cat = MoneyCategories.of(o.optString("category").trim())?.key
+                ?: MoneyCategories.find(o.optString("category"))?.key.orEmpty()
+            MoneyAnswer(
+                category = cat,
+                who = o.optString("who").trim().takeIf { w -> MoneyCategories.WHO.any { it.first == w } }.orEmpty(),
+                remember = o.optBoolean("remember", true),
+                comment = o.optString("comment").trim().take(60),
+                unsure = o.optBoolean("unsure", false) || cat.isEmpty(),
+                costUsd = costUsd(choice.model, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+            )
+        }
+    }

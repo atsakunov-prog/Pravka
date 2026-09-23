@@ -65,6 +65,9 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
          * чата. Кодов привязки и рекламы здесь нет по построению.
          */
         val platiLog: String = "",
+        /** Последние паттерны от Claude и когда они посчитаны: вкладка не платит за них при каждом открытии. */
+        val insight: String = "",
+        val insightTs: Long = 0L,
     )
 
     private val mutex = Mutex()
@@ -141,6 +144,11 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         }
         write(s.copy(entries = updated, imports = s.imports + info.copy(added = added)))
         added
+    }
+
+    suspend fun setInsight(text: String, ts: Long) = mutex.withLock {
+        ensureLoaded()
+        write(_state.value.copy(insight = text, insightTs = ts))
     }
 
     suspend fun setPlatiLog(text: String) = mutex.withLock {
@@ -231,7 +239,7 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
                 )
             }
         }
-        return State(entries, takes, rules, imports, o.optString("plati"))
+        return State(entries, takes, rules, imports, o.optString("plati"), o.optString("insight"), o.optLong("insightTs"))
     }
 
     private fun entryOf(o: JSONObject) = MoneyEntry(
@@ -298,6 +306,7 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
             })
         })
         if (s.platiLog.isNotEmpty()) put("plati", s.platiLog)
+        if (s.insight.isNotEmpty()) { put("insight", s.insight); put("insightTs", s.insightTs) }
         put("imports", JSONArray().apply {
             for (i in s.imports) put(JSONObject().apply {
                 put("ts", i.ts); put("kind", i.kind); put("owner", i.owner); put("rows", i.rows)

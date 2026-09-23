@@ -103,7 +103,9 @@ operationDate,transactionDate,accountName,accountNumber,cardName,cardNumber,merc
         assertNull(MoneyFormat.parseKop(""))
         assertNull(MoneyFormat.parseKop("abc"))
         assertNull(MoneyFormat.parseKop("1.234.5"))
-        assertEquals("1\u00A0781,84\u00A0₽", MoneyFormat.rub(178184))
+        assertEquals("1\u00A0782\u00A0₽", MoneyFormat.rub(178184))
+        assertEquals("1,2 млн", MoneyFormat.short(123_456_700))
+        assertEquals("48 тыс", MoneyFormat.short(4_812_300))
         assertEquals("−380\u00A0₽", MoneyFormat.rub(-38000))
     }
 }

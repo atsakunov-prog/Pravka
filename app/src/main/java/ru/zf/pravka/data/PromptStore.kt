@@ -32,6 +32,9 @@ class PromptStore(private val context: Context) {
         // Деньги: наговор -> траты и подсказки сверки выписок (Опус).
         MONEY("money"),
         MONEY_MATCH("money_match"),
+        MONEY_ASK("money_ask"),
+        MONEY_PATTERNS("money_patterns"),
+        MONEY_ANSWER("money_answer"),
         // Спорт: вопрос по своим тренировкам (Опус).
         COACH("coach"),
         // Тренер-консультант: короткий вопрос про упражнение (Сонет).
@@ -63,6 +66,9 @@ class PromptStore(private val context: Context) {
         PromptId.FOOD -> Prompts.FOOD
         PromptId.MONEY -> Prompts.MONEY
         PromptId.MONEY_MATCH -> Prompts.MONEY_MATCH
+        PromptId.MONEY_ASK -> Prompts.MONEY_ASK
+        PromptId.MONEY_PATTERNS -> Prompts.MONEY_PATTERNS
+        PromptId.MONEY_ANSWER -> Prompts.MONEY_ANSWER
         PromptId.COACH -> Prompts.COACH
         PromptId.TRAINER -> Prompts.TRAINER
         PromptId.BODY -> Prompts.BODY

@@ -122,6 +122,9 @@
     <string name="prompt_title_food">Еда (КБЖУ)</string>
     <string name="prompt_title_money">Деньги (траты голосом)</string>
     <string name="prompt_title_money_match">Деньги (подсказки сверки)</string>
+    <string name="prompt_title_money_ask">Деньги (вопрос Claude)</string>
+    <string name="prompt_title_money_patterns">Деньги (паттерны)</string>
+    <string name="prompt_title_money_answer">Деньги (голосовой ответ на вопрос)</string>
     <string name="prompt_title_coach">Спорт (разбор тренировок)</string>
     <string name="prompt_title_trainer">Тренер (вопрос про упражнение)</string>
     <string name="prompt_title_body">Тело (подходы, еда, зарядка)</string>
