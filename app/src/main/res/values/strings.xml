@@ -120,6 +120,8 @@
     <string name="prompt_title_meeting">Встреча (расшифровка)</string>
     <string name="prompt_title_tasks">Разноска (дела)</string>
     <string name="prompt_title_food">Еда (КБЖУ)</string>
+    <string name="prompt_title_money">Деньги (траты голосом)</string>
+    <string name="prompt_title_money_match">Деньги (подсказки сверки)</string>
     <string name="prompt_title_coach">Спорт (разбор тренировок)</string>
     <string name="prompt_title_trainer">Тренер (вопрос про упражнение)</string>
     <string name="prompt_title_body">Тело (подходы, еда, зарядка)</string>
@@ -182,9 +184,12 @@
     <string name="tab_more">Ещё</string>
     <string name="tab_sport">Спорт</string>
     <string name="tab_food">Еда</string>
+    <string name="tab_money">Деньги</string>
+    <string name="money_share_label">Деньги: выписка</string>
     <string name="tab_report">Общая статистика</string>
     <string name="tab_reviews">Разборы</string>
     <string name="e_busy">Микрофон занят другой записью — сначала заверши её</string>
+    <string name="m_busy_pravka">Идёт наговор трат — останови его кнопкой «₽»</string>
     <string name="e_busy_pravka">Идёт запись Тела — останови её кнопкой «Т»</string>
     <string name="e_parse_failed">Не разобрал — скажи ещё раз или набери текстом</string>
     <string name="action_label_tasks">Разноска</string>

@@ -29,6 +29,9 @@ class PromptStore(private val context: Context) {
         TASKS("tasks"),
         // Еда: сказанное -> КБЖУ (Сонет).
         FOOD("food"),
+        // Деньги: наговор -> траты и подсказки сверки выписок (Опус).
+        MONEY("money"),
+        MONEY_MATCH("money_match"),
         // Спорт: вопрос по своим тренировкам (Опус).
         COACH("coach"),
         // Тренер-консультант: короткий вопрос про упражнение (Сонет).
@@ -58,6 +61,8 @@ class PromptStore(private val context: Context) {
         PromptId.MEETING -> Prompts.MEETING
         PromptId.TASKS -> Prompts.TASKS
         PromptId.FOOD -> Prompts.FOOD
+        PromptId.MONEY -> Prompts.MONEY
+        PromptId.MONEY_MATCH -> Prompts.MONEY_MATCH
         PromptId.COACH -> Prompts.COACH
         PromptId.TRAINER -> Prompts.TRAINER
         PromptId.BODY -> Prompts.BODY

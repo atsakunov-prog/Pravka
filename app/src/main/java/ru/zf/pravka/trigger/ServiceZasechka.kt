@@ -93,6 +93,11 @@ fun PravkaAccessibilityService.onZasechkaTap(
         Feedback.toast(this, getString(R.string.e_busy_pravka))
         return
     }
+    if (mSession != null || mWhisperRecording) {
+        Haptics.error(this)
+        Feedback.toast(this, getString(R.string.m_busy_pravka))
+        return
+    }
     if (googleSession != null || DictationService.recording) {
         Haptics.error(this)
         Feedback.toast(this, getString(R.string.z_busy_zasechka))
@@ -127,7 +132,8 @@ fun PravkaAccessibilityService.onZasechkaTap(
 internal fun PravkaAccessibilityService.startZasechkaComment(entryId: Long) {
     touched()
     if (zSession != null || zWhisperRecording || rSession != null || rWhisperRecording ||
-        eSession != null || eWhisperRecording || googleSession != null || DictationService.recording
+        eSession != null || eWhisperRecording || mSession != null || mWhisperRecording ||
+        googleSession != null || DictationService.recording
     ) {
         Haptics.error(this)
         Feedback.toast(this, getString(R.string.z_busy_zasechka))
@@ -276,6 +282,7 @@ fun PravkaAccessibilityService.stopAnyLive() {
     when {
         zSession != null -> stopZasechkaLive()
         rSession != null -> stopRaznoskaLive()
+        mSession != null -> stopMoneyLive()
         else -> stopLiveDictation()
     }
 }
@@ -640,7 +647,7 @@ internal suspend fun PravkaAccessibilityService.checkInOnOpenEntry(
     prefs: android.content.SharedPreferences,
 ) {
     if (!cachedZCheckins || open.source == "gap") return
-    if (googleSession != null || zSession != null || DictationService.recording) return
+    if (googleSession != null || zSession != null || mSession != null || DictationService.recording) return
     if (runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)) return
     val baseMin = app.zasechkaStore.categories()
         .firstOrNull { it.name.equals(open.category, ignoreCase = true) }

@@ -222,6 +222,27 @@
             </intent-filter>
         </activity>
 
+        <!-- Деньги: «Поделиться» выпиской Тинькова/Альфы (CSV) или текстом чата
+             «Плати по миру». Своя подпись в листе «Поделиться», чтобы не путать
+             с Правкой; несколько файлов разом — недельный пакет. -->
+        <activity
+            android:name=".trigger.MoneyShareActivity"
+            android:label="@string/money_share_label"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="application/csv" />
+                <data android:mimeType="application/vnd.ms-excel" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".trigger.ProcessTextActivity"
             android:label="@string/action_label"

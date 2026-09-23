@@ -481,6 +481,27 @@ $listing
         val latencyMs: Long,
     )
 
+    /** Деньги: наговор, разобранный на траты (`ClaudeMoney.parseMoney`). */
+    data class MoneyParse(
+        val items: List<ru.zf.pravka.core.MoneyVoice.Item>,
+        val notes: String,
+        val costUsd: Double,
+        val model: String,
+        val tokensIn: Int = 0,
+        val tokensOut: Int = 0,
+    )
+
+    /** Деньги: догадки по неузнанным получателям выписки (`ClaudeMoney.hintPayees`). */
+    data class MoneyHints(
+        val groups: List<Hint>,
+        val costUsd: Double,
+        val model: String,
+        val tokensIn: Int = 0,
+        val tokensOut: Int = 0,
+    ) {
+        data class Hint(val key: String, val category: String, val who: String, val sure: Boolean, val question: String)
+    }
+
     /** «суббота, 22 августа 2026 (2026-08-22)»: модели нужны оба вида. */
     internal fun todayContext(): String {
         val now = java.util.Date()

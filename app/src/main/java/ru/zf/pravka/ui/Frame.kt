@@ -61,6 +61,7 @@ enum class ModeDecor(val glyphs: List<String>) {
     DELA(listOf("✓", "☐", "•", "→", "✓", "☐", "✓", "•")),
     SPORT(listOf("◎", "▲", "∞", "⚑", "≋", "◇", "◈", "⬡")),
     FOOD(listOf("○", "◌", "❋", "✿", "❀", "⊙", "◍", "✾")),
+    MONEY(listOf("₽", "¤", "€", "$", "₽", "%", "₽", "¢")),
     SERVICE(listOf("·", "◦", "·", "◦", "·", "◦", "·", "◦")),
 }
 

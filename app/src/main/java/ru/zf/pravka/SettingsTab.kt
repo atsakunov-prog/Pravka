@@ -78,6 +78,7 @@ internal enum class SettingsGroup(val title: String, val hint: String) {
     ZASECHKA("Засечка", "Кнопка, напоминания, категории, Google Sheets, intervals.icu"),
     DELA("Дела", "Токен Todoist"),
     BODY("Тело", "Notion и правила блока, цели по еде, отдых, глубина выгрузки"),
+    MONEY("Деньги", "Кнопка «₽»; модели и промпты — в своих группах"),
 }
 
 @Composable
@@ -150,6 +151,7 @@ private fun GroupContent(app: PravkaApp, group: SettingsGroup, serviceEnabled: B
         SettingsGroup.ZASECHKA -> ZasechkaSettings(app)
         SettingsGroup.DELA -> TodoistSettings(app)
         SettingsGroup.BODY -> BodySettings(app)
+        SettingsGroup.MONEY -> MoneySettings(app)
     }
 }
 

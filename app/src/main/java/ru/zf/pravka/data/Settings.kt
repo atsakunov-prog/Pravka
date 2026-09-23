@@ -92,6 +92,9 @@ class Settings(private val context: Context) {
         private val KEY_Z_CHECKINS = booleanPreferencesKey("z_checkins")
         // Разноска: третья кнопка «Д» (она про дела).
         private val KEY_R_ENABLED = booleanPreferencesKey("r_enabled")
+        // Деньги: кнопка «₽» и тумблер «+ ЗФ» во вкладке.
+        private val KEY_M_ENABLED = booleanPreferencesKey("m_enabled")
+        private val KEY_M_WITH_ZF = booleanPreferencesKey("m_with_zf")
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
         private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
@@ -709,6 +712,23 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_R_ENABLED] = value }
     }
 
+    // Деньги: кнопка «₽» на экране (23.09.2026). Включена с завода — владелец
+    // попросил её четвёртой на диске; выключается тумблером в настройках Денег.
+    val mEnabledFlow = context.dataStore.data.map { it[KEY_M_ENABLED] ?: true }
+    suspend fun setMEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_M_ENABLED] = value }
+    }
+
+    /**
+     * Итоги Денег с ЗФ или без: «расходы ЗФ… включая ZF или не включая ZF,
+     * потому что это мой доход основной» (владелец, 23.09.2026). С завода —
+     * без: вкладка сначала отвечает, сколько стоит семья.
+     */
+    val mWithZfFlow = context.dataStore.data.map { it[KEY_M_WITH_ZF] ?: false }
+    suspend fun setMWithZf(value: Boolean) {
+        context.dataStore.edit { it[KEY_M_WITH_ZF] = value }
+    }
+
     // ---- Notion: правила блока ----
 
     /**
@@ -1181,6 +1201,21 @@ class Settings(private val context: Context) {
         context.dataStore.edit {
             it[floatPreferencesKey("rfab_x_$screenKey")] = xFraction
             it[floatPreferencesKey("rfab_y_$screenKey")] = yFraction
+        }
+    }
+
+    // Деньги — в связке после «Д»: по умолчанию под ней.
+    suspend fun mFabPosition(screenKey: String): Pair<Float, Float> {
+        val prefs = context.dataStore.data.first()
+        val x = prefs[floatPreferencesKey("mfab_x_$screenKey")] ?: 0.92f
+        val y = prefs[floatPreferencesKey("mfab_y_$screenKey")] ?: 0.88f
+        return x to y
+    }
+
+    suspend fun setMFabPosition(screenKey: String, xFraction: Float, yFraction: Float) {
+        context.dataStore.edit {
+            it[floatPreferencesKey("mfab_x_$screenKey")] = xFraction
+            it[floatPreferencesKey("mfab_y_$screenKey")] = yFraction
         }
     }
 

@@ -222,6 +222,24 @@ class PravkaApp : Application() {
         )
     }
 
+    // Деньги: журнал трат и выписок (money.json) — незаменимые данные, как
+    // лента. Справочник получателей живёт там же, а не в коде: имена людей в
+    // публичный репозиторий не кладём.
+    val moneyStore by lazy { ru.zf.pravka.data.MoneyStore(this) { eventLog.add(it) } }
+    val moneyExport by lazy { ru.zf.pravka.data.MoneyExport(this, moneyStore) }
+    val cbrRates by lazy { ru.zf.pravka.data.CbrRates(httpClient) { eventLog.add(it) } }
+    val moneyEngine by lazy {
+        ru.zf.pravka.core.MoneyEngine(
+            claude = claudeProvider,
+            dictionary = DictionaryApplier(dictionaryStore),
+            dictionaryStore = dictionaryStore,
+            store = moneyStore,
+            rates = cbrRates,
+            stats = stats,
+            eventLog = eventLog,
+        )
+    }
+
     // Спорт: кэш тренировочной жизни из intervals.icu и разбор своих
     // тренировок. Сама выгрузка - вторая дорога к тому же API, отдельная от
     // IcuSweeper: тот пишет в ленту, а этот в кэш, который можно потерять.

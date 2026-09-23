@@ -116,6 +116,7 @@ class MainActivity : ComponentActivity() {
         const val TAB_TODOIST = "todoist"
         const val TAB_SPORT = "sport"
         const val TAB_FOOD = "food"
+        const val TAB_MONEY = "money"
         const val TAB_SETTINGS = "settings"
         const val TAB_PROMPTS = "prompts"
 
@@ -208,6 +209,7 @@ class MainActivity : ComponentActivity() {
             TAB_TODOIST -> Tab.TODOIST
             TAB_SPORT -> Tab.SPORT
             TAB_FOOD -> Tab.FOOD
+            TAB_MONEY -> Tab.MONEY
             else -> null
         }
 
@@ -284,6 +286,7 @@ internal enum class Tab(val titleRes: Int) {
     TODOIST(R.string.tab_todoist),
     SPORT(R.string.tab_sport),
     FOOD(R.string.tab_food),
+    MONEY(R.string.tab_money),
     MORE(R.string.tab_more),
     REPORT(R.string.tab_report),
     SETTINGS(R.string.tab_settings),
@@ -454,6 +457,7 @@ private fun groupIcon(group: SettingsGroup): Int? = when (group) {
     SettingsGroup.ZASECHKA -> R.drawable.ic_mode_zasechka
     SettingsGroup.DELA -> R.drawable.ic_mode_delo
     SettingsGroup.BODY -> R.drawable.ic_mode_sport
+    SettingsGroup.MONEY -> R.drawable.ic_mode_money
     else -> null
 }
 
@@ -565,7 +569,7 @@ private fun MainScreen(
                         Icon(painterResource(R.drawable.ic_mode_pravka), contentDescription = null)
                     },
                     colors = navColours,
-                    label = { Text(stringResource(Tab.PRAVKA.titleRes)) },
+                    label = { Text(stringResource(Tab.PRAVKA.titleRes), maxLines = 1, softWrap = false) },
                 )
                 NavigationBarItem(
                     selected = tab == Tab.ZASECHKA && page == null,
@@ -574,7 +578,7 @@ private fun MainScreen(
                         Icon(painterResource(R.drawable.ic_mode_zasechka), contentDescription = null)
                     },
                     colors = navColours,
-                    label = { Text(stringResource(Tab.ZASECHKA.titleRes)) },
+                    label = { Text(stringResource(Tab.ZASECHKA.titleRes), maxLines = 1, softWrap = false) },
                 )
                 NavigationBarItem(
                     selected = tab == Tab.TODOIST && page == null,
@@ -583,7 +587,7 @@ private fun MainScreen(
                         Icon(painterResource(R.drawable.ic_mode_delo), contentDescription = null)
                     },
                     colors = navColours,
-                    label = { Text(stringResource(Tab.TODOIST.titleRes)) },
+                    label = { Text(stringResource(Tab.TODOIST.titleRes), maxLines = 1, softWrap = false) },
                 )
                 NavigationBarItem(
                     selected = tab == Tab.SPORT && page == null,
@@ -592,7 +596,7 @@ private fun MainScreen(
                         Icon(painterResource(R.drawable.ic_mode_sport), contentDescription = null)
                     },
                     colors = navColours,
-                    label = { Text(stringResource(Tab.SPORT.titleRes)) },
+                    label = { Text(stringResource(Tab.SPORT.titleRes), maxLines = 1, softWrap = false) },
                 )
                 NavigationBarItem(
                     selected = tab == Tab.FOOD && page == null,
@@ -601,7 +605,19 @@ private fun MainScreen(
                         Icon(painterResource(R.drawable.ic_mode_food), contentDescription = null)
                     },
                     colors = navColours,
-                    label = { Text(stringResource(Tab.FOOD.titleRes)) },
+                    label = { Text(stringResource(Tab.FOOD.titleRes), maxLines = 1, softWrap = false) },
+                )
+                // Седьмая кнопка — Деньги (владелец, 23.09.2026: «вкладка внизу
+                // точно должна быть»). Договорённость «ровно шесть» этим
+                // пересмотрена — см. docs/agreements.md.
+                NavigationBarItem(
+                    selected = tab == Tab.MONEY && page == null,
+                    onClick = { tab = Tab.MONEY; page = null },
+                    icon = {
+                        Icon(painterResource(R.drawable.ic_mode_money), contentDescription = null)
+                    },
+                    colors = navColours,
+                    label = { Text(stringResource(Tab.MONEY.titleRes), maxLines = 1, softWrap = false) },
                 )
                 NavigationBarItem(
                     selected = tab == Tab.MORE || page != null,
@@ -610,7 +626,7 @@ private fun MainScreen(
                     onClick = { tab = Tab.MORE; page = null },
                     icon = { Icon(Icons.Filled.MoreVert, contentDescription = null) },
                     colors = navColours,
-                    label = { Text(stringResource(Tab.MORE.titleRes)) },
+                    label = { Text(stringResource(Tab.MORE.titleRes), maxLines = 1, softWrap = false) },
                 )
             }
         },
@@ -686,6 +702,7 @@ private fun MainScreen(
                         Tab.ZASECHKA -> ModeDecor.ZASECHKA
                         Tab.TODOIST -> ModeDecor.DELA
                         Tab.SPORT -> ModeDecor.SPORT
+                        Tab.MONEY -> ModeDecor.MONEY
                         else -> ModeDecor.FOOD
                     }
                     ModeFrame(decor) {
@@ -738,6 +755,18 @@ private fun MainScreen(
                                         },
                                     )
                                     SportTab(app)
+                                }
+                                Tab.MONEY -> {
+                                    TabHeader(
+                                        title = stringResource(R.string.tab_money),
+                                        icon = painterResource(R.drawable.ic_mode_money),
+                                        actions = {
+                                            StatsAction(openReport)
+                                            CostAction(openCost)
+                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.MONEY) }
+                                        },
+                                    )
+                                    MoneyTab(app)
                                 }
                                 else -> {
                                     TabHeader(
@@ -2060,6 +2089,8 @@ private val promptTitles = mapOf(
     PromptStore.PromptId.MEETING to R.string.prompt_title_meeting,
     PromptStore.PromptId.TASKS to R.string.prompt_title_tasks,
     PromptStore.PromptId.FOOD to R.string.prompt_title_food,
+    PromptStore.PromptId.MONEY to R.string.prompt_title_money,
+    PromptStore.PromptId.MONEY_MATCH to R.string.prompt_title_money_match,
     PromptStore.PromptId.COACH to R.string.prompt_title_coach,
     PromptStore.PromptId.TRAINER to R.string.prompt_title_trainer,
     PromptStore.PromptId.BODY to R.string.prompt_title_body,

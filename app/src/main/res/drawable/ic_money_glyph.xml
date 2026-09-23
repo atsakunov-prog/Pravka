@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Деньги: «₽» в том же брусковом языке, что «П», «З» и «Д» — та же
+     бумажная белизна, та же толщина планки 10, габарит близок к «П».
+     Стойка, прямоугольная чаша вверху справа и короткая перекладина
+     ниже чаши: на бегу читается рублём, а не «Р». -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+    <path
+        android:fillColor="#F7F3EA"
+        android:pathData="M34,22 h10 v56 h-10 z M34,22 h34 v10 h-34 z M62,22 h10 v34 h-10 z M34,46 h38 v10 h-38 z M24,63 h36 v9 h-36 z" />
+</vector>

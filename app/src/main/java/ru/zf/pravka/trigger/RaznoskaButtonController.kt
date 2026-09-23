@@ -33,12 +33,23 @@ import ru.zf.pravka.data.Settings
 // Собственное окно у кнопки только одно. Тикер, меню и плашка дел УХОДЯТ из
 // WindowManager, когда не нужны: скрытое оверлейное окно всё равно стоит
 // пересчёта при каждом складывании Fold (см. README, «больная тема»).
+//
+// Тот же класс водит и «₽» (Деньги, 23.09.2026): кнопка с плашкой-отметками и
+// «ОК» — ровно то, что нужно тратам, и правило «новая функция на стекле — не
+// пятая переписанная копия контроллера» (docs/agreements.md) велит не
+// копировать тысячу строк, а дать им другое лицо: цвет [ink], букву [glyphRes]
+// и своё место в настройках ([loadPosition] / [persistPosition]). По умолчанию —
+// ровно прежняя «Д».
 class RaznoskaButtonController(
     private val service: PravkaAccessibilityService,
     private val scope: CoroutineScope,
     private val settings: Settings,
     private val onShortTap: () -> Unit,
     private val onLongPress: () -> Unit,
+    private val ink: Int = INK,
+    private val glyphRes: () -> Int = { ModeGlyphs.raznoska() },
+    private val loadPosition: suspend (String) -> Pair<Float, Float> = { key -> settings.rFabPosition(key) },
+    private val persistPosition: suspend (String, Float, Float) -> Unit = { key, x, y -> settings.setRFabPosition(key, x, y) },
 ) : RingButton {
 
     companion object {
@@ -216,11 +227,11 @@ class RaznoskaButtonController(
                 b.alpha = 1f
             }
             busy -> {
-                background?.setColor(INK)
+                background?.setColor(ink)
                 b.alpha = 1f
             }
             else -> {
-                background?.setColor(INK)
+                background?.setColor(ink)
                 b.alpha = idleAlpha
             }
         }
@@ -237,7 +248,7 @@ class RaznoskaButtonController(
             return
         }
         scope.launch {
-            val (xFraction, yFraction) = settings.rFabPosition(positionKey())
+            val (xFraction, yFraction) = loadPosition(positionKey())
             applyPosition(p, xFraction, yFraction)
             button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
             repositionTickerIfVisible()
@@ -495,13 +506,13 @@ class RaznoskaButtonController(
         pill.background = BubbleSkin().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = buttonSize / 2f
-            setColor(INK)
+            setColor(ink)
         }
         pill.elevation = dp(4).toFloat()
         // Дети режутся по овалу плашки: фейды бегущей строки повторяют её форму.
         pill.clipToOutline = true
         pill.setOnClickListener { onTickerTap?.invoke() }
-        val tv = MarqueeTickerView(service, plateColor = INK, textColor = PAPER, textSizeSp = 16f)
+        val tv = MarqueeTickerView(service, plateColor = ink, textColor = PAPER, textSizeSp = 16f)
         tickerText = tv
         pill.addView(
             tv,
@@ -548,7 +559,7 @@ class RaznoskaButtonController(
 
     /** Перечитать глиф после переключения «иконки вместо букв». */
     fun refreshGlyph() {
-        glyph?.setImageResource(ModeGlyphs.raznoska())
+        glyph?.setImageResource(glyphRes())
     }
 
     class MenuItem(val label: String, val onClick: () -> Unit)
@@ -573,7 +584,7 @@ class RaznoskaButtonController(
                 textSize = 15f
                 background = BubbleSkin().apply {
                     cornerRadius = dp(18).toFloat()
-                    setColor(INK)
+                    setColor(ink)
                 }
                 alpha = 0.96f
                 setPadding(dp(16), dp(9), dp(16), dp(9))
@@ -659,7 +670,7 @@ class RaznoskaButtonController(
             background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
-                setColor(INK)
+                setColor(ink)
             }
             alpha = 0.96f
             elevation = dp(4).toFloat()
@@ -679,7 +690,7 @@ class RaznoskaButtonController(
         )
         // Кнопка «ОК» создаётся заранее: отметки меняют её счёт.
         val okButton = TextView(service).apply {
-            setTextColor(INK)
+            setTextColor(ink)
             textSize = 15f
             typeface = android.graphics.Typeface.create(
                 android.graphics.Typeface.SANS_SERIF,
@@ -854,7 +865,7 @@ class RaznoskaButtonController(
                 setStroke(dp(2), PAPER_DIM)
             }
         }
-        view.setTextColor(if (on) INK else 0x00FFFFFF)
+        view.setTextColor(if (on) ink else 0x00FFFFFF)
     }
 
     // Рядом с кнопкой, на той стороне, где есть место - то же правило, что у
@@ -886,7 +897,7 @@ class RaznoskaButtonController(
             background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
-                setColor(INK)
+                setColor(ink)
             }
             alpha = 0.96f
             elevation = dp(4).toFloat()
@@ -906,7 +917,7 @@ class RaznoskaButtonController(
             row.addView(
                 TextView(service).apply {
                     this.text = actionLabel
-                    setTextColor(INK)
+                    setTextColor(ink)
                     textSize = 14f
                     typeface = android.graphics.Typeface.create(
                         android.graphics.Typeface.SANS_SERIF,
@@ -957,7 +968,7 @@ class RaznoskaButtonController(
             background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
-                setColor(INK)
+                setColor(ink)
             }
             elevation = dp(4).toFloat()
             gravity = Gravity.CENTER_VERTICAL
@@ -1097,13 +1108,13 @@ class RaznoskaButtonController(
     private fun create() {
         val container = FrameLayout(service)
         // Не плоский кружок: выпуклая клавиша со светом сверху (`BubbleSkin`).
-        val bg = BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(INK) }
+        val bg = BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(ink) }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()
         container.alpha = idleAlpha
 
-        glyph = ImageView(service).apply { setImageResource(ModeGlyphs.raznoska()) }
+        glyph = ImageView(service).apply { setImageResource(glyphRes()) }
         container.addView(
             glyph,
             FrameLayout.LayoutParams(
@@ -1151,7 +1162,7 @@ class RaznoskaButtonController(
         container.visibility = if (enabled) View.VISIBLE else View.GONE
 
         scope.launch {
-            val (xFraction, yFraction) = settings.rFabPosition(positionKey())
+            val (xFraction, yFraction) = loadPosition(positionKey())
             if (!ringMode) {
                 applyPosition(p, xFraction, yFraction)
                 runCatching { windowManager.updateViewLayout(container, p) }
@@ -1306,6 +1317,6 @@ class RaznoskaButtonController(
         runCatching { windowManager.updateViewLayout(view, p) }
         val xFraction = p.x.toFloat() / (w - buttonSize).coerceAtLeast(1)
         val yFraction = p.y.toFloat() / (h - buttonSize).coerceAtLeast(1)
-        scope.launch { settings.setRFabPosition(positionKey(), xFraction, yFraction) }
+        scope.launch { persistPosition(positionKey(), xFraction, yFraction) }
     }
 }

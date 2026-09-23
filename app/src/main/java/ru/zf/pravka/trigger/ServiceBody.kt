@@ -131,7 +131,8 @@ fun PravkaAccessibilityService.onFoodTap() {
     }
     // Один микрофон на все четыре кнопки: чужую запись эта не перехватывает.
     if (googleSession != null || zSession != null || zWhisperRecording ||
-        rSession != null || rWhisperRecording || DictationService.recording
+        rSession != null || rWhisperRecording || mSession != null || mWhisperRecording ||
+        DictationService.recording
     ) {
         Haptics.error(this)
         Feedback.toast(this, getString(R.string.e_busy))

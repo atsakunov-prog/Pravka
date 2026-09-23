@@ -52,6 +52,13 @@ class PravkaAccessibilityService : AccessibilityService() {
          * зовёт говорить, и напоминает, что именно. Врало оно ровно так же —
          * висело с первого мига, когда движок ещё глух.
          */
+        /**
+         * Чернила «₽»: фиолетовые — пятый цвет рядом с оранжевым «П»,
+         * янтарным «З», синим «Д» и зелёным «Е». Красный был бы ближе к деньгам,
+         * но красным кнопка горит на записи — спутать нельзя.
+         */
+        val MONEY_INK = 0xFF5B4A8C.toInt()
+
         internal const val HINT_WAIT = "секунду…"
         internal const val HINT_SPEAK = "🎙 говори"
 
@@ -160,6 +167,18 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var cachedREnabled = true
     internal var micRequestForRaznoska = false
 
+    // Деньги: четвёртая кнопка на диске, «₽» (23.09.2026). Тот же контроллер,
+    // что у «Д» (`RaznoskaButtonController` со своим лицом): наговор уезжает
+    // Опусу на разбор трат, плашка с отметками и «ОК». Ни поля, ни ленты.
+    internal var mButton: RaznoskaButtonController? = null
+    internal var mSession: GoogleSpeechSession? = null
+    @Volatile internal var mWhisperRecording = false
+    @Volatile internal var mTypeInstead = false
+    /** Серая «отмена» у «₽»: ближайший итог тейка выбрасывается. */
+    @Volatile internal var mDiscard = false
+    @Volatile internal var cachedMEnabled = true
+    internal var micRequestForMoney = false
+
     // Тело: четвёртая кнопка и свой захват. Одна на подходы, еду, зарядку и
     // вопросы - намерение определяет модель тем же вызовом, что и разбор. Ни
     // поля, ни ленты этот путь не касается (в ленту еда только ПРИПИСЫВАЕТСЯ,
@@ -190,6 +209,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     private fun workColour(route: String): Int = when {
         route.startsWith("zasechka") -> ZasechkaButtonController.AMBER
         route.startsWith("raznoska") || route.startsWith("dela") -> RaznoskaButtonController.INK
+        route.startsWith("money") -> MONEY_INK
         route.startsWith("body") || route.startsWith("sport") ||
             route.startsWith("food") || route.startsWith("eda") -> BodyButtonController.INK
         else -> FloatingButtonController.ACCENT
@@ -303,6 +323,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 floatingButton?.repositionTickerIfVisible()
                 zButton?.repositionTickerIfVisible()
                 rButton?.repositionTickerIfVisible()
+                mButton?.repositionTickerIfVisible()
                 eButton?.repositionTickerIfVisible()
             }
         }
@@ -341,6 +362,20 @@ class PravkaAccessibilityService : AccessibilityService() {
             onLongPress = ::showRaznoskaMenu,
         )
         rButton?.onTickerTap = ::onRaznoskaTickerTap
+
+        // Деньги: четвёртая кнопка — контроллер «Д» со своим цветом, буквой и местом.
+        mButton = RaznoskaButtonController(
+            service = this,
+            scope = scope,
+            settings = app.settings,
+            onShortTap = ::onMoneyTap,
+            onLongPress = ::showMoneyMenu,
+            ink = MONEY_INK,
+            glyphRes = { ModeGlyphs.money() },
+            loadPosition = { key -> app.settings.mFabPosition(key) },
+            persistPosition = { key, x, y -> app.settings.setMFabPosition(key, x, y) },
+        )
+        mButton?.onTickerTap = ::onMoneyTickerTap
 
         // Еда: четвёртая кнопка того же семейства.
         eButton = BodyButtonController(
@@ -429,6 +464,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             floatingButton?.let { b -> d.add(b) { true } }
             zButton?.let { b -> d.add(b) { cachedZEnabled } }
             rButton?.let { b -> d.add(b) { cachedREnabled } }
+            mButton?.let { b -> d.add(b) { cachedMEnabled } }
             eButton?.let { b -> d.add(b) { cachedEEnabled } }
             chainButtons().forEach { b ->
                 b.onRingDrag = { rx, ry, lx, ly, action -> d.onRingDrag(b, rx, ry, lx, ly, action) }
@@ -480,6 +516,14 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch {
+            app.settings.mEnabledFlow.collect {
+                cachedMEnabled = it
+                mButton?.setEnabled(it)
+                if (allHidden) mButton?.setStacked(true)
+                refreshHandles()
+            }
+        }
+        scope.launch {
             app.settings.tEnabledFlow.collect {
                 cachedEEnabled = it
                 eButton?.setEnabled(it)
@@ -515,6 +559,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 floatingButton?.refreshGlyph()
                 zButton?.refreshGlyph()
                 rButton?.refreshGlyph()
+                mButton?.refreshGlyph()
                 eButton?.refreshGlyph()
             }
         }
@@ -659,6 +704,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     fun micBusy(): Boolean =
         googleSession != null || zSession != null || rSession != null || eSession != null ||
+            mSession != null || mWhisperRecording ||
             zWhisperRecording || rWhisperRecording || eWhisperRecording ||
             DictationService.recording
 
@@ -695,6 +741,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (eSession != null || eWhisperRecording) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.e_busy_pravka))
+            return
+        }
+        if (mSession != null || mWhisperRecording) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.m_busy_pravka))
             return
         }
         if (googleSession != null) { stopLiveDictation(); return }
@@ -743,6 +794,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         } else if (micRequestForRaznoska) {
             micRequestForRaznoska = false
             startRaznoskaCapture()
+        } else if (micRequestForMoney) {
+            micRequestForMoney = false
+            startMoneyCapture()
         } else if (micRequestForZasechka) {
             micRequestForZasechka = false
             startZasechkaCapture()
@@ -954,7 +1008,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 stopLiveDictation()
             }
             // Запись «П» через Whisper: чужие флаги не стоят, значит файл наш.
-            DictationService.recording && !zWhisperRecording && !rWhisperRecording && !eWhisperRecording -> {
+            DictationService.recording && !zWhisperRecording && !rWhisperRecording && !eWhisperRecording && !mWhisperRecording -> {
                 discardTake = true
                 app.eventLog.add("cancel requested (whisper)")
                 floatingButton?.setBusy(true)
@@ -1142,6 +1196,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                     )
                 }
             }
+            return
+        }
+        // Деньги на Whisper — тем же путём, со своим флагом.
+        if (mWhisperRecording) {
+            onMoneyWhisperSaved(file)
             return
         }
         // Еда на Whisper — тем же путём, со своим флагом.
@@ -2251,8 +2310,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         // не складываем никогда — кнопка, уехавшая под другую в тот момент,
         // когда её собираются нажать, это худший из возможных сюрпризов.
         val working = busy || googleSession != null || zSession != null ||
-            rSession != null || eSession != null || DictationService.recording ||
-            zWhisperRecording || rWhisperRecording || eWhisperRecording
+            rSession != null || eSession != null || mSession != null || DictationService.recording ||
+            zWhisperRecording || rWhisperRecording || eWhisperRecording || mWhisperRecording
         val quiet = !working && !screenLocked && now - lastTouchAt >= STACK_IDLE_MS
         if (cachedDiskMode) {
             // Диск: полминуты без касаний — к ближайшему краю и домой, свой
@@ -2351,6 +2410,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             rButton?.hideTicker()
             rButton?.hidePlate()
             rButton?.hideCancelBubble()
+            mButton?.hideTicker()
+            mButton?.hidePlate()
+            mButton?.hideCancelBubble()
             eButton?.hideTicker()
             eButton?.hidePlate()
             eButton?.hideCancelBubble()
@@ -2398,15 +2460,16 @@ class PravkaAccessibilityService : AccessibilityService() {
         refreshHandles()
     }
 
-    /** Все кнопки связки по порядку: П · З · Д · Е — включённые и нет. */
+    /** Все кнопки связки по порядку: П · З · Д · ₽ · Е — включённые и нет. */
     internal fun chainButtons(): List<RingButton> =
-        listOfNotNull(floatingButton, zButton, rButton, eButton)
+        listOfNotNull(floatingButton, zButton, rButton, mButton, eButton)
 
     /** Включённые кнопки связки по порядку — то, что реально стоит на экране. */
     internal fun chain(): List<RingButton> = listOfNotNull(
         floatingButton,
         zButton?.takeIf { cachedZEnabled },
         rButton?.takeIf { cachedREnabled },
+        mButton?.takeIf { cachedMEnabled },
         eButton?.takeIf { cachedEEnabled },
     )
 
@@ -2663,6 +2726,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         zButton?.hideInput()
         rButton?.hideInput()
         rButton?.hidePlate()
+        mButton?.hideInput()
+        mButton?.hidePlate()
         eButton?.hideInput()
         eButton?.hidePlate()
         // И обе серые ручки — с ними же. Это два лишних оверлейных окна, а
@@ -2751,6 +2816,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         zButton = null
         rButton?.destroy()
         rButton = null
+        mButton?.destroy()
+        mButton = null
         restHandler.removeCallbacks(restTick)
         eButton?.destroy()
         eButton = null
