@@ -62,7 +62,7 @@ object MoneyCashflow {
         return when {
             scope.both -> when {
                 // Пара «ЗФ заплатила — владелец получил» — внутри, исключается целиком.
-                (k == "inc_zf" || k == "zf_owner") && e.matchId.isNotBlank() -> emptyList()
+                (k == "inc_zf" || k == "zf_owner" || k == "zf_loan") && e.matchId.isNotBlank() -> emptyList()
                 // Выплата без пары: деньги ушли из ЗФ туда, чего в журнале нет.
                 k == "zf_owner" -> listOf(Part(e, "vgo:payout", v))
                 else -> listOf(Part(e, k, v))
@@ -129,11 +129,17 @@ object MoneyCashflow {
         // ---- Финансовый ----
         val got = sum { it.key == "loan" && it.kop > 0 }
         val paid = sum { it.key == "loan" && it.kop < 0 }
-        val fin = months.indices.map { i -> got[i] + paid[i] }
-        if (nonZero(got) || nonZero(paid)) {
+        // Займ ЗФ ↔ владелец: у владельца — получен и возвращён, у ЗФ — выдан и погашен.
+        val zfIn = sum { it.key == "zf_loan" && it.kop > 0 }
+        val zfOut = sum { it.key == "zf_loan" && it.kop < 0 }
+        val fin = months.indices.map { i -> got[i] + paid[i] + zfIn[i] + zfOut[i] }
+        if (nonZero(got) || nonZero(paid) || nonZero(zfIn) || nonZero(zfOut)) {
             rows += Row("Финансовая деятельность", Kind.SECTION, emptyList())
             if (nonZero(got)) rows += Row("Займы получены", Kind.LINE, got)
             if (nonZero(paid)) rows += Row("Займы возвращены", Kind.LINE, paid)
+            val zfView = !scope.personal
+            if (nonZero(zfIn)) rows += Row(if (zfView) "Займ владельцу погашен" else "Займ от ЗФ получен", Kind.LINE, zfIn, "zf_loan")
+            if (nonZero(zfOut)) rows += Row(if (zfView) "Займ владельцу выдан" else "Займ ЗФ возвращён", Kind.LINE, zfOut, "zf_loan")
             rows += Row("Финансовый поток", Kind.TOTAL, fin)
         }
 
@@ -189,6 +195,8 @@ object MoneyCashflow {
         MoneyEntry.Source.ALFA -> "Альфа · " + stripCard(e.account).ifBlank { "счёт" }
         MoneyEntry.Source.MKB -> "МКБ"
         MoneyEntry.Source.TBIZ -> TBIZ_NAME
+        // Записи со слов владельца на именованный счёт (касса ЗФ) — этот счёт.
+        MoneyEntry.Source.MANUAL -> e.account.takeIf { it.isNotBlank() && it != MoneyEntry.CASH && it != NATASHA_DEBT }
         else -> null // голос и наличные — не счёт банка; «Плати по миру» — в валюте, отдельно
     }
 
@@ -277,6 +285,10 @@ object MoneyCashflow {
      * [recentFrom]…[at] или есть якорь; движение по счёту — любые записи
      * (и «не трата» тоже: перевод жене уменьшает остаток так же, как кофе).
      */
+    /** Займ ЗФ владельцу: у Саши — долг, у ЗФ — требование; вместе — ноль. */
+    const val LOAN_DEBT = "Займ от ЗФ (долг)"
+    const val LOAN_ASSET = "Займ владельцу (у ЗФ)"
+
     /** Долг Наташе — её доля из выплат ЗФ: переводы «Доля Наташи» его гасят. */
     const val NATASHA_DEBT = "Долг Наташе (доля ЗФ)"
 
@@ -295,9 +307,16 @@ object MoneyCashflow {
         val share = usable.filter { it.category == "zf_share" && !(it.source == MoneyEntry.Source.VOICE && it.matchId.isNotBlank()) }
             .map { it.copy(id = it.id + "~долг", rubKop = -it.rubKop) } +
             usable.filter { it.account == NATASHA_DEBT }
+        // Займ — со стороны ЗФ (там он весь): выдала 200 000 — у Саши долг −200 000, у ЗФ требование +200 000.
+        val loan = usable.filter { it.category == "zf_loan" && MoneyMatch.zfSide(it) }
+        // Записи со слов владельца на именованный счёт (касса ЗФ) уже в `bank`: их счёт даёт `accountOf`.
         return bank +
             (if (wallet.isNotEmpty()) mapOf(WALLET to wallet) else emptyMap()) +
-            (if (share.isNotEmpty()) mapOf(NATASHA_DEBT to share) else emptyMap())
+            (if (share.isNotEmpty()) mapOf(NATASHA_DEBT to share) else emptyMap()) +
+            (if (loan.isNotEmpty()) mapOf(
+                LOAN_DEBT to loan.map { it.copy(id = it.id + "~долг") },
+                LOAN_ASSET to loan.map { it.copy(id = it.id + "~требование", rubKop = -it.rubKop) },
+            ) else emptyMap())
     }
 
     /** Остаток счёта на [at] от якоря [anchor] по его движениям [list]; null — якоря нет. */

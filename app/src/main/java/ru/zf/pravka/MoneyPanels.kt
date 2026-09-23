@@ -126,7 +126,7 @@ internal fun AskCard(app: PravkaApp) {
 @Composable
 internal fun CategoriesCard(cats: List<MoneyStats.Category>, spentKop: Long) {
     var open by remember { mutableStateOf(setOf<String>()) }
-    PaperCard(label = "куда ушло") {
+    PaperCard(label = "куда ушло · " + MoneyFormat.K) {
         if (cats.isEmpty()) {
             PaperHint("За этот период трат нет.")
             return@PaperCard
@@ -139,14 +139,14 @@ internal fun CategoriesCard(cats: List<MoneyStats.Category>, spentKop: Long) {
                 thickness = 18.dp,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(MoneyFormat.short(spentKop), style = MaterialTheme.typography.titleMedium)
-                    PaperHint("₽")
+                    Text(MoneyFormat.k(spentKop), style = MaterialTheme.typography.titleMedium)
+                    PaperHint(MoneyFormat.K)
                 }
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 for ((g, kop) in groups) {
-                    LegendRow(groupColor(g), g, MoneyFormat.short(kop), sub = pct(kop, spentKop))
+                    LegendRow(groupColor(g), g, MoneyFormat.k(kop), sub = pct(kop, spentKop))
                 }
             }
         }
@@ -174,7 +174,7 @@ internal fun CategoriesCard(cats: List<MoneyStats.Category>, spentKop: Long) {
                         Text(text, style = MaterialTheme.typography.labelSmall, color = if (up) spentColor() else incomeColor())
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text(MoneyFormat.rub(c.kop), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    Text(MoneyFormat.k(c.kop), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                 }
                 Spacer(Modifier.height(3.dp))
                 ShareBar(c.kop.toFloat() / peak, moneyCategoryColor(c.key), Modifier.padding(start = 17.dp))
@@ -184,7 +184,7 @@ internal fun CategoriesCard(cats: List<MoneyStats.Category>, spentKop: Long) {
                         Row(Modifier.fillMaxWidth().padding(start = 17.dp, top = 2.dp)) {
                             Text(m.name, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                             PaperHint(if (m.count > 1) "${m.count}× " else "")
-                            Text(MoneyFormat.rub(m.kop), style = MaterialTheme.typography.bodySmall)
+                            Text(MoneyFormat.k(m.kop), style = MaterialTheme.typography.bodySmall)
                         }
                     }
                     if (c.merchants.size > 12) PaperHint("   и ещё ${c.merchants.size - 12}")

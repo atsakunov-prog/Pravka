@@ -99,6 +99,9 @@ object MoneyCategories {
         // из выплаты ЗФ): в ДДС и итогах его нет, в балансе он растит долг.
         Category("owed", "Долг: начислено", G_SERVICE, Shelf.SERVICE),
         Category("zf_owner", "ЗФ: выплата владельцу", G_SERVICE, Shelf.SERVICE),
+        // Займ ЗФ владельцу — настоящий займ (владелец, 23.09.2026: «займы это
+        // реально займы мне»): у Саши долг, у ЗФ требование, вместе — ноль.
+        Category("zf_loan", "Займ ЗФ ↔ владелец", G_SERVICE, Shelf.SERVICE),
     )
 
     private val byKey = ALL.associateBy { it.key }

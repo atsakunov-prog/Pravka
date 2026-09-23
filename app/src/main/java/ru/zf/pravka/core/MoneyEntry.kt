@@ -136,6 +136,33 @@ object MoneyFormat {
         return "$prefix$grouped\u00A0₽"
     }
 
+    /**
+     * Одна размерность на всю вкладку — тысячи рублей (владелец, 23.09.2026:
+     * «где-то 000, где-то тыс. руб., где-то млн. Пускай везде будет 000
+     * руб»). Число без единицы: «’000 руб» подписано один раз на карточке.
+     * От 10 тысяч — целые тысячи («1 782», «48»), меньше — с десятой
+     * («4,5», «0,4»): иначе кофе и такси превращались бы в нули.
+     */
+    const val K = "’000 руб"
+
+    fun k(kop: Long, sign: Boolean = false): String {
+        val rub = kotlin.math.abs(kop) / 100.0
+        val th = rub / 1000
+        val body = if (rub >= 10_000) {
+            Math.round(th).toString().reversed().chunked(3).joinToString("\u00A0").reversed()
+        } else {
+            String.format(java.util.Locale("ru"), "%.1f", th)
+        }
+        val zero = body.trim('0', ',', '.').isEmpty()
+        val prefix = when {
+            zero -> ""
+            kop < 0 -> "−"
+            sign && kop > 0 -> "+"
+            else -> ""
+        }
+        return prefix + body
+    }
+
     /** Коротко для подписей графиков: «1,2 млн», «48 тыс», «900». */
     fun short(kop: Long): String {
         val r = kotlin.math.abs(kop) / 100.0

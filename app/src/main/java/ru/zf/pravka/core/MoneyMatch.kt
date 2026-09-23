@@ -154,20 +154,42 @@ object MoneyMatch {
      * исключается с двух сторон; непарная остаётся — деньги ушли туда, чего
      * в журнале нет (или пришли наличными).
      */
+    /** Касса ЗФ — наличные самой ЗФ (оплата клиента наличными), счёт записей со слов владельца. */
+    const val ZF_CASH = "Касса ЗФ"
+
+    /**
+     * Сторона ЗФ: счёт в Т-Бизнесе, касса ЗФ или сама «выплата владельцу» —
+     * её ставят только на счёте ЗФ (он бывает и «Счётом для бизнеса» в Т-Банке).
+     */
+    fun zfSide(e: MoneyEntry) = e.source == MoneyEntry.Source.TBIZ || e.account == ZF_CASH || e.category == "zf_owner"
+
+    private val ZF_KINDS = setOf("zf_owner", "zf_loan")
+
     fun linkZf(entries: List<MoneyEntry>): List<MoneyEntry> {
-        // Сторона ЗФ — по категории, не по банку: счёт ЗФ бывает и в Т-Бизнесе, и «Счётом для бизнеса» в Т-Банке.
-        val zf = entries.filter { it.fromBank && it.category == "zf_owner" && !it.dropped && it.replacedBy.isEmpty() && it.matchId.isBlank() }
+        val zf = entries.filter { zfSide(it) && it.category in ZF_KINDS && !it.dropped && !it.draft && it.replacedBy.isEmpty() }
         if (zf.isEmpty()) return entries
         val byId = entries.associateBy { it.id }.toMutableMap()
+        // Займ — займ с обеих сторон: приход «от ЗФ» на личном счёте, парный займу,
+        // — не доход, а долг. Справочник на каждом проходе ставит «Доход от ЗФ»
+        // заново, поэтому категорию пары восстанавливаем и у старых пар.
+        fun mark(z: MoneyEntry, p: MoneyEntry): MoneyEntry =
+            if (z.category == "zf_loan" && p.categoryBy != MoneyEntry.CategoryBy.OWNER) p.copy(category = "zf_loan", categoryBy = MoneyEntry.CategoryBy.RULE, question = "") else p
+        for (z in zf.filter { it.matchId.isNotBlank() }) {
+            val p = byId[z.matchId] ?: continue
+            byId[p.id] = mark(z, p)
+        }
         val mine = entries.filter {
-            it.fromBank && it.category == "inc_zf" && !it.dropped &&
-                it.replacedBy.isEmpty() && it.matchId.isBlank()
+            !zfSide(it) && !it.dropped && !it.draft && it.replacedBy.isEmpty() && it.matchId.isBlank() &&
+                (it.category in setOf("inc_zf", "zf_loan", "zf") || it.category.isBlank())
         }.toMutableList()
-        for (z in zf.sortedBy { it.ts }) {
-            val pair = mine.filter { it.rubKop == -z.rubKop && abs(it.ts - z.ts) <= 3 * DAY }.minByOrNull { abs(it.ts - z.ts) } ?: continue
+        for (z in zf.filter { it.matchId.isBlank() }.sortedBy { it.ts }) {
+            val pair = mine.filter { it.rubKop == -z.rubKop && abs(it.ts - z.ts) <= 3 * DAY }
+                // Выплате владельцу пара — только «Доход от ЗФ»; займу — и возврат с личного счёта.
+                .filter { z.category == "zf_loan" || it.category == "inc_zf" }
+                .minByOrNull { abs(it.ts - z.ts) } ?: continue
             mine.remove(pair)
             byId[z.id] = z.copy(matchId = pair.id)
-            byId[pair.id] = pair.copy(matchId = z.id)
+            byId[pair.id] = mark(z, pair).copy(matchId = z.id)
         }
         return entries.map { byId[it.id] ?: it }
     }

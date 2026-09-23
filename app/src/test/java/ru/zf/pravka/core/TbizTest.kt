@@ -42,12 +42,12 @@ class TbizTest {
             (java.io.File("src/main/assets/money_payees.txt").takeIf { it.exists() } ?: java.io.File("app/src/main/assets/money_payees.txt")).readText()
         ).also { assertTrue(it.errors.toString(), it.errors.isEmpty()) }.rules
         val cats = MoneyMatch.run(BankStatements.tbiz(csv).entries, rules, System.currentTimeMillis()).entries.map { it.category }
-        // Такси с бизнес-карты — личное; клиент — выручка; займ владельцу — выплата; овернайт — свои; терапия — личное.
-        assertEquals(listOf("transport", "zf_revenue", "zf_owner", "own", "therapy"), cats)
+        // Такси с бизнес-карты — личное; клиент — выручка; займ владельцу — займ («реально займы мне»); овернайт — свои; терапия — личное.
+        assertEquals(listOf("transport", "zf_revenue", "zf_loan", "own", "therapy"), cats)
     }
 
     @Test fun payoutPairsWithPersonalIncome() {
-        val zf = BankStatements.tbiz(csv).entries[2].copy(category = "zf_owner")
+        val zf = BankStatements.tbiz(csv).entries[2].copy(category = "zf_loan")
         val mine = MoneyEntry(
             id = "t1", owner = "sasha", source = MoneyEntry.Source.TINKOFF, ts = zf.ts + 3_600_000, rubKop = 20_000_000,
             what = "Пополнение. ООО ЗНАКОМЫЙ ФИНАНСИСТ", category = "inc_zf", account = "Black Premium",

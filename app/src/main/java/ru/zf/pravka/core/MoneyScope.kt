@@ -78,6 +78,9 @@ data class MoneyScope(
 
     /** Показывать ли счёт баланса: долг Наташе — общий для обеих сторон. */
     fun showsAccount(name: String): Boolean = when {
+        // Займ ЗФ владельцу внутри группы — ноль: при обеих кнопках его нет.
+        name == MoneyCashflow.LOAN_DEBT -> personal && !zf
+        name == MoneyCashflow.LOAN_ASSET -> zf && !personal
         both -> true
         name == MoneyCashflow.NATASHA_DEBT -> true
         name in zfAccounts -> zf

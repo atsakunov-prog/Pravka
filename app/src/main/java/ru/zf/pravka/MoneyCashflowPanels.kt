@@ -68,7 +68,7 @@ internal fun CashflowCard(app: PravkaApp, entries: List<MoneyEntry>, month: Year
     var open by remember { mutableStateOf(setOf<String>()) }
     val ru = Locale.forLanguageTag("ru")
 
-    PaperCard(label = "ДДС · движение денег") {
+    PaperCard(label = "ДДС · движение денег · " + MoneyFormat.K) {
         Row(Modifier.fillMaxWidth()) {
             Spacer(Modifier.weight(1f))
             months.forEachIndexed { i, m ->
@@ -152,7 +152,7 @@ private fun CashLine(
                 else -> MaterialTheme.colorScheme.onSurface
             }
             Text(
-                v?.let { if (it == 0L) "—" else MoneyFormat.short(it) } ?: "?",
+                v?.let { if (it == 0L) "—" else MoneyFormat.k(it) } ?: "?",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = if (bold || i == values.lastIndex) FontWeight.SemiBold else FontWeight.Normal,
                 color = color,
@@ -186,7 +186,7 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
     val assetSum = assets.sumOf { it.kop ?: 0 }
     val debtSum = debts.sumOf { it.kop ?: 0 } - loans
 
-    PaperCard(label = "баланс · сейчас · " + if (ms.both) "всё" else if (ms.zf) "ЗФ" else "личное") {
+    PaperCard(label = "баланс · сейчас · " + (if (ms.both) "всё" else if (ms.zf) "ЗФ" else "личное") + " · " + MoneyFormat.K) {
         Text("Активы", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
         for (a in assets) AccountRow(a) { editing = a.name }
         TotalRow("Итого активы", assetSum, incomeColor())
@@ -199,7 +199,7 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
                     Text("Займы у людей", style = MaterialTheme.typography.bodyMedium)
                     PaperHint("получено минус возвращено, по журналу с первой выписки")
                 }
-                Text(MoneyFormat.rub(-loans), style = MaterialTheme.typography.bodyMedium, color = spentColor())
+                Text(MoneyFormat.k(-loans), style = MaterialTheme.typography.bodyMedium, color = spentColor())
             }
         }
         TotalRow("Итого долги", debtSum, spentColor())
@@ -220,7 +220,7 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
             title = { Text(name) },
             text = {
                 Column {
-                    PaperHint("Сколько на счёте сейчас. Долг — с минусом: −733000.")
+                    PaperHint("Сколько на счёте сейчас, в рублях. Долг — с минусом: −733000.")
                     OutlinedTextField(
                         value = text,
                         onValueChange = { text = it },
@@ -248,11 +248,11 @@ private fun AccountRow(a: MoneyCashflow.Account, onClick: () -> Unit) {
             Text(a.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             PaperHint(
                 a.anchor?.let { "${it.source} · " + SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("ru")).format(Date(it.ts)) }
-                    ?: ("за 90 дней: " + MoneyFormat.rub(a.flowKop, sign = true))
+                    ?: ("за 90 дней: " + MoneyFormat.k(a.flowKop, sign = true))
             )
         }
         Text(
-            a.kop?.let { MoneyFormat.rub(it) } ?: "?",
+            a.kop?.let { MoneyFormat.k(it) } ?: "?",
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
             color = if ((a.kop ?: 0) < 0) spentColor() else MaterialTheme.colorScheme.onSurface,
@@ -264,7 +264,7 @@ private fun AccountRow(a: MoneyCashflow.Account, onClick: () -> Unit) {
 private fun TotalRow(title: String, kop: Long, color: androidx.compose.ui.graphics.Color, big: Boolean = false) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Text(title, style = if (big) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-        Text(MoneyFormat.rub(kop), style = if (big) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = color)
+        Text(MoneyFormat.k(kop), style = if (big) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = color)
     }
 }
 
@@ -284,7 +284,7 @@ internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: Mon
             .filter { ms.showsAccount(it.name) }
     }
     var open by remember { mutableStateOf(setOf<String>()) }
-    PaperCard(label = "счета · откуда и куда") {
+    PaperCard(label = "счета · откуда и куда · " + MoneyFormat.K) {
         if (flows.isEmpty()) {
             PaperHint("За период движений нет.")
             return@PaperCard
@@ -306,16 +306,16 @@ internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: Mon
                         modifier = Modifier.weight(1f),
                     )
                     Text(
-                        f.endKop?.let { MoneyFormat.rub(it) } ?: "?",
+                        f.endKop?.let { MoneyFormat.k(it) } ?: "?",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = if ((f.endKop ?: 0) < 0) spentColor() else MaterialTheme.colorScheme.onSurface,
                     )
                 }
                 Row {
-                    PaperHint("было " + (f.startKop?.let { MoneyFormat.short(it) } ?: "?") + "   ")
-                    if (f.inKop != 0L) Text("+" + MoneyFormat.short(f.inKop) + "   ", style = MaterialTheme.typography.bodySmall, color = incomeColor())
-                    if (f.outKop != 0L) Text(MoneyFormat.short(f.outKop), style = MaterialTheme.typography.bodySmall, color = spentColor())
+                    PaperHint("было " + (f.startKop?.let { MoneyFormat.k(it) } ?: "?") + "   ")
+                    if (f.inKop != 0L) Text("+" + MoneyFormat.k(f.inKop) + "   ", style = MaterialTheme.typography.bodySmall, color = incomeColor())
+                    if (f.outKop != 0L) Text(MoneyFormat.k(f.outKop), style = MaterialTheme.typography.bodySmall, color = spentColor())
                 }
                 if (expanded) {
                     // Чей счёт: отметка владельца решает, куда он встанет — в «Личное» или в «ЗФ».
@@ -329,7 +329,7 @@ internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: Mon
                         Row(Modifier.fillMaxWidth().padding(start = 12.dp, top = 2.dp)) {
                             Text(cat, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
-                                MoneyFormat.rub(kop, sign = true),
+                                MoneyFormat.k(kop, sign = true),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (kop < 0) spentColor() else incomeColor(),
                             )

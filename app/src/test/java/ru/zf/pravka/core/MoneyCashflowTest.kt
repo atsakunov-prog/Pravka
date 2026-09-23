@@ -80,7 +80,7 @@ class MoneyCashflowTest {
     @Test fun factoryBalancesFileParses() {
         val f = java.io.File("src/main/assets/money_balances.txt").takeIf { it.exists() } ?: java.io.File("app/src/main/assets/money_balances.txt")
         val a = MoneyCashflow.parseAnchors(f.readText())
-        assertEquals(11, a.size)
+        assertEquals(15, a.size)
         assertTrue(a.any { it.account == MoneyCashflow.NATASHA_DEBT && it.kop == 0L })
         // Снимок 70 743,72 плюс дневные операции после выписки — якорь на её конце, с секундами.
         val bp = a.single { it.account == "Т-Банк · Black Premium" }
@@ -98,9 +98,11 @@ class MoneyCashflowTest {
 
     @Test fun ownerCashFactsAndWallet() {
         val manual = MoneyCashflow.parseManual(asset("money_manual.txt"), "sasha")
-        assertEquals(6, manual.size)
-        assertEquals(listOf("inc_zf", "owed", "inc_zf", "owed", "loan", "gifts"), manual.map { it.category })
-        assertTrue(manual.filter { it.category != "owed" }.all { it.account == MoneyEntry.CASH && it.categoryBy == MoneyEntry.CategoryBy.OWNER })
+        assertEquals(10, manual.size)
+        assertEquals(listOf("inc_zf", "zf_revenue", "zf_owner", "owed", "inc_zf", "zf_revenue", "zf_owner", "owed", "loan", "gifts"), manual.map { it.category })
+        assertTrue(manual.filter { it.category in setOf("inc_zf", "loan", "gifts") }.all { it.account == MoneyEntry.CASH && it.categoryBy == MoneyEntry.CategoryBy.OWNER })
+        // Касса ЗФ: клиент заплатил 5 750 000 наличными.
+        assertEquals(575_000_000L, manual.filter { it.account == MoneyMatch.ZF_CASH && it.category == "zf_revenue" }.sumOf { it.rubKop })
         assertTrue(manual.filter { it.category == "owed" }.all { it.account == MoneyCashflow.NATASHA_DEBT })
         // Номер постоянный: второе чтение даёт те же записи.
         assertEquals(manual.map { it.id }, MoneyCashflow.parseManual(asset("money_manual.txt"), "sasha").map { it.id })
@@ -153,5 +155,50 @@ class MoneyCashflowTest {
         val bp = flows.first { it.name == "Т-Банк · Black Premium" }
         assertEquals(-40_000_000L, bp.outKop)
         assertEquals("Доля Наташи (ЗФ)", bp.byCategory.single().first)
+    }
+
+    @Test fun zfLoanIsLoanOnBothSidesAndCancels() {
+        val lent = MoneyEntry(id = "z1", owner = "sasha", source = MoneyEntry.Source.TBIZ, ts = at("2026-05-10"), rubKop = -20_000_000, what = "ЦАКУНОВ АЛЕКСАНДР", category = "zf_loan", account = "ЗФ")
+        val back = lent.copy(id = "z2", ts = at("2026-06-10"), rubKop = 10_000_000)
+        val got = e("t1", "2026-05-10", 200_000, "inc_zf")
+        val repaid = e("t2", "2026-06-10", -100_000, "zf")
+        val all = MoneyMatch.linkZf(listOf(lent, back, got, repaid)).associateBy { it.id }
+        // Займ, а не доход и не расход ЗФ: у приходов и возвратов владельца — та же категория.
+        assertEquals("zf_loan", all["t1"]!!.category)
+        assertEquals("zf_loan", all["t2"]!!.category)
+        val list = all.values.toList()
+        val loans = listOf(
+            MoneyCashflow.Anchor(MoneyCashflow.LOAN_DEBT, at("2026-01-01", 0), 0, "0"),
+            MoneyCashflow.Anchor(MoneyCashflow.LOAN_ASSET, at("2026-01-01", 0), 0, "0"),
+        )
+        val b = MoneyCashflow.balances(list, loans, at("2026-07-01"), at("2026-01-01")).associateBy { it.name }
+        assertEquals(-10_000_000L, b[MoneyCashflow.LOAN_DEBT]!!.kop)
+        assertEquals(10_000_000L, b[MoneyCashflow.LOAN_ASSET]!!.kop)
+        val zfAcc = setOf(MoneyCashflow.TBIZ_NAME)
+        assertTrue(MoneyScope.of(true, false, list, zfAcc).showsAccount(MoneyCashflow.LOAN_DEBT))
+        assertTrue(!MoneyScope.of(true, true, list, zfAcc).showsAccount(MoneyCashflow.LOAN_DEBT))
+        // В ДДС личного — финансовая деятельность; при обеих кнопках пара исчезает.
+        val personal = MoneyCashflow.build(list, listOf(YearMonth.of(2026, 5)), MoneyScope.of(true, false, list, zfAcc))
+        assertEquals(20_000_000L, row(personal, "Займ от ЗФ получен").values[0])
+        assertEquals(0L, row(personal, "Поступления").values[0])
+        val both = MoneyCashflow.build(list, listOf(YearMonth.of(2026, 5)), MoneyScope.of(true, true, list, zfAcc))
+        assertTrue(both.none { it.key == "zf_loan" })
+    }
+
+    @Test fun thousandsEverywhere() {
+        assertEquals("1\u00A0782", MoneyFormat.k(178_234_500))
+        assertEquals("48", MoneyFormat.k(4_812_300))
+        assertEquals("4,5", MoneyFormat.k(450_000))
+        assertEquals("−0,4", MoneyFormat.k(-38_000))
+        assertEquals("+12", MoneyFormat.k(1_200_000, sign = true))
+        assertEquals("0,0", MoneyFormat.k(0))
+    }
+
+    @Test fun zfCashDeskCountsOnce() {
+        val manual = MoneyCashflow.parseManual(asset("money_manual.txt"), "sasha")
+        val desk = MoneyCashflow.Anchor(MoneyMatch.ZF_CASH, at("2026-01-01", 0), 0, "0")
+        val acc = MoneyCashflow.balances(manual, listOf(desk), at("2026-09-30"), at("2026-08-01")).first { it.name == MoneyMatch.ZF_CASH }
+        // Клиент: 2 000 000 + 3 750 000; выдано Саше: 2 000 000 + 3 880 000.
+        assertEquals(-13_000_000L, acc.kop)
     }
 }

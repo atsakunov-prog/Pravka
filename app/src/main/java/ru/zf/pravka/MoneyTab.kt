@@ -183,7 +183,7 @@ internal fun MoneyTab(app: PravkaApp) {
             Row(Modifier.fillMaxWidth()) {
                 Column(Modifier.weight(1f)) {
                     PaperHint("ушло")
-                    Text("−" + MoneyFormat.rub(totals.spentKop), style = MaterialTheme.typography.headlineSmall, color = spentColor())
+                    Text("−" + MoneyFormat.k(totals.spentKop), style = MaterialTheme.typography.headlineSmall, color = spentColor())
                     totals.spentDelta?.let { d ->
                         val up = d > 0
                         PaperHint(
@@ -194,23 +194,23 @@ internal fun MoneyTab(app: PravkaApp) {
                 }
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
                     PaperHint("пришло")
-                    Text("+" + MoneyFormat.rub(totals.incomeKop), style = MaterialTheme.typography.headlineSmall, color = incomeColor())
-                    PaperHint("сальдо " + MoneyFormat.rub(totals.balanceKop, sign = true))
+                    Text("+" + MoneyFormat.k(totals.incomeKop), style = MaterialTheme.typography.headlineSmall, color = incomeColor())
+                    PaperHint("сальдо " + MoneyFormat.k(totals.balanceKop, sign = true) + " " + MoneyFormat.K)
                 }
             }
         }
 
         // ---- Плитки ----
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ru.zf.pravka.ui.KpiTile("в день", MoneyFormat.rub(pace.perDayKop), Modifier.weight(1f), hint = "за ${pace.daysPassed} дн.")
+            ru.zf.pravka.ui.KpiTile("в день", MoneyFormat.k(pace.perDayKop), Modifier.weight(1f), hint = "${MoneyFormat.K} · за ${pace.daysPassed} дн.")
             if (pace.forecastKop != null) {
-                ru.zf.pravka.ui.KpiTile("прогноз", MoneyFormat.short(pace.forecastKop) + " ₽", Modifier.weight(1f), hint = "если тратить так же")
+                ru.zf.pravka.ui.KpiTile("прогноз", MoneyFormat.k(pace.forecastKop), Modifier.weight(1f), hint = "${MoneyFormat.K} · если тратить так же")
             } else {
                 ru.zf.pravka.ui.KpiTile("трат", totals.count.toString(), Modifier.weight(1f), hint = "за период")
             }
             val top = biggest.firstOrNull()
             ru.zf.pravka.ui.KpiTile(
-                "крупнейшая", top?.let { MoneyFormat.short(-it.rubKop) + " ₽" } ?: "—", Modifier.weight(1f),
+                "крупнейшая", top?.let { MoneyFormat.k(-it.rubKop) } ?: "—", Modifier.weight(1f),
                 hint = top?.let { MoneyMerchants.canonical(it.what) },
             )
         }
@@ -236,7 +236,7 @@ internal fun MoneyTab(app: PravkaApp) {
         CategoriesCard(cats, totals.spentKop)
 
         // ---- Траты по дням ----
-        PaperCard(label = "по дням") {
+        PaperCard(label = "по дням · " + MoneyFormat.K) {
             val avg = if (pace.daysPassed > 0) pace.perDayKop / 100f else null
             ru.zf.pravka.ui.StackedColumns(
                 columns = daily.mapIndexed { i, kop ->
@@ -248,19 +248,19 @@ internal fun MoneyTab(app: PravkaApp) {
                     )
                 },
                 target = avg,
-                valueText = if (period.kind == MoneyStats.Kind.WEEK) { v -> MoneyFormat.short((v * 100).toLong()) } else null,
+                valueText = if (period.kind == MoneyStats.Kind.WEEK) { v -> MoneyFormat.k((v * 100).toLong()) } else null,
                 highlight = daily.indices.firstOrNull { period.firstDay.plusDays(it.toLong()) == today } ?: -1,
             )
             PaperHint("пунктир — средний день")
         }
 
         // ---- Полгода: ушло и пришло ----
-        PaperCard(label = "полгода") {
+        PaperCard(label = "полгода · " + MoneyFormat.K) {
             MonthPairs(
                 labels = trend.map { monthShort(it.month) },
                 spent = trend.map { it.spentKop },
                 income = trend.map { it.incomeKop },
-                valueText = { MoneyFormat.short(it) },
+                valueText = { MoneyFormat.k(it) },
                 highlight = trend.lastIndex,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -268,7 +268,7 @@ internal fun MoneyTab(app: PravkaApp) {
                 LegendDot(incomeColor()); PaperHint(" пришло")
             }
             val avgSpent = trend.dropLast(1).filter { it.spentKop > 0 }.map { it.spentKop }.average().takeIf { !it.isNaN() }
-            if (avgSpent != null) PaperHint("средний месяц (без текущего): " + MoneyFormat.rub(avgSpent.toLong()))
+            if (avgSpent != null) PaperHint("средний месяц (без текущего): " + MoneyFormat.k(avgSpent.toLong()) + " " + MoneyFormat.K)
         }
 
         // ---- ДДС по месяцу и баланс (владелец, 23.09.2026) ----
@@ -278,7 +278,7 @@ internal fun MoneyTab(app: PravkaApp) {
 
         // ---- Регулярные платежи ----
         if (recurring.isNotEmpty()) {
-            PaperCard(label = "регулярные · ${MoneyFormat.short(recurring.sumOf { it.avgKop })} ₽ в месяц") {
+            PaperCard(label = "регулярные · ${MoneyFormat.k(recurring.sumOf { it.avgKop })} ${MoneyFormat.K} в месяц") {
                 for (r in recurring.take(15)) {
                     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                         LegendDot(moneyCategoryColor(r.category))
@@ -287,7 +287,7 @@ internal fun MoneyTab(app: PravkaApp) {
                             Text(r.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             PaperHint(MoneyCategories.title(r.category) + " · ${r.months} мес. из 6")
                         }
-                        Text(MoneyFormat.rub(r.avgKop), style = MaterialTheme.typography.bodyMedium)
+                        Text(MoneyFormat.k(r.avgKop), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }

@@ -100,7 +100,7 @@ internal fun QuestionCards(app: PravkaApp, questions: List<MoneyEngine.Question>
     val pager = rememberPagerState(pageCount = { ordered.size })
     val scope = rememberCoroutineScope()
     val total = ordered.sumOf { q -> q.entries.sumOf { it.rubKop } }
-    PaperCard(label = "вопросы · ${ordered.size} · ${MoneyFormat.rub(total)}") {
+    PaperCard(label = "вопросы · ${ordered.size} · ${MoneyFormat.k(total)} ${MoneyFormat.K}") {
         PaperHint("Листай пальцем. «Сказать» — наговори, что это, Claude разложит и запомнит.")
         Spacer(Modifier.height(8.dp))
         HorizontalPager(state = pager, pageSpacing = 12.dp, modifier = Modifier.fillMaxWidth()) { page ->
