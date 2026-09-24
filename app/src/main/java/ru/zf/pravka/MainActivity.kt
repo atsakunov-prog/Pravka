@@ -558,6 +558,9 @@ private fun MainScreen(
     // Диалоги выгрузок, которые открывают значки в шапке служебных экранов.
     var dictationExport by remember { mutableStateOf(false) }
     var lifeExport by remember { mutableStateOf(false) }
+    // Выгрузка Денег — значком в шапке, как у Статистики (24.09.2026); раньше
+    // кнопка жила в самом низу длинной ленты.
+    var moneyExport by remember { mutableStateOf(false) }
 
     // Открытие приложения — тоже повод посмотреть, нет ли сборки свежее:
     // служба доступности может быть выключена, а суточный тик живёт в ней.
@@ -782,12 +785,17 @@ private fun MainScreen(
                                         title = stringResource(R.string.tab_money),
                                         icon = painterResource(R.drawable.ic_mode_money),
                                         actions = {
+                                            ExportAction { moneyExport = true }
                                             StatsAction(openReport)
                                             CostAction(openCost)
                                             SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.MONEY)) }
                                         },
                                     )
-                                    MoneyTab(app)
+                                    MoneyTab(
+                                        app,
+                                        exportRequested = moneyExport,
+                                        onExportHandled = { moneyExport = false },
+                                    )
                                 }
                                 else -> {
                                     TabHeader(
