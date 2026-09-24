@@ -33,6 +33,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +56,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.platform.LocalContext
@@ -90,6 +93,18 @@ import ru.zf.pravka.ui.SettingsAction
 import ru.zf.pravka.ui.StatsAction
 import ru.zf.pravka.ui.TabHeader
 import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.bevel
+import ru.zf.pravka.ui.ChipRow
+import ru.zf.pravka.ui.GlyphButton
+import ru.zf.pravka.ui.PaperButton
+import ru.zf.pravka.ui.PaperChip
+import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.PaperTextButton
+import ru.zf.pravka.ui.PaperToggle
+import ru.zf.pravka.ui.PaperAlert
+import ru.zf.pravka.ui.PaperSheet
+import ru.zf.pravka.ui.PaperField
+import ru.zf.pravka.ui.SheetAction
 import ru.zf.pravka.ui.PaperRow
 import ru.zf.pravka.ui.RowRule
 import ru.zf.pravka.ui.ScreenPad
@@ -449,57 +464,49 @@ private fun LifeExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var lastError by remember { mutableStateOf("") }
     val notionStatus by app.notionLifeSync.statusFlow.collectAsState()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Вся жизнь одной книгой") },
-        text = {
-            Column {
-                HintText(
-                    "Одна книга .xlsx — та же структура, что в Notion под «Правка: разборы»: листы " +
-                        ru.zf.pravka.core.NotionLifeSchema.ALL.joinToString(", ") { it.name } +
-                        ". Свежее сверху, шапка закреплена, фильтр включён."
-                )
-                Spacer(Modifier.height(10.dp))
-                HintText("Notion: " + notionStatus.ifBlank { "синк ещё не запускался" })
-                if (lastError.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        lastError,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+    val export: () -> Unit = {
+        busy = true
+        lastError = ""
+        app.appScope.launch {
+            val intent = runCatching { app.lifeExport.shareIntent() }
+                .onFailure { e ->
+                    // Причина целиком: «не собрался» без причины читается как поломка.
+                    lastError = "Не собралась: ${e.javaClass.simpleName}: ${e.message}"
+                    app.eventLog.add("выгрузка xlsx: $lastError")
+                }
+                .getOrNull()
+            busy = false
+            if (intent != null) {
+                onDismiss()
+                runCatching {
+                    context.startActivity(
+                        android.content.Intent.createChooser(intent, "Вся жизнь (.xlsx)")
                     )
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    busy = true
-                    lastError = ""
-                    app.appScope.launch {
-                        val intent = runCatching { app.lifeExport.shareIntent() }
-                            .onFailure { e ->
-                                // Причина целиком: «не собрался» без причины читается как поломка.
-                                lastError = "Не собралась: ${e.javaClass.simpleName}: ${e.message}"
-                                app.eventLog.add("выгрузка xlsx: $lastError")
-                            }
-                            .getOrNull()
-                        busy = false
-                        if (intent != null) {
-                            onDismiss()
-                            runCatching {
-                                context.startActivity(
-                                    android.content.Intent.createChooser(intent, "Вся жизнь (.xlsx)")
-                                )
-                            }
-                        }
-                    }
-                },
-                enabled = !busy,
-            ) { Text(if (busy) "Собираю…" else "Выгрузить .xlsx") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
-    )
+        }
+    }
+    PaperAlert(
+        onDismiss = onDismiss,
+        title = "Вся жизнь одной книгой",
+        icon = Glyphs.Export,
+        subtitle = "одна книга .xlsx — как в Notion",
+        confirm = SheetAction(if (busy) "Собираю…" else "Выгрузить .xlsx", icon = Glyphs.Export, enabled = !busy, onClick = export),
+    ) {
+        HintText(
+            "Та же структура, что в Notion под «Правка: разборы»: листы " +
+                ru.zf.pravka.core.NotionLifeSchema.ALL.joinToString(", ") { it.name } +
+                ". Свежее сверху, шапка закреплена, фильтр включён."
+        )
+        HintText("Notion: " + notionStatus.ifBlank { "синк ещё не запускался" })
+        if (lastError.isNotBlank()) {
+            Text(
+                lastError,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
 }
 
 @Composable
@@ -830,7 +837,7 @@ private fun NotificationsBanner(onFix: () -> Unit) {
             color = MaterialTheme.colorScheme.onErrorContainer,
             modifier = Modifier.weight(1f),
         )
-        TextButton(onClick = onFix) { Text("Разрешить") }
+        PaperTextButton("Разрешить", icon = Glyphs.Bell, onClick = onFix)
     }
 }
 
@@ -921,30 +928,38 @@ internal fun SpeechSection(
 
     LaunchedEffect(engine, downloading, network) { status = statusFor(engine) }
 
-    SectionCard(label = stringResource(R.string.settings_speech_title)) {
-        HintText(stringResource(R.string.speech_engine_label))
-        ModelOption(
-            label = stringResource(R.string.speech_engine_google),
-            selected = isGoogle,
-            onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_GOOGLE) } },
-        )
-        ModelOption(
-            label = stringResource(R.string.speech_engine_whisper_small),
-            selected = engine == Settings.SPEECH_WHISPER_SMALL,
-            onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_WHISPER_SMALL) } },
-        )
-        ModelOption(
-            label = stringResource(R.string.speech_engine_whisper_base),
-            selected = engine == Settings.SPEECH_WHISPER_BASE,
-            onSelect = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_WHISPER_BASE) } },
-        )
-
+    // Движок и путь — чипами (24.09.2026): три радиокнопки с подписью на две
+    // строки читались анкетой; выбор из трёх виден разом и одним тапом.
+    SectionCard(
+        label = stringResource(R.string.settings_speech_title),
+        info = context.getString(if (isGoogle) R.string.speech_hint_google else R.string.speech_hint),
+    ) {
+        PaperHint(stringResource(R.string.speech_engine_label))
+        Spacer(Modifier.height(4.dp))
+        ChipRow {
+            PaperChip("Google", selected = isGoogle, onClick = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_GOOGLE) } })
+            PaperChip(
+                "Whisper small",
+                selected = engine == Settings.SPEECH_WHISPER_SMALL,
+                onClick = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_WHISPER_SMALL) } },
+            )
+            PaperChip(
+                "Whisper base",
+                selected = engine == Settings.SPEECH_WHISPER_BASE,
+                onClick = { scope.launch { settings.setSpeechEngine(Settings.SPEECH_WHISPER_BASE) } },
+            )
+        }
         Spacer(Modifier.height(8.dp))
         Text(status, style = MaterialTheme.typography.bodySmall)
-
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            PaperButton(
+                when {
+                    isGoogle -> stringResource(R.string.google_prepare)
+                    downloading -> stringResource(R.string.speech_downloading)
+                    else -> stringResource(R.string.speech_download)
+                },
+                icon = Glyphs.Download,
                 enabled = !downloading,
                 onClick = {
                     if (isGoogle) {
@@ -965,93 +980,63 @@ internal fun SpeechSection(
                         }
                     }
                 },
-            ) {
-                Text(
-                    when {
-                        isGoogle -> stringResource(R.string.google_prepare)
-                        downloading -> stringResource(R.string.speech_downloading)
-                        else -> stringResource(R.string.speech_download)
-                    }
-                )
-            }
-            OutlinedButton(onClick = { scope.launch { status = statusFor(engine) } }) {
-                Text(stringResource(R.string.speech_refresh))
-            }
+            )
+            GlyphButton(Glyphs.Refresh, stringResource(R.string.speech_refresh), onClick = { scope.launch { status = statusFor(engine) } })
         }
-        if (isGoogle) {
-            Spacer(Modifier.height(12.dp))
-            // Recognition mode: continuous (build 55, "распознаёт идеально")
-            // vs per-segment restarts - side-by-side comparison by the owner.
-            val segmented by settings.speechSegmentedFlow.collectAsState(initial = true)
-            val formatting by settings.speechFormattingFlow.collectAsState(initial = false)
-            HintText("Путь распознавания")
-            ModelOption(
-                label = "Облачный Google — как голосовой ввод клавиатуры на русском (заводское)",
-                selected = network,
-                onSelect = { scope.launch { settings.setSpeechNetwork(true) } },
-            )
-            ModelOption(
-                label = "Офлайн-пакет на телефоне — без сети, голос не уходит",
-                selected = !network,
-                onSelect = { scope.launch { settings.setSpeechNetwork(false) } },
-            )
-            HintText(
-                "Клавиатура Google на русском распознаёт на серверах Google (пиксельная модель " +
-                    "Assistant русского не знает) — поэтому она чётче на именах, редких словах и " +
-                    "английских терминах. Облачный путь — та же дорога; без сети сам падает на " +
-                    "офлайн-пакет. Службу при этом называем явно (пакет Google), а не полагаемся " +
-                    "на выбранную системой: на части телефонов там стоит своя, и «сеть» в " +
-                    "настройке ещё не значила бы «Google» — строка «Служба» выше показывает, " +
-                    "кто отвечает на самом деле. В «Расшифровках» такие тейки значатся " +
-                    "«Google (сеть)». Действует со следующей диктовки."
-            )
-            Spacer(Modifier.height(8.dp))
-            HintText("Режим распознавания")
-            ModelOption(
-                label = "Непрерывный — одна сессия, без перезапусков (как в сборке 55)",
-                selected = segmented,
-                onSelect = { scope.launch { settings.setSpeechSegmented(true) } },
-            )
-            ModelOption(
-                label = "Посегментный — перезапуск на каждой паузе",
-                selected = !segmented,
-                onSelect = { scope.launch { settings.setSpeechSegmented(false) } },
-            )
-            Spacer(Modifier.height(8.dp))
-            val biasingOn by settings.speechBiasingFlow.collectAsState(initial = true)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = biasingOn,
-                    onCheckedChange = { on -> scope.launch { settings.setSpeechBiasing(on) } },
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Подсказывать распознавателю слова словаря", style = MaterialTheme.typography.bodyMedium)
+    }
+    if (isGoogle) {
+        // Recognition mode: continuous (build 55, "распознаёт идеально")
+        // vs per-segment restarts - side-by-side comparison by the owner.
+        val segmented by settings.speechSegmentedFlow.collectAsState(initial = true)
+        val formatting by settings.speechFormattingFlow.collectAsState(initial = false)
+        val biasingOn by settings.speechBiasingFlow.collectAsState(initial = true)
+        SectionCard(
+            label = "путь google",
+            info = "Клавиатура Google на русском распознаёт на серверах Google (пиксельная модель " +
+                "Assistant русского не знает) — поэтому она чётче на именах, редких словах и " +
+                "английских терминах. Облачный путь — та же дорога; без сети сам падает на " +
+                "офлайн-пакет. Службу при этом называем явно (пакет Google), а не полагаемся " +
+                "на выбранную системой: на части телефонов там стоит своя, и «сеть» в " +
+                "настройке ещё не значила бы «Google» — строка «Служба» выше показывает, " +
+                "кто отвечает на самом деле. В «Расшифровках» такие тейки значатся " +
+                "«Google (сеть)». Действует со следующей диктовки.",
+        ) {
+            ChipRow {
+                PaperChip("Облако", selected = network, onClick = { scope.launch { settings.setSpeechNetwork(true) } }, icon = Glyphs.Wifi)
+                PaperChip("Офлайн-пакет", selected = !network, onClick = { scope.launch { settings.setSpeechNetwork(false) } }, icon = Glyphs.Phone)
             }
-            HintText(
-                "До 40 верных форм из словаря уходят движку подсказками, слова владельца впереди " +
+            PaperHint(
+                if (network) "как голосовой ввод клавиатуры на русском (заводское)"
+                else "без сети, голос не уходит"
+            )
+            Spacer(Modifier.height(10.dp))
+            PaperHint("Режим распознавания")
+            Spacer(Modifier.height(4.dp))
+            ChipRow {
+                PaperChip("Непрерывный", selected = segmented, onClick = { scope.launch { settings.setSpeechSegmented(true) } })
+                PaperChip("Посегментный", selected = !segmented, onClick = { scope.launch { settings.setSpeechSegmented(false) } })
+            }
+            PaperHint(
+                if (segmented) "одна сессия, без перезапусков (как в сборке 55)"
+                else "перезапуск на каждой паузе"
+            )
+            Spacer(Modifier.height(6.dp))
+            PaperToggle(
+                title = "Подсказывать слова словаря",
+                checked = biasingOn,
+                onCheckedChange = { on -> scope.launch { settings.setSpeechBiasing(on) } },
+                info = "До 40 верных форм из словаря уходят движку подсказками, слова владельца впереди " +
                     "заводских. Кажется медленнее клавиатуры Google — выключи и сравни; в логе " +
-                    "диктовки видно «ready +N ms» и «first partial +N ms»."
+                    "диктовки видно «ready +N ms» и «first partial +N ms».",
             )
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(
-                    checked = formatting,
-                    onCheckedChange = { on -> scope.launch { settings.setSpeechFormatting(on) } },
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Пунктуация распознавателя", style = MaterialTheme.typography.bodyMedium)
-            }
-            HintText(
-                "Выключено (как в сборке 55): распознаватель отдаёт сырой поток слов, " +
-                    "знаки расставляет Правка. Действует со следующей диктовки."
+            PaperToggle(
+                title = "Пунктуация распознавателя",
+                checked = formatting,
+                onCheckedChange = { on -> scope.launch { settings.setSpeechFormatting(on) } },
+                info = "Выключено (как в сборке 55): распознаватель отдаёт сырой поток слов, " +
+                    "знаки расставляет Правка. Действует со следующей диктовки.",
             )
         }
-        Spacer(Modifier.height(6.dp))
-        HintText(
-            stringResource(
-                if (isGoogle) R.string.speech_hint_google else R.string.speech_hint
-            )
-        )
     }
 }
 
@@ -1070,9 +1055,7 @@ internal fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, service
     }
     if (items.isEmpty()) return
 
-    SectionCard(label = stringResource(R.string.rec_header)) {
-        HintText(stringResource(R.string.rec_hint))
-        Spacer(Modifier.height(8.dp))
+    SectionCard(label = stringResource(R.string.rec_header), info = stringResource(R.string.rec_hint)) {
         for (item in items) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Column(Modifier.weight(1f)) {
@@ -1088,28 +1071,37 @@ internal fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, service
                         Text(stringResource(R.string.rec_transcribing), style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                TextButton(
+                // «Расшифровать» — главное действие записи, удаление — значком
+                // корзины цветом ошибки (24.09.2026): два слова рядом читались
+                // равными, а равными они не бывают.
+                PaperButton(
+                    stringResource(R.string.rec_transcribe),
+                    icon = Glyphs.Spark,
+                    primary = true,
                     enabled = busyId == null,
                     onClick = {
                         val service = PravkaAccessibilityService.instance
                         if (service == null || !serviceEnabled) {
                             Feedback.toast(context, context.getString(R.string.rec_need_service))
-                            return@TextButton
-                        }
-                        busyId = item.id
-                        service.retryRecording(item.file) { ok: Boolean, msg: String ->
-                            busyId = null
-                            refreshTick++
-                            if (!ok) Feedback.toast(context, context.getString(R.string.rec_failed, msg))
+                        } else {
+                            busyId = item.id
+                            service.retryRecording(item.file) { ok: Boolean, msg: String ->
+                                busyId = null
+                                refreshTick++
+                                if (!ok) Feedback.toast(context, context.getString(R.string.rec_failed, msg))
+                            }
                         }
                     },
-                ) { Text(stringResource(R.string.rec_transcribe)) }
-                TextButton(onClick = {
-                    recordings.delete(item.id)
-                    refreshTick++
-                }) {
-                    Text(stringResource(R.string.rec_delete), color = MaterialTheme.colorScheme.error)
-                }
+                )
+                GlyphButton(
+                    Glyphs.Delete,
+                    stringResource(R.string.rec_delete),
+                    onClick = {
+                        recordings.delete(item.id)
+                        refreshTick++
+                    },
+                    tint = MaterialTheme.colorScheme.error,
+                )
             }
         }
     }
@@ -1153,13 +1145,18 @@ private fun LearningTab(app: PravkaApp) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(ScreenPad.Padding),
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         // Автообучения больше нет (владелец, 15.09.2026: «он уже обучился
         // достаточно, оставить только по кнопке»): ни слежки за полями, ни
         // авторазбора по расписанию. Разбор — только отсюда и из меню «П».
-        SectionCard(label = "Разбор по кнопке") {
+        SectionCard(
+            label = "Разбор по кнопке",
+            info = "Одно поправленное слово уходит в словарь само, без модели. Здесь — " +
+                "сложные правки очередью для Опуса; «Обучить» в меню «П» разбирает " +
+                "текст под курсором сразу. Находки — в словарь с пометкой «авто-обучение».",
+        ) {
             var watch by remember { mutableStateOf<List<ru.zf.pravka.data.EditWatchStore.Entry>>(emptyList()) }
             var watchTick by remember { mutableStateOf(0) }
             var lastBatch by remember { mutableStateOf(0L) }
@@ -1200,8 +1197,17 @@ private fun LearningTab(app: PravkaApp) {
                 )
                 Spacer(Modifier.height(6.dp))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlyphButton(Glyphs.Refresh, "обновить", onClick = {
+                    watchTick++
+                    loadTick++
+                    Feedback.toast(ctx, "Обновлено")
+                })
+                Spacer(Modifier.weight(1f))
+                PaperButton(
+                    if (analyzing) "Разбираю…" else "Разобрать сейчас",
+                    icon = Glyphs.Spark,
+                    primary = true,
                     enabled = !analyzing,
                     onClick = {
                         val svc = PravkaAccessibilityService.instance
@@ -1212,19 +1218,8 @@ private fun LearningTab(app: PravkaApp) {
                             analyzing = true
                         }
                     },
-                ) { Text(if (analyzing) "Разбираю…" else "Разобрать сейчас") }
-                OutlinedButton(onClick = {
-                    watchTick++
-                    loadTick++
-                    Feedback.toast(ctx, "Обновлено")
-                }) { Text("Обновить") }
+                )
             }
-            Spacer(Modifier.height(8.dp))
-            HintText(
-                "Одно поправленное слово уходит в словарь само, без модели. Здесь — " +
-                    "сложные правки очередью для Опуса; «Обучить» в меню «П» разбирает " +
-                    "текст под курсором сразу. Находки — в словарь с пометкой «авто-обучение»."
-            )
         }
 
         // Три столбца владельца: надиктовано → модель → он. Журнал навсегда
@@ -1250,11 +1245,11 @@ private fun LearningTab(app: PravkaApp) {
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
-                    Text("🎙 " + r.dictated.take(160), style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("✎ " + r.cleaned.take(160), style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("✓ " + r.edited.take(160), style = MaterialTheme.typography.bodySmall)
+                    // Три столбца значками, а не эмодзи (24.09.2026): микрофон —
+                    // надиктовано, искры — модель, карандаш — ты.
+                    MarkedLine(Glyphs.Mic, r.dictated.take(160), soft = true)
+                    MarkedLine(Glyphs.Spark, r.cleaned.take(160), soft = true)
+                    MarkedLine(Glyphs.Edit, r.edited.take(160), soft = false)
                 }
             }
         }
@@ -1267,15 +1262,8 @@ private fun LearningTab(app: PravkaApp) {
                         "уходят в словарь сами, с пометкой «авто-обучение»."
                 )
             } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = {
-                        app.appScope.launch {
-                            for (sug in app.learnStore.all()) accept(sug)
-                            refresh()
-                            PravkaAccessibilityService.instance?.refreshLearnBadge()
-                        }
-                    }) { Text("Принять все") }
-                    TextButton(onClick = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    PaperTextButton("Отклонить все", color = MaterialTheme.colorScheme.error, onClick = {
                         app.appScope.launch {
                             for (sug in app.learnStore.all()) {
                                 app.learnLog.add("отклонено: ${if (sug.kind == "rule") sug.text else sug.from}")
@@ -1284,7 +1272,15 @@ private fun LearningTab(app: PravkaApp) {
                             refresh()
                             PravkaAccessibilityService.instance?.refreshLearnBadge()
                         }
-                    }) { Text("Отклонить все", color = MaterialTheme.colorScheme.error) }
+                    })
+                    Spacer(Modifier.weight(1f))
+                    PaperButton("Принять все", icon = Glyphs.Check, primary = true, onClick = {
+                        app.appScope.launch {
+                            for (sug in app.learnStore.all()) accept(sug)
+                            refresh()
+                            PravkaAccessibilityService.instance?.refreshLearnBadge()
+                        }
+                    })
                 }
                 Spacer(Modifier.height(6.dp))
                 for (sug in pending) {
@@ -1309,43 +1305,45 @@ private fun LearningTab(app: PravkaApp) {
                             )
                         }
                         Row {
-                            TextButton(onClick = {
+                            PaperTextButton("Принять", icon = Glyphs.Check, onClick = {
                                 app.appScope.launch {
                                     accept(sug)
                                     refresh()
                                     PravkaAccessibilityService.instance?.refreshLearnBadge()
                                 }
-                            }) { Text("Принять") }
-                            TextButton(onClick = {
+                            })
+                            PaperTextButton("Отклонить", icon = Glyphs.Close, color = MaterialTheme.colorScheme.error, onClick = {
                                 app.appScope.launch {
                                     app.learnLog.add("отклонено: ${if (sug.kind == "rule") sug.text else sug.from}")
                                     app.learnStore.remove(sug.id)
                                     refresh()
                                     PravkaAccessibilityService.instance?.refreshLearnBadge()
                                 }
-                            }) { Text("Отклонить", color = MaterialTheme.colorScheme.error) }
+                            })
                         }
                     }
                 }
             }
         }
 
-        SectionCard(label = "Принятые правила (${rules.size})") {
+        SectionCard(
+            label = "Принятые правила (${rules.size})",
+            info = "Набор правится только руками: новых правил разбор не предлагает, " +
+                "сам себя набор не переписывает. «Оптимизировать» — Опус сливает дубли " +
+                "и противоречия, с предпросмотром. В запрос чистки правила уходят, если " +
+                "включён тумблер «Постоянные правила в промпте» в настройках Правки.",
+        ) {
             if (rules.isEmpty()) {
-                HintText("Принятые правила появятся здесь; в запрос чистки они уходят, если включён тумблер «Постоянные правила в промпте» в настройках Правки.")
+                HintText("Принятые правила появятся здесь.")
             } else {
-                HintText(
-                    "Набор правится только руками: новых правил разбор не предлагает, " +
-                        "сам себя набор не переписывает. Кнопка ниже — Опус сливает дубли " +
-                        "и противоречия, с предпросмотром."
-                )
-                Spacer(Modifier.height(6.dp))
                 var optimizing by remember { mutableStateOf(false) }
                 var optimized by remember {
                     mutableStateOf<ru.zf.pravka.provider.ClaudeProvider.OptimizedRules?>(null)
                 }
                 if (rules.size >= 2) {
-                    Button(
+                    PaperButton(
+                        if (optimizing) "Оптимизирую (Опус)…" else "Оптимизировать набор",
+                        icon = Glyphs.Spark,
                         enabled = !optimizing,
                         onClick = {
                             optimizing = true
@@ -1364,43 +1362,37 @@ private fun LearningTab(app: PravkaApp) {
                                 }
                             }
                         },
-                    ) { Text(if (optimizing) "Оптимизирую (Опус)…" else "Оптимизировать набор") }
+                    )
                     Spacer(Modifier.height(6.dp))
                 }
                 optimized?.let { opt ->
-                    AlertDialog(
-                        onDismissRequest = { optimized = null },
-                        title = { Text("Оптимизированный набор: ${rules.size} → ${opt.rules.size}") },
-                        text = {
-                            Column(Modifier.verticalScroll(rememberScrollState())) {
-                                opt.rules.forEachIndexed { i, r ->
-                                    Text("${i + 1}. ${r.text}", style = MaterialTheme.typography.bodyMedium)
-                                    if (r.before.isNotBlank()) {
-                                        Text(
-                                            "«${r.before}» → «${r.after}»",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    Spacer(Modifier.height(6.dp))
-                                }
+                    PaperAlert(
+                        onDismiss = { optimized = null },
+                        title = "Оптимизированный набор",
+                        icon = Glyphs.Spark,
+                        subtitle = "${rules.size} → ${opt.rules.size} правил",
+                        dismiss = SheetAction("Отмена") { optimized = null },
+                        confirm = SheetAction("Заменить набор", icon = Glyphs.Check) {
+                            val chosen = opt.rules
+                            optimized = null
+                            app.appScope.launch {
+                                app.rulesStore.replaceAll(chosen.map { Triple(it.text, it.before, it.after) })
+                                app.learnLog.add("набор правил ЗАМЕНЁН оптимизированным (${chosen.size})")
+                                loadTick++
                             }
                         },
-                        confirmButton = {
-                            Button(onClick = {
-                                val chosen = opt.rules
-                                optimized = null
-                                app.appScope.launch {
-                                    app.rulesStore.replaceAll(chosen.map { Triple(it.text, it.before, it.after) })
-                                    app.learnLog.add("набор правил ЗАМЕНЁН оптимизированным (${chosen.size})")
-                                    loadTick++
-                                }
-                            }) { Text("Заменить набор") }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { optimized = null }) { Text("Отмена") }
-                        },
-                    )
+                    ) {
+                        opt.rules.forEachIndexed { i, r ->
+                            Text("${i + 1}. ${r.text}", style = MaterialTheme.typography.bodyMedium)
+                            if (r.before.isNotBlank()) {
+                                Text(
+                                    "«${r.before}» → «${r.after}»",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
                 }
                 // Что реально уезжает в промпт: потолок RulesStore.PROMPT_CAP по
                 // порядку. Владелец видел 54 одобренных правила и думал, что
@@ -1434,17 +1426,33 @@ private fun LearningTab(app: PravkaApp) {
                                 app.appScope.launch { app.rulesStore.setEnabled(rule.id, on); refresh() }
                             },
                         )
-                        TextButton(onClick = {
-                            app.appScope.launch {
-                                app.learnLog.add("правило удалено: ${rule.text}")
-                                app.rulesStore.delete(rule.id)
-                                refresh()
-                            }
-                        }) { Text("×", color = MaterialTheme.colorScheme.error) }
+                        GlyphButton(
+                            Glyphs.Delete,
+                            "удалить правило",
+                            tint = MaterialTheme.colorScheme.error,
+                            onClick = {
+                                app.appScope.launch {
+                                    app.learnLog.add("правило удалено: ${rule.text}")
+                                    app.rulesStore.delete(rule.id)
+                                    refresh()
+                                }
+                            },
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+/** Строка журнала правок со значком столбца: надиктовано, модель, ты. */
+@Composable
+private fun MarkedLine(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, soft: Boolean) {
+    val color = if (soft) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+    Row(verticalAlignment = Alignment.Top, modifier = Modifier.padding(top = 2.dp)) {
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.padding(top = 2.dp).size(14.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(text, style = MaterialTheme.typography.bodySmall, color = color)
     }
 }
 
@@ -1483,44 +1491,43 @@ private fun LogsTab(app: PravkaApp) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(ScreenPad.Padding),
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         // Выгрузки для разбора — наверху, одной кнопкой каждая (владелец,
         // 16.09.2026: искал расшифровки в «Логах», а они жили за значком
         // выгрузки в «Статистике диктовки», куда из «Ещё» хода нет). Каждая
         // кнопка отдаёт файл целиком; иной период — тем же диалогом, что там.
-        SectionCard(label = "Выгрузить для разбора") {
-            HintText(
-                "Файл целиком в шаринг — Drive, почта, чат. Расшифровки — сырой выход " +
-                    "распознавателя; история — надиктовано и правка модели; правки руками — " +
-                    "надиктовано · модель · ты; словарь и правила — то, что уходит в промпт. " +
-                    "Иной период — «За период…»."
-            )
-            Spacer(Modifier.height(6.dp))
+        SectionCard(
+            label = "Выгрузить для разбора",
+            info = "Файл целиком в шаринг — Drive, почта, чат. Расшифровки — сырой выход " +
+                "распознавателя; история — надиктовано и правка модели; правки руками — " +
+                "надиктовано · модель · ты; словарь и правила — то, что уходит в промпт. " +
+                "Иной период — «За период…».",
+        ) {
             FlowRow(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedButton(onClick = {
+                LogExport(onClick = {
                     share(app.transcriptionLog.shareJsonIntent(), "Расшифровки")
-                }) { Text("Расшифровки (JSON)") }
-                OutlinedButton(onClick = {
+                }, label = "Расшифровки (JSON)")
+                LogExport(onClick = {
                     share(app.historyLog.shareIntent(), "История правок")
-                }) { Text("История правок (JSONL)") }
-                OutlinedButton(onClick = {
+                }, label = "История правок (JSONL)")
+                LogExport(onClick = {
                     // shareCsvIntent — suspend: собирается в области приложения.
                     app.appScope.launch {
                         val intent = runCatching { app.corrections.shareCsvIntent() }.getOrNull()
                         if (intent == null) Feedback.toast(context, "Не собралась")
                         else share(intent, "Правки руками")
                     }
-                }) { Text("Правки руками (CSV)") }
-                OutlinedButton(onClick = {
+                }, label = "Правки руками (CSV)")
+                LogExport(onClick = {
                     share(app.transcriptionLog.shareMetricsCsvIntent(), "Метрики диктовки")
-                }) { Text("Метрики (CSV)") }
-                OutlinedButton(onClick = {
+                }, label = "Метрики (CSV)")
+                LogExport(onClick = {
                     // exportJson — suspend: собирается в области приложения, файл во
                     // временной папке, как у выгрузки во вкладке «Словарь».
                     app.appScope.launch {
@@ -1531,19 +1538,24 @@ private fun LogsTab(app: PravkaApp) {
                         }.getOrNull()
                         if (intent == null) Feedback.toast(context, "Не собрался") else share(intent, "Словарь")
                     }
-                }) { Text("Словарь (JSON)") }
-                OutlinedButton(onClick = { share(app.rulesStore.shareIntent(), "Правила") }) { Text("Правила (JSON)") }
-                OutlinedButton(onClick = { exportOpen = true }) { Text("За период…") }
+                }, label = "Словарь (JSON)")
+                LogExport(onClick = { share(app.rulesStore.shareIntent(), "Правила") }, label = "Правила (JSON)")
+                PaperButton("За период…", icon = Glyphs.Calendar, onClick = { exportOpen = true })
             }
         }
         if (exportOpen) DictationExportDialog(app, onDismiss = { exportOpen = false })
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = { loadTick++ }) { Text("Обновить") }
+            PaperTextButton("Обновить логи", icon = Glyphs.Refresh, onClick = { loadTick++ })
         }
 
-        SectionCard(label = "Эвал промпта") {
+        SectionCard(
+            label = "Эвал промпта",
+            info = "Золотой набор: вход диктовки и эталонный результат. Каждое " +
+                "изменение промпта прогоняется по набору и меряется цифрой. " +
+                "Запросы той же формы, что дневная чистка, по одному — минута-две.",
+        ) {
             var items by remember { mutableStateOf<List<ru.zf.pravka.data.EvalStore.Item>>(emptyList()) }
             var evalTick by remember { mutableStateOf(0) }
             var showSet by remember { mutableStateOf(false) }
@@ -1565,12 +1577,6 @@ private fun LogsTab(app: PravkaApp) {
                 running = false
                 evalTick++
             }
-            HintText(
-                "Золотой набор: вход диктовки и эталонный результат. Каждое " +
-                    "изменение промпта прогоняется по набору и меряется цифрой. " +
-                    "Запросы той же формы, что дневная чистка, по одному — минута-две."
-            )
-            Spacer(Modifier.height(6.dp))
             Text("Эталонов: ${items.size}", style = MaterialTheme.typography.bodyMedium)
             last?.let { run ->
                 Text(
@@ -1588,15 +1594,8 @@ private fun LogsTab(app: PravkaApp) {
                 )
             }
             Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    enabled = !running && items.isNotEmpty(),
-                    onClick = {
-                        ru.zf.pravka.core.EvalRunner.start(app)
-                        running = true
-                    },
-                ) { Text(if (running) "Идёт…" else "Прогнать") }
-                OutlinedButton(onClick = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                PaperButton("Из истории", icon = Glyphs.Download, onClick = {
                     app.appScope.launch {
                         val added = app.evalStore.addAll(
                             withContext(Dispatchers.IO) { app.historyLog.readPairs(40) }
@@ -1604,13 +1603,24 @@ private fun LogsTab(app: PravkaApp) {
                         Feedback.toast(context, "Добавлено эталонов: $added")
                         evalTick++
                     }
-                }) { Text("Набрать из истории") }
+                })
+                Spacer(Modifier.weight(1f))
+                PaperButton(
+                    if (running) "Идёт…" else "Прогнать",
+                    icon = Glyphs.Play,
+                    primary = true,
+                    enabled = !running && items.isNotEmpty(),
+                    onClick = {
+                        ru.zf.pravka.core.EvalRunner.start(app)
+                        running = true
+                    },
+                )
             }
-            Row {
-                TextButton(onClick = { showSet = !showSet }) {
-                    Text(if (showSet) "Скрыть набор" else "Показать набор")
-                }
-            }
+            PaperTextButton(
+                if (showSet) "Скрыть набор" else "Показать набор",
+                icon = if (showSet) Glyphs.ChevronUp else Glyphs.ChevronDown,
+                onClick = { showSet = !showSet },
+            )
             if (showSet) {
                 for (item in items) {
                     Row(
@@ -1622,9 +1632,12 @@ private fun LogsTab(app: PravkaApp) {
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = {
-                            app.appScope.launch { app.evalStore.remove(item.id); evalTick++ }
-                        }) { Text("×", color = MaterialTheme.colorScheme.error) }
+                        GlyphButton(
+                            Glyphs.Delete,
+                            "убрать эталон",
+                            tint = MaterialTheme.colorScheme.error,
+                            onClick = { app.appScope.launch { app.evalStore.remove(item.id); evalTick++ } },
+                        )
                     }
                 }
             }
@@ -1639,8 +1652,8 @@ private fun LogsTab(app: PravkaApp) {
                 fontFamily = FontFamily.Monospace,
             )
             Row {
-                TextButton(onClick = { copy(eventTail.joinToString("\n")) }) { Text("Копировать") }
-                TextButton(onClick = { share(app.eventLog.shareIntent(), "Журнал событий") }) { Text("Файлом") }
+                PaperTextButton("Копировать", icon = Glyphs.Copy, onClick = { copy(eventTail.joinToString("\n")) })
+                PaperTextButton("Файлом", icon = Glyphs.Share, onClick = { share(app.eventLog.shareIntent(), "Журнал событий") })
             }
         }
 
@@ -1653,8 +1666,8 @@ private fun LogsTab(app: PravkaApp) {
                 fontFamily = FontFamily.Monospace,
             )
             Row {
-                TextButton(onClick = { copy(learnTail.joinToString("\n")) }) { Text("Копировать") }
-                TextButton(onClick = { share(app.learnLog.shareIntent(), "Журнал обучения") }) { Text("Файлом") }
+                PaperTextButton("Копировать", icon = Glyphs.Copy, onClick = { copy(learnTail.joinToString("\n")) })
+                PaperTextButton("Файлом", icon = Glyphs.Share, onClick = { share(app.learnLog.shareIntent(), "Журнал обучения") })
             }
         }
 
@@ -1667,7 +1680,7 @@ private fun LogsTab(app: PravkaApp) {
             }
             HintText(
                 if (debugOn) "Режим отладки включён: сюда пишется каждый запрос целиком."
-                else "Режим отладки выключен (Настройки → Общее → Отладка). Ниже — что успело записаться."
+                else "Режим отладки выключен (Настройки → Обновления и служба → Отладка). Ниже — что успело записаться."
             )
             Spacer(Modifier.height(6.dp))
             Text(
@@ -1677,31 +1690,22 @@ private fun LogsTab(app: PravkaApp) {
                 maxLines = 40,
             )
             Row {
-                TextButton(onClick = { share(app.requestLog.shareIntent(), "Запросы к Claude") }) { Text("Файлом") }
-                TextButton(onClick = {
+                PaperTextButton("Файлом", icon = Glyphs.Share, onClick = { share(app.requestLog.shareIntent(), "Запросы к Claude") })
+                PaperTextButton("Очистить", icon = Glyphs.Delete, color = MaterialTheme.colorScheme.error, onClick = {
                     app.requestLog.clear()
                     reqTick++
                     Feedback.toast(context, "Лог запросов очищен")
-                }) { Text("Очистить", color = MaterialTheme.colorScheme.error) }
+                })
             }
         }
     }
 }
 
+/** Кнопка выгрузки файла из «Логов»: одна форма на все семь. */
 @Composable
-private fun ModelOption(label: String, selected: Boolean, onSelect: () -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        RadioButton(selected = selected, onClick = onSelect)
-        Text(label, style = MaterialTheme.typography.bodyMedium)
-    }
+private fun LogExport(onClick: () -> Unit, label: String) {
+    PaperButton(label, icon = Glyphs.Export, onClick = onClick)
 }
-
-// ---------------------------------------------------------------------------
-// Dictionary
-// ---------------------------------------------------------------------------
 
 @Composable
 private fun dictModeColor(mode: DictMode) = when (mode) {
@@ -1777,22 +1781,30 @@ private fun DictionaryTab(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
+        contentPadding = ScreenPad.Padding,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Spacer(Modifier.weight(1f))
-                Button(onClick = { showAddDialog = true }) { Text(stringResource(R.string.dict_add)) }
-            }
-            Row {
-                TextButton(onClick = { export() }) { Text(stringResource(R.string.dict_export)) }
-                TextButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }) {
-                    Text(stringResource(R.string.dict_import))
-                }
-                TextButton(
-                    enabled = !mining,
-                    onClick = {
+            // Поиск и действия одной плашкой (24.09.2026): три слова-кнопки
+            // над полем читались строкой текста, а не кнопками.
+            ru.zf.pravka.ui.PaperCard {
+                PaperField(
+                    value = search,
+                    onValueChange = { search = it },
+                    label = stringResource(R.string.dict_search),
+                    trailing = { Icon(Glyphs.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    GlyphButton(Glyphs.Upload, stringResource(R.string.dict_export), onClick = { export() })
+                    GlyphButton(Glyphs.Download, stringResource(R.string.dict_import), onClick = {
+                        importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                    })
+                    PaperTextButton(
+                        stringResource(if (mining) R.string.dict_mine_running else R.string.dict_mine),
+                        icon = Glyphs.Spark,
+                        enabled = !mining,
+                        onClick = {
                         mining = true
                         scope.launch {
                             val pairs = withContext(Dispatchers.IO) { historyLog.readPairs(100) }
@@ -1816,19 +1828,13 @@ private fun DictionaryTab(
                                 Feedback.toast(context, context.getString(R.string.dict_mine_failed, it.message ?: ""))
                             }
                         }
-                    },
-                ) {
-                    Text(stringResource(if (mining) R.string.dict_mine_running else R.string.dict_mine))
+                        },
+                    )
+                    Spacer(Modifier.weight(1f))
+                    PaperButton(stringResource(R.string.dict_add), icon = Glyphs.Plus, primary = true, onClick = { showAddDialog = true })
                 }
             }
-            OutlinedTextField(
-                value = search,
-                onValueChange = { search = it },
-                singleLine = true,
-                label = { Text(stringResource(R.string.dict_search)) },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
         }
 
         for (mode in DictMode.entries) {
@@ -1861,10 +1867,11 @@ private fun DictionaryTab(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
-                    Text(
-                        if (expanded) "▾" else "▸",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                    Icon(
+                        Glyphs.ChevronDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp).rotate(if (expanded) 180f else 0f),
                     )
                 }
             }
@@ -1877,54 +1884,49 @@ private fun DictionaryTab(
     }
 
     suggestions?.let { list ->
-        AlertDialog(
-            onDismissRequest = { suggestions = null },
-            title = { Text(stringResource(R.string.dict_mine_title)) },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    list.forEachIndexed { i, sug ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        ) {
-                            Checkbox(
-                                checked = i in picked,
-                                onCheckedChange = { on ->
-                                    picked = if (on) picked + i else picked - i
-                                },
+        PaperAlert(
+            onDismiss = { suggestions = null },
+            title = stringResource(R.string.dict_mine_title),
+            icon = Glyphs.Spark,
+            subtitle = "отмечено ${picked.size} из ${list.size}",
+            dismiss = SheetAction(stringResource(R.string.dict_cancel)) { suggestions = null },
+            confirm = SheetAction(stringResource(R.string.dict_mine_add), icon = Glyphs.Plus) {
+                val chosen = list.filterIndexed { i, _ -> i in picked }
+                suggestions = null
+                scope.launch {
+                    for (sug in chosen) store.add(sug.from, sug.to, sug.mode, sug.note)
+                    Feedback.toast(context, context.getString(R.string.dict_mine_added, chosen.size))
+                }
+            },
+        ) {
+            list.forEachIndexed { i, sug ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                ) {
+                    Checkbox(
+                        checked = i in picked,
+                        onCheckedChange = { on ->
+                            picked = if (on) picked + i else picked - i
+                        },
+                    )
+                    Column {
+                        Text(
+                            if (sug.mode == DictMode.PROTECT) "\u0417\u0430\u0449\u0438\u0442\u0430: ${sug.from}"
+                            else "${sug.from} \u2192 ${sug.to}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (sug.note.isNotBlank()) {
+                            Text(
+                                sug.note,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            Column {
-                                Text(
-                                    if (sug.mode == DictMode.PROTECT) "\u0417\u0430\u0449\u0438\u0442\u0430: ${sug.from}"
-                                    else "${sug.from} \u2192 ${sug.to}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                                if (sug.note.isNotBlank()) {
-                                    Text(
-                                        sug.note,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val chosen = list.filterIndexed { i, _ -> i in picked }
-                    suggestions = null
-                    scope.launch {
-                        for (sug in chosen) store.add(sug.from, sug.to, sug.mode, sug.note)
-                        Feedback.toast(context, context.getString(R.string.dict_mine_added, chosen.size))
-                    }
-                }) { Text(stringResource(R.string.dict_mine_add)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { suggestions = null }) { Text(stringResource(R.string.dict_cancel)) }
-            },
-        )
+            }
+        }
     }
 
     if (showAddDialog) {
@@ -1956,7 +1958,17 @@ private fun DictionaryTab(
 
 @Composable
 private fun DictRow(entry: DictEntry, onClick: () -> Unit, onToggle: (Boolean) -> Unit) {
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+    // Строка словаря — на материале плашки, а не голой карточкой Material
+    // (24.09.2026): фаска и тон те же, что у всех плашек.
+    val look = ru.zf.pravka.ui.LocalCardLook.current
+    val shape = MaterialTheme.shapes.medium
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().then(if (look.bevel) Modifier.bevel(shape) else Modifier),
+        colors = CardDefaults.cardColors(
+            containerColor = ru.zf.pravka.ui.darkened(MaterialTheme.colorScheme.surfaceContainerLow, look.darken),
+        ),
+    ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1999,73 +2011,57 @@ private fun DictEntryDialog(
     var note by remember { mutableStateOf(entry?.note ?: "") }
     var enabled by remember { mutableStateOf(entry?.enabled ?: true) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(if (entry == null) R.string.dict_add else R.string.dict_edit)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = from,
-                    onValueChange = { from = it },
-                    label = { Text(stringResource(R.string.dict_from)) },
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
-                    singleLine = true,
+    PaperAlert(
+        onDismiss = onDismiss,
+        title = stringResource(if (entry == null) R.string.dict_add else R.string.dict_edit),
+        icon = Glyphs.Dictionary,
+        subtitle = entry?.let { if (it.hits > 0) "сработало ×${it.hits}" else null },
+        destructive = onDelete?.let { SheetAction(stringResource(R.string.dict_delete), onClick = it) },
+        confirm = SheetAction(stringResource(R.string.settings_save), icon = Glyphs.Check, enabled = from.isNotBlank()) {
+            if (from.isNotBlank()) onSave(from, to, mode, note, enabled)
+        },
+    ) {
+        PaperField(
+            value = from,
+            onValueChange = { from = it },
+            label = stringResource(R.string.dict_from),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
+        )
+        if (mode != DictMode.PROTECT) {
+            PaperField(
+                value = to,
+                onValueChange = { to = it },
+                label = stringResource(R.string.dict_to),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
+            )
+        }
+        ChipRow {
+            for (m in DictMode.entries) {
+                PaperChip(
+                    stringResource(
+                        when (m) {
+                            DictMode.HARD -> R.string.dict_mode_hard
+                            DictMode.HINT -> R.string.dict_mode_hint
+                            DictMode.PROTECT -> R.string.dict_mode_protect
+                        }
+                    ),
+                    selected = mode == m,
+                    onClick = { mode = m },
                 )
-                if (mode != DictMode.PROTECT) {
-                    OutlinedTextField(
-                        value = to,
-                        onValueChange = { to = it },
-                        label = { Text(stringResource(R.string.dict_to)) },
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
-                        singleLine = true,
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    for (m in DictMode.entries) {
-                        RadioButton(selected = mode == m, onClick = { mode = m })
-                        Text(
-                            stringResource(
-                                when (m) {
-                                    DictMode.HARD -> R.string.dict_mode_hard
-                                    DictMode.HINT -> R.string.dict_mode_hint
-                                    DictMode.PROTECT -> R.string.dict_mode_protect
-                                }
-                            ),
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                    }
-                }
-                if (mode == DictMode.HINT) {
-                    OutlinedTextField(
-                        value = note,
-                        onValueChange = { note = it },
-                        label = { Text(stringResource(R.string.dict_note)) },
-                    )
-                }
-                if (entry != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = enabled, onCheckedChange = { enabled = it })
-                        Text(stringResource(R.string.dict_enabled), Modifier.padding(start = 8.dp))
-                    }
-                }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = { if (from.isNotBlank()) onSave(from, to, mode, note, enabled) },
-            ) { Text(stringResource(R.string.settings_save)) }
-        },
-        dismissButton = {
-            Row {
-                if (onDelete != null) {
-                    TextButton(onClick = onDelete) {
-                        Text(stringResource(R.string.dict_delete), color = MaterialTheme.colorScheme.error)
-                    }
-                }
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.dict_cancel)) }
-            }
-        },
-    )
+        }
+        if (mode == DictMode.HINT) {
+            PaperField(
+                value = note,
+                onValueChange = { note = it },
+                label = stringResource(R.string.dict_note),
+                singleLine = false,
+            )
+        }
+        if (entry != null) {
+            PaperToggle(stringResource(R.string.dict_enabled), enabled, { enabled = it })
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2108,23 +2104,24 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(ScreenPad.Padding),
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         // Business-season workflow: Whisper transcribes meetings on the
         // owner's computer; this assembles the MEETING prompt + the FULL
         // current dictionary + the approved rules into one clipboard-ready
         // request for a Claude chat. Nothing is sent from the app.
-        SectionCard(label = "Для встреч") {
+        SectionCard(
+            label = "Для встреч",
+            info = "Собирает полный запрос для чистки расшифровки встречи — промпт " +
+                "«Встреча» + весь текущий словарь + принятые правила — и кладёт " +
+                "в буфер. Вставь его в чат с Клодом и добавь расшифровку.",
+        ) {
             val ctx = LocalContext.current
             val app = ctx.applicationContext as PravkaApp
-            HintText(
-                "Собирает полный запрос для чистки расшифровки встречи — промпт " +
-                    "«Встреча» + весь текущий словарь + принятые правила — и кладёт " +
-                    "в буфер. Вставь его в чат с Клодом и добавь расшифровку."
-            )
+            PaperHint("Промпт «Встреча», словарь и правила — одним запросом в буфер.")
             Spacer(Modifier.height(8.dp))
-            Button(onClick = {
+            PaperButton("Скопировать промпт для встречи", icon = Glyphs.Copy, primary = true, onClick = {
                 app.appScope.launch {
                     val template = promptStore.effective(PromptStore.PromptId.MEETING)
                     val entries = app.dictionaryStore.all().filter { it.enabled }
@@ -2151,16 +2148,26 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
                     ru.zf.pravka.target.ClipboardTarget(ctx).write(full)
                     Feedback.toast(ctx, "Скопировано: ${full.length} зн., словарь: ${entries.size}. Вставь в чат с Клодом.")
                 }
-            }) { Text("Скопировать промпт для встречи") }
+            })
         }
 
         // Промпт ночного поиска паттернов не показываем: поиск снят (15.09.2026),
         // а сам текст остался в заводских на случай сохранённой правки.
-        for (id in PromptStore.PromptId.entries.filter { it != PromptStore.PromptId.PATTERNS }) {
-            val override by promptStore.overrideFlow(id).collectAsState(initial = null)
-            val effective = override ?: promptStore.factory(id)
-            Card(onClick = { onOpen(id) }, modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
+        // Список — одной плашкой строк (24.09.2026), а не восемнадцать голых
+        // карточек: так он читается оглавлением.
+        ru.zf.pravka.ui.PaperCard(label = "промпты") {
+            val ids = PromptStore.PromptId.entries.filter { it != PromptStore.PromptId.PATTERNS }
+            ids.forEachIndexed { i, id ->
+                if (i > 0) RowRule()
+                val override by promptStore.overrideFlow(id).collectAsState(initial = null)
+                val effective = override ?: promptStore.factory(id)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable { onOpen(id) }
+                        .padding(vertical = 10.dp),
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             // getValue кидал NoSuchElement на промпте, для
@@ -2168,28 +2175,30 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
                             // Новый промпт не должен ронять Промпты: покажем
                             // его ключом, это уродливо и видно, что чинить.
                             promptTitles[id]?.let { stringResource(it) } ?: id.storageKey,
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.weight(1f),
                         )
                         if (override != null) {
                             Text(
                                 stringResource(R.string.prompt_modified),
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier
-                                    .background(MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.shapes.small)
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f), MaterialTheme.shapes.small)
                                     .padding(horizontal = 8.dp, vertical = 3.dp),
                             )
+                            Spacer(Modifier.width(6.dp))
                         }
+                        Icon(Glyphs.Forward, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                     }
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(4.dp))
                     Text(
                         effective.lineSequence().take(2).joinToString("\n"),
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
                     )
-                    Spacer(Modifier.height(6.dp))
                     Text(
                         stringResource(R.string.prompt_char_count, effective.length, effective.length / 3),
                         style = MaterialTheme.typography.labelSmall,
@@ -2224,14 +2233,17 @@ private fun PromptEditor(
         loaded = true
     }
 
+    // Системное «назад» возвращает к списку промптов, а не закрывает экран:
+    // вторая кнопка «← Назад» под шапкой с «‹» снята (24.09.2026).
+    BackHandler(onBack = onBack)
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(ScreenPad.Padding),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text(stringResource(R.string.prompt_back)) }
+            GlyphButton(Glyphs.Back, stringResource(R.string.prompt_back), onClick = onBack, tint = MaterialTheme.colorScheme.primary)
             Text(
                 promptTitles[id]?.let { stringResource(it) } ?: id.storageKey,
                 style = MaterialTheme.typography.titleMedium,
@@ -2266,28 +2278,11 @@ private fun PromptEditor(
         }
         Spacer(Modifier.height(12.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                // Placeholders live only in the CLEAN master prompt; BUSINESS
-                // and SOFTEN are directives layered on top of it.
-                if (id == PromptStore.PromptId.CLEAN_CLAUDE) {
-                    if (!text.contains(Prompts.PLACEHOLDER_INPUT)) {
-                        error = R.string.prompt_error_no_input
-                        return@Button
-                    }
-                    warning = when {
-                        !text.contains(Prompts.PLACEHOLDER_DICT) -> R.string.prompt_warning_no_dict
-                        else -> null
-                    }
-                }
-                scope.launch {
-                    promptStore.setOverride(id, text)
-                    savedMark = true
-                }
-            }) {
-                Text(stringResource(if (savedMark) R.string.settings_saved else R.string.settings_save))
-            }
-            OutlinedButton(onClick = {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            PaperButton(
+                stringResource(if (confirmReset) R.string.prompt_reset_confirm else R.string.prompt_reset),
+                icon = Glyphs.Undo,
+                onClick = {
                 if (confirmReset) {
                     scope.launch {
                         promptStore.resetToFactory(id)
@@ -2300,9 +2295,34 @@ private fun PromptEditor(
                 } else {
                     confirmReset = true
                 }
-            }) {
-                Text(stringResource(if (confirmReset) R.string.prompt_reset_confirm else R.string.prompt_reset))
-            }
+                },
+            )
+            Spacer(Modifier.weight(1f))
+            PaperButton(
+                stringResource(if (savedMark) R.string.settings_saved else R.string.settings_save),
+                icon = if (savedMark) Glyphs.Check else null,
+                primary = true,
+                onClick = {
+                    // Placeholders live only in the CLEAN master prompt; BUSINESS
+                    // and SOFTEN are directives layered on top of it.
+                    val ok = if (id == PromptStore.PromptId.CLEAN_CLAUDE) {
+                        if (!text.contains(Prompts.PLACEHOLDER_INPUT)) {
+                            error = R.string.prompt_error_no_input
+                            false
+                        } else {
+                            warning = when {
+                                !text.contains(Prompts.PLACEHOLDER_DICT) -> R.string.prompt_warning_no_dict
+                                else -> null
+                            }
+                            true
+                        }
+                    } else true
+                    if (ok) scope.launch {
+                        promptStore.setOverride(id, text)
+                        savedMark = true
+                    }
+                },
+            )
         }
     }
 }
