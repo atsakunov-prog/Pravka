@@ -109,7 +109,10 @@ object MoneyVoice {
             rubBasis = basis,
             what = it.what,
             note = if (it.heard.isNotBlank()) "сказано: ${it.heard.trim()}" else "",
-            account = if (it.cash) MoneyEntry.CASH else "",
+            // «Наличные» — это всегда половина перемещения кошелёк ↔ банк: запись
+            // встаёт на кошелёк, даже если модель забыла cash (иначе сверка не
+            // найдёт ей пополнение с обратным знаком — `MoneyMatch.linkCashMoves`).
+            account = if (it.cash || MoneyCategories.of(it.category)?.key == "cash") MoneyEntry.CASH else "",
             category = MoneyCategories.of(it.category)?.key ?: "other",
             who = MoneyCategories.WHO.firstOrNull { w -> w.first == it.who }?.first.orEmpty(),
             categoryBy = MoneyEntry.CategoryBy.MODEL,

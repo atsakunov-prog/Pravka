@@ -99,6 +99,8 @@ class Settings(private val context: Context) {
         private val KEY_M_ENABLED = booleanPreferencesKey("m_enabled")
         private val KEY_M_WITH_ZF = booleanPreferencesKey("m_with_zf")
         private val KEY_M_PUSH = booleanPreferencesKey("m_push")
+        // Образцы денежных уведомлений для разборщиков новых банков — только по тумблеру.
+        private val KEY_M_PUSH_SAMPLES = booleanPreferencesKey("m_push_samples")
         private val KEY_M_SCOPE_P = booleanPreferencesKey("m_scope_personal")
         private val KEY_M_SCOPE_Z = booleanPreferencesKey("m_scope_zf")
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
@@ -326,6 +328,11 @@ class Settings(private val context: Context) {
     // Режим отладки (15.09.2026): каждый запрос к Claude целиком — в
     // отдельный лог, чтобы владелец мог выгрузить и посмотреть, не уезжает ли
     // в модель лишнего. Выключен — транспорт ничего не пишет.
+    val mPushSamplesFlow = context.dataStore.data.map { it[KEY_M_PUSH_SAMPLES] ?: false }
+    suspend fun setMPushSamples(value: Boolean) {
+        context.dataStore.edit { it[KEY_M_PUSH_SAMPLES] = value }
+    }
+
     val dailyBackupFlow = context.dataStore.data.map { it[KEY_DAILY_BACKUP] ?: true }
     suspend fun setDailyBackup(value: Boolean) {
         context.dataStore.edit { it[KEY_DAILY_BACKUP] = value }

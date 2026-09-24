@@ -57,4 +57,17 @@ class MoneyVoiceTest {
         assertEquals(3_000_00L, d[3].rubKop)
         assertEquals("v:7:1", d[0].id)
     }
+
+    @Test fun cashMoveLandsOnWalletEvenIfModelForgotCashFlag() {
+        // «Взял 200 000 из наличных и положил на Тинькофф»: категория «наличные» —
+        // это кошелёк, иначе сверка не найдёт пополнению пару.
+        val items = listOf(MoneyVoice.Item("на Тинькофф из наличных", 200_000_00, "RUB", "двести тысяч", false, "cash", "", false, "", ""))
+        val d = MoneyVoice.toDrafts(
+            items, takeId = 8, owner = "sasha", today = java.time.LocalDate.parse("2026-09-25"),
+            noonTs = { 1000L }, takeTs = 5000L, rates = { _, _ -> null },
+        )
+        assertEquals(MoneyEntry.CASH, d.single().account)
+        assertEquals(-200_000_00L, d.single().rubKop)
+        assertTrue(MoneyMatch.isCashMove(d.single().copy(draft = false)))
+    }
 }

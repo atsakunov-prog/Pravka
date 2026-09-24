@@ -51,13 +51,18 @@ object MoneyMatch {
             }
         }
         val (withPush, pushLinked) = linkPush(list)
-        val (withVoice, voiceLinked) = linkVoice(withPush)
+        val (withCash, cashLinked) = linkCashMoves(withPush)
+        val (withVoice, voiceLinked0) = linkVoice(withCash)
+        val voiceLinked = voiceLinked0 + cashLinked
         val (withSpouse0, spouseLinked) = linkSpouse(withVoice)
         val withSpouse = linkZf(withSpouse0)
         return Result(ask(withSpouse, now), voiceLinked, pushLinked, spouseLinked, classified)
     }
 
     // ---- 2а. Пуш ↔ выписка ----
+
+    /** Вопрос о надиктованном «внёс / снял», которому банк пары не дал. */
+    const val CASH_MOVE_ORPHAN = "Надиктовано «внёс или снял наличные», а в выписке пары нет. Операция была?"
 
     /** Вопрос о пуше, которому в пришедшей выписке пары нет. */
     const val ORPHAN_PUSH = "Пуш был, а в выписке Т-Банка его нет. Операцию отменили?"
@@ -103,6 +108,66 @@ object MoneyMatch {
             byId[p.id] = p.copy(replacedBy = b.id, question = "")
         }
         return entries.map { byId[it.id] ?: it } to linked
+    }
+
+    // ---- 2б. Наличные ↔ карта ----
+
+    /**
+     * Перемещение кошелёк ↔ банк со слов владельца (25.09.2026: «взял 200 000 из
+     * наличных и положил на Тинькофф — а пуш потом подтвердит»). Надиктованное
+     * на счёте наличных с категорией «наличные» — это не трата, а половина
+     * перемещения: «внёс на карту» — кошелёк минус, «снял» — кошелёк плюс.
+     * Кошелёк меняется сразу, со слов; вторая половина — пополнение или снятие
+     * в банке ПРОТИВОПОЛОЖНОГО знака, та же сумма, от суток до до четырёх после.
+     * Связь делает банк правдой: кошелёк считает его строку с обратным знаком
+     * (`MoneyCashflow.walletMoves`), а связанный голос выбывает — ни кошелёк,
+     * ни итоги не считают перемещение дважды. Пришла выписка — связь с пуша
+     * переезжает на её строку (`linkPush`).
+     *
+     * Кандидат — то, что похоже на банкомат: категория «наличные» (правило,
+     * MCC, категория банка) или ещё не разложенное без признаков перевода
+     * человека — чужие 200 000 по СБП за внесение не считаются.
+     */
+    fun linkCashMoves(entries: List<MoneyEntry>): Pair<List<MoneyEntry>, Int> {
+        val moves = entries.filter { isCashMove(it) && it.matchId.isBlank() }.sortedBy { it.ts }
+        if (moves.isEmpty()) return entries to 0
+        val byId = entries.associateBy { it.id }.toMutableMap()
+        val taken = entries.filter { it.fromBank && it.matchId.isNotBlank() }.map { it.id }.toMutableSet()
+        var linked = 0
+        for (v in moves) {
+            val cand = entries.asSequence()
+                .filter { it.fromBank && !it.dropped && it.replacedBy.isEmpty() && it.id !in taken }
+                .filter { abs(it.rubKop + v.rubKop) <= 100L }
+                .filter { it.ts >= v.ts - DAY - DAY / 2 && it.ts <= v.ts + 4 * DAY }
+                .filter { looksLikeAtm(byId[it.id] ?: it) }
+                // Сначала узнанный банкомат, потом ближайший по времени.
+                .sortedWith(compareBy({ if ((byId[it.id] ?: it).category == "cash") 0 else 1 }, { abs(it.ts - v.ts) }))
+                .firstOrNull() ?: continue
+            taken.add(cand.id)
+            linked++
+            byId[v.id] = v.copy(matchId = cand.id, question = "")
+            val b = byId[cand.id] ?: cand
+            byId[cand.id] = b.copy(
+                matchId = v.id,
+                category = "cash",
+                // Сказал владелец — это его решение, справочник его не перебьёт.
+                categoryBy = MoneyEntry.CategoryBy.OWNER,
+                question = "",
+            )
+        }
+        return entries.map { byId[it.id] ?: it } to linked
+    }
+
+    /** Надиктованная половина перемещения кошелёк ↔ банк. */
+    fun isCashMove(e: MoneyEntry): Boolean =
+        e.source == MoneyEntry.Source.VOICE && !e.draft && !e.dropped &&
+            e.account == MoneyEntry.CASH && e.category == "cash"
+
+    private fun looksLikeAtm(e: MoneyEntry): Boolean {
+        if (e.category == "cash") return true
+        if (e.category.isNotBlank()) return false
+        val hay = MoneyRules.norm(e.what + " " + e.note)
+        return listOf("сбп", "перевод", "система быстрых", "картой:").none { hay.contains(it) }
     }
 
     // ---- 2. Голос ↔ выписка ----
@@ -257,6 +322,11 @@ object MoneyMatch {
                 orphan(e) -> e.copy(question = ORPHAN_PUSH)
                 e.fromBank && e.category.isBlank() && e.matchId.isBlank() ->
                     e.copy(question = groupText[MoneyRules.norm(e.what)].orEmpty())
+                isCashMove(e) && e.matchId.isBlank() -> {
+                    val span = covered[e.owner]
+                    val due = span != null && e.ts in span.first..span.second && now - e.ts > 3 * DAY
+                    e.copy(question = if (due) CASH_MOVE_ORPHAN else "")
+                }
                 e.source == MoneyEntry.Source.VOICE && e.matchId.isBlank() && e.account != MoneyEntry.CASH -> {
                     val span = covered[e.owner]
                     val due = span != null && e.ts in span.first..span.second && now - e.ts > 3 * DAY

@@ -36,6 +36,30 @@ class MoneyNotificationListener : NotificationListenerService() {
         runCatching { activeNotifications }.getOrNull()?.forEach { handle(it) }
     }
 
+    /**
+     * Образцы денежных уведомлений (Настройки → Деньги, тумблер «Собирать
+     * образцы»): для разборщиков пушей новых банков — Альфы и МКБ у Марианны,
+     * внесения через банкомат у Т-Банка. Решение «похоже ли на деньги» — до
+     * корутины: шторка шлёт десятки уведомлений, и тумблер читается только
+     * ради денежных.
+     */
+    private fun sample(pkg: String, title: String, extras: android.os.Bundle, n: Notification, ts: Long) {
+        val app = application as? PravkaApp ?: return
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
+        val big = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString().orEmpty()
+        if (!app.pushSamples.wanted(pkg, title, text + " " + big)) return
+        val sub = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString().orEmpty()
+        val lines = runCatching {
+            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)?.messages
+                ?.mapNotNull { it.text?.toString() }
+        }.getOrNull().orEmpty()
+        app.appScope.launch {
+            if (runCatching { app.settings.mPushSamplesFlow.first() }.getOrDefault(false)) {
+                app.pushSamples.add(pkg, title, text, big, sub, lines, ts)
+            }
+        }
+    }
+
     private fun handle(sbn: StatusBarNotification) {
         val pkg = sbn.packageName ?: return
         if (pkg == packageName) return
@@ -44,6 +68,7 @@ class MoneyNotificationListener : NotificationListenerService() {
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
         val extras = n.extras ?: return
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+        sample(pkg, title, extras, n, sbn.postTime)
         if (BankPush.from(pkg, title) == BankPush.From.OTHER) return
 
         // Телеграм кладёт непрочитанные сообщения чата списком (MessagingStyle):

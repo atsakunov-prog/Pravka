@@ -42,6 +42,67 @@ class MoneyMatchTest {
         assertEquals(-350_00L, s.cashSpentKop)
     }
 
+    // ---- Наличные ↔ карта (владелец, 25.09.2026: «наговорить "взял 200 000 из
+    // наличных и положил на Тинькофф", а когда приедет пуш — он подтвердит») ----
+
+    private fun push(id: String, what: String, rub: Long, ts: Long, note: String = "") =
+        MoneyEntry(id = id, owner = "sasha", source = MoneyEntry.Source.PUSH, ts = ts, rubKop = rub, what = what, note = note, account = "*1519")
+
+    private fun walletKop(entries: List<MoneyEntry>) = MoneyCashflow.walletMoves(entries).sumOf { it.rubKop }
+
+    @Test fun cashDepositSaidWaitsForPushThenStatementAndWalletMovesOnce() {
+        val said = voice("v1", "на Тинькофф из наличных", -200_000_00, t0, "cash", cash = true)
+        // Сказал — кошелёк похудел сразу, банка ещё нет.
+        assertEquals(-200_000_00L, walletKop(MoneyMatch.run(listOf(said), emptyList(), t0 + day).entries))
+
+        // Приехал пуш — подтвердил.
+        val r1 = MoneyMatch.run(listOf(said, push("p1", "Банкомат Т-Банка", 200_000_00, t0 + 3_600_000L)), emptyList(), t0 + day)
+        val b1 = r1.entries.associateBy { it.id }
+        assertEquals("p1", b1["v1"]!!.matchId)
+        assertEquals("v1", b1["p1"]!!.matchId)
+        assertEquals("cash", b1["p1"]!!.category)
+        assertEquals(-200_000_00L, walletKop(r1.entries))
+
+        // Пришла выписка — строка заменила пуш, связь голоса переехала на неё.
+        val row = bank("t1", "Внесение наличных", 200_000_00, t0 + 2 * 3_600_000L).copy(account = "*1519")
+        val r2 = MoneyMatch.run(r1.entries + row, emptyList(), t0 + 2 * day)
+        val b2 = r2.entries.associateBy { it.id }
+        assertEquals("t1", b2["p1"]!!.replacedBy)
+        assertEquals("t1", b2["v1"]!!.matchId)
+        assertEquals("cash", b2["t1"]!!.category)
+        assertEquals(-200_000_00L, walletKop(r2.entries))
+        // Перемещение — ни доход, ни трата.
+        val s = MoneyMatch.summary(r2.entries, t0 - day, t0 + 30 * day, withZf = true)
+        assertEquals(0L, s.incomeKop)
+        assertEquals(0L, s.expenseKop)
+    }
+
+    @Test fun atmWithdrawalSaidLinksToBankAndWalletGrowsOnce() {
+        val said = voice("v1", "снял в банкомате", 50_000_00, t0, "cash", cash = true)
+        val row = bank("t1", "Снятие в банкомате", -50_000_00, t0 + day, mcc = "6011")
+        val r = MoneyMatch.run(listOf(said, row), emptyList(), t0 + 2 * day)
+        assertEquals("t1", r.entries.first { it.id == "v1" }.matchId)
+        assertEquals(50_000_00L, walletKop(r.entries))
+    }
+
+    @Test fun cashDepositDoesNotTakeSomeonesTransferOfTheSameAmount() {
+        val said = voice("v1", "на Тинькофф из наличных", -200_000_00, t0, "cash", cash = true)
+        val transfer = push("p1", "Иван П.", 200_000_00, t0 + 3_600_000L, note = "СБП")
+        // Строка — через двое суток: пуш перевода с ней не склеивается (другое время).
+        val row = bank("t2", "Внесение наличных", 200_000_00, t0 + 2 * day)
+        val r = MoneyMatch.run(listOf(said, transfer, row), emptyList(), t0 + 2 * day)
+        val byId = r.entries.associateBy { it.id }
+        assertEquals("t2", byId["v1"]!!.matchId)
+        assertEquals("", byId["p1"]!!.matchId)
+    }
+
+    @Test fun cashDepositPushWithAtmWordIsCashEvenWithoutVoice() {
+        // Автоматически: внесение через банкомат — всегда из кошелька, не доход.
+        val r = MoneyMatch.run(listOf(push("p1", "Пополнение через банкомат", 200_000_00, t0)), emptyList(), t0 + day)
+        assertEquals("cash", r.entries.single().category)
+        assertEquals(-200_000_00L, walletKop(r.entries))
+    }
+
     @Test fun spouseTransfersStitchBothSides() {
         val rules = MoneyRules.parseText("Жена Ж. = Между нами\nМарианна: Муж М. = Между нами").rules
         val entries = listOf(

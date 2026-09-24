@@ -686,6 +686,58 @@ internal fun MoneySettings(app: PravkaApp) {
     // Кнопка «₽» — в «Кнопках на экране» рядом с остальными (24.09.2026);
     // модели — в «Моделях», промпты — во вкладке «Промпты».
     PaperCard(label = "пуши банка") { PushSettings(app) }
+    PushSamplesCard(app)
+}
+
+/**
+ * Сбор образцов денежных уведомлений (25.09.2026): разборщик пушей нового
+ * банка пишется по настоящим текстам. Включил, неделю пожил, «Поделиться
+ * образцами» — и файл уходит тому, кто пишет разбор. Нужен тот же доступ к
+ * уведомлениям, что и пушам банка.
+ */
+@Composable
+private fun PushSamplesCard(app: PravkaApp) {
+    val context = LocalContext.current
+    val on by app.settings.mPushSamplesFlow.collectAsState(initial = false)
+    var count by remember { mutableStateOf(0) }
+    LaunchedEffect(on) {
+        while (true) {
+            count = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.pushSamples.count() }
+            kotlinx.coroutines.delay(3_000)
+        }
+    }
+    PaperCard(
+        label = "образцы пушей",
+        info = "Пока включено, каждое уведомление, похожее на денежное (есть сумма в рублях или оно " +
+            "от банка), записывается целиком в файл базы. Нужно, чтобы научить Правку пушам нового " +
+            "банка — Альфы, МКБ, внесения через банкомат: разбор пишется по настоящим текстам. " +
+            "Собрал — «Поделиться образцами», и выключи: чужие уведомления копятся, только пока их " +
+            "собирают. Хранятся последние 400.",
+    ) {
+        ru.zf.pravka.ui.PaperToggle(
+            title = "Собирать образцы",
+            checked = on,
+            onCheckedChange = { v -> app.appScope.launch { app.settings.setMPushSamples(v) } },
+            hint = if (count > 0) "собрано: $count" else "пока пусто",
+        )
+        if (count > 0) {
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                ru.zf.pravka.ui.PaperButton("Поделиться образцами", icon = ru.zf.pravka.ui.Glyphs.Share, onClick = {
+                    val f = app.pushSamples.fileForShare() ?: return@PaperButton
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent.createChooser(
+                                ru.zf.pravka.data.shareFileIntent(context, f, "text/plain"),
+                                "Образцы пушей",
+                            )
+                        )
+                    }
+                })
+                ru.zf.pravka.ui.PaperTextButton("Очистить", onClick = { app.pushSamples.clear(); count = 0 })
+            }
+        }
+    }
 }
 
 
