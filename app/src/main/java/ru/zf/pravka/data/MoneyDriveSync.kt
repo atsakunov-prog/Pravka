@@ -124,6 +124,10 @@ internal class MoneyDriveSync(
             lastLoggedError = ""
             return s
         } catch (e: Throwable) {
+            // Что бы ни сорвалось, сложенное в памяти могло уйти дальше базы:
+            // следующий обмен перечитает журналы с диска, где лежит только
+            // то, что уже легло в базу.
+            merged = null
             if (e is kotlinx.coroutines.CancellationException) throw e
             val why = when (e) {
                 is GoogleAuth.AuthException, is GoogleDrive.DriveException -> e.message.orEmpty()
@@ -147,7 +151,10 @@ internal class MoneyDriveSync(
     private suspend fun exchange(): Status {
         val me = device
         dir.mkdirs()
-        val m = merged ?: load().also { merged = it }
+        // Через ту же очередь записи: скачанные куски прошлого обмена могли
+        // ещё стоять в ней — читать надо после них.
+        val m = merged ?: (DiskWriter.call(60_000) { load() } ?: throw java.io.IOException("журналы обмена не прочитались за минуту"))
+            .also { merged = it }
 
         // 1. Своё.
         val snapshot: SyncFlat = store.exchange { s -> null to local(s).flat() }
@@ -176,21 +183,23 @@ internal class MoneyDriveSync(
             else if (r.md5 != md5(passport)) drive.update(r.id, passport, MIME)
         }
 
-        // 3. Чужое — только изменившееся.
+        // 3. Чужое — только изменившееся. Складывается, когда скачано ВСЁ:
+        // оборвалась сеть на втором куске — первый не остаётся в памяти
+        // несложенным в базу (иначе следующий обмен отправил бы старые поля
+        // базы как свежие правки и откатил чужое).
         val fresh = ArrayList<Pair<File, ByteArray>>()
-        val from = HashMap<String, Int>()
         for (r in remote) {
-            val c = MoneySync.parseChunk(r.name)
-            val dev = c?.device ?: MoneySync.parseDeviceFile(r.name) ?: continue
+            val dev = MoneySync.parseChunk(r.name)?.device ?: MoneySync.parseDeviceFile(r.name) ?: continue
             if (dev == me) continue
             val copy = File(dir, r.name)
             if (copy.isFile && md5(copy) == r.md5) continue
-            val bytes = drive.download(r.id)
-            if (c != null) {
-                val touched = m.fold(MoneySync.decodeAll(String(bytes, Charsets.UTF_8)))
-                from[dev] = (from[dev] ?: 0) + touched.size
-            }
-            fresh.add(copy to bytes)
+            fresh.add(copy to drive.download(r.id))
+        }
+        val from = HashMap<String, Int>()
+        for ((f, bytes) in fresh) {
+            val dev = MoneySync.parseChunk(f.name)?.device ?: continue
+            val touched = m.fold(MoneySync.decodeAll(String(bytes, Charsets.UTF_8)))
+            from[dev] = (from[dev] ?: 0) + touched.size
         }
 
         // 4. База — к сложенному.
