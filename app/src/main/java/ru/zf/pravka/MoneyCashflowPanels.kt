@@ -162,16 +162,22 @@ internal fun BreakdownDialog(b: Breakdown, onDismiss: () -> Unit) {
 @Composable
 internal fun CashflowCard(app: PravkaApp, entries: List<MoneyEntry>, month: YearMonth, ms: MoneyScope) {
     val months = remember(month) { listOf(month.minusMonths(2), month.minusMonths(1), month) }
-    val rows = remember(entries, month, ms) { MoneyCashflow.build(entries, months, ms) }
-    val anchors = remember(entries) { app.moneyEngine.anchors() }
-    val bounds = remember(entries, month, anchors, ms) {
-        months.map { ym ->
+    val data = rememberCalc("dds", Ref(entries), month, ms) {
+        val anchors = app.moneyEngine.anchors()
+        val rows = MoneyCashflow.build(entries, months, ms)
+        val bounds = months.map { ym ->
             val p = MoneyStats.of(MoneyStats.Kind.MONTH, ym.atDay(1))
             fun known(at: Long) = MoneyCashflow.balances(entries, anchors, at, at).filter { ms.showsAccount(it.name) }
                 .mapNotNull { it.kop }.takeIf { it.isNotEmpty() }?.sum()
             known(p.from - 1) to known(minOf(p.to - 1, System.currentTimeMillis()))
         }
+        rows to bounds
     }
+    if (data == null) {
+        PaperCard(label = "ДДС · движение денег · " + MoneyFormat.K) { PaperHint("считаю…") }
+        return
+    }
+    val (rows, bounds) = data
     var open by remember { mutableStateOf(setOf<String>()) }
     var shown by remember { mutableStateOf<Breakdown?>(null) }
     val ru = Locale.forLanguageTag("ru")
@@ -299,11 +305,20 @@ private fun CashLine(
 internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneyScope) {
     val scope = app.appScope
     val now = System.currentTimeMillis()
-    val anchors = remember(entries, app.moneyStore.stateFlow.value.balances) { app.moneyEngine.anchors() }
-    val accounts = remember(entries, anchors, ms) {
-        MoneyCashflow.balances(entries, anchors, now, now - 90L * 86_400_000L).filter { ms.showsAccount(it.name) }
+    val balancesRef = Ref(app.moneyStore.stateFlow.value.balances)
+    val data = rememberCalc("balance", Ref(entries), balancesRef, ms) {
+        val anchors = app.moneyEngine.anchors()
+        Triple(
+            MoneyCashflow.balances(entries, anchors, now, now - 90L * 86_400_000L).filter { ms.showsAccount(it.name) },
+            MoneyCashflow.loanDebt(entries, now),
+            MoneyCashflow.loansByLender(entries, now),
+        )
     }
-    val loans = remember(entries) { MoneyCashflow.loanDebt(entries, now) }
+    if (data == null) {
+        PaperCard(label = "баланс · " + MoneyFormat.K) { PaperHint("считаю…") }
+        return
+    }
+    val (accounts, loans, lenders) = data
     var editing by remember { mutableStateOf<String?>(null) }
     var shown by remember { mutableStateOf<Breakdown?>(null) }
     fun open(a: MoneyCashflow.Account) {
@@ -318,7 +333,6 @@ internal fun BalanceCard(app: PravkaApp, entries: List<MoneyEntry>, ms: MoneySco
     // Долговой счёт — в обязательствах и с нулём: «Займ от ЗФ 0» в активах читался как деньги.
     val assets = accounts.filter { it.kop != null && it.kop >= 0 && !MoneyCashflow.isDebtAccount(it.name) }
     val debts = accounts.filter { it.kop != null && (it.kop < 0 || MoneyCashflow.isDebtAccount(it.name)) }
-    val lenders = remember(entries) { MoneyCashflow.loansByLender(entries, now) }
     val unknown = accounts.filter { it.kop == null }
     val assetSum = assets.sumOf { it.kop ?: 0 }
     val debtSum = debts.sumOf { it.kop ?: 0 } - loans
@@ -419,11 +433,14 @@ private fun TotalRow(title: String, kop: Long, color: androidx.compose.ui.graphi
 @Composable
 internal fun AccountsCard(app: PravkaApp, entries: List<MoneyEntry>, period: MoneyStats.Period, ms: MoneyScope) {
     val scope = app.appScope
-    val anchors = remember(entries, app.moneyStore.stateFlow.value.balances) { app.moneyEngine.anchors() }
-    val flows = remember(entries, anchors, period, ms) {
-        MoneyCashflow.accountFlows(entries, anchors, period.from, period.to, System.currentTimeMillis())
+    val flows = rememberCalc("accounts", Ref(entries), Ref(app.moneyStore.stateFlow.value.balances), period, ms) {
+        MoneyCashflow.accountFlows(entries, app.moneyEngine.anchors(), period.from, period.to, System.currentTimeMillis())
             .filter { it.inKop != 0L || it.outKop != 0L || it.endKop != null }
             .filter { ms.showsAccount(it.name) }
+    }
+    if (flows == null) {
+        PaperCard(label = "счета · " + MoneyFormat.K) { PaperHint("считаю…") }
+        return
     }
     var open by remember { mutableStateOf(setOf<String>()) }
     var shown by remember { mutableStateOf<Breakdown?>(null) }

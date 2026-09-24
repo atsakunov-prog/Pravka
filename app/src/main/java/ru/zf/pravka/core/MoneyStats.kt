@@ -209,10 +209,16 @@ object MoneyMerchants {
         "mcba|atm|банкомат|выдача наличных|снятие" to "Банкомат",
     ).map { (re, name) -> Regex(re, RegexOption.IGNORE_CASE) to name }
 
-    fun canonical(what: String): String {
+    // Двадцать регулярок на запись — дорого, а названий в журнале в разы меньше, чем записей.
+    private val memo = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val TAIL_NUMBER = Regex("[\\s_#№-]*\\d[\\d_.\\s-]*$")
+
+    fun canonical(what: String): String = memo.getOrPut(what) { compute(what) }
+
+    private fun compute(what: String): String {
         val w = what.trim()
         BRANDS.firstOrNull { it.first.containsMatchIn(w) }?.let { return it.second }
         // Номер кассы и магазина в хвосте — не часть имени: «MAGAZIN 382» и «MAGAZIN 17» — одна сеть.
-        return w.replace(Regex("[\\s_#№-]*\\d[\\d_.\\s-]*$"), "").trim().ifEmpty { w }
+        return w.replace(TAIL_NUMBER, "").trim().ifEmpty { w }
     }
 }

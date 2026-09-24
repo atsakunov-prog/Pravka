@@ -301,10 +301,28 @@ object MoneyCashflow {
         return add to stale
     }
 
-    private fun stripCard(account: String) = account.replace(Regex("""\s*\*\d{4}\b"""), "").trim()
+    private val CARD_SUFFIX = Regex("""\s*\*\d{4}\b""")
+
+    private fun stripCard(account: String) = account.replace(CARD_SUFFIX, "").trim()
+
+    /**
+     * Память последнего расчёта по САМОМУ списку (по ссылке, не по
+     * содержимому): вкладка за одно открытие зовёт раскладку по счетам
+     * восемь-девять раз — для начала и конца трёх месяцев ДДС, баланса и
+     * «Счетов», — а журнал между ними тот же. Владелец, 24.09.2026: «секунды
+     * 3–4 она открывается».
+     */
+    private class Memo<T>(val of: List<MoneyEntry>, val value: T)
+    @Volatile private var cardsMemo: Memo<Map<String, String>>? = null
+    @Volatile private var movesMemo: Memo<Map<String, List<MoneyEntry>>>? = null
 
     /** Карта Т-Банка → счёт, по строкам выписки: «1519» → «Т-Банк · Black Premium». */
-    fun cardMap(entries: List<MoneyEntry>): Map<String, String> =
+    fun cardMap(entries: List<MoneyEntry>): Map<String, String> {
+        cardsMemo?.takeIf { it.of === entries }?.let { return it.value }
+        return computeCardMap(entries).also { cardsMemo = Memo(entries, it) }
+    }
+
+    private fun computeCardMap(entries: List<MoneyEntry>): Map<String, String> =
         entries.filter { it.source == MoneyEntry.Source.TINKOFF || it.source == MoneyEntry.Source.TBIZ }
             .mapNotNull { e ->
                 BankPush.cardOf(e.account).takeIf { it.isNotEmpty() }?.let {
@@ -343,6 +361,11 @@ object MoneyCashflow {
      * знаком: заплатил 400 000 — долг меньше на 400 000).
      */
     fun movesByAccount(entries: List<MoneyEntry>): Map<String, List<MoneyEntry>> {
+        movesMemo?.takeIf { it.of === entries }?.let { return it.value }
+        return computeMoves(entries).also { movesMemo = Memo(entries, it) }
+    }
+
+    private fun computeMoves(entries: List<MoneyEntry>): Map<String, List<MoneyEntry>> {
         val cards = cardMap(entries)
         val usable = entries.filter { !it.draft && !it.dropped && it.replacedBy.isEmpty() }
         val bank = usable.mapNotNull { e -> accountOf(e, cards)?.let { it to e } }.groupBy({ it.first }, { it.second })
@@ -356,12 +379,23 @@ object MoneyCashflow {
         val loan = usable.filter { it.category == "zf_loan" && MoneyMatch.zfSide(it) }
         // Округления: копилка получила — счёт покупки отдал ту же сумму в ту же
         // секунду (строки на нём нет). Чей счёт — по покупке рядом по времени.
-        val tinkoff = usable.filter { it.source == MoneyEntry.Source.TINKOFF && it.category != "roundup" }.sortedBy { it.ts }
-        val fallback = tinkoff.groupingBy { accountOf(it, cards) }.eachCount().maxByOrNull { it.value }?.key
+        // Покупки — по времени и со своим счётом, посчитанным один раз; округление
+        // ищет свою покупку двоичным поиском, а не перебором всех записей
+        // (1 662 округления × 4 600 строк — это и были секунды открытия).
+        val buys = usable.filter { it.source == MoneyEntry.Source.TINKOFF && it.category != "roundup" && it.rubKop < 0 }
+            .sortedBy { it.ts }
+        val buyTs = LongArray(buys.size) { buys[it].ts }
+        val buyAcc = Array(buys.size) { accountOf(buys[it], cards) }
+        val fallback = buyAcc.filterNotNull().groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
         val rounds = usable.filter { it.category == "roundup" && it.source == MoneyEntry.Source.TINKOFF }.mapNotNull { r ->
-            val buy = tinkoff.lastOrNull { it.ts in (r.ts - 10_000)..r.ts && it.rubKop < 0 && accountOf(it, cards) != accountOf(r, cards) }
-            val acc = buy?.let { accountOf(it, cards) } ?: fallback ?: return@mapNotNull null
-            acc to r.copy(id = r.id + "~округление", rubKop = -r.rubKop)
+            val own = accountOf(r, cards)
+            var i = java.util.Arrays.binarySearch(buyTs, r.ts).let { if (it >= 0) { var j = it; while (j + 1 < buyTs.size && buyTs[j + 1] == r.ts) j++; j } else -it - 2 }
+            var acc: String? = null
+            while (i >= 0 && buyTs[i] >= r.ts - 10_000) {
+                if (buyAcc[i] != own) { acc = buyAcc[i]; break }
+                i--
+            }
+            (acc ?: fallback ?: return@mapNotNull null) to r.copy(id = r.id + "~округление", rubKop = -r.rubKop)
         }.groupBy({ it.first }, { it.second })
         val withRounds = bank.toMutableMap()
         rounds.forEach { (acc, list) -> withRounds[acc] = withRounds[acc].orEmpty() + list }

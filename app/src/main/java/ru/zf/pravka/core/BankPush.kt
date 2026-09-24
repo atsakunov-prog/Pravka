@@ -153,5 +153,8 @@ object BankPush {
     }
 
     /** Последние четыре цифры карты из счёта записи: «Black Premium *1519» → «1519». */
-    fun cardOf(account: String): String = Regex("""\*(\d{4})\b""").find(account)?.groupValues?.get(1).orEmpty()
+    // Регулярка — одна на всё: её зовут на каждую из тысяч записей при каждом пересчёте вкладки.
+    private val CARD_TAIL = Regex("""\*(\d{4})\b""")
+
+    fun cardOf(account: String): String = CARD_TAIL.find(account)?.groupValues?.get(1).orEmpty()
 }

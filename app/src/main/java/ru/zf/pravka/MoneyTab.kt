@@ -46,6 +46,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.MoneyCategories
+import ru.zf.pravka.core.MoneyEngine
 import ru.zf.pravka.core.MoneyEntry
 import ru.zf.pravka.core.MoneyFormat
 import ru.zf.pravka.core.MoneyMerchants
@@ -105,7 +106,8 @@ internal fun MoneyTab(
     val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
     val zOn by app.settings.mScopeZfFlow.collectAsState(initial = false)
     // «Личное · ЗФ»: итоги — по назначению, ДДС и счета — по стороне (см. `MoneyScope`).
-    val ms = remember(state, pOn, zOn) { app.moneyEngine.scope(pOn, zOn) }
+    val stateRef = Ref(state)
+    val ms = remember(stateRef, pOn, zOn) { app.moneyEngine.scope(pOn, zOn) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -153,18 +155,41 @@ internal fun MoneyTab(
     }
 
     val entries = state.entries
-    val totals = remember(state, period, ms) { MoneyStats.totals(entries, period, ms) }
-    val cats = remember(state, period, ms) { MoneyStats.categories(entries, period, ms) }
-    val daily = remember(state, period, ms) { MoneyStats.daily(entries, period, ms) }
-    val pace = remember(state, period, ms) { MoneyStats.pace(entries, period, ms, today) }
-    val trend = remember(state, ms) { MoneyStats.trend(entries, today, 6, ms) }
-    val recurring = remember(state, ms) { MoneyStats.recurring(entries, today, ms) }
-    val biggest = remember(state, period, ms) { MoneyStats.biggest(entries, period, ms) }
-    val drafts = remember(state) { entries.filter { it.draft && !it.dropped }.sortedByDescending { it.ts } }
-    val questions = remember(state) { app.moneyEngine.questions() }
-    val journal = remember(state, period) {
-        entries.filter { !it.draft && !it.dropped && it.ts >= period.from && it.ts < period.to }.sortedByDescending { it.ts }
+    // Всё тяжёлое — одним заходом на фоне и с памятью: вкладка не ждёт расчёта.
+    val calc = rememberCalc("tab", stateRef, period, ms) {
+        TabCalc(
+            totals = MoneyStats.totals(entries, period, ms),
+            cats = MoneyStats.categories(entries, period, ms),
+            daily = MoneyStats.daily(entries, period, ms),
+            pace = MoneyStats.pace(entries, period, ms, today),
+            trend = MoneyStats.trend(entries, today, 6, ms),
+            recurring = MoneyStats.recurring(entries, today, ms),
+            biggest = MoneyStats.biggest(entries, period, ms),
+            drafts = entries.filter { it.draft && !it.dropped }.sortedByDescending { it.ts },
+            questions = app.moneyEngine.questions(),
+            journal = entries.filter { !it.draft && !it.dropped && it.ts >= period.from && it.ts < period.to }.sortedByDescending { it.ts },
+        )
     }
+    if (calc == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                androidx.compose.material3.CircularProgressIndicator()
+                Spacer(Modifier.height(8.dp))
+                PaperHint("считаю…")
+            }
+        }
+        return
+    }
+    val totals = calc.totals
+    val cats = calc.cats
+    val daily = calc.daily
+    val pace = calc.pace
+    val trend = calc.trend
+    val recurring = calc.recurring
+    val biggest = calc.biggest
+    val drafts = calc.drafts
+    val questions = calc.questions
+    val journal = calc.journal
     // Сколько ждёт владельца — прямо на чипе: иначе вопросы и траты без «ОК»
     // за чипом «Разобрать» молчали бы, пока туда не зайдёшь.
     val waiting = questions.size + drafts.size
@@ -723,3 +748,17 @@ private fun dayLetter(d: java.time.LocalDate): String = listOf("пн", "вт", "
 
 private fun stamp(ts: Long, withTime: Boolean = true): String =
     SimpleDateFormat(if (withTime) "d MMM, HH:mm" else "d MMM", Locale.forLanguageTag("ru")).format(Date(ts))
+
+/** Всё, что вкладка считает по журналу за один заход (на фоне, см. `MoneyCalc.kt`). */
+internal data class TabCalc(
+    val totals: MoneyStats.Totals,
+    val cats: List<MoneyStats.Category>,
+    val daily: List<Long>,
+    val pace: MoneyStats.Pace,
+    val trend: List<MoneyStats.Month>,
+    val recurring: List<MoneyStats.Recurring>,
+    val biggest: List<MoneyEntry>,
+    val drafts: List<MoneyEntry>,
+    val questions: List<MoneyEngine.Question>,
+    val journal: List<MoneyEntry>,
+)
