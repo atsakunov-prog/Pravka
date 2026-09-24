@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -13,23 +14,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -39,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,7 +50,18 @@ import ru.zf.pravka.data.NightReviewStore
 import ru.zf.pravka.data.PromptVersions
 import ru.zf.pravka.data.StoreFiles
 import ru.zf.pravka.data.shareFileIntent
+import ru.zf.pravka.ui.ChipRow
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.GlyphButton
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.InfoButton
+import ru.zf.pravka.ui.PaperButton
+import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.PaperChip
+import ru.zf.pravka.ui.PaperField
+import ru.zf.pravka.ui.PaperTextButton
+import ru.zf.pravka.ui.PaperToggle
+import ru.zf.pravka.ui.ScreenPad
 
 // «Ещё → Разборы» (16–18.09.2026): ночной разбор диктовок, правка промпта и
 // ручное сравнение моделей (CompareCard); ночная тень снята 18.09, её старые
@@ -72,6 +73,10 @@ import ru.zf.pravka.ui.Feedback
 // каждому внизу совет; советы вместе с предложениями выгружать логом и
 // отправлять в Claude Code». Так и сделано: чипы переключают список, строки
 // уходят из списка по действию, лог — кнопкой.
+//
+// Второе издание (24.09.2026): тумблеры — строками с «i» (длинные пояснения
+// под каждым тумблером ушли за неё), степперы — значками «−/+», чипы и
+// кнопки — из набора; главная кнопка — одна на плашку.
 
 private val dayTime = SimpleDateFormat("EEE dd.MM HH:mm", Locale("ru"))
 
@@ -95,8 +100,8 @@ internal fun ReviewsTab(app: PravkaApp) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(ScreenPad.Padding),
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         BoardCard(app, runs)
         ControlsCard(app, runs)
@@ -110,15 +115,23 @@ internal fun ReviewsTab(app: PravkaApp) {
             SectionCard(label = "История") {
                 for (run in history) {
                     val open = run.id in openHistory
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    val toggle = { openHistory = if (open) openHistory - run.id else openHistory + run.id }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().clickable(onClick = toggle),
+                    ) {
                         Text(
                             "${dayTime.format(Date(run.startedAt))} · ${kindLabel(run)} · ${statusLine(run)}",
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = { openHistory = if (open) openHistory - run.id else openHistory + run.id }) {
-                            Text(if (open) "Скрыть" else "Открыть")
-                        }
+                        GlyphButton(
+                            Glyphs.ChevronDown,
+                            if (open) "скрыть" else "открыть",
+                            onClick = toggle,
+                            size = 34.dp,
+                            modifier = Modifier.rotate(if (open) 180f else 0f),
+                        )
                     }
                 }
             }
@@ -131,6 +144,27 @@ internal fun ReviewsTab(app: PravkaApp) {
                 }
             }
         }
+    }
+}
+
+/**
+ * Ступенька «−  значение  +» строкой: число с подписью слева, значки справа.
+ * В наборе такой детали нет, а здесь их две — потолок денег и час запуска
+ * (24.09.2026); `PaperSlider` сюда не подходит: шаг один, а ряд короткий.
+ */
+@Composable
+private fun StepperRow(
+    text: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+    info: String? = null,
+    infoTitle: String = text,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        if (info != null) InfoButton(infoTitle, info)
+        GlyphButton(Glyphs.Minus, "меньше", onClick = onMinus, tint = MaterialTheme.colorScheme.onSurface)
+        GlyphButton(Glyphs.Plus, "больше", onClick = onPlus, tint = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -149,47 +183,48 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
     val tuneRunning = runs.any { it.active && it.isTune }
 
     SectionCard(label = "Ночью") {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = enabled, onCheckedChange = { on -> scope.launch { settings.setNightReviewEnabled(on) } })
-            Spacer(Modifier.width(8.dp))
-            Text("Разбор журналов батчем: разбор и проверка моделью, согласование — в коде", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        }
-        HintText("Высоковероятное применяется само (кроме отклонённого проверкой и придержанного согласованием), низковероятное отбрасывается. Промпт не трогает. Недельный — в ночь на пятницу, всегда. Модель и усилие — в настройках, группа «Модели».")
-        Spacer(Modifier.height(4.dp))
+        PaperToggle(
+            title = "Разбор журналов батчем",
+            hint = "разбор и проверка моделью, согласование — в коде",
+            checked = enabled,
+            onCheckedChange = { on -> scope.launch { settings.setNightReviewEnabled(on) } },
+            info = "Высоковероятное применяется само (кроме отклонённого проверкой и придержанного согласованием), низковероятное отбрасывается. Промпт не трогает. Недельный — в ночь на пятницу, всегда. Модель и усилие — в настройках, группа «Модели».",
+        )
         val dailyOn by settings.nightDailyEnabledFlow.collectAsState(initial = false)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = dailyOn, enabled = enabled, onCheckedChange = { on -> scope.launch { settings.setNightDailyEnabled(on) } })
-            Spacer(Modifier.width(8.dp))
-            Text("Сутки каждую ночь", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        }
-        HintText("Выключено с завода: ослышка становится словарной, когда повторяется, а за сутки она редко повторится — шесть ночей по $0,6–0,7 давали ту же картину, что одна недельная. Кнопка «Сутки» ниже работает и так.")
+        PaperToggle(
+            title = "Сутки каждую ночь",
+            checked = dailyOn,
+            enabled = enabled,
+            onCheckedChange = { on -> scope.launch { settings.setNightDailyEnabled(on) } },
+            info = "Выключено с завода: ослышка становится словарной, когда повторяется, а за сутки она редко повторится — шесть ночей по $0,6–0,7 давали ту же картину, что одна недельная. Кнопка «Сутки» ниже работает и так.",
+        )
+        PaperToggle(
+            title = "Правка промпта раз в неделю",
+            hint = "Опус 5.5 по идеям недели, с измерением",
+            checked = tuneOn,
+            onCheckedChange = { on -> scope.launch { settings.setPromptTuneEnabled(on) } },
+            info = "В ночь на субботу. Новый промпт перечищает диктовки недели, слепой судья сравнивает с прежним; принимается только заметный перевес; через неделю откат, если правок руками стало больше.",
+        )
         Spacer(Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = tuneOn, onCheckedChange = { on -> scope.launch { settings.setPromptTuneEnabled(on) } })
-            Spacer(Modifier.width(8.dp))
-            Text("Правка промпта раз в неделю: Опус 5.5 по идеям недели, с измерением", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        }
-        HintText("В ночь на субботу. Новый промпт перечищает диктовки недели, слепой судья сравнивает с прежним; принимается только заметный перевес; через неделю откат, если правок руками стало больше.")
-        Spacer(Modifier.height(6.dp))
         val budget by settings.nightBudgetUsdFlow.collectAsState(initial = 4)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Потолок дня для автоматов: $$budget", style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.width(8.dp))
-            OutlinedButton(onClick = { scope.launch { settings.setNightBudgetUsd(budget - 1) } }) { Text("−") }
-            Spacer(Modifier.width(4.dp))
-            OutlinedButton(onClick = { scope.launch { settings.setNightBudgetUsd(budget + 1) } }) { Text("+") }
-        }
-        HintText("Расход по приложению за вчера или за сегодня выше потолка — разбор и правка промпта сами не стартуют, идущее измерение ждёт завтра. Кнопки потолок не смотрят.")
+        StepperRow(
+            text = "Потолок дня для автоматов: $$budget",
+            infoTitle = "Потолок дня",
+            onMinus = { scope.launch { settings.setNightBudgetUsd(budget - 1) } },
+            onPlus = { scope.launch { settings.setNightBudgetUsd(budget + 1) } },
+            info = "Расход по приложению за вчера или за сегодня выше потолка — разбор и правка промпта сами не стартуют, идущее измерение ждёт завтра. Кнопки потолок не смотрят.",
+        )
+        StepperRow(
+            text = "Запуск в ${"%02d".format(hour)}:00",
+            onMinus = { scope.launch { settings.setNightReviewHour((hour + 23) % 24) } },
+            onPlus = { scope.launch { settings.setNightReviewHour((hour + 1) % 24) } },
+        )
         Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Запуск в ${"%02d".format(hour)}:00", style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.width(8.dp))
-            OutlinedButton(onClick = { scope.launch { settings.setNightReviewHour((hour + 23) % 24) } }) { Text("−") }
-            Spacer(Modifier.width(4.dp))
-            OutlinedButton(onClick = { scope.launch { settings.setNightReviewHour((hour + 1) % 24) } }) { Text("+") }
-        }
-        Spacer(Modifier.height(6.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Главная — «Сутки», справа под пальцем; «Неделю» и «Промпт» — контуром.
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+        ) {
             fun launchReview(kind: String) {
                 busy = true
                 scope.launch {
@@ -199,9 +234,9 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                     busy = false
                 }
             }
-            Button(enabled = !busy && !reviewRunning, onClick = { launchReview(NightReviewPolicy.DAILY) }) { Text("Сутки") }
-            OutlinedButton(enabled = !busy && !reviewRunning, onClick = { launchReview(NightReviewPolicy.WEEKLY) }) { Text("Неделю") }
-            OutlinedButton(
+            PaperButton("Неделю", enabled = !busy && !reviewRunning, onClick = { launchReview(NightReviewPolicy.WEEKLY) })
+            PaperButton(
+                "Промпт",
                 enabled = !busy && !tuneRunning,
                 onClick = {
                     busy = true
@@ -212,25 +247,31 @@ private fun ControlsCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                         busy = false
                     }
                 },
-            ) { Text("Промпт") }
+            )
+            PaperButton(
+                "Сутки",
+                primary = true,
+                enabled = !busy && !reviewRunning,
+                onClick = { launchReview(NightReviewPolicy.DAILY) },
+            )
         }
         // Ревизия батчей у Anthropic по кнопке: то же, что делает старт приложения.
-        Row {
-            TextButton(enabled = !busy, onClick = {
-                busy = true
-                scope.launch {
-                    val closed = runCatching { ru.zf.pravka.core.NightSweep.closeShadowRuns(app) }.getOrDefault(0)
-                    val r = ru.zf.pravka.core.NightSweep.sweepBatches(app)
-                    Feedback.toast(context, (if (closed > 0) "закрыто прогонов тени $closed; " else "") + r)
-                    busy = false
-                }
-            }) { Text("Проверить батчи у Anthropic") }
-        }
+        PaperTextButton("Проверить батчи у Anthropic", icon = Glyphs.Refresh, enabled = !busy, onClick = {
+            busy = true
+            scope.launch {
+                val closed = runCatching { ru.zf.pravka.core.NightSweep.closeShadowRuns(app) }.getOrDefault(0)
+                val r = ru.zf.pravka.core.NightSweep.sweepBatches(app)
+                Feedback.toast(context, (if (closed > 0) "закрыто прогонов тени $closed; " else "") + r)
+                busy = false
+            }
+        })
         val month = runs.filter { it.stage == "done" && it.startedAt > System.currentTimeMillis() - 30 * 86_400_000L }
         if (month.isNotEmpty()) {
-            Row {
-                TextButton(onClick = { exportLog(context, app, month, "Лог разборов за 30 дней") }) { Text("Лог за 30 дней для Claude Code") }
-            }
+            PaperTextButton(
+                "Лог за 30 дней для Claude Code",
+                icon = Glyphs.Export,
+                onClick = { exportLog(context, app, month, "Лог разборов за 30 дней") },
+            )
         }
     }
 }
@@ -286,6 +327,12 @@ private fun exportLog(context: Context, app: PravkaApp, runs: List<NightReviewSt
     }
 }
 
+/** «Лог для Claude Code» — одна и та же тихая кнопка у каждого прогона. */
+@Composable
+private fun LogButton(onClick: () -> Unit) {
+    PaperTextButton("Лог для Claude Code", icon = Glyphs.Export, onClick = onClick)
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReviewCard(app: PravkaApp, title: String, run: NightReviewStore.Run) {
@@ -312,11 +359,11 @@ private fun ReviewCard(app: PravkaApp, title: String, run: NightReviewStore.Run)
             // Причина целиком (правило 6), но одной строкой на сбой — не простынёй.
             Text(run.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
-        Spacer(Modifier.height(6.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            FilterChip(selected = tab == "applied", onClick = { tab = "applied" }, label = { Text("Применено ${applied.size}") })
-            FilterChip(selected = tab == "proposed", onClick = { tab = "proposed" }, label = { Text("Предложено ${proposed.size}") })
-            FilterChip(selected = tab == "ideas", onClick = { tab = "ideas" }, label = { Text("Идеи ${ideas.size}") })
+        Spacer(Modifier.height(8.dp))
+        ChipRow {
+            PaperChip("Применено ${applied.size}", selected = tab == "applied", onClick = { tab = "applied" })
+            PaperChip("Предложено ${proposed.size}", selected = tab == "proposed", onClick = { tab = "proposed" })
+            PaperChip("Идеи ${ideas.size}", selected = tab == "ideas", onClick = { tab = "ideas" })
         }
         Spacer(Modifier.height(4.dp))
         when (tab) {
@@ -329,13 +376,13 @@ private fun ReviewCard(app: PravkaApp, title: String, run: NightReviewStore.Run)
                 else {
                     if (!run.active) Row(verticalAlignment = Alignment.CenterVertically) {
                         Spacer(Modifier.weight(1f))
-                        TextButton(onClick = {
+                        PaperTextButton("Принять все", icon = Glyphs.Check, onClick = {
                             app.appScope.launch {
                                 app.nightReview.applyAll(run.id)
                                     .onSuccess { Feedback.toast(context, "Принято: $it") }
                                     .onFailure { Feedback.toast(context, "Не получилось: ${it.message}") }
                             }
-                        }) { Text("Принять все") }
+                        })
                     }
                     GroupedRows(app, run, proposed, proposedTab = true)
                 }
@@ -345,11 +392,15 @@ private fun ReviewCard(app: PravkaApp, title: String, run: NightReviewStore.Run)
                 else for (c in ideas) NoteRow(c)
             }
         }
-        Row {
+        FlowRow {
             if (run.summary.isNotBlank()) {
-                TextButton(onClick = { showSummary = !showSummary }) { Text(if (showSummary) "Скрыть сводку" else "Сводка") }
+                PaperTextButton(
+                    if (showSummary) "Скрыть сводку" else "Сводка",
+                    icon = if (showSummary) Glyphs.ChevronUp else Glyphs.ChevronDown,
+                    onClick = { showSummary = !showSummary },
+                )
             }
-            TextButton(onClick = { exportLog(context, app, listOf(run), "Лог разбора") }) { Text("Лог для Claude Code") }
+            LogButton { exportLog(context, app, listOf(run), "Лог разбора") }
         }
         if (showSummary) {
             Text(summaryBody(run.summary), style = MaterialTheme.typography.bodySmall)
@@ -364,15 +415,20 @@ private fun ReviewCard(app: PravkaApp, title: String, run: NightReviewStore.Run)
         }
         if (run.stage == "done" && (applied.isNotEmpty() || proposed.isNotEmpty())) {
             Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
+            PaperField(
                 value = replyText,
                 onValueChange = { replyText = it },
-                label = { Text("Ответить по-человечески: что вернуть, что применить") },
-                modifier = Modifier.fillMaxWidth(),
+                label = "Ответить по-человечески: что вернуть, что применить",
+                singleLine = false,
                 minLines = 2,
             )
+            Spacer(Modifier.height(6.dp))
             Row {
-                Button(
+                Spacer(Modifier.weight(1f))
+                PaperButton(
+                    if (sending) "Думаю…" else "Отправить",
+                    icon = Glyphs.Send,
+                    primary = true,
                     enabled = replyText.isNotBlank() && !sending,
                     onClick = {
                         sending = true
@@ -384,7 +440,7 @@ private fun ReviewCard(app: PravkaApp, title: String, run: NightReviewStore.Run)
                             sending = false
                         }
                     },
-                ) { Text(if (sending) "Думаю…" else "Отправить") }
+                )
             }
         }
     }
@@ -430,16 +486,10 @@ private fun ChangeRow(app: PravkaApp, run: NightReviewStore.Run, c: NightReviewS
         // изменений своей копией и решение владельца потерялось бы.
         if (!run.active) {
             if (proposedTab) {
-                IconButton(onClick = { act("apply") }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Filled.Check, contentDescription = "Принять", tint = MaterialTheme.colorScheme.primary)
-                }
-                IconButton(onClick = { act("reject") }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Filled.Close, contentDescription = "Отклонить", tint = MaterialTheme.colorScheme.error)
-                }
+                GlyphButton(Glyphs.Check, "Принять", onClick = { act("apply") }, tint = MaterialTheme.colorScheme.primary, size = 36.dp)
+                GlyphButton(Glyphs.Close, "Отклонить", onClick = { act("reject") }, tint = MaterialTheme.colorScheme.error, size = 36.dp)
             } else {
-                IconButton(onClick = { act("revert") }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Filled.Close, contentDescription = "Вернуть", tint = MaterialTheme.colorScheme.error)
-                }
+                GlyphButton(Glyphs.Close, "Вернуть", onClick = { act("revert") }, tint = MaterialTheme.colorScheme.error, size = 36.dp)
             }
             Spacer(Modifier.width(4.dp))
         }
@@ -517,9 +567,7 @@ private fun ShadowCard(run: NightReviewStore.Run) {
             Text("Примеры", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             for (c in examples) ShadowRow(c)
         }
-        if (run.stage == "done") Row {
-            TextButton(onClick = { exportLog(context, app, listOf(run), "Лог тени") }) { Text("Лог для Claude Code") }
-        }
+        if (run.stage == "done") LogButton { exportLog(context, app, listOf(run), "Лог тени") }
     }
 }
 
@@ -559,7 +607,6 @@ private fun ShadowRow(c: NightReviewStore.Change) {
  * примеры с тремя текстами по тапу. Автостарта нет: тик службы только
  * докручивает начатое.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CompareCard(app: PravkaApp, run: NightReviewStore.Run?) {
     val context = LocalContext.current
@@ -568,46 +615,52 @@ private fun CompareCard(app: PravkaApp, run: NightReviewStore.Run?) {
     var cap by remember { mutableStateOf(20) }
     var busy by remember { mutableStateOf(false) }
     val running = run?.active == true
-    SectionCard(label = "Сравнение моделей") {
-        HintText(
-            "Три плеча чистят одни и те же диктовки периода тем же промптом и словарём, что кнопка «П»: " +
-                ComparePolicy.ARMS.joinToString(", ") { it.label } + ". Судья слепой (дорога «Судья правки промпта»). Само не запускается, ничего не меняет.",
-        )
+    SectionCard(
+        label = "Сравнение моделей",
+        info = "Три плеча чистят одни и те же диктовки периода тем же промптом и словарём, что кнопка «П»: " +
+            ComparePolicy.ARMS.joinToString(", ") { it.label } + ". Судья слепой (дорога «Судья правки промпта»). " +
+            "Само не запускается, ничего не меняет.\n\n" +
+            "Берутся последние чистки периода без контекста поля. Ориентир цены — три чистки и судья " +
+            "на каждую диктовку. Потолок дня кнопка не смотрит.",
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Период", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(84.dp))
+            ChipRow {
+                for (d in ComparePolicy.DAYS) PaperChip(daysLabel(d), selected = days == d, onClick = { days = d })
+            }
+        }
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Период", style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.width(8.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (d in ComparePolicy.DAYS) FilterChip(selected = days == d, onClick = { days = d }, label = { Text(daysLabel(d)) })
+            Text("Диктовок", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(84.dp))
+            ChipRow {
+                for (n in ComparePolicy.CAPS) PaperChip("до $n", selected = cap == n, onClick = { cap = n })
             }
         }
+        Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Диктовок", style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.width(8.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (n in ComparePolicy.CAPS) FilterChip(selected = cap == n, onClick = { cap = n }, label = { Text("до $n") })
+            // Ориентир цены — живое число, оно меняется с выбором потолка.
+            Box(Modifier.weight(1f).padding(end = 8.dp)) {
+                HintText("около $" + "%.2f".format(Locale.US, cap * ComparePolicy.USD_PER_ITEM) + " за $cap диктовок")
             }
+            PaperButton(
+                if (running) "Идёт…" else "Сравнить",
+                icon = Glyphs.Play,
+                primary = true,
+                enabled = !busy && !running,
+                onClick = {
+                    busy = true
+                    scope.launch {
+                        val started = app.modelCompare.start(days, cap)
+                            .onSuccess { Feedback.toast(context, if (it.active) "Пошло: ${it.progress}" else it.summary) }
+                            .onFailure { Feedback.toast(context, "Не запустилось: ${it.message}") }
+                            .getOrNull()
+                        busy = false
+                        // Первый кусок — сразу, не дожидаясь пятиминутного тика службы; прогресс виден в карточке.
+                        if (started?.active == true) app.modelCompare.pollNow(started.id)
+                    }
+                },
+            )
         }
-        HintText(
-            "Берутся последние чистки периода без контекста поля. Ориентир цены: около $" +
-                "%.2f".format(Locale.US, cap * ComparePolicy.USD_PER_ITEM) + " за $cap диктовок — три чистки и судья. Потолок дня кнопка не смотрит.",
-        )
-        Spacer(Modifier.height(4.dp))
-        Button(
-            enabled = !busy && !running,
-            onClick = {
-                busy = true
-                scope.launch {
-                    val started = app.modelCompare.start(days, cap)
-                        .onSuccess { Feedback.toast(context, if (it.active) "Пошло: ${it.progress}" else it.summary) }
-                        .onFailure { Feedback.toast(context, "Не запустилось: ${it.message}") }
-                        .getOrNull()
-                    busy = false
-                    // Первый кусок — сразу, не дожидаясь пятиминутного тика службы; прогресс виден в карточке.
-                    if (started?.active == true) app.modelCompare.pollNow(started.id)
-                }
-            },
-        ) { Text(if (running) "Идёт…" else "Сравнить") }
         if (run != null) {
             Spacer(Modifier.height(8.dp))
             Text("Последнее · ${dayTime.format(Date(run.startedAt))}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
@@ -638,18 +691,18 @@ private fun CompareBody(app: PravkaApp, run: NightReviewStore.Run) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     if (run.active) Row {
-        TextButton(onClick = {
+        PaperTextButton("Продолжить сейчас", icon = Glyphs.Refresh, onClick = {
             app.appScope.launch {
                 app.modelCompare.pollNow(run.id)
                     .onSuccess { Feedback.toast(context, it) }.onFailure { Feedback.toast(context, "Не прошло: ${it.message}") }
             }
-        }) { Text("Продолжить сейчас") }
-        TextButton(onClick = {
+        })
+        PaperTextButton("Отменить", icon = Glyphs.Close, color = MaterialTheme.colorScheme.error, onClick = {
             app.appScope.launch {
                 app.modelCompare.cancel(run.id)
                     .onSuccess { Feedback.toast(context, "Отменено") }.onFailure { Feedback.toast(context, "Не отменилось: ${it.message}") }
             }
-        }) { Text("Отменить", color = MaterialTheme.colorScheme.error) }
+        })
     }
     if (run.error.isNotBlank()) {
         Text(run.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -664,9 +717,7 @@ private fun CompareBody(app: PravkaApp, run: NightReviewStore.Run) {
         Text("Примеры", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
         for (c in examples) CompareRow(c)
     }
-    if (run.stage == "done") Row {
-        TextButton(onClick = { exportLog(context, app, listOf(run), "Лог сравнения моделей") }) { Text("Лог для Claude Code") }
-    }
+    if (run.stage == "done") LogButton { exportLog(context, app, listOf(run), "Лог сравнения моделей") }
 }
 
 /** Пример сравнения: лучшее и худшее плечо, почему; надиктовка и три текста — по тапу. */
@@ -718,15 +769,18 @@ private fun TuneCard(app: PravkaApp, run: NightReviewStore.Run?) {
                 append('.')
             }
             Text(metrics, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row {
-                TextButton(onClick = {
+            PaperTextButton(
+                "Вернуть прежний промпт",
+                icon = Glyphs.Undo,
+                color = MaterialTheme.colorScheme.error,
+                onClick = {
                     app.appScope.launch {
                         app.promptTuner.revertActive()
                             .onSuccess { Feedback.toast(context, it) }
                             .onFailure { Feedback.toast(context, "Не получилось: ${it.message}") }
                     }
-                }) { Text("Вернуть прежний промпт", color = MaterialTheme.colorScheme.error) }
-            }
+                },
+            )
         }
         if (run == null) {
             HintText("Правки промпта ещё не было: в ночь на субботу или кнопкой «Промпт». Без идей за неделю промпт не трогается.")
@@ -755,9 +809,7 @@ private fun TuneCard(app: PravkaApp, run: NightReviewStore.Run?) {
             Text("Прежние версии", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             for (v in history) VersionRow(v)
         }
-        if (run.stage == "done") Row {
-            TextButton(onClick = { exportLog(context, app, listOf(run), "Лог правки промпта") }) { Text("Лог для Claude Code") }
-        }
+        if (run.stage == "done") LogButton { exportLog(context, app, listOf(run), "Лог правки промпта") }
     }
 }
 
@@ -790,8 +842,10 @@ private fun evalSummary(app: PravkaApp): NightBoard.EvalSummary? =
  * недели, тень, правка промпта, эвал; под идущими — «Проверить сейчас» и
  * «Отменить». Ниже — журнал ночных автоматов (night.log): последние строки,
  * сбои красным. Владелец (17.09): «единый лог, который будет показывать, что
- * работает, что нет».
+ * работает, что нет». «Обновить» — значком в строке подписи (24.09.2026):
+ * три слова в ряд под табло на узком экране не помещались.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
     val context = LocalContext.current
@@ -811,7 +865,10 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
         journal = withContext(Dispatchers.IO) { app.nightLog.readLast(40) }
     }
     val lines = NightBoard.build(runs, reviewOn, tuneOn, hour, eval, app.lastNightTickMs, System.currentTimeMillis(), dailyOn = dailyOn)
-    SectionCard(label = "Что работает") {
+    PaperCard(
+        label = "Что работает",
+        trailing = { GlyphButton(Glyphs.Refresh, "обновить", onClick = { tick++ }, size = 30.dp) },
+    ) {
         for (l in lines) {
             val color = when (l.state) {
                 "fail" -> MaterialTheme.colorScheme.error
@@ -829,7 +886,7 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                 }
                 val run = runs.firstOrNull { it.id == l.runId && it.active }
                 if (run != null) Row {
-                    TextButton(onClick = {
+                    PaperTextButton("Проверить сейчас", icon = Glyphs.Refresh, onClick = {
                         app.appScope.launch {
                             val r = when {
                                 run.isTune -> app.promptTuner.pollNow(run.id)
@@ -839,8 +896,8 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                             r.onSuccess { Feedback.toast(context, it) }.onFailure { Feedback.toast(context, "Опрос не прошёл: ${it.message}") }
                             tick++
                         }
-                    }) { Text("Проверить сейчас") }
-                    TextButton(onClick = {
+                    })
+                    PaperTextButton("Отменить", icon = Glyphs.Close, color = MaterialTheme.colorScheme.error, onClick = {
                         app.appScope.launch {
                             val r = when {
                                 run.isTune -> app.promptTuner.cancel(run.id)
@@ -850,20 +907,22 @@ private fun BoardCard(app: PravkaApp, runs: List<NightReviewStore.Run>) {
                             r.onSuccess { Feedback.toast(context, "Отменено") }.onFailure { Feedback.toast(context, "Не отменилось: ${it.message}") }
                             tick++
                         }
-                    }) { Text("Отменить", color = MaterialTheme.colorScheme.error) }
+                    })
                 }
             }
         }
-        Row {
-            TextButton(onClick = { showJournal = !showJournal }) {
-                val fails = journal.count { NightBoard.isFailureLine(it) }
-                Text((if (showJournal) "Скрыть журнал" else "Журнал") + (if (fails > 0) " · сбоев $fails" else ""), color = if (fails > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
-            }
-            TextButton(onClick = { tick++ }) { Text("Обновить") }
-            TextButton(onClick = {
+        FlowRow {
+            val fails = journal.count { NightBoard.isFailureLine(it) }
+            PaperTextButton(
+                (if (showJournal) "Скрыть журнал" else "Журнал") + (if (fails > 0) " · сбоев $fails" else ""),
+                icon = Glyphs.ListLines,
+                color = if (fails > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                onClick = { showJournal = !showJournal },
+            )
+            PaperTextButton("Весь журнал", icon = Glyphs.Export, onClick = {
                 runCatching { context.startActivity(Intent.createChooser(app.nightLog.shareIntent(), "Журнал ночных автоматов")) }
                     .onFailure { Feedback.toast(context, "Журнала ещё нет") }
-            }) { Text("Весь журнал") }
+            })
         }
         if (showJournal) {
             if (journal.isEmpty()) HintText("Журнал пуст: автоматы ещё ничего не писали.")

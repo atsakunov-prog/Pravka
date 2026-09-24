@@ -7,7 +7,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,13 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,15 +52,19 @@ import ru.zf.pravka.ui.CenteredBarRow
 import ru.zf.pravka.ui.CenteredBars
 import ru.zf.pravka.ui.ChartSlice
 import ru.zf.pravka.ui.CompareRow
+import ru.zf.pravka.ui.DayNav
 import ru.zf.pravka.ui.DayStripChart
 import ru.zf.pravka.ui.DonutChart
 import ru.zf.pravka.ui.DotRow
+import ru.zf.pravka.ui.Glyphs
 import ru.zf.pravka.ui.HourTicks
 import ru.zf.pravka.ui.KpiTile
 import ru.zf.pravka.ui.LegendRow
 import ru.zf.pravka.ui.LineChart
+import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.SignedColumns
 import ru.zf.pravka.ui.StackedColumn
 import ru.zf.pravka.ui.StackedColumns
@@ -97,10 +94,16 @@ import ru.zf.pravka.ui.StripSegment
 // часа (core/DayReport.Window.shifted), базой служат его собственные дни,
 // а порогов вроде «хорошо — это 8 часов сна» вкладка не выдумывает. Все
 // числа считает core/DayReport.kt (JVM-тесты), модель к экрану не подходит.
+//
+// Легенды графиков — за «i» в подписи плашки (24.09.2026): на плашке
+// остаются числа и живые строки, а абзацы «пунктир — это…», которых было
+// три десятка, открываются по требованию. Формулы коэффициентов остались
+// под каждым числом — это не легенда, а само число словами.
 
 private const val DAY = DayReport.DAY_MS
 private val WEEKDAYS = listOf("вс", "пн", "вт", "ср", "чт", "пт", "сб")
 private val reportDateFormat = SimpleDateFormat("d MMMM", Locale("ru"))
+private val reportWeekday = SimpleDateFormat("EEEE", Locale("ru"))
 private val reportShortDate = SimpleDateFormat("d.MM", Locale("ru"))
 private val reportIso = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 private val reportClock = SimpleDateFormat("HH:mm", Locale.US)
@@ -342,35 +345,28 @@ internal fun ReportTab(app: PravkaApp) {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = ScreenPad.Padding,
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         // ---- шапка и день ----
         item {
             // Название — в общей шапке («Общая статистика»); здесь сразу день.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { dayOffset += 1 }) {
-                    Icon(Icons.Filled.KeyboardArrowLeft, contentDescription = "раньше")
-                }
-                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                    val title = when (dayOffset) {
-                        0 -> "сегодня"
-                        1 -> "вчера"
-                        else -> weekdayOf(dayStart) + ", " + reportDateFormat.format(Date(dayStart))
-                    }
-                    Text(title, style = MaterialTheme.typography.titleMedium)
-                    PaperHint(
-                        weekdayOf(dayStart) + ", " + reportDateFormat.format(Date(dayStart)) +
-                            (if (isToday) " · до ${clockOf(now)}" else " · целиком"),
-                    )
-                }
-                IconButton(
-                    onClick = { dayOffset = (dayOffset - 1).coerceAtLeast(0) },
-                    enabled = dayOffset > 0,
-                ) {
-                    Icon(Icons.Filled.KeyboardArrowRight, contentDescription = "позже")
-                }
+            // Один навигатор с Засечкой и Едой (24.09.2026): день словом
+            // сверху, дата под ним — раньше у дальних дней дата стояла дважды,
+            // «вт, 16 сентября» и под ним снова «вт, 16 сентября».
+            val title = when (dayOffset) {
+                0 -> "Сегодня"
+                1 -> "Вчера"
+                else -> reportWeekday.format(Date(dayStart)).replaceFirstChar { it.uppercase() }
             }
+            DayNav(
+                title = title,
+                onPrev = { dayOffset += 1 },
+                onNext = if (dayOffset > 0) ({ dayOffset = (dayOffset - 1).coerceAtLeast(0) }) else null,
+                subtitle = (if (dayOffset <= 1) weekdayOf(dayStart) + ", " else "") +
+                    reportDateFormat.format(Date(dayStart)) +
+                    (if (isToday) " · до ${clockOf(now)}" else " · целиком"),
+            )
         }
 
         // ---- 1. оценка дня ----
@@ -500,7 +496,12 @@ private fun ScoreCard(
     isToday: Boolean,
 ) {
     val b = frame.balance
-    PaperCard(label = "Каким был день") {
+    PaperCard(
+        label = "Каким был день",
+        info = "Балл — часы × ценность часа категории, как в Засечке. Сотня — сильный день: " +
+            "восемь часов работы по +8 и час спорта. Место считается среди 27 предыдущих " +
+            "дней, обрезанных как этот.",
+    ) {
         RainbowScoreBar(b.net, weekMode = false)
         Spacer(Modifier.height(8.dp))
         Text(
@@ -533,11 +534,6 @@ private fun ScoreCard(
             height = 84.dp,
             hollow = if (frame.full) emptySet() else setOf(4),
             valueText = { signed(it.roundToInt()) },
-        )
-        PaperHint(
-            "Балл — часы × ценность часа категории, как в Засечке. Сотня — сильный день: " +
-                "восемь часов работы по +8 и час спорта. Место считается среди 27 предыдущих " +
-                "дней, обрезанных как этот.",
         )
     }
 }
@@ -636,8 +632,13 @@ private fun KpiCard(
             refFrame.rhythm.wakeMs?.let { "неделю назад подъём " + clockOf(it) },
         ),
     )
-    PaperCard(label = "Сутки в числах") {
-        for (pair in tiles.chunked(2)) {
+    PaperCard(
+        label = "Сутки в числах",
+        info = "Зелёная дельта — лучше, чем неделю назад, красная — хуже; телефон считается " +
+            "по дням, поэтому у экрана и отвлечений сравнение с целым днём.",
+    ) {
+        tiles.chunked(2).forEachIndexed { i, pair ->
+            if (i > 0) Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (t in pair) {
                     KpiTile(
@@ -647,12 +648,7 @@ private fun KpiCard(
                 }
                 if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
-            Spacer(Modifier.height(8.dp))
         }
-        PaperHint(
-            "Зелёная дельта — лучше, чем неделю назад, красная — хуже; телефон считается " +
-                "по дням, поэтому у экрана и отвлечений сравнение с целым днём.",
-        )
     }
 }
 
@@ -757,7 +753,11 @@ private fun StripsCard(
     refLabel: String,
     nowFrac: Float?,
 ) {
-    PaperCard(label = "День по часам") {
+    PaperCard(
+        label = "День по часам",
+        info = "Сутки слева направо, цвета — радуга категорий Засечки; риска — сейчас. " +
+            "Пустое — не размечено или ещё не наступило. Так видно не «сколько», а «когда».",
+    ) {
         PaperHint("этот день")
         DayStripChart(today.map { StripSegment(it.startFrac, it.endFrac, categoryColor(it.category)) }, height = 18.dp, nowFrac = nowFrac)
         Spacer(Modifier.height(8.dp))
@@ -765,11 +765,6 @@ private fun StripsCard(
         DayStripChart(ref.map { StripSegment(it.startFrac, it.endFrac, categoryColor(it.category)) }, height = 18.dp)
         Spacer(Modifier.height(2.dp))
         HourTicks()
-        Spacer(Modifier.height(6.dp))
-        PaperHint(
-            "Сутки слева направо, цвета — радуга категорий Засечки; риска — сейчас. " +
-                "Пустое — не размечено или ещё не наступило. Так видно не «сколько», а «когда».",
-        )
     }
 }
 
@@ -783,7 +778,13 @@ private fun TriangleCard(frame: Frame, refFrame: Frame) {
     val refBuckets = DayReport.buckets(refFrame.slices)
     val t = DayReport.triangle(frame.slices)
     val rt = DayReport.triangle(refFrame.slices)
-    PaperCard(label = "Треугольник ценности") {
+    PaperCard(
+        label = "Треугольник ценности",
+        info = "Цель — перевёрнутый треугольник: широко сверху, узко внизу. Бодрствование " +
+            "разложено по ценности часа категории, сон не в счёт. Тонкая тёмная черта " +
+            "под полосой — тот же день неделю назад к этому же часу. Индекс — доля верха " +
+            "в сумме верха и низа.",
+    ) {
         CenteredBars(
             rows = buckets.mapIndexed { i, b ->
                 CenteredBarRow(
@@ -801,12 +802,6 @@ private fun TriangleCard(frame: Frame, refFrame: Frame) {
             "Верх (от +6) ${dur(DayReport.msToMin(t.topMs))} · низ (до −2) ${dur(DayReport.msToMin(t.bottomMs))} · " +
                 "индекс ${pct(t.index)}, неделю назад ${pct(rt.index)}",
             style = MaterialTheme.typography.bodySmall,
-        )
-        PaperHint(
-            "Цель — перевёрнутый треугольник: широко сверху, узко внизу. Бодрствование " +
-                "разложено по ценности часа категории, сон не в счёт. Тонкая тёмная черта " +
-                "под полосой — тот же день неделю назад к этому же часу. Индекс — доля верха " +
-                "в сумме верха и низа.",
         )
     }
 }
@@ -831,11 +826,15 @@ private fun CompareCard(
 ) {
     val partial = isToday && !frame.full
     val neutral = MaterialTheme.colorScheme.onSurfaceVariant
-    PaperCard(label = "Против того же дня неделю назад") {
-        PaperHint(
-            if (partial) "Оба дня — до ${clockOf(now)}: половина дня против целого проигрывала бы всегда."
-            else "Оба дня целиком.",
-        )
+    PaperCard(
+        label = "Против того же дня неделю назад",
+        info = "Идущий день сравнивается с прошлым до того же часа: половина дня против " +
+            "целого проигрывала бы всегда. Толстая полоска — этот день, тонкая серая — " +
+            "неделю назад; в скобках — те числа, что считаются только целыми сутками.",
+    ) {
+        // Какое окно у сравнения — живая строка, она меняется с часом; почему
+        // так — за «i» (24.09.2026).
+        PaperHint(if (partial) "Оба дня — до ${clockOf(now)}." else "Оба дня целиком.")
         Spacer(Modifier.height(6.dp))
         val cats = (frame.slices + refFrame.slices)
             .map { it.category }
@@ -909,8 +908,6 @@ private fun CompareCard(
                 "${food.carbs} г", "${refFood.carbs} г", DayReport.delta(food.carbs.toLong(), refFood.carbs.toLong()), neutral,
             )
         }
-        Spacer(Modifier.height(4.dp))
-        PaperHint("Толстая полоска — этот день, тонкая серая — неделю назад; в скобках — те числа, что считаются только целыми сутками.")
     }
 }
 
@@ -926,7 +923,13 @@ private fun WeekCard(
     isToday: Boolean,
     now: Long,
 ) {
-    PaperCard(label = "Неделя") {
+    PaperCard(
+        label = "Неделя",
+        info = "Столбики — бодрствование по дням, стопкой по категориям: работа сверху, " +
+            "потери внизу. Сон — в карточке «Тело».\n\n" +
+            "Семь суток по часам — друг под другом: в какие часы работа, в какие потери, " +
+            "и где ночь съезжает.",
+    ) {
         // Стопка бодрствования по дням: потери внизу, работа сверху — тот же
         // порядок, что в радуге, и та же цель (перевёрнутый треугольник).
         val columns = weekDays.map { d ->
@@ -939,8 +942,6 @@ private fun WeekCard(
             )
         }
         StackedColumns(columns, height = 150.dp, valueText = { hoursShort(it.roundToLong()) }, highlight = 6)
-        Spacer(Modifier.height(4.dp))
-        PaperHint("Бодрствование по дням, стопкой по категориям: работа сверху, потери внизу. Сон — в карточке «Тело».")
         Spacer(Modifier.height(8.dp))
         val weekTotals = weekDays.flatMap { it.slices }
             .filter { !DayReport.isSleep(it.category) }
@@ -988,14 +989,15 @@ private fun WeekCard(
             Spacer(Modifier.width(28.dp))
             Box(Modifier.weight(1f)) { HourTicks() }
         }
-        Spacer(Modifier.height(4.dp))
-        PaperHint("Семь суток друг под другом: в какие часы работа, в какие потери, и где ночь съезжает.")
     }
 }
 
 @Composable
 private fun HistoryCard(history: List<DayScore>) {
-    PaperCard(label = "Балл по дням, четыре недели") {
+    PaperCard(
+        label = "Балл по дням, четыре недели",
+        info = "Полные сутки, как в Засечке; контуром — день, который ещё идёт. Подписи стоят под понедельниками.",
+    ) {
         SignedColumns(
             values = history.map { it.net.toFloat() },
             colorOf = { scoreColor(it, 100f) },
@@ -1024,7 +1026,6 @@ private fun HistoryCard(history: List<DayScore>) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        PaperHint("Полные сутки, как в Засечке; контуром — день, который ещё идёт. Подписи стоят под понедельниками.")
     }
 }
 
@@ -1047,16 +1048,30 @@ private fun PhoneCard(
     awakeMin: Long,
     isToday: Boolean,
 ) {
-    PaperCard(label = "Телефон") {
+    PaperCard(
+        label = "Телефон",
+        info = if (!usageGranted) null
+        else "Столбики — минуты по дням: отмеченные приложения цветом своей категории, " +
+            "остальной экран серым. Отвлечение — взял телефон и убрал быстрее двух минут.",
+    ) {
         if (!usageGranted) {
             PaperHint(
                 "Дай Правке доступ к статистике использования — появятся экран по дням, " +
                     "приложения, подъёмы, отвлечения и звонки.",
             )
-            OutlinedButton(onClick = {
-                runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
-                onGranted(PhoneSweeper.hasUsageAccess(context))
-            }) { Text("Дать доступ к статистике") }
+            Spacer(Modifier.height(8.dp))
+            Row {
+                Spacer(Modifier.weight(1f))
+                PaperButton(
+                    "Дать доступ к статистике",
+                    icon = Glyphs.Key,
+                    primary = true,
+                    onClick = {
+                        runCatching { context.startActivity(Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
+                        onGranted(PhoneSweeper.hasUsageAccess(context))
+                    },
+                )
+            }
             return@PaperCard
         }
         val summaries = days.map { PhoneDaySummary.of(phoneDays[phoneDayKey(it)], tracked, labels) }
@@ -1080,8 +1095,6 @@ private fun PhoneCard(
             StackedColumn(weekdayOf(days[i]), parts, faded = isToday && i == days.lastIndex)
         }
         StackedColumns(columns, height = 130.dp, valueText = { hoursShort(it.roundToLong()) }, highlight = 6)
-        Spacer(Modifier.height(4.dp))
-        PaperHint("Минуты по дням: отмеченные приложения цветом своей категории, остальной экран серым.")
         Spacer(Modifier.height(8.dp))
         for (label in appLabels) {
             val today = phone.apps.firstOrNull { it.label == label }?.minutes ?: 0L
@@ -1187,7 +1200,18 @@ private fun BodyCard(
     val days14 = (13 downTo 0).map { dayStart - it * DAY }
     val days28 = (27 downTo 0).map { dayStart - it * DAY }
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    PaperCard(label = "Тело") {
+    // Легенды всех графиков тела — одним пояснением за «i» (24.09.2026): их
+    // было четыре абзаца под четырьмя графиками, и плашка читалась инструкцией.
+    PaperCard(
+        label = "Тело",
+        info = "Сон — часы за ночь по ленте (сон с часов, разрезанный полуночью, склеен " +
+            "обратно), без ленты — по Garmin. Пунктир — медиана 28 ночей.\n\n" +
+            "Тренировки — столбики тренировочной нагрузки (load intervals.icu) по дням, " +
+            "цветом вида спорта.\n\n" +
+            "HRV и пульс покоя — пунктир: среднее за 28 дней. HRV выше базы и пульс ниже — " +
+            "восстановлен; наоборот — день полегче.\n\n" +
+            "Вес — пунктир: цель из настроек Тела.",
+    ) {
         // ---- сон ----
         fun sleepMin(ds: Long): Long {
             val ribbon = DayReport.msToMin(DayReport.nightSleepMs(pool, ds, now))
@@ -1217,7 +1241,6 @@ private fun BodyCard(
                     (if (score > 0) " · счёт сна Garmin $score" else ""),
                 style = MaterialTheme.typography.bodySmall,
             )
-            PaperHint("Часы за ночь по ленте (сон с часов, разрезанный полуночью, склеен обратно), без ленты — по Garmin. Пунктир — медиана 28 ночей.")
         } else {
             PaperHint("Сна за эти дни ни в ленте, ни в часах нет.")
         }
@@ -1256,7 +1279,6 @@ private fun BodyCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = labelColor,
             )
-            PaperHint("Столбики — тренировочная нагрузка (load intervals.icu) по дням, цветом вида спорта.")
         } else {
             PaperHint("Тренировок с часов за эти семь дней нет.")
         }
@@ -1307,7 +1329,6 @@ private fun BodyCard(
                     LineChart(rhr14, RHR_INK, height = 64.dp, baseline = rhrBase, valueText = { "${it.roundToInt()}" })
                 }
             }
-            PaperHint("Пунктир — среднее за 28 дней. HRV выше базы и пульс ниже — восстановлен; наоборот — день полегче.")
             Spacer(Modifier.height(12.dp))
         }
 
@@ -1342,7 +1363,6 @@ private fun BodyCard(
                     (if (goalWeight > 0) " · до цели $goalWeight: ${fmt1((lastWeight - goalWeight).toDouble())}" else ""),
                 style = MaterialTheme.typography.bodySmall,
             )
-            PaperHint("Пунктир — цель из настроек Тела.")
         }
         val h = healthByDate[dateKey] ?: healthByDate.values.filter { it.date < dateKey }.maxByOrNull { it.date }
         if (h != null && (h.ctl > 0 || h.atl > 0)) {
@@ -1418,7 +1438,16 @@ private fun FoodCard(
     val today = totals7.last()
     val meals = app.foodStore.mealsOn(dateKey)
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    PaperCard(label = "Еда: КБЖУ") {
+    PaperCard(
+        label = "Еда: КБЖУ",
+        info = "Цели — из настроек Тела. Белок — пол: зелёный, когда добрал; калории, жиры и " +
+            "углеводы — потолок: красный, когда перебрал. Считаются только подтверждённые приёмы.\n\n" +
+            "Пунктир на столбиках — цели из настроек. Пустой день — приёмов не записано, а не " +
+            "«ничего не ел».\n\n" +
+            "Доли — по калориям: белки и углеводы ×4, жиры ×9.\n\n" +
+            "Четыре недели: неделя — семь дней до выбранного; в среднем считаются только дни " +
+            "с записями, иначе пропущенный день выглядел бы как голодовка.",
+    ) {
         if (mealsSize == 0 || totals28.all { it.empty }) {
             PaperHint("Приёмов за четыре недели в дневнике нет.")
             return@PaperCard
@@ -1450,11 +1479,6 @@ private fun FoodCard(
                 modifier = Modifier.weight(1f),
             )
         }
-        Spacer(Modifier.height(4.dp))
-        PaperHint(
-            "Цели — из настроек Тела. Белок — пол: зелёный, когда добрал; калории, жиры и " +
-                "углеводы — потолок: красный, когда перебрал. Считаются только подтверждённые приёмы.",
-        )
 
         // ---- по приёмам ----
         if (meals.isNotEmpty()) {
@@ -1554,7 +1578,6 @@ private fun FoodCard(
                 )
             }
         }
-        PaperHint("Пунктир — цели из настроек. Пустой день — приёмов не записано, а не «ничего не ел».")
 
         // ---- доли макросов по дням ----
         Spacer(Modifier.height(12.dp))
@@ -1614,7 +1637,6 @@ private fun FoodCard(
                     LegendRow(PROTEIN_INK, "Белки", "${today.protein} г", sub = pct((p / macroKcal).toDouble()))
                     LegendRow(FAT_INK, "Жиры", "${today.fat} г", sub = pct((f / macroKcal).toDouble()))
                     LegendRow(CARBS_INK, "Углеводы", "${today.carbs} г", sub = pct((c / macroKcal).toDouble()))
-                    PaperHint("доли по калориям: белки и углеводы ×4, жиры ×9")
                 }
             }
         }
@@ -1705,7 +1727,6 @@ private fun FoodCard(
                     )
                 }
             }
-            PaperHint("Неделя — семь дней до выбранного; в среднем считаются только дни с записями, иначе пропущенный день выглядел бы как голодовка.")
         }
     }
 }
@@ -1728,7 +1749,10 @@ private fun TasksAppCard(
 ) {
     val dateKey = isoOf(dayStart)
     val todayKey = isoOf(now)
-    PaperCard(label = "Дела и Правка") {
+    PaperCard(
+        label = "Дела и Правка",
+        info = "Сколько Правка сама стоила и сколько было наговорено — то, чего в ленте нет: там это лежит как «Систематизация».",
+    ) {
         val starts = DayReport.todoistStarts(pool, window)
         val dueToday = tasks.count { it.due == dateKey }
         val overdue = tasks.count { it.due.isNotBlank() && it.due < todayKey }
@@ -1770,7 +1794,6 @@ private fun TasksAppCard(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        PaperHint("Сколько Правка сама стоила и сколько было наговорено — то, чего в ленте нет: там это лежит как «Систематизация».")
     }
 }
 
@@ -1817,7 +1840,11 @@ private fun RatiosCard(
     val refHoles = refFrame.minutes(DayReport::isHole)
     val t = DayReport.triangle(frame.slices)
     val rt = DayReport.triangle(refFrame.slices)
-    PaperCard(label = "Коэффициенты") {
+    PaperCard(
+        label = "Коэффициенты",
+        info = "Порогов тут нет нарочно: что «хорошо», решают его собственные дни, а не таблица. " +
+            "Формула под каждым числом — чтобы можно было проверить.",
+    ) {
         RatioRow(
             "КПД дня", pct(frame.balance.efficiency), ref(pct(refFrame.balance.efficiency)),
             "плюсовые очки к обороту: плюс ÷ (плюс + |минус|)",
@@ -1853,10 +1880,6 @@ private fun RatiosCard(
         RatioRow(
             "Треугольник", pct(t.index), ref(pct(rt.index)),
             "минуты от +6 ÷ (от +6 плюс до −2): чем выше, тем шире верх",
-        )
-        PaperHint(
-            "Порогов тут нет нарочно: что «хорошо», решают его собственные дни, а не таблица. " +
-                "Формула под каждым числом — чтобы можно было проверить.",
         )
     }
 }

@@ -1,8 +1,10 @@
 package ru.zf.pravka
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,20 +15,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -36,12 +31,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -53,10 +48,20 @@ import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.TranscriptionLog
 import ru.zf.pravka.data.dayStartMs
 import ru.zf.pravka.target.PlainTextTarget
+import ru.zf.pravka.ui.ChipRow
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.GlyphButton
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.PaperAlert
+import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.PaperChip
+import ru.zf.pravka.ui.PaperField
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.PaperLabel
+import ru.zf.pravka.ui.PaperTextButton
+import ru.zf.pravka.ui.ScreenPad
+import ru.zf.pravka.ui.SheetAction
 
 // Вкладка «Правка»: текстбокс для чужого текста, нерасшифрованные записи,
 // восстановленный черновик, последние расшифровки. Владелец (15.09.2026):
@@ -98,8 +103,8 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = ScreenPad.Padding,
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         // Текстбокс для чужого текста — самым первым: владелец (16.09.2026)
         // «наверху должен быть текстбокс… над всеми правками».
@@ -111,27 +116,32 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
 
         // Recovery: text from a Google take that was interrupted before it
         // could be inserted (phone died / app killed mid-dictation).
+        // До 24.09.2026 — голая карточка вторичного цвета, единственная такая
+        // во вкладке; теперь та же плашка, что у всех, с кнопками набора.
         draft?.let { d ->
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                PaperCard(
+                    label = "черновик после сбоя",
+                    info = stringResource(R.string.draft_header) + ". Диктовка оборвалась до " +
+                        "вставки — сел телефон или система закрыла приложение посреди тейка, — " +
+                        "а текст успел сохраниться. Скопируй его или удали.",
                 ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text(
-                            stringResource(R.string.draft_header),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    Text(d, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        PaperTextButton(
+                            stringResource(R.string.draft_delete),
+                            icon = Glyphs.Delete,
+                            color = MaterialTheme.colorScheme.error,
+                            onClick = { liveDraft.clear(); draft = null },
                         )
-                        Spacer(Modifier.height(6.dp))
-                        Text(d, style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.height(6.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { copy(d) }) { Text(stringResource(R.string.draft_copy)) }
-                            TextButton(onClick = { liveDraft.clear(); draft = null }) {
-                                Text(stringResource(R.string.draft_delete), color = MaterialTheme.colorScheme.error)
-                            }
-                        }
+                        Spacer(Modifier.weight(1f))
+                        PaperButton(
+                            stringResource(R.string.draft_copy),
+                            icon = Glyphs.Copy,
+                            primary = true,
+                            onClick = { copy(d) },
+                        )
                     }
                 }
             }
@@ -146,8 +156,8 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
         }
         if (hasMore && !showAll) {
             item {
-                OutlinedButton(onClick = { showAll = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Показать всё")
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    PaperTextButton("Показать всё", icon = Glyphs.ChevronDown, onClick = { showAll = true })
                 }
             }
         }
@@ -242,22 +252,37 @@ private fun CleanBox(app: PravkaApp) {
         }
     }
 
-    PaperCard(label = "причесать текст") {
-        OutlinedTextField(
+    // «Очистить» — в строке подписи плашки (24.09.2026): три кнопки в ряд со
+    // значками на узком экране Fold не влезают, а «Из буфера» и «Причесать»
+    // должны стоять под пальцем. Видна, пока в поле есть текст; место под неё
+    // держится всегда, чтобы плашка не прыгала, когда текст появляется.
+    PaperCard(
+        label = "причесать текст",
+        trailing = {
+            Box(Modifier.height(40.dp), contentAlignment = Alignment.CenterEnd) {
+                if (text.isNotEmpty() && !busy) {
+                    PaperTextButton("Очистить", onClick = { text = ""; result = null; error = null; streaming = "" })
+                }
+            }
+        },
+    ) {
+        PaperField(
             value = text,
             onValueChange = { text = it },
-            modifier = Modifier.fillMaxWidth(),
+            singleLine = false,
             minLines = 3,
             maxLines = 12,
             enabled = !busy,
-            placeholder = { Text("Вставь текст — причешу и положу в буфер") },
+            placeholder = "Вставь текст — причешу и положу в буфер",
         )
         Spacer(Modifier.height(8.dp))
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedButton(
+            PaperButton(
+                "Из буфера",
+                icon = Glyphs.Paste,
                 enabled = !busy,
                 onClick = {
                     val fromClip = clipboardText()
@@ -269,16 +294,15 @@ private fun CleanBox(app: PravkaApp) {
                         error = null
                     }
                 },
-            ) { Text("Из буфера") }
-            Button(onClick = { clean() }, enabled = text.isNotBlank() && !busy) {
-                Text(if (busy) "Правлю…" else "Причесать")
-            }
+            )
             Spacer(Modifier.weight(1f))
-            if (text.isNotEmpty() && !busy) {
-                TextButton(onClick = { text = ""; result = null; error = null; streaming = "" }) {
-                    Text("Очистить")
-                }
-            }
+            PaperButton(
+                if (busy) "Правлю…" else "Причесать",
+                icon = Glyphs.Pravka,
+                primary = true,
+                enabled = text.isNotBlank() && !busy,
+                onClick = { clean() },
+            )
         }
         if (busy) {
             Spacer(Modifier.height(8.dp))
@@ -302,11 +326,10 @@ private fun CleanBox(app: PravkaApp) {
             SelectionContainer {
                 Text(r, style = MaterialTheme.typography.bodyMedium)
             }
-            Spacer(Modifier.height(6.dp))
-            OutlinedButton(onClick = {
+            PaperTextButton("Скопировать ещё раз", icon = Glyphs.Copy, onClick = {
                 putClipboard(context, r)
                 Feedback.toast(context, context.getString(R.string.transcript_copied))
-            }) { Text("Скопировать ещё раз") }
+            })
         }
     }
 }
@@ -319,14 +342,30 @@ private fun engineLabel(engine: String): String = when (engine) {
     else -> engine
 }
 
+/**
+ * Плашка, которую можно нажать целиком. В наборе у `PaperCard` нажатия нет,
+ * а расшифровка копируется тапом по всей плашке с июля — отнимать это
+ * ради значка было бы шагом назад (24.09.2026). Рябь обрезана по форме
+ * плашки: без подписи плашка — ровно её `Card`.
+ */
+@Composable
+private fun TapPaperCard(onClick: () -> Unit, enabled: Boolean, content: @Composable ColumnScope.() -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(enabled = enabled, onClick = onClick),
+    ) {
+        PaperCard(content = content)
+    }
+}
+
 /** Одна расшифровка: строка метрик, время, текст; тап — текст в буфер. */
 @Composable
 private fun TranscriptCard(entry: TranscriptionLog.Entry, ruLoc: Locale, onCopy: () -> Unit) {
-    Card(
-        onClick = { if (entry.text.isNotBlank()) onCopy() },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(14.dp)) {
+    val canCopy = entry.text.isNotBlank()
+    TapPaperCard(onClick = { if (canCopy) onCopy() }, enabled = canCopy) {
+        Column {
             // Metrics line: engine · audio · transcription time · chars.
             val meta = buildString {
                 append(entry.ts.replace('T', ' ').substring(5, 16))
@@ -343,12 +382,17 @@ private fun TranscriptCard(entry: TranscriptionLog.Entry, ruLoc: Locale, onCopy:
                 append(" · ")
                 append(entry.chars).append(" симв.")
             }
-            Text(
-                meta,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (!entry.ok) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    meta,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (!entry.ok) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                // Значок — подсказка, что тап копирует; делает то же самое.
+                if (canCopy) GlyphButton(Glyphs.Copy, "скопировать", onClick = onCopy, size = 30.dp)
+            }
             entry.error?.let {
                 Spacer(Modifier.height(4.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -420,10 +464,16 @@ internal fun DictationStatsTab(app: PravkaApp, exportRequested: Boolean, onExpor
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(ScreenPad.Padding),
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
-        PaperCard(label = "наговорено") {
+        PaperCard(
+            label = "наговорено",
+            info = "Минуты — длина записей по журналу расшифровок, не время у телефона. " +
+                "«Сегодня» — с полуночи; 7 и 30 дней — вместе с сегодняшним. Средняя " +
+                "запись и «не расшифровалось» — за всё время, движки — сколько записей " +
+                "распознал каждый.",
+        ) {
             val t = today
             if (t == null) {
                 PaperHint("Считаю…")
@@ -464,7 +514,12 @@ internal fun DictationStatsTab(app: PravkaApp, exportRequested: Boolean, onExpor
         }
 
         snapshot?.let { s ->
-            PaperCard(label = "правки текста") {
+            PaperCard(
+                label = "правки текста",
+                info = "Правки текста по видам — чистка, деловой стиль, мягче — и то, что " +
+                    "модель вернула без изменений. Деньги здесь не живут: у них свой " +
+                    "экран за «$» в шапке, общий на всё приложение.",
+            ) {
                 StatLine(stringResource(R.string.stats_total), s.total.toString())
                 StatLine(stringResource(R.string.stats_clean), s.clean.toString())
                 StatLine(stringResource(R.string.stats_business), s.business.toString())
@@ -545,81 +600,85 @@ internal fun DictationExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
         }
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Выгрузить") },
-        text = {
-            Column {
-                for (w in ExportWhat.entries) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = what == w, onClick = { what = w })
-                        Text(w.title, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
-                if (what != ExportWhat.HISTORY && what != ExportWhat.REQUESTS) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("Период", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (p in Period.entries) {
-                            FilterChip(selected = period == p, onClick = { period = p }, label = { Text(p.title) })
-                        }
-                    }
-                    if (period == Period.CUSTOM) {
-                        Spacer(Modifier.height(6.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
-                                value = fromText, onValueChange = { fromText = it },
-                                label = { Text("с") }, singleLine = true, modifier = Modifier.weight(1f),
-                            )
-                            OutlinedTextField(
-                                value = toText, onValueChange = { toText = it },
-                                label = { Text("по") }, singleLine = true, modifier = Modifier.weight(1f),
-                            )
-                        }
-                        PaperHint("Даты как 01.09.2026, обе включительно")
-                    }
-                }
-                if (error.isNotBlank()) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    fun export() {
+        val r = range()
+        if (r == null) { error = "Не разобрал даты"; return }
+        val (from, to) = r
+        if (what == ExportWhat.CORRECTIONS) {
+            // shareCsvIntent — suspend: собирается в области приложения.
+            onDismiss()
+            app.appScope.launch {
+                val intent = runCatching { app.corrections.shareCsvIntent(from, to) }.getOrNull()
+                if (intent == null) Feedback.toast(context, "Не собралась")
+                else runCatching { context.startActivity(android.content.Intent.createChooser(intent, what.title)) }
+            }
+            return
+        }
+        val intent = runCatching {
+            when (what) {
+                ExportWhat.TAKES ->
+                    if (period == Period.ALL) app.transcriptionLog.shareJsonIntent()
+                    else app.transcriptionLog.shareJsonIntent(from, to)
+                ExportWhat.METRICS -> app.transcriptionLog.shareMetricsCsvIntent(from, to)
+                ExportWhat.EVENTS ->
+                    if (period == Period.ALL) app.eventLog.shareIntent()
+                    else app.eventLog.shareRangeIntent(from, to)
+                ExportWhat.HISTORY -> app.historyLog.shareIntent()
+                ExportWhat.REQUESTS -> app.requestLog.shareIntent()
+                ExportWhat.CORRECTIONS -> throw IllegalStateException()
+            }
+        }.getOrElse { e -> error = "Не собралась: ${e.message}"; return }
+        onDismiss()
+        runCatching {
+            context.startActivity(android.content.Intent.createChooser(intent, what.title))
+        }.onFailure { Feedback.toast(context, "Файл пуст") }
+    }
+
+    // Лист вместо AlertDialog (24.09.2026): «Выгрузить» — справа под пальцем,
+    // «Отмена» не нужна — закрывают крестик и свайп, выгрузка ничего не портит.
+    PaperAlert(
+        onDismiss = onDismiss,
+        title = "Выгрузить",
+        icon = Glyphs.Export,
+        confirm = SheetAction("Выгрузить", icon = Glyphs.Export, onClick = { export() }),
+    ) {
+        Column {
+            for (w in ExportWhat.entries) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { what = w },
+                ) {
+                    RadioButton(selected = what == w, onClick = { what = w })
+                    Text(w.title, style = MaterialTheme.typography.bodyMedium)
                 }
             }
-        },
-        confirmButton = {
-            Button(onClick = {
-                val r = range()
-                if (r == null) { error = "Не разобрал даты"; return@Button }
-                val (from, to) = r
-                if (what == ExportWhat.CORRECTIONS) {
-                    // shareCsvIntent — suspend: собирается в области приложения.
-                    onDismiss()
-                    app.appScope.launch {
-                        val intent = runCatching { app.corrections.shareCsvIntent(from, to) }.getOrNull()
-                        if (intent == null) Feedback.toast(context, "Не собралась")
-                        else runCatching { context.startActivity(android.content.Intent.createChooser(intent, what.title)) }
-                    }
-                    return@Button
+        }
+        if (what != ExportWhat.HISTORY && what != ExportWhat.REQUESTS) {
+            PaperLabel("период")
+            ChipRow {
+                for (p in Period.entries) {
+                    PaperChip(p.title, selected = period == p, onClick = { period = p })
                 }
-                val intent = runCatching {
-                    when (what) {
-                        ExportWhat.TAKES ->
-                            if (period == Period.ALL) app.transcriptionLog.shareJsonIntent()
-                            else app.transcriptionLog.shareJsonIntent(from, to)
-                        ExportWhat.METRICS -> app.transcriptionLog.shareMetricsCsvIntent(from, to)
-                        ExportWhat.EVENTS ->
-                            if (period == Period.ALL) app.eventLog.shareIntent()
-                            else app.eventLog.shareRangeIntent(from, to)
-                        ExportWhat.HISTORY -> app.historyLog.shareIntent()
-                        ExportWhat.REQUESTS -> app.requestLog.shareIntent()
-                        ExportWhat.CORRECTIONS -> throw IllegalStateException()
-                    }
-                }.getOrElse { e -> error = "Не собралась: ${e.message}"; return@Button }
-                onDismiss()
-                runCatching {
-                    context.startActivity(android.content.Intent.createChooser(intent, what.title))
-                }.onFailure { Feedback.toast(context, "Файл пуст") }
-            }) { Text("Выгрузить") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
-    )
+            }
+            if (period == Period.CUSTOM) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PaperField(
+                        value = fromText, onValueChange = { fromText = it },
+                        label = "с", modifier = Modifier.weight(1f),
+                    )
+                    PaperField(
+                        value = toText, onValueChange = { toText = it },
+                        label = "по", modifier = Modifier.weight(1f),
+                    )
+                }
+                PaperHint("Даты как 01.09.2026, обе включительно")
+            }
+        }
+        if (error.isNotBlank()) {
+            Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+    }
 }
