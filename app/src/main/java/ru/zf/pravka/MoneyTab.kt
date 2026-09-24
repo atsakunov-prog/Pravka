@@ -57,6 +57,7 @@ import ru.zf.pravka.trigger.showMoneyPlate
 import ru.zf.pravka.ui.ChipRow
 import ru.zf.pravka.ui.DayNav
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.GlyphButton
 import ru.zf.pravka.ui.Glyphs
 import ru.zf.pravka.ui.InfoButton
 import ru.zf.pravka.ui.PaperAlert
@@ -190,6 +191,26 @@ internal fun MoneyTab(
     val drafts = calc.drafts
     val questions = calc.questions
     val journal = calc.journal
+    // Микрофон у строки журнала: наговорил, что это, — Claude разложил, и все
+    // операции того же получателя пересчитались, а правило легло в справочник.
+    val explain: (MoneyEntry) -> Unit = { e ->
+        startMoneyVoice(app, "row:" + e.id, "что это: ${e.what}?") { spoken ->
+            app.appScope.launch {
+                app.moneyEngine.explainPayee(e, spoken)
+                    .onSuccess { (a, n) ->
+                        Feedback.toast(
+                            context,
+                            if (a.unsure || a.category.isBlank()) "Не понял, что это, — скажи иначе"
+                            else "✓ ${e.what}: " + MoneyCategories.title(a.category) +
+                                (if (a.who.isNotBlank()) " · " + MoneyCategories.whoTitle(a.who) else "") +
+                                " — операций $n, запомнил",
+                            long = true,
+                        )
+                    }
+                    .onFailure { err -> Feedback.toast(context, "Не вышло: ${err.message}", long = true) }
+            }
+        }
+    }
     // Сколько ждёт владельца — прямо на чипе: иначе вопросы и траты без «ОК»
     // за чипом «Разобрать» молчали бы, пока туда не зайдёшь.
     val waiting = questions.size + drafts.size
@@ -415,7 +436,7 @@ internal fun MoneyTab(
                 // ---- Журнал периода ----
                 PaperCard(label = "журнал · " + journal.size) {
                     if (journal.isEmpty()) PaperHint("За этот период записей нет.")
-                    for (e in journal.take(150)) EntryRow(e) { editing = e }
+                    for (e in journal.take(150)) EntryRow(e, onVoice = explain) { editing = e }
                     if (journal.size > 150) PaperHint("и ещё ${journal.size - 150} — в книге")
                 }
 
@@ -478,7 +499,7 @@ private fun PeriodCard(
 
 /** Одна строка журнала: что, когда, откуда, сумма; тап — правка. */
 @Composable
-private fun EntryRow(e: MoneyEntry, onClick: () -> Unit) {
+private fun EntryRow(e: MoneyEntry, onVoice: ((MoneyEntry) -> Unit)? = null, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -506,7 +527,12 @@ private fun EntryRow(e: MoneyEntry, onClick: () -> Unit) {
             )
             if (e.currency != "RUB") PaperHint(MoneyFormat.orig(e.origMinor, e.currency))
         }
+        // Микрофон: «что это?» голосом — ответ ложится на все операции этого получателя.
+        if (onVoice != null && e.source != MoneyEntry.Source.VOICE) {
+            GlyphButton(Glyphs.Mic, "Сказать, что это", onClick = { onVoice(e) }, size = 36.dp)
+        }
     }
+    MoneyVoiceBar("row:" + e.id)
 }
 
 /** Выбор категории: список по группам, как владелец читает бюджет. */

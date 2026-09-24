@@ -485,7 +485,30 @@ class MoneyEngine(
      * превращает это в категорию и «для кого»; постоянный получатель
      * запоминается правилом с комментарием его словами.
      */
-    suspend fun answerByVoice(q: Question, spoken: String): Result<ClaudeProvider.MoneyAnswer> {
+    /**
+     * Микрофон на строке журнала (владелец, 24.09.2026: «IP carenko… понял,
+     * что это полиграфия… нажать и сказать, что это такое, и чтобы сразу по
+     * всем таким же операциям всё пересчиталось»). Все операции того же
+     * получателя — по имени без номера кассы (`MoneyMerchants.canonical`), за
+     * всё время — разом; ответ ЗАПОМИНАЕТСЯ правилом всегда: владелец сам
+     * объясняет получателя, это и есть «записать в базу».
+     */
+    suspend fun explainPayee(entry: MoneyEntry, spoken: String): Result<Pair<ClaudeProvider.MoneyAnswer, Int>> {
+        val name = MoneyMerchants.canonical(entry.what)
+        val same = store.load().entries.filter {
+            !it.draft && !it.dropped && it.replacedBy.isEmpty() && it.source != MoneyEntry.Source.VOICE &&
+                MoneyMerchants.canonical(it.what).equals(name, ignoreCase = true)
+        }.ifEmpty { listOf(entry) }
+        val q = Question("p:" + MoneyRules.norm(name), "", same.sortedByDescending { it.ts })
+        return answerByVoice(q, spoken, forceRemember = true, pattern = name).map { it to same.size }
+    }
+
+    suspend fun answerByVoice(
+        q: Question,
+        spoken: String,
+        forceRemember: Boolean = false,
+        pattern: String? = null,
+    ): Result<ClaudeProvider.MoneyAnswer> {
         val a = claude.interpretMoneyAnswer(MoneyContext.card(q.entries), spoken, MoneyRules.toText(allRules()))
             .getOrElse { return Result.failure(it) }
         runCatching { stats.recordAux(a.costUsd, a.tokensIn, a.tokensOut, route = ModelRoute.MONEY.key) }
@@ -494,17 +517,18 @@ class MoneyEngine(
             it.copy(category = a.category, who = a.who, categoryBy = MoneyEntry.CategoryBy.OWNER, question = "")
         }
         val first = q.entries.first()
-        if (a.remember && first.fromBank) {
+        val remember = a.remember || forceRemember
+        if (remember && (first.fromBank || first.source == MoneyEntry.Source.MANUAL)) {
             val sign = if (q.entries.all { it.rubKop < 0 }) -1 else if (q.entries.all { it.rubKop > 0 }) 1 else 0
             store.addRule(
                 MoneyRules.Rule(
-                    pattern = first.what.trim(), category = a.category, who = a.who, sign = sign,
+                    pattern = (pattern ?: first.what).trim(), category = a.category, who = a.who, sign = sign,
                     // Получатель на счетах обоих — правило на оба; на одном — только на его.
                     owner = q.entries.map { it.owner }.distinct().singleOrNull().orEmpty(), comment = a.comment,
                 )
             )
         }
-        eventLog.add("деньги: голосом ответ — ${first.what} → ${a.category}" + if (a.remember) ", запомнил" else "")
+        eventLog.add("деньги: голосом ответ — ${first.what} → ${a.category}, операций ${q.entries.size}" + if (remember) ", запомнил" else "")
         reconcile()
         return Result.success(a)
     }

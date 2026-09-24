@@ -87,4 +87,10 @@ class MoneyStatsTest {
         assertTrue(text.contains("Продукты"))
         assertTrue(!text.contains(",00"))
     }
+
+    @Test fun samePayeeAcrossCashDesks() {
+        // «Сказать, что это» на одной строке ложится на все операции получателя: номер кассы в хвосте — не имя.
+        assertEquals(MoneyMerchants.canonical("IP CARENKO"), MoneyMerchants.canonical("IP CARENKO 12"))
+        assertEquals(MoneyMerchants.canonical("IP CARENKO"), MoneyMerchants.canonical("IP CARENKO_3"))
+    }
 }
