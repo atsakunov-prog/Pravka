@@ -792,16 +792,58 @@ private fun PushSettings(app: PravkaApp) {
         if (pushes.isEmpty()) "Доступ есть. Пока ничего не поймано — первый пуш Т-Банка появится здесь."
         else "Поймано ${pushes.size}, из них операций $money; выпиской уже заменено $replaced."
     )
+    // Тап по пойманному — его сырьё целиком (25.09.2026: «пополнение ничего
+    // не отметило» — видно, что именно сохранилось, а не гадать).
+    var raw by remember { mutableStateOf<ru.zf.pravka.data.MoneyStore.Push?>(null) }
     for (p in pushes.takeLast(6).reversed()) {
-        Row(Modifier.fillMaxWidth().padding(top = 3.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(top = 3.dp)
+                .clickable { raw = p },
+        ) {
             Text(
-                stamp(p.ts) + "  " + p.title.ifBlank { p.pkg.substringAfterLast('.') },
+                stamp(p.ts) + "  " + p.title.ifBlank { p.text.lineSequence().firstOrNull().orEmpty().ifBlank { p.pkg.substringAfterLast('.') } },
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             PaperHint(p.result)
+        }
+    }
+    // Переразбор вручную — тот же, что проходит шаг переразбора истории после
+    // правки разбора: из сырья заново, решения владельца не трогает.
+    var reparsing by remember { mutableStateOf(false) }
+    Spacer(Modifier.height(6.dp))
+    ru.zf.pravka.ui.PaperTextButton(
+        if (reparsing) "Переразбираю…" else "Переразобрать пойманные пуши",
+        icon = ru.zf.pravka.ui.Glyphs.Refresh,
+        enabled = !reparsing,
+        onClick = {
+            reparsing = true
+            app.appScope.launch {
+                val text = runCatching { app.moneyEngine.reparsePushes() }.fold(
+                    { o -> "Пуши: просмотрено ${o.looked}, поправлено ${o.changed}" + if (o.added > 0) ", добавлено ${o.added}" else "" },
+                    { e -> "Не переразобрал: ${e.message ?: e.javaClass.simpleName}" },
+                )
+                app.eventLog.add("деньги: $text")
+                ru.zf.pravka.ui.Feedback.toast(context, text)
+                reparsing = false
+            }
+        },
+    )
+    raw?.let { p ->
+        ru.zf.pravka.ui.PaperAlert(
+            onDismiss = { raw = null },
+            title = "Пойманный пуш",
+            icon = ru.zf.pravka.ui.Glyphs.Bell,
+            subtitle = stamp(p.ts) + " · " + p.result,
+        ) {
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(
+                    "Приложение: ${p.pkg}\nЗаголовок: " + p.title.ifBlank { "(пусто)" } + "\n\n" + p.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
     }
 }

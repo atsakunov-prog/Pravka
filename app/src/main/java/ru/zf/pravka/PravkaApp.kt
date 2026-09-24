@@ -266,6 +266,8 @@ class PravkaApp : Application() {
     // Деньги: журнал трат и выписок (money.json) — незаменимые данные, как
     // лента. Там же — правила справочника, которые владелец вписал или
     // запомнил ответами; заводские — в assets (moneyFactoryRules ниже).
+    /** Сырьё выписок: каждый загруженный файл как есть, в `imports/` базы (data/ImportArchive.kt). */
+    internal val importArchive by lazy { ru.zf.pravka.data.ImportArchive { ru.zf.pravka.data.DataRoot.dir(this) } }
     /** Образцы денежных уведомлений для разборщиков новых банков (data/PushSamples.kt). */
     internal val pushSamples by lazy { ru.zf.pravka.data.PushSamples(this) }
     val moneyStore by lazy { ru.zf.pravka.data.MoneyStore(this) { eventLog.add(it) } }
@@ -295,6 +297,7 @@ class PravkaApp : Application() {
                 if (!profileStore.owner) ""
                 else runCatching { assets.open("money_manual.txt").bufferedReader().use { it.readText() } }.getOrDefault("")
             },
+            keepImport = { bytes -> importArchive.keep(bytes) },
         )
     }
 

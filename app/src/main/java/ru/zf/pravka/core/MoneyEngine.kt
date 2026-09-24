@@ -45,6 +45,8 @@ class MoneyEngine(
     private val factoryManual: () -> String = { "" },
     /** Текст файла остатков — из него же строки «счёт ЗФ | …». */
     private val factoryAccountsText: () -> String = { "" },
+    /** Сырьё выписки — в `imports/` базы до разбора (`data/ImportArchive.kt`). */
+    private val keepImport: (ByteArray) -> Unit = {},
 ) {
 
     /**
@@ -185,7 +187,14 @@ class MoneyEngine(
         }
     }
 
-    suspend fun importBytes(bytes: ByteArray): Result<ImportOutcome> =
+    suspend fun importBytes(bytes: ByteArray): Result<ImportOutcome> {
+        // Сырьё — до разбора и что бы он ни сказал: поправим разбор — строки
+        // выведутся заново из файла, а не заново загруженной выписки.
+        withContext(Dispatchers.IO) { runCatching { keepImport(bytes) } }
+        return importParsed(bytes)
+    }
+
+    private suspend fun importParsed(bytes: ByteArray): Result<ImportOutcome> =
         if (XlsxRead.isZip(bytes)) withContext(Dispatchers.Default) {
             runCatching {
                 val rows = XlsxRead.firstSheet(bytes)
