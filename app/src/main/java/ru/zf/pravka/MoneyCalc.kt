@@ -39,8 +39,14 @@ internal object MoneyCalcCache {
 @Composable
 internal fun <T : Any> rememberCalc(tag: String, vararg keys: Any?, compute: () -> T): T? {
     val k = listOf(tag) + keys.toList()
-    val cached = MoneyCalcCache.get(k) as T?
-    return produceState(initialValue = cached, *keys) {
-        if (value == null) value = withContext(Dispatchers.Default) { compute().also { MoneyCalcCache.put(k, it) } }
+    // produceState помнит значение и при смене ключей, а первая версия
+    // пересчитывала, только когда значения не было вовсе, — переключил
+    // «Личное · ЗФ», а цифры прежние (владелец, 24.09.2026: «включение и
+    // выключение ЗФ и личное ничего не даёт»). Теперь на КАЖДЫЙ новый ключ:
+    // есть в памяти — сразу, нет — считаем на фоне; прежние цифры видны
+    // эти доли секунды, вкладка не мигает «считаю…» вместе с кнопками.
+    return produceState<T?>(initialValue = MoneyCalcCache.get(k) as T?, *keys) {
+        value = (MoneyCalcCache.get(k) as T?)
+            ?: withContext(Dispatchers.Default) { compute().also { MoneyCalcCache.put(k, it) } }
     }.value
 }
