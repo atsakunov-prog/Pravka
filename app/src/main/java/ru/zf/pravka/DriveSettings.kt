@@ -17,7 +17,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -30,7 +29,6 @@ import ru.zf.pravka.ui.Glyphs
 import ru.zf.pravka.ui.PaperAlert
 import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperCard
-import ru.zf.pravka.ui.PaperField
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.PaperRow
 import ru.zf.pravka.ui.PaperTextButton
@@ -54,7 +52,8 @@ internal fun GoogleDriveSettings(app: PravkaApp) {
         label = "семейный google drive",
         info = "Сюда Правка кладёт общие Деньги: у каждого телефона свой журнал правок, телефоны читают " +
             "журналы друг друга и складывают одну и ту же базу. Входить нужно под семейным аккаунтом — " +
-            "тем же на всех телефонах. Аккаунт в сам телефон добавлять не нужно: вход идёт через браузер. " +
+            "тем же на всех телефонах: браузер сначала предложит аккаунт телефона — выбери «другой " +
+            "аккаунт». Аккаунт в сам телефон добавлять не нужно: вход идёт через браузер. " +
             "Правка видит в Drive только свои файлы (папка «Правка»), чужие документы ей не видны. " +
             "Ключ входа хранится в закрытой памяти приложения и не уезжает с копией базы.",
     ) {
@@ -69,7 +68,7 @@ internal fun GoogleDriveSettings(app: PravkaApp) {
             )
             Spacer(Modifier.height(6.dp))
             if (waiting) {
-                PaperHint("Жду ответа из браузера: войди под семейным аккаунтом и нажми «Разрешить»…")
+                PaperHint("Жду ответа из браузера: войди под СЕМЕЙНЫМ аккаунтом (не своим личным) и нажми «Разрешить»…")
                 Spacer(Modifier.height(4.dp))
                 PaperTextButton("Отменить вход", onClick = { app.googleAuth.cancel() })
             } else {
@@ -118,8 +117,6 @@ internal fun GoogleDriveSettings(app: PravkaApp) {
         }
     }
 
-    if (!app.googleAuth.secretFromBuild) SecretCard(app)
-
     val profile by app.profileStore.flow.collectAsState()
     if (profile?.has(ru.zf.pravka.data.Profile.Mode.MONEY) == true) MoneySyncCard(app)
     if (acc != null) DriveBackupCard(app)
@@ -143,44 +140,6 @@ internal fun GoogleDriveSettings(app: PravkaApp) {
                 "Общие Деньги перестанут меняться с другими телефонами. Всё, что уже есть на этом " +
                     "телефоне, останется; журналы в Drive тоже. Подключишься снова — обмен продолжится с того же места."
             )
-        }
-    }
-}
-
-/**
- * Секрет клиента руками — запасной путь, если сборка пришла без него
- * (в секретах GitHub нет GOOGLE_CLIENT_SECRET). Вписывается один раз на телефон.
- */
-@Composable
-private fun SecretCard(app: PravkaApp) {
-    var secret by remember { mutableStateOf("") }
-    var saved by remember { mutableStateOf(app.googleAuth.clientSecret.isNotBlank()) }
-    PaperCard(
-        label = "секрет клиента",
-        info = "Вход через браузер требует секрет клиента Google (тип «Desktop app»). Обычно он приходит " +
-            "со сборкой: в репозитории на GitHub, Settings → Secrets and variables → Actions, секрет " +
-            "GOOGLE_CLIENT_SECRET. Эта сборка пришла без него — можно вписать здесь один раз.",
-    ) {
-        PaperHint(
-            if (saved) "Вписан руками на этом телефоне."
-            else "Сборка без секрета: положи GOOGLE_CLIENT_SECRET в секреты GitHub или впиши его здесь.",
-            if (saved) null else MaterialTheme.colorScheme.error,
-        )
-        Spacer(Modifier.height(6.dp))
-        PaperField(
-            value = secret,
-            onValueChange = { secret = it },
-            label = "Client secret",
-            visualTransformation = PasswordVisualTransformation(),
-        )
-        Spacer(Modifier.height(6.dp))
-        Row {
-            Spacer(Modifier.weight(1f))
-            PaperButton("Сохранить", icon = if (saved) Glyphs.Check else null, primary = true, enabled = secret.isNotBlank(), onClick = {
-                app.googleAuth.saveSecret(secret)
-                secret = ""
-                saved = true
-            })
         }
     }
 }

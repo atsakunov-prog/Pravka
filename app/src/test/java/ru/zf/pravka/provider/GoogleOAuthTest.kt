@@ -42,6 +42,14 @@ class GoogleOAuthTest {
         assertNull(GoogleOAuth.parseRedirect("POST /?code=x HTTP/1.1"))
     }
 
+    @Test fun appRedirectQueryIsParsed() {
+        // Android-клиент: браузер открывает ru.zf.pravka:/oauth2redirect?… — берётся строка запроса как есть.
+        assertEquals(GoogleOAuth.Redirect("4/0AVG", "st", ""), GoogleOAuth.parseQuery("state=st&code=4%2F0AVG&scope=x"))
+        assertEquals(GoogleOAuth.Redirect("", "", ""), GoogleOAuth.parseQuery(""))
+        val url = GoogleOAuth.authUrl("id", GoogleAuth.REDIRECT_APP, GoogleAuth.SCOPE, "ch", "st")
+        assertTrue(url.contains("redirect_uri=ru.zf.pravka%3A%2Foauth2redirect"))
+    }
+
     @Test fun pageEscapesGoogleWords() {
         val page = String(GoogleOAuth.page(false, "<script>"), Charsets.UTF_8)
         assertTrue(page.contains("&lt;script>"))

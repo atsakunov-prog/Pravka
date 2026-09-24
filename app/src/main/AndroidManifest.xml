@@ -119,6 +119,23 @@
             </intent-filter>
         </activity>
 
+        <!-- Возврат из браузера после входа в Google (provider/GoogleAuth.kt):
+             Android-клиент Google отдаёт код на адрес со схемой-пакетом. -->
+        <activity
+            android:name=".trigger.GoogleAuthActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="ru.zf.pravka" android:path="/oauth2redirect" />
+            </intent-filter>
+        </activity>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="ru.zf.pravka.files"

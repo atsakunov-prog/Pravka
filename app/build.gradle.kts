@@ -63,10 +63,10 @@ val buildTimestamp: String = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").for
 
 // Клиент Google для входа в семейный Drive (общие Деньги, provider/GoogleAuth.kt).
 // ID клиента не секрет — Google показывает его в каждой ссылке входа, поэтому
-// он вписан здесь. Секрет клиента в репозиторий не кладём: CI берёт его из
-// секретов GitHub (GOOGLE_CLIENT_SECRET), локальная сборка — из
-// local.properties (google.clientSecret). Пришёл в секретах свой ID — берётся
-// он: ID и секрет должны быть от одного клиента.
+// он вписан здесь. Заводской клиент — Android (пакет ru.zf.pravka и подпись
+// pravka.jks), секрета у него нет. Секрет бывает только у клиента Desktop: тогда
+// CI берёт его из секретов GitHub (GOOGLE_CLIENT_SECRET вместе с его
+// GOOGLE_CLIENT_ID), локальная сборка — из local.properties (google.clientSecret).
 val googleClientId: String = System.getenv("GOOGLE_CLIENT_ID")?.trim()?.takeIf { it.isNotEmpty() }
     ?: prop("google.clientId", "85341821733-72cnjhi0rhcm713s3sv90mmnn977v28s.apps.googleusercontent.com")!!
 val googleClientSecret: String = System.getenv("GOOGLE_CLIENT_SECRET")?.trim()?.takeIf { it.isNotEmpty() }

@@ -43,18 +43,21 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      # Клиент Google для входа в семейный Drive (общие Деньги): секрет — только
-      # из секретов репозитория, в код его не кладём. Значений не печатаем —
-      # только есть ли они (GitHub всё равно спрятал бы их звёздочками).
+      # Клиент Google для входа в семейный Drive (общие Деньги, копии базы):
+      # секрет, если он есть, — только из секретов репозитория, в код его не
+      # кладём. Значений не печатаем — только есть ли они.
       - name: Google client (есть ли секреты)
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         run: |
+          # Заводской клиент — Android (пакет и подпись), секрета у него нет: вход
+          # возвращается в приложение по его схеме. Секрет нужен только клиенту
+          # Desktop — тогда вход идёт через 127.0.0.1 (provider/GoogleAuth.kt).
           if [ -n "$GOOGLE_CLIENT_SECRET" ]; then
-            echo "GOOGLE_CLIENT_SECRET: есть"
+            echo "GOOGLE_CLIENT_SECRET: есть — вход через Desktop-клиент (127.0.0.1)"
           else
-            echo "::warning::GOOGLE_CLIENT_SECRET нет в секретах репозитория — вход в Google Drive попросит вписать секрет руками"
+            echo "GOOGLE_CLIENT_SECRET: нет — вход через Android-клиент (ru.zf.pravka:/oauth2redirect), секрет не нужен"
           fi
           CODE_ID=$(sed -n 's/.*prop("google.clientId", "\([^"]*\)").*/\1/p' app/build.gradle.kts)
           if [ -z "$GOOGLE_CLIENT_ID" ]; then

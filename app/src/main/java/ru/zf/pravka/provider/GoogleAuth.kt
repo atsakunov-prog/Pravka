@@ -9,10 +9,12 @@ import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -25,10 +27,19 @@ import ru.zf.pravka.data.StoreFiles
  * Вход в семейный Google Drive (25.09.2026) — через браузер, без аккаунта на
  * телефоне. Владелец: «на Boox только один аккаунт можно» — поэтому не
  * системный выбор аккаунта, а обычный вход Google в браузере: Правка открывает
- * страницу входа, ждёт ответа на своём телефоне (127.0.0.1, случайный порт) и
- * меняет код на ключ. Клиент Google — «Desktop app»: только он пускает ответ
- * на 127.0.0.1; секрет такого клиента Google сам считает несекретным, в
- * репозитории его всё равно нет — сборка берёт его из секретов GitHub.
+ * страницу входа и получает код обратно, а потом меняет его на ключ (PKCE).
+ *
+ * Как код возвращается — по типу клиента Google:
+ *  - клиент **Android** (заводской: пакет `ru.zf.pravka` и подпись
+ *    `pravka.jks`) — браузер открывает адрес `ru.zf.pravka:/oauth2redirect`,
+ *    его ловит `trigger/GoogleAuthActivity`. Секрета у такого клиента нет вовсе.
+ *    Google пускает эту схему только с галочкой «Enable custom URI scheme» в
+ *    настройках клиента (без неё — «Custom URI scheme is not enabled for your
+ *    Android client», 25.09.2026);
+ *  - клиент **Desktop** — если сборка пришла с его секретом
+ *    (`GOOGLE_CLIENT_SECRET` + `GOOGLE_CLIENT_ID` в секретах GitHub): ответ на
+ *    127.0.0.1, случайный порт. Android-клиенту этот путь Google закрыл
+ *    («The loopback flow has been blocked»).
  *
  * Доступ — только к файлам самой Правки (`drive.file`): чужих документов в
  * Drive она не видит и испортить не может.
@@ -41,15 +52,37 @@ class GoogleAuth(private val context: Context, private val http: OkHttpClient) {
 
     companion object {
         const val SCOPE = "https://www.googleapis.com/auth/drive.file"
+        /** Куда Google возвращает код Android-клиенту: схема — имя пакета. */
+        const val REDIRECT_APP = "ru.zf.pravka:/oauth2redirect"
         private const val FILE = "google-auth.json"
-        private const val SECRET_FILE = "google-client-secret.txt"
         private const val TOKEN_URL = "https://oauth2.googleapis.com/token"
         /** Сколько ждать ответа из браузера. */
         const val WAIT_MS = 5 * 60_000L
+
+        @Volatile private var pending: CompletableDeferred<GoogleOAuth.Redirect>? = null
+
+        /**
+         * Браузер вернул в приложение (`GoogleAuthActivity`). false — входа никто
+         * не ждёт (процесс успел умереть, пока открыт браузер): начать заново.
+         */
+        fun onRedirect(query: String?): Boolean {
+            val d = pending ?: return false
+            return d.complete(GoogleOAuth.parseQuery(query.orEmpty()))
+        }
     }
 
-    /** Кто вошёл: адрес аккаунта — чтобы видно было, что это семейный, а не личный. */
-    data class Account(val email: String, val refresh: String, val scope: String, val at: Long)
+    /**
+     * Кто вошёл: адрес аккаунта — чтобы видно было, что это семейный, а не
+     * личный; каким клиентом — ключ обновляется тем же ([desktop] — с секретом).
+     */
+    data class Account(
+        val email: String,
+        val refresh: String,
+        val scope: String,
+        val at: Long,
+        val client: String = "",
+        val desktop: Boolean = false,
+    )
 
     /** Ошибка входа словами; [relogin] — ключ отозван, нужно войти заново. */
     class AuthException(message: String, val relogin: Boolean = false) : Exception(message)
@@ -69,30 +102,24 @@ class GoogleAuth(private val context: Context, private val http: OkHttpClient) {
 
     val clientId: String get() = BuildConfig.GOOGLE_CLIENT_ID
 
-    /** Секрет клиента: из сборки, а если сборка без него — вписанный руками один раз. */
-    val clientSecret: String
-        get() = BuildConfig.GOOGLE_CLIENT_SECRET.ifBlank {
-            runCatching { File(dir, SECRET_FILE).readText().trim() }.getOrDefault("")
-        }
-
-    /** Секрет пришёл со сборкой (из секретов GitHub), а не вписан руками. */
-    val secretFromBuild: Boolean get() = BuildConfig.GOOGLE_CLIENT_SECRET.isNotBlank()
-
-    fun saveSecret(secret: String) {
-        StoreFiles.writeAtomic(File(dir, SECRET_FILE), secret.trim())
-    }
+    /** Сборка пришла с секретом Desktop-клиента — вход через 127.0.0.1; иначе — Android-клиент. */
+    val desktop: Boolean get() = BuildConfig.GOOGLE_CLIENT_SECRET.isNotBlank()
 
     private fun read(): Account? = runCatching {
         val f = File(dir, FILE)
         if (!f.isFile) return null
         val o = JSONObject(f.readText())
-        Account(o.optString("email"), o.getString("refresh"), o.optString("scope"), o.optLong("at"))
+        Account(
+            o.optString("email"), o.getString("refresh"), o.optString("scope"), o.optLong("at"),
+            o.optString("client"), o.optBoolean("desktop", false),
+        )
     }.getOrNull()
 
     private fun write(a: Account) {
         StoreFiles.writeAtomic(
             File(dir, FILE),
-            JSONObject().put("email", a.email).put("refresh", a.refresh).put("scope", a.scope).put("at", a.at).toString(),
+            JSONObject().put("email", a.email).put("refresh", a.refresh).put("scope", a.scope).put("at", a.at)
+                .put("client", a.client).put("desktop", a.desktop).toString(),
         )
     }
 
@@ -102,36 +129,29 @@ class GoogleAuth(private val context: Context, private val http: OkHttpClient) {
      */
     suspend fun signIn(open: (String) -> Unit): Result<Account> = withContext(Dispatchers.IO) {
         runCatching {
-            if (clientSecret.isBlank()) {
-                throw AuthException("В сборке нет секрета клиента Google: положи GOOGLE_CLIENT_SECRET в секреты репозитория или впиши его здесь")
-            }
             val verifier = GoogleOAuth.verifier()
             val state = GoogleOAuth.random(16)
-            val socket = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))
-            server = socket
             _waiting.value = true
             try {
-                socket.soTimeout = WAIT_MS.toInt()
-                val redirect = "http://127.0.0.1:${socket.localPort}"
-                val url = GoogleOAuth.authUrl(clientId, redirect, SCOPE, GoogleOAuth.challenge(verifier), state)
-                withContext(Dispatchers.Main) { open(url) }
-                val back = waitRedirect(socket, state)
+                val (redirect, back) = if (desktop) viaLoopback(verifier, state, open) else viaApp(verifier, state, open)
                 if (back.error.isNotEmpty()) {
                     throw AuthException(
-                        if (back.error == "access_denied") "Вход отменён: в Google не нажали «Разрешить»"
-                        else "Google ответил: ${back.error}"
+                        when (back.error) {
+                            "access_denied" -> "Вход отменён: в Google не нажали «Разрешить»"
+                            "cancelled" -> "Вход отменён"
+                            else -> "Google ответил: ${back.error}"
+                        }
                     )
                 }
-                val tokens = post(
-                    FormBody.Builder()
-                        .add("code", back.code)
-                        .add("client_id", clientId)
-                        .add("client_secret", clientSecret)
-                        .add("redirect_uri", redirect)
-                        .add("grant_type", "authorization_code")
-                        .add("code_verifier", verifier)
-                        .build()
-                )
+                if (back.state != state) throw AuthException("Ответ не от этого входа — начни вход заново")
+                val form = FormBody.Builder()
+                    .add("code", back.code)
+                    .add("client_id", clientId)
+                    .add("redirect_uri", redirect)
+                    .add("grant_type", "authorization_code")
+                    .add("code_verifier", verifier)
+                if (desktop) form.add("client_secret", BuildConfig.GOOGLE_CLIENT_SECRET)
+                val tokens = post(form.build())
                 val refresh = tokens.optString("refresh_token")
                 if (refresh.isBlank()) throw AuthException("Google не выдал ключ на будущее (refresh_token) — войди ещё раз")
                 val scope = tokens.optString("scope")
@@ -143,20 +163,50 @@ class GoogleAuth(private val context: Context, private val http: OkHttpClient) {
                 access = tokens.optString("access_token")
                 accessUntil = System.currentTimeMillis() + tokens.optLong("expires_in", 3600) * 1000 - 60_000
                 val email = runCatching { email(access) }.getOrDefault("")
-                val acc = Account(email, refresh, scope, System.currentTimeMillis())
+                val acc = Account(email, refresh, scope, System.currentTimeMillis(), clientId, desktop)
                 write(acc)
                 _account.value = acc
                 acc
             } finally {
                 _waiting.value = false
-                server = null
-                runCatching { socket.close() }
             }
+        }
+    }
+
+    /** Android-клиент: код приходит в `GoogleAuthActivity` по адресу [REDIRECT_APP]. */
+    private suspend fun viaApp(verifier: String, state: String, open: (String) -> Unit): Pair<String, GoogleOAuth.Redirect> {
+        val d = CompletableDeferred<GoogleOAuth.Redirect>()
+        pending = d
+        try {
+            val url = GoogleOAuth.authUrl(clientId, REDIRECT_APP, SCOPE, GoogleOAuth.challenge(verifier), state)
+            withContext(Dispatchers.Main) { open(url) }
+            val back = withTimeoutOrNull(WAIT_MS) { d.await() }
+                ?: throw AuthException("Ответа из браузера не было ${WAIT_MS / 60_000} минут — начни вход заново")
+            return REDIRECT_APP to back
+        } finally {
+            if (pending === d) pending = null
+        }
+    }
+
+    /** Desktop-клиент: ждём браузер на 127.0.0.1. */
+    private suspend fun viaLoopback(verifier: String, state: String, open: (String) -> Unit): Pair<String, GoogleOAuth.Redirect> {
+        val socket = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))
+        server = socket
+        try {
+            socket.soTimeout = WAIT_MS.toInt()
+            val redirect = "http://127.0.0.1:${socket.localPort}"
+            val url = GoogleOAuth.authUrl(clientId, redirect, SCOPE, GoogleOAuth.challenge(verifier), state)
+            withContext(Dispatchers.Main) { open(url) }
+            return redirect to waitRedirect(socket, state)
+        } finally {
+            server = null
+            runCatching { socket.close() }
         }
     }
 
     /** Оборвать ожидание ответа из браузера. */
     fun cancel() {
+        pending?.complete(GoogleOAuth.Redirect("", "", "cancelled"))
         runCatching { server?.close() }
     }
 
@@ -175,19 +225,17 @@ class GoogleAuth(private val context: Context, private val http: OkHttpClient) {
         }
     }
 
-    /** Ключ доступа на ближайший час; просроченный меняется сам. */
+    /** Ключ доступа на ближайший час; просроченный меняется сам — тем же клиентом, что входили. */
     suspend fun accessToken(): String = withContext(Dispatchers.IO) {
         val acc = _account.value ?: throw AuthException("Google Drive не подключён", relogin = true)
         if (access.isNotEmpty() && System.currentTimeMillis() < accessUntil) return@withContext access
+        val form = FormBody.Builder()
+            .add("client_id", acc.client.ifBlank { clientId })
+            .add("refresh_token", acc.refresh)
+            .add("grant_type", "refresh_token")
+        if (acc.desktop) form.add("client_secret", BuildConfig.GOOGLE_CLIENT_SECRET)
         val o = try {
-            post(
-                FormBody.Builder()
-                    .add("client_id", clientId)
-                    .add("client_secret", clientSecret)
-                    .add("refresh_token", acc.refresh)
-                    .add("grant_type", "refresh_token")
-                    .build()
-            )
+            post(form.build())
         } catch (e: AuthException) {
             if (e.relogin) {
                 // Ключ отозван (вышли из аккаунта, сменили пароль, полгода без
@@ -310,6 +358,11 @@ object GoogleOAuth {
         if (parts.size < 2 || parts[0] != "GET") return null
         val query = parts[1].substringAfter('?', "")
         if (query.isEmpty()) return null
+        return parseQuery(query)
+    }
+
+    /** Строка запроса ответа Google (`state=…&code=…` или `error=…`), закодированная. */
+    fun parseQuery(query: String): Redirect {
         val q = query.split('&').mapNotNull { kv ->
             val k = kv.substringBefore('=')
             if (k.isEmpty()) null else k to URLDecoder.decode(kv.substringAfter('=', ""), "UTF-8")
