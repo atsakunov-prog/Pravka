@@ -2147,6 +2147,73 @@ private fun PromptsTab(promptStore: PromptStore) {
     }
 }
 
+/**
+ * Набор промптов: отдать свои тексты другой установке и принять чужие
+ * (владелец, 25.09.2026: Марианне «промпты надо дать мои»). Свои правки и
+ * принятые недельной правкой версии живут только в базе владельца — без
+ * набора у неё были бы заводские из APK. Род и «без прозы» у получателя
+ * накладываются при сборке запроса, текст набора не трогается.
+ */
+@Composable
+private fun PromptSetCard(promptStore: PromptStore) {
+    val context = LocalContext.current
+    val app = context.applicationContext as PravkaApp
+    val scope = app.appScope
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val result = runCatching {
+                val text = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }
+                }
+                val (from, texts) = ru.zf.pravka.data.PromptSet.decode(text)
+                val n = promptStore.importSet(texts)
+                app.eventLog.add("промпты: принят набор от ${from.ifBlank { "?" }} — $n")
+                if (n == 0) "В наборе нет своих текстов — у отправителя заводские, как и здесь"
+                else "Принято промптов: $n" + (if (from.isNotBlank()) " (от $from)" else "")
+            }.getOrElse { e -> "Набор не принят: ${e.message ?: e.javaClass.simpleName}" }
+            Feedback.toast(context, result)
+        }
+    }
+    SectionCard(
+        label = "Набор промптов",
+        info = "«Поделиться» собирает в один файл все промпты, которые здесь правили руками " +
+            "или приняла недельная правка, — отправь его на другой телефон. «Принять» кладёт " +
+            "такие тексты поверх здешних. Заводские промпты у всех одинаковые, в набор они не " +
+            "едут. У другого пользователя чистка сама пишет в его роде, а художественной " +
+            "прозы у него нет — это накладывается при запросе, не в тексте.",
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PaperButton("Поделиться набором", icon = Glyphs.Share, onClick = {
+                scope.launch {
+                    runCatching {
+                        val texts = promptStore.overrides().mapKeys { it.key.storageKey }
+                        if (texts.isEmpty()) {
+                            Feedback.toast(context, "Своих текстов нет — все промпты заводские")
+                            return@launch
+                        }
+                        val from = app.profileStore.current?.name.orEmpty()
+                        val file = withContext(Dispatchers.IO) {
+                            File(context.cacheDir, "pravka-prompts.json").also {
+                                it.writeText(ru.zf.pravka.data.PromptSet.encode(from, texts, System.currentTimeMillis()))
+                            }
+                        }
+                        context.startActivity(
+                            android.content.Intent.createChooser(
+                                ru.zf.pravka.data.shareFileIntent(context, file, "application/json"),
+                                "Набор промптов",
+                            )
+                        )
+                    }.onFailure { e -> Feedback.toast(context, "Набор не собрался: ${e.message}") }
+                }
+            })
+            PaperButton("Принять набор", icon = Glyphs.Download, onClick = {
+                importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+            })
+        }
+    }
+}
+
 @Composable
 private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) -> Unit) {
     Column(
@@ -2156,6 +2223,7 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
+        PromptSetCard(promptStore)
         // Business-season workflow: Whisper transcribes meetings on the
         // owner's computer; this assembles the MEETING prompt + the FULL
         // current dictionary + the approved rules into one clipboard-ready

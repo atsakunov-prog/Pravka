@@ -58,7 +58,7 @@ suspend fun ClaudeProvider.parseMoney(
         val apiKey = settings.apiKey()
         if (apiKey.isBlank()) throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         require(transcript.isNotBlank()) { "Пустой наговор — разбирать нечего." }
-        val template = promptStore.effective(PromptStore.PromptId.MONEY)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.MONEY)
         val parts = moneyParts(template, "{TODAY}", { s ->
             s.replace("{CATEGORIES}", moneyCatalogBlock())
                 .replace("{PAYEES}", payeesBlock.ifBlank { "— пока пусто" })
@@ -116,7 +116,7 @@ suspend fun ClaudeProvider.hintPayees(
         val apiKey = settings.apiKey()
         if (apiKey.isBlank()) throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         require(groupsBlock.isNotBlank()) { "Спрашивать не о чем — все получатели узнаны." }
-        val template = promptStore.effective(PromptStore.PromptId.MONEY_MATCH)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.MONEY_MATCH)
         val parts = moneyParts(template, Prompts.PLACEHOLDER_INPUT, { s ->
             s.replace("{CATEGORIES}", moneyCatalogBlock())
                 .replace("{PAYEES}", payeesBlock.ifBlank { "— пока пусто" })
@@ -162,7 +162,7 @@ private suspend fun ClaudeProvider.moneyText(
     runCatchingApi {
         val apiKey = settings.apiKey()
         if (apiKey.isBlank()) throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
-        val template = promptStore.effective(promptId)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(promptId)
         // Выжимка журнала — в голове под кэшем: второй вопрос подряд её не оплачивает заново.
         val parts = moneyParts(template, "{TODAY}", { s ->
             s.replace("{CATEGORIES}", moneyCatalogBlock())
@@ -204,7 +204,7 @@ suspend fun ClaudeProvider.interpretMoneyAnswer(card: String, spoken: String, pa
             val apiKey = settings.apiKey()
             if (apiKey.isBlank()) throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
             require(spoken.isNotBlank()) { "Ответ пустой — скажи ещё раз." }
-            val template = promptStore.effective(PromptStore.PromptId.MONEY_ANSWER)
+            val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.MONEY_ANSWER)
             val parts = moneyParts(template, Prompts.PLACEHOLDER_INPUT, { s ->
                 s.replace("{CATEGORIES}", moneyCatalogBlock())
                     .replace("{PAYEES}", payeesBlock.ifBlank { "— пока пусто" })

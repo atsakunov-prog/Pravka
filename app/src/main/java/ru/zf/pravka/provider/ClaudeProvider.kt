@@ -109,7 +109,9 @@ class ClaudeProvider(
                 val model = choice.model
                 // Fiction mode (settings toggle): the PROSE directive rides on
                 // top of the plain CLEAN pass; explicit style modes win over it.
-                val proseOn = mode == ProofreadMode.CLEAN && settings.proseModeFlow.first()
+                // Художественная проза — только у владельца: это его книги
+                // (владелец, 25.09.2026: Марианне «мои промпты, но без прозы»).
+                val proseOn = mode == ProofreadMode.CLEAN && author().owner && settings.proseModeFlow.first()
                 val parts = cleanParts(mode, dictBlock, directive, contextBefore, conversationContext, proseOn)
                     // Кэш стабильного префикса — на повседневной модели: там он
                     // читается с каждой диктовки. Переделка на другой модели —

@@ -68,7 +68,7 @@ suspend fun ClaudeProvider.parseBody(
             throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         }
         require(text.isNotBlank()) { "Пустая фраза — разбирать нечего." }
-        val template = promptStore.effective(PromptStore.PromptId.BODY)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.BODY)
         // Стабильная часть — до маркера {VARS}: инструкция и оба
         // справочника. Она и уходит под точку кэша.
         val split = template.indexOf(Prompts.PLACEHOLDER_VARS)
@@ -323,7 +323,7 @@ suspend fun ClaudeProvider.coach(
         if (apiKey.isBlank()) {
             throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         }
-        val template = promptStore.effective(PromptStore.PromptId.COACH)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.COACH)
         var prompt = template
             .replace("{CONTEXT}", contextBlock.ifBlank { "Данных нет — выгрузка не удалась." })
             .replace("{TODAY}", todayContext())
@@ -369,7 +369,7 @@ suspend fun ClaudeProvider.trainer(
         if (apiKey.isBlank()) {
             throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         }
-        val template = promptStore.effective(PromptStore.PromptId.TRAINER)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.TRAINER)
         var prompt = template
             .replace("{FOCUS}", focusBlock.ifBlank { "Упражнение не из справочника." })
             .replace("{WEEK}", weekBlock.ifBlank { "Правил недели в кэше нет." })

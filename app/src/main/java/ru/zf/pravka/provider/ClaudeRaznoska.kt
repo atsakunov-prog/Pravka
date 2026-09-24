@@ -64,7 +64,7 @@ suspend fun ClaudeProvider.splitTasks(
             throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         }
         require(transcript.isNotBlank()) { "Пустой наговор — разбирать нечего." }
-        val template = promptStore.effective(PromptStore.PromptId.TASKS)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.TASKS)
         val catalog = catalogBlock.ifBlank {
             "Каталог проектов не загружен — оставь project пустым, владелец выберет сам."
         }

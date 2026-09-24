@@ -269,9 +269,10 @@ $raw
         // относится к ним соответственно. И меняются они раз в несколько
         // дней, а фраза приходит десятки раз в день: под кэшем они почти
         // всегда бесплатны, в хвосте платились бы каждый раз.
-        val stableWithOwner =
-            if (ownerRules.isBlank()) stableRules
-            else stableRules + ownerRules + "\n\n"
+        // Не владелец (профиль): кто диктует — первой строкой свода. Свод
+        // написан про Сашу, а лента — того, кто говорит.
+        val stableWithOwner = Prompts.speakerNote(author()) +
+            (if (ownerRules.isBlank()) stableRules else stableRules + ownerRules + "\n\n")
         val parts = Prompts.PromptParts(
             stablePrefix = stableWithOwner,
             cacheStableAlways = true,

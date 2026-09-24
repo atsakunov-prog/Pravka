@@ -63,7 +63,7 @@ suspend fun ClaudeProvider.parseFood(
             throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         }
         require(text.isNotBlank() || image != null) { "Нечего разбирать: ни слов, ни снимка." }
-        val template = promptStore.effective(PromptStore.PromptId.FOOD)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.FOOD)
         var prompt = template
             .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
             .replace("{NOW}", nowContext())

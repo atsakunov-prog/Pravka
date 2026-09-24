@@ -994,8 +994,10 @@ private fun PravkaSettings(app: PravkaApp) {
     val convo by settings.convoContextFlow.collectAsState(initial = true)
     val rulesOn by settings.rulesInPromptFlow.collectAsState(initial = false)
 
+    // Проза — книги владельца; у остальных её нет и в чистке (ClaudeProvider).
+    val owner = app.profileStore.flow.collectAsState().value?.owner ?: true
     PaperCard(label = "правка текста") {
-        PaperToggle(
+        if (owner) PaperToggle(
             title = "Художественная проза",
             checked = prose,
             onCheckedChange = { on -> scope.launch { settings.setProseMode(on) } },

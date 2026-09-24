@@ -89,8 +89,59 @@ class PromptStore(private val context: Context) {
         context.promptDataStore.edit { it[stringPreferencesKey(id.storageKey)] = text }
     }
 
+    /** Свои тексты владельца (переопределения заводских) — для набора промптов. */
+    suspend fun overrides(): Map<PromptId, String> {
+        val prefs = context.promptDataStore.data.first()
+        return PromptId.entries.mapNotNull { id -> prefs[stringPreferencesKey(id.storageKey)]?.let { id to it } }.toMap()
+    }
+
+    /**
+     * Принять набор с другой установки: каждый текст из него ложится своим
+     * переопределением. Чего в наборе нет — остаётся как было (там у
+     * отправителя заводской, а он у всех один — из APK). Возвращает, сколько
+     * текстов принято.
+     */
+    suspend fun importSet(texts: Map<String, String>): Int {
+        val known = texts.mapNotNull { (key, text) ->
+            PromptId.entries.firstOrNull { it.storageKey == key }?.let { it to text }
+        }
+        if (known.isEmpty()) return 0
+        context.promptDataStore.edit { p -> for ((id, text) in known) p[stringPreferencesKey(id.storageKey)] = text }
+        return known.size
+    }
+
     /** "Вернуть заводской": removes the override, factory text applies again. */
     suspend fun resetToFactory(id: PromptId) {
         context.promptDataStore.edit { it.remove(stringPreferencesKey(id.storageKey)) }
+    }
+}
+
+/**
+ * Набор промптов одним файлом — чтобы отдать свои промпты другой установке
+ * (владелец, 25.09.2026: Марианне «промпты надо дать мои»). Свои тексты
+ * владельца — те, что он правил руками и что приняла недельная правка
+ * промпта, — живут только в его базе; заводские у всех одни, из APK, поэтому
+ * в набор не едут. Род и «без прозы» у получателя накладываются при сборке
+ * запроса (`Prompts.forAuthor`, `Prompts.speakerNote`), а не в тексте.
+ */
+internal object PromptSet {
+    const val FORMAT = "pravka-prompts"
+
+    fun encode(from: String, texts: Map<String, String>, now: Long): String =
+        org.json.JSONObject()
+            .put("format", FORMAT)
+            .put("version", 1)
+            .put("from", from)
+            .put("exportedAt", now)
+            .put("prompts", org.json.JSONObject().also { o -> texts.forEach { (k, v) -> o.put(k, v) } })
+            .toString(2)
+
+    /** Тексты набора: ключ промпта — текст. Не наш файл — исключение с понятным текстом. */
+    fun decode(text: String): Pair<String, Map<String, String>> {
+        val o = org.json.JSONObject(text)
+        require(o.optString("format") == FORMAT) { "это не набор промптов Правки" }
+        val p = o.optJSONObject("prompts") ?: org.json.JSONObject()
+        val map = p.keys().asSequence().associateWith { p.getString(it) }
+        return o.optString("from") to map
     }
 }

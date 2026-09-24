@@ -44,22 +44,54 @@ class ProfileTest {
     }
 
     @Test
-    fun `у Марианны — женский род и нет тем владельца`() {
+    fun `у Марианны — промпт владельца, но женский род и без прозы`() {
+        // Владелец, 25.09.2026: «промпты надо ей дать мои, но без художественной
+        // прозы и с пониманием, что диктует женщина».
         val t = Prompts.CLEAN_CLAUDE
         val her = Prompts.forAuthor(t, Prompts.Author("Марианна", female = true, owner = false))
         assertTrue(her.contains("Кто диктует: Марианна, женщина."))
-        assertTrue(her.contains("в женском роде"))
+        assertTrue(her.contains("в женском роде (\"я подумала\", не \"я подумал\")"))
+        assertTrue(her.contains("Она диктует:"))
         assertFalse(her.contains("Кто диктует: мужчина"))
-        assertFalse(her.contains("сделки M&A"))
+        // Темы владельца на месте…
+        assertTrue(her.contains("сделки M&A"))
+        assertTrue(her.contains("психотерапия в терминах IFS; еврейские традиции."))
+        // …кроме прозы и «жене».
+        assertFalse(her.contains("художественную прозу: главы книги"))
+        assertFalse(her.contains("эротические"))
+        assertFalse(her.contains("род определяется персонажем"))
+        assertFalse(her.contains("сообщения жене"))
+        assertTrue(her.contains("сообщения родным, детям и коллегам"))
         // Всё до и после абзаца — прежнее.
         assertTrue(her.startsWith(t.substringBefore("Кто диктует:")))
         assertTrue(her.endsWith(t.substring(t.indexOf("Сначала пойми по содержанию"))))
     }
 
     @Test
-    fun `свой текст без маркеров не трогается`() {
+    fun `свой текст без маркеров — только род первой строкой`() {
         val own = "Правь текст бережно.\n{DICT}\n{INPUT}"
-        assertEquals(own, Prompts.forAuthor(own, Prompts.Author("Марианна", female = true, owner = false)))
+        val her = Prompts.forAuthor(own, Prompts.Author("Марианна", female = true, owner = false))
+        assertTrue(her.startsWith("Кто диктует: Марианна, женщина."))
+        assertTrue(her.endsWith(own))
+        assertEquals(own, Prompts.forAuthor(own, Prompts.Author.OWNER))
+    }
+
+    @Test
+    fun `приписка режимам — у владельца пусто, у Марианны её имя и род`() {
+        assertEquals("", Prompts.speakerNote(Prompts.Author.OWNER))
+        val note = Prompts.speakerNote(Prompts.Author("Марианна", female = true, owner = false))
+        assertTrue(note.contains("диктует не Саша, а Марианна (женщина)"))
+        assertTrue(note.contains("«я купила», не «я купил»"))
+    }
+
+    @Test
+    fun `набор промптов туда и обратно, чужой файл — отказ`() {
+        val texts = mapOf("clean_claude" to "мой промпт", "money" to "деньги")
+        val (from, back) = PromptSet.decode(PromptSet.encode("Саша", texts, 1L))
+        assertEquals("Саша", from)
+        assertEquals(texts, back)
+        val err = runCatching { PromptSet.decode("""{"format":"pravka-dictionary"}""") }.exceptionOrNull()
+        assertTrue(err is IllegalArgumentException)
     }
 
     @Test

@@ -120,29 +120,68 @@ object Prompts {
 
     private const val WHO_START = "Кто диктует:"
     private const val WHO_END = "Сначала пойми по содержанию"
+    private const val TOPICS = "Он диктует:"
+
+    /** Первая строка абзаца «Кто диктует»: имя, пол и род авторской речи. */
+    private fun whoLine(a: Author): String {
+        val (kind, rod, say, notSay) = if (a.female) listOf("женщина", "женском", "я подумала", "я подумал")
+        else listOf("мужчина", "мужском", "я подумал", "я подумала")
+        return "$WHO_START ${a.name}, $kind. Авторская речь от первого лица — всегда\n" +
+            "в $rod роде (\"$say\", не \"$notSay\")."
+    }
 
     /**
-     * Шаблон чистки под автора. У владельца — как есть. У другого абзац от
-     * «Кто диктует:» до «Сначала пойми по содержанию» заменяется его именем,
-     * родом и нейтральным списком тем. Маркеров нет (владелец переписал
-     * промпт своим текстом) — шаблон не трогается: свой текст важнее.
+     * Шаблон чистки под автора (владелец, 25.09.2026: «промпты надо ей дать мои,
+     * но без художественной прозы и с пониманием, что диктует женщина»).
+     * У владельца — как есть, байт в байт. У другого абзац «Кто диктует» — тот
+     * же владельцев, но: имя и род автора; без оговорки «в прозе род по
+     * персонажу» и без пункта «художественную прозу…»; «сообщения жене» —
+     * «родным». Остальной текст не трогается: правила формы вида «в прозе —
+     * словами» без прозы просто не срабатывают. Маркеров нет (свой текст
+     * владельца, переписанный правкой промпта) — род первой строкой сверху,
+     * иначе чистка писала бы её «я сделала» мужским родом.
      */
     fun forAuthor(template: String, author: Author): String {
         if (author.owner) return template
         val start = template.indexOf(WHO_START)
         val end = template.indexOf(WHO_END)
-        if (start < 0 || end <= start) return template
-        val (kind, rod, say, notSay) = if (author.female) {
-            listOf("женщина", "женском", "я подумала", "я подумал")
-        } else {
-            listOf("мужчина", "мужском", "я подумал", "я подумала")
-        }
-        val who = "$WHO_START ${author.name}, $kind. Авторская речь от первого лица — всегда\n" +
-            "в $rod роде (\"$say\", не \"$notSay\"); в художественной\n" +
-            "прозе род определяется персонажем, который говорит. Диктует что\n" +
-            "угодно: сообщения родным, друзьям и коллегам, рабочие и учебные\n" +
-            "заметки, списки дел, вопросы ассистенту.\n"
-        return template.substring(0, start) + who + template.substring(end)
+        if (start < 0 || end <= start) return whoLine(author) + "\n\n" + template
+        val topics = ownerTopics(template.substring(start, end))
+        val pronoun = if (author.female) "Она диктует:" else "Он диктует:"
+        val body = if (topics != null) " $pronoun\n$topics" else " $pronoun что угодно: сообщения родным,\n" +
+            "друзьям и коллегам, рабочие и учебные заметки, списки дел,\nвопросы ассистенту.\n"
+        return template.substring(0, start) + whoLine(author) + body + template.substring(end)
+    }
+
+    /**
+     * Темы владельца из его абзаца — пункты после «Он диктует:», без
+     * художественной прозы. null — абзац не той формы (переписан), тогда
+     * берётся нейтральный список.
+     */
+    private fun ownerTopics(paragraph: String): String? {
+        val at = paragraph.indexOf(TOPICS)
+        if (at < 0) return null
+        val items = paragraph.substring(at + TOPICS.length).trim('\n', ' ')
+            .split("\n— ").map { it.removePrefix("— ").trimEnd() }
+            .filter { it.isNotBlank() && !it.startsWith("художественн") }
+            .map { it.replace("сообщения жене, детям и коллегам", "сообщения родным, детям и коллегам") }
+        if (items.isEmpty()) return null
+        val last = items.last().trimEnd(';', ',', '.') + "."
+        return (items.dropLast(1) + last).joinToString("\n") { "— $it" } + "\n"
+    }
+
+    /**
+     * Кто диктует — приписка в начало промптов режимов (Засечка, Дела, Еда,
+     * Деньги, Тело) у не-владельца. Промпты написаны про Сашу: «владелец»,
+     * «Саша диктует», примеры с его семьёй. Для владельца — пусто (кэш цел).
+     */
+    fun speakerNote(author: Author): String {
+        if (author.owner) return ""
+        val rod = if (author.female) "женский («я купила», не «я купил»)" else "мужской («я купил», не «я купила»)"
+        return "ВАЖНО: диктует не Саша, а ${author.name} (${if (author.female) "женщина" else "мужчина"}). " +
+            "Всё, что ниже сказано об авторе — «владелец», «Саша диктует», «его», — относится к " +
+            "${author.name}: «я», «мне», «мой» в диктовке — это ${author.name}; род автора — $rod. " +
+            "Саша в тексте — отдельный человек из семьи.\n\n"
     }
 
     // Splits at {DICT} and {INPUT} (empty dict block leaves no stray blank
