@@ -2,20 +2,19 @@ package ru.zf.pravka
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -43,15 +42,21 @@ import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.trigger.finishMoneyTab
 import ru.zf.pravka.trigger.listenForMoneyTab
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.PaperField
 import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.PaperIconButton
+import ru.zf.pravka.ui.PaperTextButton
 
 // Вопросы сверки — карточками (владелец, 23.09.2026): на карточке сколько раз,
 // какая сумма, кому, с какого счёта, и сам список операций с датами. Внизу —
 // «Не знаю» (карточка остаётся, листаем дальше) и «Сказать»: наговорил, что
 // это, — Claude сам понял категорию и запомнил получателя. Карточки листаются
 // пальцем: смахнул — значит, пока не знаешь, она вернётся на своё место в
-// стопке.
+// стопке. Главная кнопка на карточке одна — справа (24.09.2026): «Сказать»,
+// а у пуша без пары и у надиктованного — «Да, …» на их единственный вопрос.
 //
 // Голос — НАШ движок, тот же, что у «П», «З», «Д» и «₽» (служба,
 // `listenForMoneyTab`): со словарём, подсказками справочника, серой
@@ -80,29 +85,49 @@ internal fun MoneyVoiceBar(owner: String) {
     val live by MoneyTabVoice.live.collectAsState()
     val mine = live?.takeIf { it.owner == owner } ?: return
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Text(
-            "🎙 " + mine.text.ifBlank { "слушаю…" },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { PravkaAccessibilityService.instance?.finishMoneyTab(keep = true) }) { Text("Готово") }
-            OutlinedButton(onClick = { PravkaAccessibilityService.instance?.finishMoneyTab(keep = false) }) { Text("Отмена") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Glyphs.Mic,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                mine.text.ifBlank { "слушаю…" },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            PaperButton("Отмена", icon = Glyphs.Close, onClick = { PravkaAccessibilityService.instance?.finishMoneyTab(keep = false) })
+            PaperButton("Готово", icon = Glyphs.Check, primary = true, onClick = { PravkaAccessibilityService.instance?.finishMoneyTab(keep = true) })
         }
     }
 }
 
+/**
+ * Вопросы сверки стопкой карточек. [footer] — ручка под стопкой («Claude
+ * разложит очевидное»): она про все вопросы разом, а не про одну карточку.
+ */
 @Composable
-internal fun QuestionCards(app: PravkaApp, questions: List<MoneyEngine.Question>) {
+internal fun QuestionCards(
+    app: PravkaApp,
+    questions: List<MoneyEngine.Question>,
+    footer: (@Composable ColumnScope.() -> Unit)? = null,
+) {
     if (questions.isEmpty()) return
     // Крупные — первыми: вопрос на сто тысяч важнее десяти по триста.
     val ordered = remember(questions) { questions.sortedBy { q -> q.entries.sumOf { it.rubKop } } }
     val pager = rememberPagerState(pageCount = { ordered.size })
     val scope = rememberCoroutineScope()
     val total = ordered.sumOf { q -> q.entries.sumOf { it.rubKop } }
-    PaperCard(label = "вопросы · ${ordered.size} · ${MoneyFormat.k(total)} ${MoneyFormat.K}") {
-        PaperHint("Листай пальцем. «Сказать» — наговори, что это, Claude разложит и запомнит.")
-        Spacer(Modifier.height(8.dp))
+    PaperCard(
+        label = "вопросы · ${ordered.size} · ${MoneyFormat.k(total)} ${MoneyFormat.K}",
+        info = "Листай пальцем. «Сказать» — наговори, что это, Claude разложит и запомнит. " +
+            "«Не знаю» — карточка остаётся в стопке, листаем дальше.",
+    ) {
         HorizontalPager(state = pager, pageSpacing = 12.dp, modifier = Modifier.fillMaxWidth()) { page ->
             QuestionCard(
                 app = app,
@@ -115,6 +140,10 @@ internal fun QuestionCards(app: PravkaApp, questions: List<MoneyEngine.Question>
                     }
                 },
             )
+        }
+        if (footer != null) {
+            Spacer(Modifier.height(4.dp))
+            footer()
         }
     }
 }
@@ -129,6 +158,10 @@ private fun QuestionCard(app: PravkaApp, q: MoneyEngine.Question, position: Stri
     var result by remember(q.key) { mutableStateOf("") }
     val voice = q.entries.first().source == MoneyEntry.Source.VOICE
     val orphan = q.text == MoneyMatch.ORPHAN_PUSH
+    // Пока слушаем для этой карточки, главная — «Готово» в полосе «слушаю…»,
+    // и «Сказать» на это время уступает ей заливку: две главных рядом — ни одной.
+    val live by MoneyTabVoice.live.collectAsState()
+    val listening = live?.owner == "card:" + q.key
 
     fun submit(spoken: String) {
         if (spoken.isBlank()) return
@@ -203,43 +236,72 @@ private fun QuestionCard(app: PravkaApp, q: MoneyEngine.Question, position: Stri
         Spacer(Modifier.height(8.dp))
         if (orphan) {
             // Пуш был, выписка пришла, а пары нет: обычно отмена или возврат день в день.
+            // Вопрос на карточке — «Операцию отменили?», поэтому ответ короткий:
+            // «Отменили — вычеркнуть» рядом с «Не знаю» на внешнем экране Fold не встаёт.
             PaperHint(q.text)
             Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { scope.launch { app.moneyEngine.drop(q.entries.map { it.id }) } }) { Text("Отменили — вычеркнуть") }
-                OutlinedButton(onClick = onSkip) { Text("Не знаю") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                PaperButton("Не знаю", onClick = onSkip)
+                PaperButton(
+                    "Да, вычеркнуть",
+                    icon = Glyphs.Delete,
+                    primary = true,
+                    onClick = { scope.launch { app.moneyEngine.drop(q.entries.map { it.id }) } },
+                )
             }
             return@Column
         }
         if (voice) {
             // Надиктовано, а в выписке не нашлось: тут вопрос один — наличные ли.
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { scope.launch { app.moneyEngine.markCash(q.entries.map { it.id }) } }) { Text("Да, наличные") }
-                OutlinedButton(onClick = onSkip) { Text("Не знаю") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                PaperButton("Не знаю", onClick = onSkip)
+                PaperButton(
+                    "Да, наличные",
+                    icon = Glyphs.Check,
+                    primary = true,
+                    onClick = { scope.launch { app.moneyEngine.markCash(q.entries.map { it.id }) } },
+                )
             }
             return@Column
         }
         if (typing) {
-            OutlinedTextField(
+            PaperField(
                 value = typed,
                 onValueChange = { typed = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Что это") },
+                label = "Что это",
                 singleLine = false,
             )
-            Row {
-                TextButton(enabled = !busy && typed.isNotBlank(), onClick = { submit(typed.trim()); typing = false }) { Text("Готово") }
-                TextButton(onClick = { typing = false }) { Text("Отмена") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                PaperTextButton("Отмена", onClick = { typing = false })
+                PaperTextButton(
+                    "Готово",
+                    icon = Glyphs.Check,
+                    enabled = !busy && typed.isNotBlank(),
+                    onClick = { submit(typed.trim()); typing = false },
+                )
             }
         }
         MoneyVoiceBar("card:" + q.key)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(enabled = !busy, onClick = onSkip) { Text("Не знаю") }
-            Button(
+        // «Не знаю» — контуром слева, «текстом» — значком-карандашом (горит,
+        // пока поле открыто), «Сказать» — главная справа.
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            PaperButton("Не знаю", enabled = !busy, onClick = onSkip)
+            Spacer(Modifier.weight(1f))
+            PaperIconButton(
+                Glyphs.Edit,
+                "текстом",
+                enabled = !busy,
+                active = typing,
+                onClick = { typing = !typing },
+            )
+            Spacer(Modifier.width(8.dp))
+            PaperButton(
+                if (busy) "Разбираю…" else "Сказать",
+                icon = Glyphs.Mic,
+                primary = !listening,
                 enabled = !busy,
                 onClick = { startMoneyVoice(app, "card:" + q.key, "что это: ${first.what}?") { submit(it) } },
-            ) { Text(if (busy) "Разбираю…" else "🎙 Сказать") }
-            TextButton(enabled = !busy, onClick = { typing = !typing }) { Text("текстом") }
+            )
         }
     }
 }
