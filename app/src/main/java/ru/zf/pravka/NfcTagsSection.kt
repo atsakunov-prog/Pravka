@@ -10,23 +10,13 @@ import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.Ndef
 import android.nfc.tech.NdefFormatable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -40,6 +30,37 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import ru.zf.pravka.data.NfcTag
+import ru.zf.pravka.ui.ChipRow
+import ru.zf.pravka.ui.GlyphButton
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.IconBadge
+import ru.zf.pravka.ui.PaperAlert
+import ru.zf.pravka.ui.PaperButton
+import ru.zf.pravka.ui.PaperChip
+import ru.zf.pravka.ui.PaperField
+import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.PaperToggle
+import ru.zf.pravka.ui.SheetAction
+
+/**
+ * Пояснение раздела — за «i» у плашки «метки nfc» в настройках Засечки
+ * (24.09.2026): раньше здесь стояли строка под заголовком, своя «i» и абзац
+ * «куда клеить» в конце списка — теперь на плашке только метки.
+ */
+internal val NFC_INFO =
+    "Засечка без телефона в руках: приложил — дело началось или кончилось. " +
+        "Наклейка на стене: приложил, зайдя " +
+        "в туалет, приложил, выйдя. Работает и с погашенным экраном на " +
+        "заблокированном телефоне. На саму метку уходит только номер: что " +
+        "она делает, задаётся здесь и меняется без перезаписи наклейки.\n\n" +
+        "Куда клеить, кроме туалета и кухни: на руль велосипеда и на держатель " +
+        "в машине (поездка сама начинается и кончается), у входной двери " +
+        "(ушёл / пришёл), на кофеварку, на дверь спальни (сон), на гантельную " +
+        "стойку или коврик (тренировка), на рабочий монитор (сел за работу), " +
+        "на обложку книги или на кресло для чтения, на детскую дверь (время с " +
+        "Серёжей), на зарядку телефона у кровати (отбой), в прихожей на " +
+        "ключницу. Метка хороша там, где дело начинается ФИЗИЧЕСКИ и всегда " +
+        "в одном месте — тогда касание надёжнее памяти."
 
 /**
  * Метки NFC: наклейка = засечка. Владелец: «давай добавим возможность
@@ -64,24 +85,7 @@ fun NfcTagsSection(app: PravkaApp) {
 
     val adapter = remember { runCatching { NfcAdapter.getDefaultAdapter(context) }.getOrNull() }
 
-    // Заголовок «метки nfc» — у плашки снаружи; пояснение — за «i».
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            "Засечка без телефона в руках: приложил — дело началось или кончилось.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        ru.zf.pravka.ui.InfoButton(
-            "Метки NFC",
-            "Наклейка на стене — это засечка без телефона в руках. Приложил, зайдя " +
-                "в туалет, приложил, выйдя. Работает и с погашенным экраном на " +
-                "заблокированном телефоне. На саму метку уходит только номер: что " +
-                "она делает, задаётся здесь и меняется без перезаписи наклейки.",
-        )
-    }
-    Spacer(Modifier.height(8.dp))
-
+    // Заголовок «метки nfc» и пояснение (NFC_INFO) — у плашки снаружи.
     when {
         adapter == null -> Text(
             "В этом телефоне нет NFC — метки работать не будут.",
@@ -94,15 +98,20 @@ fun NfcTagsSection(app: PravkaApp) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
-            OutlinedButton(onClick = {
+            Spacer(Modifier.height(6.dp))
+            PaperButton("Включить NFC", icon = Glyphs.Nfc, onClick = {
                 context.startActivity(
                     Intent(android.provider.Settings.ACTION_NFC_SETTINGS)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
-            }) { Text("Включить NFC") }
+            })
+            Spacer(Modifier.height(6.dp))
         }
     }
 
+    // Строка метки: имя, что делает и записана ли; справа «править» и
+    // «записать» значками (24.09.2026) — две кнопки словами оставляли имени
+    // метки полстроки.
     for (tag in tags) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -122,14 +131,22 @@ fun NfcTagsSection(app: PravkaApp) {
                     else MaterialTheme.colorScheme.error,
                 )
             }
-            TextButton(onClick = { editing = tag }) { Text("Правка") }
-            TextButton(onClick = { writing = tag }) {
-                Text(if (tag.written > 0L) "Перезаписать" else "Записать")
-            }
+            GlyphButton(Glyphs.Edit, "править метку", onClick = { editing = tag }, size = 36.dp)
+            GlyphButton(
+                Glyphs.Nfc,
+                if (tag.written > 0L) "перезаписать метку" else "записать метку",
+                onClick = { writing = tag },
+                // Незаписанная — краской режима: это единственное, что с ней
+                // осталось сделать.
+                tint = if (tag.written > 0L) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.primary,
+                size = 36.dp,
+            )
         }
     }
 
-    OutlinedButton(onClick = {
+    Spacer(Modifier.height(6.dp))
+    PaperButton("Новая метка", icon = Glyphs.Plus, onClick = {
         editing = NfcTag(
             id = NfcTag.newId(),
             name = "",
@@ -137,20 +154,7 @@ fun NfcTagsSection(app: PravkaApp) {
             title = "",
             category = categories.firstOrNull().orEmpty(),
         )
-    }) { Text("+ Новая метка") }
-
-    Text(
-        "Куда клеить, кроме туалета и кухни: на руль велосипеда и на держатель " +
-            "в машине (поездка сама начинается и кончается), у входной двери " +
-            "(ушёл / пришёл), на кофеварку, на дверь спальни (сон), на гантельную " +
-            "стойку или коврик (тренировка), на рабочий монитор (сел за работу), " +
-            "на обложку книги или на кресло для чтения, на детскую дверь (время с " +
-            "Серёжей), на зарядку телефона у кровати (отбой), в прихожей на " +
-            "ключницу. Метка хороша там, где дело начинается ФИЗИЧЕСКИ и всегда " +
-            "в одном месте — тогда касание надёжнее памяти.",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    })
 
     editing?.let { tag ->
         TagDialog(
@@ -186,6 +190,10 @@ fun NfcTagsSection(app: PravkaApp) {
     }
 }
 
+/**
+ * Метка: где висит, что делает касание, категория. Лист набора (24.09.2026):
+ * «Удалить» — корзиной слева, «Отмену» заменили крестик и свайп.
+ */
 @Composable
 private fun TagDialog(
     tag: NfcTag,
@@ -200,93 +208,50 @@ private fun TagDialog(
     var act by remember(tag.id) { mutableStateOf(tag.act) }
     var resume by remember(tag.id) { mutableStateOf(tag.resume) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Метка") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Где висит: «Туалет», «Велик»") },
-                    singleLine = true,
+    PaperAlert(
+        onDismiss = onDismiss,
+        title = "Метка",
+        icon = Glyphs.Nfc,
+        subtitle = tag.name.ifBlank { null },
+        confirm = SheetAction("Сохранить") {
+            onSave(
+                tag.copy(
+                    name = name.trim(),
+                    title = title.trim(),
+                    category = category.trim(),
+                    act = act,
+                    resume = resume,
                 )
-                Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Название в ленте (пусто — как выше)") },
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text("Что делает касание", style = MaterialTheme.typography.labelMedium)
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    for (a in listOf(NfcTag.ACT_TOGGLE, NfcTag.ACT_START, NfcTag.ACT_STOP)) {
-                        FilterChip(
-                            selected = act == a,
-                            onClick = { act = a },
-                            label = { Text(NfcTag.actLabel(a)) },
-                        )
-                    }
-                }
-                if (act != NfcTag.ACT_STOP) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("Категория", style = MaterialTheme.typography.labelMedium)
-                    Row(
-                        Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        for (c in categories) {
-                            FilterChip(
-                                selected = category == c,
-                                onClick = { category = c },
-                                label = { Text(c) },
-                            )
-                        }
-                    }
-                }
-                if (act == NfcTag.ACT_TOGGLE) {
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = resume, onCheckedChange = { resume = it })
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "Закрыв, вернуться к прошлому делу",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    Text(
-                        "Туалет и кухня — это перерывы: без возврата в ленте " +
-                            "останется дыра «Не размечено».",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            )
+        },
+        destructive = SheetAction("удалить метку", onClick = onDelete),
+    ) {
+        PaperField(value = name, onValueChange = { name = it }, label = "Где висит: «Туалет», «Велик»")
+        PaperField(value = title, onValueChange = { title = it }, label = "Название в ленте (пусто — как выше)")
+        Text("Что делает касание", style = MaterialTheme.typography.labelMedium)
+        ChipRow {
+            for (a in listOf(NfcTag.ACT_TOGGLE, NfcTag.ACT_START, NfcTag.ACT_STOP)) {
+                PaperChip(NfcTag.actLabel(a), selected = act == a, onClick = { act = a })
+            }
+        }
+        if (act != NfcTag.ACT_STOP) {
+            Text("Категория", style = MaterialTheme.typography.labelMedium)
+            ChipRow {
+                for (c in categories) {
+                    PaperChip(c, selected = category == c, onClick = { category = c })
                 }
             }
-        },
-        confirmButton = {
-            Button(onClick = {
-                onSave(
-                    tag.copy(
-                        name = name.trim(),
-                        title = title.trim(),
-                        category = category.trim(),
-                        act = act,
-                        resume = resume,
-                    )
-                )
-            }) { Text("Сохранить") }
-        },
-        dismissButton = {
-            Row {
-                TextButton(onClick = onDelete) { Text("Удалить") }
-                TextButton(onClick = onDismiss) { Text("Отмена") }
-            }
-        },
-    )
+        }
+        if (act == NfcTag.ACT_TOGGLE) {
+            PaperToggle(
+                title = "Закрыв, вернуться к прошлому делу",
+                checked = resume,
+                onCheckedChange = { resume = it },
+                info = "Туалет и кухня — это перерывы: без возврата в ленте " +
+                    "останется дыра «Не размечено».",
+            )
+        }
+    }
 }
 
 /**
@@ -329,24 +294,25 @@ private fun WriteDialog(tag: NfcTag, onDone: (Boolean) -> Unit) {
         }
     }
 
-    AlertDialog(
-        onDismissRequest = { onDone(ok) },
-        title = { Text("Записать «${tag.name.ifBlank { "метку" }}»") },
-        text = {
-            Column {
-                Text(status)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "Метка держится у телефона секунду. Подойдёт любая пустая " +
-                        "NDEF-наклейка (NTAG213 и крупнее): на неё уходит меньше " +
-                        "восьмидесяти байт.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-        confirmButton = { Button(onClick = { onDone(ok) }) { Text("Готово") } },
-    )
+    // Лист набора (24.09.2026). Закрыть — крестиком, свайпом или «Готово»:
+    // все три отдают, записалась ли метка, как прежде onDismissRequest.
+    PaperAlert(
+        onDismiss = { onDone(ok) },
+        title = "Записать «${tag.name.ifBlank { "метку" }}»",
+        icon = Glyphs.Nfc,
+        confirm = SheetAction("Готово") { onDone(ok) },
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(if (ok) Glyphs.Check else Glyphs.Nfc, size = 34.dp)
+            Spacer(Modifier.width(12.dp))
+            Text(status, style = MaterialTheme.typography.bodyLarge)
+        }
+        PaperHint(
+            "Метка держится у телефона секунду. Подойдёт любая пустая " +
+                "NDEF-наклейка (NTAG213 и крупнее): на неё уходит меньше " +
+                "восьмидесяти байт."
+        )
+    }
 }
 
 /** Compose отдаёт контекст темы, а режиму читателя нужна именно Activity. */

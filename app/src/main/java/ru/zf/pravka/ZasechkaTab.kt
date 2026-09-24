@@ -2,51 +2,34 @@ package ru.zf.pravka
 
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -56,14 +39,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -81,19 +61,31 @@ import ru.zf.pravka.core.AutoPilotRules
 import ru.zf.pravka.core.PlaceDeal
 import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.data.phoneDayKey
+import ru.zf.pravka.ui.ChipRow
+import ru.zf.pravka.ui.DayNav
 import ru.zf.pravka.ui.Feedback
-import ru.zf.pravka.ui.PaperCard
-import ru.zf.pravka.ui.PaperLabel
-import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.GlyphButton
 import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.IconAction
+import ru.zf.pravka.ui.IconActionRow
+import ru.zf.pravka.ui.InfoButton
+import ru.zf.pravka.ui.PaperAlert
 import ru.zf.pravka.ui.PaperButton
+import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.PaperChip
 import ru.zf.pravka.ui.PaperField
+import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.PaperIconButton
+import ru.zf.pravka.ui.PaperLabel
+import ru.zf.pravka.ui.PaperSheet
 import ru.zf.pravka.ui.PaperSlider
+import ru.zf.pravka.ui.PaperTextButton
 import ru.zf.pravka.ui.PaperToggle
+import ru.zf.pravka.ui.RowRule
 import ru.zf.pravka.ui.ScreenPad
+import ru.zf.pravka.ui.SheetAction
+import ru.zf.pravka.ui.VoiceInput
 import ru.zf.pravka.trigger.onZasechkaTap
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.ui.res.painterResource
 
 // Вкладка «Засечка»: the owner's day as a ribbon of entries, the numbers he
 // loves, and the knobs. Everything the buttons capture lands here for review
@@ -195,6 +187,36 @@ private fun msToMin(ms: Long): Long = (ms + 30_000L) / 60_000L
 
 private fun fmtDur(min: Long): String =
     if (min >= 60) "${min / 60} ч ${min % 60} м" else "$min м"
+
+/**
+ * Длительность полными словами — для подписи в шапке листа («1 ч 15 мин»):
+ * там строка одна и места хватает, а в ленте остаётся короткая «1 ч 15 м».
+ */
+private fun fmtDurLong(min: Long): String = when {
+    min < 60 -> "$min мин"
+    min % 60 == 0L -> "${min / 60} ч"
+    else -> "${min / 60} ч ${min % 60} мин"
+}
+
+/** «10:40–11:55 · 1 ч 15 мин»; у идущего — «10:40–… · 1 ч 15 мин, идёт», у цепочки перед временем Σ. */
+private fun spanLine(start: Long, end: Long, open: Boolean, minutes: Long, net: Boolean = false): String =
+    "${fmtTime(start)}–${if (open) "…" else fmtTime(end)} · " +
+        (if (net) "Σ " else "") + fmtDurLong(minutes) + (if (open) ", идёт" else "")
+
+// Навигатор дня: словом — день, под ним — дата (24.09.2026, общий DayNav
+// набора). Раньше вчерашнего — день недели словом: так прошлый день и
+// вспоминается, а число стоит под ним.
+private val weekdayFormat = SimpleDateFormat("EEEE", Locale.forLanguageTag("ru"))
+private val dateOnlyFormat = SimpleDateFormat("d MMMM", Locale.forLanguageTag("ru"))
+
+private fun dayTitle(offset: Int, dayStart: Long): String = when (offset) {
+    0 -> "Сегодня"
+    1 -> "Вчера"
+    else -> capFirst(weekdayFormat.format(Date(dayStart)))
+}
+
+private fun daySubtitle(offset: Int, dayStart: Long): String =
+    if (offset <= 1) dayLabelFormat.format(Date(dayStart)) else dateOnlyFormat.format(Date(dayStart))
 
 /** Local-midnight start of the day [offsetDays] before today. */
 private fun dayStartBack(offsetDays: Int): Long {
@@ -312,6 +334,11 @@ internal fun ZasechkaTab(app: PravkaApp) {
     // было, или присоединить к соседу (владелец: «очень часто что-то просто
     // не дозаписалось или обрубилось — тогда присоединять к прошлому»).
     var gapFor by remember { mutableStateOf<GapTarget?>(null) }
+    // Лист записи по тапу на строку ленты (24.09.2026: «лента дышит» — в
+    // строке больше нет четырёх значков). Держим id головы, а не саму запись:
+    // пока лист открыт, лента живёт — идущее дело тикает, его останавливают
+    // голосом, — и лист показывает запись нынешней, а не снимком с тапа.
+    var sheetFor by remember { mutableStateOf<Long?>(null) }
     var draft by remember { mutableStateOf("") }
     var processing by remember { mutableStateOf(false) }
 
@@ -368,71 +395,57 @@ internal fun ZasechkaTab(app: PravkaApp) {
         }
     }
 
+    val doStop: () -> Unit = {
+        app.appScope.launch { app.zasechkaEngine.closeOpen() }
+    }
+
+    // Поля и шаг — общие для всех вкладок (ScreenPad): раньше у Засечки сверху
+    // было 16 вместо 8, а между разделами — свои распорки 10–14.
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 32.dp),
+        contentPadding = ScreenPad.Padding,
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         // Название и значки — в общей шапке (ui/Frame.kt). Здесь сразу день.
         // ---- date navigation ----
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { dayOffset += 1 }) {
-                    Icon(Icons.Filled.KeyboardArrowLeft, contentDescription = "раньше")
-                }
-                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                    val label = when {
-                        dayOffset == 0 -> "сегодня"
-                        dayOffset == 1 -> "вчера"
-                        else -> dayLabelFormat.format(Date(dayStart))
-                    }
-                    Text(label, style = MaterialTheme.typography.titleMedium)
-                }
-                IconButton(
-                    onClick = { dayOffset = (dayOffset - 1).coerceAtLeast(0) },
-                    enabled = dayOffset > 0,
-                ) {
-                    Icon(Icons.Filled.KeyboardArrowRight, contentDescription = "позже")
-                }
-            }
+            DayNav(
+                title = dayTitle(dayOffset, dayStart),
+                subtitle = daySubtitle(dayOffset, dayStart),
+                onPrev = { dayOffset += 1 },
+                // Сегодня вперёд некуда — стрелка гаснет.
+                onNext = if (dayOffset > 0) ({ dayOffset = (dayOffset - 1).coerceAtLeast(0) }) else null,
+            )
+            Spacer(Modifier.height(6.dp))
             // The score of the day sits right under its name (owner's layout).
             val rangeTo = minOf(now, dayEnd)
             val balance = rangeEntries.sumOf { e ->
                 worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now).toDouble() / 3_600_000.0
             }
             RainbowScoreBar(kotlin.math.round(balance).toInt(), weekMode = false)
-            Spacer(Modifier.height(12.dp))
         }
 
         // ---- quick add: one dense row, voice or typed ----
+        // Общая строка ввода набора (24.09.2026): микрофон · поле · отправить.
+        // Микрофон — тот же тап «З», что на стекле. На время разбора поле не
+        // гасим: в общей строке оно гаснет вместе с микрофоном, а тапнуть его
+        // и сказать следующее, пока модель думает над прошлым, можно было и
+        // раньше. Отправка до конца разбора закрыта, как и была.
         if (dayOffset == 0) {
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        modifier = Modifier.weight(1f),
-                        label = { Text(if (processing) "Разбираю…" else "Чем занят?") },
-                        singleLine = true,
-                        enabled = !processing,
-                    )
-                    IconButton(onClick = { submitText() }, enabled = !processing && draft.isNotBlank()) {
-                        Icon(Icons.Filled.Send, contentDescription = "записать")
-                    }
-                    // Микрофон — штриховой пиктограммой, в одном языке с кнопками,
-                    // а не эмодзи (владелец: «микрофончик сделать более стильным»).
-                    IconButton(onClick = {
+                VoiceInput(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    placeholder = if (processing) "Разбираю…" else "Чем занят?",
+                    onSend = submitText,
+                    onMic = {
                         val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
                         if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
                         else service.onZasechkaTap()
-                    }) {
-                        Icon(
-                            painterResource(R.drawable.ic_mic),
-                            contentDescription = "надиктовать",
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
+                    },
+                    sendEnabled = !processing && draft.isNotBlank(),
+                    maxLines = 1,
+                )
             }
         }
 
@@ -443,31 +456,27 @@ internal fun ZasechkaTab(app: PravkaApp) {
         // Лента — с заголовком, но БЕЗ плашки (владелец, 15.09, второй заход:
         // «лента у Засечки — без плашки»): строки лежат прямо на фоне, как
         // раньше. Дневные записи — обычная колонка: их несколько десятков.
+        // Лента дышит (владелец, 24.09.2026): в строке время, дело и
+        // категория, а стоп · заметка · правка · удаление — в листе по тапу.
+        // На виду остаётся только «стоп» у идущего дела.
         item {
             PaperLabel("лента")
             Column(Modifier.fillMaxWidth()) {
               dayUnits.forEachIndexed { index, unit ->
                 val head = unit.fragments.first()
-                val doStop: () -> Unit = {
-                    app.appScope.launch { app.zasechkaEngine.closeOpen() }
-                }
                 // Заполнитель «не размечено» — не запись, чтобы её править:
                 // тап открывает выбор «что это было / к соседу».
                 val isGap = head.source == "gap"
+                val onOpen: () -> Unit = {
+                    if (isGap) gapFor = gapTargetOf(dayUnits, index, head) else sheetFor = head.id
+                }
                 if (unit.chain) {
                     ChainBlock(
                         unit = unit,
                         now = now,
                         worthOf = worthOf,
                         onStop = if (unit.open) doStop else null,
-                        onEdit = {
-                            if (isGap) gapFor = gapTargetOf(dayUnits, index, head) else editingChain = unit.fragments
-                        },
-                        onComment = { commenting = head },
-                        onDelete = {
-                            app.appScope.launch { unit.fragments.forEach { store.delete(it.id) } }
-                        },
-                        onEditInterruption = { editing = it },
+                        onClick = onOpen,
                     )
                 } else {
                     EntryRow(
@@ -475,9 +484,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
                         now = now,
                         worthOf = worthOf,
                         onStop = if (head.open) doStop else null,
-                        onEdit = { if (isGap) gapFor = gapTargetOf(dayUnits, index, head) else editing = head },
-                        onComment = { commenting = head },
-                        onDelete = { app.appScope.launch { store.delete(head.id) } },
+                        onClick = onOpen,
                     )
                 }
                 // A visible hole in the ribbon is the whole point of the app -
@@ -521,7 +528,6 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     )
               }
             }
-            Spacer(Modifier.height(14.dp))
         }
 
         // ---- totals: EVERY category, laid out in rainbow order (red work at
@@ -529,7 +535,16 @@ internal fun ZasechkaTab(app: PravkaApp) {
         // of the day at a glance and aims for the inverted triangle: long red
         // bars up top, short violet ones below. Zero rows stay visible but dim.
         item {
-          PaperCard(label = "итоги") {
+          PaperCard(
+              label = "итоги",
+              // Как читать плашку — за «i»: на виду сами числа (24.09.2026).
+              info = "Баланс дня — сумма очков: час дела × ценность часа его категории " +
+                  "(правится в настройках Засечки). Плюс и минус — отдельно: ноль на " +
+                  "полоске чаще всего честная ничья, час потерь съедает час работы. " +
+                  "Ниже — все категории, кроме сна, в радужном порядке: работа сверху, " +
+                  "потери внизу, цель — перевёрнутый треугольник. Доля — от времени " +
+                  "бодрствования, справа — очки категории за день.",
+          ) {
             // Summed in MILLISECONDS and rounded once: adding up per-entry
             // whole minutes is how the day used to come out short of the clock.
             val rangeTo = minOf(now, dayEnd)
@@ -639,15 +654,50 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 )
             }
           }
-          Spacer(Modifier.height(14.dp))
         }
 
         // ---- the phone layer: separate from the ribbon by design ----
         item {
             PhoneSection(app, dayStart, now)
-            Spacer(Modifier.height(12.dp))
         }
         // Настройки режима — за шестерёнкой в шапке вкладки.
+    }
+
+    // Лист записи — то, что раньше висело значками на каждой строке. Первым
+    // стоит «Поправить»: это и делал тап по строке до листа.
+    sheetFor?.let { headId ->
+        val unit = dayUnits.firstOrNull { it.fragments.first().id == headId }
+        // Запись исчезла, пока лист открыт (удалили голосом, дело склеилось
+        // с соседним) — лист закрывается сам, а не всплывает потом по отмене.
+        LaunchedEffect(unit == null) { if (unit == null) sheetFor = null }
+        if (unit != null) {
+            val head = unit.fragments.first()
+            val totalMs = unit.fragments.sumOf { it.durationMs(now) }
+            EntrySheet(
+                entry = head,
+                subtitle = spanLine(
+                    unit.start,
+                    unit.fragments.last().end,
+                    unit.open,
+                    msToMin(totalMs),
+                    net = unit.chain,
+                ),
+                points = pointsOf(worthOf(head.category), totalMs),
+                pieces = unit.fragments.size,
+                onDismiss = { sheetFor = null },
+                onEdit = {
+                    sheetFor = null
+                    if (unit.chain) editingChain = unit.fragments else editing = head
+                },
+                onComment = { sheetFor = null; commenting = head },
+                onStop = if (unit.open) ({ sheetFor = null; doStop() }) else null,
+                // У разрезанного дела удаляются все куски — как ✕ блока раньше.
+                onDelete = {
+                    sheetFor = null
+                    app.appScope.launch { unit.fragments.forEach { store.delete(it.id) } }
+                },
+            )
+        }
     }
 
     // Микрофон в редакторе: сказанное правит ИМЕННО эту запись — движок
@@ -805,6 +855,15 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     Feedback.toast(app, "⏱ «${next.title}» с ${fmtTime(target.start)}")
                 }
             },
+            // У заполнителя в строке тоже были 💬 и ✕ — они переехали сюда,
+            // низом листа. У «··· N без записи» записи нет, и их нет.
+            onComment = target.gap?.let { gap -> { gapFor = null; commenting = gap } },
+            onDelete = target.gap?.let {
+                {
+                    gapFor = null
+                    app.appScope.launch { target.pieces.forEach { store.delete(it.id) } }
+                }
+            },
         )
     }
 }
@@ -814,6 +873,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
  * «··· N мин без записи» между делами. [gap] — сама запись-заполнитель (у
  * свежей дыры её ещё нет), [prev] и [next] — соседи по времени, к которым
  * дыру можно присоединить; [end] = 0 — дыра живая, тикает до сейчас.
+ * [pieces] — все куски заполнителя, если он собран в цепочку: удаляются вместе.
  */
 private data class GapTarget(
     val start: Long,
@@ -821,13 +881,21 @@ private data class GapTarget(
     val gap: ZasechkaStore.Entry?,
     val prev: ZasechkaStore.Entry?,
     val next: ZasechkaStore.Entry?,
+    val pieces: List<ZasechkaStore.Entry> = listOfNotNull(gap),
 )
 
 /** Соседи заполнителя по времени: список единиц дня идёт от новых к старым. */
 private fun gapTargetOf(units: List<DayUnit>, index: Int, gap: ZasechkaStore.Entry): GapTarget {
     val prev = units.getOrNull(index + 1)?.fragments?.last()?.takeIf { it.source != "gap" }
     val next = if (gap.open) null else units.getOrNull(index - 1)?.fragments?.first()?.takeIf { it.source != "gap" }
-    return GapTarget(start = gap.start, end = gap.end, gap = gap, prev = prev, next = next)
+    return GapTarget(
+        start = gap.start,
+        end = gap.end,
+        gap = gap,
+        prev = prev,
+        next = next,
+        pieces = units.getOrNull(index)?.fragments ?: listOf(gap),
+    )
 }
 
 /**
@@ -835,6 +903,11 @@ private fun gapTargetOf(units: List<DayUnit>, index: Int, gap: ZasechkaStore.Ent
  * размечено“, и там выбор: либо сказать, что это было, либо присоединить к
  * предыдущему — очень часто что-то просто не дозаписалось или обрубилось».
  * Третий выход — к следующему: обрубается и начало.
+ *
+ * С 24.09.2026 — лист набора. «Сказать» — микрофон строки ввода (тот же
+ * тап «З» с якорем-интервалом), выходы к соседям — кнопками со значками
+ * вместо ▶ ◀ в подписи. Тап по «не размечено» открывает этот лист сразу, а не
+ * общий лист записи: выбор — ровно то, за чем сюда тапают.
  */
 @Composable
 private fun GapDialog(
@@ -845,75 +918,71 @@ private fun GapDialog(
     onType: (String) -> Unit,
     onJoinPrev: () -> Unit,
     onJoinNext: () -> Unit,
+    onComment: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
 ) {
     var text by remember { mutableStateOf("") }
     val live = target.end == 0L
     val endMs = if (live) now else target.end
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
+    PaperSheet(
+        onDismiss = onDismiss,
+        title = if (live) "Не размечено с ${fmtTime(target.start)}"
+        else "Не размечено ${fmtTime(target.start)}–${fmtTime(target.end)}",
+        icon = Glyphs.Timer,
+        subtitle = fmtDurLong(msToMin(endMs - target.start)) + (if (live) ", идёт" else ""),
+    ) {
+        Text("Что это было?", style = MaterialTheme.typography.bodyMedium)
+        VoiceInput(
+            value = text,
+            onValueChange = { text = it },
+            placeholder = "набрать — или «П» надиктует сюда",
+            onSend = { onType(text.trim()) },
+            onMic = onSay,
+            maxLines = 1,
+        )
+        PaperHint(
+            if (live) "Голосом или текстом — ляжет с ${fmtTime(target.start)}"
+            else "Голосом или текстом — ляжет ровно в ${fmtTime(target.start)}–${fmtTime(target.end)}"
+        )
+        if (target.prev != null || target.next != null) {
             Text(
-                if (live) "Не размечено с ${fmtTime(target.start)}"
-                else "Не размечено ${fmtTime(target.start)}–${fmtTime(target.end)}"
+                if (live) "Или это всё ещё то же дело:" else "Или это обрывок соседнего дела:",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 6.dp),
             )
-        },
-        text = {
-            Column {
-                Text(
-                    fmtDur(msToMin(endMs - target.start)) + (if (live) ", идёт" else ""),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            target.prev?.let { prev ->
+                PaperButton(
+                    if (live) "Продолжить «${capFirst(prev.title)}»"
+                    else "К предыдущему: «${capFirst(prev.title)}»",
+                    onClick = onJoinPrev,
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = if (live) Glyphs.Play else Glyphs.Back,
                 )
-                Spacer(Modifier.height(10.dp))
-                Text("Что это было?", style = MaterialTheme.typography.bodyMedium)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("набрать — или «П» надиктует сюда") },
-                        singleLine = true,
-                    )
-                    IconButton(onClick = { onType(text.trim()) }, enabled = text.isNotBlank()) {
-                        Icon(Icons.Filled.Send, contentDescription = "записать")
-                    }
-                }
-                OutlinedButton(onClick = onSay, modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        if (live) "🎙 Сказать — ляжет с ${fmtTime(target.start)}"
-                        else "🎙 Сказать — ляжет ровно в ${fmtTime(target.start)}–${fmtTime(target.end)}"
-                    )
-                }
-                if (target.prev != null || target.next != null) {
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        if (live) "Или это всё ещё то же дело:" else "Или это обрывок соседнего дела:",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    target.prev?.let { prev ->
-                        OutlinedButton(onClick = onJoinPrev, modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                if (live) "▶ Продолжить «${capFirst(prev.title)}»"
-                                else "◀ К предыдущему: «${capFirst(prev.title)}»",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    target.next?.let { next ->
-                        OutlinedButton(onClick = onJoinNext, modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                "▶ К следующему: «${capFirst(next.title)}»",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Закрыть") } },
-    )
+            target.next?.let { next ->
+                PaperButton(
+                    "К следующему: «${capFirst(next.title)}»",
+                    onClick = onJoinNext,
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = Glyphs.Forward,
+                )
+            }
+        }
+        if (onComment != null || onDelete != null) {
+            RowRule()
+            IconActionRow {
+                if (onComment != null) {
+                    IconAction(
+                        Glyphs.Note,
+                        "Заметка",
+                        onClick = onComment,
+                        active = target.gap?.comment?.isNotBlank() == true,
+                    )
+                }
+                if (onDelete != null) IconAction(Glyphs.Delete, "Удалить", onClick = onDelete)
+            }
+        }
+    }
 }
 
 /**
@@ -1020,15 +1089,29 @@ private fun Modifier.runningNow(): Modifier = this
     )
 
 
+/**
+ * Маленький круглый «стоп» у идущего дела — единственное действие, что
+ * осталось в строке ленты (24.09.2026): остановить идущее — самое частое, и
+ * лезть за ним в лист было бы на шаг дольше. Красный, как квадратик раньше.
+ */
+@Composable
+private fun StopButton(onStop: () -> Unit) {
+    PaperIconButton(
+        Glyphs.Stop,
+        "остановить",
+        onClick = onStop,
+        size = 30.dp,
+        tint = MaterialTheme.colorScheme.error,
+    )
+}
+
 @Composable
 private fun EntryRow(
     entry: ZasechkaStore.Entry,
     now: Long,
     worthOf: (String) -> Int,
     onStop: (() -> Unit)?,
-    onEdit: () -> Unit,
-    onComment: () -> Unit,
-    onDelete: () -> Unit,
+    onClick: () -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -1037,7 +1120,8 @@ private fun EntryRow(
             .then(
                 if (entry.open) Modifier.runningNow() else Modifier
             )
-            .clickable(onClick = onEdit)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
             .padding(vertical = 2.dp),
     ) {
         Column(Modifier.width(46.dp)) {
@@ -1061,7 +1145,7 @@ private fun EntryRow(
         // Две строки (макет владельца): сверху ЛИЧНОЕ название дела, снизу
         // «[тег категории] · длительность · ±баллы» — так читается и на
         // сложенном экране, без ужатых колонок.
-        Column(Modifier.weight(1f).padding(start = 8.dp)) {
+        Column(Modifier.weight(1f).padding(start = 8.dp, end = 6.dp)) {
             val title = buildString {
                 append(capFirst(entry.title.ifBlank { entry.raw.take(60) }))
                 if (entry.client.isNotBlank()) append(" · ${entry.client}")
@@ -1093,57 +1177,36 @@ private fun EntryRow(
             CommentLine(entry.comment)
         }
         if (onStop != null) {
-            IconButton(onClick = onStop, modifier = Modifier.size(30.dp)) {
-                Box(
-                    Modifier
-                        .size(11.dp)
-                        .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp)),
-                )
-            }
-        }
-        CommentBubble(hasComment = entry.comment.isNotBlank(), onClick = onComment)
-        IconButton(onClick = onEdit, modifier = Modifier.size(30.dp)) {
-            Icon(
-                Icons.Filled.Edit,
-                contentDescription = "править",
-                modifier = Modifier.size(15.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
-            Icon(
-                Icons.Filled.Clear,
-                contentDescription = "удалить",
-                modifier = Modifier.size(15.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            StopButton(onStop)
+            Spacer(Modifier.width(4.dp))
         }
     }
 }
 
 // The whole interrupted activity as one block: the time column shows the full
 // span, one tall line runs beside it, the header line carries the NET Σ
-// (interruptions excluded). Header edit/✕ act on ALL fragments.
+// (interruptions excluded). Тап по блоку открывает лист всего дела: правка
+// и удаление там действуют на ВСЕ куски.
 @Composable
 private fun ChainBlock(
     unit: DayUnit,
     now: Long,
     worthOf: (String) -> Int,
     onStop: (() -> Unit)?,
-    onEdit: () -> Unit,
-    onComment: () -> Unit,
-    onDelete: () -> Unit,
-    onEditInterruption: (ZasechkaStore.Entry) -> Unit,
+    onClick: () -> Unit,
 ) {
     val head = unit.fragments.first()
     val last = unit.fragments.last()
     Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
             .then(
                 if (unit.open) Modifier.runningNow() else Modifier
             )
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
             .padding(vertical = 2.dp),
     ) {
         Column(Modifier.width(46.dp)) {
@@ -1164,80 +1227,113 @@ private fun ChainBlock(
                 .fillMaxHeight()
                 .background(categoryColor(head.category), RoundedCornerShape(2.dp)),
         )
-        Column(Modifier.weight(1f)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onEdit),
-            ) {
-                // Те же две строки, что у одиночной записи; время — НЕТТО по
-                // всем фрагментам дела (жирным: это сумма).
-                Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                    val pomos = unit.fragments.sumOf { it.pomodoros }
-                    val title = buildString {
-                        append(capFirst(head.title.ifBlank { head.raw.take(60) }))
-                        if (head.client.isNotBlank()) append(" · ${head.client}")
-                        if (head.useful > 0) append(" ★${head.useful}")
-                        if (pomos > 0) append(" 🍅×$pomos")
-                    }
-                    Text(
-                        title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CategoryTag(head.category)
-                        DotSep()
-                        Text(
-                            fmtDur(unit.totalMin(now)),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                        )
-                        val pts = pointsOf(
-                            worthOf(head.category),
-                            unit.fragments.sumOf { it.durationMs(now) },
-                        )
-                        if (pts != 0) {
-                            DotSep()
-                            PointsChip(pts, bold = true)
-                        }
-                    }
-                    CommentLine(head.comment)
-                }
-                if (onStop != null) {
-                    IconButton(onClick = onStop, modifier = Modifier.size(30.dp)) {
-                        Box(
-                            Modifier
-                                .size(11.dp)
-                                .background(MaterialTheme.colorScheme.error, RoundedCornerShape(2.dp)),
-                        )
-                    }
-                }
-                CommentBubble(hasComment = head.comment.isNotBlank(), onClick = onComment)
-                IconButton(onClick = onEdit, modifier = Modifier.size(30.dp)) {
-                    Icon(
-                        Icons.Filled.Edit,
-                        contentDescription = "править всё дело",
-                        modifier = Modifier.size(15.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
-                    Icon(
-                        Icons.Filled.Clear,
-                        contentDescription = "удалить всё дело",
-                        modifier = Modifier.size(15.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        // Те же две строки, что у одиночной записи; время — НЕТТО по
+        // всем фрагментам дела (жирным: это сумма).
+        Column(Modifier.weight(1f).padding(start = 8.dp, end = 6.dp)) {
+            val pomos = unit.fragments.sumOf { it.pomodoros }
+            val title = buildString {
+                append(capFirst(head.title.ifBlank { head.raw.take(60) }))
+                if (head.client.isNotBlank()) append(" · ${head.client}")
+                if (head.useful > 0) append(" ★${head.useful}")
+                if (pomos > 0) append(" 🍅×$pomos")
+            }
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CategoryTag(head.category)
+                DotSep()
+                Text(
+                    fmtDur(unit.totalMin(now)),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+                val pts = pointsOf(
+                    worthOf(head.category),
+                    unit.fragments.sumOf { it.durationMs(now) },
+                )
+                if (pts != 0) {
+                    DotSep()
+                    PointsChip(pts, bold = true)
                 }
             }
+            CommentLine(head.comment)
             // Врезки внутри дела (сон, тренировка с часов, разрезавшие его) в
             // ленте отдельными строками не рисуются — владелец: «очень сильно
             // засоряет». Они остаются в данных и в выгрузках; тап по блоку
             // правит дело целиком. Параллельного трека больше нет: телефон
             // считается по дням и виден строкой у итогов дня.
+        }
+        if (onStop != null) {
+            StopButton(onStop)
+            Spacer(Modifier.width(4.dp))
+        }
+    }
+}
+
+/**
+ * Лист записи — всё, что раньше висело значками на каждой строке ленты
+ * (стоп, 💬, ✎, ✕ по 30dp). Владелец (24.09.2026): «лента дышит» — в строке
+ * время, дело и категория, действия — по тапу. «Поправить» первым: это и
+ * делал тап по строке до листа. У разрезанного дела [entry] — его голова,
+ * правка и удаление действуют на все [pieces] кусков, заметка — у головы.
+ */
+@Composable
+private fun EntrySheet(
+    entry: ZasechkaStore.Entry,
+    subtitle: String,
+    points: Int,
+    pieces: Int,
+    onDismiss: () -> Unit,
+    onEdit: () -> Unit,
+    onComment: () -> Unit,
+    onStop: (() -> Unit)?,
+    onDelete: () -> Unit,
+) {
+    PaperSheet(
+        onDismiss = onDismiss,
+        title = capFirst(entry.title.ifBlank { entry.raw.take(60) }.ifBlank { "без названия" }),
+        icon = Glyphs.Zasechka,
+        subtitle = subtitle,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CategoryTag(entry.category)
+            if (entry.client.isNotBlank()) {
+                DotSep()
+                Text(
+                    entry.client,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (points != 0) {
+                DotSep()
+                PointsChip(points, bold = true)
+            }
+        }
+        if (pieces > 1) {
+            PaperHint("Кусков: $pieces — правка и удаление действуют на всё дело целиком.")
+        }
+        // Комментарий целиком: в ленте видны только две первые строки.
+        if (entry.comment.isNotBlank()) {
+            Text(entry.comment, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (entry.raw.isNotBlank() && entry.raw != entry.title) {
+            PaperHint("Надиктовано: «${entry.raw.take(200)}»")
+        }
+        IconActionRow {
+            IconAction(Glyphs.Edit, "Поправить", onClick = onEdit)
+            // Заметка горит, когда слова уже есть, — как баббл 💬 в строке раньше.
+            IconAction(Glyphs.Note, "Заметка", onClick = onComment, active = entry.comment.isNotBlank())
+            if (onStop != null) IconAction(Glyphs.Stop, "Стоп", onClick = onStop)
+            IconAction(Glyphs.Delete, "Удалить", onClick = onDelete)
         }
     }
 }
@@ -1313,28 +1409,35 @@ internal fun ZasechkaSettings(app: PravkaApp) {
             )
         }
 
-        PaperCard(label = "категории") {
+        // Пояснения разделов — за «i» в подписи плашки (24.09.2026); внутри
+        // заголовки-дубли «Категории», «Клиенты и проекты» сняты.
+        PaperCard(
+            label = "категории",
+            info = "Сонет выбирает строго из этого списка; пояснение — подсказка ему. Тап — править: " +
+                "там же базовое время («всё ещё …?» после него) и ценность часа от −10 до +10, " +
+                "из которой складывается баланс дня.",
+        ) {
             CategoriesEditor(
                 categories = categories,
                 onChange = { app.appScope.launch { app.zasechkaStore.setCategories(it) } },
             )
         }
-        PaperCard(label = "клиенты и проекты") {
+        PaperCard(label = "клиенты и проекты", info = "Помогают распознаванию и попадают в отчёты.") {
             EditableList(
-                title = "Клиенты и проекты",
-                hint = "Помогают распознаванию и попадают в отчёты",
                 values = clients,
                 onChange = { app.appScope.launch { app.zasechkaStore.setClients(it) } },
             )
         }
 
+        // Плашку «правила разбора» раздел рисует сам: пустой набор не
+        // показывается вовсе.
         ZasechkaRulesSection(app)
 
         // Своей выгрузки у ленты больше нет (09.09): вся жизнь одним xlsx,
         // лист «Засечка» как база в Notion, — за значком выгрузки в Статистике.
 
-        PaperCard(label = "автопилот") { AutoPilotSection(app) }
-        PaperCard(label = "метки nfc") { NfcTagsSection(app) }
+        PaperCard(label = "автопилот", info = AUTOPILOT_INFO) { AutoPilotSection(app) }
+        PaperCard(label = "метки nfc", info = NFC_INFO) { NfcTagsSection(app) }
     }
 }
 
@@ -1417,6 +1520,46 @@ internal fun IntervalsSettings(app: PravkaApp) {
     }
 }
 
+/** Пояснение плашки «автопилот» — за её «i» в настройках Засечки (24.09.2026). */
+private const val AUTOPILOT_INFO =
+    "Wi-Fi-места, Bluetooth машины и датчик движения: приезд закрывает " +
+        "передвижение сам, остальное — вопросом-пушем. Имя Wi-Fi система отдаёт " +
+        "только с разрешением «Местоположение» (GPS при этом не включается), имя " +
+        "Bluetooth-устройства на Android 12+ — с «Устройствами рядом»."
+
+/** Как автопилот узнаёт место и что делает по приезду — за «i» у «Мест». */
+private const val PLACES_INFO =
+    "У каждого места два способа узнать приезд. «подключился» — " +
+        "точнее, так ловится дом. «вижу сеть» — для мест вроде Летово, " +
+        "к чьему Wi-Fi ты не подключаешься: приезд засчитывается, как " +
+        "только сеть появилась в эфире. У места может быть дело по " +
+        "приезду (карандаш): закрыв дорогу, автопилот сам начнёт его; не то — " +
+        "«Сказать» в пуше заменит.\n\n" +
+        "Новые сети: подключись к домашнему Wi-Fi — он появится здесь (и придёт " +
+        "пуш «что это за место?»). Сети, которые просто слышно рядом, " +
+        "подтягиваются сами раз в полчаса."
+
+/**
+ * Подзаголовок части внутри плашки («Места», «Машина») — со своим «i», если
+ * есть что пояснить (24.09.2026): длинный абзац под заголовком раньше стоял
+ * прямо в плашке и читался инструкцией, а не настройкой.
+ */
+@Composable
+private fun SubHead(text: String, info: String? = null) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+        )
+        if (info != null) InfoButton(text, info, size = 30.dp)
+    }
+}
+
 /**
  * Автопилот: телефон сам замечает швы дня. Приезд в известный Wi-Fi закрывает
  * открытое «Передвижение» сам; отъезд из места и подключение машины спрашивают
@@ -1430,13 +1573,7 @@ private fun AutoPilotSection(app: PravkaApp) {
     val scope = app.appScope
     val settings = app.settings
 
-    Text(
-        "Wi-Fi-места, Bluetooth машины и датчик движения: приезд закрывает " +
-            "передвижение сам, остальное — вопросом-пушем.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-
+    // Пояснение раздела — за «i» у плашки (AUTOPILOT_INFO), здесь сразу дело.
     var permTick by remember { mutableStateOf(0) }
     val askPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -1446,8 +1583,6 @@ private fun AutoPilotSection(app: PravkaApp) {
     val visibleSsids by settings.autoVisibleFlow.collectAsState(initial = emptySet<String>())
     val carBt by settings.autoCarBtFlow.collectAsState(initial = "")
 
-    // ---- Места по Wi-Fi ----
-    Spacer(Modifier.height(10.dp))
     // Что автопилот видит ПРЯМО СЕЙЧАС. Первая версия молчала, и понять это
     // было нельзя ниоткуда — теперь состояние на виду.
     val pilot = ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoPilot
@@ -1456,7 +1591,6 @@ private fun AutoPilotSection(app: PravkaApp) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    Spacer(Modifier.height(8.dp))
 
     // Почему молчит — словами и с кнопкой. Раньше на это место приходила
     // одна кнопка «дать доступ», и она врала: доступ был выдан «только при
@@ -1468,89 +1602,99 @@ private fun AutoPilotSection(app: PravkaApp) {
     // покажет (отказано дважды) — вторая кнопка ведёт в настройки Правки.
     var notifAsked by remember { mutableStateOf(false) }
     for (b in blockers) {
+        Spacer(Modifier.height(8.dp))
         Text(
             "⚠ " + b.text,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
         )
-        OutlinedButton(onClick = {
+        Spacer(Modifier.height(4.dp))
+        PaperButton(
             when (b.fix) {
-                ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION ->
-                    askPermission.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
-                ru.zf.pravka.trigger.AutoPilot.FIX_BACKGROUND -> {
-                    // На Android 11+ системного диалога для фонового
-                    // местоположения нет вовсе: только экран приложения,
-                    // руками. Поэтому ведём прямо туда.
-                    if (android.os.Build.VERSION.SDK_INT == 29) {
-                        askPermission.launch("android.permission.ACCESS_BACKGROUND_LOCATION")
-                    } else {
+                ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION -> "Дать доступ к имени Wi-Fi"
+                ru.zf.pravka.trigger.AutoPilot.FIX_BACKGROUND -> "Открыть разрешения Правки"
+                ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION_SYS -> "Включить геолокацию"
+                ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF -> "Разрешить уведомления"
+                ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF_CHANNEL -> "Открыть канал уведомлений"
+                ru.zf.pravka.trigger.AutoPilot.FIX_BT -> "Дать доступ к Bluetooth-устройствам"
+                else -> "Включить Wi-Fi"
+            },
+            icon = when (b.fix) {
+                ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION,
+                ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION_SYS -> Glyphs.Place
+                ru.zf.pravka.trigger.AutoPilot.FIX_BACKGROUND -> Glyphs.Key
+                ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF,
+                ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF_CHANNEL -> Glyphs.Bell
+                ru.zf.pravka.trigger.AutoPilot.FIX_BT -> Glyphs.Car
+                else -> Glyphs.Wifi
+            },
+            onClick = {
+                when (b.fix) {
+                    ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION ->
+                        askPermission.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                    ru.zf.pravka.trigger.AutoPilot.FIX_BACKGROUND -> {
+                        // На Android 11+ системного диалога для фонового
+                        // местоположения нет вовсе: только экран приложения,
+                        // руками. Поэтому ведём прямо туда.
+                        if (android.os.Build.VERSION.SDK_INT == 29) {
+                            askPermission.launch("android.permission.ACCESS_BACKGROUND_LOCATION")
+                        } else {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    android.net.Uri.fromParts("package", context.packageName, null),
+                                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                            Feedback.toast(app, "Разрешения → Местоположение → «Разрешать всегда»")
+                        }
+                    }
+                    ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION_SYS ->
                         context.startActivity(
                             android.content.Intent(
-                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                android.net.Uri.fromParts("package", context.packageName, null),
+                                android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS
                             ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                         )
-                        Feedback.toast(app, "Разрешения → Местоположение → «Разрешать всегда»")
+                    ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF -> {
+                        if (android.os.Build.VERSION.SDK_INT >= 33 && !notifAsked) {
+                            notifAsked = true
+                            askPermission.launch("android.permission.POST_NOTIFICATIONS")
+                        } else {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                                )
+                                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
                     }
-                }
-                ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION_SYS ->
-                    context.startActivity(
-                        android.content.Intent(
-                            android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS
-                        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF -> {
-                    if (android.os.Build.VERSION.SDK_INT >= 33 && !notifAsked) {
-                        notifAsked = true
-                        askPermission.launch("android.permission.POST_NOTIFICATIONS")
-                    } else {
+                    ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF_CHANNEL ->
                         context.startActivity(
                             android.content.Intent(
-                                android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                                android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS
                             )
                                 .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                .putExtra(
+                                    android.provider.Settings.EXTRA_CHANNEL_ID,
+                                    ru.zf.pravka.trigger.AutoPilot.CHANNEL,
+                                )
                                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                         )
-                    }
-                }
-                ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF_CHANNEL ->
-                    context.startActivity(
-                        android.content.Intent(
-                            android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS
-                        )
-                            .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
-                            .putExtra(
-                                android.provider.Settings.EXTRA_CHANNEL_ID,
-                                ru.zf.pravka.trigger.AutoPilot.CHANNEL,
-                            )
+                    ru.zf.pravka.trigger.AutoPilot.FIX_BT ->
+                        askPermission.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+                    else -> context.startActivity(
+                        android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
                             .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                     )
-                ru.zf.pravka.trigger.AutoPilot.FIX_BT ->
-                    askPermission.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
-                else -> context.startActivity(
-                    android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }
-        }) {
-            Text(
-                when (b.fix) {
-                    ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION -> "Дать доступ к имени Wi-Fi"
-                    ru.zf.pravka.trigger.AutoPilot.FIX_BACKGROUND -> "Открыть разрешения Правки"
-                    ru.zf.pravka.trigger.AutoPilot.FIX_LOCATION_SYS -> "Включить геолокацию"
-                    ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF -> "Разрешить уведомления"
-                    ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF_CHANNEL -> "Открыть канал уведомлений"
-                    ru.zf.pravka.trigger.AutoPilot.FIX_BT -> "Дать доступ к Bluetooth-устройствам"
-                    else -> "Включить Wi-Fi"
                 }
-            )
-        }
-        Spacer(Modifier.height(6.dp))
+            },
+        )
     }
     if (blockers.isNotEmpty()) {
-        TextButton(onClick = { permTick++ }) { Text("Проверить ещё раз") }
+        PaperTextButton("Проверить ещё раз", onClick = { permTick++ }, icon = Glyphs.Refresh)
     }
 
+    // ---- Места по Wi-Fi ----
     // Сети, которые служба уже видела: владелец называет каждую местом
     // («это дача») — ровно то, что он просил, вместо угадывания SSID.
     val seen by settings.autoSeenFlow.collectAsState(initial = emptyMap<String, Long>())
@@ -1564,35 +1708,13 @@ private fun AutoPilotSection(app: PravkaApp) {
     val deals by settings.autoPlaceDealsFlow.collectAsState(initial = emptyMap<String, PlaceDeal>())
     val dealCategories by app.zasechkaStore.categoriesFlow.collectAsState()
     var dealPlace by remember { mutableStateOf<String?>(null) }
-    if (places.isNotEmpty()) {
-        Text("Мои места", style = MaterialTheme.typography.bodyMedium)
-        Text(
-            "Кнопка справа выбирает, что считать приездом. «подключился» — " +
-                "точнее, так ловится дом. «вижу сеть» — для мест вроде Летово, " +
-                "к чьему Wi-Fi ты не подключаешься: приезд засчитывается, как " +
-                "только сеть появилась в эфире. У места может быть дело по " +
-                "приезду: закрыв дорогу, автопилот сам начнёт его; не то — " +
-                "«Сказать» в пуше заменит.",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        for ((ssid, name) in places) {
-            val byAir = visibleSsids.contains(ssid)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "$name — $ssid",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = {
-                    scope.launch { settings.setAutoVisible(ssid, !byAir) }
-                }) { Text(if (byAir) "вижу сеть" else "подключился") }
-                TextButton(onClick = { scope.launch { settings.removeAutoPlace(ssid) } }) {
-                    Text("✕")
-                }
-            }
-            val deal = AutoPilotRules.dealFor(name, deals)
-            Row(verticalAlignment = Alignment.CenterVertically) {
+    SubHead("Места", info = PLACES_INFO)
+    for ((ssid, name) in places) {
+        val byAir = visibleSsids.contains(ssid)
+        val deal = AutoPilotRules.dealFor(name, deals)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("$name — $ssid", style = MaterialTheme.typography.bodyMedium)
                 Text(
                     if (deal != null) {
                         "по приезду: «${deal.title}»" +
@@ -1600,12 +1722,31 @@ private fun AutoPilotSection(app: PravkaApp) {
                     } else "по приезду — спросить, что делаешь",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f).padding(start = 12.dp),
                 )
-                TextButton(onClick = { dealPlace = name }) { Text(if (deal != null) "изменить" else "дело…") }
             }
+            GlyphButton(
+                Glyphs.Edit,
+                if (deal != null) "изменить дело по приезду" else "задать дело по приезду",
+                onClick = { dealPlace = name },
+                size = 36.dp,
+            )
+            GlyphButton(
+                Glyphs.Delete,
+                "убрать место",
+                onClick = { scope.launch { settings.removeAutoPlace(ssid) } },
+                size = 36.dp,
+            )
         }
-        Spacer(Modifier.height(6.dp))
+        // Что считать приездом — выбором из двух, а не кнопкой-переключателем
+        // со словом текущего режима: так видно и что выбрано, и что ещё есть.
+        ChipRow(Modifier.padding(top = 4.dp, bottom = 8.dp)) {
+            PaperChip("подключился", selected = !byAir, onClick = {
+                if (byAir) scope.launch { settings.setAutoVisible(ssid, false) }
+            })
+            PaperChip("вижу сеть", selected = byAir, onClick = {
+                if (!byAir) scope.launch { settings.setAutoVisible(ssid, true) }
+            })
+        }
     }
     dealPlace?.let { place ->
         PlaceDealDialog(
@@ -1621,40 +1762,34 @@ private fun AutoPilotSection(app: PravkaApp) {
     }
 
     if (unnamed.isEmpty()) {
-        Text(
-            if (places.isEmpty()) {
-                "Новых сетей пока не видел. Подключись к домашнему Wi-Fi — " +
-                    "он появится здесь (и придёт пуш «что это за место?»). Сети, " +
-                    "которые просто слышно рядом, подтягиваются сами раз в полчаса."
-            } else "Все увиденные сети названы.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        PaperHint(if (places.isEmpty()) "Новых сетей пока не видел." else "Все увиденные сети названы.")
     } else {
-        Text("Что это за сети?", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            "Что это за сети?",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(top = 6.dp),
+        )
         for (ssid in unnamed) {
             if (namingSsid == ssid) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = placeName,
-                        onValueChange = { placeName = it },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("«$ssid» — это…") },
-                        singleLine = true,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Button(onClick = {
-                        val name = placeName.trim()
-                        if (name.isNotBlank()) {
-                            scope.launch {
-                                settings.addAutoPlace(ssid, name)
-                                settings.removeAutoSeen(ssid)
-                            }
+                val done: () -> Unit = {
+                    val name = placeName.trim()
+                    if (name.isNotBlank()) {
+                        scope.launch {
+                            settings.addAutoPlace(ssid, name)
+                            settings.removeAutoSeen(ssid)
                         }
-                        namingSsid = null
-                        placeName = ""
-                    }) { Text("Готово") }
+                    }
+                    namingSsid = null
+                    placeName = ""
                 }
+                PaperField(
+                    value = placeName,
+                    onValueChange = { placeName = it },
+                    label = "«$ssid» — это…",
+                    trailing = {
+                        GlyphButton(Glyphs.Check, "готово", onClick = done, tint = MaterialTheme.colorScheme.primary)
+                    },
+                )
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -1666,19 +1801,33 @@ private fun AutoPilotSection(app: PravkaApp) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    TextButton(onClick = { namingSsid = ssid; placeName = "" }) {
-                        Text("Это место…")
-                    }
-                    TextButton(onClick = { scope.launch { settings.removeAutoSeen(ssid) } }) {
-                        Text("Не место")
-                    }
+                    PaperTextButton("Это место…", onClick = { namingSsid = ssid; placeName = "" })
+                    PaperTextButton("Не место", onClick = { scope.launch { settings.removeAutoSeen(ssid) } })
                 }
             }
         }
     }
+    val autoArrive by settings.autoArriveFlow.collectAsState(initial = true)
+    val leaveAsk by settings.autoLeaveAskFlow.collectAsState(initial = true)
+    val carAsk by settings.autoCarAskFlow.collectAsState(initial = true)
+    val carStart by settings.autoCarStartFlow.collectAsState(initial = true)
+    val stillAsk by settings.autoStillAskFlow.collectAsState(initial = true)
+    // Тумблеры — рядом с тем, чем они правят (24.09.2026): приезд и отъезд —
+    // у мест, поездка — у машины, «точно ещё» — отдельно.
+    Spacer(Modifier.height(4.dp))
+    PaperToggle(
+        title = "Приезд в место закрывает передвижение",
+        checked = autoArrive,
+        onCheckedChange = { on -> scope.launch { settings.setAutoArrive(on) } },
+    )
+    PaperToggle(
+        title = "Спрашивать при отъезде из места",
+        checked = leaveAsk,
+        onCheckedChange = { on -> scope.launch { settings.setAutoLeaveAsk(on) } },
+    )
 
     // ---- Машина по Bluetooth ----
-    Spacer(Modifier.height(12.dp))
+    SubHead("Машина")
     val needBtPerm = android.os.Build.VERSION.SDK_INT >= 31 &&
         context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) !=
         android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -1701,15 +1850,15 @@ private fun AutoPilotSection(app: PravkaApp) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                TextButton(onClick = { scope.launch { settings.setAutoCarBt("") } }) {
-                    Text("Убрать")
-                }
+                PaperTextButton("Убрать", onClick = { scope.launch { settings.setAutoCarBt("") } })
             }
         }
         btPermTick -> {
-            OutlinedButton(onClick = {
-                askPermission.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
-            }) { Text("Дать доступ к Bluetooth-устройствам") }
+            PaperButton(
+                "Дать доступ к Bluetooth-устройствам",
+                icon = Glyphs.Car,
+                onClick = { askPermission.launch(android.Manifest.permission.BLUETOOTH_CONNECT) },
+            )
         }
         else -> {
             // Имя → адрес: адрес едет в настройки вместе с именем, по нему
@@ -1724,71 +1873,56 @@ private fun AutoPilotSection(app: PravkaApp) {
                 }.getOrNull().orEmpty()
             }
             if (bonded.isEmpty()) {
-                Text(
-                    "Спаренных Bluetooth-устройств не видно.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                PaperHint("Спаренных Bluetooth-устройств не видно.")
             } else {
                 Text("Какое устройство — машина?", style = MaterialTheme.typography.bodyMedium)
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
+                Spacer(Modifier.height(6.dp))
+                ChipRow {
                     for ((name, addr) in bonded) {
-                        FilterChip(
+                        PaperChip(
+                            name,
                             selected = false,
                             onClick = { scope.launch { settings.setAutoCarBt(name, addr) } },
-                            label = { Text(name) },
                         )
                     }
                 }
             }
         }
     }
-
-    // ---- Тумблеры ----
-    Spacer(Modifier.height(12.dp))
-    val autoArrive by settings.autoArriveFlow.collectAsState(initial = true)
-    val leaveAsk by settings.autoLeaveAskFlow.collectAsState(initial = true)
-    val carAsk by settings.autoCarAskFlow.collectAsState(initial = true)
-    val carStart by settings.autoCarStartFlow.collectAsState(initial = true)
-    val stillAsk by settings.autoStillAskFlow.collectAsState(initial = true)
-    @Composable
-    fun toggle(checked: Boolean, label: String, onChange: (Boolean) -> Unit) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = checked, onCheckedChange = onChange)
-            Spacer(Modifier.width(8.dp))
-            Text(label, style = MaterialTheme.typography.bodyMedium)
-        }
-    }
-    toggle(autoArrive, "Приезд в место закрывает передвижение") { on ->
-        scope.launch { settings.setAutoArrive(on) }
-    }
-    toggle(leaveAsk, "Спрашивать при отъезде из места") { on ->
-        scope.launch { settings.setAutoLeaveAsk(on) }
-    }
-    toggle(carStart, "Машина подключилась — сразу начать «Поездку на машине»") { on ->
-        scope.launch { settings.setAutoCarStart(on) }
-    }
-    if (!carStart) {
-        toggle(carAsk, "…или хотя бы спросить «сел в машину?»") { on ->
-            scope.launch { settings.setAutoCarAsk(on) }
-        }
-    }
-    Text(
-        "Поездка стартует с момента подключения и закрывает текущее дело; в пуше " +
+    Spacer(Modifier.height(4.dp))
+    PaperToggle(
+        title = "Машина подключилась — сразу начать «Поездку на машине»",
+        checked = carStart,
+        onCheckedChange = { on -> scope.launch { settings.setAutoCarStart(on) } },
+        info = "Поездка стартует с момента подключения и закрывает текущее дело; в пуше " +
             "есть «Отменить». Отключилась машина — через две минуты вопрос «приехал?». " +
             "Приезд в место с открытой дорогой закрывает её и спрашивает, что теперь.",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    toggle(stillAsk, "«Точно ещё …?», когда телефон задвигался") { on ->
-        scope.launch { settings.setAutoStillAsk(on) }
+    if (!carStart) {
+        PaperToggle(
+            title = "…или хотя бы спросить «сел в машину?»",
+            checked = carAsk,
+            onCheckedChange = { on -> scope.launch { settings.setAutoCarAsk(on) } },
+        )
     }
+
+    // ---- Движение ----
+    SubHead("Движение")
+    PaperToggle(
+        title = "«Точно ещё …?», когда телефон задвигался",
+        checked = stillAsk,
+        onCheckedChange = { on -> scope.launch { settings.setAutoStillAsk(on) } },
+        info = "Датчик значимого движения после получаса сидячего дела (работа, " +
+            "систематизация, чтение) спрашивает, идёт ли оно ещё, — не чаще раза в " +
+            "двадцать минут.",
+    )
 }
 
-/** Дело места по приезду: название и категория; пустое название — дела нет. */
+/**
+ * Дело места по приезду: название и категория; пустое название — дела нет.
+ * Лист набора вместо AlertDialog (24.09.2026): «Убрать» — корзиной слева,
+ * «Отмену» заменили крестик и свайп.
+ */
 @Composable
 private fun PlaceDealDialog(
     place: String,
@@ -1799,58 +1933,55 @@ private fun PlaceDealDialog(
 ) {
     var title by remember { mutableStateOf(current?.title.orEmpty()) }
     var category by remember { mutableStateOf(current?.category.orEmpty()) }
-    var categoryMenu by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Приехал в «$place» — что начать?") },
-        text = {
-            Column {
-                Text(
-                    "Дорога закроется приездом, и это дело начнётся с того же момента. " +
-                        "Ошибся автопилот — «Сказать» в пуше заменит его.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Дело") },
-                    placeholder = { Text("Забираю Серёжу") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                Box {
-                    OutlinedButton(onClick = { categoryMenu = true }) {
-                        Text("Категория: " + category.ifBlank { "нет" })
-                    }
-                    DropdownMenu(expanded = categoryMenu, onDismissRequest = { categoryMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("без категории") },
-                            onClick = { category = ""; categoryMenu = false },
-                        )
-                        for (c in categories) {
-                            DropdownMenuItem(text = { Text(c) }, onClick = { category = c; categoryMenu = false })
-                        }
-                    }
-                }
+    PaperAlert(
+        onDismiss = onDismiss,
+        title = "Приехал в «$place» — что начать?",
+        icon = Glyphs.Place,
+        confirm = SheetAction("Готово") { onSave(title.trim(), category) },
+        destructive = if (current != null) SheetAction("убрать дело по приезду") { onSave("", "") } else null,
+    ) {
+        PaperHint(
+            "Дорога закроется приездом, и это дело начнётся с того же момента. " +
+                "Ошибся автопилот — «Сказать» в пуше заменит его."
+        )
+        PaperField(
+            value = title,
+            onValueChange = { title = it },
+            label = "Дело",
+            placeholder = "Забираю Серёжу",
+        )
+        CategoryPicker(selected = category, options = categories, onSelect = { category = it })
+    }
+}
+
+/**
+ * Выбор категории в окне: кнопка с текущей и выпадающий список. Своей детали
+ * в наборе нет (24.09.2026): чипами два десятка категорий в окно не лезут, а
+ * выбранная уезжала бы за край ряда.
+ */
+@Composable
+private fun CategoryPicker(
+    selected: String,
+    options: List<String>,
+    onSelect: (String) -> Unit,
+    noneLabel: String? = "без категории",
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        PaperButton(
+            "Категория: " + selected.ifBlank { "нет" },
+            onClick = { open = true },
+            icon = Glyphs.Tag,
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            if (noneLabel != null) {
+                DropdownMenuItem(text = { Text(noneLabel) }, onClick = { onSelect(""); open = false })
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSave(title.trim(), category) }) { Text("Готово") }
-        },
-        dismissButton = {
-            Row {
-                if (current != null) {
-                    TextButton(onClick = { onSave("", "") }) {
-                        Text("Убрать", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-                TextButton(onClick = onDismiss) { Text("Отмена") }
+            for (c in options) {
+                DropdownMenuItem(text = { Text(c) }, onClick = { onSelect(c); open = false })
             }
-        },
-    )
+        }
+    }
 }
 
 /**
@@ -1858,6 +1989,9 @@ private fun PlaceDealDialog(
  * sharp shrink, and the quarantined file if one ever appears. Restore puts a
  * copy back (undoable like any other operation), «Файлом» hands the raw JSON
  * out so nothing important is ever trapped in private storage.
+ *
+ * Лежит в плашке «резервные копии ленты» (настройки «Приложения»), поэтому
+ * своего заголовка нет, а пояснение — за «i» в строке состояния (24.09.2026).
  */
 @Composable
 internal fun BackupsSection(app: PravkaApp) {
@@ -1889,33 +2023,37 @@ internal fun BackupsSection(app: PravkaApp) {
             }
         }
     }
-    Text("Резервные копии", style = MaterialTheme.typography.titleSmall)
-    Text(
-        "Копия всего нажитого (лента, словарь, правила, телефон) снимается раз в час, " +
-            "плюс копия ленты на каждый день и перед любым резким сокращением записей. " +
-            "«Восстановить» возвращает копию целиком (отменяется кнопкой ↩︎), " +
-            "«Файлом» отдаёт сырой JSON. «Импорт CSV» поднимает ленту из любой выгрузки: " +
-            "строки, которые уже есть, не удваиваются.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = { tick++ }) { Text("Обновить") }
-        TextButton(onClick = {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            if (list.isEmpty()) "Копий пока нет — первая появится в течение часа."
+            else "Копий: ${list.size}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        // Кнопки ↩︎ во вкладке больше нет (15.09) — отмена живёт в меню
+        // долгого нажатия «З», так и сказано.
+        InfoButton(
+            "Резервные копии",
+            "Копия всего нажитого (лента, словарь, правила, телефон) снимается раз в час, " +
+                "плюс копия ленты на каждый день и перед любым резким сокращением записей. " +
+                "«Восстановить» возвращает копию целиком (отменяется из меню долгого нажатия «З»), " +
+                "значок «поделиться» у копии и «Текущий файл» отдают сырой JSON. " +
+                "«Импорт CSV» поднимает ленту из любой выгрузки: " +
+                "строки, которые уже есть, не удваиваются.",
+            size = 30.dp,
+        )
+    }
+    IconActionRow {
+        IconAction(Glyphs.Refresh, "Обновить", onClick = { tick++ })
+        IconAction(Glyphs.Share, "Текущий файл", onClick = {
             app.appScope.launch {
                 runCatching { context.startActivity(app.zasechkaStore.shareStoreIntent()) }
             }
-        }) { Text("Текущий файл") }
-        TextButton(onClick = {
+        })
+        IconAction(Glyphs.Download, "Импорт CSV", onClick = {
             runCatching { importer.launch(arrayOf("*/*")) }
-        }) { Text("Импорт CSV") }
-    }
-    if (list.isEmpty()) {
-        Text(
-            "Копий пока нет — первая появится в течение часа.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        })
     }
     for (b in list) {
         Row(
@@ -1936,12 +2074,18 @@ internal fun BackupsSection(app: PravkaApp) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TextButton(onClick = {
-                app.appScope.launch {
-                    runCatching { context.startActivity(app.zasechkaStore.shareStoreIntent(b.name)) }
-                }
-            }) { Text("Файлом") }
-            TextButton(
+            GlyphButton(
+                Glyphs.Share,
+                "отдать файлом",
+                onClick = {
+                    app.appScope.launch {
+                        runCatching { context.startActivity(app.zasechkaStore.shareStoreIntent(b.name)) }
+                    }
+                },
+                size = 36.dp,
+            )
+            PaperTextButton(
+                "Восстановить",
                 onClick = {
                     app.appScope.launch {
                         val n = runCatching { app.zasechkaStore.restoreFrom(b.name) }.getOrDefault(0)
@@ -1953,31 +2097,28 @@ internal fun BackupsSection(app: PravkaApp) {
                     }
                 },
                 enabled = b.entries > 0,
-            ) { Text("Восстановить") }
+            )
         }
     }
 }
 
+/**
+ * Список категорий: имя цветом радуги, справа базовое время и ценность часа,
+ * под ним подсказка разбору. Заголовок и пояснение — у плашки снаружи.
+ */
 @Composable
 private fun CategoriesEditor(
     categories: List<ZasechkaStore.Category>,
     onChange: (List<ZasechkaStore.Category>) -> Unit,
 ) {
     var editing by remember { mutableStateOf<ZasechkaStore.Category?>(null) }
-    Text("Категории", style = MaterialTheme.typography.titleSmall)
-    Text(
-        "Сонет выбирает строго из этого списка; пояснение — подсказка ему. Тап — править: " +
-            "там же базовое время («всё ещё …?» после него) и ценность часа от −10 до +10, " +
-            "из которой складывается баланс дня.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
     // Same order as the day's progress bars: along the rainbow, red first.
     for (category in categories.sortedBy { categoryHue(it.name) }) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
                 .clickable { editing = category },
         ) {
             Column(Modifier.weight(1f).padding(vertical = 3.dp)) {
@@ -1992,9 +2133,25 @@ private fun CategoriesEditor(
                     )
                     // The two knobs at a glance: typical length and what an
                     // hour of it is worth (+ lifts the day, - sinks it).
+                    // Часики — значком набора, а не эмодзи ⏱.
+                    if (category.baseMin > 0) {
+                        Icon(
+                            Glyphs.Timer,
+                            contentDescription = "базовое время",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(13.dp),
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            "${category.baseMin} м",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
                     Text(
-                        (if (category.baseMin > 0) "⏱ ${category.baseMin} м  " else "") +
-                            (if (category.value > 0) "+${category.value}" else "${category.value}"),
+                        if (category.value > 0) "+${category.value}" else "${category.value}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -2006,158 +2163,141 @@ private fun CategoriesEditor(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
-            IconButton(onClick = { onChange(categories.filter { it.name != category.name }) }) {
-                Icon(
-                    Icons.Filled.Clear,
-                    contentDescription = "удалить",
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            GlyphButton(
+                Glyphs.Delete,
+                "удалить категорию",
+                onClick = { onChange(categories.filter { it.name != category.name }) },
+                size = 36.dp,
+            )
         }
     }
     var newName by remember { mutableStateOf("") }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = newName,
-            onValueChange = { newName = it },
-            label = { Text("Добавить категорию") },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-        )
-        TextButton(
-            onClick = {
-                val v = newName.trim()
-                if (v.isNotEmpty()) {
-                    onChange(categories + ZasechkaStore.Category(v, ""))
-                    newName = ""
-                }
-            },
-            enabled = newName.isNotBlank(),
-        ) { Text("OK") }
-    }
+    Spacer(Modifier.height(4.dp))
+    PaperField(
+        value = newName,
+        onValueChange = { newName = it },
+        label = "Добавить категорию",
+        trailing = {
+            GlyphButton(
+                Glyphs.Plus,
+                "добавить",
+                onClick = {
+                    val v = newName.trim()
+                    if (v.isNotEmpty()) {
+                        onChange(categories + ZasechkaStore.Category(v, ""))
+                        newName = ""
+                    }
+                },
+                enabled = newName.isNotBlank(),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
+    )
     editing?.let { original ->
         var name by remember(original) { mutableStateOf(original.name) }
         var hint by remember(original) { mutableStateOf(original.hint) }
         var baseMin by remember(original) { mutableStateOf(original.baseMin.toString()) }
         var worth by remember(original) { mutableStateOf(original.value) }
-        AlertDialog(
-            onDismissRequest = { editing = null },
-            title = { Text("Категория") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("Название") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = hint,
-                        onValueChange = { hint = it },
-                        label = { Text("Что сюда относится (подсказка Сонету)") },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = baseMin,
-                        onValueChange = { baseMin = it.filter { c -> c.isDigit() }.take(4) },
-                        label = { Text("Базовое время, мин (0 — не спрашивать)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Ценность часа: " + (if (worth > 0) "+$worth" else "$worth") +
-                            when {
-                                worth >= 7 -> " — тянет день вверх"
-                                worth > 0 -> " — плюс"
-                                worth == 0 -> " — ватерлиния, сервисное время"
-                                worth > -7 -> " — минус"
-                                else -> " — тянет день вниз"
-                            },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Slider(
-                        value = worth.toFloat(),
-                        onValueChange = { worth = it.roundToInt() },
-                        valueRange = -10f..10f,
-                        steps = 19,
+        PaperAlert(
+            onDismiss = { editing = null },
+            title = "Категория",
+            icon = Glyphs.Tag,
+            subtitle = original.name,
+            confirm = SheetAction("Сохранить") {
+                editing = null
+                val trimmed = name.trim()
+                if (trimmed.isNotEmpty()) {
+                    onChange(
+                        categories.map {
+                            if (it.name == original.name) {
+                                ZasechkaStore.Category(
+                                    name = trimmed,
+                                    hint = hint.trim(),
+                                    baseMin = baseMin.toIntOrNull() ?: 0,
+                                    value = worth,
+                                )
+                            } else it
+                        }
                     )
                 }
             },
-            confirmButton = {
-                Button(onClick = {
-                    editing = null
-                    val trimmed = name.trim()
-                    if (trimmed.isNotEmpty()) {
-                        onChange(
-                            categories.map {
-                                if (it.name == original.name) {
-                                    ZasechkaStore.Category(
-                                        name = trimmed,
-                                        hint = hint.trim(),
-                                        baseMin = baseMin.toIntOrNull() ?: 0,
-                                        value = worth,
-                                    )
-                                } else it
-                            }
-                        )
-                    }
-                }) { Text("Сохранить") }
-            },
-            dismissButton = { TextButton(onClick = { editing = null }) { Text("Отмена") } },
-        )
+        ) {
+            PaperField(value = name, onValueChange = { name = it }, label = "Название")
+            PaperField(
+                value = hint,
+                onValueChange = { hint = it },
+                label = "Что сюда относится (подсказка Сонету)",
+                singleLine = false,
+                maxLines = 4,
+            )
+            PaperField(
+                value = baseMin,
+                onValueChange = { baseMin = it.filter { c -> c.isDigit() }.take(4) },
+                label = "Базовое время, мин (0 — не спрашивать)",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
+            // Ползунок меняет только поле окна — пишет «Сохранить», поэтому
+            // по отпусканию делать нечего.
+            PaperSlider(
+                title = "Ценность часа",
+                valueText = if (worth > 0) "+$worth" else "$worth",
+                value = worth.toFloat(),
+                onValueChange = { worth = it.roundToInt() },
+                onValueChangeFinished = {},
+                valueRange = -10f..10f,
+                steps = 19,
+            )
+            PaperHint(
+                when {
+                    worth >= 7 -> "Тянет день вверх"
+                    worth > 0 -> "Плюс"
+                    worth == 0 -> "Ватерлиния, сервисное время"
+                    worth > -7 -> "Минус"
+                    else -> "Тянет день вниз"
+                }
+            )
+        }
     }
 }
 
+/** Список строк с «удалить» и полем «добавить»; подпись и пояснение — у плашки. */
 @Composable
 private fun EditableList(
-    title: String,
-    hint: String,
     values: List<String>,
     onChange: (List<String>) -> Unit,
 ) {
-    Text(title, style = MaterialTheme.typography.titleSmall)
-    Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     for (value in values) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(value, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            IconButton(onClick = { onChange(values - value) }) {
-                Icon(
-                    Icons.Filled.Clear,
-                    contentDescription = "удалить",
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            GlyphButton(Glyphs.Delete, "удалить", onClick = { onChange(values - value) }, size = 36.dp)
         }
     }
     var newValue by remember { mutableStateOf("") }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = newValue,
-            onValueChange = { newValue = it },
-            label = { Text("Добавить") },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-        )
-        TextButton(
-            onClick = {
-                val v = newValue.trim()
-                if (v.isNotEmpty()) {
-                    onChange(values + v)
-                    newValue = ""
-                }
-            },
-            enabled = newValue.isNotBlank(),
-        ) { Text("OK") }
-    }
+    Spacer(Modifier.height(4.dp))
+    PaperField(
+        value = newValue,
+        onValueChange = { newValue = it },
+        label = "Добавить",
+        trailing = {
+            GlyphButton(
+                Glyphs.Plus,
+                "добавить",
+                onClick = {
+                    val v = newValue.trim()
+                    if (v.isNotEmpty()) {
+                        onChange(values + v)
+                        newValue = ""
+                    }
+                },
+                enabled = newValue.isNotBlank(),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2286,6 +2426,12 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, now: Long) {
     // прошлых дней сняты: звонки считаются всегда, если журнал разрешён.
     PaperCard(
         label = "телефон",
+        // На плашке пояснений нет (владелец, 15.09), но тап и долгое нажатие
+        // по приложению иначе не узнать ниоткуда — они за «i» (24.09.2026).
+        info = "Тап по приложению — считать его по дням или перестать: минуты уходят в " +
+            "строку «Телефон» Notion и в Общую статистику, в ленту не пишется ничего; " +
+            "считаемое — жирным, с галочкой и полоской акцента. Долгое нажатие — " +
+            "категория и «звук в фоне». Звонки считаются по журналу, если он разрешён.",
         trailing = {
             if (usageGranted && agg.screenMs > 0) {
                 Text(
@@ -2297,13 +2443,18 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, now: Long) {
         },
     ) {
         if (!usageGranted) {
-            OutlinedButton(onClick = {
-                runCatching {
-                    context.startActivity(
-                        android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
-                    )
-                }
-            }) { Text("Дать доступ к статистике использования") }
+            PaperButton(
+                "Дать доступ к статистике использования",
+                icon = Glyphs.Key,
+                primary = true,
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                        )
+                    }
+                },
+            )
             return@PaperCard
         }
 
@@ -2385,13 +2536,18 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, now: Long) {
                     modifier = Modifier.padding(start = 8.dp).width(56.dp),
                     textAlign = TextAlign.End,
                 )
-                Text(
-                    if (on) "✓" else " ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.width(16.dp),
-                    textAlign = TextAlign.End,
-                )
+                // Галочка считаемого — значком набора; место под неё держится
+                // и у несчитаемых, чтобы столбец минут не прыгал.
+                Box(Modifier.width(18.dp), contentAlignment = Alignment.CenterEnd) {
+                    if (on) {
+                        Icon(
+                            Glyphs.Check,
+                            contentDescription = "считается",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(13.dp),
+                        )
+                    }
+                }
             }
         }
         if (topApps.isEmpty()) {
@@ -2404,10 +2560,11 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, now: Long) {
         // Звонки считаются по журналу; без разрешения — только кнопка дать его.
         if (!callGranted) {
             Spacer(Modifier.height(4.dp))
-            TextButton(
+            PaperTextButton(
+                "Разрешить журнал звонков",
                 onClick = { callPermission.launch(Manifest.permission.READ_CALL_LOG) },
-                contentPadding = PaddingValues(0.dp),
-            ) { Text("Разрешить журнал звонков") }
+                icon = Glyphs.Phone,
+            )
         }
     }
 
@@ -2437,6 +2594,9 @@ private fun PhoneSection(app: PravkaApp, dayStart: Long, now: Long) {
  * вообще не смотрю». Осталось то, что работает: список с тумблерами.
  * Предложение, застрявшее с прежних ночей, показывается ещё раз — судить или
  * снять руками, само оно никуда не уедет и в промпт не попадёт.
+ *
+ * Плашку раздел рисует сам (24.09.2026): раньше он стоял голым текстом между
+ * плашками настроек, а пустой не показывается вовсе — снаружи этого не знают.
  */
 @Composable
 private fun ZasechkaRulesSection(app: PravkaApp) {
@@ -2454,65 +2614,55 @@ private fun ZasechkaRulesSection(app: PravkaApp) {
     // а робот новых не предлагает — говорить было бы нечего.
     if (proposed.isEmpty() && active.isEmpty()) return
 
-    Spacer(Modifier.height(12.dp))
-    Text("Правила разбора", style = MaterialTheme.typography.titleSmall)
-    Text(
-        "Что у тебя значат слова про время и дела — уходит в каждый разбор " +
+    PaperCard(
+        label = "правила разбора",
+        info = "Что у тебя значат слова про время и дела — уходит в каждый разбор " +
             "фразы. Новых правил робот не предлагает, набор правится здесь.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-
-    if (proposed.isNotEmpty()) {
-        Spacer(Modifier.height(10.dp))
-        Text("Предложено раньше — суди или сними", style = MaterialTheme.typography.bodyMedium)
-        for (r in proposed) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-            ) {
-                Text(r.text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                TextButton(onClick = {
-                    scope.launch { app.zasechkaRules.approve(r.id); reload++ }
-                }) { Text("Да") }
-                TextButton(onClick = {
-                    scope.launch { app.zasechkaRules.delete(r.id); reload++ }
-                }) { Text("Нет", color = MaterialTheme.colorScheme.error) }
+    ) {
+        if (proposed.isNotEmpty()) {
+            Text("Предложено раньше — суди или сними", style = MaterialTheme.typography.bodyMedium)
+            for (r in proposed) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                ) {
+                    Text(r.text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    PaperTextButton("Да", onClick = {
+                        scope.launch { app.zasechkaRules.approve(r.id); reload++ }
+                    })
+                    PaperTextButton("Нет", color = MaterialTheme.colorScheme.error, onClick = {
+                        scope.launch { app.zasechkaRules.delete(r.id); reload++ }
+                    })
+                }
             }
         }
-    }
 
-    if (active.isNotEmpty()) {
-        Spacer(Modifier.height(10.dp))
-        Text("Действующие правила", style = MaterialTheme.typography.bodyMedium)
-        for (r in active) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-            ) {
-                Switch(
-                    checked = r.enabled,
-                    onCheckedChange = { v ->
-                        scope.launch { app.zasechkaRules.setEnabled(r.id, v); reload++ }
-                    },
-                )
-                Spacer(Modifier.width(10.dp))
+        if (active.isNotEmpty()) {
+            // Подзаголовок нужен, только когда рядом есть предложенные:
+            // иначе он повторял бы подпись плашки.
+            if (proposed.isNotEmpty()) {
                 Text(
-                    r.text,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (r.enabled) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
+                    "Действующие правила",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 10.dp),
                 )
-                IconButton(
-                    onClick = { scope.launch { app.zasechkaRules.delete(r.id); reload++ } },
-                    modifier = Modifier.size(30.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.Clear,
-                        contentDescription = "удалить правило",
-                        modifier = Modifier.size(15.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            }
+            for (r in active) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) {
+                        PaperToggle(
+                            title = r.text,
+                            checked = r.enabled,
+                            onCheckedChange = { v ->
+                                scope.launch { app.zasechkaRules.setEnabled(r.id, v); reload++ }
+                            },
+                        )
+                    }
+                    GlyphButton(
+                        Glyphs.Delete,
+                        "удалить правило",
+                        onClick = { scope.launch { app.zasechkaRules.delete(r.id); reload++ } },
+                        size = 36.dp,
                     )
                 }
             }
@@ -2520,6 +2670,11 @@ private fun ZasechkaRulesSection(app: PravkaApp) {
     }
 }
 
+/**
+ * Приложение телефона по долгому нажатию: считать ли его по дням, «звук в
+ * фоне» и категория-подсказка. Лист набора (24.09.2026); пояснения под
+ * тумблерами — за их «i».
+ */
 @Composable
 private fun ImmersiveAppDialog(
     label: String,
@@ -2532,90 +2687,43 @@ private fun ImmersiveAppDialog(
     var enabled by remember { mutableStateOf(currentCategory != null) }
     var category by remember { mutableStateOf(currentCategory ?: "Отдых") }
     var audio by remember { mutableStateOf(currentAudio) }
-    var menu by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(label) },
-        text = {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Считать по дням", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "Минуты в этом приложении идут в строку «Телефон» у итогов дня " +
-                                "и в «Телефон» Notion; в ленту ничего не пишется",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = enabled, onCheckedChange = { enabled = it })
-                }
-                if (enabled) {
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Звук в фоне", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                "Для аудиокниг, подкастов и музыки: время считается по " +
-                                    "фоновой службе, а не по переднему плану — книга играет " +
-                                    "с погасшим экраном, и иначе её не поймать вовсе",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Switch(checked = audio, onCheckedChange = { audio = it })
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Box {
-                        OutlinedButton(onClick = { menu = true }) { Text("Категория: $category") }
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            for (c in (listOf("Отдых") + categories).distinct()) {
-                                DropdownMenuItem(text = { Text(c) }, onClick = { category = c; menu = false })
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(onClick = { onSave(if (enabled) category else null, enabled && audio) }) {
-                Text("Сохранить")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Комментарий к делу: баббл в строке, строка под делом, своё окно.
-// ---------------------------------------------------------------------------
-
-/**
- * Баббл 💬 рядом с ✎ и ✕. В core-наборе иконок Material пузыря нет, а тащить
- * ради одного значка extended-набор незачем — он рисуется: контур пузыря с
- * хвостиком, залитый. Пустой — бледный, с комментарием — цветом акцента, так
- * в ленте с одного взгляда видно, у каких дел есть слова.
- */
-@Composable
-private fun CommentBubble(hasComment: Boolean, onClick: () -> Unit) {
-    val tint = if (hasComment) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
-    IconButton(onClick = onClick, modifier = Modifier.size(30.dp)) {
-        Canvas(Modifier.size(15.dp)) {
-            val w = size.width
-            val body = size.height * 0.78f
-            val path = Path().apply {
-                addRoundRect(RoundRect(Rect(0f, 0f, w, body), CornerRadius(body * 0.38f)))
-                // Хвостик влево-вниз, как у реплики в мессенджере.
-                moveTo(w * 0.18f, body - 1f)
-                lineTo(w * 0.10f, size.height)
-                lineTo(w * 0.42f, body - 1f)
-                close()
-            }
-            drawPath(path, tint)
+    PaperAlert(
+        onDismiss = onDismiss,
+        title = label,
+        icon = Glyphs.Phone,
+        confirm = SheetAction("Сохранить") { onSave(if (enabled) category else null, enabled && audio) },
+    ) {
+        PaperToggle(
+            title = "Считать по дням",
+            checked = enabled,
+            onCheckedChange = { enabled = it },
+            info = "Минуты в этом приложении идут в строку «Телефон» у итогов дня " +
+                "и в «Телефон» Notion; в ленту ничего не пишется.",
+        )
+        if (enabled) {
+            PaperToggle(
+                title = "Звук в фоне",
+                checked = audio,
+                onCheckedChange = { audio = it },
+                info = "Для аудиокниг, подкастов и музыки: время считается по " +
+                    "фоновой службе, а не по переднему плану — книга играет " +
+                    "с погасшим экраном, и иначе её не поймать вовсе.",
+            )
+            CategoryPicker(
+                selected = category,
+                options = (listOf("Отдых") + categories).distinct(),
+                onSelect = { category = it },
+                noneLabel = null,
+            )
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Комментарий к делу: строка под делом, «Заметка» в листе записи, своё окно.
+// Баббл 💬 в строке снят вместе с остальными значками (24.09.2026): что у
+// дела есть слова, видно по третьей строке, а «Заметка» в листе горит.
+// ---------------------------------------------------------------------------
 
 /** Третья строка записи — сам комментарий, той же бледностью, что дыры в ленте. */
 @Composable
@@ -2642,10 +2750,11 @@ private fun onlyCommentChanged(before: ZasechkaStore.Entry, after: ZasechkaStore
         after.open == before.open && (after.open || fmtTime(after.end) == fmtTime(before.end))
 
 /**
- * Комментарий к делу отдельным окном — по тапу на баббл. Одно поле и ничего
- * лишнего: слова к делу пишутся чаще, чем правится само дело, а полный
- * редактор с временем и категорией ради них долгий. Диктовка — кнопкой «П»
- * прямо в поле: это и есть движок Правки, со словарём, правилами и чисткой.
+ * Комментарий к делу отдельным окном — по «Заметке» в листе записи. Одно поле
+ * и ничего лишнего: слова к делу пишутся чаще, чем правится само дело, а
+ * полный редактор с временем и категорией ради них долгий. Диктовка — кнопкой
+ * «П» прямо в поле: это и есть движок Правки, со словарём, правилами и
+ * чисткой. «Убрать комментарий» — корзиной слева, как удаление в любом окне.
  */
 @Composable
 private fun CommentDialog(
@@ -2654,43 +2763,37 @@ private fun CommentDialog(
     onSave: (String) -> Unit,
 ) {
     var comment by remember { mutableStateOf(entry.comment) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(capFirst(entry.title.ifBlank { entry.category.ifBlank { "без названия" } })) },
-        text = {
-            Column {
-                Text(
-                    "${fmtTime(entry.start)}–${if (entry.open) "…" else fmtTime(entry.end)}" +
-                        (if (entry.category.isBlank()) "" else " · ${entry.category}"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = comment,
-                    onValueChange = { comment = it },
-                    label = { Text("Комментарий") },
-                    placeholder = { Text("что было внутри — «П» надиктует сюда") },
-                    minLines = 3,
-                    maxLines = 8,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (entry.comment.isNotBlank()) {
-                    TextButton(onClick = { onSave("") }) {
-                        Text("Убрать комментарий", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        },
-        confirmButton = { Button(onClick = { onSave(comment.trim()) }) { Text("Сохранить") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
-    )
+    PaperAlert(
+        onDismiss = onDismiss,
+        title = capFirst(entry.title.ifBlank { entry.category.ifBlank { "без названия" } }),
+        icon = Glyphs.Note,
+        subtitle = "${fmtTime(entry.start)}–${if (entry.open) "…" else fmtTime(entry.end)}" +
+            (if (entry.category.isBlank()) "" else " · ${entry.category}"),
+        confirm = SheetAction("Сохранить") { onSave(comment.trim()) },
+        destructive = if (entry.comment.isNotBlank()) SheetAction("убрать комментарий") { onSave("") } else null,
+    ) {
+        PaperField(
+            value = comment,
+            onValueChange = { comment = it },
+            label = "Комментарий",
+            placeholder = "что было внутри — «П» надиктует сюда",
+            singleLine = false,
+            minLines = 3,
+            maxLines = 8,
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Entry editor: every field down to the minutes.
 // ---------------------------------------------------------------------------
 
+/**
+ * Правка записи — лист набора (24.09.2026). Микрофон — в шапке справа, где
+ * владелец его и просил («в кнопке edit сверху кнопка микрофончика»);
+ * «Удалить запись» — корзиной у левого края низа, «Сохранить» — справа.
+ * «Отмену» заменили крестик и свайп.
+ */
 @Composable
 private fun EditEntryDialog(
     entry: ZasechkaStore.Entry,
@@ -2707,7 +2810,6 @@ private fun EditEntryDialog(
     var comment by remember { mutableStateOf(entry.comment) }
     var startText by remember { mutableStateOf(fmtTime(entry.start)) }
     var endText by remember { mutableStateOf(if (entry.open) "" else fmtTime(entry.end)) }
-    var categoryMenu by remember { mutableStateOf(false) }
 
     val entryDayStart = remember(entry.id) {
         val cal = Calendar.getInstance()
@@ -2719,129 +2821,91 @@ private fun EditEntryDialog(
         cal.timeInMillis
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Запись", modifier = Modifier.weight(1f))
-                if (onDictate != null) {
-                    IconButton(onClick = onDictate) {
-                        Icon(
-                            painterResource(R.drawable.ic_mic),
-                            contentDescription = "надиктовать поправку",
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
+    val save: () -> Unit = {
+        val newStart = parseTimeOfDay(entryDayStart, startText) ?: entry.start
+        val newEnd = when {
+            endText.isBlank() -> if (entry.open) 0L else entry.end
+            else -> parseTimeOfDay(entryDayStart, endText)
+                ?: (if (entry.open) 0L else entry.end)
+        }
+        onSave(
+            entry.copy(
+                title = title.trim(),
+                category = category.trim(),
+                client = client.trim(),
+                comment = comment.trim(),
+                start = newStart,
+                end = if (newEnd > 0) newEnd.coerceAtLeast(newStart) else newEnd,
+                // Полезность руками больше не ставится: её заменила
+                // ценность часа - она понятна и считается сама.
+                // У старых записей оценка остаётся как была.
+                // An edited robot fact stays a robot fact: it keeps
+                // living inside its block and keeps blocking its own
+                // re-sweep duplicate.
+                source = if (entry.source == "auto") "auto" else "edit",
+            )
+        )
+    }
+
+    PaperSheet(
+        onDismiss = onDismiss,
+        title = "Правка записи",
+        icon = Glyphs.Edit,
+        subtitle = "${fmtTime(entry.start)}–${if (entry.open) "…" else fmtTime(entry.end)}",
+        actions = {
+            if (onDictate != null) {
+                GlyphButton(
+                    Glyphs.Mic,
+                    "надиктовать поправку",
+                    onClick = onDictate,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
             }
         },
-        text = {
-            Column {
-                if (onDictate != null) {
-                    PaperHint("Микрофон: скажи, что поменять, — «это был обед», «до 17:40», «категория семья».")
-                    Spacer(Modifier.height(8.dp))
-                }
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Дело") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                Box {
-                    OutlinedButton(onClick = { categoryMenu = true }) {
-                        Text("Категория: " + category.ifBlank { "нет" })
-                    }
-                    DropdownMenu(expanded = categoryMenu, onDismissRequest = { categoryMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("без категории") },
-                            onClick = { category = ""; categoryMenu = false },
-                        )
-                        for (c in categories) {
-                            DropdownMenuItem(text = { Text(c) }, onClick = { category = c; categoryMenu = false })
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = client,
-                    onValueChange = { client = it },
-                    label = { Text("Клиент/проект") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                // Комментарий — обычное поле: тап по «П» надиктует прямо сюда,
-                // со словарём и чисткой, как в любое поле любого приложения.
-                OutlinedTextField(
-                    value = comment,
-                    onValueChange = { comment = it },
-                    label = { Text("Комментарий") },
-                    placeholder = { Text("что было внутри — «П» надиктует сюда") },
-                    minLines = 2,
-                    maxLines = 5,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = startText,
-                        onValueChange = { startText = it },
-                        label = { Text("Начало") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedTextField(
-                        value = endText,
-                        onValueChange = { endText = it },
-                        label = { Text(if (entry.open) "Конец (пусто = идёт)" else "Конец") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                if (entry.raw.isNotBlank() && entry.raw != entry.title) {
-                    Text(
-                        "Надиктовано: «${entry.raw.take(200)}»",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                TextButton(onClick = onDelete) {
-                    Text("Удалить запись", color = MaterialTheme.colorScheme.error)
-                }
-            }
+        footer = {
+            PaperIconButton(
+                Glyphs.Delete,
+                "удалить запись",
+                onClick = onDelete,
+                tint = MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.weight(1f))
+            PaperButton("Сохранить", onClick = save, primary = true)
         },
-        confirmButton = {
-            Button(onClick = {
-                val newStart = parseTimeOfDay(entryDayStart, startText) ?: entry.start
-                val newEnd = when {
-                    endText.isBlank() -> if (entry.open) 0L else entry.end
-                    else -> parseTimeOfDay(entryDayStart, endText)
-                        ?: (if (entry.open) 0L else entry.end)
-                }
-                onSave(
-                    entry.copy(
-                        title = title.trim(),
-                        category = category.trim(),
-                        client = client.trim(),
-                        comment = comment.trim(),
-                        start = newStart,
-                        end = if (newEnd > 0) newEnd.coerceAtLeast(newStart) else newEnd,
-                        // Полезность руками больше не ставится: её заменила
-                        // ценность часа - она понятна и считается сама.
-                        // У старых записей оценка остаётся как была.
-                        // An edited robot fact stays a robot fact: it keeps
-                        // living inside its block and keeps blocking its own
-                        // re-sweep duplicate.
-                        source = if (entry.source == "auto") "auto" else "edit",
-                    )
-                )
-            }) { Text("Сохранить") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Отмена") }
-        },
-    )
+    ) {
+        if (onDictate != null) {
+            PaperHint("Микрофон: скажи, что поменять, — «это был обед», «до 17:40», «категория семья».")
+        }
+        PaperField(value = title, onValueChange = { title = it }, label = "Дело")
+        CategoryPicker(selected = category, options = categories, onSelect = { category = it })
+        PaperField(value = client, onValueChange = { client = it }, label = "Клиент/проект")
+        // Комментарий — обычное поле: тап по «П» надиктует прямо сюда,
+        // со словарём и чисткой, как в любое поле любого приложения.
+        PaperField(
+            value = comment,
+            onValueChange = { comment = it },
+            label = "Комментарий",
+            placeholder = "что было внутри — «П» надиктует сюда",
+            singleLine = false,
+            minLines = 2,
+            maxLines = 5,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PaperField(
+                value = startText,
+                onValueChange = { startText = it },
+                modifier = Modifier.weight(1f),
+                label = "Начало",
+            )
+            PaperField(
+                value = endText,
+                onValueChange = { endText = it },
+                modifier = Modifier.weight(1f),
+                label = if (entry.open) "Конец (пусто = идёт)" else "Конец",
+            )
+        }
+        if (entry.raw.isNotBlank() && entry.raw != entry.title) {
+            PaperHint("Надиктовано: «${entry.raw.take(200)}»")
+        }
+    }
 }
