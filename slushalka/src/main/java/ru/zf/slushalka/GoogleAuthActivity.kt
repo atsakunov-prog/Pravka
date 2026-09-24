@@ -7,7 +7,7 @@ import android.widget.Toast
 import ru.zf.slushalka.data.GoogleAuth
 
 /**
- * Возврат из браузера после входа в Google (`ru.zf.slushalka:/oauth2redirect?code=…`):
+ * Возврат из браузера после входа в Google (`ru.zf.pravka:/slushalka?code=…`):
  * код уходит ждущему входу, а на экран возвращается Слушалка. Своего окна нет.
  */
 class GoogleAuthActivity : Activity() {

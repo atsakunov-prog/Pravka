@@ -80,7 +80,7 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     чтения, `вопросы-<имя>.json` — история вопросов, сливается по времени;
     транспорт между устройствами — сторонняя синхронизация папки или облако:
     семейный Google Drive (`GoogleAuth.kt` — вход браузером, Android-клиент,
-    код на `ru.zf.slushalka:/oauth2redirect` в `GoogleAuthActivity`;
+    общий с Правкой, код на `ru.zf.pravka:/slushalka` в `GoogleAuthActivity`;
     `DriveCloud.kt` — те же дела по путям от папки; читает всё, пишет только
     своё) или WebDAV: `Cloud.kt` — клиент (PROPFIND/GET/PUT/MKCOL, Яндекс.Диск с
     паролем приложения) и развилка на Drive (`Prefs.cloudKind`), те же файлы в `<папка>/_Слушалка`, тела собирает

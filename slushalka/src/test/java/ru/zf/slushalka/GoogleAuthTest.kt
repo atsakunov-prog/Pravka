@@ -18,7 +18,7 @@ class GoogleAuthTest {
 
     @Test fun authUrlAsksToReadAllAndWriteOwn() {
         val url = GoogleAuth.authUrl("id.apps.googleusercontent.com", "ch", "st")
-        assertTrue(url.contains("redirect_uri=ru.zf.slushalka%3A%2Foauth2redirect"))
+        assertTrue(url.contains("redirect_uri=ru.zf.pravka%3A%2Fslushalka"))
         assertTrue(url.contains("drive.readonly"))
         assertTrue(url.contains("drive.file"))
         assertTrue(url.contains("access_type=offline"))

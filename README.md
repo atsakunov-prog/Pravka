@@ -208,9 +208,11 @@ Google Drive или FolderSync (двусторонняя синхронизац�
 облака. Пишет — только в свои папки (`drive.file`): «Слушалка» и её подпапки
 она заводит сама, руками их заводить не надо (в папку, заведённую руками,
 Google писать не даст). Позиции, вопросы и пометки — в `_Слушалка/`, как у
-WebDAV. Клиент Google — Android (`ru.zf.slushalka` + подпись `pravka.jks`,
+WebDAV. Клиент Google — общий с Правкой (Android, пакет `ru.zf.pravka`,
 галочка «Enable custom URI scheme»): код входа возвращается на
-`ru.zf.slushalka:/oauth2redirect` (`GoogleAuthActivity`), секрета нет. Ключ
+`ru.zf.pravka:/slushalka` (`GoogleAuthActivity`) — у Правки свой путь
+`/oauth2redirect`, ответы не путаются; секрета нет. В проекте нужен доступ
+`drive.readonly` (Data access). Ключ
 входа — в закрытой памяти приложения. Код — `data/GoogleAuth.kt`,
 `data/DriveCloud.kt`; `Cloud` отдаёт все дела Drive, когда выбран он.
 

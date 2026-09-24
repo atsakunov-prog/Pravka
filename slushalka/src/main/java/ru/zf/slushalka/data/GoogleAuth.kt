@@ -22,11 +22,11 @@ import ru.zf.slushalka.BuildConfig
 /**
  * Вход в семейный Google Drive (25.09.2026) — браузером, без аккаунта на
  * устройстве: владелец, «на Boox только один аккаунт можно». Слушалка открывает
- * страницу входа Google, браузер возвращает код по адресу
- * `ru.zf.slushalka:/oauth2redirect` (его ловит `GoogleAuthActivity`), код
- * меняется на ключ по PKCE. Клиент Google — Android (пакет `ru.zf.slushalka`,
- * подпись `pravka.jks`) с галочкой «Enable custom URI scheme»: секрета у такого
- * клиента нет; ответ на 127.0.0.1 Google Android-клиентам закрыл.
+ * страницу входа Google, браузер возвращает код по адресу [REDIRECT] (его
+ * ловит `GoogleAuthActivity`), код меняется на ключ по PKCE. Клиент Google —
+ * Android-клиент Правки в проекте семейного аккаунта, с галочкой «Enable
+ * custom URI scheme»: секрета у такого клиента нет; ответ на 127.0.0.1 Google
+ * Android-клиентам закрыл.
  *
  * Доступ: «читать всё» (`drive.readonly`) — книги, закинутые в Drive с
  * компьютера, — и «свои файлы» (`drive.file`) — выгрузка книг с полки, позиции,
@@ -42,7 +42,14 @@ class GoogleAuth(private val context: Context, private val http: OkHttpClient) {
     companion object {
         const val SCOPE_ALL = "https://www.googleapis.com/auth/drive.readonly"
         const val SCOPE_OWN = "https://www.googleapis.com/auth/drive.file"
-        const val REDIRECT = "ru.zf.slushalka:/oauth2redirect"
+        /**
+         * Клиент Google — тот же, что у Правки (Android, пакет `ru.zf.pravka`):
+         * Google принимает у Android-клиента любой путь в схеме его пакета, а
+         * свой путь не даёт двум приложениям спутать ответ — у Правки
+         * `/oauth2redirect`, у Слушалки `/slushalka` (владелец: «а к тому же
+         * ключу нельзя подключить?», 25.09.2026).
+         */
+        const val REDIRECT = "ru.zf.pravka:/slushalka"
         private const val FILE = "google-auth.json"
         private const val TOKEN_URL = "https://oauth2.googleapis.com/token"
         const val WAIT_MS = 5 * 60_000L

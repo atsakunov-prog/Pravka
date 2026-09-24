@@ -45,8 +45,8 @@
         </activity>
 
         <!-- Возврат из браузера после входа в семейный Google Drive
-             (data/GoogleAuth.kt): Android-клиент Google отдаёт код на адрес
-             со схемой-пакетом. Своего окна нет. -->
+             (data/GoogleAuth.kt): Android-клиент Google (общий с Правкой)
+             отдаёт код на адрес со схемой её пакета. Своего окна нет. -->
         <activity
             android:name=".GoogleAuthActivity"
             android:exported="true"
@@ -58,7 +58,9 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="ru.zf.slushalka" android:path="/oauth2redirect" />
+                <!-- Схема — пакет Правки: клиент Google у них общий (data/GoogleAuth.kt),
+                     путь свой — ответ Правки (/oauth2redirect) сюда не попадёт. -->
+                <data android:scheme="ru.zf.pravka" android:path="/slushalka" />
             </intent-filter>
         </activity>
 
