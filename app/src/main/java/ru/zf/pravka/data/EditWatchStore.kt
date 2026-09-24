@@ -39,7 +39,7 @@ class EditWatchStore(private val context: Context) {
     private var loaded = false
     private val entries = mutableListOf<Entry>()
 
-    private fun file() = File(context.filesDir, "pravka-edit-watch.json")
+    private fun file() = File(DataRoot.dir(context), "pravka-edit-watch.json")
 
     // Monotonic within the process: prevents ID reuse when the max entry is
     // removed while a learn batch still holds the old IDs for deferred remove().

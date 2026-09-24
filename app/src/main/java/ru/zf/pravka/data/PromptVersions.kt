@@ -57,7 +57,7 @@ class PromptVersions(private val context: Context) {
     private val _flow = MutableStateFlow<List<Version>>(emptyList())
     val flow: StateFlow<List<Version>> = _flow
 
-    private fun file() = File(context.filesDir, FILE_NAME)
+    private fun file() = File(DataRoot.dir(context), FILE_NAME)
 
     private fun ensureLoaded() {
         if (loaded) return

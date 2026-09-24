@@ -3,14 +3,14 @@ package ru.zf.pravka.data
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.Prompts
 
-private val Context.promptDataStore by preferencesDataStore(name = "prompts")
+// В папке базы (DataRoot): свои промпты владельца — часть базы.
+private val Context.promptDataStore get() = DataRoot.preferences(this, "prompts")
 
 // Owner-editable prompt overrides (spec section 7). Factory texts stay as
 // constants in Prompts.kt; DataStore holds only the overrides, so an APK

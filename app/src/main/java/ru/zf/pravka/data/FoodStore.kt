@@ -54,7 +54,7 @@ class FoodStore(private val context: Context) {
         val items: List<MealItem>,
         val note: String = "",         // замечание модели: чего не хватило
         val source: String = "voice",  // voice | text | photo | barcode
-        val photo: String = "",        // имя файла в filesDir/food
+        val photo: String = "",        // имя файла в <база>/food
         val confirmed: Boolean = false,
         val icuSynced: Boolean = false,
         val ribbonSynced: Boolean = false,
@@ -105,7 +105,7 @@ class FoodStore(private val context: Context) {
     }
 
     private val mutex = Mutex()
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
     private var loaded = false
 
     private val _mealsFlow = MutableStateFlow<List<Meal>>(emptyList())
@@ -114,7 +114,7 @@ class FoodStore(private val context: Context) {
     var logger: ((String) -> Unit)? = null
 
     /** Куда складываем снимки тарелок. */
-    fun photoDir(): File = File(context.filesDir, "food").also { it.mkdirs() }
+    fun photoDir(): File = File(DataRoot.dir(context), "food").also { it.mkdirs() }
 
     fun photoFile(name: String): File? =
         if (name.isBlank()) null else File(photoDir(), name).takeIf { it.exists() }

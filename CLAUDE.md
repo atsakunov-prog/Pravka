@@ -85,7 +85,11 @@
   текста после доставки (`armCapture` / `digestEdits` в службе), не
   постоянная подписка. Режим отладки — `ClaudeProvider.requestLogger` →
   `app.requestLog`.
-- **Хранение и обвязка:** `data/StoreFiles.kt` (атомарная запись, `.prev`,
+- **Хранение и обвязка:** `data/DataRoot.kt` (где база: память приложения
+  или папка `Documents/Pravka`; все сторы открывают файлы в `DataRoot.dir`,
+  DataStore — через `DataRoot.preferences`, сторож — `DataRootGuardTest`),
+  `data/DbMove.kt` (переезд базы под тестами), экран — `DataSettings.kt`
+  («Настройки → База данных»), `data/StoreFiles.kt` (атомарная запись, `.prev`,
   `.corrupt`), `data/DiskWriter.kt`, `data/Backups.kt`, `data/Settings.kt`,
   `data/ModelRoutes.kt`, `data/EventLog.kt`, `data/Stats.kt`, `data/Updates.kt`,
   `ui/*`.
@@ -129,6 +133,9 @@ CI (`.github/workflows/build-apk.yml`) собирает APK на каждый п
    записывается; миграции пишут только после чтения; сырая надиктовка не
    удаляется никогда. Кэш спорта и плана — расходный, но пустой ответ API в
    него не пишется.
+   **База — одна папка на установку** (`DataRoot`): новый стор открывает файл
+   в `DataRoot.dir(context)`, никогда в `filesDir` — иначе после переезда базы
+   в `Documents/Pravka` его данных не будет в скопированной папке.
 2. **Складывание Fold — больная тема.** Ничего тяжёлого на главном потоке
    службы; окна не прятать через `GONE`, а снимать из WindowManager; за чужими
    окнами не подглядывать; на оконные события не подписываться.

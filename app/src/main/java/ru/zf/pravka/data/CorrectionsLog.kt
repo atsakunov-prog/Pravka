@@ -46,7 +46,7 @@ class CorrectionsLog(private val context: Context) {
     private val entries = mutableListOf<Entry>()
     private var nextId = 1L
 
-    private fun file() = File(context.filesDir, "corrections.json")
+    private fun file() = File(DataRoot.dir(context), "corrections.json")
 
     private fun ensureLoaded() {
         if (loaded) return

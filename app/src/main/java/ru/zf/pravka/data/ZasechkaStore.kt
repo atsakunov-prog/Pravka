@@ -240,7 +240,7 @@ class ZasechkaStore(private val context: Context) {
         step.label
     }
 
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
 
     suspend fun all(): List<Entry> = mutex.withLock {
         ensureLoaded()
@@ -1544,7 +1544,7 @@ class ZasechkaStore(private val context: Context) {
         if (parkedParallels.isEmpty()) return 0
         val parked = ArrayList(parkedParallels)
         parkedParallels.clear()
-        val archive = File(context.filesDir, PARALLEL_ARCHIVE)
+        val archive = File(DataRoot.dir(context), PARALLEL_ARCHIVE)
         DiskWriter.post {
             val existing = runCatching { JSONArray(archive.readText()) }.getOrNull() ?: JSONArray()
             for (o in parked) existing.put(o)
@@ -1569,7 +1569,7 @@ class ZasechkaStore(private val context: Context) {
         publish()
     }
 
-    private val backupDir: File get() = File(context.filesDir, "zasechka-backups")
+    private val backupDir: File get() = File(DataRoot.dir(context), "zasechka-backups")
 
     @Volatile private var lastPersistedCount = -1
 

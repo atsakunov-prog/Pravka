@@ -39,7 +39,7 @@ class DictionaryStore(private val context: Context) {
     private val _entriesFlow = MutableStateFlow<List<DictEntry>>(emptyList())
     val entriesFlow: StateFlow<List<DictEntry>> = _entriesFlow
 
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
 
     suspend fun all(): List<DictEntry> = mutex.withLock {
         ensureLoaded()

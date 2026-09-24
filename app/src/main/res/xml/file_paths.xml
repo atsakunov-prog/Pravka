@@ -2,4 +2,7 @@
 <paths>
     <files-path name="files" path="." />
     <cache-path name="cache" path="." />
+    <!-- Папка базы (DataRoot): снимки еды и копии ленты делятся оттуда,
+         когда база переехала в Documents/Pravka. -->
+    <external-path name="db" path="Documents/Pravka" />
 </paths>

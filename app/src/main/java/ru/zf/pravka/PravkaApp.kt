@@ -38,6 +38,15 @@ class PravkaApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Где база — решается первым, до любого стора: все они открывают свои
+        // файлы в DataRoot.dir, и здесь же закрепляется переезд, подготовленный
+        // кнопкой «Перенести базу в папку» (пока в папки ещё никто не пишет).
+        ru.zf.pravka.data.DataRoot.init(this)
+        ru.zf.pravka.data.DataRoot.startNote.takeIf { it.isNotBlank() }?.let { eventLog.add("база: $it") }
+        if (ru.zf.pravka.data.DataRoot.where.value == ru.zf.pravka.data.DataRoot.Where.FOLDER_NO_ACCESS) {
+            eventLog.add("база: папка ${ru.zf.pravka.data.DataRoot.dir(this)} недоступна — нет доступа к файлам")
+            ru.zf.pravka.data.DataRoot.notifyNoAccess(this)
+        }
         // Копии на диск: раз в час их снимает тик службы, но старт процесса -
         // после обновления APK или перезагрузки телефона - тоже хороший момент
         // (и единственный, если служба доступности почему-то выключена).

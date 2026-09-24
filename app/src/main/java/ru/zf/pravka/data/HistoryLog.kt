@@ -21,7 +21,7 @@ class HistoryLog(private val context: Context) {
 
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
 
-    private val file: File by lazy { File(context.filesDir, FILE_NAME) }
+    private val file: File by lazy { File(DataRoot.dir(context), FILE_NAME) }
 
     fun append(
         mode: String,
@@ -48,7 +48,7 @@ class HistoryLog(private val context: Context) {
         val at = Date()
         DiskWriter.post {
             if (file.exists() && file.length() > MAX_BYTES) {
-                val backup = File(context.filesDir, "$FILE_NAME.1")
+                val backup = File(DataRoot.dir(context), "$FILE_NAME.1")
                 backup.delete()
                 file.renameTo(backup)
             }

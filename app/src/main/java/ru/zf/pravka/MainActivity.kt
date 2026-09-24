@@ -310,6 +310,9 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         serviceEnabled.value = ru.zf.pravka.trigger.PravkaAccessibilityService.instance != null
         notifEnabled.value = notificationsOn()
+        // Доступ к файлам выдаётся на системном экране — вернулись оттуда,
+        // экран «База данных» должен увидеть его сразу.
+        ru.zf.pravka.data.DataRoot.refreshAccess(this)
         maybeAskNotifications()
     }
 }

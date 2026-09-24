@@ -94,7 +94,7 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
     )
 
     private val mutex = Mutex()
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
     private var loaded = false
     private var loadedCount = 0
 

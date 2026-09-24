@@ -7,14 +7,15 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import ru.zf.pravka.core.PlaceDeal
 import ru.zf.pravka.core.StackGeometry
 
-private val Context.dataStore by preferencesDataStore(name = "settings")
+// Файл — в папке базы (DataRoot), а не намертво в filesDir: ключи, модели и
+// тумблеры едут вместе с лентой, когда базу копируют на другой телефон.
+private val Context.dataStore get() = DataRoot.preferences(this, "settings")
 
 class Settings(private val context: Context) {
 

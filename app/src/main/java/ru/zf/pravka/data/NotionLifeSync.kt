@@ -1179,7 +1179,7 @@ class NotionLifeSync(
 
     // ---- Файл состояния ----
 
-    private val stateFile: File get() = File(context.filesDir, STATE_FILE)
+    private val stateFile: File get() = File(DataRoot.dir(context), STATE_FILE)
 
     private fun loadState() {
         if (stateLoaded) return

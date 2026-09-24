@@ -25,4 +25,15 @@ internal object DiskWriter {
     fun post(block: () -> Unit) {
         runCatching { executor.execute { runCatching { block() } } }
     }
+
+    /**
+     * Ждёт, пока очередь допишет всё, что в неё встало до этого вызова, но не
+     * дольше [timeoutMs]. Перед перезапуском процесса (переезд базы): иначе
+     * последняя запись ленты умерла бы в очереди вместе с процессом.
+     */
+    fun drain(timeoutMs: Long) {
+        val done = java.util.concurrent.CountDownLatch(1)
+        runCatching { executor.execute { done.countDown() } }
+        runCatching { done.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) }
+    }
 }

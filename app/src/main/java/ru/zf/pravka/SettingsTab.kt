@@ -108,6 +108,7 @@ internal enum class SettingsGroup(
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, Glyphs.Disk),
     DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, Glyphs.Palette),
     CARDS("Плашки приложения", "темнее, фаска, свет, зерно", SettingsShelf.LOOK, Glyphs.Layers),
+    DATA("База данных", "где лежит, переезд в папку, как копировать", SettingsShelf.APP, Glyphs.Archive),
     APP("Обновления и служба", "служба, обновления, копии ленты, отладка", SettingsShelf.APP, Glyphs.Phone),
 }
 
@@ -129,6 +130,21 @@ internal fun SettingsTab(
         // одна кнопка, и «есть свежая сборка» должно быть видно, не открывая
         // ничего. Тап — экран «Обновления и служба».
         StatusStrip(app, serviceEnabled, onOpenAccessibilitySettings) { onOpen(SettingsGroup.APP) }
+        // База в папке, а доступа к файлам нет — лента пустая не потому, что
+        // пустая. Говорим сверху, а не только красной точкой на полке.
+        val dbWhere by ru.zf.pravka.data.DataRoot.where.collectAsState()
+        if (dbWhere == ru.zf.pravka.data.DataRoot.Where.FOLDER_NO_ACCESS) {
+            PaperCard {
+                PaperRow(
+                    title = "База недоступна",
+                    hint = "нет доступа к файлам — лента, еда и деньги не читаются",
+                    icon = Glyphs.Archive,
+                    badgeTint = MaterialTheme.colorScheme.error,
+                    trailing = { StatusDot(false) },
+                    onClick = { onOpen(SettingsGroup.DATA) },
+                )
+            }
+        }
 
         for (shelf in SettingsShelf.entries) {
             val groups = SettingsGroup.entries.filter { it.shelf == shelf && it != SettingsGroup.APP }
@@ -218,6 +234,14 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
             val e by s.tEnabledFlow.collectAsState(initial = false)
             GroupStatus(listOfNotNull("П", "З".takeIf { z }, "Д".takeIf { d }, "₽".takeIf { m }, "Е".takeIf { e }).joinToString(" "))
         }
+        SettingsGroup.DATA -> {
+            val where by ru.zf.pravka.data.DataRoot.where.collectAsState()
+            when (where) {
+                ru.zf.pravka.data.DataRoot.Where.PRIVATE -> GroupStatus("в памяти", ok = null, dot = true)
+                ru.zf.pravka.data.DataRoot.Where.FOLDER -> GroupStatus("в папке", ok = true, dot = true)
+                ru.zf.pravka.data.DataRoot.Where.FOLDER_NO_ACCESS -> GroupStatus("нет доступа", ok = false, dot = true)
+            }
+        }
         else -> null
     }
 }
@@ -288,6 +312,7 @@ private fun GroupContent(
         SettingsGroup.BUTTONS -> ButtonsSettings(app)
         SettingsGroup.DISK -> DiskSettings(app)
         SettingsGroup.CARDS -> CardsSettings(app)
+        SettingsGroup.DATA -> DataSettings(app)
         SettingsGroup.APP -> AppSettings(app, serviceEnabled, onOpenAccessibilitySettings)
     }
 }

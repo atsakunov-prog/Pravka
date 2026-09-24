@@ -123,7 +123,7 @@ class NightReviewStore(private val context: Context) {
     private val _runsFlow = MutableStateFlow<List<Run>>(emptyList())
     val runsFlow: StateFlow<List<Run>> = _runsFlow
 
-    private fun file() = File(context.filesDir, FILE_NAME)
+    private fun file() = File(DataRoot.dir(context), FILE_NAME)
 
     private fun ensureLoaded() {
         if (loaded) return

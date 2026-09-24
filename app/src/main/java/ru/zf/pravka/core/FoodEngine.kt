@@ -72,7 +72,7 @@ class FoodEngine(
     /**
      * Сказанное (или набранное) → приём пищи на диске, ещё не подтверждённый.
      *
-     * [photo] - снимок тарелки: он копируется в своё место в filesDir и уезжает
+     * [photo] - снимок тарелки: он копируется в своё место в папке базы и уезжает
      * модели вместе со словами. Слова при этом можно не говорить вовсе.
      */
     suspend fun parse(
@@ -462,7 +462,7 @@ class FoodEngine(
 
     private fun noteTail(note: String) = if (note.isBlank()) "" else " ($note)"
 
-    /** Снимок переезжает в filesDir/food под именем по времени приёма. */
+    /** Снимок переезжает в папку базы (food/) под именем по времени приёма. */
     private fun savePhoto(source: File): String {
         val name = "eda-" + System.currentTimeMillis() + ".jpg"
         val target = File(store.photoDir(), name)

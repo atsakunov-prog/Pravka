@@ -40,7 +40,7 @@ class PaceStore(private val context: Context) {
         private const val SEED_VERSION = 1
     }
 
-    private val file: File by lazy { File(context.filesDir, FILE_NAME) }
+    private val file: File by lazy { File(DataRoot.dir(context), FILE_NAME) }
 
     /** Ключ — «дорога|модель|усилие»; пустая дорога тоже ключ, просто общий. */
     private val acc = HashMap<String, Pace.Acc>()

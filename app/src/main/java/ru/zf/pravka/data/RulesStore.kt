@@ -63,7 +63,7 @@ class RulesStore(
     private var loaded = false
     private val rules = mutableListOf<Rule>()
 
-    private fun file() = File(context.filesDir, fileName)
+    private fun file() = File(DataRoot.dir(context), fileName)
 
     private fun ensureLoaded() {
         if (loaded) return

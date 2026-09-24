@@ -34,7 +34,7 @@ class EventLog(
     private var writer: BufferedWriter? = null
     private var written = -1L   // -1 = not yet measured
 
-    private val file: File by lazy { File(context.filesDir, fileName) }
+    private val file: File by lazy { File(DataRoot.dir(context), fileName) }
 
     fun add(line: String) {
         // Timestamp on the caller's thread so the ordering the owner reads is
@@ -58,7 +58,7 @@ class EventLog(
     private fun rotate() {
         runCatching { writer?.close() }
         writer = null
-        val backup = File(context.filesDir, "$fileName.1")
+        val backup = File(DataRoot.dir(context), "$fileName.1")
         backup.delete()
         file.renameTo(backup)
         written = 0L
@@ -72,7 +72,7 @@ class EventLog(
             runCatching { writer?.close() }
             writer = null
             file.delete()
-            File(context.filesDir, "$fileName.1").delete()
+            File(DataRoot.dir(context), "$fileName.1").delete()
             written = 0L
         }
     }

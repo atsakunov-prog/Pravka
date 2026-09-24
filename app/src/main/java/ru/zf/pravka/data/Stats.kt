@@ -5,7 +5,6 @@ import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import java.util.Calendar
 import java.util.Locale
 import kotlinx.coroutines.flow.Flow
@@ -13,7 +12,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import ru.zf.pravka.core.ProofreadMode
 
-private val Context.statsDataStore by preferencesDataStore(name = "stats")
+// В папке базы (DataRoot): счётчики и деньги по дорогам — часть базы.
+private val Context.statsDataStore get() = DataRoot.preferences(this, "stats")
 
 // Persistent usage counters. Only numbers live here - no text of any fix
 // is ever persisted (spec section 14).
