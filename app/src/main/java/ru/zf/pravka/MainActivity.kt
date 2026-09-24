@@ -312,7 +312,9 @@ class MainActivity : ComponentActivity() {
         notifEnabled.value = notificationsOn()
         // Доступ к файлам выдаётся на системном экране — вернулись оттуда,
         // экран «База данных» должен увидеть его сразу.
-        ru.zf.pravka.data.DataRoot.refreshAccess(this)
+        // Доступ вернулся, а процесс начинал без него — перезапуск: сторы
+        // прочли папку пустой и записали бы эту пустоту поверх базы.
+        if (ru.zf.pravka.data.DataRoot.refreshAccess(this)) ru.zf.pravka.data.DataRoot.restart(this)
         maybeAskNotifications()
     }
 }
@@ -369,6 +371,16 @@ private val BOTTOM_TABS: List<Pair<Tab, androidx.compose.ui.graphics.vector.Imag
     Tab.MONEY to Glyphs.Money,
     Tab.MORE to Glyphs.More,
 )
+
+/** Режим профиля, которому принадлежит вкладка; null — вкладка есть всегда. */
+private fun modeOf(tab: Tab): ru.zf.pravka.data.Profile.Mode? = when (tab) {
+    Tab.ZASECHKA -> ru.zf.pravka.data.Profile.Mode.ZASECHKA
+    Tab.TODOIST -> ru.zf.pravka.data.Profile.Mode.DELA
+    Tab.SPORT -> ru.zf.pravka.data.Profile.Mode.SPORT
+    Tab.FOOD -> ru.zf.pravka.data.Profile.Mode.FOOD
+    Tab.MONEY -> ru.zf.pravka.data.Profile.Mode.MONEY
+    else -> null
+}
 
 /** Режим вкладки: узор плашек и краска. Служебное — в родном оранжевом. */
 private fun decorOf(tab: Tab): ModeDecor = when (tab) {
@@ -541,12 +553,38 @@ private fun MainScreen(
     onFixNotifications: () -> Unit = {},
     onOpenAccessibilitySettings: () -> Unit,
 ) {
+    // Кто пользуется (data/Profile.kt): свежая установка сначала спрашивает —
+    // пока не ответили, остального приложения нет, иначе оно завелось бы с
+    // заводскими владельца и мужским родом в чистке.
+    val profile by app.profileStore.flow.collectAsState()
+    val asking by app.profileStore.asking.collectAsState()
+    if (profile == null && asking) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            ModeFrame(ModeDecor.SERVICE) { ProfileOnboarding(app) }
+        }
+        return
+    }
+    // Вкладка выключенного в профиле режима не показывается: ни снизу, ни по
+    // ссылке из уведомления — тогда первая живая.
+    val live: (Tab) -> Boolean = { t -> modeOf(t)?.let { m -> profile?.has(m) ?: true } ?: true }
+    val firstLive = { BOTTOM_TABS.map { it.first }.first(live) }
     // Служебные вкладки живут под «Ещё» и открываются поверх текущей. Ссылка
     // снаружи (уведомление, меню кнопки) может показывать прямо на служебную —
     // тогда открываем «Ещё» и сразу её.
     val service = remember { SERVICE_TABS }
     var tab by remember {
-        mutableStateOf(if (initialTab in service) Tab.MORE else initialTab)
+        mutableStateOf(
+            when {
+                initialTab in service -> Tab.MORE
+                live(initialTab) -> initialTab
+                else -> firstLive()
+            }
+        )
+    }
+    // Режим выключили тумблером, пока его вкладка открыта, или ссылка извне
+    // привела на выключенный — на первую живую.
+    LaunchedEffect(profile, tab) {
+        if (!live(tab)) tab = firstLive()
     }
     // Стопка экранов поверх вкладки (24.09.2026): из Настроек открывается
     // группа, из группы — подключение, и «назад» должен вести на шаг, а не
@@ -630,7 +668,7 @@ private fun MainScreen(
                     )
                 },
             ) {
-                for ((item, glyph) in BOTTOM_TABS) {
+                for ((item, glyph) in BOTTOM_TABS.filter { live(it.first) }) {
                     val selected = if (item == Tab.MORE) tab == Tab.MORE || page != null
                     else tab == item && page == null
                     val ink = decorOf(item).tint(MaterialTheme.colorScheme).primary

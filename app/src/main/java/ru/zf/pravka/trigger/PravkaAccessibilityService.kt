@@ -16,6 +16,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import ru.zf.pravka.PravkaApp
@@ -283,9 +286,35 @@ class PravkaAccessibilityService : AccessibilityService() {
     /** Автопилот Засечки: Wi-Fi-места, BT машины, «точно ещё …?». */
     val autoPilot by lazy { AutoPilot(this, app, scope) }
 
+    /**
+     * Кнопка стоит на стекле, только если включены и её тумблер («Кнопки на
+     * экране»), и сам режим в профиле: выключенная Засечка — это и без «З».
+     */
+    private fun withMode(toggle: kotlinx.coroutines.flow.Flow<Boolean>, mode: ru.zf.pravka.data.Profile.Mode) =
+        kotlinx.coroutines.flow.combine(toggle, app.profileStore.flow) { on, p -> on && (p?.has(mode) ?: true) }
+            .distinctUntilChanged()
+
+    /** Запущен ли автопилот: он живёт, пока в профиле включена Засечка. */
+    private var autoPilotOn = false
+
     override fun onServiceConnected() {
         super.onServiceConnected()
-        runCatching { autoPilot.start() }
+        // Автопилот — часть Засечки: выключили режим в профиле — гаснут и
+        // слежка за Wi-Fi и машиной, и вопросы о новых сетях.
+        scope.launch {
+            app.profileStore.flow
+                .map { it?.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA) ?: true }
+                .distinctUntilChanged()
+                .collect { on ->
+                    if (on && !autoPilotOn) {
+                        runCatching { autoPilot.start() }
+                        autoPilotOn = true
+                    } else if (!on && autoPilotOn) {
+                        runCatching { autoPilot.stop() }
+                        autoPilotOn = false
+                    }
+                }
+        }
         instance = this
         // A fresh "connected" after takes were mid-flight = the process died
         // and the system rebound the service. Makes crashes visible in the log.
@@ -504,7 +533,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         floatingButton?.show()
         chromeHandler.post(chromeTicker)
         scope.launch {
-            app.settings.zEnabledFlow.collect {
+            withMode(app.settings.zEnabledFlow, ru.zf.pravka.data.Profile.Mode.ZASECHKA).collect {
                 cachedZEnabled = it
                 zButton?.setEnabled(it)
                 // setEnabled показывает кнопку — а набор мог быть убран в
@@ -514,7 +543,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch {
-            app.settings.rEnabledFlow.collect {
+            withMode(app.settings.rEnabledFlow, ru.zf.pravka.data.Profile.Mode.DELA).collect {
                 cachedREnabled = it
                 rButton?.setEnabled(it)
                 // setEnabled показывает кнопку — а набор мог быть убран в
@@ -524,7 +553,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch {
-            app.settings.mEnabledFlow.collect {
+            withMode(app.settings.mEnabledFlow, ru.zf.pravka.data.Profile.Mode.MONEY).collect {
                 cachedMEnabled = it
                 mButton?.setEnabled(it)
                 if (allHidden) mButton?.setStacked(true)
@@ -532,7 +561,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch {
-            app.settings.tEnabledFlow.collect {
+            withMode(app.settings.tEnabledFlow, ru.zf.pravka.data.Profile.Mode.FOOD).collect {
                 cachedEEnabled = it
                 eButton?.setEnabled(it)
                 // setEnabled показывает кнопку — а набор мог быть убран в
@@ -2643,15 +2672,32 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal val zReminderHandler = android.os.Handler(android.os.Looper.getMainLooper())
     internal val zReminderTick = object : Runnable {
         override fun run() {
+            // Режимы профиля (25.09.2026): выключенный режим не работает и в
+            // фоне — ни синков, ни уведомлений, ни вызовов Claude. Правка,
+            // копии и обновления идут всегда.
+            // База была недоступна со старта, а доступ вернулся (выдали с
+            // уведомления, минуя приложение): сторы прочли её пустой и сейчас
+            // смогли бы записать эту пустоту поверх. Процесс — заново, очередь
+            // записи не дописываем; службу система поднимет сама.
+            if (ru.zf.pravka.data.DataRoot.refreshAccess(this@PravkaAccessibilityService)) {
+                android.util.Log.w("Pravka", "база: доступ вернулся — перезапуск процесса")
+                Runtime.getRuntime().exit(0)
+            }
+            val mode = app.profileStore
+            val zasechka = mode.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA)
+            val sport = mode.has(ru.zf.pravka.data.Profile.Mode.SPORT)
+            val food = mode.has(ru.zf.pravka.data.Profile.Mode.FOOD)
+            val dela = mode.has(ru.zf.pravka.data.Profile.Mode.DELA)
             // Midnight housekeeping first: a дело running across 00:00 splits
             // into yesterday's closed head and today's open tail, so the new
             // day's ribbon and totals are right from the first minutes.
-            scope.launch { runCatching { app.zasechkaStore.normalize() } }
+            if (zasechka) scope.launch { runCatching { app.zasechkaStore.normalize() } }
             // The sweeps next: they may close a gap (a YouTube session, a
             // call, a workout becomes an entry) that the reminder would
             // otherwise nag about. Fire-and-forget - the check reads current data.
-            scope.launch { app.phoneSweeper.sweep() }
-            scope.launch { app.icuSweeper.sweep() }
+            // Телефон по дням — слой Засечки; тренировки в ленту — и Спорт, и Засечка.
+            if (zasechka) scope.launch { app.phoneSweeper.sweep() }
+            if (zasechka && sport) scope.launch { app.icuSweeper.sweep() }
             // Ночной разбор: запустить назревший прогон или спросить статус
             // батча. Сам себя дросселирует (раз в 10 минут), тику не мешает.
             // Отметка тика — пульс для табло «что работает»: нет тика — стоят все.
@@ -2673,34 +2719,47 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Спорт и еда: свой кэш и своя недоставленная почта. Оба звонка
             // сами себя дросселируют (30 минут у выгрузки, «уже уехало» у
             // еды), так что пятиминутный тик может дёргать их сколько хочет.
-            scope.launch {
+            if (sport) scope.launch {
                 runCatching { app.icuSportSync.refresh() }
                 // Приехало новое с часов — уведомление с вердиктом по его
                 // правилам и кнопками самочувствия. Замыкает петлю feel,
                 // которую иначе надо помнить самому.
                 runCatching { notifyArrivedWorkouts() }
-                runCatching { autoPilot.tick() }
             }
-            scope.launch { runCatching { app.foodEngine.syncPending() } }
+            // Автопилот — Засечки, а не Спорта: раньше жил в той же корутине.
+            if (zasechka && autoPilotOn) scope.launch { runCatching { autoPilot.tick() } }
+            if (food) scope.launch { runCatching { app.foodEngine.syncPending() } }
             // Дневник в Notion: галочки, feel, колено и вес уезжают сами.
             // Свой дроссель на полчаса и свой «ничего не изменилось» внутри.
-            scope.launch { runCatching { app.notionDiarySync.sync() } }
+            // В нём и спорт, и итог еды — живёт, пока жив хоть один из них.
+            if (sport || food) scope.launch { runCatching { app.notionDiarySync.sync() } }
             // Вся жизнь в Notion: полный обход раз в час, очередь разгребается
             // каждый тик пачкой — Notion пускает три запроса в секунду.
             scope.launch { runCatching { app.notionLifeSync.sync() } }
             // План: календарь раз в час, правила блока раз в сутки — оба
             // звонка дросселируются сами.
-            scope.launch { runCatching { app.planSync.refresh() } }
+            if (sport) scope.launch { runCatching { app.planSync.refresh() } }
             // Подходы: ждут активность от часов и уезжают, как только она
             // появится. Свой дроссель на десять минут внутри.
-            scope.launch { runCatching { app.strengthEngine.syncPending() } }
+            if (sport) scope.launch { runCatching { app.strengthEngine.syncPending() } }
             // Закрылось дело, пришедшее из Todoist - в задачу уезжает время.
-            scope.launch { runCatching { app.todoistSync.flushLinks() } }
+            // Время берётся из ленты — нужны и Дела, и Засечка.
+            if (dela && zasechka) scope.launch { runCatching { app.todoistSync.flushLinks() } }
             // Копии на диск: сама проверка стоит один listFiles, копирование
             // уходит на writer-поток и случается раз в час (имя файла = часовая
             // засечка), так что тик может дёргать её сколько угодно.
             ru.zf.pravka.data.Backups.tick(this@PravkaAccessibilityService) { line ->
                 app.eventLog.add(line)
+            }
+            // Суточная копия всей базы — ночью (DailyBackup): решение и архив
+            // на writer-потоке, главный поток тут только спрашивает тумблер.
+            scope.launch {
+                if (runCatching { app.settings.dailyBackupFlow.first() }.getOrDefault(true)) {
+                    ru.zf.pravka.data.DailyBackup.tick(
+                        this@PravkaAccessibilityService,
+                        app.profileStore.current?.id ?: "user",
+                    ) { line -> app.eventLog.add(line) }
+                }
             }
             // Обновления: сам решает, прошли ли сутки, сам тянет и сам говорит.
             scope.launch { runCatching { app.updates.tick() } }

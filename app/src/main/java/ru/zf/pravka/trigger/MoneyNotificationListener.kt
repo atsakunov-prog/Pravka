@@ -61,6 +61,8 @@ class MoneyNotificationListener : NotificationListenerService() {
         val chatTitle = style?.conversationTitle?.toString()?.takeIf { it.isNotBlank() } ?: title
 
         val app = application as? PravkaApp ?: return
+        // Деньги выключены в профиле — пуши банка не читаются вовсе.
+        if (!app.profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) return
         app.appScope.launch {
             if (!app.settings.mPushFlow.first()) return@launch
             for ((text, ts) in items) {

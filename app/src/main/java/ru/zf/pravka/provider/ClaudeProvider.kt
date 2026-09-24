@@ -146,6 +146,12 @@ class ClaudeProvider(
      * правила и директива прозы. Иначе сравнение моделей мерило бы разницу
      * промптов, а не моделей.
      */
+    /**
+     * Кто диктует — профиль установки (род и имя в промпте чистки). Ставит
+     * PravkaApp; с завода — владелец, и тогда шаблон ровно прежний.
+     */
+    @Volatile var author: () -> Prompts.Author = { Prompts.Author.OWNER }
+
     internal suspend fun cleanParts(
         mode: ProofreadMode,
         dictBlock: String,
@@ -179,7 +185,8 @@ class ClaudeProvider(
         val dictAndRules = listOf(dictBlock, rulesBlock)
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
-        return Prompts.assemble(template, dictAndRules, fullDirective, contextBefore, conversationContext)
+        val who = author()
+        return Prompts.assemble(Prompts.forAuthor(template, who), dictAndRules, fullDirective, contextBefore, conversationContext, who)
     }
 
     /** Промпт обычной чистки без директив и контекста — для тени, эвала и измерения промпта-кандидата. */

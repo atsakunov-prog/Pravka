@@ -60,6 +60,8 @@ class Settings(private val context: Context) {
         private val KEY_MIGRATED_SPEECH_NET = booleanPreferencesKey("migrated_speech_network_1")
         private val KEY_PLAN_RULES_LAST_RUN = longPreferencesKey("plan_rules_last_run")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
+        // Суточная копия базы ночью (DailyBackup) — с завода включена.
+        private val KEY_DAILY_BACKUP = booleanPreferencesKey("daily_backup")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
         private val KEY_LEARN_AUTO = booleanPreferencesKey("learn_auto_capture")
 
@@ -324,6 +326,11 @@ class Settings(private val context: Context) {
     // Режим отладки (15.09.2026): каждый запрос к Claude целиком — в
     // отдельный лог, чтобы владелец мог выгрузить и посмотреть, не уезжает ли
     // в модель лишнего. Выключен — транспорт ничего не пишет.
+    val dailyBackupFlow = context.dataStore.data.map { it[KEY_DAILY_BACKUP] ?: true }
+    suspend fun setDailyBackup(value: Boolean) {
+        context.dataStore.edit { it[KEY_DAILY_BACKUP] = value }
+    }
+
     val debugLogFlow = context.dataStore.data.map { it[KEY_DEBUG_LOG] ?: false }
     suspend fun setDebugLog(value: Boolean) {
         context.dataStore.edit { it[KEY_DEBUG_LOG] = value }

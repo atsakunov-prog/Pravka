@@ -106,6 +106,45 @@ object Prompts {
         val beforeInput: String get() = stablePrefix + dictPart
     }
 
+    /**
+     * Кто диктует (профиль установки, 25.09.2026). Промпт чистки писался под
+     * владельца: «Кто диктует: мужчина» и дальше его темы — сделки, приложения,
+     * IFS, проза. Для Марианны это значило бы «я сделала» → «я сделал».
+     */
+    data class Author(val name: String, val female: Boolean, val owner: Boolean) {
+        companion object {
+            /** Владелец: шаблон и приписки — ровно прежние, байт в байт (кэш промпта). */
+            val OWNER = Author("Саша", female = false, owner = true)
+        }
+    }
+
+    private const val WHO_START = "Кто диктует:"
+    private const val WHO_END = "Сначала пойми по содержанию"
+
+    /**
+     * Шаблон чистки под автора. У владельца — как есть. У другого абзац от
+     * «Кто диктует:» до «Сначала пойми по содержанию» заменяется его именем,
+     * родом и нейтральным списком тем. Маркеров нет (владелец переписал
+     * промпт своим текстом) — шаблон не трогается: свой текст важнее.
+     */
+    fun forAuthor(template: String, author: Author): String {
+        if (author.owner) return template
+        val start = template.indexOf(WHO_START)
+        val end = template.indexOf(WHO_END)
+        if (start < 0 || end <= start) return template
+        val (kind, rod, say, notSay) = if (author.female) {
+            listOf("женщина", "женском", "я подумала", "я подумал")
+        } else {
+            listOf("мужчина", "мужском", "я подумал", "я подумала")
+        }
+        val who = "$WHO_START ${author.name}, $kind. Авторская речь от первого лица — всегда\n" +
+            "в $rod роде (\"$say\", не \"$notSay\"); в художественной\n" +
+            "прозе род определяется персонажем, который говорит. Диктует что\n" +
+            "угодно: сообщения родным, друзьям и коллегам, рабочие и учебные\n" +
+            "заметки, списки дел, вопросы ассистенту.\n"
+        return template.substring(0, start) + who + template.substring(end)
+    }
+
     // Splits at {DICT} and {INPUT} (empty dict block leaves no stray blank
     // lines). If a user-edited template loses {INPUT}, the input is appended
     // at the end - never silently dropped.
@@ -126,6 +165,8 @@ object Prompts {
         // context is "tone, gender, what we're talking about" material -
         // stuffing both under the seam instruction neutered the second.
         conversation: String = "",
+        /** Кто диктует: род в приписке к разговору. С завода — владелец. */
+        author: Author = Author.OWNER,
     ): PromptParts {
         val inputIdx = template.indexOf(PLACEHOLDER_INPUT)
         val before = if (inputIdx >= 0) template.substring(0, inputIdx) else template
@@ -139,10 +180,11 @@ object Prompts {
             extras += "ДОПОЛНИТЕЛЬНОЕ ЗАДАНИЕ ПОВЕРХ ПРАВКИ:\n" + directive.trim() + "\n\n"
         }
         if (conversation.isNotBlank()) {
+            val gender = if (author.female) "автор — женщина, «говорила», а не «говорил»"
+            else "автор — мужчина, «говорил», а не «говорила»"
             extras += "Ниже в тегах <разговор> — предыдущие сообщения автора в этом же " +
                 "чате. Используй их, чтобы понять, о чём идёт речь, выдержать тон и " +
-                "правильно согласовать род и имена (автор — мужчина, «говорил», а не " +
-                "«говорила»). Сами сообщения не правь и в ответ не включай.\n" +
+                "правильно согласовать род и имена ($gender). Сами сообщения не правь и в ответ не включай.\n" +
                 "<разговор>\n" + conversation.trim() + "\n</разговор>\n\n"
         }
         if (context.isNotBlank()) {

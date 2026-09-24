@@ -28,6 +28,12 @@ import org.json.JSONObject
 // opening. end == 0 means "still going".
 class ZasechkaStore(private val context: Context) {
 
+    /**
+     * Категории свежей ленты — у кого файла ещё нет. Ставит PravkaApp по
+     * профилю: владельцу его список, остальным — [neutralCategories].
+     */
+    @Volatile var freshCategories: () -> List<Category> = { DEFAULT_CATEGORIES }
+
     companion object {
         const val FORMAT = "pravka-zasechka"
         private const val FILE_NAME = "zasechka.json"
@@ -108,6 +114,26 @@ class ZasechkaStore(private val context: Context) {
                 "техническая: дыры без записи, их заводит авто-заполнитель ленты", baseMin = 30, value = -5),
             Category("Звонки", "телефонный разговор, если непонятно с кем и о чём", baseMin = 30, value = 2),
         )
+
+        /**
+         * Заводские категории не-владельца (профиль, 25.09.2026): список
+         * владельца написан про его жизнь — «с Марианной», «сборка Правки»,
+         * две категории про секс. Серёже тринадцать; Марианне «с Марианной» —
+         * про саму себя. Имена, на которые опирается код («Сон», «Потери»,
+         * «Не размечено», «Звонки»), остаются; добавлена «Учёба».
+         */
+        fun neutralCategories(): List<Category> {
+            val personal = setOf("Секс: с Марианной", "Секс: соло")
+            val hints = mapOf(
+                "Семья" to "время и разговоры с семьёй и родными",
+                "Систематизация" to "наведение порядка в делах: планы, списки, разбор завалов",
+            )
+            val base = DEFAULT_CATEGORIES.filter { it.name !in personal }
+                .map { c -> hints[c.name]?.let { c.copy(hint = it) } ?: c }
+            val study = Category("Учёба", "уроки, занятия, домашние задания, курсы", baseMin = 60, value = 8)
+            val at = base.indexOfFirst { it.name == "Чтение" }.coerceAtLeast(0)
+            return base.take(at) + study + base.drop(at)
+        }
 
         // The v1 seed, kept only to recognize an UNTOUCHED list during the
         // seed migration - an edited list is never overwritten.
@@ -1318,7 +1344,7 @@ class ZasechkaStore(private val context: Context) {
             val root = StoreFiles.readOrQuarantine(file) { JSONObject(it) }
                 ?: recoverRoot("лента не читалась")
             categories = root?.optJSONArray("categories")?.toCategoryList()?.toMutableList()
-                ?: DEFAULT_CATEGORIES.toMutableList()
+                ?: freshCategories().toMutableList()
             catSeedVersion = root?.optInt("catSeed", 1) ?: CAT_SEED_VERSION
             if (root != null && catSeedVersion < CAT_SEED_VERSION) {
                 // v1 -> v2: the owner's real taxonomy replaced the draft, but

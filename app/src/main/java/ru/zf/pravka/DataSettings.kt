@@ -177,6 +177,8 @@ internal fun DataSettings(app: PravkaApp) {
         }
     }
 
+    DailyBackupCard(app)
+
     PaperCard(label = "как копировать") {
         PaperHint(
             "Папка — Documents/${DataRoot.FOLDER_NAME} во внутренней памяти: «Мои файлы» → " +
@@ -283,3 +285,70 @@ private fun megabytes(bytes: Long): String =
 
 private fun stamp(ms: Long): String =
     SimpleDateFormat("d MMMM yyyy, HH:mm", Locale.forLanguageTag("ru")).format(Date(ms))
+
+/**
+ * Копия всей базы раз в сутки — ночью, одним архивом в Documents/Pravka-backups
+ * (data/DailyBackup.kt). Здесь — тумблер, когда была последняя, ошибка словами
+ * (правило 6) и «Сделать копию сейчас».
+ */
+@Composable
+private fun DailyBackupCard(app: PravkaApp) {
+    val context = LocalContext.current
+    val on by app.settings.dailyBackupFlow.collectAsState(initial = true)
+    var state by remember { mutableStateOf<ru.zf.pravka.data.DailyBackup.State?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf("") }
+    LaunchedEffect(busy) {
+        if (!busy) state = withContext(Dispatchers.IO) { runCatching { ru.zf.pravka.data.DailyBackup.state(context) }.getOrNull() }
+    }
+    PaperCard(
+        label = "копия раз в сутки",
+        info = "Каждую ночь, с двух до шести (лучше на зарядке), вся база одним zip ложится " +
+            "в Documents/${ru.zf.pravka.data.DailyBackup.FOLDER_NAME} — рядом с базой, а не в ней: " +
+            "пропадёт папка базы, копии останутся. Проспал ночь выключенным — копия снимется, " +
+            "как только телефон включится. Хранятся две недели каждый день и по копии на месяц " +
+            "за год. Архив — сама база: распакуй его в Documents/${DataRoot.FOLDER_NAME} и нажми " +
+            "«Открыть эту базу».",
+    ) {
+        ru.zf.pravka.ui.PaperToggle(
+            title = "Копия каждую ночь",
+            checked = on,
+            onCheckedChange = { v -> app.appScope.launch { app.settings.setDailyBackup(v) } },
+        )
+        val s = state
+        when {
+            s == null -> Unit
+            s.lastAt > 0 -> PaperHint(
+                "Последняя: ${stamp(s.lastAt)} · ${megabytes(s.lastBytes)} · ${s.lastFile}"
+            )
+            else -> PaperHint("Копий ещё не было — первая снимется на ближайшем тике службы.")
+        }
+        if (s != null && s.error.isNotBlank() && s.errorAt > s.lastAt) {
+            Text(
+                "Не снялась ${stamp(s.errorAt)}: ${s.error}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        if (result.isNotBlank()) PaperHint(result)
+        Spacer(Modifier.height(8.dp))
+        PaperButton(
+            if (busy) "Снимаю копию…" else "Сделать копию сейчас",
+            onClick = {
+                busy = true
+                result = ""
+                app.appScope.launch {
+                    val err = withContext(Dispatchers.IO) {
+                        ru.zf.pravka.data.DailyBackup.runNow(context, app.profileStore.current?.id ?: "user") { line ->
+                            app.eventLog.add(line)
+                        }
+                    }
+                    result = if (err == null) "Готово." else "Не снялась: $err"
+                    busy = false
+                }
+            },
+            icon = Glyphs.Download,
+            enabled = !busy,
+        )
+    }
+}

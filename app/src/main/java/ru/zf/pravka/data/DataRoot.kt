@@ -62,27 +62,15 @@ internal object DataRoot {
     const val FOLDER_NAME = "Pravka"
 
     /** В приватной памяти: «база переехала туда-то» (путь папки). */
-    private const val MOVED = "db-location.json"
+    private const val MOVED = DbMove.MOVED
     /** Переезд подготовлен и ждёт закрепления на следующем старте. */
-    private const val PENDING = "db-move-pending.json"
-    private const val ASIDE_PREFIX = "before-move-"
+    private const val PENDING = DbMove.PENDING
+    private const val ASIDE_PREFIX = DbMove.ASIDE_PREFIX
 
-    /**
-     * Остаётся в приватной памяти всегда: не копируется в базу и не
-     * откладывается при переезде. Проверяется по первому элементу пути.
-     */
-    private val PRIVATE_ONLY = setOf(
-        "models",                 // Whisper: сотни мегабайт, скачиваются заново
-        "recordings",             // WAV пишется в реальном времени — не через FUSE
-        "live_draft.txt",         // черновик на лету: ~50 записей в минуту
-        "live_draft.txt.tmp",
-        "profileInstalled",       // служебное системы (profileinstaller)
-        MOVED,
-        PENDING,
-    )
+    /** Остаётся в приватной памяти всегда — список и причины в [DbMove.notDatabase]. */
+    internal fun notDatabase(topName: String): Boolean = DbMove.notDatabase(topName)
 
-    private fun privateOnly(topName: String): Boolean =
-        topName in PRIVATE_ONLY || topName.startsWith(ASIDE_PREFIX) || topName.startsWith("profileinstaller")
+    private fun privateOnly(topName: String): Boolean = DbMove.notDatabase(topName)
 
     private fun skipForCopy(rel: String): Boolean = privateOnly(rel.substringBefore('/'))
 
@@ -120,6 +108,7 @@ internal object DataRoot {
             access -> Where.FOLDER
             else -> Where.FOLDER_NO_ACCESS
         }
+        startedWithoutAccess = whereState.value == Where.FOLDER_NO_ACCESS
         // Снимки тарелок в food/ — не для Галереи: `.nomedia` прячет папку от
         // сканера медиа. И у базы, открытой с другого телефона, тоже.
         if (whereState.value == Where.FOLDER) {
@@ -201,12 +190,23 @@ internal object DataRoot {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Environment.isExternalStorageManager()
         else context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 
-    fun refreshAccess(context: Context) {
+    /** С каким местом процесс начал: без доступа или с ним. */
+    @Volatile private var startedWithoutAccess = false
+
+    /**
+     * Освежить доступ. Возвращает true, если процесс начинал с недоступной
+     * базой, а доступ вернулся: тогда процесс надо перезапустить. Сторы при
+     * старте прочли папку пустой (чужие файлы без доступа не читаются), а
+     * писать поверх теперь им уже можно — первая же запись положила бы эту
+     * пустоту поверх настоящей базы.
+     */
+    fun refreshAccess(context: Context): Boolean {
         val now = runCatching { hasAccess(context) }.getOrDefault(false)
         accessState.value = now
         if (whereState.value != Where.PRIVATE) {
             whereState.value = if (now) Where.FOLDER else Where.FOLDER_NO_ACCESS
         }
+        return startedWithoutAccess && now
     }
 
     /** Системный экран, где выдаётся доступ к файлам. */
@@ -317,7 +317,9 @@ internal object DataRoot {
      * процесса. Служба доступности поднимется системой сама.
      */
     fun restart(activity: Activity) {
-        DiskWriter.drain(3_000L)
+        // Процесс без доступа: в очереди — записи состояния, прочитанного
+        // пустым; дописывать их нельзя (см. refreshAccess).
+        if (!startedWithoutAccess) DiskWriter.drain(3_000L)
         val intent = Intent.makeRestartActivityTask(ComponentName(activity, ru.zf.pravka.MainActivity::class.java))
         activity.startActivity(intent)
         Runtime.getRuntime().exit(0)

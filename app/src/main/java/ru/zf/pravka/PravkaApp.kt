@@ -43,6 +43,14 @@ class PravkaApp : Application() {
         // кнопкой «Перенести базу в папку» (пока в папки ещё никто не пишет).
         ru.zf.pravka.data.DataRoot.init(this)
         ru.zf.pravka.data.DataRoot.startNote.takeIf { it.isNotBlank() }?.let { eventLog.add("база: $it") }
+        // Кто пользуется — сразу за местом базы: от профиля зависят первые же
+        // шаги старта (сеять ли наличные владельца, какие режимы живы).
+        profileStore.init().takeIf { it.isNotBlank() }?.let { eventLog.add(it) }
+        // Входы выключенных режимов из чужих меню («Поделиться», выделение, NFC) —
+        // выключены в системе; следим за профилем, чтобы тумблер действовал сразу.
+        appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            profileStore.flow.collect { p -> ru.zf.pravka.trigger.ModeEntries.sync(this@PravkaApp, p) }
+        }
         if (ru.zf.pravka.data.DataRoot.where.value == ru.zf.pravka.data.DataRoot.Where.FOLDER_NO_ACCESS) {
             eventLog.add("база: папка ${ru.zf.pravka.data.DataRoot.dir(this)} недоступна — нет доступа к файлам")
             ru.zf.pravka.data.DataRoot.notifyNoAccess(this)
@@ -68,7 +76,10 @@ class PravkaApp : Application() {
         // приложении нет живого прогона, гасится.
         appScope.launch { runCatching { ru.zf.pravka.core.NightSweep.onStart(this@PravkaApp) } }
         // Деньги: записи со слов владельца (наличные мимо выписок) — в журнал, один раз.
-        appScope.launch { runCatching { moneyEngine.seedManual() } }
+        // Только у самого владельца: у Марианны это были бы чужие 3,88 млн.
+        if (profileStore.owner && profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) {
+            appScope.launch { runCatching { moneyEngine.seedManual() } }
+        }
         // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
         // свой лог, пока тумблер включён (Настройки → Общее).
         appScope.launch {
@@ -116,6 +127,8 @@ class PravkaApp : Application() {
     var workWatcher: ((route: String, expectMs: Long, done: Boolean, ok: Boolean) -> Unit)? = null
 
     val settings by lazy { Settings(this) }
+    /** Кто пользуется установкой и какие режимы включены (data/Profile.kt). */
+    internal val profileStore by lazy { ru.zf.pravka.data.ProfileStore(this) }
     /** История «сколько идёт запрос» по тройкам «дорога + модель + усилие». */
     val paceStore by lazy { PaceStore(this) }
     val promptStore by lazy { PromptStore(this) }
@@ -151,7 +164,14 @@ class PravkaApp : Application() {
     /** Журнал правок руками: надиктовано → модель → владелец, навсегда. */
     val corrections by lazy { ru.zf.pravka.data.CorrectionsLog(this) }
     val evalStore by lazy { ru.zf.pravka.data.EvalStore(this) }
-    val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient, rulesStore) }
+    val claudeProvider by lazy {
+        ClaudeProvider(settings, promptStore, httpClient, rulesStore).also { p ->
+            p.author = {
+                profileStore.current?.let { ru.zf.pravka.core.Prompts.Author(it.name, it.female, it.owner) }
+                    ?: ru.zf.pravka.core.Prompts.Author.OWNER
+            }
+        }
+    }
     // Ночной разбор: батчи Anthropic, память прогонов и движок (core/NightReview.kt).
     val claudeBatches by lazy { ru.zf.pravka.provider.ClaudeBatches(settings, httpClient) }
     val nightReviewStore by lazy { ru.zf.pravka.data.NightReviewStore(this) }
@@ -197,6 +217,10 @@ class PravkaApp : Application() {
     val zasechkaStore by lazy {
         ru.zf.pravka.data.ZasechkaStore(this).also { store ->
             store.logger = { line -> eventLog.add(line) }
+            store.freshCategories = {
+                if (profileStore.owner) ru.zf.pravka.data.ZasechkaStore.DEFAULT_CATEGORIES
+                else ru.zf.pravka.data.ZasechkaStore.neutralCategories()
+            }
         }
     }
     val zasechkaSync by lazy {
@@ -248,10 +272,21 @@ class PravkaApp : Application() {
             rates = cbrRates,
             stats = stats,
             eventLog = eventLog,
-            factory = { moneyFactoryRules },
-            factoryBalances = { moneyFactoryBalances },
-            factoryAccountsText = { runCatching { assets.open("money_balances.txt").bufferedReader().use { it.readText() } }.getOrDefault("") },
-            factoryManual = { runCatching { assets.open("money_manual.txt").bufferedReader().use { it.readText() } }.getOrDefault("") },
+            // Хозяин трат — пользователь установки. Заводские файлы Денег
+            // (справочник получателей, остатки и счета ЗФ, наличные) написаны
+            // про владельца и его семью: чужой установке их не показываем и в
+            // Claude не отправляем.
+            owner = { profileStore.current?.id ?: "user" },
+            factory = { if (profileStore.owner) moneyFactoryRules else emptyList() },
+            factoryBalances = { if (profileStore.owner) moneyFactoryBalances else emptyList() },
+            factoryAccountsText = {
+                if (!profileStore.owner) ""
+                else runCatching { assets.open("money_balances.txt").bufferedReader().use { it.readText() } }.getOrDefault("")
+            },
+            factoryManual = {
+                if (!profileStore.owner) ""
+                else runCatching { assets.open("money_manual.txt").bufferedReader().use { it.readText() } }.getOrDefault("")
+            },
         )
     }
 

@@ -92,6 +92,7 @@ internal enum class SettingsGroup(
     val glyph: ImageVector,
     val decor: ModeDecor = ModeDecor.SERVICE,
 ) {
+    PROFILE("Кто пользуется", "имя, род, какие режимы включены", SettingsShelf.MODES, Glyphs.Tune),
     PRAVKA("Правка", "проза, контекст, правила в промпте", SettingsShelf.MODES, Glyphs.Pravka, ModeDecor.PRAVKA),
     ZASECHKA("Засечка", "напоминания, категории, автопилот, NFC", SettingsShelf.MODES, Glyphs.Zasechka, ModeDecor.ZASECHKA),
     DELA("Дела", "кнопка «Д», Todoist", SettingsShelf.MODES, Glyphs.Delo, ModeDecor.DELA),
@@ -146,8 +147,12 @@ internal fun SettingsTab(
             }
         }
 
+        // Группы выключенного в профиле режима не показываются: их настройки
+        // ни на что не действуют. Вернуть режим — «Кто пользуется».
+        val profile by app.profileStore.flow.collectAsState()
         for (shelf in SettingsShelf.entries) {
             val groups = SettingsGroup.entries.filter { it.shelf == shelf && it != SettingsGroup.APP }
+                .filter { g -> g.modes.isEmpty() || g.modes.any { m -> profile?.has(m) ?: true } }
             if (groups.isEmpty()) continue
             PaperCard(label = shelf.label) {
                 groups.forEachIndexed { i, g ->
@@ -180,6 +185,21 @@ internal fun SettingsTab(
         )
     }
 }
+
+/**
+ * Режимы, ради которых группа существует; пусто — группа нужна всегда.
+ * intervals.icu нужен и Спорту, и Еде (итог дня в wellness).
+ */
+private val SettingsGroup.modes: Set<ru.zf.pravka.data.Profile.Mode>
+    get() = when (this) {
+        SettingsGroup.ZASECHKA, SettingsGroup.SHEETS -> setOf(ru.zf.pravka.data.Profile.Mode.ZASECHKA)
+        SettingsGroup.DELA, SettingsGroup.TODOIST -> setOf(ru.zf.pravka.data.Profile.Mode.DELA)
+        SettingsGroup.SPORT -> setOf(ru.zf.pravka.data.Profile.Mode.SPORT)
+        SettingsGroup.FOOD -> setOf(ru.zf.pravka.data.Profile.Mode.FOOD)
+        SettingsGroup.MONEY -> setOf(ru.zf.pravka.data.Profile.Mode.MONEY)
+        SettingsGroup.INTERVALS -> setOf(ru.zf.pravka.data.Profile.Mode.SPORT, ru.zf.pravka.data.Profile.Mode.FOOD)
+        else -> emptySet()
+    }
 
 /** Состояние группы для правого края строки меню. */
 private class GroupStatus(val text: String, val ok: Boolean? = null, val dot: Boolean = false)
@@ -232,7 +252,21 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
             val d by s.rEnabledFlow.collectAsState(initial = true)
             val m by s.mEnabledFlow.collectAsState(initial = true)
             val e by s.tEnabledFlow.collectAsState(initial = false)
-            GroupStatus(listOfNotNull("П", "З".takeIf { z }, "Д".takeIf { d }, "₽".takeIf { m }, "Е".takeIf { e }).joinToString(" "))
+            val p by app.profileStore.flow.collectAsState()
+            fun on(mode: ru.zf.pravka.data.Profile.Mode) = p?.has(mode) ?: true
+            GroupStatus(
+                listOfNotNull(
+                    "П",
+                    "З".takeIf { z && on(ru.zf.pravka.data.Profile.Mode.ZASECHKA) },
+                    "Д".takeIf { d && on(ru.zf.pravka.data.Profile.Mode.DELA) },
+                    "₽".takeIf { m && on(ru.zf.pravka.data.Profile.Mode.MONEY) },
+                    "Е".takeIf { e && on(ru.zf.pravka.data.Profile.Mode.FOOD) },
+                ).joinToString(" ")
+            )
+        }
+        SettingsGroup.PROFILE -> {
+            val p by app.profileStore.flow.collectAsState()
+            p?.let { GroupStatus("${it.name} · ${it.modes.size + 1} из ${ru.zf.pravka.data.Profile.Mode.entries.size + 1}") }
         }
         SettingsGroup.DATA -> {
             val where by ru.zf.pravka.data.DataRoot.where.collectAsState()
@@ -296,6 +330,7 @@ private fun GroupContent(
     onOpen: (SettingsGroup) -> Unit,
 ) {
     when (group) {
+        SettingsGroup.PROFILE -> ProfileSettings(app)
         SettingsGroup.PRAVKA -> PravkaSettings(app)
         SettingsGroup.ZASECHKA -> ZasechkaSettings(app)
         SettingsGroup.DELA -> DelaSettings(app, onOpen)
@@ -539,14 +574,28 @@ private fun ButtonsSettings(app: PravkaApp) {
     var sizeSlider by remember(fabSize) { mutableStateOf(fabSize.toFloat()) }
     var alphaSlider by remember(fabAlpha) { mutableStateOf(fabAlpha) }
 
-    PaperCard(label = "какие кнопки", info = "«П» стоит всегда: без неё нет ни диктовки, ни шестерёнки с веером.") {
-        PaperToggle("Засечка «З»", z, { v -> scope.launch { settings.setZEnabled(v) } }, hint = "видна всегда, в любом приложении")
-        PaperToggle("Дело «Д»", d, { v -> scope.launch { settings.setREnabled(v) } }, hint = "наговорил — задачи в Todoist")
-        PaperToggle("Деньги «₽»", m, { v -> scope.launch { settings.setMEnabled(v) } }, hint = "наговорил трату — плашка с суммой и «ОК»")
+    // Кнопка выключенного в профиле режима не встанет, что бы ни стояло тут:
+    // тумблер гаснет и говорит почему (вернуть режим — «Кто пользуется»).
+    val profile by app.profileStore.flow.collectAsState()
+    fun on(mode: ru.zf.pravka.data.Profile.Mode) = profile?.has(mode) ?: true
+    val off = "режим выключен в «Кто пользуется»"
+    PaperCard(label = "какие кнопки", info = "«П» стоит всегда: без неё нет ни диктовки, ни шестерёнки с веером. " +
+        "Кнопка режима, выключенного в «Кто пользуется», не ставится вовсе.") {
+        val zOn = on(ru.zf.pravka.data.Profile.Mode.ZASECHKA)
+        val dOn = on(ru.zf.pravka.data.Profile.Mode.DELA)
+        val mOn = on(ru.zf.pravka.data.Profile.Mode.MONEY)
+        val eOn = on(ru.zf.pravka.data.Profile.Mode.FOOD)
+        PaperToggle("Засечка «З»", z && zOn, { v -> scope.launch { settings.setZEnabled(v) } },
+            hint = if (zOn) "видна всегда, в любом приложении" else off, enabled = zOn)
+        PaperToggle("Дело «Д»", d && dOn, { v -> scope.launch { settings.setREnabled(v) } },
+            hint = if (dOn) "наговорил — задачи в Todoist" else off, enabled = dOn)
+        PaperToggle("Деньги «₽»", m && mOn, { v -> scope.launch { settings.setMEnabled(v) } },
+            hint = if (mOn) "наговорил трату — плашка с суммой и «ОК»" else off, enabled = mOn)
         PaperToggle(
-            "Еда «Е»", e, { v -> scope.launch { settings.setTEnabled(v) } },
-            hint = "пятая: подходы, еда, зарядка, вопрос",
+            "Еда «Е»", e && eOn, { v -> scope.launch { settings.setTEnabled(v) } },
+            hint = if (eOn) "пятая: подходы, еда, зарядка, вопрос" else off,
             info = "Одна на всё тело: намерение определяет модель. С 19.09.2026 выключена с завода.",
+            enabled = eOn,
         )
     }
 

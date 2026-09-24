@@ -35,7 +35,7 @@ class MoneyEngine(
     private val rates: CbrRates,
     private val stats: Stats,
     private val eventLog: EventLog,
-    /** Чей это телефон: пока приложение одно — Саши. */
+    /** Чей это телефон — ключ профиля установки (data/Profile.kt): «sasha», «marianna»… */
     private val owner: () -> String = { "sasha" },
     /** Заводской справочник (`assets/money_payees.txt`): идёт ПОСЛЕ правил владельца. */
     private val factory: () -> List<MoneyRules.Rule> = { emptyList() },

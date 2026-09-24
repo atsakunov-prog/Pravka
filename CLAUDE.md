@@ -89,14 +89,19 @@
   или папка `Documents/Pravka`; все сторы открывают файлы в `DataRoot.dir`,
   DataStore — через `DataRoot.preferences`, сторож — `DataRootGuardTest`),
   `data/DbMove.kt` (переезд базы под тестами), экран — `DataSettings.kt`
-  («Настройки → База данных»), `data/StoreFiles.kt` (атомарная запись, `.prev`,
+  («Настройки → База данных»), суточная копия — `data/DailyBackup.kt`; кто
+  пользуется и какие режимы включены — `data/Profile.kt` (`app.profileStore`,
+  экран первого запуска и группа «Кто пользуется» — `ProfileScreen.kt`, входы
+  режимов из чужих меню — `trigger/ModeEntries.kt`), `data/StoreFiles.kt` (атомарная запись, `.prev`,
   `.corrupt`), `data/DiskWriter.kt`, `data/Backups.kt`, `data/Settings.kt`,
   `data/ModelRoutes.kt`, `data/EventLog.kt`, `data/Stats.kt`, `data/Updates.kt`,
   `ui/*`.
 - **Служба доступности:** `trigger/PravkaAccessibilityService.kt` — хозяин
   микрофона, оверлейных окон, стопки кнопок и тиков. Режимные куски — расширения
   рядом: `trigger/ServiceZasechka.kt`, `ServiceRaznoska.kt`, `ServiceBody.kt`,
-  `ServiceAnalysis.kt`. Сами кнопки — `*ButtonController.kt`.
+  `ServiceMoney.kt`. Сами кнопки — `*ButtonController.kt`. Фоновая работа
+  режима в пятиминутном тике идёт, только если режим включён в профиле
+  (`app.profileStore.has(Profile.Mode.X)`).
 - **Сборка приложения:** `PravkaApp.kt` (сервис-локатор: все сторы и движки),
   `MainActivity.kt` (вкладки), `SettingsTab.kt` (группы настроек),
   `ModelsSettings.kt` (группа «Модели»).
@@ -139,7 +144,7 @@ CI (`.github/workflows/build-apk.yml`) собирает APK на каждый п
 2. **Складывание Fold — больная тема.** Ничего тяжёлого на главном потоке
    службы; окна не прятать через `GONE`, а снимать из WindowManager; за чужими
    окнами не подглядывать; на оконные события не подписываться.
-3. **Внизу семь кнопок (Правка · Засечка · Дело · Спорт · Еда · Деньги · Ещё), плавающих четыре: П · З · Д · ₽** (Деньги — с 23.09.2026, «₽» водит тот же `RaznoskaButtonController` со своим лицом; зелёная «Е» с 19.09.2026 выключена с завода, тумблер Еды возвращает её пятой). Связка и кольцо
+3. **Внизу семь кнопок (Правка · Засечка · Дело · Спорт · Еда · Деньги · Ещё), плавающих четыре: П · З · Д · ₽** (режим, выключенный в профиле, прячет свою вкладку и кнопку — остаётся от пяти до одной «П») (Деньги — с 23.09.2026, «₽» водит тот же `RaznoskaButtonController` со своим лицом; зелёная «Е» с 19.09.2026 выключена с завода, тумблер Еды возвращает её пятой). Связка и кольцо
    говорят с кнопками через `trigger/RingButton.kt`; порядок — `chain()` в
    службе; новая функция на стекле — новый `RingButton` в списке, не пятая
    переписанная копия контроллера. Серая шестерёнка (0,72 кнопки) — не

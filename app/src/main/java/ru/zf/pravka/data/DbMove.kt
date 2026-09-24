@@ -26,6 +26,29 @@ internal object DbMove {
 
     /** Паспорт базы в её папке: есть он — папка является базой Правки. */
     const val PASSPORT = "pravka-db.json"
+    /** В приватной памяти: «база переехала туда-то» (путь папки). */
+    const val MOVED = "db-location.json"
+    /** Переезд подготовлен и ждёт закрепления на следующем старте. */
+    const val PENDING = "db-move-pending.json"
+    const val ASIDE_PREFIX = "before-move-"
+
+    /**
+     * Не база и остаётся в приватной памяти всегда: не копируется при переезде,
+     * не откладывается, не идёт в суточную копию. Проверяется по первому
+     * элементу пути.
+     */
+    private val PRIVATE_ONLY = setOf(
+        "models",                 // Whisper: сотни мегабайт, скачиваются заново
+        "recordings",             // WAV пишется в реальном времени — не через FUSE
+        "live_draft.txt",         // черновик на лету: ~50 записей в минуту
+        "live_draft.txt.tmp",
+        "profileInstalled",       // служебное системы (profileinstaller)
+        MOVED,
+        PENDING,
+    )
+
+    fun notDatabase(topName: String): Boolean =
+        topName in PRIVATE_ONLY || topName.startsWith(ASIDE_PREFIX) || topName.startsWith("profileinstaller")
 
     /**
      * Копирует дерево [src] в [dst]: всё, кроме того, что [skip] отвергает по
@@ -137,16 +160,18 @@ internal object DbMove {
         }.getOrNull()
     }
 
+    fun passportText(p: Passport): String = JSONObject()
+        .put("app", "Правка")
+        .put("format", p.format)
+        .put("token", p.token)
+        .put("createdAt", p.createdAt)
+        .put("device", p.device)
+        .put("note", "Папка — база приложения Правка. Скопировать базу — скопировать папку целиком.")
+        .toString(2)
+
     fun writePassport(folder: File, p: Passport) {
-        val o = JSONObject()
-            .put("app", "Правка")
-            .put("format", p.format)
-            .put("token", p.token)
-            .put("createdAt", p.createdAt)
-            .put("device", p.device)
-            .put("note", "Папка — база приложения Правка. Скопировать базу — скопировать папку целиком.")
         folder.mkdirs()
-        StoreFiles.writeAtomic(File(folder, PASSPORT), o.toString(2))
+        StoreFiles.writeAtomic(File(folder, PASSPORT), passportText(p))
     }
 
     // --- подготовленный переезд ---------------------------------------------

@@ -27,6 +27,20 @@ internal object DiskWriter {
     }
 
     /**
+     * Выполняет [block] на writer-потоке и ждёт результат не дольше
+     * [timeoutMs]; не успел — null (работа при этом не отменяется). Для
+     * суточной копии по кнопке: архив должен сниматься там же, где пишутся
+     * сторы, чтобы не застать файл посреди записи.
+     */
+    fun <T> call(timeoutMs: Long, block: () -> T): T? {
+        val done = java.util.concurrent.CountDownLatch(1)
+        var result: T? = null
+        runCatching { executor.execute { runCatching { result = block() }; done.countDown() } }
+        val ok = runCatching { done.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) }.getOrDefault(false)
+        return if (ok) result else null
+    }
+
+    /**
      * Ждёт, пока очередь допишет всё, что в неё встало до этого вызова, но не
      * дольше [timeoutMs]. Перед перезапуском процесса (переезд базы): иначе
      * последняя запись ленты умерла бы в очереди вместе с процессом.
