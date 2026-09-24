@@ -132,8 +132,8 @@ fun ModeFrame(decor: ModeDecor, content: @Composable () -> Unit) {
 }
 
 /**
- * Шапка вкладки: пиктограмма режима в плашке, название с засечками и короткая
- * полоска акцента под ним, справа — значки действий. Служебные экраны под
+ * Шапка вкладки: пиктограмма режима в плашке краской режима, название с
+ * засечками, справа — значки действий. Служебные экраны под
  * «Ещё» дают [onBack] — тогда слева стоит «‹».
  */
 @Composable
@@ -179,18 +179,15 @@ fun TabHeader(
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
+            // Полоски под названием больше нет (владелец, 24.09.2026:
+            // «подчёркивания под названиями какие-то странные»). Короткая
+            // черта одной длины под словами разной длины читалась ссылкой
+            // или опечаткой вёрстки; режим теперь держит значок в краске
+            // режима слева, а название — просто название.
             Text(
                 title,
                 style = MaterialTheme.typography.headlineSmall,
                 maxLines = 1,
-            )
-            // Полоска под названием — вместо строки пояснений.
-            Box(
-                Modifier
-                    .padding(top = 3.dp)
-                    .width(if (subtitle == null) 44.dp else 28.dp)
-                    .height(3.dp)
-                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp)),
             )
             if (subtitle != null) {
                 Text(
@@ -239,7 +236,7 @@ fun CostAction(onClick: () -> Unit) {
 @Composable
 fun SettingsAction(onClick: () -> Unit) = HeaderAction(Glyphs.Gear, "настройки режима", onClick)
 
-/** Статистика: столбики. */
+/** Статистика: круговая диаграмма — круглая, в пару шестерёнке, и не путается с часами Засечки. */
 @Composable
 fun StatsAction(onClick: () -> Unit) = HeaderAction(Glyphs.Stats, "статистика", onClick)
 
