@@ -105,6 +105,17 @@ internal object HistoryFixes {
             val o = app.moneyEngine.reparsePushes()
             Result(o.looked, o.changed + o.added, if (o.added > 0) "добавлено записей: ${o.added}" else "")
         },
+        // Настоящая причина: неразрывный пробел после точки («RUB.\u00A0Банкомат.»,
+        // «*0292.\u00A0Диана Т.», «Доступно\u00A0…») — терялись место, получатель
+        // перевода и остаток. Разбор пробелы теперь нормализует — переразбор всего.
+        Step(
+            id = "2026-09-25-push-nbsp",
+            title = "Пуши Т-Банка: неразрывные пробелы — место, получатель перевода, остаток",
+            files = listOf(MoneyStore.FILE_NAME),
+        ) { app ->
+            val o = app.moneyEngine.reparsePushes()
+            Result(o.looked, o.changed + o.added, if (o.added > 0) "добавлено записей: ${o.added}" else "")
+        },
     )
 
     private const val FILE = "history-fixes.json"

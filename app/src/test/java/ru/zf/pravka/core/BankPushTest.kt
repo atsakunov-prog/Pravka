@@ -80,6 +80,43 @@ class BankPushTest {
         assertEquals("cash", MoneyRules.classify(e, emptyList())?.category)
     }
 
+    @Test fun ownersRealAtmPushWithNonBreakingSpaces() {
+        // Сырьё с телефона владельца (25.09.2026, «Пойманный пуш»): заголовок пуст,
+        // место — на ТОЙ ЖЕ строке, после точки и НЕРАЗРЫВНОГО пробела.
+        for (sp in listOf("\u00A0", "\u202F", " ")) {
+            val text = "Пополнение на 195${sp}000 ₽, счет RUB.${sp}Банкомат.\nДоступно${sp}232${sp}483,72 ₽"
+            val p = money("", text)
+            assertEquals(19_500_000L, p.rubKop)
+            assertEquals("Банкомат", p.what)
+            assertEquals(23_248_372L, p.balanceKop)
+            val e = BankPush.entry(p, ts = 1L, owner = "sasha", title = "", text = text)
+            assertEquals("cash", MoneyRules.classify(e, emptyList())?.category)
+        }
+    }
+
+    @Test fun transferRecipientAfterNonBreakingSpace() {
+        // Те же неразрывные пробелы у перевода — получатель терялся, в журнале «Перевод».
+        val text = "Перевод на 1\u00A0500 ₽, от Марианна Ц., счет карты *0292.\u00A0Диана Т.\nДоступно\u00A084\u00A0130,02 ₽"
+        val p = money("", text)
+        assertEquals("Диана Т.", p.what)
+        assertEquals("0292", p.card)
+        assertEquals(-150_000L, p.rubKop)
+        assertEquals(8_413_002L, p.balanceKop)
+    }
+
+    @Test fun zeroWidthAndInvisiblesAreNamed() {
+        val p = money("", "Пополнение на 195 000 ₽, счет RUB.\u200B Банкомат.\nДоступно 1 000 ₽")
+        assertEquals("Банкомат", p.what)
+        assertEquals("U+00A0 ×1", BankPush.invisibles("RUB.\u00A0Банкомат."))
+        assertEquals("", BankPush.invisibles("обычный текст\nвторая строка"))
+    }
+
+    @Test fun keyStaysOnOriginalTextSoSavedEntriesKeepTheirIds() {
+        // Пробелы нормализуются только для разбора: номер пуша — по исходнику.
+        val nbsp = "Пополнение на 195\u00A0000 ₽, счет RUB.\u00A0Банкомат."
+        assertNotEquals(BankPush.key("", nbsp), BankPush.key("", nbsp.replace('\u00A0', ' ')))
+    }
+
     @Test fun purchaseKeepsMerchantTitleEvenWithDetailLine() {
         val p = money("ВкусВилл", "Покупка на 300 ₽, счет карты *1519\nКутузовский 12\nДоступно 1 000 ₽")
         assertEquals("ВкусВилл", p.what)

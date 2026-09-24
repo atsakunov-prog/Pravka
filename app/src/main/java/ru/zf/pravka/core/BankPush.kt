@@ -82,9 +82,31 @@ object BankPush {
      */
     private fun clean(s: String) = s.replace("\u00AD", "").replace("\r", "").trim()
 
+    /**
+     * Пробелы шторки — к обычному, ТОЛЬКО для разбора. Т-Банк ставит
+     * неразрывные не только в суммах, но и после точки: «счет RUB.\u00A0Банкомат.»,
+     * «*0292.\u00A0Марианна Ц.», «Доступно\u00A0232 483,72». Разбор искал «. » с
+     * обычным пробелом — и на настоящих пушах терял место, получателя перевода и
+     * остаток (владелец, 25.09.2026: внесение 195 000 и оба перевода — «без
+     * категории»). Отпечаток пуша ([key]) считается по исходному тексту, как и
+     * раньше, — номера уже сохранённых записей не меняются.
+     */
+    private val ODD_SPACE = Regex("[\\p{Zs}\\u00A0\\u2007\\u202F]")
+    private val ZERO_WIDTH = Regex("[\\u200B\\u200C\\u200D\\u2060\\uFEFF]")
+    private fun spaces(s: String) = s.replace(ZERO_WIDTH, "").replace(ODD_SPACE, " ")
+
+    /**
+     * Невидимые символы текста — словами, для окна «Пойманный пуш»: «U+00A0 ×4».
+     * Неразрывный пробел выглядит как обычный, а разбор он ломал; теперь его видно.
+     */
+    fun invisibles(text: String): String =
+        text.filter { it != ' ' && it != '\n' && (Character.isSpaceChar(it) || ZERO_WIDTH.matches(it.toString())) }
+            .groupingBy { it }.eachCount()
+            .entries.joinToString(", ") { (c, n) -> "U+%04X ×%d".format(c.code, n) }
+
     fun parse(title: String, text: String): Outcome {
         val t = clean(title)
-        val body = clean(text)
+        val body = spaces(clean(text))
         val low = (t + " " + body).lowercase()
         if (DECLINED.any { low.contains(it) }) return Outcome.Skip("отказ — денег не списали")
         val lines = body.lines().map { it.trim() }.filter { it.isNotEmpty() }
@@ -112,6 +134,9 @@ object BankPush {
             // справочник узнаёт банкомат и ведёт сумму из кошелька.
             val detail = lines.drop(1).firstOrNull { !it.startsWith("Доступно", ignoreCase = true) }
                 ?.trim()?.trimEnd('.')?.trim().orEmpty()
+            // Место бывает и на той же строке, после точки: «Пополнение на 195 000 ₽,
+            // счет RUB. Банкомат.» (настоящий пуш владельца, 25.09.2026).
+            val place = detail.ifBlank { if (isTransfer) "" else tail.trimEnd('.').trim() }
             // Заголовок, который повторяет само действие («Пополнение» над
             // «Пополнение на 195 000 ₽…»), — тоже не место: как пустой.
             val bankTitle = t.isBlank() || BANK_TITLES.any { t.equals(it, ignoreCase = true) } ||
@@ -119,11 +144,11 @@ object BankPush {
                 (INCOME + EXPENSE).any { t.lowercase().startsWith(it) && t.length <= it.length + 12 }
             val what = when {
                 isTransfer && tail.isNotBlank() -> tail
-                bankTitle && detail.isNotBlank() -> detail
+                bankTitle && place.isNotBlank() -> place
                 else -> t.ifBlank { tail.ifBlank { m.groupValues[1] } }
             }
             val note = buildList {
-                if (detail.isNotBlank() && detail != what) add(detail)
+                if (place.isNotBlank() && place != what) add(place)
                 if (isTransfer && t.isNotBlank() && t != what) add("в $t")
                 if (holder.isNotBlank()) add("картой: $holder")
                 if (verb.contains("сбп")) add("СБП")

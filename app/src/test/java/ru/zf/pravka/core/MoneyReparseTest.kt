@@ -33,6 +33,18 @@ class MoneyReparseTest {
         assertEquals(-19_500_000L, MoneyCashflow.walletMoves(r.entries).sumOf { it.rubKop })
     }
 
+    @Test fun ownersRealNbspPushIsFixedByReparse() {
+        // Настоящее сырьё: одна строка с местом после неразрывного пробела.
+        val real = "Пополнение на 195\u00A0000 ₽, счет RUB.\u00A0Банкомат.\nДоступно 232\u00A0483,72 ₽"
+        val r = MoneyReparse.Raw(ts = raw.ts, pkg = pkg, title = "", text = real)
+        val old = yesterday().copy(id = "push-" + BankPush.key("", real), category = "", categoryBy = MoneyEntry.CategoryBy.NONE)
+        val out = MoneyReparse.pushes(listOf(old), listOf(r), "sasha")
+        assertEquals(1, out.changed)
+        assertEquals("Банкомат", out.entries.single().what)
+        val m = MoneyMatch.run(out.entries, emptyList(), raw.ts + 86_400_000L)
+        assertEquals("cash", m.entries.single().category)
+    }
+
     @Test fun ownersDecisionIsKept() {
         val out = MoneyReparse.pushes(listOf(yesterday(MoneyEntry.CategoryBy.OWNER, "inc_zf")), listOf(raw), "sasha")
         val e = out.entries.single()

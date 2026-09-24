@@ -844,6 +844,9 @@ private fun PushSettings(app: PravkaApp) {
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
+            ru.zf.pravka.core.BankPush.invisibles(p.title + p.text).takeIf { it.isNotBlank() }?.let {
+                PaperHint("Невидимые символы: $it")
+            }
         }
     }
 }
