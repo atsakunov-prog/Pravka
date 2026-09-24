@@ -438,31 +438,50 @@ private fun AppSettings(app: PravkaApp, serviceEnabled: Boolean, onOpenAccessibi
 @Composable
 private fun HistoryFixesCard(app: PravkaApp) {
     val context = LocalContext.current
+    val fixes = ru.zf.pravka.core.HistoryFixes
     var done by remember { mutableStateOf<List<ru.zf.pravka.core.HistoryFixes.Done>>(emptyList()) }
-    LaunchedEffect(Unit) {
-        done = withContext(Dispatchers.IO) { runCatching { ru.zf.pravka.core.HistoryFixes.done(context) }.getOrDefault(emptyList()) }
+    var busy by remember { mutableStateOf(false) }
+    LaunchedEffect(busy) {
+        if (!busy) done = withContext(Dispatchers.IO) { runCatching { fixes.done(context) }.getOrDefault(emptyList()) }
     }
-    val pending = ru.zf.pravka.core.HistoryFixes.pending(ru.zf.pravka.core.HistoryFixes.STEPS, done)
+    val pending = fixes.pending(fixes.STEPS, done)
     PaperCard(
         label = "переразбор истории",
         info = "Правка разбора, которая меняет уже накопленное, приходит с шагом: в первый запуск " +
             "сборки он проходит по истории своего вида и выводит её заново из сырья — текста пуша, " +
-            "надиктовки. Решения владельца (его категории, вычеркнутое, ответы) не трогаются, записи не " +
-            "удаляются, до шага снимается копия его файлов.",
+            "надиктовки. Пройденный шаг не повторяется никогда. Упавший пробуется снова при " +
+            "следующем запуске, но не больше ${fixes.MAX_ATTEMPTS} раз — и шаг, уронивший приложение, " +
+            "тоже: отметка «начал» пишется до шага. Потом шаг откладывается до кнопки «Повторить». " +
+            "Решения владельца не трогаются, записи не удаляются, до шага снимается копия его файлов.",
     ) {
         if (done.isEmpty() && pending.isEmpty()) PaperHint("Шагов пока не было.")
         val stamp = remember { java.text.SimpleDateFormat("d MMMM, HH:mm", Locale.forLanguageTag("ru")) }
         for (d in done.sortedByDescending { it.at }.take(8)) {
             Text(d.title, style = MaterialTheme.typography.bodyMedium)
+            val at = stamp.format(java.util.Date(d.at))
             PaperHint(
-                if (d.ok) "${stamp.format(java.util.Date(d.at))} · просмотрено ${d.looked}, поправлено ${d.changed}" +
-                    (if (d.note.isNotBlank()) " · ${d.note}" else "")
-                else "${stamp.format(java.util.Date(d.at))} · упал: ${d.error} — повторится при следующем запуске",
-                color = if (d.ok) null else MaterialTheme.colorScheme.error,
+                when {
+                    d.ok -> "$at · просмотрено ${d.looked}, поправлено ${d.changed}" +
+                        (if (d.note.isNotBlank()) " · ${d.note}" else "")
+                    d.gaveUp -> "$at · отложен после ${d.attempts} попыток: ${d.error.ifBlank { "оборвался посреди шага" }}"
+                    d.running -> "$at · начат, попытка ${d.attempts} из ${fixes.MAX_ATTEMPTS}"
+                    else -> "$at · упал (попытка ${d.attempts} из ${fixes.MAX_ATTEMPTS}): ${d.error} — повторится при следующем запуске"
+                },
+                color = if (d.ok || d.running) null else MaterialTheme.colorScheme.error,
             )
+            if (d.gaveUp) {
+                ru.zf.pravka.ui.PaperTextButton("Повторить", icon = Glyphs.Refresh, enabled = !busy, onClick = {
+                    busy = true
+                    app.appScope.launch(Dispatchers.IO) {
+                        runCatching { fixes.retry(app, d.id) { line -> app.eventLog.add(line) } }
+                        busy = false
+                    }
+                })
+            }
             Spacer(Modifier.height(4.dp))
         }
-        if (pending.any { p -> done.none { it.id == p.id } }) PaperHint("Ждут запуска: ${pending.size}")
+        val waiting = pending.count { p -> done.none { it.id == p.id } }
+        if (waiting > 0) PaperHint("Ждут запуска: $waiting")
     }
 }
 
