@@ -56,7 +56,6 @@ internal fun RaznoskaSection(app: PravkaApp) {
     val drafts by app.raznoskaStore.draftsFlow.collectAsState()
     val projectList by app.todoistStore.projectsFlow.collectAsState()
     val labelList by app.todoistStore.labelsFlow.collectAsState()
-    val buttonOn by app.settings.rEnabledFlow.collectAsState(initial = true)
     var editing by remember { mutableStateOf<Pair<Long, ParsedTask>?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = app.appScope
@@ -96,18 +95,8 @@ internal fun RaznoskaSection(app: PravkaApp) {
                 )
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(
-                checked = buttonOn,
-                onCheckedChange = { on -> scope.launch { app.settings.setREnabled(on) } },
-            )
-            Text(
-                "Кнопка «Д» на экране",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
-        Spacer(Modifier.height(6.dp))
+        // Тумблер «Кнопка «Д» на экране» уехал в настройки (24.09.2026): во
+        // вкладке ему было не место — рядом с ним жили дела, а не настройки.
 
         for (draft in pending) {
             Card(

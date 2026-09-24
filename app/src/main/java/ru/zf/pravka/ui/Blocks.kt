@@ -68,23 +68,31 @@ fun Modifier.bevel(shape: Shape? = null): Modifier = composed {
     )
 }
 
-/** Карточка с необязательной подписью над ней. */
+/**
+ * Карточка с необязательной подписью над ней. [info] — пояснение, которое
+ * раньше лежало абзацем в конце плашки: теперь оно за «i» в строке подписи
+ * (24.09.2026), а на плашке остаётся сама вещь.
+ */
 @Composable
 fun PaperCard(
     label: String? = null,
     labelColor: Color? = null,
     trailing: (@Composable () -> Unit)? = null,
+    info: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(Modifier.fillMaxWidth()) {
-        if (label != null || trailing != null) {
+        if (label != null || trailing != null || info != null) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (label != null) PaperLabel(label, labelColor) else Box {}
-                trailing?.invoke()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (info != null) InfoButton(label ?: "Пояснение", info, size = 30.dp)
+                    trailing?.invoke()
+                }
             }
         }
         // Узор знаков режима — на самой плашке, под текстом (владелец, 15.09).
@@ -147,11 +155,6 @@ fun PaperHint(text: String, color: Color? = null) {
         style = MaterialTheme.typography.bodySmall,
         color = color ?: MaterialTheme.colorScheme.onSurfaceVariant,
     )
-}
-
-@Composable
-fun PaperTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.headlineSmall)
 }
 
 /**

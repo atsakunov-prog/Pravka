@@ -310,35 +310,30 @@ internal fun TodoistSettings(app: PravkaApp) {
     val token by app.settings.todoistTokenFlow.collectAsState(initial = "")
     val status by app.todoistStore.statusFlow.collectAsState()
     var draft by remember(token) { mutableStateOf(token) }
-    Column {
-        Text(
-            "Todoist → Настройки → Интеграции → Разработчик → API-токен. " +
-                "Ключ живёт только на телефоне.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { draft = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Токен Todoist") },
-            singleLine = true,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = {
-                app.appScope.launch {
-                    app.settings.setTodoistToken(draft.trim())
-                    app.todoistSync.refresh(force = true)
-                }
-            }) { Text("Сохранить и проверить") }
+    ru.zf.pravka.ui.PaperCard(
+        label = "токен",
+        info = "Todoist → Настройки → Интеграции → Разработчик → API-токен. Ключ живёт только на телефоне.",
+    ) {
+        ru.zf.pravka.ui.PaperField(value = draft, onValueChange = { draft = it }, label = "Токен Todoist")
+        if (status.isNotBlank()) {
             Text(
                 status,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+                maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        Spacer(Modifier.height(6.dp))
+        Row {
+            Spacer(Modifier.weight(1f))
+            ru.zf.pravka.ui.PaperButton("Сохранить и проверить", primary = true, onClick = {
+                app.appScope.launch {
+                    app.settings.setTodoistToken(draft.trim())
+                    app.todoistSync.refresh(force = true)
+                }
+            })
+        }
     }
 }
+

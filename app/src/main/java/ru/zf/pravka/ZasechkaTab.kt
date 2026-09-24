@@ -85,6 +85,12 @@ import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperLabel
 import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.PaperButton
+import ru.zf.pravka.ui.PaperField
+import ru.zf.pravka.ui.PaperSlider
+import ru.zf.pravka.ui.PaperToggle
+import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.trigger.onZasechkaTap
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.res.painterResource
@@ -1237,13 +1243,15 @@ private fun ChainBlock(
 }
 
 // ---------------------------------------------------------------------------
-// Settings block: button, reminders, dictionaries of categories/clients,
-// the Sheets webhook and the CSV export.
+// Настройки Засечки: напоминания, словари категорий и клиентов, правила
+// разбора, автопилот, метки NFC. С 24.09.2026 кнопка «З» — в «Кнопках на
+// экране» (все четыре тумблера рядом), таблица и intervals.icu — в
+// «Подключениях» (`ZasechkaSheetsSettings`, `IntervalsSettings` ниже),
+// резервные копии ленты — в «Обновлениях и службе».
 // ---------------------------------------------------------------------------
 
 @Composable
 internal fun ZasechkaSettings(app: PravkaApp) {
-    val context = LocalContext.current
     // Настройки открываются и БЕЗ захода в Засечку — стор мог быть не прочитан,
     // и редактор категорий показал бы пустоту. Отредактировать пустоту и
     // сохранить — значит затереть настоящие категории; загрузка обязана
@@ -1251,114 +1259,110 @@ internal fun ZasechkaSettings(app: PravkaApp) {
     LaunchedEffect(Unit) { app.zasechkaStore.all() }
     val categories by app.zasechkaStore.categoriesFlow.collectAsState()
     val clients by app.zasechkaStore.clientsFlow.collectAsState()
-    val syncStatus by app.zasechkaSync.statusFlow.collectAsState()
-    val entries by app.zasechkaStore.entriesFlow.collectAsState()
 
-    val zEnabled by app.settings.zEnabledFlow.collectAsState(initial = true)
     val gapMin by app.settings.zGapMinFlow.collectAsState(initial = 45)
     val dayStartH by app.settings.zDayStartFlow.collectAsState(initial = 9)
     val dayEndH by app.settings.zDayEndFlow.collectAsState(initial = 23)
-    val webhook by app.settings.zWebhookFlow.collectAsState(initial = "")
+    val checkins by app.settings.zCheckinsFlow.collectAsState(initial = true)
+    // Ползунки пишут по отпусканию: запись DataStore на каждый шаг
+    // перетаскивания — десятки записей файла за секунду.
+    var gapSlider by remember(gapMin) { mutableStateOf(gapMin.toFloat()) }
+    var startSlider by remember(dayStartH) { mutableStateOf(dayStartH.toFloat()) }
+    var endSlider by remember(dayEndH) { mutableStateOf(dayEndH.toFloat()) }
 
-    Column(Modifier.padding(top = 4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Кнопка «З» на экране", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "Видна всегда, в любом приложении",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(checked = zEnabled, onCheckedChange = { v ->
-                app.appScope.launch { app.settings.setZEnabled(v) }
-            })
-        }
-
-        Spacer(Modifier.height(8.dp))
-        Text(
-            if (gapMin > 0) "Напоминать о дыре во времени: через $gapMin мин"
-            else "Напоминания о дырах: выключены",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Slider(
-            value = gapMin.toFloat(),
-            onValueChange = { v ->
-                val snapped = (v / 15f).roundToInt() * 15
-                app.appScope.launch { app.settings.setZGapMin(snapped) }
-            },
-            valueRange = 0f..120f,
-            steps = 7,
-        )
-        Text(
-            "Активные часы: с $dayStartH:00 до $dayEndH:00 (утром — «день начался?», после — «закрыть день?»)",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Slider(
-            value = dayStartH.toFloat(),
-            onValueChange = { v -> app.appScope.launch { app.settings.setZDayStart(v.roundToInt()) } },
-            valueRange = 0f..12f,
-            steps = 11,
-        )
-        Slider(
-            value = dayEndH.toFloat(),
-            onValueChange = { v -> app.appScope.launch { app.settings.setZDayEnd(v.roundToInt()) } },
-            valueRange = 12f..24f,
-            steps = 11,
-        )
-
-        Spacer(Modifier.height(8.dp))
-        val checkins by app.settings.zCheckinsFlow.collectAsState(initial = true)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(
+    Column(verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap)) {
+        PaperCard(label = "напоминания") {
+            val gapShown = (gapSlider / 15f).roundToInt() * 15
+            PaperSlider(
+                title = "Дыра во времени",
+                valueText = if (gapShown > 0) "через $gapShown мин" else "выключено",
+                value = gapSlider,
+                onValueChange = { gapSlider = it },
+                onValueChangeFinished = {
+                    app.appScope.launch { app.settings.setZGapMin((gapSlider / 15f).roundToInt() * 15) }
+                },
+                valueRange = 0f..120f,
+                steps = 7,
+            )
+            PaperSlider(
+                title = "День начинается",
+                valueText = "${startSlider.roundToInt()}:00",
+                value = startSlider,
+                onValueChange = { startSlider = it },
+                onValueChangeFinished = { app.appScope.launch { app.settings.setZDayStart(startSlider.roundToInt()) } },
+                valueRange = 0f..12f,
+                steps = 11,
+                info = "Активные часы: утром кнопка спрашивает «день начался?», после конца — «закрыть день?». " +
+                    "Вне этих часов о дырах не напоминает.",
+            )
+            PaperSlider(
+                title = "День кончается",
+                valueText = "${endSlider.roundToInt()}:00",
+                value = endSlider,
+                onValueChange = { endSlider = it },
+                onValueChangeFinished = { app.appScope.launch { app.settings.setZDayEnd(endSlider.roundToInt()) } },
+                valueRange = 12f..24f,
+                steps = 11,
+            )
+            PaperToggle(
+                title = "Спрашивать «всё ещё …?»",
                 checked = checkins,
                 onCheckedChange = { app.appScope.launch { app.settings.setZCheckins(it) } },
-            )
-            Text(
-                "Спрашивать «всё ещё …?»",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(start = 8.dp),
+                info = "Когда дело идёт дольше базового времени своей категории, кнопка моргает и " +
+                    "спрашивает. «Да» — считаем дальше, «Нет» — сразу новая запись.",
             )
         }
-        Text(
-            "Когда дело идёт дольше базового времени своей категории, кнопка моргает и " +
-                "спрашивает. «Да» — считаем дальше, «Нет» — сразу новая запись.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(12.dp))
 
-        CategoriesEditor(
-            categories = categories,
-            onChange = { app.appScope.launch { app.zasechkaStore.setCategories(it) } },
-        )
-        Spacer(Modifier.height(8.dp))
-        EditableList(
-            title = "Клиенты и проекты",
-            hint = "Помогают распознаванию и попадают в отчёты",
-            values = clients,
-            onChange = { app.appScope.launch { app.zasechkaStore.setClients(it) } },
-        )
+        PaperCard(label = "категории") {
+            CategoriesEditor(
+                categories = categories,
+                onChange = { app.appScope.launch { app.zasechkaStore.setCategories(it) } },
+            )
+        }
+        PaperCard(label = "клиенты и проекты") {
+            EditableList(
+                title = "Клиенты и проекты",
+                hint = "Помогают распознаванию и попадают в отчёты",
+                values = clients,
+                onChange = { app.appScope.launch { app.zasechkaStore.setClients(it) } },
+            )
+        }
 
-        Spacer(Modifier.height(12.dp))
-        Text("Google Sheets", style = MaterialTheme.typography.titleSmall)
-        var url by remember(webhook) { mutableStateOf(webhook) }
-        OutlinedTextField(
-            value = url,
-            onValueChange = { url = it },
-            label = { Text("URL веб-приложения Apps Script") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        ZasechkaRulesSection(app)
+
+        // Своей выгрузки у ленты больше нет (09.09): вся жизнь одним xlsx,
+        // лист «Засечка» как база в Notion, — за значком выгрузки в Статистике.
+
+        PaperCard(label = "автопилот") { AutoPilotSection(app) }
+        PaperCard(label = "метки nfc") { NfcTagsSection(app) }
+    }
+}
+
+/**
+ * Google Sheets — зеркало ленты в таблицу. Живёт в «Подключениях» рядом с
+ * остальными ключами: искать адрес скрипта в настройках Засечки было
+ * «а где это было?».
+ */
+@Composable
+internal fun ZasechkaSheetsSettings(app: PravkaApp) {
+    LaunchedEffect(Unit) { app.zasechkaStore.all() }
+    val syncStatus by app.zasechkaSync.statusFlow.collectAsState()
+    val entries by app.zasechkaStore.entriesFlow.collectAsState()
+    val webhook by app.settings.zWebhookFlow.collectAsState(initial = "")
+    var url by remember(webhook) { mutableStateOf(webhook) }
+    val pending = entries.count { !it.open && !it.synced }
+
+    PaperCard(
+        label = "таблица",
+        info = "Скрипт и настройка за пять минут — docs/zasechka-sheets.md в репозитории. " +
+            "Закрытые записи уходят в таблицу сами; «Синхронизировать» толкает очередь сейчас.",
+    ) {
+        PaperField(value = url, onValueChange = { url = it }, label = "URL веб-приложения Apps Script")
+        if (syncStatus.isNotBlank()) PaperHint("Последняя отправка: $syncStatus")
+        if (pending > 0) PaperHint("Ждут отправки: $pending")
+        Spacer(Modifier.height(6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = {
-                app.appScope.launch {
-                    app.settings.setZWebhook(url)
-                    Feedback.toast(app, "Сохранено")
-                }
-            }) { Text("Сохранить") }
-            OutlinedButton(onClick = {
+            PaperButton("Синхронизировать", icon = Glyphs.Refresh, onClick = {
                 app.appScope.launch {
                     val result = app.zasechkaSync.syncNow()
                     result.onSuccess { n ->
@@ -1367,72 +1371,49 @@ internal fun ZasechkaSettings(app: PravkaApp) {
                         Feedback.toast(app, "Не удалось: ${e.message}")
                     }
                 }
-            }) { Text("Синхронизировать") }
+            })
+            Spacer(Modifier.weight(1f))
+            PaperButton("Сохранить", primary = true, enabled = url.trim() != webhook, onClick = {
+                app.appScope.launch {
+                    app.settings.setZWebhook(url)
+                    Feedback.toast(app, "Сохранено")
+                }
+            })
         }
-        val pending = entries.count { !it.open && !it.synced }
-        Text(
-            buildString {
-                append("Скрипт и настройка за 5 минут: docs/zasechka-sheets.md в репозитории.")
-                if (syncStatus.isNotBlank()) append("\nПоследняя отправка: $syncStatus.")
-                if (pending > 0) append("\nЖдут отправки: $pending.")
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    }
+}
 
-        Spacer(Modifier.height(12.dp))
-        Text("intervals.icu", style = MaterialTheme.typography.titleSmall)
-        Text(
-            "Тренировки за последние двое суток сами встают в ленту (бег, вело, силовая, ходьба), " +
-                "а Garmin-длительность сна дописывается к записи «сон». Ключ: intervals.icu → " +
-                "Settings → Developer Settings → API Key.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        val icuAthlete by app.settings.icuAthleteFlow.collectAsState(initial = "")
-        val icuKey by app.settings.icuKeyFlow.collectAsState(initial = "")
-        var athleteField by remember(icuAthlete) { mutableStateOf(icuAthlete) }
-        var keyField by remember(icuKey) { mutableStateOf(icuKey) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = athleteField,
-                onValueChange = { athleteField = it },
-                label = { Text("Athlete ID (i…)") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-                value = keyField,
-                onValueChange = { keyField = it },
-                label = { Text("API Key") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
+/**
+ * intervals.icu: тренировки двух последних суток встают в ленту, сон Garmin
+ * дописывается к «сну», спорт и еда пишут туда своё. Ключ — один на всё
+ * приложение, поэтому в «Подключениях», а не в Засечке.
+ */
+@Composable
+internal fun IntervalsSettings(app: PravkaApp) {
+    val icuAthlete by app.settings.icuAthleteFlow.collectAsState(initial = "")
+    val icuKey by app.settings.icuKeyFlow.collectAsState(initial = "")
+    var athleteField by remember(icuAthlete) { mutableStateOf(icuAthlete) }
+    var keyField by remember(icuKey) { mutableStateOf(icuKey) }
+    PaperCard(
+        label = "ключ",
+        info = "Тренировки за последние двое суток сами встают в ленту (бег, вело, силовая, ходьба), " +
+            "а Garmin-длительность сна дописывается к записи «сон». Ключ: intervals.icu → " +
+            "Settings → Developer Settings → API Key.",
+    ) {
+        PaperField(value = athleteField, onValueChange = { athleteField = it }, label = "Athlete ID (i…)")
+        PaperField(value = keyField, onValueChange = { keyField = it }, label = "API Key")
+        Spacer(Modifier.height(6.dp))
+        Row {
+            Spacer(Modifier.weight(1f))
+            PaperButton("Сохранить и проверить", primary = true, onClick = {
+                app.appScope.launch {
+                    app.settings.setIcuAthlete(athleteField)
+                    app.settings.setIcuKey(keyField)
+                    Feedback.toast(app, "Сохранено — тренировки подтянутся в ближайший свип")
+                    app.icuSweeper.sweep(force = true)
+                }
+            })
         }
-        TextButton(onClick = {
-            app.appScope.launch {
-                app.settings.setIcuAthlete(athleteField)
-                app.settings.setIcuKey(keyField)
-                Feedback.toast(app, "Сохранено — тренировки подтянутся в ближайший свип")
-                app.icuSweeper.sweep(force = true)
-            }
-        }) { Text("Сохранить и проверить") }
-
-        // Notion mirror removed (owner's call): Sheets is the one mirror.
-
-        Spacer(Modifier.height(12.dp))
-        BackupsSection(app)
-
-        ZasechkaRulesSection(app)
-
-        // Своей выгрузки у ленты больше нет (09.09): вся жизнь одним xlsx,
-        // лист «Засечка» как база в Notion, — в «Ещё → Выгрузки».
-
-        Spacer(Modifier.height(18.dp))
-        AutoPilotSection(app)
-
-        Spacer(Modifier.height(18.dp))
-        NfcTagsSection(app)
     }
 }
 
@@ -1449,8 +1430,6 @@ private fun AutoPilotSection(app: PravkaApp) {
     val scope = app.appScope
     val settings = app.settings
 
-    Text("Автопилот", style = MaterialTheme.typography.titleSmall)
-    Spacer(Modifier.height(4.dp))
     Text(
         "Wi-Fi-места, Bluetooth машины и датчик движения: приезд закрывает " +
             "передвижение сам, остальное — вопросом-пушем.",
@@ -1881,7 +1860,7 @@ private fun PlaceDealDialog(
  * out so nothing important is ever trapped in private storage.
  */
 @Composable
-private fun BackupsSection(app: PravkaApp) {
+internal fun BackupsSection(app: PravkaApp) {
     val context = LocalContext.current
     var tick by remember { mutableStateOf(0) }
     var list by remember { mutableStateOf<List<ZasechkaStore.BackupInfo>>(emptyList()) }

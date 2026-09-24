@@ -72,6 +72,12 @@ import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.PaperLabel
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.PaperButton
+import ru.zf.pravka.ui.PaperField
+import ru.zf.pravka.ui.PaperSlider
+import ru.zf.pravka.ui.PaperToggle
+import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.trigger.startRestFromTab
 
 // Вкладка «Спорт»: сегодня, светофор, подходы, форма, разбор.
@@ -2646,9 +2652,14 @@ private fun TalkCard(talk: SportStore.Talk, onDelete: () -> Unit) {
     }
 }
 
+/**
+ * Настройки спорта. С 24.09.2026 всё про Notion (токен, хаб, план, Дневник,
+ * «Вся жизнь») — в «Подключениях → Notion» ([NotionSettings] ниже): это один
+ * ключ на всё приложение, а не часть спорта.
+ */
 @Composable
 internal fun BodySportSettings(app: PravkaApp) {
-    // Группа «Тело» открывается и без захода во вкладку «Спорт» — сторы могли
+    // Группа открывается и без захода во вкладку «Спорт» — сторы могли
     // быть не прочитаны, и счётчик «ждут отправки» показал бы ноль неправдой.
     LaunchedEffect(Unit) {
         runCatching { app.sportStore.load() }
@@ -2662,10 +2673,222 @@ internal fun BodySportSettings(app: PravkaApp) {
     val restSec by app.settings.restSecFlow.collectAsState(initial = 90)
     val talks by store.talksFlow.collectAsState()
     val rules by app.planStore.rulesFlow.collectAsState()
-    val notionToken by app.settings.notionTokenFlow.collectAsState(initial = "")
     val sessions by app.strengthStore.sessionsFlow.collectAsState()
     var sliderDays by remember(days) { mutableStateOf(days.toFloat()) }
     var sliderRest by remember(restSec) { mutableStateOf(restSec.toFloat()) }
+    val goalWeight by app.settings.goalWeightFlow.collectAsState(
+        initial = ru.zf.pravka.data.Settings.GOAL_WEIGHT_DEFAULT
+    )
+    var goalSlider by remember(goalWeight) { mutableStateOf(goalWeight.toFloat()) }
+    val notify by app.settings.sportNotifyFlow.collectAsState(initial = true)
+
+    Column(verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap)) {
+        PaperCard(label = "тренировки") {
+            PaperSlider(
+                title = "Отдых между подходами",
+                valueText = "${sliderRest.toInt()} сек",
+                value = sliderRest,
+                onValueChange = { sliderRest = it },
+                onValueChangeFinished = { app.appScope.launch { app.settings.setRestSec(sliderRest.toInt()) } },
+                valueRange = 30f..240f,
+                info = "«Таймер» в карточке упражнения и на плашке запускает именно этот отдых.",
+            )
+            PaperSlider(
+                title = "Глубина выгрузки",
+                valueText = "${sliderDays.toInt()} дн.",
+                value = sliderDays,
+                onValueChange = { sliderDays = it },
+                onValueChangeFinished = { app.appScope.launch { app.settings.setSportDays(sliderDays.toInt()) } },
+                valueRange = 30f..400f,
+                info = "Столько дней тренировок и здоровья держим на телефоне. " +
+                    "Глубже — дольше первая выгрузка, но длиннее графики.",
+            )
+            PaperSlider(
+                title = "Цель веса",
+                valueText = "${goalSlider.toInt()} кг",
+                value = goalSlider,
+                onValueChange = { goalSlider = it },
+                onValueChangeFinished = { app.appScope.launch { app.settings.setGoalWeight(goalSlider.toInt()) } },
+                valueRange = 65f..95f,
+                info = "К ней меряет дорогу карточка «Цели».",
+            )
+            PaperToggle(
+                title = "Тренировка приехала — уведомление",
+                checked = notify,
+                onCheckedChange = { v -> app.appScope.launch { app.settings.setSportNotify(v) } },
+                info = "Как только часы отдали тренировку: вердикт по твоим правилам " +
+                    "и кнопки самочувствия 2/3/4 прямо в шторке.",
+            )
+        }
+
+        PaperCard(label = "подходы в intervals") {
+            val pending = sessions.count { it.pendingSync }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (pending == 0) "Всё уехало" else "$pending ждут активность от часов",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                PaperButton("Донести", icon = Glyphs.Upload, onClick = {
+                    app.appScope.launch {
+                        val outcome = app.strengthEngine.syncPending(force = true)
+                        Feedback.toast(
+                            app,
+                            "Отправлено ${outcome.sent}, ждут ${outcome.waiting}" +
+                                (if (outcome.failed > 0) ", не вышло ${outcome.failed}" else ""),
+                            long = true,
+                        )
+                    }
+                })
+            }
+        }
+
+        PaperCard(label = "пороги из intervals.icu", info = "Правятся в intervals.icu — здесь только видно.") {
+            if (profile.known) {
+                val lines = buildList {
+                    if (profile.weightKg > 0) add("Вес" to fmt1(profile.weightKg) + " кг")
+                    if (profile.restingHr > 0) add("Пульс покоя" to "${profile.restingHr}")
+                    if (profile.runThresholdPaceSecPerKm > 0) {
+                        add("Порог бега" to pace(profile.runThresholdPaceSecPerKm) + "/км")
+                    }
+                    if (profile.runFtp > 0) add("FTP бега" to "${profile.runFtp} Вт")
+                    if (profile.runLthr > 0) add("ЛПАНО" to "${profile.runLthr}")
+                    if (profile.runMaxHr > 0) add("Макс. пульс" to "${profile.runMaxHr}")
+                    if (profile.rideFtp > 0) add("FTP вело" to "${profile.rideFtp} Вт")
+                    if (profile.swimThresholdPer100m > 0) {
+                        add("Порог плавания" to pace(profile.swimThresholdPer100m) + "/100 м")
+                    }
+                }
+                for ((label, value) in lines) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        PaperHint(label)
+                        Text(value, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            } else {
+                PaperHint(
+                    "Пороги ещё не приехали. Они тянутся при глубокой выгрузке — " +
+                        "нажми «Обновить» на вкладке «Спорт»."
+                )
+            }
+        }
+
+        PaperCard(label = "правила блока", info = "Правятся в Notion — здесь только видно. Читаются раз в сутки; токен и хаб — в «Подключениях → Notion».") {
+            if (rules.known) {
+                Text(rules.blockTitle.ifBlank { "Блок" }, style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(6.dp))
+                val lines = buildList {
+                    if (rules.runHrCeiling > 0) add("Потолок лёгкого бега" to "${rules.runHrCeiling}")
+                    if (rules.greyZoneLow > 0 && rules.greyZoneHigh > 0) {
+                        add("Серая зона" to "${rules.greyZoneLow}–${rules.greyZoneHigh}")
+                    }
+                    if (rules.cadenceMin > 0) add("Каденс" to "${rules.cadenceMin}+")
+                    if (rules.runsPerWeekMax > 0) add("Пробежек в неделю" to "не больше ${rules.runsPerWeekMax}")
+                    if (rules.hoursBetweenRuns > 0) add("Между пробежками" to "${rules.hoursBetweenRuns} ч")
+                    if (rules.rampNeedsPositiveTsb) add("Тест" to "только на плюсовом TSB")
+                    if (rules.testPrep.isNotBlank()) add("Перед тестом" to rules.testPrep.take(60))
+                }
+                for ((label, value) in lines) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        PaperHint(label)
+                        Text(value, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                if (rules.cancelOrder.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    PaperHint("Отмена: ${rules.cancelOrder}")
+                }
+                if (rules.weekPlan.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("Штатная неделя", style = MaterialTheme.typography.labelMedium)
+                    for ((day, session) in rules.weekPlan) {
+                        Text("$day — $session", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            } else {
+                PaperHint("Правила ещё не приезжали — нужен токен Notion и доступ к странице блока (Подключения → Notion).")
+            }
+        }
+
+        // Справочник упражнений: живой из базы Notion «Упражнения», файл сборки —
+        // семя и запас без сети. Отсюда видно, ЧЕМ сейчас матчатся строки плана —
+        // и почему «Суставы сверху вниз» вдруг без техники.
+        val bookVersion by app.exerciseBook.versionFlow.collectAsState()
+        var syncingBook by remember { mutableStateOf(false) }
+        var bookError by remember { mutableStateOf(app.notionExerciseSync.lastError()) }
+        PaperCard(
+            label = "справочник упражнений",
+            info = "Читается раз в сутки вместе с планом и по кнопке «Обновить» во " +
+                "вкладке. Без сети — последнее прочитанное, без токена — файл сборки. " +
+                "Голосовые имена движений — из файла сборки (tools/gen_reference.py).",
+        ) {
+            val book = app.exerciseBook
+            val zaryadka = remember(bookVersion) { book.ofBlock("Зарядка") }
+            Text(
+                if (book.fromNotion) "Из Notion, прочитан " + bookStampFormat.format(Date(book.fetchedAt))
+                else "Файл сборки от ${book.snapshotDate().ifBlank { "—" }} — Notion ещё не читался",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(4.dp))
+            PaperHint("Движений: ${book.all.size} · в блоке «Зарядка»: ${zaryadka.size}")
+            if (zaryadka.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                PaperHint(zaryadka.joinToString(" · ") { it.name.substringBefore(":") })
+            }
+            if (bookError.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(bookError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(8.dp))
+            PaperButton(
+                if (syncingBook) "Читаю…" else "Перечитать из Notion",
+                icon = Glyphs.Refresh,
+                enabled = !syncingBook,
+                onClick = {
+                    syncingBook = true
+                    app.appScope.launch {
+                        val ok = runCatching { app.notionExerciseSync.refresh(force = true) }.getOrDefault(false)
+                        syncingBook = false
+                        bookError = if (ok) "" else app.notionExerciseSync.lastError()
+                        Feedback.toast(
+                            app,
+                            if (ok) "Справочник обновлён: ${app.exerciseBook.all.size} движений"
+                            else bookError.ifBlank { "Справочник не обновился" },
+                            long = !ok,
+                        )
+                    }
+                },
+            )
+        }
+
+        if (talks.isNotEmpty()) {
+            PaperCard(label = "разборы тренера") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Сохранено разборов: ${talks.size}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    PaperButton("Убрать все", icon = Glyphs.Delete, onClick = { app.appScope.launch { store.clearTalks() } })
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Notion — один ключ на всё приложение: план и правила блока для Спорта,
+ * справочник упражнений, автогалочки в «Дневник», «Вся жизнь» в базы
+ * «Правка: разборы». До 24.09.2026 это лежало в настройках «Тела» и
+ * сохранялось тремя разными кнопками.
+ */
+@Composable
+internal fun NotionSettings(app: PravkaApp) {
+    LaunchedEffect(Unit) { runCatching { app.planStore.load() } }
+    val rules by app.planStore.rulesFlow.collectAsState()
+    val notionToken by app.settings.notionTokenFlow.collectAsState(initial = "")
     val notionHub by app.settings.notionHubFlow.collectAsState(
         initial = ru.zf.pravka.data.Settings.NOTION_HUB_DEFAULT
     )
@@ -2677,184 +2900,37 @@ internal fun BodySportSettings(app: PravkaApp) {
     // Ошибка Notion живёт не во Flow, а полем в синхронизаторе: перечитываем её
     // после каждой попытки, иначе на экране останется прошлая.
     var notionError by remember { mutableStateOf(app.notionPlanSync.lastError()) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
-    // Справочник упражнений: живой из базы Notion «Упражнения», файл сборки —
-    // семя и запас без сети. Отсюда видно, ЧЕМ сейчас матчатся строки плана —
-    // и почему «Суставы сверху вниз» вдруг без техники.
-    val bookVersion by app.exerciseBook.versionFlow.collectAsState()
-    var syncingBook by remember { mutableStateOf(false) }
-    var bookError by remember { mutableStateOf(app.notionExerciseSync.lastError()) }
-    PaperCard(label = "справочник упражнений") {
-        val book = app.exerciseBook
-        val zaryadka = remember(bookVersion) { book.ofBlock("Зарядка") }
-        Text(
-            if (book.fromNotion) "Из Notion, прочитан " + bookStampFormat.format(Date(book.fetchedAt))
-            else "Файл сборки от ${book.snapshotDate().ifBlank { "—" }} — Notion ещё не читался",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Spacer(Modifier.height(4.dp))
-        PaperHint("Движений: ${book.all.size} · в блоке «Зарядка»: ${zaryadka.size}")
-        if (zaryadka.isNotEmpty()) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                zaryadka.joinToString(" · ") { it.name.substringBefore(":") },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(
-            onClick = {
-                if (!syncingBook) {
-                    syncingBook = true
-                    app.appScope.launch {
-                        app.settings.setNotionToken(tokenDraft.trim())
-                        app.settings.setNotionHub(hubDraft.trim())
-                        val ok = runCatching { app.notionExerciseSync.refresh(force = true) }
-                            .getOrDefault(false)
-                        syncingBook = false
-                        bookError = if (ok) "" else app.notionExerciseSync.lastError()
-                        Feedback.toast(
-                            app,
-                            if (ok) "Справочник обновлён: ${app.exerciseBook.all.size} движений"
-                            else bookError.ifBlank { "Справочник не обновился" },
-                            long = !ok,
-                        )
-                    }
-                }
-            },
-            enabled = !syncingBook,
-        ) { Text(if (syncingBook) "Читаю…" else "Перечитать из Notion") }
-        if (bookError.isNotBlank()) {
+    Column(verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap)) {
+        PaperCard(
+            label = "ключ и хаб",
+            info = "Нужны две вещи: внутренний токен интеграции Notion и доступ этой " +
+                "интеграции к странице «Тело: велоформа и сила» — страница → «…» в правом " +
+                "верхнем углу → Connections → выбрать интеграцию. Доступ наследуется вниз: " +
+                "страницу блока отдельно открывать не надо. В поле хаба можно вставить прямо " +
+                "ссылку из «Copy link» — id из неё вынется сам. Хаб читается и сам: светофор " +
+                "колена, правило отмены и потолок бега лежат на нём, а не на странице блока. " +
+                "Для Дневника и «Всей жизни» интеграции нужны права на запись.",
+        ) {
+            PaperField(value = tokenDraft, onValueChange = { tokenDraft = it }, label = "Токен Notion (ntn_…)")
+            PaperField(value = hubDraft, onValueChange = { hubDraft = it }, label = "Страница-хаб: ссылка или id")
+            if (rules.sourceText.isNotBlank()) PaperHint("План прочитан и лежит на телефоне: ${rules.sourceText.length} зн.")
+            if (notionError.isNotBlank()) {
+                Text(notionError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (report.isNotBlank()) {
+                Text(
+                    report,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                )
+            }
             Spacer(Modifier.height(6.dp))
-            Text(
-                bookError,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        PaperHint(
-            "Читается раз в сутки вместе с планом и по кнопке «Обновить» во " +
-                "вкладке. Без сети — последнее прочитанное, без токена — файл сборки. " +
-                "Голосовые имена движений — из файла сборки (tools/gen_reference.py)."
-        )
-    }
-    Spacer(Modifier.height(12.dp))
-
-    PaperCard(label = "правила блока из notion") {
-        if (rules.known) {
-            Text(rules.blockTitle.ifBlank { "Блок" }, style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(6.dp))
-            val lines = buildList {
-                if (rules.runHrCeiling > 0) add("Потолок лёгкого бега" to "${rules.runHrCeiling}")
-                if (rules.greyZoneLow > 0 && rules.greyZoneHigh > 0) {
-                    add("Серая зона" to "${rules.greyZoneLow}–${rules.greyZoneHigh}")
-                }
-                if (rules.cadenceMin > 0) add("Каденс" to "${rules.cadenceMin}+")
-                if (rules.runsPerWeekMax > 0) add("Пробежек в неделю" to "не больше ${rules.runsPerWeekMax}")
-                if (rules.hoursBetweenRuns > 0) add("Между пробежками" to "${rules.hoursBetweenRuns} ч")
-                if (rules.rampNeedsPositiveTsb) add("Тест" to "только на плюсовом TSB")
-                if (rules.testPrep.isNotBlank()) add("Перед тестом" to rules.testPrep.take(60))
-            }
-            for ((label, value) in lines) {
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    PaperHint(label)
-                    Text(value, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-            if (rules.cancelOrder.isNotBlank()) {
-                Spacer(Modifier.height(6.dp))
-                PaperHint("Отмена: ${rules.cancelOrder}")
-            }
-            if (rules.weekPlan.isNotEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                Text("Штатная неделя", style = MaterialTheme.typography.labelMedium)
-                for ((day, session) in rules.weekPlan) {
-                    Text("$day — $session", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            PaperHint("Правится в Notion — здесь только видно. Читается раз в сутки.")
-        } else {
-            PaperHint(
-                "Правила ещё не приезжали. Нужны две вещи: внутренний токен " +
-                    "интеграции Notion (только чтение) и доступ этой интеграции " +
-                    "к странице «Тело: велоформа и сила» — страница → «…» в правом " +
-                    "верхнем углу → Connections → выбрать интеграцию. Доступ " +
-                    "наследуется вниз: страницу блока отдельно открывать не надо."
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(
-            value = tokenDraft,
-            onValueChange = { tokenDraft = it },
-            label = { Text("Токен Notion (ntn_…)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = hubDraft,
-            onValueChange = { hubDraft = it },
-            label = { Text("Страница-хаб: ссылка или id") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        PaperHint(
-            "Можно вставить прямо ссылку из «Copy link» — id из неё вынется сам. " +
-                "Хаб читается и сам: светофор колена, правило отмены и потолок бега " +
-                "лежат на нём, а не на странице блока."
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                app.appScope.launch {
-                    app.settings.setNotionToken(tokenDraft.trim())
-                    app.settings.setNotionHub(hubDraft.trim())
-                    Feedback.toast(app, "Сохранено")
-                }
-            }) { Text("Сохранить") }
-            OutlinedButton(
-                onClick = {
-                    if (!syncingPlan) {
-                        syncingPlan = true
-                        app.appScope.launch {
-                            val outcome = app.planSync.refresh(force = true)
-                            syncingPlan = false
-                            notionError = app.notionPlanSync.lastError()
-                            bookError = app.notionExerciseSync.lastError()
-                            val fresh = listOfNotNull(
-                                if (outcome.events) "календарь" else null,
-                                if (outcome.rules) "правила" else null,
-                                if (outcome.exercises) "справочник" else null,
-                            )
-                            Feedback.toast(
-                                app,
-                                when {
-                                    outcome.error.isNotBlank() -> outcome.error
-                                    fresh.isEmpty() -> "Ничего не обновилось"
-                                    else -> "Обновлено: " + fresh.joinToString(", ")
-                                },
-                                long = true,
-                            )
-                        }
-                    }
-                },
-                enabled = !syncingPlan,
-            ) { Text(if (syncingPlan) "Читаю…" else "Прочитать план") }
-        }
-        Spacer(Modifier.height(6.dp))
-        // «Проверить доступ» — не про удобство, а про то, чтобы ошибка была
-        // читаемой. «Не нашлось страниц» ничего не говорит о том, что чинить;
-        // построчный отчёт («токен принят, хаб отдал 404») указывает пальцем.
-        OutlinedButton(
-            onClick = {
-                if (!checking) {
+            ChipRowButtons {
+                // «Проверить доступ» — не про удобство, а про то, чтобы ошибка была
+                // читаемой. «Не нашлось страниц» ничего не говорит о том, что чинить;
+                // построчный отчёт («токен принят, хаб отдал 404») указывает пальцем.
+                PaperButton(if (checking) "Проверяю…" else "Проверить", icon = Glyphs.Search, enabled = !checking, onClick = {
                     checking = true
                     app.appScope.launch {
                         // Токен и хаб из полей — иначе проверяется прошлое,
@@ -2867,78 +2943,74 @@ internal fun BodySportSettings(app: PravkaApp) {
                             .getOrElse { e -> "Справочник: сорвалось — ${e.message ?: e.javaClass.simpleName}" }
                         checking = false
                     }
-                }
-            },
-            enabled = !checking,
-        ) { Text(if (checking) "Проверяю…" else "Проверить доступ") }
-        if (report.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                report,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-            )
-        }
-        if (notionError.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                notionError,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        if (rules.sourceText.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            PaperHint("Прочитано и лежит на телефоне: ${rules.sourceText.length} зн.")
+                })
+                PaperButton(if (syncingPlan) "Читаю…" else "Прочитать план", icon = Glyphs.Download, enabled = !syncingPlan, onClick = {
+                    syncingPlan = true
+                    app.appScope.launch {
+                        app.settings.setNotionToken(tokenDraft.trim())
+                        app.settings.setNotionHub(hubDraft.trim())
+                        val outcome = app.planSync.refresh(force = true)
+                        syncingPlan = false
+                        notionError = app.notionPlanSync.lastError()
+                        val fresh = listOfNotNull(
+                            if (outcome.events) "календарь" else null,
+                            if (outcome.rules) "правила" else null,
+                            if (outcome.exercises) "справочник" else null,
+                        )
+                        Feedback.toast(
+                            app,
+                            when {
+                                outcome.error.isNotBlank() -> outcome.error
+                                fresh.isEmpty() -> "Ничего не обновилось"
+                                else -> "Обновлено: " + fresh.joinToString(", ")
+                            },
+                            long = true,
+                        )
+                    }
+                })
+                PaperButton("Сохранить", primary = true,
+                    enabled = tokenDraft.trim() != notionToken || hubDraft.trim() != notionHub,
+                    onClick = {
+                        app.appScope.launch {
+                            app.settings.setNotionToken(tokenDraft.trim())
+                            app.settings.setNotionHub(hubDraft.trim())
+                            Feedback.toast(app, "Сохранено")
+                        }
+                    })
+            }
         }
 
-        Spacer(Modifier.height(14.dp))
         val diary by app.settings.notionDiaryFlow.collectAsState(initial = true)
         var pushingDiary by remember { mutableStateOf(false) }
         var diaryStatus by remember { mutableStateOf("") }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Автогалочки в «Дневник»", style = MaterialTheme.typography.bodyMedium)
-                PaperHint(
-                    "Зарядка, «сделано», feel, колено, вес и еда сами уезжают в " +
-                        "твою базу Notion. Галочки только ставятся, тексты пишутся " +
-                        "лишь в пустые ячейки — твоё руками написанное не трогается. " +
-                        "Интеграции нужны права на запись."
-                )
-            }
-            Switch(checked = diary, onCheckedChange = { v ->
-                app.appScope.launch { app.settings.setNotionDiary(v) }
-            })
-        }
-        if (diary) {
-            Spacer(Modifier.height(6.dp))
-            OutlinedButton(
-                onClick = {
-                    if (!pushingDiary) {
-                        pushingDiary = true
-                        app.appScope.launch {
-                            val done = runCatching { app.notionDiarySync.sync(force = true) }
-                                .getOrDefault(false)
-                            pushingDiary = false
-                            diaryStatus = when {
-                                app.notionDiarySync.lastError().isNotBlank() ->
-                                    app.notionDiarySync.lastError()
-                                done -> "Уехало: ${app.notionDiarySync.lastPushed()}"
-                                else -> "Нечего отправлять или уже уехало"
-                            }
+        PaperCard(label = "дневник") {
+            PaperToggle(
+                title = "Автогалочки в «Дневник»",
+                checked = diary,
+                onCheckedChange = { v -> app.appScope.launch { app.settings.setNotionDiary(v) } },
+                info = "Зарядка, «сделано», feel, колено, вес и еда сами уезжают в " +
+                    "твою базу Notion. Галочки только ставятся, тексты пишутся " +
+                    "лишь в пустые ячейки — твоё руками написанное не трогается.",
+            )
+            if (diary) {
+                if (diaryStatus.isNotBlank()) PaperHint(diaryStatus)
+                Spacer(Modifier.height(4.dp))
+                PaperButton(if (pushingDiary) "Отправляю…" else "Отправить сейчас", icon = Glyphs.Upload, enabled = !pushingDiary, onClick = {
+                    pushingDiary = true
+                    app.appScope.launch {
+                        val done = runCatching { app.notionDiarySync.sync(force = true) }.getOrDefault(false)
+                        pushingDiary = false
+                        diaryStatus = when {
+                            app.notionDiarySync.lastError().isNotBlank() -> app.notionDiarySync.lastError()
+                            done -> "Уехало: ${app.notionDiarySync.lastPushed()}"
+                            else -> "Нечего отправлять или уже уехало"
                         }
                     }
-                },
-                enabled = !pushingDiary,
-            ) { Text(if (pushingDiary) "Отправляю…" else "Отправить в Дневник сейчас") }
-            if (diaryStatus.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                PaperHint(diaryStatus)
+                })
             }
         }
 
-        // ---- Вся жизнь в Notion: лента, еда, спорт, дни, паттерны ----
-        Spacer(Modifier.height(14.dp))
+        // ---- Вся жизнь в Notion: лента, еда, спорт, дни ----
         val life by app.settings.notionLifeFlow.collectAsState(initial = true)
         val lifeHub by app.settings.notionLifeHubFlow.collectAsState(
             initial = ru.zf.pravka.data.NotionLifeSync.HUB_DEFAULT
@@ -2946,212 +3018,72 @@ internal fun BodySportSettings(app: PravkaApp) {
         var lifeHubDraft by remember(lifeHub) { mutableStateOf(lifeHub) }
         var pushingLife by remember { mutableStateOf(false) }
         val lifeStatus by app.notionLifeSync.statusFlow.collectAsState()
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Вся жизнь — в «Правка: разборы»", style = MaterialTheme.typography.bodyMedium)
+        PaperCard(label = "вся жизнь") {
+            PaperToggle(
+                title = "Вся жизнь — в «Правка: разборы»",
+                checked = life,
+                onCheckedChange = { v -> app.appScope.launch { app.settings.setNotionLife(v) } },
+                info = "Раз в час лента Засечки, еда, тренировки, силовые, зарядка, " +
+                    "телефон и форма по дням уезжают строками в свои базы. " +
+                    "Разбор читает Notion. Чужие колонки («Дети дома», «Якорь утра») " +
+                    "не трогаются. Первый заезд — вся история, шесть сотен строк: Notion " +
+                    "пускает три запроса в секунду, поэтому займёт около часа и пойдёт " +
+                    "пачками на каждом тике. Дальше — по паре десятков правок в час.",
+            )
+            if (life) {
+                PaperField(value = lifeHubDraft, onValueChange = { lifeHubDraft = it }, label = "Хаб «Правка: разборы»: ссылка или id")
                 PaperHint(
-                    "Раз в час лента Засечки, еда, тренировки, силовые, зарядка, " +
-                        "телефон и форма по дням уезжают строками в свои базы, " +
-                        "паттерны ночного поиска и твои вердикты по ним — в " +
-                        "«Паттерны» и «Подтверждения». CSV больше не нужен: разбор " +
-                        "читает Notion. Чужие колонки («Дети дома», «Якорь утра», " +
-                        "статусы паттернов) не трогаются."
+                    "Интеграции (тот же токен) нужен доступ к этой странице: " +
+                        "… → Connections. Базы под ней находятся по названиям сами."
                 )
-            }
-            Switch(checked = life, onCheckedChange = { v ->
-                app.appScope.launch { app.settings.setNotionLife(v) }
-            })
-        }
-        if (life) {
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = lifeHubDraft,
-                onValueChange = { lifeHubDraft = it },
-                label = { Text("Хаб «Правка: разборы»: ссылка или id") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            PaperHint(
-                "Интеграции (тот же токен, что выше) нужен доступ к этой странице: " +
-                    "… → Connections. Базы под ней находятся по названиям сами."
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    app.appScope.launch {
-                        app.settings.setNotionLifeHub(lifeHubDraft.trim())
-                        Feedback.toast(app, "Сохранено")
+                // Состояние словами и всегда с временем последней удачной записи:
+                // «отправлено 12 ✓ · последняя запись 14:20». Пустая строка до
+                // первого тика читалась как поломка — теперь она говорит, чего ждать.
+                PaperHint(
+                    lifeStatus.ifBlank {
+                        "Состояние появится после первого тика службы — до пяти минут после запуска. " +
+                            "Не терпится — «Синхронизировать»."
                     }
-                }) { Text("Сохранить") }
-                OutlinedButton(
-                    onClick = {
-                        if (!pushingLife) {
-                            pushingLife = true
-                            app.appScope.launch {
-                                runCatching { app.notionLifeSync.sync(force = true) }
-                                pushingLife = false
-                                val err = app.notionLifeSync.lastError()
-                                if (err.isNotBlank()) Feedback.toast(app, err, long = true)
-                            }
+                )
+                Spacer(Modifier.height(4.dp))
+                ChipRowButtons {
+                    PaperButton(if (pushingLife) "Отправляю…" else "Синхронизировать", icon = Glyphs.Refresh, enabled = !pushingLife, onClick = {
+                        pushingLife = true
+                        app.appScope.launch {
+                            runCatching { app.notionLifeSync.sync(force = true) }
+                            pushingLife = false
+                            val err = app.notionLifeSync.lastError()
+                            if (err.isNotBlank()) Feedback.toast(app, err, long = true)
                         }
-                    },
-                    enabled = !pushingLife,
-                ) { Text(if (pushingLife) "Отправляю…" else "Синхронизировать сейчас") }
-            }
-            Spacer(Modifier.height(4.dp))
-            // Состояние словами и всегда с временем последней удачной записи:
-            // «отправлено 12 ✓ · последняя запись 14:20». Пустая строка до
-            // первого тика читалась как поломка — теперь она говорит, чего ждать.
-            PaperHint(
-                lifeStatus.ifBlank {
-                    "Состояние появится после первого тика службы — до пяти минут после запуска. " +
-                        "Не терпится — «Синхронизировать сейчас»."
+                    })
+                    PaperButton("Сбросить карту", icon = Glyphs.Undo, onClick = {
+                        app.appScope.launch {
+                            app.notionLifeSync.resetMaps()
+                            Feedback.toast(app, "Карта страниц сброшена — следующий синк сверится с базами заново")
+                        }
+                    })
+                    PaperButton("Сохранить", primary = true, enabled = lifeHubDraft.trim() != lifeHub, onClick = {
+                        app.appScope.launch {
+                            app.settings.setNotionLifeHub(lifeHubDraft.trim())
+                            Feedback.toast(app, "Сохранено")
+                        }
+                    })
                 }
-            )
-            TextButton(onClick = {
-                app.appScope.launch {
-                    app.notionLifeSync.resetMaps()
-                    Feedback.toast(app, "Карта страниц сброшена — следующий синк сверится с базами заново")
-                }
-            }) { Text("Сбросить карту страниц") }
-            PaperHint(
-                "Первый заезд — вся история, шесть сотен строк: Notion пускает три " +
-                    "запроса в секунду, поэтому займёт около часа и пойдёт пачками на " +
-                    "каждом тике. Дальше — по паре десятков правок в час."
-            )
-        }
-    }
-
-    Spacer(Modifier.height(14.dp))
-
-    PaperCard(label = "настройки спорта") {
-        Text("Отдых между подходами: ${sliderRest.toInt()} сек", style = MaterialTheme.typography.bodyMedium)
-        Slider(
-            value = sliderRest,
-            onValueChange = { sliderRest = it },
-            onValueChangeFinished = {
-                app.appScope.launch { app.settings.setRestSec(sliderRest.toInt()) }
-            },
-            valueRange = 30f..240f,
-        )
-        PaperHint("Чип «⏱» в карточке и на плашке запускает именно этот отдых.")
-        Spacer(Modifier.height(12.dp))
-        Text("Глубина выгрузки: ${sliderDays.toInt()} дн.", style = MaterialTheme.typography.bodyMedium)
-        Slider(
-            value = sliderDays,
-            onValueChange = { sliderDays = it },
-            onValueChangeFinished = {
-                app.appScope.launch { app.settings.setSportDays(sliderDays.toInt()) }
-            },
-            valueRange = 30f..400f,
-        )
-        PaperHint(
-            "Столько дней тренировок и здоровья держим на телефоне. " +
-                "Глубже — дольше первая выгрузка, но длиннее графики."
-        )
-        Spacer(Modifier.height(12.dp))
-        val goalWeight by app.settings.goalWeightFlow.collectAsState(
-            initial = ru.zf.pravka.data.Settings.GOAL_WEIGHT_DEFAULT
-        )
-        var goalSlider by remember(goalWeight) { mutableStateOf(goalWeight.toFloat()) }
-        Text("Цель веса: ${goalSlider.toInt()} кг", style = MaterialTheme.typography.bodyMedium)
-        Slider(
-            value = goalSlider,
-            onValueChange = { goalSlider = it },
-            onValueChangeFinished = {
-                app.appScope.launch { app.settings.setGoalWeight(goalSlider.toInt()) }
-            },
-            valueRange = 65f..95f,
-        )
-        PaperHint("К ней меряет дорогу карточка «Цели октября».")
-        Spacer(Modifier.height(12.dp))
-        val notify by app.settings.sportNotifyFlow.collectAsState(initial = true)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Тренировка приехала — уведомление", style = MaterialTheme.typography.bodyMedium)
-                PaperHint(
-                    "Как только часы отдали тренировку: вердикт по твоим правилам " +
-                        "и кнопки самочувствия 2/3/4 прямо в шторке."
-                )
-            }
-            Switch(checked = notify, onCheckedChange = { v ->
-                app.appScope.launch { app.settings.setSportNotify(v) }
-            })
-        }
-        Spacer(Modifier.height(12.dp))
-        val pending = sessions.count { it.pendingSync }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Подходы в intervals", style = MaterialTheme.typography.bodyMedium)
-                PaperHint(
-                    if (pending == 0) "всё уехало"
-                    else "$pending ждут активность от часов"
-                )
-            }
-            OutlinedButton(onClick = {
-                app.appScope.launch {
-                    val outcome = app.strengthEngine.syncPending(force = true)
-                    Feedback.toast(
-                        app,
-                        "Отправлено ${outcome.sent}, ждут ${outcome.waiting}" +
-                            (if (outcome.failed > 0) ", не вышло ${outcome.failed}" else ""),
-                        long = true,
-                    )
-                }
-            }) { Text("Донести") }
-        }
-        Spacer(Modifier.height(12.dp))
-        if (profile.known) {
-            Text("Пороги из intervals.icu", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
-            val lines = buildList {
-                if (profile.weightKg > 0) add("Вес" to fmt1(profile.weightKg) + " кг")
-                if (profile.restingHr > 0) add("Пульс покоя" to "${profile.restingHr}")
-                if (profile.runThresholdPaceSecPerKm > 0) {
-                    add("Порог бега" to pace(profile.runThresholdPaceSecPerKm) + "/км")
-                }
-                if (profile.runFtp > 0) add("FTP бега" to "${profile.runFtp} Вт")
-                if (profile.runLthr > 0) add("ЛПАНО" to "${profile.runLthr}")
-                if (profile.runMaxHr > 0) add("Макс. пульс" to "${profile.runMaxHr}")
-                if (profile.rideFtp > 0) add("FTP вело" to "${profile.rideFtp} Вт")
-                if (profile.swimThresholdPer100m > 0) {
-                    add("Порог плавания" to pace(profile.swimThresholdPer100m) + "/100 м")
-                }
-            }
-            for ((label, value) in lines) {
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    PaperHint(label)
-                    Text(value, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            PaperHint("Правятся в intervals.icu — здесь только видно.")
-        } else {
-            PaperHint(
-                "Пороги ещё не приехали. Они тянутся при глубокой выгрузке — " +
-                    "нажми «Обновить» на вкладке «Спорт»."
-            )
-        }
-        Spacer(Modifier.height(12.dp))
-        PaperHint(
-            "Справочник: ${app.exerciseBook.all.size} упражнений, снимок " +
-                app.exerciseBook.snapshotDate() + ". Лежит файлом в приложении — " +
-                "работает без интернета. Правится в Notion, пересобирается скриптом."
-        )
-        if (talks.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(onClick = { scope.launch { store.clearTalks() } }) {
-                Text("Убрать все разборы (${talks.size})")
             }
         }
     }
+}
+
+/** Кнопки плашки в ряд с переносом: на внешнем экране Fold три в строку не встают. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun ChipRowButtons(content: @Composable androidx.compose.foundation.layout.FlowRowScope.() -> Unit) {
+    androidx.compose.foundation.layout.FlowRow(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
+    )
 }
 
 // ---- Мелочи ----

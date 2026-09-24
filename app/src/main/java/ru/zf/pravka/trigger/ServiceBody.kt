@@ -753,7 +753,7 @@ internal fun PravkaAccessibilityService.showFoodMenu() {
             listOf(
                 BodyButtonController.MenuItem(head) { openFoodTab() },
                 BodyButtonController.MenuItem("Записать еду") { onFoodTap() },
-                BodyButtonController.MenuItem("Настройки") { openSettingsTab() },
+                BodyButtonController.MenuItem("Настройки") { openSettingsTab("FOOD") },
                 BodyButtonController.MenuItem("Закрыть") { eButton?.hideMenu() },
             )
         )

@@ -72,6 +72,10 @@ import ru.zf.pravka.ui.microColor
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.PaperLabel
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.PaperButton
+import ru.zf.pravka.ui.PaperToggle
+import ru.zf.pravka.ui.ScreenPad
 
 // Вкладка «Еда»: дневник приёмов с КБЖУ.
 //
@@ -842,9 +846,7 @@ internal fun BodyFoodSettings(app: PravkaApp) {
     val carbs by app.settings.foodCarbsFlow.collectAsState(initial = 0)
     val toIcu by app.settings.foodToIcuFlow.collectAsState(initial = true)
     val toRibbon by app.settings.foodToRibbonFlow.collectAsState(initial = true)
-    val tEnabled by app.settings.tEnabledFlow.collectAsState(initial = true)
     val meals by app.foodStore.mealsFlow.collectAsState()
-    val scope = rememberCoroutineScope()
 
     var kcalText by remember(kcal) { mutableStateOf(kcal.toString()) }
     var proteinText by remember(protein) { mutableStateOf(protein.toString()) }
@@ -862,78 +864,77 @@ internal fun BodyFoodSettings(app: PravkaApp) {
         }
     }
 
-    PaperCard(label = "настройки еды") {
-        Text("Цели на день", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            NumberField("Ккал", kcalText, Modifier.weight(1f)) { kcalText = it }
-            NumberField("Белки", proteinText, Modifier.weight(1f)) { proteinText = it }
+    Column(verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap)) {
+        PaperCard(
+            label = "цели на день",
+            info = "«Посчитать от веса» берёт настоящий вес из intervals.icu: Миффлин-Сан-Жеор " +
+                "при умеренной активности, белок 1,8 г/кг, жиры 0,9 г/кг, углеводы — остаток. " +
+                "Посчитанное ложится в поля — проверь и сохрани.",
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                NumberField("Ккал", kcalText, Modifier.weight(1f)) { kcalText = it }
+                NumberField("Белки", proteinText, Modifier.weight(1f)) { proteinText = it }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                NumberField("Жиры", fatText, Modifier.weight(1f)) { fatText = it }
+                NumberField("Углеводы", carbsText, Modifier.weight(1f)) { carbsText = it }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                PaperButton("От веса", icon = Glyphs.Sport, onClick = {
+                    // Считаем от настоящего веса из intervals.icu, а не от памяти.
+                    val weight = app.sportStore.lastWeight()
+                        .takeIf { it > 0 } ?: app.sportStore.profileFlow.value.weightKg
+                    if (weight <= 0) {
+                        Feedback.toast(app, "Вес неизвестен — он приезжает из intervals.icu")
+                    } else {
+                        val computed = computeTargets(weight)
+                        kcalText = computed.kcal.toString()
+                        proteinText = computed.protein.toString()
+                        fatText = computed.fat.toString()
+                        carbsText = computed.carbs.toString()
+                        Feedback.toast(app, "Посчитал от ${Math.round(weight)} кг — проверь и сохрани")
+                    }
+                })
+                Spacer(Modifier.weight(1f))
+                PaperButton("Сохранить", primary = true, onClick = saveTargets)
+            }
         }
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            NumberField("Жиры", fatText, Modifier.weight(1f)) { fatText = it }
-            NumberField("Углеводы", carbsText, Modifier.weight(1f)) { carbsText = it }
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = saveTargets) { Text("Сохранить цели") }
-            OutlinedButton(onClick = {
-                // Считаем от настоящего веса из intervals.icu, а не от памяти:
-                // Миффлин-Сан-Жеор при умеренной активности, белок 1,8 г/кг,
-                // жиры 0,9 г/кг, углеводы — остаток.
-                val weight = app.sportStore.lastWeight()
-                    .takeIf { it > 0 } ?: app.sportStore.profileFlow.value.weightKg
-                if (weight <= 0) {
-                    Feedback.toast(app, "Вес неизвестен — он приезжает из intervals.icu")
-                } else {
-                    val computed = computeTargets(weight)
-                    kcalText = computed.kcal.toString()
-                    proteinText = computed.protein.toString()
-                    fatText = computed.fat.toString()
-                    carbsText = computed.carbs.toString()
-                    Feedback.toast(app, "Посчитал от ${Math.round(weight)} кг — проверь и сохрани")
-                }
-            }) { Text("Посчитать от веса") }
-        }
-        Spacer(Modifier.height(14.dp))
-        SwitchRow(
-            "Кнопка «Т» на экране",
-            "Четвёртая в связке под «Д». Одна на всё тело: подходы, еда, " +
-                "зарядка, вопрос — намерение определяет модель.",
-            tEnabled,
-        ) { v -> app.appScope.launch { app.settings.setTEnabled(v) } }
-        SwitchRow(
-            "Приписывать к ленте",
-            "КБЖУ дописывается к записи «Еда» в Засечке, если она в это время " +
-                "есть. Своих записей лента от еды не отращивает.",
-            toRibbon,
-        ) { v -> app.appScope.launch { app.settings.setFoodToRibbon(v) } }
-        SwitchRow(
-            "Писать в intervals.icu",
-            "Итог дня уезжает в wellness (ккал, Б/Ж/У) — там эти поля пустуют, " +
-                "и оттуда их видит разбор тренировок.",
-            toIcu,
-        ) { v -> app.appScope.launch { app.settings.setFoodToIcu(v) } }
-        Spacer(Modifier.height(10.dp))
-        // Выгрузки дневника здесь нет: вся жизнь одним xlsx — в «Ещё → Выгрузки».
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
-                scope.launch {
+
+        PaperCard(label = "куда уходит еда") {
+            PaperToggle(
+                title = "Приписывать к ленте",
+                checked = toRibbon,
+                onCheckedChange = { v -> app.appScope.launch { app.settings.setFoodToRibbon(v) } },
+                info = "КБЖУ дописывается к записи «Еда» в Засечке, если она в это время " +
+                    "есть. Своих записей лента от еды не отращивает.",
+            )
+            PaperToggle(
+                title = "Писать в intervals.icu",
+                checked = toIcu,
+                onCheckedChange = { v -> app.appScope.launch { app.settings.setFoodToIcu(v) } },
+                info = "Итог дня уезжает в wellness (ккал, Б/Ж/У) — там эти поля пустуют, " +
+                    "и оттуда их видит разбор тренировок.",
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PaperHint(
+                    "Записанных приёмов: ${meals.count { it.confirmed }}. " +
+                        "Файл food.json — в часовых копиях вместе с лентой.",
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            PaperButton("Донести в intervals.icu", icon = Glyphs.Upload, onClick = {
+                app.appScope.launch {
                     val done = app.foodEngine.syncPending(force = true)
-                    Feedback.toast(
-                        app,
-                        if (done > 0) "Дней уехало: $done" else "Всё уже на месте",
-                    )
+                    Feedback.toast(app, if (done > 0) "Дней уехало: $done" else "Всё уже на месте")
                 }
-            }) { Text("Донести в intervals.icu") }
+            })
         }
-        Spacer(Modifier.height(8.dp))
-        PaperHint(
-            "В дневнике ${meals.count { it.confirmed }} записанных приёмов. " +
-                "Файл food.json — в часовых копиях вместе с лентой."
-        )
     }
 }
+
 
 @Composable
 private fun NumberField(

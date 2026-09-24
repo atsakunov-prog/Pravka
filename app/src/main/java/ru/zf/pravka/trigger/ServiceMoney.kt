@@ -488,7 +488,7 @@ internal fun PravkaAccessibilityService.showMoneyMenu() {
         if (questions > 0) items.add(RaznoskaButtonController.MenuItem("? Вопросов сверки: $questions") { openMoneyTab() })
         items.add(RaznoskaButtonController.MenuItem("Набрать текстом") { openMoneyTypeIn("") })
         items.add(RaznoskaButtonController.MenuItem("Открыть Деньги") { openMoneyTab() })
-        items.add(RaznoskaButtonController.MenuItem("Настройки") { openSettingsTab() })
+        items.add(RaznoskaButtonController.MenuItem("Настройки") { openSettingsTab("MONEY") })
         items.add(RaznoskaButtonController.MenuItem("Закрыть") { mButton?.hideMenu() })
         mButton?.showMenu(items)
     }

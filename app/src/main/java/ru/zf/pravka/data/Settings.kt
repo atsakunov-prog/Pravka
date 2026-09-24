@@ -228,6 +228,16 @@ class Settings(private val context: Context) {
     /** Модель и усилие для дороги — читается перед каждым запросом. */
     suspend fun modelChoice(route: ModelRoute): ModelChoice = modelChoiceFlow(route).first()
 
+    /**
+     * Сколько дорог владелец увёл от заводского — строка «Модели» в меню
+     * настроек пишет «своих: 2» вместо полотна из семнадцати дорог.
+     */
+    fun modelChoicesChangedFlow(): Flow<Int> = context.dataStore.data.map { prefs ->
+        ModelRoute.entries.count { route ->
+            !ModelChoice.of(route, prefs[modelKey(route)], prefs[effortKey(route)]).isDefaultFor(route)
+        }
+    }
+
     suspend fun setModel(route: ModelRoute, model: String) {
         if (model !in Models.ALL) return
         context.dataStore.edit { it[modelKey(route)] = model }

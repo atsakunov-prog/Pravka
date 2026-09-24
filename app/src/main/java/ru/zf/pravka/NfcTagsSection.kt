@@ -64,16 +64,22 @@ fun NfcTagsSection(app: PravkaApp) {
 
     val adapter = remember { runCatching { NfcAdapter.getDefaultAdapter(context) }.getOrNull() }
 
-    Text("Метки NFC", style = MaterialTheme.typography.titleSmall)
-    Spacer(Modifier.height(4.dp))
-    Text(
-        "Наклейка на стене — это засечка без телефона в руках. Приложил, зайдя " +
-            "в туалет, приложил, выйдя. Работает и с погашенным экраном на " +
-            "заблокированном телефоне. На саму метку уходит только номер: что " +
-            "она делает, задаётся здесь и меняется без перезаписи наклейки.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    // Заголовок «метки nfc» — у плашки снаружи; пояснение — за «i».
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Засечка без телефона в руках: приложил — дело началось или кончилось.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        ru.zf.pravka.ui.InfoButton(
+            "Метки NFC",
+            "Наклейка на стене — это засечка без телефона в руках. Приложил, зайдя " +
+                "в туалет, приложил, выйдя. Работает и с погашенным экраном на " +
+                "заблокированном телефоне. На саму метку уходит только номер: что " +
+                "она делает, задаётся здесь и меняется без перезаписи наклейки.",
+        )
+    }
     Spacer(Modifier.height(8.dp))
 
     when {

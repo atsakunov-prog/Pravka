@@ -1511,7 +1511,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                     FloatingButtonController.MenuItem("Обучить", red) { learnFromField() },
                     FloatingButtonController.MenuItem("Сброс", red) { resetStuck() },
                     FloatingButtonController.MenuItem("Открыть Правку", red) { openPravkaPrompts() },
-                    FloatingButtonController.MenuItem("Настройки", red) { openSettingsTab() },
+                    FloatingButtonController.MenuItem("Настройки", red) { openSettingsTab("PRAVKA") },
                     FloatingButtonController.MenuItem("Закрыть", red) { floatingButton?.hideMenu() },
                 ),
             )
@@ -2507,11 +2507,17 @@ class PravkaAccessibilityService : AccessibilityService() {
      * каждой кнопки (владелец, 19.09.2026: «в меню длинного тапа на каждую
      * кнопку тоже возможность открыть настройки»).
      */
-    internal fun openSettingsTab() {
+    /**
+     * «Настройки» из меню кнопки. [group] — имя группы этой кнопки
+     * (`SettingsGroup`): долгое нажатие на «З» → «Настройки» открывает
+     * Засечку, а не меню всех групп (24.09.2026).
+     */
+    internal fun openSettingsTab(group: String? = null) {
         runCatching {
             startActivity(
                 android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
                     .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_SETTINGS)
+                    .apply { if (group != null) putExtra(ru.zf.pravka.MainActivity.EXTRA_SETTINGS_GROUP, group) }
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }

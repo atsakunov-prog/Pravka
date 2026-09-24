@@ -30,9 +30,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -92,6 +89,11 @@ import ru.zf.pravka.ui.PravkaTheme
 import ru.zf.pravka.ui.SettingsAction
 import ru.zf.pravka.ui.StatsAction
 import ru.zf.pravka.ui.TabHeader
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.PaperRow
+import ru.zf.pravka.ui.RowRule
+import ru.zf.pravka.ui.ScreenPad
+import ru.zf.pravka.ui.tint
 
 // Tabs: Засечка (the daily surface), then the Правка service tabs.
 // Editorial "proofreader" design: paper, ink, red pen (ui/Theme.kt).
@@ -119,6 +121,13 @@ class MainActivity : ComponentActivity() {
         const val TAB_MONEY = "money"
         const val TAB_SETTINGS = "settings"
         const val TAB_PROMPTS = "prompts"
+
+        /**
+         * Группа настроек, в которую приземлить «Настройки» из меню плавающей
+         * кнопки (24.09.2026): долгое нажатие на «З» → «Настройки» открывает
+         * Засечку, а не меню всех групп. Значение — имя [SettingsGroup].
+         */
+        const val EXTRA_SETTINGS_GROUP = "settings_group"
 
         // Кнопка еды: «сфоткай тарелку» / «штрихкод» с длинного нажатия
         // открывают Тело (Е) и сразу запускают камеру или сканер.
@@ -198,6 +207,12 @@ class MainActivity : ComponentActivity() {
     // где был («должно попадать на засечку»). Теперь просьба живёт состоянием,
     // и экран на неё реагирует в любой момент жизни активити.
     private val tabRequest = mutableStateOf<Tab?>(null)
+    private val groupRequest = mutableStateOf<SettingsGroup?>(null)
+
+    private fun groupOf(intent: android.content.Intent?): SettingsGroup? =
+        intent?.getStringExtra(EXTRA_SETTINGS_GROUP)?.let { name ->
+            SettingsGroup.entries.firstOrNull { it.name == name }
+        }
     private val foodActionRequest = mutableStateOf("")
 
     private fun tabOf(intent: android.content.Intent?): Tab? =
@@ -217,6 +232,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         tabOf(intent)?.let { tabRequest.value = it }
+        groupOf(intent)?.let { groupRequest.value = it }
         intent.getStringExtra(EXTRA_FOOD_ACTION)?.takeIf { it.isNotBlank() }?.let {
             foodActionRequest.value = it
         }
@@ -229,6 +245,7 @@ class MainActivity : ComponentActivity() {
         // Без явной просьбы открываем таймшит: это экран, который он смотрит
         // каждый день, всё остальное — служебное.
         val initialTab = tabOf(intent) ?: Tab.ZASECHKA
+        groupOf(intent)?.let { groupRequest.value = it }
         setContent {
             PravkaTheme {
                 // Вид плашек — из настроек, один раз на всё приложение
@@ -242,6 +259,8 @@ class MainActivity : ComponentActivity() {
                     foodAction = foodAction,
                     tabRequest = tabRequest.value,
                     onTabRequestHandled = { tabRequest.value = null },
+                    groupRequest = groupRequest.value,
+                    onGroupRequestHandled = { groupRequest.value = null },
                     foodActionRequest = foodActionRequest.value,
                     onFoodActionHandled = { foodActionRequest.value = "" },
                     settings = app.settings,
@@ -322,15 +341,37 @@ private val SERVICE_TABS = listOf(
     Tab.SETTINGS,
 )
 
+/** Нижние кнопки и их значки. */
+private val BOTTOM_TABS: List<Pair<Tab, androidx.compose.ui.graphics.vector.ImageVector>> = listOf(
+    Tab.PRAVKA to Glyphs.Pravka,
+    Tab.ZASECHKA to Glyphs.Zasechka,
+    Tab.TODOIST to Glyphs.Delo,
+    Tab.SPORT to Glyphs.Sport,
+    Tab.FOOD to Glyphs.Food,
+    Tab.MONEY to Glyphs.Money,
+    Tab.MORE to Glyphs.More,
+)
+
+/** Режим вкладки: узор плашек и краска. Служебное — в родном оранжевом. */
+private fun decorOf(tab: Tab): ModeDecor = when (tab) {
+    Tab.PRAVKA -> ModeDecor.PRAVKA
+    Tab.ZASECHKA -> ModeDecor.ZASECHKA
+    Tab.TODOIST -> ModeDecor.DELA
+    Tab.SPORT -> ModeDecor.SPORT
+    Tab.FOOD -> ModeDecor.FOOD
+    Tab.MONEY -> ModeDecor.MONEY
+    else -> ModeDecor.SERVICE
+}
+
 /** Одна строка про то, зачем эта вкладка — чтобы не открывать её наугад. */
 private fun serviceHint(tab: Tab): String = when (tab) {
-    Tab.REPORT -> "День в графиках: балл, лента по часам, телефон, тело, еда — и тот же день неделю назад рядом"
-    Tab.SETTINGS -> "Общее: ключ Anthropic, кнопки на экране, служба, обновления, модели"
-    Tab.DICTIONARY -> "Как писать имена и термины: заменять, подсказывать, не трогать"
-    Tab.PROMPTS -> "Тексты запросов ко всем режимам — правятся и возвращаются к заводским"
-    Tab.LEARNING -> "Разбор твоих правок по кнопке и принятые правила"
-    Tab.REVIEWS -> "Ночной разбор диктовок и тень второй модели: что нашёл, что применил, ответ текстом"
-    Tab.LOGS -> "Что делала служба: кнопки, свипы, выгрузки, ошибки"
+    Tab.REPORT -> "день в графиках и тот же день неделю назад"
+    Tab.SETTINGS -> "режимы, голос и Claude, подключения, кнопки"
+    Tab.DICTIONARY -> "как писать имена и термины"
+    Tab.PROMPTS -> "тексты запросов ко всем режимам"
+    Tab.LEARNING -> "разбор твоих правок и принятые правила"
+    Tab.REVIEWS -> "ночной разбор, правка промпта, сравнение"
+    Tab.LOGS -> "что делала служба, выгрузки для разбора"
     else -> ""
 }
 
@@ -341,45 +382,55 @@ private sealed class Page {
     data object Cost : Page()
 }
 
+/** Значок служебного экрана — тот же, что у него в шапке. */
+private fun serviceGlyph(tab: Tab): androidx.compose.ui.graphics.vector.ImageVector = when (tab) {
+    Tab.REVIEWS -> Glyphs.Moon
+    Tab.DICTIONARY -> Glyphs.Dictionary
+    Tab.PROMPTS -> Glyphs.Scroll
+    Tab.LEARNING -> Glyphs.Learn
+    Tab.LOGS -> Glyphs.ListLines
+    Tab.SETTINGS -> Glyphs.Gear
+    Tab.REPORT -> Glyphs.Stats
+    Tab.STATS -> Glyphs.Stats
+    else -> Glyphs.More
+}
+
+/**
+ * «Ещё» — две полки (24.09.2026): что учит и чистит саму Правку (разборы,
+ * словарь, промпты, обучение) и служебное (логи, настройки). Раньше — шесть
+ * голых карточек подряд с абзацем под каждой; значок и строка в одну линию
+ * читаются быстрее, чем пояснение.
+ */
 @Composable
 private fun MoreList(onOpen: (Tab) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(ScreenPad.Padding),
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
-        for (item in SERVICE_TABS) {
-            Card(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpen(item) }
-            ) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            stringResource(item.titleRes),
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        HintText(serviceHint(item))
-                    }
-                    Icon(
-                        Icons.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        for ((label, items) in MORE_SHELVES) {
+            ru.zf.pravka.ui.PaperCard(label = label) {
+                items.forEachIndexed { i, item ->
+                    if (i > 0) RowRule()
+                    PaperRow(
+                        title = stringResource(item.titleRes),
+                        hint = serviceHint(item),
+                        icon = serviceGlyph(item),
+                        badgeTint = MaterialTheme.colorScheme.primary,
+                        onClick = { onOpen(item) },
                     )
                 }
             }
         }
     }
 }
+
+private val MORE_SHELVES: List<Pair<String, List<Tab>>> = listOf(
+    "правка изнутри" to listOf(Tab.REVIEWS, Tab.DICTIONARY, Tab.PROMPTS, Tab.LEARNING),
+    "служебное" to listOf(Tab.LOGS, Tab.SETTINGS),
+)
 
 /**
  * Единственная выгрузка приложения — вся жизнь одной книгой Excel. Живёт за
@@ -451,16 +502,6 @@ private fun LifeExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
     )
 }
 
-/** Пиктограмма режима для шапки настроек группы. */
-private fun groupIcon(group: SettingsGroup): Int? = when (group) {
-    SettingsGroup.PRAVKA -> R.drawable.ic_mode_pravka
-    SettingsGroup.ZASECHKA -> R.drawable.ic_mode_zasechka
-    SettingsGroup.DELA -> R.drawable.ic_mode_delo
-    SettingsGroup.BODY -> R.drawable.ic_mode_sport
-    SettingsGroup.MONEY -> R.drawable.ic_mode_money
-    else -> null
-}
-
 @Composable
 private fun MainScreen(
     app: PravkaApp,
@@ -468,6 +509,8 @@ private fun MainScreen(
     foodAction: String = "",
     tabRequest: Tab? = null,
     onTabRequestHandled: () -> Unit = {},
+    groupRequest: SettingsGroup? = null,
+    onGroupRequestHandled: () -> Unit = {},
     foodActionRequest: String = "",
     onFoodActionHandled: () -> Unit = {},
     settings: Settings,
@@ -495,9 +538,14 @@ private fun MainScreen(
     var tab by remember {
         mutableStateOf(if (initialTab in service) Tab.MORE else initialTab)
     }
-    var page by remember {
-        mutableStateOf<Page?>(if (initialTab in service) Page.Service(initialTab) else null)
+    // Стопка экранов поверх вкладки (24.09.2026): из Настроек открывается
+    // группа, из группы — подключение, и «назад» должен вести на шаг, а не
+    // сразу на вкладку. Тап по нижней кнопке снимает всю стопку.
+    var pages by remember {
+        mutableStateOf<List<Page>>(if (initialTab in service) listOf(Page.Service(initialTab)) else emptyList())
     }
+    val page = pages.lastOrNull()
+    val pop = { pages = pages.dropLast(1) }
     // Одноразовый автозапуск камеры/сканера в Теле (Е) — из меню кнопки еды.
     var foodActionPending by remember { mutableStateOf(foodAction.ifBlank { null }) }
     // Диалоги выгрузок, которые открывают значки в шапке служебных экранов.
@@ -514,12 +562,20 @@ private fun MainScreen(
         val want = tabRequest ?: return@LaunchedEffect
         if (want in service) {
             tab = Tab.MORE
-            page = Page.Service(want)
+            pages = listOf(Page.Service(want))
         } else {
             tab = want
-            page = null
+            pages = emptyList()
         }
         onTabRequestHandled()
+    }
+    // Группа настроек из меню кнопки: Настройки, над ними — эта группа, чтобы
+    // «назад» вёл в меню настроек, а не на вкладку.
+    LaunchedEffect(groupRequest) {
+        val g = groupRequest ?: return@LaunchedEffect
+        tab = Tab.MORE
+        pages = listOf(Page.Service(Tab.SETTINGS), Page.ModeSettings(g))
+        onGroupRequestHandled()
     }
     LaunchedEffect(foodActionRequest) {
         if (foodActionRequest.isBlank()) return@LaunchedEffect
@@ -527,30 +583,29 @@ private fun MainScreen(
         onFoodActionHandled()
     }
     // Системное «назад» закрывает верхний экран, а не приложение.
-    BackHandler(enabled = page != null) { page = null }
+    BackHandler(enabled = pages.isNotEmpty()) { pop() }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             val navLine = MaterialTheme.colorScheme.outlineVariant
-            val navColours = NavigationBarItemDefaults.colors(
-                selectedIconColor = MaterialTheme.colorScheme.primary,
-                selectedTextColor = MaterialTheme.colorScheme.primary,
-                indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // Шесть кнопок — порядок и подписи владельца: Правка, Засечка,
-            // Дело, Тело (С), Тело (Е), Ещё. Пиктограммы те же, что могут
+            // Семь кнопок — порядок и подписи владельца: Правка, Засечка,
+            // Дело, Спорт, Еда, Деньги, Ещё. Пиктограммы те же, что могут
             // встать на плавающие кнопки: перо, часы, галочка, гантеля,
-            // тарелка — один язык на всё приложение. Тап по кнопке закрывает
-            // и верхний экран: владелец хочет вкладку, а не то, что над ней.
+            // вилка, рубль — один язык на всё приложение (`ui/Glyphs.kt`).
+            // Тап по кнопке закрывает и верхний экран: владелец хочет
+            // вкладку, а не то, что над ней.
             // Панель — на фоне вкладки, а не своей плитой (владелец,
             // 20.09.2026: «кнопки внизу темноватые, выглядит как будто они
             // немного грязные»). Тёмно-тёплая плита под тёмным фоном и была
             // той грязью: два почти одинаковых тона, между ними ступенька.
             // Теперь панель — продолжение фона, сверху волосяная линия, а
             // выбранная кнопка держится акцентом, а не подложкой-пятном.
+            // Акцент — краской своего режима (24.09.2026): Засечка янтарная,
+            // Дело синее, как их кнопки на стекле.
+            // Седьмая кнопка — Деньги (владелец, 23.09.2026: «вкладка внизу
+            // точно должна быть»). Договорённость «ровно шесть» этим
+            // пересмотрена — см. docs/agreements.md.
             NavigationBar(
                 containerColor = MaterialTheme.colorScheme.background,
                 modifier = Modifier.drawBehind {
@@ -562,72 +617,26 @@ private fun MainScreen(
                     )
                 },
             ) {
-                NavigationBarItem(
-                    selected = tab == Tab.PRAVKA && page == null,
-                    onClick = { tab = Tab.PRAVKA; page = null },
-                    icon = {
-                        Icon(painterResource(R.drawable.ic_mode_pravka), contentDescription = null)
-                    },
-                    colors = navColours,
-                    label = { Text(stringResource(Tab.PRAVKA.titleRes), maxLines = 1, softWrap = false) },
-                )
-                NavigationBarItem(
-                    selected = tab == Tab.ZASECHKA && page == null,
-                    onClick = { tab = Tab.ZASECHKA; page = null },
-                    icon = {
-                        Icon(painterResource(R.drawable.ic_mode_zasechka), contentDescription = null)
-                    },
-                    colors = navColours,
-                    label = { Text(stringResource(Tab.ZASECHKA.titleRes), maxLines = 1, softWrap = false) },
-                )
-                NavigationBarItem(
-                    selected = tab == Tab.TODOIST && page == null,
-                    onClick = { tab = Tab.TODOIST; page = null },
-                    icon = {
-                        Icon(painterResource(R.drawable.ic_mode_delo), contentDescription = null)
-                    },
-                    colors = navColours,
-                    label = { Text(stringResource(Tab.TODOIST.titleRes), maxLines = 1, softWrap = false) },
-                )
-                NavigationBarItem(
-                    selected = tab == Tab.SPORT && page == null,
-                    onClick = { tab = Tab.SPORT; page = null },
-                    icon = {
-                        Icon(painterResource(R.drawable.ic_mode_sport), contentDescription = null)
-                    },
-                    colors = navColours,
-                    label = { Text(stringResource(Tab.SPORT.titleRes), maxLines = 1, softWrap = false) },
-                )
-                NavigationBarItem(
-                    selected = tab == Tab.FOOD && page == null,
-                    onClick = { tab = Tab.FOOD; page = null },
-                    icon = {
-                        Icon(painterResource(R.drawable.ic_mode_food), contentDescription = null)
-                    },
-                    colors = navColours,
-                    label = { Text(stringResource(Tab.FOOD.titleRes), maxLines = 1, softWrap = false) },
-                )
-                // Седьмая кнопка — Деньги (владелец, 23.09.2026: «вкладка внизу
-                // точно должна быть»). Договорённость «ровно шесть» этим
-                // пересмотрена — см. docs/agreements.md.
-                NavigationBarItem(
-                    selected = tab == Tab.MONEY && page == null,
-                    onClick = { tab = Tab.MONEY; page = null },
-                    icon = {
-                        Icon(painterResource(R.drawable.ic_mode_money), contentDescription = null)
-                    },
-                    colors = navColours,
-                    label = { Text(stringResource(Tab.MONEY.titleRes), maxLines = 1, softWrap = false) },
-                )
-                NavigationBarItem(
-                    selected = tab == Tab.MORE || page != null,
-                    // Повторный тап по «Ещё» возвращает список: иначе из
-                    // Логов обратно к списку пришлось бы жать «назад».
-                    onClick = { tab = Tab.MORE; page = null },
-                    icon = { Icon(Icons.Filled.MoreVert, contentDescription = null) },
-                    colors = navColours,
-                    label = { Text(stringResource(Tab.MORE.titleRes), maxLines = 1, softWrap = false) },
-                )
+                for ((item, glyph) in BOTTOM_TABS) {
+                    val selected = if (item == Tab.MORE) tab == Tab.MORE || page != null
+                    else tab == item && page == null
+                    val ink = decorOf(item).tint(MaterialTheme.colorScheme).primary
+                    NavigationBarItem(
+                        selected = selected,
+                        // Повторный тап по «Ещё» возвращает список: иначе из
+                        // Логов обратно к списку пришлось бы жать «назад».
+                        onClick = { tab = item; pages = emptyList() },
+                        icon = { Icon(glyph, contentDescription = null) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = ink,
+                            selectedTextColor = ink,
+                            indicatorColor = ink.copy(alpha = 0.14f),
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                        label = { Text(stringResource(item.titleRes), maxLines = 1, softWrap = false) },
+                    )
+                }
             }
         },
     ) { padding ->
@@ -635,30 +644,37 @@ private fun MainScreen(
             // Пуши выключены — говорим сверху, а не в глубине настроек
             // автопилота: без них молчат автопилот, напоминания и обновления.
             if (!notifEnabled) NotificationsBanner(onFixNotifications)
-            val openCost = { page = Page.Cost }
-            val openReport = { page = Page.Service(Tab.REPORT) }
+            val openCost = { pages = pages + Page.Cost }
+            val openReport = { pages = listOf(Page.Service(Tab.REPORT)) }
             val p = page
             when {
-                p != null -> ModeFrame(ModeDecor.SERVICE) {
+                p != null -> ModeFrame((p as? Page.ModeSettings)?.group?.decor ?: ModeDecor.SERVICE) {
                     Column {
                         when (p) {
                             is Page.Cost -> {
-                                TabHeader(title = stringResource(R.string.stats_header), onBack = { page = null })
+                                TabHeader(title = stringResource(R.string.stats_header), glyph = Glyphs.Stats, onBack = pop)
                                 CostScreen(app)
                             }
                             is Page.ModeSettings -> {
                                 TabHeader(
-                                    title = "Настройки · ${p.group.title}",
-                                    icon = groupIcon(p.group)?.let { painterResource(it) },
-                                    onBack = { page = null },
+                                    title = p.group.title,
+                                    glyph = p.group.glyph,
+                                    onBack = pop,
                                     actions = { CostAction(openCost) },
                                 )
-                                ModeSettingsScreen(app, p.group, serviceEnabled)
+                                ModeSettingsScreen(
+                                    app,
+                                    p.group,
+                                    serviceEnabled,
+                                    onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                                    onOpen = { g -> pages = pages + Page.ModeSettings(g) },
+                                )
                             }
                             is Page.Service -> {
                                 TabHeader(
                                     title = stringResource(p.tab.titleRes),
-                                    onBack = { page = null },
+                                    glyph = serviceGlyph(p.tab),
+                                    onBack = pop,
                                     actions = {
                                         when (p.tab) {
                                             Tab.REPORT -> ExportAction { lifeExport = true }
@@ -670,7 +686,12 @@ private fun MainScreen(
                                 )
                                 when (p.tab) {
                                     Tab.REPORT -> ReportTab(app)
-                                    Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings)
+                                    Tab.SETTINGS -> SettingsTab(
+                                        app,
+                                        serviceEnabled,
+                                        onOpenAccessibilitySettings,
+                                        onOpen = { g -> pages = pages + Page.ModeSettings(g) },
+                                    )
                                     Tab.DICTIONARY -> DictionaryTab(dictionaryStore, historyLog, dictMiner)
                                     Tab.PROMPTS -> PromptsTab(promptStore)
                                     Tab.LEARNING -> LearningTab(app)
@@ -691,21 +712,14 @@ private fun MainScreen(
                     Column {
                         TabHeader(
                             title = stringResource(R.string.tab_more),
+                            glyph = Glyphs.More,
                             actions = { CostAction(openCost) },
                         )
-                        MoreList(onOpen = { page = Page.Service(it) })
+                        MoreList(onOpen = { pages = listOf(Page.Service(it)) })
                     }
                 }
                 else -> {
-                    val decor = when (tab) {
-                        Tab.PRAVKA -> ModeDecor.PRAVKA
-                        Tab.ZASECHKA -> ModeDecor.ZASECHKA
-                        Tab.TODOIST -> ModeDecor.DELA
-                        Tab.SPORT -> ModeDecor.SPORT
-                        Tab.MONEY -> ModeDecor.MONEY
-                        else -> ModeDecor.FOOD
-                    }
-                    ModeFrame(decor) {
+                    ModeFrame(decorOf(tab)) {
                         Column {
                             when (tab) {
                                 Tab.PRAVKA -> {
@@ -713,9 +727,9 @@ private fun MainScreen(
                                         title = stringResource(R.string.tab_pravka),
                                         icon = painterResource(R.drawable.ic_mode_pravka),
                                         actions = {
-                                            StatsAction { page = Page.Service(Tab.STATS) }
+                                            StatsAction { pages = listOf(Page.Service(Tab.STATS)) }
                                             CostAction(openCost)
-                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.PRAVKA) }
+                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.PRAVKA)) }
                                         },
                                     )
                                     PravkaTab(app, serviceEnabled)
@@ -727,7 +741,7 @@ private fun MainScreen(
                                         actions = {
                                             StatsAction(openReport)
                                             CostAction(openCost)
-                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.ZASECHKA) }
+                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) }
                                         },
                                     )
                                     ZasechkaTab(app)
@@ -739,7 +753,7 @@ private fun MainScreen(
                                         actions = {
                                             StatsAction(openReport)
                                             CostAction(openCost)
-                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.DELA) }
+                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.DELA)) }
                                         },
                                     )
                                     TodoistTab(app)
@@ -751,7 +765,7 @@ private fun MainScreen(
                                         actions = {
                                             StatsAction(openReport)
                                             CostAction(openCost)
-                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.BODY) }
+                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.SPORT)) }
                                         },
                                     )
                                     SportTab(app)
@@ -763,7 +777,7 @@ private fun MainScreen(
                                         actions = {
                                             StatsAction(openReport)
                                             CostAction(openCost)
-                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.MONEY) }
+                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.MONEY)) }
                                         },
                                     )
                                     MoneyTab(app)
@@ -775,7 +789,7 @@ private fun MainScreen(
                                         actions = {
                                             StatsAction(openReport)
                                             CostAction(openCost)
-                                            SettingsAction { page = Page.ModeSettings(SettingsGroup.BODY) }
+                                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.FOOD)) }
                                         },
                                     )
                                     FoodTab(
@@ -843,48 +857,25 @@ internal fun BrandMark(size: androidx.compose.ui.unit.Dp, textSize: androidx.com
     }
 }
 
+/** Прежнее имя подписи раздела — теперь та же [PaperLabel], чтобы подписи не расходились. */
 @Composable
-internal fun ScreenTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.headlineSmall)
-}
+internal fun SectionLabel(text: String) = ru.zf.pravka.ui.PaperLabel(text)
 
-/** Small uppercase label in the accent color above a card. */
-@Composable
-internal fun SectionLabel(text: String) {
-    Text(
-        text.uppercase(Locale.forLanguageTag("ru")),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
-    )
-}
-
+/**
+ * Служебные экраны (Разборы, Обучение, Логи, Словарь, Промпты, Настройки)
+ * до 24.09.2026 лежали на голой карточке Material — без фаски, света, зерна
+ * и узора, и выглядели другим приложением рядом с вкладками. Теперь это та
+ * же плашка, что везде.
+ */
 @Composable
 internal fun SectionCard(
     label: String? = null,
+    info: String? = null,
     content: @Composable ColumnScope.() -> Unit,
-) {
-    Column(Modifier.fillMaxWidth()) {
-        if (label != null) SectionLabel(label)
-        Card(Modifier.fillMaxWidth()) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                content = content,
-            )
-        }
-    }
-}
+) = ru.zf.pravka.ui.PaperCard(label = label, info = info, content = content)
 
 @Composable
-internal fun HintText(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
+internal fun HintText(text: String) = ru.zf.pravka.ui.PaperHint(text)
 
 @Composable
 internal fun SpeechSection(

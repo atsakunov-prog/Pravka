@@ -540,21 +540,11 @@ private fun PayeesCard(app: PravkaApp) {
 /** Настройки Денег — группа за шестерёнкой в шапке вкладки. */
 @Composable
 internal fun MoneySettings(app: PravkaApp) {
-    val on by app.settings.mEnabledFlow.collectAsState(initial = true)
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Кнопка «₽» на экране", style = MaterialTheme.typography.bodyMedium)
-                PaperHint("Четвёртая на диске: наговорил трату — плашка с суммой и «ОК».")
-            }
-            Switch(checked = on, onCheckedChange = { v -> app.appScope.launch { app.settings.setMEnabled(v) } })
-        }
-        Spacer(Modifier.height(12.dp))
-        PushSettings(app)
-        Spacer(Modifier.height(8.dp))
-        PaperHint("Модели — в «Моделях», дороги «Деньги»: траты голосом и подсказки сверки. Промпты — во вкладке «Промпты».")
-    }
+    // Кнопка «₽» — в «Кнопках на экране» рядом с остальными (24.09.2026);
+    // модели — в «Моделях», промпты — во вкладке «Промпты».
+    PaperCard(label = "пуши банка") { PushSettings(app) }
 }
+
 
 /**
  * Пуши банка: тумблер, есть ли «Доступ к уведомлениям» и что поймано.
@@ -564,7 +554,6 @@ internal fun MoneySettings(app: PravkaApp) {
 @Composable
 private fun PushSettings(app: PravkaApp) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val on by app.settings.mPushFlow.collectAsState(initial = true)
     val state by app.moneyStore.stateFlow.collectAsState()
     var granted by remember { mutableStateOf(pushAccess(context)) }
@@ -576,13 +565,13 @@ private fun PushSettings(app: PravkaApp) {
             kotlinx.coroutines.delay(1500)
         }
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("Ловить пуши банка", style = MaterialTheme.typography.bodyMedium)
-            PaperHint("Т-Банк и чат «Плати по миру» в Телеграме: трата ложится в журнал сразу, выписка потом её заменяет.")
-        }
-        Switch(checked = on, onCheckedChange = { v -> scope.launch { app.settings.setMPush(v) } })
-    }
+    ru.zf.pravka.ui.PaperToggle(
+        title = "Ловить пуши банка",
+        checked = on,
+        onCheckedChange = { v -> app.appScope.launch { app.settings.setMPush(v) } },
+        hint = "Т-Банк и «Плати по миру» в Телеграме",
+        info = "Трата ложится в журнал сразу, как пришёл пуш, а выписка потом её заменяет.",
+    )
     if (!on) return
     Spacer(Modifier.height(6.dp))
     if (!granted) {
@@ -591,14 +580,14 @@ private fun PushSettings(app: PravkaApp) {
                 "«О приложении» → ⋮ → «Разрешить ограниченные настройки», как было со службой доступности.",
             color = MaterialTheme.colorScheme.error,
         )
-        OutlinedButton(onClick = {
+        ru.zf.pravka.ui.PaperButton("Открыть доступ", icon = ru.zf.pravka.ui.Glyphs.Bell, primary = true, onClick = {
             runCatching {
                 context.startActivity(
                     android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
                         .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             }
-        }) { Text("Открыть доступ к уведомлениям") }
+        })
         return
     }
     val pushes = state.pushes

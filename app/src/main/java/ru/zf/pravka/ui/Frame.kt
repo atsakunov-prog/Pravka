@@ -14,8 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,12 +32,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.graphics.painter.Painter
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ru.zf.pravka.R
 
 // Каркас вкладки: шапка с названием и служебными значками справа и фон с
 // разбросанными знаками режима. Владелец (15.09.2026): «справа наверху в
@@ -116,11 +114,20 @@ fun Modifier.glyphPattern(decor: ModeDecor): Modifier {
     }
 }
 
-/** Вкладка целиком: режим для узора плашек и содержимое. Фон — чистый, тёмный. */
+/**
+ * Вкладка целиком: режим для узора плашек, краска режима (`Kit.kt`,
+ * [tint]) и содержимое. Фон — чистый, тёмный.
+ */
 @Composable
 fun ModeFrame(decor: ModeDecor, content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalModeDecor provides decor) {
-        Box(Modifier.fillMaxSize()) { content() }
+    MaterialTheme(
+        colorScheme = decor.tint(MaterialTheme.colorScheme),
+        typography = MaterialTheme.typography,
+        shapes = MaterialTheme.shapes,
+    ) {
+        CompositionLocalProvider(LocalModeDecor provides decor) {
+            Box(Modifier.fillMaxSize()) { content() }
+        }
     }
 }
 
@@ -135,8 +142,10 @@ fun TabHeader(
     icon: Painter? = null,
     onBack: (() -> Unit)? = null,
     subtitle: String? = null,
+    glyph: ImageVector? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    val badge = icon ?: glyph?.let { rememberVectorPainter(it) }
     Row(
         Modifier
             .fillMaxWidth()
@@ -145,14 +154,15 @@ fun TabHeader(
     ) {
         if (onBack != null) {
             IconButton(onClick = onBack) {
-                Text(
-                    "‹",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary,
+                Icon(
+                    Glyphs.Back,
+                    contentDescription = "назад",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp),
                 )
             }
         }
-        if (icon != null) {
+        if (badge != null) {
             Box(
                 Modifier
                     .size(36.dp)
@@ -160,7 +170,7 @@ fun TabHeader(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    icon,
+                    badge,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.size(20.dp),
@@ -200,10 +210,10 @@ fun TabHeader(
 
 /** Значок действия в шапке: штриховая пиктограмма цветом второго плана. */
 @Composable
-fun HeaderAction(iconRes: Int, description: String, onClick: () -> Unit, tint: Color? = null) {
+fun HeaderAction(icon: ImageVector, description: String, onClick: () -> Unit, tint: Color? = null) {
     IconButton(onClick = onClick) {
         Icon(
-            painterResource(iconRes),
+            icon,
             contentDescription = description,
             tint = tint ?: MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(22.dp),
@@ -225,23 +235,14 @@ fun CostAction(onClick: () -> Unit) {
     }
 }
 
-/** Шестерёнка: настройки именно этого режима. */
+/** Шестерёнка: настройки именно этого режима. Тем же штрихом, что остальные значки. */
 @Composable
-fun SettingsAction(onClick: () -> Unit) {
-    IconButton(onClick = onClick) {
-        Icon(
-            Icons.Filled.Settings,
-            contentDescription = "настройки режима",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(22.dp),
-        )
-    }
-}
+fun SettingsAction(onClick: () -> Unit) = HeaderAction(Glyphs.Gear, "настройки режима", onClick)
 
 /** Статистика: столбики. */
 @Composable
-fun StatsAction(onClick: () -> Unit) = HeaderAction(R.drawable.ic_stats, "статистика", onClick)
+fun StatsAction(onClick: () -> Unit) = HeaderAction(Glyphs.Stats, "статистика", onClick)
 
 /** Выгрузка: стрелка из лотка. */
 @Composable
-fun ExportAction(onClick: () -> Unit) = HeaderAction(R.drawable.ic_export, "выгрузка", onClick)
+fun ExportAction(onClick: () -> Unit) = HeaderAction(Glyphs.Export, "выгрузка", onClick)

@@ -529,7 +529,7 @@ internal fun PravkaAccessibilityService.showZasechkaMenu() {
         )
         // Помидоров здесь больше нет: владелец ими не пользовался, а место
         // сверху занял тот пункт, которым он пользоваться собирается.
-        val prefs = ZasechkaButtonController.MenuItem("Настройки") { openSettingsTab() }
+        val prefs = ZasechkaButtonController.MenuItem("Настройки") { openSettingsTab("ZASECHKA") }
         val close = ZasechkaButtonController.MenuItem("Закрыть") { zButton?.hideMenu() }
         zButton?.showMenu(listOfNotNull(thought, header, openTab, prefs, close))
     }
