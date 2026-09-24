@@ -597,43 +597,34 @@ private fun NumberSlider(
 }
 
 /**
- * Облако по WebDAV: адрес, логин, пароль приложения, папка - и проверка.
- * Пароль - именно «пароль приложения» (у Яндекса - id.yandex.ru, «Пароли
- * приложений», тип «Файлы»): обычный пароль от почты WebDAV не примет.
+ * Облако: семейный Google Drive (вход браузером, 25.09.2026) или WebDAV
+ * (адрес, логин, пароль приложения). Папка и синхронизация — общие для обоих.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CloudSettings(app: SlushalkaApp) {
     val prefs by app.state.prefs.collectAsState()
     val scope = rememberCoroutineScope()
-    var url by remember { mutableStateOf(prefs.cloudUrl) }
-    var user by remember { mutableStateOf(prefs.cloudUser) }
-    var pass by remember { mutableStateOf(prefs.cloudPass) }
     var dir by remember { mutableStateOf(prefs.cloudDir) }
     var checking by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<String?>(null) }
 
     Section("Облако")
-    Note(
-        "Синхронизация без сторонней программы и место для книг. Подходит любой WebDAV: " +
-            "Яндекс.Диск (адрес webdav.yandex.ru, логин - почта, пароль - пароль приложения из " +
-            "id.yandex.ru → «Пароли приложений» → «Файлы»), Nextcloud, Box, Koofr."
-    )
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FilterChip(
+            selected = prefs.cloudDrive,
+            onClick = { scope.launch { app.settings.setCloudKind(Settings.CLOUD_DRIVE) }; result = null },
+            label = { Text("Google Drive") },
+        )
+        FilterChip(
+            selected = !prefs.cloudDrive,
+            onClick = { scope.launch { app.settings.setCloudKind(Settings.CLOUD_WEBDAV) }; result = null },
+            label = { Text("WebDAV") },
+        )
+    }
+    if (prefs.cloudDrive) DriveSettings(app) else WebDavSettings(app)
     OutlinedTextField(
-        value = url, onValueChange = { url = it; scope.launch { app.settings.setCloudUrl(it) } },
-        label = { Text("Адрес WebDAV") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = user, onValueChange = { user = it; scope.launch { app.settings.setCloudUser(it) } },
-        label = { Text("Логин") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = pass, onValueChange = { pass = it; scope.launch { app.settings.setCloudPass(it) } },
-        label = { Text("Пароль приложения") }, singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = dir, onValueChange = { dir = it; scope.launch { app.settings.setCloudDir(it) } },
+        value = dir, onValueChange = { dir = it; scope.launch { app.settings.setCloudDir(it); app.driveCloud.forget() } },
         label = { Text("Папка в облаке") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
     )
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -660,5 +651,99 @@ private fun CloudSettings(app: SlushalkaApp) {
         "Позиции, вопросы и пометки ездят через «${prefs.cloudDir}/_Слушалка» - те же файлы, что в папке " +
             "библиотеки, так что обе дороги работают вместе. Книги - в «${prefs.cloudDir}/Книги», экран " +
             "облака - значок на полке."
+    )
+}
+
+/**
+ * Семейный Google Drive: вход браузером (аккаунт на устройство не
+ * добавляется — на Boox место одно), кто вошёл, видит ли Слушалка книги,
+ * закинутые с компьютера.
+ */
+@Composable
+private fun DriveSettings(app: SlushalkaApp) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs by app.state.prefs.collectAsState()
+    val waiting by app.googleAuth.waiting.collectAsState()
+    val scope = rememberCoroutineScope()
+    var error by remember { mutableStateOf<String?>(null) }
+    Note(
+        "Семейный аккаунт Google: книги лежат в его Drive, в папке «${prefs.cloudDir}/Книги» — каждая своей " +
+            "папкой, как на полке. Закинуть можно и с компьютера, через браузер или Google Drive для компьютера. " +
+            "Вход — через браузер, аккаунт в само устройство не добавляется. Браузер сначала предложит свой " +
+            "аккаунт — выбери «другой» и войди под семейным. Google покажет «приложение не проверено» — " +
+            "«Дополнительно» → «Перейти». Слушалка читает весь Drive, а пишет только в свои папки."
+    )
+    if (prefs.driveEmail.isBlank()) {
+        if (waiting) {
+            Note("Жду ответа из браузера: войди под семейным аккаунтом и нажми «Разрешить»…")
+            TextButton(onClick = { app.googleAuth.cancel() }) { Text("Отменить вход") }
+        } else {
+            TextButton(onClick = {
+                error = null
+                scope.launch {
+                    app.googleAuth.signIn { url ->
+                        // Выбор браузера: на Boox Chrome пускает в Google только под
+                        // аккаунтом устройства, а место одно — там нужен Firefox.
+                        val view = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent.createChooser(view, "Вход в Google — открыть в…")
+                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }.onFailure { e -> error = "Не открылся браузер: ${e.message}" }
+                    }.onSuccess { a ->
+                        app.driveCloud.forget()
+                        app.settings.setDrive(a.email, a.all)
+                    }.onFailure { e -> error = e.message ?: "Вход не вышел" }
+                }
+            }) { Text("Подключить Google Drive") }
+        }
+    } else {
+        Text("Вошли: ${prefs.driveEmail}", style = MaterialTheme.typography.bodyLarge)
+        Note(
+            if (prefs.driveAll) "Видит все книги в папке — и закинутые с компьютера."
+            else "Google дал доступ только к своим файлам: видны книги, выгруженные самой Слушалкой. " +
+                "Чтобы видеть закинутые с компьютера — отключи и войди заново, оставив обе галочки."
+        )
+        TextButton(onClick = {
+            scope.launch {
+                app.googleAuth.signOut()
+                app.driveCloud.forget()
+                app.settings.setDrive("", false)
+            }
+        }) { Text("Отключить") }
+    }
+    error?.let { Note(it) }
+}
+
+/**
+ * WebDAV: адрес, логин, пароль приложения. Пароль - именно «пароль
+ * приложения» (у Яндекса - id.yandex.ru, «Пароли приложений», тип «Файлы»):
+ * обычный пароль от почты WebDAV не примет.
+ */
+@Composable
+private fun WebDavSettings(app: SlushalkaApp) {
+    val prefs by app.state.prefs.collectAsState()
+    val scope = rememberCoroutineScope()
+    var url by remember { mutableStateOf(prefs.cloudUrl) }
+    var user by remember { mutableStateOf(prefs.cloudUser) }
+    var pass by remember { mutableStateOf(prefs.cloudPass) }
+    Note(
+        "Подходит любой WebDAV: Яндекс.Диск (адрес webdav.yandex.ru, логин - почта, пароль - пароль " +
+            "приложения из id.yandex.ru → «Пароли приложений» → «Файлы»), Nextcloud, Box, Koofr."
+    )
+    OutlinedTextField(
+        value = url, onValueChange = { url = it; scope.launch { app.settings.setCloudUrl(it) } },
+        label = { Text("Адрес WebDAV") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = user, onValueChange = { user = it; scope.launch { app.settings.setCloudUser(it) } },
+        label = { Text("Логин") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = pass, onValueChange = { pass = it; scope.launch { app.settings.setCloudPass(it) } },
+        label = { Text("Пароль приложения") }, singleLine = true,
+        visualTransformation = PasswordVisualTransformation(),
+        modifier = Modifier.fillMaxWidth(),
     )
 }

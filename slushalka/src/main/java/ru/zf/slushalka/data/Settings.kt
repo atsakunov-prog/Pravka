@@ -150,10 +150,20 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val cloudPass: String = "",
         val cloudDir: String = DEFAULT_CLOUD_DIR,
         val cloudSync: Boolean = true,
+        // Какое облако: семейный Google Drive (вход браузером, data/DriveCloud.kt)
+        // или WebDAV. Заводское — Drive; у кого уже вписан WebDAV — он.
+        val cloudKind: String = CLOUD_DRIVE,
+        /** Кто вошёл в Google Drive; пусто — вход не сделан. */
+        val driveEmail: String = "",
+        /** Google дал «читать всё»: видны и книги, закинутые в Drive с компьютера. */
+        val driveAll: Boolean = false,
     ) {
+        val cloudDrive: Boolean get() = cloudKind == CLOUD_DRIVE
+
         /** Облако настроено: есть куда и с чем ходить. */
         val cloudReady: Boolean
-            get() = cloudUrl.isNotBlank() && cloudUser.isNotBlank() && cloudPass.isNotBlank()
+            get() = if (cloudDrive) driveEmail.isNotBlank()
+            else cloudUrl.isNotBlank() && cloudUser.isNotBlank() && cloudPass.isNotBlank()
 
         /** Все папки библиотеки, главная первой. */
         val libraryUris: List<String>
@@ -231,6 +241,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 cloudPass = p[KEY_CLOUD_PASS] ?: "",
                 cloudDir = p[KEY_CLOUD_DIR]?.takeIf { it.isNotBlank() } ?: DEFAULT_CLOUD_DIR,
                 cloudSync = p[KEY_CLOUD_SYNC] ?: true,
+                cloudKind = p[KEY_CLOUD_KIND]
+                    ?: if (!p[KEY_CLOUD_USER].isNullOrBlank() && !p[KEY_CLOUD_PASS].isNullOrBlank()) CLOUD_WEBDAV else CLOUD_DRIVE,
+                driveEmail = p[KEY_DRIVE_EMAIL] ?: "",
+                driveAll = p[KEY_DRIVE_ALL] ?: false,
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -328,6 +342,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setCloudPass(v: String) = edit { it[KEY_CLOUD_PASS] = v.trim() }
     suspend fun setCloudDir(v: String) = edit { it[KEY_CLOUD_DIR] = v.trim().trim('/') }
     suspend fun setCloudSync(v: Boolean) = edit { it[KEY_CLOUD_SYNC] = v }
+    suspend fun setCloudKind(v: String) = edit { it[KEY_CLOUD_KIND] = v }
+    suspend fun setDrive(email: String, all: Boolean) = edit {
+        it[KEY_DRIVE_EMAIL] = email
+        it[KEY_DRIVE_ALL] = all
+    }
 
     companion object {
         // Модели - в ask/Models.kt: там же имена, цены и «по умолчанию».
@@ -371,6 +390,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         /** WebDAV Яндекс.Диска: логин - почта, пароль - «пароль приложения» из id.yandex.ru. */
         const val DEFAULT_CLOUD_URL = "https://webdav.yandex.ru"
         const val DEFAULT_CLOUD_DIR = "Слушалка"
+        const val CLOUD_DRIVE = "drive"
+        const val CLOUD_WEBDAV = "webdav"
 
         /**
          * Книжный - Literata, своя гарнитура в ресурсах. Системный «с
@@ -588,6 +609,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_CLOUD_PASS = stringPreferencesKey("cloud_pass")
         private val KEY_CLOUD_DIR = stringPreferencesKey("cloud_dir")
         private val KEY_CLOUD_SYNC = booleanPreferencesKey("cloud_sync")
+        private val KEY_CLOUD_KIND = stringPreferencesKey("cloud_kind")
+        private val KEY_DRIVE_EMAIL = stringPreferencesKey("drive_email")
+        private val KEY_DRIVE_ALL = booleanPreferencesKey("drive_all")
     }
 }
 

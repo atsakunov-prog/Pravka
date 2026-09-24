@@ -43,6 +43,8 @@ class SlushalkaApp : Application() {
     lateinit var journal: Journal; private set
     lateinit var sync: PositionSync; private set
     lateinit var cloud: ru.zf.slushalka.data.Cloud; private set
+    lateinit var googleAuth: ru.zf.slushalka.data.GoogleAuth; private set
+    lateinit var driveCloud: ru.zf.slushalka.data.DriveCloud; private set
     lateinit var cloudBooks: ru.zf.slushalka.data.CloudBooks; private set
     lateinit var markup: Markup; private set
     lateinit var updater: Updater; private set
@@ -69,7 +71,17 @@ class SlushalkaApp : Application() {
         notes = Notes(this)
         journal = Journal(this)
         sync = PositionSync(this)
-        cloud = ru.zf.slushalka.data.Cloud(settings)
+        googleAuth = ru.zf.slushalka.data.GoogleAuth(this, okhttp3.OkHttpClient())
+        driveCloud = ru.zf.slushalka.data.DriveCloud(settings, googleAuth)
+        cloud = ru.zf.slushalka.data.Cloud(settings, driveCloud)
+        // Ключ входа стёрт (отозван, вышли) — настройки не должны считать Drive подключённым.
+        scope.launch {
+            googleAuth.account.collect { a ->
+                val p = settings.now()
+                if (a == null && p.driveEmail.isNotBlank()) settings.setDrive("", false)
+                if (a != null && (a.email != p.driveEmail || a.all != p.driveAll)) settings.setDrive(a.email, a.all)
+            }
+        }
         markup = Markup(this)
         updater = Updater(this, settings)
         speaker = Speaker(this)

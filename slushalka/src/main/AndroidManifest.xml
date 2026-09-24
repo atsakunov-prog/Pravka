@@ -44,6 +44,24 @@
             </intent-filter>
         </activity>
 
+        <!-- Возврат из браузера после входа в семейный Google Drive
+             (data/GoogleAuth.kt): Android-клиент Google отдаёт код на адрес
+             со схемой-пакетом. Своего окна нет. -->
+        <activity
+            android:name=".GoogleAuthActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="ru.zf.slushalka" android:path="/oauth2redirect" />
+            </intent-filter>
+        </activity>
+
         <!-- MediaSessionService, not a bare foreground service: it is what
              puts the cover on the lock screen, wires the headset buttons and
              keeps Android from reclaiming playback mid-chapter. -->
