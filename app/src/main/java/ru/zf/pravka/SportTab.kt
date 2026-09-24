@@ -4,54 +4,40 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,16 +54,28 @@ import ru.zf.pravka.data.PlanStore
 import ru.zf.pravka.data.SportStore
 import ru.zf.pravka.data.StrengthStore
 import ru.zf.pravka.data.dayKey
+import ru.zf.pravka.ui.ChipRow
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.GlyphButton
+import ru.zf.pravka.ui.IconAction
+import ru.zf.pravka.ui.IconActionRow
+import ru.zf.pravka.ui.InfoButton
+import ru.zf.pravka.ui.PaperAlert
 import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.PaperChip
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.PaperLabel
 import ru.zf.pravka.ui.Glyphs
 import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperField
+import ru.zf.pravka.ui.PaperSheet
 import ru.zf.pravka.ui.PaperSlider
+import ru.zf.pravka.ui.PaperTextButton
 import ru.zf.pravka.ui.PaperToggle
 import ru.zf.pravka.ui.ScreenPad
+import ru.zf.pravka.ui.Segments
+import ru.zf.pravka.ui.SheetAction
+import ru.zf.pravka.ui.VoiceInput
 import ru.zf.pravka.trigger.startRestFromTab
 
 // Вкладка «Спорт»: сегодня, светофор, подходы, форма, разбор.
@@ -92,6 +90,12 @@ import ru.zf.pravka.trigger.startRestFromTab
 //   3. ЗАРЯДКА — цепочка, которая не должна рваться, и вис в секундах.
 //   4. Форма, тренировки, вопрос — то, что смотрят раз в неделю, а не каждый день.
 //
+// С 24.09.2026 это три части чипами сверху: «Сегодня» (1–3), «Путь» (форма,
+// КПД, неделя, цели, вес) и «Журнал» (тренировки, вопрос, разборы,
+// неразобранное). Пятнадцать плашек одной лентой утром прокручивались мимо
+// нужного; теперь то, что смотришь каждый день, не делит экран с тем, что
+// открываешь раз в неделю. Порядок внутри частей — прежний.
+//
 // Всё, кроме вопроса, рисуется из кэша на диске и считается на телефоне —
 // вкладка открывается мгновенно и работает в самолёте, а он тренируется на
 // даче каждое воскресенье.
@@ -100,6 +104,12 @@ private val talkTimeFormat = SimpleDateFormat("d MMM, HH:mm", Locale("ru"))
 private val workoutDayFormat = SimpleDateFormat("EEEE, d MMMM", Locale("ru"))
 private val workoutTimeFormat = SimpleDateFormat("HH:mm", Locale.US)
 private val bookStampFormat = SimpleDateFormat("d.MM HH:mm", Locale("ru"))
+
+/** Части вкладки — чипами сверху; номер части хранится в rememberSaveable. */
+private val PARTS = listOf("Сегодня", "Путь", "Журнал")
+private const val PART_TODAY = 0
+private const val PART_PATH = 1
+private const val PART_JOURNAL = 2
 
 /** Цвет тона сводки: та же радуга, что у балла дня в Засечке. */
 @Composable
@@ -137,6 +147,12 @@ internal fun SportTab(app: PravkaApp) {
     // редактирования.
     var coachTopic by remember { mutableStateOf<Triple<String, ExerciseBook.Exercise?, Boolean>?>(null) }
     var days by remember { mutableStateOf(14) }
+    // Часть вкладки переживает поворот и уход на соседнюю вкладку: открыл
+    // «Журнал», сходил в Засечку — вернулся в «Журнал», а не в «Сегодня».
+    var part by rememberSaveable { mutableStateOf(PART_TODAY) }
+    // Своя прокрутка у каждой части: вернулся в «Журнал» — там же, где был,
+    // а переключился из середины длинного журнала — «Сегодня» с начала.
+    val listStates = listOf(rememberLazyListState(), rememberLazyListState(), rememberLazyListState())
 
     var gtgDialog by remember { mutableStateOf(false) }
     var feelDialog by remember { mutableStateOf<Long?>(null) }
@@ -268,608 +284,664 @@ internal fun SportTab(app: PravkaApp) {
         }
     }
 
-    LazyColumn(
-        Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        // ---- Что я делаю сегодня ----
-        item {
-            PaperCard(
-                label = "сегодня",
-                trailing = {
-                    if (syncing) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    } else {
-                        IconButton(onClick = refresh) {
-                            Icon(Icons.Filled.Refresh, contentDescription = "Обновить")
-                        }
-                    }
-                },
-            ) {
-                if (mainPlan == null) {
-                    Text(
-                        "В календаре intervals на сегодня ничего нет.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    PaperHint(
-                        "План приезжает из календаря intervals — ты его туда пушишь, " +
-                            "когда собираешь блок. Правила блока читаются из Notion."
-                    )
-                } else {
-                    Text(mainPlan.name, style = MaterialTheme.typography.titleLarge)
-                    Spacer(Modifier.height(4.dp))
-                    // planLine — «название · параметры»; название уже выше,
-                    // поэтому в подсказку идёт только хвост с параметрами.
-                    PaperHint(verdict.planLine.substringAfter(mainPlan.name).trim(' ', '·'))
-                    // Комментарий владельца к сессии — первый абзац описания
-                    // до нумерованного списка. Он там про смысл дня, и это
-                    // ровно то, что стоит прочитать перед началом.
-                    val comment = mainPlan.noteBefore()
-                    if (comment.isNotBlank()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            comment.take(400),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    // Список упражнений силовой здесь не дублируем: он живёт
-                    // ниже карточками-задачами. А у кардио нумерованные строки —
-                    // подсказки дня («руки на верх руля», «каждые 15 мин из
-                    // седла»), их место здесь, без галочек.
-                    if (!mainPlan.strength) {
-                        val cues = mainPlan.plannedLines()
-                        if (cues.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            // Подсказки кардио — его же слова, не имена из
-                            // справочника: матчить «нагрудный ремень» незачем.
-                            for (cue in PlanLine.parseAll(cues, app.exerciseBook)) {
-                                Text(
-                                    "· " + (if (cue.dose.isBlank()) cue.name else "${cue.name} — ${cue.dose}"),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                                if (cue.note.isNotBlank()) {
-                                    Text(
-                                        "   " + cue.note,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+    val listState = listStates[part]
+    // Пилюля светофора в плашке «сегодня» ведёт к его подробностям. Индекс
+    // считается по устройству части «Сегодня» ниже: «сегодня», чек-лист
+    // зарядки, затем на каждую силовую подпись и её упражнения, и следом —
+    // светофор. Поменял порядок элементов — поправь и здесь.
+    val lightIndex = 2 + dayGroups.sumOf { 1 + it.second.size }
+
+    Column(Modifier.fillMaxWidth()) {
+        Segments(
+            options = PARTS,
+            selected = part,
+            onSelect = { part = it },
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp),
+        )
+        LazyColumn(
+            Modifier.fillMaxWidth(),
+            state = listState,
+            contentPadding = ScreenPad.Padding,
+            verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
+        ) {
+            if (part == PART_TODAY) {
+                // ---- Что я делаю сегодня ----
+                item {
+                    PaperCard(
+                        label = "сегодня",
+                        info = "План приезжает из календаря intervals — ты его туда пушишь, " +
+                            "когда собираешь блок. Правила блока читаются из Notion.",
+                        trailing = {
+                            if (syncing) {
+                                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                                 }
+                            } else {
+                                GlyphButton(Glyphs.Refresh, "Обновить", onClick = refresh)
                             }
-                        }
-                    }
-                    // Его текст ПОСЛЕ списка — «Отдых минута. Задача дня — не
-                    // устать, а понять, как гиря лежит в руках». Раньше терялся.
-                    val afterNote = mainPlan.noteAfter()
-                    if (afterNote.isNotBlank()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            afterNote.take(400),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    // Второстепенное дня — одной строкой, по часам: турник
-                    // после гири, Zwift днём. Зарядка — в своей карточке.
-                    val extras = app.planStore.dayOf(today)
-                        .filterNot { it.eventId == mainPlan.eventId || it.charger }
-                        .sortedBy { it.time.ifBlank { "99:99" } }
-                    if (extras.isNotEmpty()) {
-                        Spacer(Modifier.height(6.dp))
-                        PaperHint(
-                            "Ещё сегодня: " + extras.joinToString("; ") { e ->
-                                (if (e.time.isNotBlank()) e.time + " " else "") +
-                                    e.name + (if (e.minutes > 0) " · ${e.minutes} мин" else "")
-                            }
-                        )
-                    }
-                    // Кардио закрывают часы: активность нужного типа приехала —
-                    // задача дня выполнена фактом, никакую кнопку жать не надо.
-                    val arrivedToday = if (!mainPlan.strength) {
-                        workouts.firstOrNull {
-                            dayKey(it.start) == today &&
-                                (it.type.equals(mainPlan.type, true) ||
-                                    (mainPlan.type.equals("Ride", true) &&
-                                        it.type.equals("VirtualRide", true)))
-                        }
-                    } else null
-                    if (arrivedToday != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "✓ Приехала с часов: " + buildList {
-                                if (arrivedToday.km >= 0.1) add(fmt1(arrivedToday.km) + " км")
-                                add("${arrivedToday.minutes} мин")
-                                if (arrivedToday.avgHr > 0) add("пульс ${arrivedToday.avgHr}")
-                            }.joinToString(", "),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = toneColor(1),
-                        )
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                        },
                     ) {
-                        if (todaySession?.done == true) {
+                        // Светофор пилюлей — вердикт дня виден, не прокручивая мимо
+                        // упражнений; почему и три числа — в его плашке ниже, тап
+                        // по пилюле туда и ведёт (24.09.2026).
+                        TrafficPill(verdict, onClick = {
+                            scope.launch { listState.animateScrollToItem(lightIndex) }
+                        })
+                        Spacer(Modifier.height(10.dp))
+                        if (mainPlan == null) {
                             Text(
-                                "✓ Сделано",
+                                "В календаре intervals на сегодня ничего нет.",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = toneColor(1),
                             )
                         } else {
-                            Button(onClick = {
-                                app.appScope.launch {
-                                    val session = app.strengthEngine.markDone(today, mainPlan.minutes)
-                                    feelDialog = session.id
-                                }
-                            }) { Text("Сделано") }
-                        }
-                        if (todaySession != null && todaySession.feel in 1..5) {
-                            PaperHint("самочувствие ${todaySession.feel}/5")
-                        } else if (todaySession != null) {
-                            OutlinedButton(onClick = { feelDialog = todaySession.id }) {
-                                Text("Самочувствие")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ---- Зарядка: чек-лист на утро ----
-        item {
-            val chargerPlan = remember(planDays, today) { app.planStore.chargerOf(today) }
-            ZaryadkaChecklist(app, gtgToday, chargerPlan)
-        }
-
-        // ---- Упражнения дня с прошлым разом: группа на каждую силовую ----
-        for ((session, tasks) in dayGroups) {
-            item(key = "pl" + session.eventId) {
-                val checkedCount = tasks.count { todaySession?.isChecked(it.id) == true }
-                val label = if (dayGroups.size == 1) "упражнения" else {
-                    (if (session.time.isNotBlank()) session.time + " · " else "") +
-                        session.shortName.lowercase()
-                }
-                PaperLabel("$label · $checkedCount из ${tasks.size}")
-                // У второй сессии дня комментарий владельца иначе не виден:
-                // карточка «сегодня» показывает только главную.
-                if (session.eventId != mainPlan?.eventId) {
-                    val note = listOf(session.noteBefore(), session.noteAfter())
-                        .filter { it.isNotBlank() }.joinToString(" ")
-                    if (note.isNotBlank()) PaperHint(note.take(300))
-                }
-            }
-            items(tasks.size, key = { i -> "px" + session.eventId + "-" + tasks[i].id }) { i ->
-                val task = tasks[i]
-                val doneToday = todaySession?.exercises?.firstOrNull { it.exerciseId == task.id }
-                PlannedExerciseCard(
-                    title = task.title,
-                    hint = task.hint,
-                    exercise = task.exercise,
-                    lastTime = task.lastTime,
-                    doneToday = doneToday,
-                    history = task.history,
-                    restSec = restSec,
-                    onAskCoach = { auto -> coachTopic = Triple(task.title, task.exercise, auto) },
-                    checked = todaySession?.isChecked(task.id) == true,
-                    onCheck = {
-                        app.appScope.launch {
-                            val before = app.strengthStore.sessionsOn(today).firstOrNull()?.done == true
-                            val updated = app.strengthEngine.toggleChecked(
-                                task.id, today, allIds = dayTasks.map { it.id },
-                            )
-                            // Отметил последнее — сессия закрылась сама:
-                            // осталось спросить самочувствие, как у «Сделано».
-                            if (updated != null && updated.done && !before) {
-                                feelDialog = updated.id
-                            }
-                        }
-                    },
-                    onRest = { seconds ->
-                        Feedback.toast(app, "Отдых $seconds сек — кнопка «Т» считает")
-                        ru.zf.pravka.trigger.PravkaAccessibilityService.instance
-                            ?.startRestFromTab(seconds)
-                    },
-                )
-            }
-        }
-
-        // ---- Светофор ----
-        item {
-            PaperCard(label = "светофор", labelColor = toneColor(verdict.tone)) {
-                Text(
-                    verdict.headline,
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = toneColor(verdict.tone),
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(verdict.because, style = MaterialTheme.typography.bodyMedium)
-                if (verdict.warnings.isNotEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                    for (w in verdict.warnings) {
-                        Text(
-                            "⚠ " + w,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-                if (verdict.numbers.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    // Три числа мелким шрифтом — чтобы можно было проверить, а
-                    // не чтобы читать вместо вердикта. Больше трёх — дашборд.
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        for (n in verdict.numbers) {
-                            Column {
+                            Text(mainPlan.name, style = MaterialTheme.typography.titleLarge)
+                            Spacer(Modifier.height(4.dp))
+                            // planLine — «название · параметры»; название уже выше,
+                            // поэтому в подсказку идёт только хвост с параметрами.
+                            PaperHint(verdict.planLine.substringAfter(mainPlan.name).trim(' ', '·'))
+                            // Комментарий владельца к сессии — первый абзац описания
+                            // до нумерованного списка. Он там про смысл дня, и это
+                            // ровно то, что стоит прочитать перед началом.
+                            val comment = mainPlan.noteBefore()
+                            if (comment.isNotBlank()) {
+                                Spacer(Modifier.height(8.dp))
                                 Text(
-                                    n.label + " " + n.value,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = toneColor(n.tone),
+                                    comment.take(400),
+                                    style = MaterialTheme.typography.bodyMedium,
                                 )
-                                if (n.hint.isNotBlank()) {
-                                    Text(
-                                        n.hint,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            }
+                            // Список упражнений силовой здесь не дублируем: он живёт
+                            // ниже карточками-задачами. А у кардио нумерованные строки —
+                            // подсказки дня («руки на верх руля», «каждые 15 мин из
+                            // седла»), их место здесь, без галочек.
+                            if (!mainPlan.strength) {
+                                val cues = mainPlan.plannedLines()
+                                if (cues.isNotEmpty()) {
+                                    Spacer(Modifier.height(8.dp))
+                                    // Подсказки кардио — его же слова, не имена из
+                                    // справочника: матчить «нагрудный ремень» незачем.
+                                    for (cue in PlanLine.parseAll(cues, app.exerciseBook)) {
+                                        Text(
+                                            "· " + (if (cue.dose.isBlank()) cue.name else "${cue.name} — ${cue.dose}"),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        if (cue.note.isNotBlank()) {
+                                            Text(
+                                                "   " + cue.note,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            // Его текст ПОСЛЕ списка — «Отдых минута. Задача дня — не
+                            // устать, а понять, как гиря лежит в руках». Раньше терялся.
+                            val afterNote = mainPlan.noteAfter()
+                            if (afterNote.isNotBlank()) {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    afterNote.take(400),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            // Второстепенное дня — одной строкой, по часам: турник
+                            // после гири, Zwift днём. Зарядка — в своей карточке.
+                            val extras = app.planStore.dayOf(today)
+                                .filterNot { it.eventId == mainPlan.eventId || it.charger }
+                                .sortedBy { it.time.ifBlank { "99:99" } }
+                            if (extras.isNotEmpty()) {
+                                Spacer(Modifier.height(6.dp))
+                                PaperHint(
+                                    "Ещё сегодня: " + extras.joinToString("; ") { e ->
+                                        (if (e.time.isNotBlank()) e.time + " " else "") +
+                                            e.name + (if (e.minutes > 0) " · ${e.minutes} мин" else "")
+                                    }
+                                )
+                            }
+                            // Кардио закрывают часы: активность нужного типа приехала —
+                            // задача дня выполнена фактом, никакую кнопку жать не надо.
+                            val arrivedToday = if (!mainPlan.strength) {
+                                workouts.firstOrNull {
+                                    dayKey(it.start) == today &&
+                                        (it.type.equals(mainPlan.type, true) ||
+                                            (mainPlan.type.equals("Ride", true) &&
+                                                it.type.equals("VirtualRide", true)))
+                                }
+                            } else null
+                            if (arrivedToday != null) {
+                                Spacer(Modifier.height(8.dp))
+                                DoneLine(
+                                    "Приехала с часов: " + buildList {
+                                        if (arrivedToday.km >= 0.1) add(fmt1(arrivedToday.km) + " км")
+                                        add("${arrivedToday.minutes} мин")
+                                        if (arrivedToday.avgHr > 0) add("пульс ${arrivedToday.avgHr}")
+                                    }.joinToString(", ")
+                                )
+                            }
+                            Spacer(Modifier.height(10.dp))
+                            // «Сделано» — главная кнопка плашки, справа, куда дотягивается
+                            // большой палец; «Самочувствие» — контуром слева от неё.
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                // Состояние слева берёт то, что осталось от кнопок: у
+                                // строки с весом ширина считается последней, и
+                                // главную кнопку узкий экран не сожмёт.
+                                Row(
+                                    Modifier.weight(1f),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    if (todaySession?.done == true) {
+                                        DoneLine("Сделано")
+                                    }
+                                    if (todaySession != null && todaySession.feel in 1..5) {
+                                        PaperHint("самочувствие ${todaySession.feel}/5")
+                                    }
+                                }
+                                if (todaySession != null && todaySession.feel !in 1..5) {
+                                    PaperButton(
+                                        "Самочувствие",
+                                        onClick = { feelDialog = todaySession.id },
+                                        icon = Glyphs.Heart,
+                                    )
+                                }
+                                if (todaySession?.done != true) {
+                                    PaperButton(
+                                        "Сделано",
+                                        onClick = {
+                                            app.appScope.launch {
+                                                val session = app.strengthEngine.markDone(today, mainPlan.minutes)
+                                                feelDialog = session.id
+                                            }
+                                        },
+                                        icon = Glyphs.Check,
+                                        primary = true,
                                     )
                                 }
                             }
                         }
                     }
                 }
-                val error = app.icuSportSync.lastError()
-                if (error.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        error,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
+
+                // ---- Зарядка: чек-лист на утро ----
+                item {
+                    val chargerPlan = remember(planDays, today) { app.planStore.chargerOf(today) }
+                    ZaryadkaChecklist(app, gtgToday, chargerPlan)
                 }
-            }
-        }
 
-        // Итог силовой словами — рядом с её упражнениями, а не в другой
-        // вкладке: «гоблет четыре по десять шестнадцать, последний тяжело,
-        // очень доволен» — числа в журнал, комментарий в заметку сессии.
-        if (dayTasks.isNotEmpty()) {
-            item {
-                PaperCard {
-                    BodyTalkBox(
-                        app = app,
-                        hint = "Подходы и как прошло — словами…",
-                        whereSaid = "в карточке силовой",
-                    )
-                }
-            }
-        }
-
-        // ---- Силовая сегодня: что записано и куда уехало ----
-        if (todaySession != null && (!todaySession.empty || todaySession.done)) {
-            item { StrengthTodayCard(app, todaySession, onFeel = { feelDialog = todaySession.id }) }
-        }
-
-        // ---- Зарядка и GTG ----
-        item {
-            PaperCard(
-                label = "зарядка · путь к первому подтягиванию",
-            ) {
-                // Отметка зарядки — ГЛАВНАЯ кнопка во всю ширину, и она одна.
-                // Раньше она была мелкой справа от стрика, а «+» в углу открывал
-                // диалог с висами, который зарядку не отмечал вовсе — и было
-                // непонятно, чем одно отличается от другого. Теперь порядок
-                // такой: сверху «сделал», ниже мелким — числа турника.
-                val charged = gtgToday?.charged == true
-                if (charged) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "✓ Зарядка сделана",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = toneColor(1),
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(onClick = {
-                            app.appScope.launch { app.bodyEngine.unchargeToday(today) }
-                        }) { Text("Отменить") }
+                // ---- Упражнения дня с прошлым разом: группа на каждую силовую ----
+                for ((session, tasks) in dayGroups) {
+                    item(key = "pl" + session.eventId) {
+                        val checkedCount = tasks.count { todaySession?.isChecked(it.id) == true }
+                        val label = if (dayGroups.size == 1) "упражнения" else {
+                            (if (session.time.isNotBlank()) session.time + " · " else "") +
+                                session.shortName.lowercase()
+                        }
+                        PaperLabel("$label · $checkedCount из ${tasks.size}")
+                        // У второй сессии дня комментарий владельца иначе не виден:
+                        // карточка «сегодня» показывает только главную.
+                        if (session.eventId != mainPlan?.eventId) {
+                            val note = listOf(session.noteBefore(), session.noteAfter())
+                                .filter { it.isNotBlank() }.joinToString(" ")
+                            if (note.isNotBlank()) PaperHint(note.take(300))
+                        }
                     }
-                } else {
-                    Button(
-                        onClick = { app.appScope.launch { app.bodyEngine.chargedToday() } },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Зарядка сделана") }
-                }
-                Spacer(Modifier.height(10.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "$streak",
-                        style = MaterialTheme.typography.displaySmall,
-                        color = if (streak > 0) toneColor(1) else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            if (streak == 1) "день подряд" else "дней подряд",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        PaperHint(
-                            if (charged) "сегодня отмечено"
-                            else "сегодня ещё нет — цепочка не рвётся до полуночи"
+                    items(tasks.size, key = { i -> "px" + session.eventId + "-" + tasks[i].id }) { i ->
+                        val task = tasks[i]
+                        val doneToday = todaySession?.exercises?.firstOrNull { it.exerciseId == task.id }
+                        PlannedExerciseCard(
+                            title = task.title,
+                            hint = task.hint,
+                            exercise = task.exercise,
+                            lastTime = task.lastTime,
+                            doneToday = doneToday,
+                            history = task.history,
+                            restSec = restSec,
+                            onAskCoach = { auto -> coachTopic = Triple(task.title, task.exercise, auto) },
+                            checked = todaySession?.isChecked(task.id) == true,
+                            onCheck = {
+                                app.appScope.launch {
+                                    val before = app.strengthStore.sessionsOn(today).firstOrNull()?.done == true
+                                    val updated = app.strengthEngine.toggleChecked(
+                                        task.id, today, allIds = dayTasks.map { it.id },
+                                    )
+                                    // Отметил последнее — сессия закрылась сама:
+                                    // осталось спросить самочувствие, как у «Сделано».
+                                    if (updated != null && updated.done && !before) {
+                                        feelDialog = updated.id
+                                    }
+                                }
+                            },
+                            onRest = { seconds ->
+                                Feedback.toast(app, "Отдых $seconds сек — кнопка «Т» считает")
+                                ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                                    ?.startRestFromTab(seconds)
+                            },
                         )
                     }
                 }
-                Spacer(Modifier.height(10.dp))
-                GtgStrip(app.strengthStore.recentGtg(14))
-                Spacer(Modifier.height(12.dp))
-                PaperHint("Турник — отдельные числа, зарядку они не отмечают:")
-                Spacer(Modifier.height(4.dp))
-                val best = app.strengthStore.bestHang()
-                val bestPull = app.strengthStore.bestPullups()
-                if ((gtgToday?.pullups ?: 0) > 0) {
-                    Text(
-                        "Подтягивания сегодня: ${gtgToday?.pullups}" +
-                            (if (bestPull == gtgToday?.pullups) " — рекорд" else ""),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = toneColor(1),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    LegendValue(
-                        "Вис сегодня",
-                        if ((gtgToday?.hangSec ?: 0) > 0) "${gtgToday?.hangSec} сек" else "—",
-                        CTL_COLOR,
-                    )
-                    LegendValue("Лучший вис", if (best > 0) "$best сек" else "—", ATL_COLOR)
-                    LegendValue(
-                        if (bestPull > 0) "Подтягивания" else "Негативы",
-                        if (bestPull > 0) "$bestPull"
-                        else if ((gtgToday?.negatives ?: 0) > 0) "${gtgToday?.negatives}" else "—",
-                        CTL_COLOR,
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                OutlinedButton(
-                    onClick = { gtgDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Записать вис, негативы, колено") }
-                if (gtgToday?.knee?.isNotBlank() == true) {
-                    Spacer(Modifier.height(8.dp))
-                    PaperHint("Колено сегодня: ${gtgToday.knee}")
-                }
-            }
-        }
 
-        // ---- Тренированность графиком ----
-        if (health.size >= 4) {
-            item {
-                PaperCard(label = "тренированность и усталость") {
-                    FitnessChart(health.take(90).reversed())
-                    Spacer(Modifier.height(8.dp))
-                    val today = health.firstOrNull()
-                    if (today != null) {
+                // ---- Светофор: подробности пилюли из плашки «сегодня» ----
+                item(key = "svetofor") {
+                    PaperCard(label = "светофор", labelColor = toneColor(verdict.tone)) {
+                        Text(
+                            verdict.headline,
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = toneColor(verdict.tone),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(verdict.because, style = MaterialTheme.typography.bodyMedium)
+                        if (verdict.warnings.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            for (w in verdict.warnings) {
+                                Text(
+                                    "⚠ " + w,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
+                        if (verdict.numbers.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            // Три числа мелким шрифтом — чтобы можно было проверить, а
+                            // не чтобы читать вместо вердикта. Больше трёх — дашборд.
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                for (n in verdict.numbers) {
+                                    Column {
+                                        Text(
+                                            n.label + " " + n.value,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = toneColor(n.tone),
+                                        )
+                                        if (n.hint.isNotBlank()) {
+                                            Text(
+                                                n.hint,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        val error = app.icuSportSync.lastError()
+                        if (error.isNotBlank()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                error,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+
+                // Итог силовой словами — рядом с её упражнениями, а не в другой
+                // вкладке: «гоблет четыре по десять шестнадцать, последний тяжело,
+                // очень доволен» — числа в журнал, комментарий в заметку сессии.
+                if (dayTasks.isNotEmpty()) {
+                    item {
+                        PaperCard {
+                            BodyTalkBox(
+                                app = app,
+                                hint = "Подходы и как прошло — словами…",
+                                whereSaid = "в карточке силовой",
+                            )
+                        }
+                    }
+                }
+
+                // ---- Силовая сегодня: что записано и куда уехало ----
+                if (todaySession != null && (!todaySession.empty || todaySession.done)) {
+                    item { StrengthTodayCard(app, todaySession, onFeel = { feelDialog = todaySession.id }) }
+                }
+
+                // ---- Зарядка и GTG ----
+                item {
+                    PaperCard(
+                        label = "зарядка · путь к первому подтягиванию",
+                        info = "Турник — отдельные числа, зарядку они не отмечают.",
+                    ) {
+                        // Отметка зарядки — ГЛАВНАЯ кнопка во всю ширину, и она одна.
+                        // Раньше она была мелкой справа от стрика, а «+» в углу открывал
+                        // диалог с висами, который зарядку не отмечал вовсе — и было
+                        // непонятно, чем одно отличается от другого. Теперь порядок
+                        // такой: сверху «сделал», ниже мелким — числа турника.
+                        val charged = gtgToday?.charged == true
+                        if (charged) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                DoneLine("Зарядка сделана", big = true, modifier = Modifier.weight(1f))
+                                PaperTextButton(
+                                    "Отменить",
+                                    onClick = { app.appScope.launch { app.bodyEngine.unchargeToday(today) } },
+                                    icon = Glyphs.Undo,
+                                )
+                            }
+                        } else {
+                            PaperButton(
+                                "Зарядка сделана",
+                                onClick = { app.appScope.launch { app.bodyEngine.chargedToday() } },
+                                modifier = Modifier.fillMaxWidth(),
+                                icon = Glyphs.Check,
+                                primary = true,
+                            )
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "$streak",
+                                style = MaterialTheme.typography.displaySmall,
+                                color = if (streak > 0) toneColor(1) else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    if (streak == 1) "день подряд" else "дней подряд",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                PaperHint(
+                                    if (charged) "сегодня отмечено"
+                                    else "сегодня ещё нет — цепочка не рвётся до полуночи"
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        GtgStrip(app.strengthStore.recentGtg(14))
+                        Spacer(Modifier.height(12.dp))
+                        // Подпись раздела осталась, пояснение «зарядку они не
+                        // отмечают» — за «i» плашки (24.09.2026).
+                        PaperHint("Турник")
+                        Spacer(Modifier.height(4.dp))
+                        val best = app.strengthStore.bestHang()
+                        val bestPull = app.strengthStore.bestPullups()
+                        if ((gtgToday?.pullups ?: 0) > 0) {
+                            Text(
+                                "Подтягивания сегодня: ${gtgToday?.pullups}" +
+                                    (if (bestPull == gtgToday?.pullups) " — рекорд" else ""),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = toneColor(1),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
                         Row(
                             Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
-                            LegendValue("Тренированность", fmt1(today.ctl), CTL_COLOR)
-                            LegendValue("Усталость", fmt1(today.atl), ATL_COLOR)
                             LegendValue(
-                                "Форма",
-                                signed(Math.round(today.tsb).toInt()),
-                                toneColor(if (today.tsb < -10) -1 else if (today.tsb > 5) 1 else 0),
+                                "Вис сегодня",
+                                if ((gtgToday?.hangSec ?: 0) > 0) "${gtgToday?.hangSec} сек" else "—",
+                                CTL_COLOR,
+                            )
+                            LegendValue("Лучший вис", if (best > 0) "$best сек" else "—", ATL_COLOR)
+                            LegendValue(
+                                if (bestPull > 0) "Подтягивания" else "Негативы",
+                                if (bestPull > 0) "$bestPull"
+                                else if ((gtgToday?.negatives ?: 0) > 0) "${gtgToday?.negatives}" else "—",
+                                CTL_COLOR,
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        PaperButton(
+                            "Записать вис, негативы, колено",
+                            onClick = { gtgDialog = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            icon = Glyphs.Edit,
+                        )
+                        if (gtgToday?.knee?.isNotBlank() == true) {
+                            Spacer(Modifier.height(8.dp))
+                            PaperHint("Колено сегодня: ${gtgToday.knee}")
+                        }
+                    }
+                }
+            }
+
+            if (part == PART_PATH) {
+                // Пустая часть читается поломкой: до первой выгрузки intervals здесь
+                // ничего бы не нарисовалось — скажем, чего ждём.
+                if (health.isEmpty() && workouts.isEmpty()) {
+                    item {
+                        PaperCard {
+                            Text(
+                                "Графики появятся, когда intervals.icu пришлёт первые дни и тренировки.",
+                                style = MaterialTheme.typography.bodyMedium,
                             )
                         }
                     }
-                    Spacer(Modifier.height(6.dp))
-                    PaperHint(
-                        "Тренированность — накопленная нагрузка за шесть недель, " +
-                            "усталость — за неделю. Их разница и есть форма: минус — " +
-                            "работаешь в долг, плюс — свежий."
-                    )
                 }
-            }
-        }
 
-        // ---- КПД: его же месячная контрольная, посчитанная сама ----
-        // Правило владельца из Notion: «раз в месяц — темп бега на пульсе 150
-        // и мощность на пульсе ~145. Первый вниз, вторая вверх». Это и есть
-        // efficiency factor, который intervals считает каждой тренировке:
-        // темп (или ватты) на удар пульса. Держать для этого отдельный ритуал
-        // не нужно — данные уже в кэше, рисуем тренд и говорим словами.
-        item { EfficiencyCard(workouts) }
-
-        // ---- План недели: что впереди, с его же комментариями ----
-        item { WeekPlanCard(app, planDays) }
-
-        // ---- Цели октября ----
-        item { GoalsCard(app, health, gtgDays, rules) }
-
-        // ---- Вес и VO2max, если часы их знают ----
-        if (weights.size >= 3) {
-            item {
-                PaperCard(label = "вес") {
-                    WeightChart(weights.reversed())
-                    Spacer(Modifier.height(8.dp))
-                    val newest = weights.first()
-                    val oldest = weights.last()
-                    val delta = newest.weightKg - oldest.weightKg
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        LegendValue("Сейчас", fmt1(newest.weightKg) + " кг", CTL_COLOR)
-                        LegendValue(
-                            "За ${weights.size} замеров",
-                            (if (delta > 0) "+" else "") + fmt1(delta) + " кг",
-                            toneColor(if (delta > 1) -1 else if (delta < -1) 1 else 0),
-                        )
-                        val vo2 = health.firstOrNull { it.vo2max > 0 }?.vo2max ?: 0.0
-                        if (vo2 > 0) LegendValue("VO₂max", fmt0(vo2), ATL_COLOR)
-                    }
-                }
-            }
-        }
-
-        // ---- Тренировки ----
-        item {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PaperLabel("тренировки · ${shownWorkouts.size}")
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (d in listOf(7, 14, 30, 90)) {
-                        FilterChip(
-                            selected = days == d,
-                            onClick = { days = d },
-                            label = { Text("$d дн.") },
-                        )
-                    }
-                }
-            }
-        }
-        if (shownWorkouts.isEmpty()) {
-            item {
-                PaperCard {
-                    Text(
-                        if (workouts.isEmpty()) "Тренировок в кэше нет."
-                        else "За $days дней тренировок не было.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    if (workouts.isEmpty()) {
-                        Spacer(Modifier.height(6.dp))
-                        PaperHint(
-                            "Тренировки приезжают из intervals.icu. Проверь athlete id " +
-                                "и ключ («Настройки» → «Засечка»), потом нажми «Обновить»."
-                        )
-                    }
-                }
-            }
-        } else {
-            // Группируем по неделям: у недели есть свой итог, и это единица,
-            // которой владелец про тренировки и думает.
-            for ((weekLabel, list) in byWeek) {
-                item(key = "w-$weekLabel") {
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        PaperLabel(weekLabel)
-                        PaperHint(
-                            "${list.size} шт · ${list.sumOf { it.minutes }} мин · " +
-                                "load ${list.sumOf { it.load }}"
-                        )
-                    }
-                }
-                items(list.size, key = { i -> list[i].id }) { i ->
-                    val w = list[i]
-                    WorkoutRow(
-                        workout = w,
-                        expanded = openWorkout == w.id,
-                        onToggle = { openWorkout = if (openWorkout == w.id) null else w.id },
-                        maxHr = profile.runMaxHr,
-                        rules = rules,
-                        onComment = { commenting = w },
-                    )
-                }
-            }
-        }
-
-        // ---- Вопрос ----
-        item {
-            PaperCard(label = "спросить про тренировки") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = question,
-                        onValueChange = { question = it },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Стоит ли сегодня бежать интервалы?") },
-                        minLines = 1,
-                        maxLines = 4,
-                        enabled = !asking,
-                    )
-                    IconButton(onClick = ask, enabled = !asking) {
-                        if (asking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Filled.Send, contentDescription = "Спросить")
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-                PaperHint(
-                    "Опус видит твои тренировки, сон, HRV, форму, еду за неделю и " +
-                        "чем ты был занят по ленте. Пустой вопрос = «как у меня дела»."
-                )
-                if (streaming.isNotBlank()) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(streaming, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-        }
-
-        // ---- Прошлые разборы ----
-        if (talks.isNotEmpty()) {
-            item { PaperLabel("прошлые разборы") }
-            items(talks.size, key = { i -> talks[i].id }) { i ->
-                val talk = talks[i]
-                TalkCard(
-                    talk = talk,
-                    onDelete = { scope.launch { store.deleteTalk(talk.id) } },
-                )
-            }
-        }
-
-        // ---- Неразобранное: сказанное, что не стало ничем ----
-        // Сырая надиктовка не удаляется никогда — но до сих пор её никто и не
-        // ПОКАЗЫВАЛ: фраза, на которой модель споткнулась, лежала на диске
-        // невидимой, а «можно переиграть» было обещанием без кнопки. Вот кнопка.
-        run {
-            val unparsed = rawTakes.filter { it.kind.isBlank() || it.kind == "unknown" }.take(5)
-            if (unparsed.isNotEmpty()) {
-                item { PaperLabel("неразобранное · ${unparsed.size}") }
-                items(unparsed.size, key = { i -> "raw" + unparsed[i].id }) { i ->
-                    val take = unparsed[i]
-                    var busy by remember(take.id) { mutableStateOf(false) }
-                    PaperCard {
-                        Text("«${take.text}»", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.height(4.dp))
-                        PaperHint(
-                            rawDayFormat.format(Date(take.ts)) +
-                                (if (take.error.isBlank()) "" else " · ${take.error.take(120)}")
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(
-                            onClick = {
-                                if (!busy) {
-                                    busy = true
-                                    app.appScope.launch {
-                                        val result = app.bodyEngine.rehear(take.id)
-                                        busy = false
-                                        Feedback.toast(
-                                            app,
-                                            result.fold(
-                                                { "✓ " + it.headline() },
-                                                { e -> e.message ?: "Опять не вышло" },
-                                            ),
-                                            long = true,
-                                        )
-                                    }
+                // ---- Тренированность графиком ----
+                if (health.size >= 4) {
+                    item {
+                        PaperCard(
+                            label = "тренированность и усталость",
+                            info = "Тренированность — накопленная нагрузка за шесть недель, " +
+                                "усталость — за неделю. Их разница и есть форма: минус — " +
+                                "работаешь в долг, плюс — свежий.",
+                        ) {
+                            FitnessChart(health.take(90).reversed())
+                            Spacer(Modifier.height(8.dp))
+                            val today = health.firstOrNull()
+                            if (today != null) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    LegendValue("Тренированность", fmt1(today.ctl), CTL_COLOR)
+                                    LegendValue("Усталость", fmt1(today.atl), ATL_COLOR)
+                                    LegendValue(
+                                        "Форма",
+                                        signed(Math.round(today.tsb).toInt()),
+                                        toneColor(if (today.tsb < -10) -1 else if (today.tsb > 5) 1 else 0),
+                                    )
                                 }
-                            },
-                            enabled = !busy,
-                        ) { Text(if (busy) "Разбираю…" else "Разобрать заново") }
+                            }
+                        }
+                    }
+                }
+
+                // ---- КПД: его же месячная контрольная, посчитанная сама ----
+                // Правило владельца из Notion: «раз в месяц — темп бега на пульсе 150
+                // и мощность на пульсе ~145. Первый вниз, вторая вверх». Это и есть
+                // efficiency factor, который intervals считает каждой тренировке:
+                // темп (или ватты) на удар пульса. Держать для этого отдельный ритуал
+                // не нужно — данные уже в кэше, рисуем тренд и говорим словами.
+                item { EfficiencyCard(workouts) }
+
+                // ---- План недели: что впереди, с его же комментариями ----
+                item { WeekPlanCard(app, planDays) }
+
+                // ---- Цели октября ----
+                item { GoalsCard(app, health, gtgDays, rules) }
+
+                // ---- Вес и VO2max, если часы их знают ----
+                if (weights.size >= 3) {
+                    item {
+                        PaperCard(label = "вес") {
+                            WeightChart(weights.reversed())
+                            Spacer(Modifier.height(8.dp))
+                            val newest = weights.first()
+                            val oldest = weights.last()
+                            val delta = newest.weightKg - oldest.weightKg
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                LegendValue("Сейчас", fmt1(newest.weightKg) + " кг", CTL_COLOR)
+                                LegendValue(
+                                    "За ${weights.size} замеров",
+                                    (if (delta > 0) "+" else "") + fmt1(delta) + " кг",
+                                    toneColor(if (delta > 1) -1 else if (delta < -1) 1 else 0),
+                                )
+                                val vo2 = health.firstOrNull { it.vo2max > 0 }?.vo2max ?: 0.0
+                                if (vo2 > 0) LegendValue("VO₂max", fmt0(vo2), ATL_COLOR)
+                            }
+                        }
                     }
                 }
             }
-        }
 
-        // Настройки режима — за шестерёнкой в шапке вкладки.
+            if (part == PART_JOURNAL) {
+                // ---- Тренировки ----
+                // Период — чипами ПОД подписью, а не в её строке: четыре чипа рядом с
+                // «тренировки · 12» на внешнем экране Fold не вставали (24.09.2026).
+                item {
+                    Column(Modifier.fillMaxWidth()) {
+                        PaperLabel("тренировки · ${shownWorkouts.size}")
+                        ChipRow {
+                            for (d in listOf(7, 14, 30, 90)) {
+                                PaperChip("$d дн.", selected = days == d, onClick = { days = d })
+                            }
+                        }
+                    }
+                }
+                if (shownWorkouts.isEmpty()) {
+                    item {
+                        PaperCard {
+                            Text(
+                                if (workouts.isEmpty()) "Тренировок в кэше нет."
+                                else "За $days дней тренировок не было.",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            if (workouts.isEmpty()) {
+                                // Не пояснение, а что чинить — поэтому на виду. Ключ с
+                                // 24.09 живёт в «Подключениях», не в «Засечке».
+                                Spacer(Modifier.height(6.dp))
+                                PaperHint(
+                                    "Тренировки приезжают из intervals.icu. Проверь athlete id " +
+                                        "и ключ («Настройки» → «Подключения» → «intervals.icu»), " +
+                                        "потом нажми «Обновить» в части «Сегодня»."
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    // Группируем по неделям: у недели есть свой итог, и это единица,
+                    // которой владелец про тренировки и думает.
+                    for ((weekLabel, list) in byWeek) {
+                        item(key = "w-$weekLabel") {
+                            Row(
+                                Modifier.fillMaxWidth().padding(top = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                PaperLabel(weekLabel)
+                                PaperHint(
+                                    "${list.size} шт · ${list.sumOf { it.minutes }} мин · " +
+                                        "load ${list.sumOf { it.load }}"
+                                )
+                            }
+                        }
+                        items(list.size, key = { i -> list[i].id }) { i ->
+                            val w = list[i]
+                            WorkoutRow(
+                                workout = w,
+                                expanded = openWorkout == w.id,
+                                onToggle = { openWorkout = if (openWorkout == w.id) null else w.id },
+                                maxHr = profile.runMaxHr,
+                                rules = rules,
+                                onComment = { commenting = w },
+                            )
+                        }
+                    }
+                }
+
+                // ---- Вопрос ----
+                item {
+                    PaperCard(
+                        label = "спросить про тренировки",
+                        info = "Опус видит твои тренировки, сон, HRV, форму, еду за неделю и " +
+                            "чем ты был занят по ленте. Пустой вопрос = «как у меня дела».",
+                    ) {
+                        // Строка ввода — общая на все вкладки. Микрофона у этого поля
+                        // не было, и строка без него. «Отправить» горит и на пустом
+                        // поле: пустой вопрос — это «как у меня дела».
+                        VoiceInput(
+                            value = question,
+                            onValueChange = { question = it },
+                            placeholder = "Стоит ли сегодня бежать интервалы?",
+                            onSend = ask,
+                            sendEnabled = !asking,
+                            enabled = !asking,
+                        )
+                        if (asking && streaming.isBlank()) {
+                            Spacer(Modifier.height(10.dp))
+                            BusyLine("Думает…")
+                        }
+                        if (streaming.isNotBlank()) {
+                            Spacer(Modifier.height(10.dp))
+                            Text(streaming, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+
+                // ---- Прошлые разборы ----
+                if (talks.isNotEmpty()) {
+                    item { PaperLabel("прошлые разборы") }
+                    items(talks.size, key = { i -> talks[i].id }) { i ->
+                        val talk = talks[i]
+                        TalkCard(
+                            talk = talk,
+                            onDelete = { scope.launch { store.deleteTalk(talk.id) } },
+                        )
+                    }
+                }
+
+                // ---- Неразобранное: сказанное, что не стало ничем ----
+                // Сырая надиктовка не удаляется никогда — но до сих пор её никто и не
+                // ПОКАЗЫВАЛ: фраза, на которой модель споткнулась, лежала на диске
+                // невидимой, а «можно переиграть» было обещанием без кнопки. Вот кнопка.
+                run {
+                    val unparsed = rawTakes.filter { it.kind.isBlank() || it.kind == "unknown" }.take(5)
+                    if (unparsed.isNotEmpty()) {
+                        item { PaperLabel("неразобранное · ${unparsed.size}") }
+                        items(unparsed.size, key = { i -> "raw" + unparsed[i].id }) { i ->
+                            val take = unparsed[i]
+                            var busy by remember(take.id) { mutableStateOf(false) }
+                            PaperCard {
+                                Text("«${take.text}»", style = MaterialTheme.typography.bodyMedium)
+                                Spacer(Modifier.height(4.dp))
+                                PaperHint(
+                                    rawDayFormat.format(Date(take.ts)) +
+                                        (if (take.error.isBlank()) "" else " · ${take.error.take(120)}")
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                PaperButton(
+                                    if (busy) "Разбираю…" else "Разобрать заново",
+                                    onClick = {
+                                        if (!busy) {
+                                            busy = true
+                                            app.appScope.launch {
+                                                val result = app.bodyEngine.rehear(take.id)
+                                                busy = false
+                                                Feedback.toast(
+                                                    app,
+                                                    result.fold(
+                                                        { "✓ " + it.headline() },
+                                                        { e -> e.message ?: "Опять не вышло" },
+                                                    ),
+                                                    long = true,
+                                                )
+                                            }
+                                        }
+                                    },
+                                    icon = Glyphs.Refresh,
+                                    enabled = !busy,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Настройки режима — за шестерёнкой в шапке вкладки.
+        }
     }
 
     if (gtgDialog) {
@@ -932,46 +1004,39 @@ private fun CoachDialog(
     // «Как делать?» не заставляет редактировать вопрос: диалог открылся —
     // ответ уже пошёл.
     LaunchedEffect(Unit) { if (autoAsk) send() }
-    AlertDialog(
+    // Лист, а не окно по центру (24.09.2026): ответ длинный и растёт потоком,
+    // ему нужна прокрутка во всю высоту, а строка вопроса — внизу, над
+    // клавиатурой, как в любом разговоре. «Закрыть» ушло в крестик и свайп.
+    PaperSheet(
         // Закрывается ВСЕГДА: запрос доживёт в app-scope и ляжет в «прошлые
         // разборы», а запертый диалог — это владелец без телефона.
-        onDismissRequest = onClose,
-        title = { Text(shortName, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-        text = {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                OutlinedTextField(
-                    value = question,
-                    onValueChange = { question = it },
-                    label = { Text(if (autoAsk) "Вопрос тренеру" else "Спроси про это упражнение…") },
-                    minLines = 1,
-                    maxLines = 3,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(6.dp))
-                PaperHint(
-                    "Тренер-консультант видит карточку движения из твоего " +
-                        "справочника, план дня и правила недели."
-                )
-                if (streaming.isNotBlank()) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(streaming, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
+        onDismiss = onClose,
+        title = shortName,
+        icon = Glyphs.Spark,
+        subtitle = "тренер-консультант",
+        footer = {
+            VoiceInput(
+                value = question,
+                onValueChange = { question = it },
+                placeholder = if (autoAsk) "Вопрос тренеру" else "Спроси про это упражнение…",
+                onSend = send,
+                modifier = Modifier.weight(1f),
+                sendEnabled = !busy && question.isNotBlank(),
+                enabled = !busy,
+                maxLines = 3,
+            )
         },
-        confirmButton = {
-            Button(
-                onClick = send,
-                enabled = !busy && question.isNotBlank(),
-            ) { Text(if (busy) "Думает…" else "Спросить") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
-    )
+    ) {
+        when {
+            streaming.isNotBlank() -> Text(streaming, style = MaterialTheme.typography.bodyMedium)
+            busy -> BusyLine("Думает…")
+            // Пока ответа нет, лист не пустой: сказано, что тренер видит.
+            else -> PaperHint(
+                "Тренер-консультант видит карточку движения из твоего " +
+                    "справочника, план дня и правила недели."
+            )
+        }
+    }
 }
 
 /**
@@ -987,51 +1052,48 @@ private fun WorkoutCommentDialog(
 ) {
     var text by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text(SportCoach.sportName(workout.type) + " · " + fmtDay(workout.start)) },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    label = { Text("Как прошло — своими словами") },
-                    minLines = 2,
-                    maxLines = 5,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(6.dp))
-                PaperHint(
-                    "Уедет в описание этой активности в intervals (свой блок, " +
-                        "твоё там не трогается) и останется на телефоне."
-                )
+    PaperAlert(
+        onDismiss = onClose,
+        title = "Комментарий в intervals",
+        icon = Glyphs.Note,
+        subtitle = SportCoach.sportName(workout.type) + " · " + fmtDay(workout.start),
+        confirm = SheetAction(
+            text = if (busy) "Отправляю…" else "Отправить",
+            icon = Glyphs.Send,
+            enabled = !busy && text.isNotBlank(),
+        ) {
+            if (!busy && text.isNotBlank()) {
+                busy = true
+                app.appScope.launch {
+                    val outcome = app.strengthEngine.commentWorkout(workout.id, text)
+                    busy = false
+                    Feedback.toast(
+                        app,
+                        outcome.fold(
+                            { "✓ Уехало в intervals" },
+                            { e -> (e.message ?: "Не уехало") + " — текст сохранён" },
+                        ),
+                        long = true,
+                    )
+                    onClose()
+                }
             }
         },
-        confirmButton = {
-            Button(
-                onClick = {
-                    if (!busy && text.isNotBlank()) {
-                        busy = true
-                        app.appScope.launch {
-                            val outcome = app.strengthEngine.commentWorkout(workout.id, text)
-                            busy = false
-                            Feedback.toast(
-                                app,
-                                outcome.fold(
-                                    { "✓ Уехало в intervals" },
-                                    { e -> (e.message ?: "Не уехало") + " — текст сохранён" },
-                                ),
-                                long = true,
-                            )
-                            onClose()
-                        }
-                    }
-                },
-                enabled = !busy && text.isNotBlank(),
-            ) { Text(if (busy) "Отправляю…" else "Отправить") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
-    )
+    ) {
+        PaperField(
+            value = text,
+            onValueChange = { text = it },
+            label = "Как прошло — своими словами",
+            singleLine = false,
+            minLines = 2,
+            maxLines = 5,
+        )
+        // Куда уедет сказанное — не справка, а последствие кнопки: на виду.
+        PaperHint(
+            "Уедет в описание этой активности в intervals (свой блок, " +
+                "твоё там не трогается) и останется на телефоне."
+        )
+    }
 }
 
 private fun fmtDay(ts: Long): String = workoutDayFormat.format(Date(ts))
@@ -1156,35 +1218,78 @@ private fun PlannedExerciseCard(
             Text(exercise.progression, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (seconds in listOf(60, restSec, 120).distinct()) {
-                OutlinedButton(onClick = { onRest(seconds) }) { Text("⏱ $seconds") }
-            }
+        // Ряд значков с подписями вместо пяти кнопок словами (24.09.2026):
+        // «⏱ 60 · ⏱ 90 · ⏱ 120 · Как делать? · Спросить» в строку не вставали
+        // и переносились лесенкой. Таймер один — тап запускает отдых из
+        // настроек, долгое нажатие даёт выбрать другой.
+        val context = androidx.compose.ui.platform.LocalContext.current
+        var pickRest by remember { mutableStateOf(false) }
+        IconActionRow {
+            IconAction(
+                Glyphs.Timer,
+                "Таймер",
+                onClick = { onRest(restSec) },
+                onLongClick = { pickRest = true },
+            )
             if (onAskCoach != null) {
-                // «Как делать?» — один тап, фиксированный вопрос; «Спросить» —
+                // «Как делать» — один тап, фиксированный вопрос; «Спросить» —
                 // своё, с пустым полем. Обе — лёгкий тренер-консультант.
-                OutlinedButton(onClick = { onAskCoach(true) }) { Text("Как делать?") }
-                OutlinedButton(onClick = { onAskCoach(false) }) { Text("Спросить") }
+                IconAction(Glyphs.Book, "Как делать", onClick = { onAskCoach(true) })
+                IconAction(Glyphs.Spark, "Спросить", onClick = { onAskCoach(false) })
+            }
+            if (exercise != null && exercise.videoQuery.isNotBlank()) {
+                IconAction(Glyphs.Play, "Видео", onClick = {
+                    // Не встроенный плеер, а поиск в ютубе: держать у себя ссылки
+                    // на чужие видео значит починять их каждый год.
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse(
+                                    "https://www.youtube.com/results?search_query=" +
+                                        android.net.Uri.encode(exercise.videoQuery)
+                                ),
+                            )
+                        )
+                    }
+                })
             }
         }
-        if (exercise != null && exercise.videoQuery.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            val context = androidx.compose.ui.platform.LocalContext.current
-            TextButton(onClick = {
-                // Не встроенный плеер, а поиск в ютубе: держать у себя ссылки
-                // на чужие видео значит починять их каждый год.
-                runCatching {
-                    context.startActivity(
-                        android.content.Intent(
-                            android.content.Intent.ACTION_VIEW,
-                            android.net.Uri.parse(
-                                "https://www.youtube.com/results?search_query=" +
-                                    android.net.Uri.encode(exercise.videoQuery)
-                            ),
-                        )
-                    )
-                }
-            }) { Text("▶ Видео: " + exercise.videoQuery.take(40)) }
+        if (pickRest) {
+            RestSheet(
+                restSec = restSec,
+                onPick = { seconds ->
+                    pickRest = false
+                    onRest(seconds)
+                },
+                onDismiss = { pickRest = false },
+            )
+        }
+    }
+}
+
+/**
+ * Выбор отдыха по долгому нажатию на «Таймер»: прежние 60 и 120 рядом с
+ * отдыхом из настроек. Тап по чипу сразу запускает отсчёт — лист для одного
+ * решения, второго тапа «ОК» он не просит.
+ */
+@Composable
+private fun RestSheet(restSec: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+    PaperSheet(
+        onDismiss = onDismiss,
+        title = "Отдых",
+        icon = Glyphs.Timer,
+        subtitle = "по тапу на «Таймер» — $restSec сек",
+    ) {
+        ChipRow {
+            for (seconds in listOf(60, 90, 120, restSec).distinct().sorted()) {
+                PaperChip(
+                    "$seconds сек",
+                    selected = seconds == restSec,
+                    onClick = { onPick(seconds) },
+                    icon = Glyphs.Timer,
+                )
+            }
         }
     }
 }
@@ -1252,24 +1357,49 @@ private fun StrengthTodayCard(
                 (if (session.rpe > 0) " · RPE ${session.rpe}" else ""))
         } else {
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = onFeel) { Text("Самочувствие") }
+            PaperButton("Самочувствие", onClick = onFeel, icon = Glyphs.Heart)
         }
 
         Spacer(Modifier.height(12.dp))
-        Text(
-            (if (route.tone == 1) "✓ " else if (route.tone < 0) "⚠ " else "⏳ ") + route.headline,
-            style = MaterialTheme.typography.bodyMedium,
-            color = toneColor(route.tone),
-        )
-        if (route.hint.isNotBlank()) {
-            Spacer(Modifier.height(4.dp))
-            PaperHint(route.hint)
+        // Состояние дороги наружу — словами и значком на виду (договорённость:
+        // молчание читается поломкой); как эта дорога устроена и что значит
+        // «Без часов» — за «i» у строки (24.09.2026), раньше это были два
+        // абзаца под ней.
+        val routeInfo = listOfNotNull(
+            route.hint.ifBlank { null },
+            if (route.canNote) {
+                "«Без часов» — когда силовая прошла без них вовсе: журнал ляжет " +
+                    "заметкой сразу, не дожидаясь полутора суток."
+            } else null,
+        ).joinToString("\n\n")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                when {
+                    route.tone == 1 -> Glyphs.Check
+                    route.tone < 0 -> Glyphs.Close
+                    else -> Glyphs.Timer
+                },
+                contentDescription = null,
+                tint = toneColor(route.tone),
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                route.headline,
+                style = MaterialTheme.typography.bodyMedium,
+                color = toneColor(route.tone),
+                modifier = Modifier.weight(1f),
+            )
+            if (routeInfo.isNotBlank()) InfoButton("Куда уехала силовая", routeInfo)
         }
         if (route.canRetry || route.canNote) {
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // С переносом: две кнопки со значками на внешнем экране Fold в
+            // одну строку не встают.
+            ChipRowButtons {
                 if (route.canRetry) {
-                    OutlinedButton(
+                    PaperButton(
+                        if (busy) "Ищу…" else "Найти активность",
                         onClick = {
                             if (!busy) {
                                 busy = true
@@ -1288,11 +1418,13 @@ private fun StrengthTodayCard(
                                 }
                             }
                         },
+                        icon = Glyphs.Search,
                         enabled = !busy,
-                    ) { Text(if (busy) "Ищу…" else "Найти активность") }
+                    )
                 }
                 if (route.canNote) {
-                    OutlinedButton(
+                    PaperButton(
+                        "Без часов",
                         onClick = {
                             if (!busy) {
                                 busy = true
@@ -1310,16 +1442,10 @@ private fun StrengthTodayCard(
                                 }
                             }
                         },
+                        icon = Glyphs.Calendar,
                         enabled = !busy,
-                    ) { Text("Без часов") }
+                    )
                 }
-            }
-            if (route.canNote) {
-                Spacer(Modifier.height(4.dp))
-                PaperHint(
-                    "«Без часов» — когда силовая прошла без них вовсе: журнал ляжет " +
-                        "заметкой сразу, не дожидаясь полутора суток."
-                )
             }
         }
     }
@@ -1370,90 +1496,85 @@ private fun GtgDialog(app: PravkaApp, date: String, onClose: () -> Unit) {
     // и «вис 40 секунд» оставлял день неотмеченным: владелец видел цифры и
     // пустой стрик и не понимал, чего ещё от него хотят.
     var charged by remember { mutableStateOf(true) }
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text("Зарядка и турник") },
-        text = {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = charged, onCheckedChange = { charged = it })
-                    Spacer(Modifier.width(8.dp))
-                    Text("Отметить зарядку сделанной", style = MaterialTheme.typography.bodyMedium)
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedTextField(
-                        value = hang,
-                        onValueChange = { hang = it.filter { c -> c.isDigit() }.take(4) },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Вис, сек") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                    OutlinedTextField(
-                        value = negatives,
-                        onValueChange = { negatives = it.filter { c -> c.isDigit() }.take(3) },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Негативы") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedTextField(
-                        value = scapular,
-                        onValueChange = { scapular = it.filter { c -> c.isDigit() }.take(3) },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Лопаточные") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                    OutlinedTextField(
-                        value = pullups,
-                        onValueChange = { pullups = it.filter { c -> c.isDigit() }.take(3) },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Подтягивания") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                PaperHint("Колено сегодня")
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (option in listOf("зелёный", "жёлтый", "красный")) {
-                        FilterChip(
-                            selected = knee == option,
-                            onClick = { knee = if (knee == option) "" else option },
-                            label = { Text(option) },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                PaperHint(
-                    "Записывается лучший результат дня: вечерняя попытка не портит " +
-                        "утреннюю. Колено — наоборот, последнее сказанное."
+    val number = KeyboardOptions(keyboardType = KeyboardType.Number)
+    PaperAlert(
+        onDismiss = onClose,
+        title = "Зарядка и турник",
+        icon = Glyphs.Sport,
+        confirm = SheetAction("Записать", icon = Glyphs.Check) {
+            app.appScope.launch {
+                app.bodyEngine.putGtgNumbers(
+                    date = date,
+                    charged = if (charged) true else null,
+                    hangSec = hang.toIntOrNull(),
+                    negatives = negatives.toIntOrNull(),
+                    scapular = scapular.toIntOrNull(),
+                    pullups = pullups.toIntOrNull(),
+                    knee = knee.ifBlank { null },
                 )
+                onClose()
             }
         },
-        confirmButton = {
-            TextButton(onClick = {
-                app.appScope.launch {
-                    app.bodyEngine.putGtgNumbers(
-                        date = date,
-                        charged = if (charged) true else null,
-                        hangSec = hang.toIntOrNull(),
-                        negatives = negatives.toIntOrNull(),
-                        scapular = scapular.toIntOrNull(),
-                        pullups = pullups.toIntOrNull(),
-                        knee = knee.ifBlank { null },
-                    )
-                    onClose()
-                }
-            }) { Text("Записать") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
-    )
+    ) {
+        PaperToggle(
+            title = "Отметить зарядку сделанной",
+            checked = charged,
+            onCheckedChange = { charged = it },
+        )
+        // Как считаются числа — за «i» у подписи раздела (24.09.2026), а не
+        // абзацем под чипами колена.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { PaperHint("Турник, за день") }
+            InfoButton(
+                "Как записывается",
+                "Записывается лучший результат дня: вечерняя попытка не портит " +
+                    "утреннюю. Колено — наоборот, последнее сказанное.",
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PaperField(
+                value = hang,
+                onValueChange = { hang = it.filter { c -> c.isDigit() }.take(4) },
+                modifier = Modifier.weight(1f),
+                label = "Вис, сек",
+                keyboardOptions = number,
+            )
+            PaperField(
+                value = negatives,
+                onValueChange = { negatives = it.filter { c -> c.isDigit() }.take(3) },
+                modifier = Modifier.weight(1f),
+                label = "Негативы",
+                keyboardOptions = number,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PaperField(
+                value = scapular,
+                onValueChange = { scapular = it.filter { c -> c.isDigit() }.take(3) },
+                modifier = Modifier.weight(1f),
+                label = "Лопаточные",
+                keyboardOptions = number,
+            )
+            PaperField(
+                value = pullups,
+                onValueChange = { pullups = it.filter { c -> c.isDigit() }.take(3) },
+                modifier = Modifier.weight(1f),
+                label = "Подтягивания",
+                keyboardOptions = number,
+            )
+        }
+        PaperHint("Колено сегодня")
+        ChipRow {
+            for (option in listOf("зелёный", "жёлтый", "красный")) {
+                PaperChip(
+                    option,
+                    selected = knee == option,
+                    onClick = { knee = if (knee == option) "" else option },
+                    warn = option == "красный",
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -1466,53 +1587,39 @@ private fun FeelDialog(app: PravkaApp, sessionId: Long, onClose: () -> Unit) {
     var feel by remember { mutableStateOf(0) }
     var rpe by remember { mutableStateOf(0) }
     var note by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text("Как прошло") },
-        text = {
-            Column {
-                PaperHint("Самочувствие: 1 отлично — 5 развалина (шкала intervals)")
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (v in 1..5) {
-                        FilterChip(
-                            selected = feel == v,
-                            onClick = { feel = if (feel == v) 0 else v },
-                            label = { Text("$v") },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                PaperHint("Как тяжело далось, RPE 1–10")
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    for (v in listOf(3, 5, 7, 8, 9, 10)) {
-                        FilterChip(
-                            selected = rpe == v,
-                            onClick = { rpe = if (rpe == v) 0 else v },
-                            label = { Text("$v") },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = note,
-                    onValueChange = { note = it },
-                    label = { Text("Заметка (уедет в intervals)") },
-                    minLines = 1,
-                    maxLines = 3,
-                )
+    PaperAlert(
+        onDismiss = onClose,
+        title = "Как прошло",
+        icon = Glyphs.Heart,
+        confirm = SheetAction("Записать", icon = Glyphs.Check) {
+            app.appScope.launch {
+                app.strengthEngine.setFeel(sessionId, feel, rpe, note.trim())
+                app.strengthEngine.syncPending(force = true)
+                onClose()
             }
         },
-        confirmButton = {
-            TextButton(onClick = {
-                app.appScope.launch {
-                    app.strengthEngine.setFeel(sessionId, feel, rpe, note.trim())
-                    app.strengthEngine.syncPending(force = true)
-                    onClose()
-                }
-            }) { Text("Записать") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
-    )
+    ) {
+        // Шкала — подпись к чипам, без неё «1» и «5» не прочитать: на виду.
+        PaperHint("Самочувствие: 1 отлично — 5 развалина (шкала intervals)")
+        ChipRow {
+            for (v in 1..5) {
+                PaperChip("$v", selected = feel == v, onClick = { feel = if (feel == v) 0 else v })
+            }
+        }
+        PaperHint("Как тяжело далось, RPE 1–10")
+        ChipRow {
+            for (v in listOf(3, 5, 7, 8, 9, 10)) {
+                PaperChip("$v", selected = rpe == v, onClick = { rpe = if (rpe == v) 0 else v })
+            }
+        }
+        PaperField(
+            value = note,
+            onValueChange = { note = it },
+            label = "Заметка (уедет в intervals)",
+            singleLine = false,
+            maxLines = 3,
+        )
+    }
 }
 
 @Composable
@@ -1554,31 +1661,119 @@ private val RUN_COLOR = Color(0xFF16A34A)
 private val RIDE_COLOR = Color(0xFF2563EB)
 
 /**
- * Тренированность и усталость одной картинкой. Рисуем руками по Canvas, а не
- * библиотекой: две ломаные - это двадцать строк, а любая графическая
- * библиотека это ещё одна зависимость в приложении, где их пять.
+ * Круглая галочка чек-листа: пустой кружок кромкой → залитый краской режима
+ * со значком. До 24.09.2026 была ярко-зелёной с «✓» шрифта — рядом с
+ * кнопками набора она читалась чужой деталью.
  */
-/** Круглая галочка чек-листа: пустой круг → зелёная точка с ✓. */
 @Composable
 private fun CheckDot(ticked: Boolean, onCheck: () -> Unit) {
+    val c = MaterialTheme.colorScheme
     Box(
         Modifier
-            .size(30.dp)
-            .background(
-                if (ticked) toneColor(1) else MaterialTheme.colorScheme.surface,
-                CircleShape,
-            )
-            .border(
-                width = 2.dp,
-                color = if (ticked) toneColor(1) else MaterialTheme.colorScheme.outlineVariant,
-                shape = CircleShape,
-            )
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(if (ticked) c.primary else Color.Transparent)
+            .border(1.5.dp, if (ticked) c.primary else c.outline, CircleShape)
             .clickable(onClick = onCheck),
         contentAlignment = Alignment.Center,
     ) {
         if (ticked) {
-            Text("✓", color = MaterialTheme.colorScheme.surface, fontWeight = FontWeight.Bold)
+            Icon(Glyphs.Check, contentDescription = "сделано", tint = c.onPrimary, modifier = Modifier.size(16.dp))
         }
+    }
+}
+
+/**
+ * Кружок «не смог» или «частично» на месте галочки — того же размера, что
+ * [CheckDot], чтобы строки чек-листа не прыгали. Раньше это были знаки
+ * шрифта «✗» и «◐».
+ */
+@Composable
+private fun MarkDot(icon: ImageVector, color: Color, description: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(color.copy(alpha = 0.14f))
+            .border(1.5.dp, color, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = description, tint = color, modifier = Modifier.size(16.dp))
+    }
+}
+
+/** «Сделано» строкой: значок галочки и слово, цветом «хорошо». */
+@Composable
+private fun DoneLine(text: String, modifier: Modifier = Modifier, big: Boolean = false) {
+    val color = toneColor(1)
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Icon(Glyphs.Check, contentDescription = null, tint = color, modifier = Modifier.size(if (big) 20.dp else 18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text,
+            style = if (big) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
+            color = color,
+        )
+    }
+}
+
+/** Идёт запрос: крутилка и слово — на месте ответа, пока его нет. */
+@Composable
+private fun BusyLine(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.width(8.dp))
+        PaperHint(text)
+    }
+}
+
+/**
+ * Светофор пилюлей: точка цвета и вердикт словами («По плану», «Срежь
+ * интенсивность»). Живёт в плашке «сегодня», чтобы решение дня было видно
+ * до упражнений; тап ведёт к плашке светофора с причинами и числами.
+ */
+@Composable
+private fun TrafficPill(verdict: TrafficLight.Verdict, onClick: () -> Unit) {
+    val color = toneColor(verdict.tone)
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(color.copy(alpha = 0.14f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(7.dp))
+        Text(
+            verdict.headline,
+            style = MaterialTheme.typography.labelLarge,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * Секунды удержания у строки зарядки: значок таймера и число краской
+ * режима. Раньше — «⏱40» текстом; число осталось, чтобы было видно, сколько
+ * пойдёт, до тапа.
+ */
+@Composable
+private fun TimerTap(seconds: Int, onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Glyphs.Timer, contentDescription = "таймер", tint = c.primary, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(3.dp))
+        Text("$seconds", style = MaterialTheme.typography.labelLarge, color = c.primary)
     }
 }
 
@@ -1654,9 +1849,13 @@ private fun ZaryadkaChecklist(
 
     PaperCard(
         label = "зарядка сегодня",
+        // Как пользоваться чек-листом — за «i» (24.09.2026); раньше строкой
+        // под списком, и она менялась, когда зарядка закрыта.
+        info = "Тап по названию — техника, карандаш — как пошло. Отметишь всё — " +
+            "зарядка закроется сама. Числа виса и негативов — в карточке зарядки ниже.",
         trailing = {
             PaperHint(
-                if (charged) "✓ сделана"
+                if (charged) "сделана"
                 else "${allIds.count { it in doneIds }} из ${items.size}"
             )
         },
@@ -1683,13 +1882,12 @@ private fun ZaryadkaChecklist(
                 if (report != null && report.status != "ok") {
                     // «Не смог» и «частично» — не галочка и не пустота: видно
                     // без раскрытия. Тап открывает тот же ✎-отчёт.
-                    Text(
-                        if (report.status == "no") "✗" else "◐",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = toneColor(if (report.status == "no") -2 else -1),
-                        modifier = Modifier
-                            .clickable { noting = task }
-                            .padding(horizontal = 5.dp),
+                    val no = report.status == "no"
+                    MarkDot(
+                        icon = if (no) Glyphs.Close else Glyphs.Minus,
+                        color = toneColor(if (no) -2 else -1),
+                        description = if (no) "не смог" else "частично",
+                        onClick = { noting = task },
                     )
                 } else {
                     CheckDot(ticked) {
@@ -1740,14 +1938,16 @@ private fun ZaryadkaChecklist(
                                 color = MaterialTheme.colorScheme.error,
                             )
                         }
-                        Spacer(Modifier.height(6.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { asking = Triple(task.title, exercise, true) }) {
-                                Text("Как делать?")
-                            }
-                            OutlinedButton(onClick = { asking = Triple(task.title, exercise, false) }) {
-                                Text("Спросить")
-                            }
+                        Spacer(Modifier.height(2.dp))
+                        // Те же значки, что у упражнения силовой: одно
+                        // действие — один значок во всей вкладке.
+                        IconActionRow {
+                            IconAction(Glyphs.Book, "Как делать", onClick = {
+                                asking = Triple(task.title, exercise, true)
+                            })
+                            IconAction(Glyphs.Spark, "Спросить", onClick = {
+                                asking = Triple(task.title, exercise, false)
+                            })
                         }
                     }
                 }
@@ -1756,27 +1956,18 @@ private fun ZaryadkaChecklist(
                 // пульс. Таймер поэтому здесь, в одном тапе от строки.
                 val holdSec = HOLD_SEC.find(task.title)?.groupValues?.get(1)?.toIntOrNull()
                 if (holdSec != null && !ticked) {
-                    Text(
-                        "⏱$holdSec",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clickable {
-                                Feedback.toast(app, "$holdSec сек пошли — считает кнопка «Т»")
-                                ru.zf.pravka.trigger.PravkaAccessibilityService.instance
-                                    ?.startRestFromTab(holdSec)
-                            }
-                            .padding(horizontal = 4.dp, vertical = 8.dp),
-                    )
+                    TimerTap(holdSec) {
+                        Feedback.toast(app, "$holdSec сек пошли — считает кнопка «Т»")
+                        ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                            ?.startRestFromTab(holdSec)
+                    }
                 }
-                IconButton(onClick = { noting = task }, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        Icons.Filled.Edit,
-                        contentDescription = "Комментарий к упражнению",
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                GlyphButton(
+                    Glyphs.Edit,
+                    "Комментарий к упражнению",
+                    onClick = { noting = task },
+                    size = 32.dp,
+                )
             }
         }
         // Его текст ПОСЛЕ списка: «Минимум на плохое утро: 1 + 3 + шесть
@@ -1794,28 +1985,21 @@ private fun ZaryadkaChecklist(
         // сам рисует по нему кривую, из слова «ужас» её не построишь.
         if (charged || doneIds.isNotEmpty()) {
             Spacer(Modifier.height(6.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                PaperHint("самочувствие")
+            // Шкала — подпись к чипам: без неё «1» и «5» не прочитать.
+            PaperHint("самочувствие · 1 отлично — 5 развалина (шкала intervals)")
+            Spacer(Modifier.height(4.dp))
+            ChipRow {
                 for (v in 1..5) {
-                    FilterChip(
+                    PaperChip(
+                        "$v",
                         selected = gtgToday?.feel == v,
                         onClick = {
                             app.appScope.launch { app.bodyEngine.putGtgNumbers(feel = v) }
                         },
-                        label = { Text("$v") },
                     )
                 }
             }
-            PaperHint("1 отлично — 5 развалина (шкала intervals)")
         }
-        Spacer(Modifier.height(4.dp))
-        PaperHint(
-            if (charged) "Числа виса и негативов — в карточке зарядки ниже."
-            else "Тап по названию — техника, ✎ — как пошло. Отметишь всё — зарядка закроется сама."
-        )
         // Накопленные за день пометки — здесь же, чтобы было видно, что уедет
         // в intervals вместе с итогом.
         val accumNote = gtgToday?.note.orEmpty()
@@ -1873,62 +2057,51 @@ private fun ZaryadkaReportDialog(
     var status by remember { mutableStateOf(existing?.status ?: "ok") }
     var fact by remember { mutableStateOf(existing?.fact.orEmpty()) }
     var note by remember { mutableStateOf(existing?.note.orEmpty()) }
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text(name, style = MaterialTheme.typography.titleMedium) },
-        text = {
-            Column {
-                if (plan.isNotBlank()) PaperHint("план: $plan")
-                Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for ((key, label) in listOf("ok" to "Сделал", "part" to "Частично", "no" to "Не смог")) {
-                        FilterChip(
-                            selected = status == key,
-                            onClick = { status = key },
-                            label = { Text(label) },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = fact,
-                    onValueChange = { fact = it },
-                    label = { Text("Факт: «10», «12 из 15»…") },
-                    minLines = 1,
+    PaperAlert(
+        onDismiss = onClose,
+        title = name,
+        icon = Glyphs.Edit,
+        // План пункта — подзаголовком: с ним сверяют факт, он нужен на виду.
+        subtitle = if (plan.isNotBlank()) "план: $plan" else null,
+        confirm = SheetAction("Записать", icon = Glyphs.Check) {
+            app.appScope.launch {
+                app.bodyEngine.reportZaryadka(
+                    StrengthStore.GtgItem(
+                        id = task.id,
+                        name = name,
+                        plan = plan,
+                        status = status,
+                        fact = fact.trim(),
+                        note = note.trim(),
+                    ),
+                    allIds = allIds,
                 )
-                Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
-                    value = note,
-                    onValueChange = { note = it },
-                    label = { Text("Ощущение: «тяжело», «легко»…") },
-                    minLines = 1,
-                    maxLines = 3,
-                )
-                Spacer(Modifier.height(6.dp))
-                PaperHint("Уедет строкой «факт/план» в комментарий intervals — по ней правится план.")
+                Feedback.toast(app, "✓ В таблице дня — уедет в intervals")
             }
+            onClose()
         },
-        confirmButton = {
-            TextButton(onClick = {
-                app.appScope.launch {
-                    app.bodyEngine.reportZaryadka(
-                        StrengthStore.GtgItem(
-                            id = task.id,
-                            name = name,
-                            plan = plan,
-                            status = status,
-                            fact = fact.trim(),
-                            note = note.trim(),
-                        ),
-                        allIds = allIds,
-                    )
-                    Feedback.toast(app, "✓ В таблице дня — уедет в intervals")
-                }
-                onClose()
-            }) { Text("Записать") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
-    )
+    ) {
+        ChipRow {
+            for ((key, label) in listOf("ok" to "Сделал", "part" to "Частично", "no" to "Не смог")) {
+                PaperChip(label, selected = status == key, onClick = { status = key }, warn = key == "no")
+            }
+        }
+        PaperField(
+            value = fact,
+            onValueChange = { fact = it },
+            label = "Факт: «10», «12 из 15»…",
+            singleLine = false,
+        )
+        PaperField(
+            value = note,
+            onValueChange = { note = it },
+            label = "Ощущение: «тяжело», «легко»…",
+            singleLine = false,
+            maxLines = 3,
+        )
+        // Куда уедет запись — последствие кнопки, а не справка: на виду.
+        PaperHint("Уедет строкой «факт/план» в комментарий intervals — по ней правится план.")
+    }
 }
 
 /**
@@ -1940,38 +2113,35 @@ private fun ZaryadkaReportDialog(
 private fun BodyTalkBox(app: PravkaApp, hint: String, whereSaid: String) {
     var draft by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { draft = it },
-            modifier = Modifier.weight(1f),
-            label = { Text(hint) },
-            minLines = 1,
-            maxLines = 3,
-            enabled = !busy,
-        )
-        IconButton(
-            onClick = {
-                val text = draft.trim()
-                if (text.isNotBlank() && !busy) {
-                    busy = true
-                    draft = ""
-                    app.appScope.launch {
-                        val result = app.bodyEngine.hear(text, source = "text", whereSaid = whereSaid)
-                        busy = false
-                        Feedback.toast(
-                            app,
-                            result.fold({ "✓ " + it.headline() }, { e -> e.message ?: "Не разобрал" }),
-                            long = true,
-                        )
-                    }
+    // Та же строка ввода, что у Засечки, Еды и Денег (24.09.2026). Микрофона
+    // здесь не было и нет — поле для набора, голосом говорят кнопке.
+    VoiceInput(
+        value = draft,
+        onValueChange = { draft = it },
+        placeholder = hint,
+        onSend = {
+            val text = draft.trim()
+            if (text.isNotBlank() && !busy) {
+                busy = true
+                draft = ""
+                app.appScope.launch {
+                    val result = app.bodyEngine.hear(text, source = "text", whereSaid = whereSaid)
+                    busy = false
+                    Feedback.toast(
+                        app,
+                        result.fold({ "✓ " + it.headline() }, { e -> e.message ?: "Не разобрал" }),
+                        long = true,
+                    )
                 }
-            },
-            enabled = !busy,
-        ) {
-            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            else Icon(Icons.Filled.Send, contentDescription = "Записать")
-        }
+            }
+        },
+        sendEnabled = !busy && draft.isNotBlank(),
+        enabled = !busy,
+        maxLines = 3,
+    )
+    if (busy) {
+        Spacer(Modifier.height(8.dp))
+        BusyLine("Разбираю…")
     }
 }
 
@@ -2028,7 +2198,10 @@ private fun WeekPlanCard(app: PravkaApp, planDays: List<PlanStore.PlanDay>) {
     }
     if (upcoming.isEmpty()) return
     var openDate by remember { mutableStateOf<String?>(null) }
-    PaperCard(label = "план недели") {
+    PaperCard(
+        label = "план недели",
+        info = "Тап по дню — его комментарии из календаря. Правится в чате с Клодом.",
+    ) {
         for ((date, events) in upcoming) {
             // По часам: зарядка утром, гиря, турник, Zwift днём. Турник — не
             // зарядка (см. PlanDay.charger), поэтому он здесь, среди сессий.
@@ -2084,8 +2257,6 @@ private fun WeekPlanCard(app: PravkaApp, planDays: List<PlanStore.PlanDay>) {
                 }
             }
         }
-        Spacer(Modifier.height(4.dp))
-        PaperHint("Тап по дню — его комментарии из календаря. Правится в чате с Клодом.")
     }
 }
 
@@ -2266,7 +2437,12 @@ private fun EfficiencyCard(workouts: List<SportStore.Workout>) {
         }.sortedBy { it.start }
     }
     if (runs.size < 3 && rides.size < 3) return
-    PaperCard(label = "кпд · темп и ватты на удар пульса") {
+    PaperCard(
+        label = "кпд · темп и ватты на удар пульса",
+        info = "Это твоя месячная контрольная, посчитанная сама: рост — база " +
+            "строится, темп на том же пульсе ускоряется. Сравниваются " +
+            "средние по четырём неделям, одиночные точки шумят.",
+    ) {
         var shown = false
         if (runs.size >= 3) {
             EfficiencyRow("Бег", runs, RUN_COLOR)
@@ -2276,12 +2452,6 @@ private fun EfficiencyCard(workouts: List<SportStore.Workout>) {
             if (shown) Spacer(Modifier.height(12.dp))
             EfficiencyRow("Вело", rides, RIDE_COLOR)
         }
-        Spacer(Modifier.height(8.dp))
-        PaperHint(
-            "Это твоя месячная контрольная, посчитанная сама: рост — база " +
-                "строится, темп на том же пульсе ускоряется. Сравниваются " +
-                "средние по четырём неделям, одиночные точки шумят."
-        )
     }
 }
 
@@ -2338,6 +2508,11 @@ private fun EfficiencyRow(label: String, ascending: List<SportStore.Workout>, co
     }
 }
 
+/**
+ * Тренированность и усталость одной картинкой. Рисуем руками по Canvas, а не
+ * библиотекой: две ломаные - это двадцать строк, а любая графическая
+ * библиотека это ещё одна зависимость в приложении, где их пять.
+ */
 @Composable
 private fun FitnessChart(ascending: List<SportStore.Health>) {
     val points = ascending.filter { it.ctl > 0 || it.atl > 0 }
@@ -2515,7 +2690,7 @@ private fun WorkoutRow(
         }
         if (onComment != null) {
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = onComment) { Text("Комментарий в intervals") }
+            PaperButton("Комментарий в intervals", onClick = onComment, icon = Glyphs.Note)
         }
     }
 }
@@ -2625,9 +2800,7 @@ private fun TalkCard(talk: SportStore.Talk, onDelete: () -> Unit) {
                             String.format(Locale.US, "%.3f", talk.costUsd) + " USD" else "")
                 )
             }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Clear, contentDescription = "Убрать")
-            }
+            GlyphButton(Glyphs.Close, "Убрать", onClick = onDelete)
         }
         if (talk.error.isNotBlank()) {
             Text(
