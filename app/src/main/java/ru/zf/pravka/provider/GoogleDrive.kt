@@ -7,6 +7,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -89,6 +90,36 @@ class GoogleDrive(private val auth: GoogleAuth, private val http: OkHttpClient) 
                 .header("Authorization", "Bearer $token")
                 .patch(bytes.toRequestBody(mime.toMediaType())).build()
         }.use { resp -> item(JSONObject(resp.body?.string().orEmpty())) }
+    }
+
+    /**
+     * Большой файл (копия базы — десятки мегабайт) — загрузкой с сессией:
+     * тело идёт потоком с диска, а не массивом в памяти. [existingId] — файл
+     * с тем же именем уже есть: переписать его, а не завести двойника.
+     */
+    suspend fun uploadFile(folderId: String, name: String, file: java.io.File, mime: String, existingId: String? = null): Item =
+        withContext(Dispatchers.IO) {
+            val meta = if (existingId == null) JSONObject().put("name", name).put("parents", JSONArray().put(folderId)) else JSONObject()
+            val start = if (existingId == null) "$UPLOAD/files?uploadType=resumable&fields=$FIELDS"
+            else "$UPLOAD/files/$existingId?uploadType=resumable&fields=$FIELDS"
+            val session = call { token ->
+                Request.Builder().url(start)
+                    .header("Authorization", "Bearer $token")
+                    .header("X-Upload-Content-Type", mime)
+                    .header("X-Upload-Content-Length", file.length().toString())
+                    .method(if (existingId == null) "POST" else "PATCH", meta.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                    .build()
+            }.use { it.header("Location") } ?: throw DriveException("Google Drive: не дал адрес загрузки")
+            http.newCall(Request.Builder().url(session).put(file.asRequestBody(mime.toMediaType())).build()).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) throw DriveException("Google Drive, загрузка: HTTP ${resp.code} — ${reason(text)}")
+                item(JSONObject(text))
+            }
+        }
+
+    /** Удалить свой файл совсем (старые копии базы: место в Drive общее с книгами). */
+    suspend fun delete(id: String) = withContext(Dispatchers.IO) {
+        call { token -> Request.Builder().url("$API/files/$id").header("Authorization", "Bearer $token").delete().build() }.close()
     }
 
     private suspend fun create(parent: String, name: String): String {

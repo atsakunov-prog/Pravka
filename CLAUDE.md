@@ -93,7 +93,8 @@
   `data/DbMove.kt` (переезд базы под тестами), секреты установки (вход в
   Google, имя телефона в журналах обмена) — `DataRoot.secrets`, не в базе,
   экран — `DataSettings.kt`
-  («Настройки → База данных»), суточная копия — `data/DailyBackup.kt`; кто
+  («Настройки → База данных»), суточная копия — `data/DailyBackup.kt` (и в семейный Drive —
+  `data/DriveBackup.kt`); кто
   пользуется и какие режимы включены — `data/Profile.kt` (`app.profileStore`,
   экран первого запуска и группа «Кто пользуется» — `ProfileScreen.kt`, входы
   режимов из чужих меню — `trigger/ModeEntries.kt`), `data/StoreFiles.kt` (атомарная запись, `.prev`,

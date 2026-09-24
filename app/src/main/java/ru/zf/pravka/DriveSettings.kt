@@ -122,6 +122,7 @@ internal fun GoogleDriveSettings(app: PravkaApp) {
 
     val profile by app.profileStore.flow.collectAsState()
     if (profile?.has(ru.zf.pravka.data.Profile.Mode.MONEY) == true) MoneySyncCard(app)
+    if (acc != null) DriveBackupCard(app)
 
     if (askOut) {
         PaperAlert(
@@ -232,6 +233,51 @@ internal fun MoneySyncCard(app: PravkaApp) {
         )
     }
 }
+
+/** Ночная копия базы в Drive: что уехало, сколько копий там лежит, «выгрузить сейчас». */
+@Composable
+private fun DriveBackupCard(app: PravkaApp) {
+    val st by app.driveBackup.status.collectAsState()
+    PaperCard(
+        label = "копия базы в drive",
+        info = "Каждую ночь телефон снимает zip всей базы (Настройки → База данных → копия раз в " +
+            "сутки), и как только он снят — по Wi-Fi уезжает в папку «Правка/Копии базы» семейного " +
+            "Drive. Копии каждого человека — со своим именем в названии, телефон чистит только свои: " +
+            "в Drive остаётся неделя каждый день и по копии на месяц за год. Нет Wi-Fi трое суток — " +
+            "едет и по мобильной сети. Внутри архива — и ключи (Anthropic, Todoist, Notion, " +
+            "intervals): семейный аккаунт стоит держать под двухфакторной защитой.",
+    ) {
+        PaperRow(
+            title = if (st.sentAt > 0) "Последняя: " + SimpleDateFormat("d MMMM, HH:mm", Locale("ru")).format(Date(st.sentAt))
+            else "Ещё не выгружалась",
+            hint = when {
+                st.running -> "выгружаю…"
+                st.waiting -> "свежая копия ждёт Wi-Fi"
+                st.sentAt > 0 -> "${st.sent} · ${mb(st.bytes)} · своих копий в Drive ${st.copies}, ${mb(st.copiesBytes)}"
+                else -> "уедет после ближайшей ночной копии"
+            },
+            icon = Glyphs.Archive,
+            trailing = { StatusDot(if (st.error.isNotBlank()) false else if (st.sentAt > 0) true else null) },
+            onClick = null,
+        )
+        if (st.error.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            PaperHint("Не вышло: ${st.error}", MaterialTheme.colorScheme.error)
+        }
+        Spacer(Modifier.height(6.dp))
+        PaperButton(
+            if (st.running) "Выгружаю…" else "Выгрузить сейчас",
+            icon = Glyphs.Upload,
+            enabled = !st.running,
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { app.appScope.launch(kotlinx.coroutines.Dispatchers.IO) { app.driveBackup.tick(force = true) } },
+        )
+        PaperHint("Выгружает последнюю снятую копию и по мобильной сети. Свежую снимает «Сделать копию сейчас» в «Базе данных».")
+    }
+}
+
+private fun mb(bytes: Long): String =
+    if (bytes >= 1024 * 1024) String.format(Locale("ru"), "%.1f МБ", bytes / 1024.0 / 1024.0) else "${bytes / 1024} КБ"
 
 /** Строка под переключателем вкладки Деньги: видно, что общие и когда был обмен. */
 @Composable

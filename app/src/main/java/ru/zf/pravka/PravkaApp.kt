@@ -340,6 +340,17 @@ class PravkaApp : Application() {
         )
     }
 
+    /** Ночная копия базы — ещё и в семейный Drive, `Правка/Копии базы` (data/DriveBackup.kt). */
+    internal val driveBackup by lazy {
+        ru.zf.pravka.data.DriveBackup(
+            context = this,
+            auth = googleAuth,
+            drive = googleDrive,
+            user = { profileStore.current?.id ?: "user" },
+            log = { eventLog.add(it) },
+        )
+    }
+
     /** Заводские остатки счетов — снимок владельца (`assets/money_balances.txt`). */
     val moneyFactoryBalances: List<ru.zf.pravka.core.MoneyCashflow.Anchor> by lazy {
         runCatching {

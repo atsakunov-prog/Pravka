@@ -2765,6 +2765,9 @@ class PravkaAccessibilityService : AccessibilityService() {
                     ) { line -> app.eventLog.add(line) }
                 }
             }
+            // Та же копия — в семейный Google Drive, как только снята (по Wi-Fi).
+            // Без входа в Google молчит; решение — чтение двух маленьких файлов.
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.driveBackup.tick() } }
             // Обновления: сам решает, прошли ли сутки, сам тянет и сам говорит.
             scope.launch { runCatching { app.updates.tick() } }
             zasechkaReminderCheck()
