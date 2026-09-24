@@ -103,6 +103,19 @@ class MoneyMatchTest {
         assertEquals(-200_000_00L, walletKop(r.entries))
     }
 
+    @Test fun ownersRealAtmPushConfirmsSaidDeposit() {
+        // «Положил 195 000 на Тинькофф из наличных» — и настоящий пуш через час.
+        val text = "Пополнение на 195 000 ₽, счет RUB.\nБанкомат.\nДоступно 232 483,72 ₽"
+        val parsed = (BankPush.parse("", text) as BankPush.Outcome.Money).p
+        val p = BankPush.entry(parsed, ts = t0 + 3_600_000L, owner = "sasha", title = "", text = text)
+        val said = voice("v1", "на Тинькофф из наличных", -195_000_00, t0, "cash", cash = true)
+        val r = MoneyMatch.run(listOf(said, p), emptyList(), t0 + day)
+        val byId = r.entries.associateBy { it.id }
+        assertEquals(p.id, byId["v1"]!!.matchId)
+        assertEquals("cash", byId[p.id]!!.category)
+        assertEquals(-195_000_00L, walletKop(r.entries))
+    }
+
     @Test fun spouseTransfersStitchBothSides() {
         val rules = MoneyRules.parseText("Жена Ж. = Между нами\nМарианна: Муж М. = Между нами").rules
         val entries = listOf(

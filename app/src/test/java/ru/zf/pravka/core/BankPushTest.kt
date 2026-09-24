@@ -64,6 +64,27 @@ class BankPushTest {
         assertEquals(500_000L, money("Т-Банк", "Пополнение на 5 000 ₽, счет RUB\nДоступно 10 000 ₽").rubKop)
     }
 
+    @Test fun atmCashInFromOwnersPhone() {
+        // Настоящий пуш владельца (25.09.2026): заголовка нет, место — второй строкой.
+        val text = "Пополнение на 195 000 ₽, счет RUB.\nБанкомат.\nДоступно 232 483,72 ₽"
+        for (title in listOf("", "Т-Банк")) {
+            val p = money(title, text)
+            assertEquals(19_500_000L, p.rubKop)
+            assertEquals("Банкомат", p.what)
+            assertEquals("", p.card)
+            assertEquals(23_248_372L, p.balanceKop)
+        }
+        // Справочник узнаёт банкомат: сумма — из кошелька, не доход.
+        val e = BankPush.entry(money("", text), ts = 1L, owner = "sasha", title = "", text = text)
+        assertEquals("cash", MoneyRules.classify(e, emptyList())?.category)
+    }
+
+    @Test fun purchaseKeepsMerchantTitleEvenWithDetailLine() {
+        val p = money("ВкусВилл", "Покупка на 300 ₽, счет карты *1519\nКутузовский 12\nДоступно 1 000 ₽")
+        assertEquals("ВкусВилл", p.what)
+        assertTrue(p.note, p.note.contains("Кутузовский 12"))
+    }
+
     @Test fun keyIsStableAndBalanceSeparatesTwins() {
         val a = BankPush.key("ВкусВилл", "Покупка на 300 ₽, счет карты *1519\nДоступно 1 000 ₽")
         assertEquals(a, BankPush.key("ВкусВилл", "Покупка на 300 ₽, счет карты *1519\nДоступно 1 000 ₽"))

@@ -67,6 +67,9 @@ object BankPush {
     private val AVAILABLE = Regex("""Доступно\s+(-?$N)\s*$RUB""")
     private val OLD = Regex("""Карта\s*\*(\d{4})\.\s*($N)\s*$RUB\.""")
 
+    /** Заголовки, которые — сам банк, а не место операции. */
+    private val BANK_TITLES = listOf("Т-Банк", "Т‑Банк", "Тинькофф", "Tinkoff", "T-Bank", "Т-Бизнес", "Т-Банк Бизнес")
+
     private val EXPENSE = listOf("покупка", "оплата", "перевод", "списание", "платеж", "платёж", "снятие", "выдача")
     private val INCOME = listOf("пополнение", "поступление", "зачисление", "возврат", "входящий")
     private val DECLINED = listOf("отказ", "отклон", "не прошла", "недостаточно средств")
@@ -102,11 +105,21 @@ object BankPush {
             val tail = first.substringAfterLast(". ", "").trim()
             val holder = FROM.find(first)?.groupValues?.get(1)?.trim().orEmpty()
             val isTransfer = verb.startsWith("перевод")
+            // Строка-пояснение между первой и «Доступно»: «Банкомат.» у пополнения
+            // наличными (пуш владельца, 25.09.2026: «Пополнение на 195 000 ₽, счет
+            // RUB. / Банкомат. / Доступно 232 483,72 ₽» — без магазина в заголовке).
+            // Когда заголовок пуст или это сам банк, место операции — оно: по нему
+            // справочник узнаёт банкомат и ведёт сумму из кошелька.
+            val detail = lines.drop(1).firstOrNull { !it.startsWith("Доступно", ignoreCase = true) }
+                ?.trim()?.trimEnd('.')?.trim().orEmpty()
+            val bankTitle = t.isBlank() || BANK_TITLES.any { t.equals(it, ignoreCase = true) }
             val what = when {
                 isTransfer && tail.isNotBlank() -> tail
+                bankTitle && detail.isNotBlank() -> detail
                 else -> t.ifBlank { tail.ifBlank { m.groupValues[1] } }
             }
             val note = buildList {
+                if (detail.isNotBlank() && detail != what) add(detail)
                 if (isTransfer && t.isNotBlank() && t != what) add("в $t")
                 if (holder.isNotBlank()) add("картой: $holder")
                 if (verb.contains("сбп")) add("СБП")
