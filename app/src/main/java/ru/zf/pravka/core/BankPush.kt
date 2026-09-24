@@ -112,7 +112,11 @@ object BankPush {
             // справочник узнаёт банкомат и ведёт сумму из кошелька.
             val detail = lines.drop(1).firstOrNull { !it.startsWith("Доступно", ignoreCase = true) }
                 ?.trim()?.trimEnd('.')?.trim().orEmpty()
-            val bankTitle = t.isBlank() || BANK_TITLES.any { t.equals(it, ignoreCase = true) }
+            // Заголовок, который повторяет само действие («Пополнение» над
+            // «Пополнение на 195 000 ₽…»), — тоже не место: как пустой.
+            val bankTitle = t.isBlank() || BANK_TITLES.any { t.equals(it, ignoreCase = true) } ||
+                t.equals(m.groupValues[1], ignoreCase = true) ||
+                (INCOME + EXPENSE).any { t.lowercase().startsWith(it) && t.length <= it.length + 12 }
             val what = when {
                 isTransfer && tail.isNotBlank() -> tail
                 bankTitle && detail.isNotBlank() -> detail

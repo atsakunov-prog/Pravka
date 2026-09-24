@@ -94,6 +94,17 @@ internal object HistoryFixes {
             val o = app.moneyEngine.reparsePushes()
             Result(o.looked, o.changed + o.added, if (o.added > 0) "добавлено записей: ${o.added}" else "")
         },
+        // Тот же переразбор после второй правки: заголовок, повторяющий само
+        // действие («Пополнение»), — не место операции. Первый шаг на телефоне
+        // уже отмечен пройденным, поэтому правка приходит своим шагом.
+        Step(
+            id = "2026-09-25-push-generic-title",
+            title = "Пуши Т-Банка: заголовок «Пополнение» — не место операции",
+            files = listOf(MoneyStore.FILE_NAME),
+        ) { app ->
+            val o = app.moneyEngine.reparsePushes()
+            Result(o.looked, o.changed + o.added, if (o.added > 0) "добавлено записей: ${o.added}" else "")
+        },
     )
 
     private const val FILE = "history-fixes.json"

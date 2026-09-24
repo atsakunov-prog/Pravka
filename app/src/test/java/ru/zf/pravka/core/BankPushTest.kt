@@ -67,7 +67,8 @@ class BankPushTest {
     @Test fun atmCashInFromOwnersPhone() {
         // Настоящий пуш владельца (25.09.2026): заголовка нет, место — второй строкой.
         val text = "Пополнение на 195 000 ₽, счет RUB.\nБанкомат.\nДоступно 232 483,72 ₽"
-        for (title in listOf("", "Т-Банк")) {
+        // Заголовок пуст, это банк или повторяет действие — место берётся со второй строки.
+        for (title in listOf("", "Т-Банк", "Пополнение", "Пополнение счета")) {
             val p = money(title, text)
             assertEquals(19_500_000L, p.rubKop)
             assertEquals("Банкомат", p.what)
