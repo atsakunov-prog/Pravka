@@ -43,7 +43,32 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      # Клиент Google для входа в семейный Drive (общие Деньги): секрет — только
+      # из секретов репозитория, в код его не кладём. Значений не печатаем —
+      # только есть ли они (GitHub всё равно спрятал бы их звёздочками).
+      - name: Google client (есть ли секреты)
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          if [ -n "$GOOGLE_CLIENT_SECRET" ]; then
+            echo "GOOGLE_CLIENT_SECRET: есть"
+          else
+            echo "::warning::GOOGLE_CLIENT_SECRET нет в секретах репозитория — вход в Google Drive попросит вписать секрет руками"
+          fi
+          CODE_ID=$(sed -n 's/.*prop("google.clientId", "\([^"]*\)").*/\1/p' app/build.gradle.kts)
+          if [ -z "$GOOGLE_CLIENT_ID" ]; then
+            echo "GOOGLE_CLIENT_ID: из кода ($CODE_ID)"
+          elif [ "$GOOGLE_CLIENT_ID" = "$CODE_ID" ]; then
+            echo "GOOGLE_CLIENT_ID: из секретов, совпадает с вписанным в код"
+          else
+            echo "::warning::GOOGLE_CLIENT_ID в секретах не совпадает с вписанным в код — сборка берёт из секретов; ID и секрет должны быть от одного клиента"
+          fi
+
       - name: Build debug APK
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         run: >-
           ./gradlew assembleDebug
           -PbuildNumber=${{ github.run_number }}

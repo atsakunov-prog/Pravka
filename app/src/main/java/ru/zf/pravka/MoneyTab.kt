@@ -250,6 +250,8 @@ internal fun MoneyTab(
             selected = part,
             onSelect = { part = it },
         )
+        // Общие с семьёй: когда был обмен и что пришло (есть вход в семейный Drive).
+        MoneySyncLine(app)
 
         when (part) {
             PART_SUMMARY -> {
@@ -685,6 +687,7 @@ private fun PayeesCard(app: PravkaApp) {
 internal fun MoneySettings(app: PravkaApp) {
     // Кнопка «₽» — в «Кнопках на экране» рядом с остальными (24.09.2026);
     // модели — в «Моделях», промпты — во вкладке «Промпты».
+    MoneySyncCard(app)
     PaperCard(label = "пуши банка") { PushSettings(app) }
     PushSamplesCard(app)
 }

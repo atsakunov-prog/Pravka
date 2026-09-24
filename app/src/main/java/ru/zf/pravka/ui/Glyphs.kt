@@ -145,6 +145,8 @@ object Glyphs {
     // ---- Настройки и «Ещё» ----
     val Key by lazy { glyph("Key", circle(7.5f, 15.5f, 4.5f), "M10.7 12.3L21 2M17 6l3 3M14.5 8.5l2.5 2.5") }
     val Link by lazy { glyph("Link", "M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7", "M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7") }
+    /** Облако: семейный Google Drive, общие Деньги. */
+    val Cloud by lazy { glyph("Cloud", "M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z") }
     /** Диск кнопок: стекло и четыре кнопки вокруг шестерёнки. */
     val Disk by lazy {
         glyph(

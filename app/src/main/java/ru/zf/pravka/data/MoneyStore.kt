@@ -203,6 +203,19 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
             out
         }
 
+    /**
+     * Обмен с другими телефонами (`data/MoneyDriveSync.kt`): снимок и
+     * применение — под тем же замком, что правки и сверка. [block] получает
+     * состояние и возвращает новое (или null — писать нечего) и свой итог.
+     * Записей не может стать меньше (`write`).
+     */
+    suspend fun <T> exchange(block: (State) -> Pair<State?, T>): T = mutex.withLock {
+        ensureLoaded()
+        val (next, out) = block(_state.value)
+        if (next != null) write(next)
+        out
+    }
+
     /** Владелец вписал остаток счёта: новый якорь, прежние остаются историей. */
     suspend fun addBalance(a: ru.zf.pravka.core.MoneyCashflow.Anchor) = mutex.withLock {
         ensureLoaded()

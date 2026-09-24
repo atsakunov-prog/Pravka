@@ -108,6 +108,7 @@ internal enum class SettingsGroup(
     NOTION("Notion", "план, Дневник, «Вся жизнь»", SettingsShelf.LINKS, Glyphs.Scroll),
     INTERVALS("intervals.icu", "тренировки, сон, вес", SettingsShelf.LINKS, Glyphs.Activity, ModeDecor.SPORT),
     SHEETS("Google Sheets", "таймшит из ленты", SettingsShelf.LINKS, Glyphs.ListLines, ModeDecor.ZASECHKA),
+    GOOGLE("Google Drive", "семейный аккаунт, общие Деньги", SettingsShelf.LINKS, Glyphs.Cloud, ModeDecor.MONEY),
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, Glyphs.Disk),
     DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, Glyphs.Palette),
     CARDS("Плашки приложения", "темнее, фаска, свет, зерно", SettingsShelf.LOOK, Glyphs.Layers),
@@ -198,7 +199,7 @@ private val SettingsGroup.modes: Set<ru.zf.pravka.data.Profile.Mode>
         SettingsGroup.DELA, SettingsGroup.TODOIST -> setOf(ru.zf.pravka.data.Profile.Mode.DELA)
         SettingsGroup.SPORT -> setOf(ru.zf.pravka.data.Profile.Mode.SPORT)
         SettingsGroup.FOOD -> setOf(ru.zf.pravka.data.Profile.Mode.FOOD)
-        SettingsGroup.MONEY -> setOf(ru.zf.pravka.data.Profile.Mode.MONEY)
+        SettingsGroup.MONEY, SettingsGroup.GOOGLE -> setOf(ru.zf.pravka.data.Profile.Mode.MONEY)
         SettingsGroup.INTERVALS -> setOf(ru.zf.pravka.data.Profile.Mode.SPORT, ru.zf.pravka.data.Profile.Mode.FOOD)
         else -> emptySet()
     }
@@ -244,6 +245,15 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
             val athlete by s.icuAthleteFlow.collectAsState(initial = "")
             val key by s.icuKeyFlow.collectAsState(initial = "")
             keyStatus(athlete.isNotBlank() && key.isNotBlank())
+        }
+        SettingsGroup.GOOGLE -> {
+            val acc by app.googleAuth.account.collectAsState()
+            val sync by app.moneyDriveSync.status.collectAsState()
+            when {
+                acc == null -> GroupStatus("нет входа", ok = null, dot = true)
+                sync.error.isNotBlank() -> GroupStatus("ошибка", ok = false, dot = true)
+                else -> GroupStatus("подключён", ok = true, dot = true)
+            }
         }
         SettingsGroup.SHEETS -> {
             val url by s.zWebhookFlow.collectAsState(initial = "")
@@ -346,6 +356,7 @@ private fun GroupContent(
         SettingsGroup.NOTION -> NotionSettings(app)
         SettingsGroup.INTERVALS -> IntervalsSettings(app)
         SettingsGroup.SHEETS -> ZasechkaSheetsSettings(app)
+        SettingsGroup.GOOGLE -> GoogleDriveSettings(app)
         SettingsGroup.BUTTONS -> ButtonsSettings(app)
         SettingsGroup.DISK -> DiskSettings(app)
         SettingsGroup.CARDS -> CardsSettings(app)

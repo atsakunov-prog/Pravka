@@ -2688,6 +2688,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             val sport = mode.has(ru.zf.pravka.data.Profile.Mode.SPORT)
             val food = mode.has(ru.zf.pravka.data.Profile.Mode.FOOD)
             val dela = mode.has(ru.zf.pravka.data.Profile.Mode.DELA)
+            val money = mode.has(ru.zf.pravka.data.Profile.Mode.MONEY)
             // Midnight housekeeping first: a дело running across 00:00 splits
             // into yesterday's closed head and today's open tail, so the new
             // day's ribbon and totals are right from the first minutes.
@@ -2729,6 +2730,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Автопилот — Засечки, а не Спорта: раньше жил в той же корутине.
             if (zasechka && autoPilotOn) scope.launch { runCatching { autoPilot.tick() } }
             if (food) scope.launch { runCatching { app.foodEngine.syncPending() } }
+            // Общие Деньги: обмен с семейным Drive — свои правки туда, чужие
+            // сюда. Без входа молчит; второй обмен поверх идущего не встаёт.
+            if (money) scope.launch { runCatching { app.moneyDriveSync.sync("тик") } }
             // Дневник в Notion: галочки, feel, колено и вес уезжают сами.
             // Свой дроссель на полчаса и свой «ничего не изменилось» внутри.
             // В нём и спорт, и итог еды — живёт, пока жив хоть один из них.

@@ -31,6 +31,12 @@ internal object DbMove {
     /** Переезд подготовлен и ждёт закрепления на следующем старте. */
     const val PENDING = "db-move-pending.json"
     const val ASIDE_PREFIX = "before-move-"
+    /**
+     * Секреты установки (вход в Google, имя устройства для обмена Деньгами) —
+     * в приватной памяти всегда: база копируется на другой телефон и в суточную
+     * копию, а вход в семейный Drive и имя телефона с ней ехать не должны.
+     */
+    const val SECRETS = "secrets"
 
     /**
      * Не база и остаётся в приватной памяти всегда: не копируется при переезде,
@@ -45,6 +51,7 @@ internal object DbMove {
         "profileInstalled",       // служебное системы (profileinstaller)
         MOVED,
         PENDING,
+        SECRETS,
     )
 
     fun notDatabase(topName: String): Boolean =

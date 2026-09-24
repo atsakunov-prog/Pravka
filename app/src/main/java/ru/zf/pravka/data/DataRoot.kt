@@ -374,6 +374,15 @@ internal object DataRoot {
     private val stores = HashMap<String, DataStore<Preferences>>()
 
     /**
+     * Секреты установки — вход в Google, имя телефона в журнале обмена. Живут
+     * в приватной памяти, НЕ в папке базы: папку копируют на другой телефон,
+     * она уезжает в суточную копию — с ней уехал бы вход в семейный Drive, а
+     * два телефона под одним именем писали бы в один журнал.
+     */
+    fun secrets(context: Context): File =
+        File((context.applicationContext ?: context).filesDir, DbMove.SECRETS).apply { mkdirs() }
+
+    /**
      * DataStore настроек в папке базы. Заводской `preferencesDataStore` пишет
      * в `filesDir/datastore` намертво — поэтому свой, по тому же имени файла.
      * Один экземпляр на файл на процесс: второй на тот же файл DataStore

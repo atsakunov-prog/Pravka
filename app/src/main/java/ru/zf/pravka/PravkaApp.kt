@@ -2,6 +2,8 @@ package ru.zf.pravka
 
 import android.app.Application
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import ru.zf.pravka.core.DictionaryApplier
@@ -85,6 +87,14 @@ class PravkaApp : Application() {
         // Только у самого владельца: у Марианны это были бы чужие 3,88 млн.
         if (profileStore.owner && profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) {
             appScope.launch { runCatching { moneyEngine.seedManual() } }
+        }
+        // Общие Деньги через семейный Drive (data/MoneyDriveSync.kt): правка
+        // уходит через полминуты тишины, а не с каждым нажатием; дальше —
+        // тик службы раз в пять минут. Нет входа или Деньги выключены — молчит.
+        appScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            @OptIn(kotlinx.coroutines.FlowPreview::class)
+            moneyStore.stateFlow.drop(1).debounce(30_000L)
+                .collect { runCatching { moneyDriveSync.sync("правка") } }
         }
         // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
         // свой лог, пока тумблер включён (Настройки → Общее).
@@ -306,6 +316,30 @@ class PravkaApp : Application() {
      * публичном репозитории»). Читается один раз; не прочитался — пусто, и
      * работают правила владельца и безличные.
      */
+    // Семейный Google Drive: вход через браузер, ключ — в закрытой памяти
+    // (provider/GoogleAuth.kt); обмен Деньгами — data/MoneyDriveSync.kt.
+    // Свой клиент: выгрузка первого журнала — мегабайты по мобильной сети.
+    private val googleHttp by lazy {
+        httpClient.newBuilder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build()
+    }
+    val googleAuth by lazy { ru.zf.pravka.provider.GoogleAuth(this, googleHttp) }
+    val googleDrive by lazy { ru.zf.pravka.provider.GoogleDrive(googleAuth, googleHttp) }
+    internal val moneyDriveSync by lazy {
+        ru.zf.pravka.data.MoneyDriveSync(
+            context = this,
+            store = moneyStore,
+            auth = googleAuth,
+            drive = googleDrive,
+            profile = { profileStore.current },
+            reconcile = { moneyEngine.reconcile() },
+            log = { eventLog.add(it) },
+        )
+    }
+
     /** Заводские остатки счетов — снимок владельца (`assets/money_balances.txt`). */
     val moneyFactoryBalances: List<ru.zf.pravka.core.MoneyCashflow.Anchor> by lazy {
         runCatching {
