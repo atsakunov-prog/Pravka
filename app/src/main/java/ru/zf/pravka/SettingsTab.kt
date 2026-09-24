@@ -29,6 +29,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.StackGeometry
@@ -399,6 +401,7 @@ private fun AppSettings(app: PravkaApp, serviceEnabled: Boolean, onOpenAccessibi
         }
     }
     UpdatesCard(app)
+    HistoryFixesCard(app)
     PaperCard(label = "резервные копии ленты") { BackupsSection(app) }
     PaperCard(label = "отладка") {
         val debugLog by settings.debugLogFlow.collectAsState(initial = false)
@@ -425,6 +428,41 @@ private fun AppSettings(app: PravkaApp, serviceEnabled: Boolean, onOpenAccessibi
     ) {
         val pace = remember { app.paceStore.summary() }
         for (line in pace) Text("· $line", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/**
+ * Переразбор истории (core/HistoryFixes.kt): что новая логика переделала в
+ * накопленном при первом запуске сборки — словами, а не молча (правило 6).
+ */
+@Composable
+private fun HistoryFixesCard(app: PravkaApp) {
+    val context = LocalContext.current
+    var done by remember { mutableStateOf<List<ru.zf.pravka.core.HistoryFixes.Done>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        done = withContext(Dispatchers.IO) { runCatching { ru.zf.pravka.core.HistoryFixes.done(context) }.getOrDefault(emptyList()) }
+    }
+    val pending = ru.zf.pravka.core.HistoryFixes.pending(ru.zf.pravka.core.HistoryFixes.STEPS, done)
+    PaperCard(
+        label = "переразбор истории",
+        info = "Правка разбора, которая меняет уже накопленное, приходит с шагом: в первый запуск " +
+            "сборки он проходит по истории своего вида и выводит её заново из сырья — текста пуша, " +
+            "надиктовки. Решения владельца (его категории, вычеркнутое, ответы) не трогаются, записи не " +
+            "удаляются, до шага снимается копия его файлов.",
+    ) {
+        if (done.isEmpty() && pending.isEmpty()) PaperHint("Шагов пока не было.")
+        val stamp = remember { java.text.SimpleDateFormat("d MMMM, HH:mm", Locale.forLanguageTag("ru")) }
+        for (d in done.sortedByDescending { it.at }.take(8)) {
+            Text(d.title, style = MaterialTheme.typography.bodyMedium)
+            PaperHint(
+                if (d.ok) "${stamp.format(java.util.Date(d.at))} · просмотрено ${d.looked}, поправлено ${d.changed}" +
+                    (if (d.note.isNotBlank()) " · ${d.note}" else "")
+                else "${stamp.format(java.util.Date(d.at))} · упал: ${d.error} — повторится при следующем запуске",
+                color = if (d.ok) null else MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.height(4.dp))
+        }
+        if (pending.any { p -> done.none { it.id == p.id } }) PaperHint("Ждут запуска: ${pending.size}")
     }
 }
 

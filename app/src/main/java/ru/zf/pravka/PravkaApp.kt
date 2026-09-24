@@ -75,6 +75,12 @@ class PravkaApp : Application() {
         // больше нет. Затем — ревизия батчей у Anthropic: всё идущее, за чем в
         // приложении нет живого прогона, гасится.
         appScope.launch { runCatching { ru.zf.pravka.core.NightSweep.onStart(this@PravkaApp) } }
+        // Переразбор истории (core/HistoryFixes.kt): правка разбора, пришедшая
+        // с этой сборкой, один раз проходит по накопленному и выводит его заново
+        // из сырья — вчерашний пуш не остаётся вчерашним разбором.
+        appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { ru.zf.pravka.core.HistoryFixes.runPending(this@PravkaApp) { line -> eventLog.add(line) } }
+        }
         // Деньги: записи со слов владельца (наличные мимо выписок) — в журнал, один раз.
         // Только у самого владельца: у Марианны это были бы чужие 3,88 млн.
         if (profileStore.owner && profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) {

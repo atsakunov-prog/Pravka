@@ -366,6 +366,21 @@ class MoneyEngine(
 
     // ---- Сверка ----
 
+    /**
+     * Переразобрать пойманные пуши текущим разбором (`MoneyReparse`): шаг
+     * переразбора истории, когда разбор пушей поправили. Потом — сверка:
+     * снятые категории встают заново по новому «что».
+     */
+    suspend fun reparsePushes(): MoneyReparse.Out {
+        val out = withContext(Dispatchers.Default) {
+            store.applyReparse { s ->
+                MoneyReparse.pushes(s.entries, s.pushes.map { MoneyReparse.Raw(it.ts, it.pkg, it.title, it.text) }, owner())
+            }
+        }
+        if (out.changed + out.added > 0) reconcile()
+        return out
+    }
+
     suspend fun reconcile(): MoneyMatch.Result {
         var result: MoneyMatch.Result? = null
         withContext(Dispatchers.Default) {

@@ -187,6 +187,22 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         true
     }
 
+    /**
+     * Переразбор пушей (шаг переразбора истории, `core/HistoryFixes.kt`):
+     * записи — из нового разбора сырья, сырым пушам, ставшим записью, — «запись».
+     * Под замком, как сверка; записей не может стать меньше (`write`).
+     */
+    suspend fun applyReparse(block: (State) -> ru.zf.pravka.core.MoneyReparse.Out): ru.zf.pravka.core.MoneyReparse.Out =
+        mutex.withLock {
+            ensureLoaded()
+            val s = _state.value
+            val out = block(s)
+            val pushes = if (out.nowMoney.isEmpty()) s.pushes
+            else s.pushes.map { if (it.key in out.nowMoney) it.copy(result = MONEY) else it }
+            if (out.changed + out.added > 0) write(s.copy(entries = out.entries, pushes = pushes))
+            out
+        }
+
     /** Владелец вписал остаток счёта: новый якорь, прежние остаются историей. */
     suspend fun addBalance(a: ru.zf.pravka.core.MoneyCashflow.Anchor) = mutex.withLock {
         ensureLoaded()
