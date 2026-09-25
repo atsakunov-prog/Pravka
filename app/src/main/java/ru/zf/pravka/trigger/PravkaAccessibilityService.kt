@@ -283,6 +283,21 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     internal val app: PravkaApp by lazy { application as PravkaApp }
 
+    /**
+     * Кнопка гарнитуры (`ServiceHeadset.kt`): разговор со стеком Bluetooth —
+     * подтвердить распознавание, заметить стоп с головы, закрыть на конце тейка.
+     */
+    internal val headsetVoice by lazy {
+        ru.zf.pravka.provider.HeadsetVoice(this) { line -> app.eventLog.add("гарнитура: $line") }
+    }
+
+    /**
+     * Тейк, который сейчас заводится, позван кнопкой гарнитуры: сессия
+     * слушает гарнитуру, какой бы кружок микрофона ни стоял. Стоит только на
+     * время синхронного старта — сессия читает его в конструкторе.
+     */
+    internal var headsetTake = false
+
     /** Автопилот Засечки: Wi-Fi-места, BT машины, «точно ещё …?». */
     val autoPilot by lazy { AutoPilot(this, app, scope) }
 
@@ -532,6 +547,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         // plus a notification (the no-field path).
         floatingButton?.show()
         chromeHandler.post(chromeTicker)
+        // Связь со стеком Bluetooth — заранее: на нажатии кнопки гарнитуры её
+        // ожидание съело бы первые слова. Без «Устройств поблизости» — ничего.
+        runCatching { headsetVoice.open() }
         scope.launch {
             withMode(app.settings.zEnabledFlow, ru.zf.pravka.data.Profile.Mode.ZASECHKA).collect {
                 cachedZEnabled = it
@@ -889,6 +907,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             formatting = cachedFormatting,
             segmentedSession = cachedSegmented,
             network = network,
+            fromHeadset = headsetTake,
         )
         googleSession = session
         // Start listening FIRST, then dress the UI: the button, the ticker's
@@ -2343,6 +2362,11 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
 
+        // Тейк с кнопки гарнитуры кончился — любой дорогой: закрыть
+        // распознавание у стека, иначе следующее нажатие он потратит на
+        // закрытие старого (`HeadsetVoice`).
+        headsetVoice.tick(takeRunning = micBusy())
+
         // Стопка: собрать кнопки, когда их давно не трогали. Посреди работы
         // не складываем никогда — кнопка, уехавшая под другую в тот момент,
         // когда её собираются нажать, это худший из возможных сюрпризов.
@@ -2880,6 +2904,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         chromeHandler.removeCallbacks(chromeTicker)
         lagHandler.removeCallbacks(lagTick)
         configHandler.removeCallbacks(configSettled)
+        runCatching { headsetVoice.close() }
         googleSession?.stop()
         googleSession = null
         zSession?.stop()

@@ -13,6 +13,7 @@ import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import ru.zf.pravka.core.ListenPolicy
+import ru.zf.pravka.core.HeadsetPress
 import ru.zf.pravka.core.MicPlan
 
 // Live, streaming speech recognition via Android's SpeechRecognizer - the same
@@ -57,6 +58,9 @@ class GoogleSpeechSession(
     // Сетевой путь (см. шапку): системный распознаватель с разрешённой сетью
     // вместо офлайн-пакета. Заводское — офлайн, как было.
     private val network: Boolean = false,
+    // Тейк позван кнопкой гарнитуры: «чем нажал — тем и слушаем», гарнитура
+    // при любом кружке микрофона (`core/HeadsetPress.phoneMic`).
+    private val fromHeadset: Boolean = false,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
@@ -420,7 +424,11 @@ class GoogleSpeechSession(
             // Ждём в обоих случаях по одной причине: стартовав раньше, первые
             // слова услышим прежним входом — салоном или карманом.
             val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val phone = (context.applicationContext as? ru.zf.pravka.PravkaApp)?.phoneMicOnly != false
+            val phone = HeadsetPress.phoneMic(
+                ownerChosePhone = (context.applicationContext as? ru.zf.pravka.PravkaApp)?.phoneMicOnly != false,
+                fromHeadset = fromHeadset,
+            )
+            if (fromHeadset) onLog("тейк с кнопки гарнитуры — слушаем гарнитуру")
             val headsetPresent = MicRouting.headsetMic(am) != null
             val inCall = MicRouting.callInProgress(am)
             val plan = MicPlan.choose(

@@ -245,6 +245,27 @@
             </intent-filter>
         </activity>
 
+        <!-- Кнопка гарнитуры: долгое нажатие «помощника» (у Shokz OpenComm2 —
+             Mute две секунды вне звонка) шлёт команду распознавания, и
+             Bluetooth-стек открывает на неё ACTION_VOICE_COMMAND. exported=true
+             обязательно: intent приносит система. showWhenLocked - нажатие на
+             заблокированном телефоне должно дойти до Засечки, как касание
+             метки; taskAffinity пустой - трамплин не подменяет главное окно. -->
+        <activity
+            android:name=".trigger.HeadsetButtonActivity"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:showWhenLocked="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".trigger.DictationService"
             android:foregroundServiceType="microphone"

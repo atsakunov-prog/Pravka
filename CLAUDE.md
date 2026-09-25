@@ -47,7 +47,11 @@
   распознаватель глух, и это окно платится до тейка, а не первыми словами.
   Когда тейк кончается сам — `core/ListenPolicy.kt`: тишина сессию не убивает
   (подняли заново тем же клиентом), а десять минут без единого слова закрывают
-  запись. Геометрия стопки — `core/StackGeometry.kt`,
+  запись. Кнопка гарнитуры («помощник» Bluetooth, у Shokz — Mute две секунды):
+  трамплин `trigger/HeadsetButtonActivity.kt` (`ACTION_VOICE_COMMAND`, на
+  замке тоже), служба — `trigger/ServiceHeadset.kt`, стек —
+  `provider/HeadsetVoice.kt`, решение «поле — Правка, иначе или замок —
+  Засечка» — `core/HeadsetPress.kt`. Геометрия стопки — `core/StackGeometry.kt`,
   пружины и сжатие кнопок — `core/ChainPhysics.kt` + `trigger/BubbleMotion.kt`,
   серая «отмена» у любой записи — `trigger/CancelBubble.kt`.
 - **Claude:** `provider/ClaudeProvider.kt` — только транспорт (HTTP, SSE-стрим,

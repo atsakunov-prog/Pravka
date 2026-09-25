@@ -17,6 +17,7 @@ import android.os.IBinder
 import java.io.File
 import kotlin.concurrent.thread
 import ru.zf.pravka.R
+import ru.zf.pravka.core.HeadsetPress
 import ru.zf.pravka.data.Recordings
 import ru.zf.pravka.data.WavFile
 import ru.zf.pravka.provider.MicRouting
@@ -53,6 +54,14 @@ class DictationService : Service() {
          */
         @Volatile var holding: Boolean = false
             private set
+
+        /**
+         * Запись заведена кнопкой гарнитуры и слушает гарнитуру
+         * (`ServiceHeadset.kt`). Срок, а не флаг: служба поднимается
+         * асинхронно, а метка, которую никто не забрал, не должна дожить до
+         * следующего тапа пальцем. Время — `SystemClock.elapsedRealtime`.
+         */
+        @Volatile var headsetUntil: Long = 0L
     }
 
     private var record: AudioRecord? = null
@@ -160,11 +169,16 @@ class DictationService : Service() {
         // об этом в журнал, а не молчим.
         val app = application as? ru.zf.pravka.PravkaApp
         val log = { line: String -> app?.eventLog?.add("диктовка: $line") }
+        // Кнопка гарнитуры — гарнитура, какой бы кружок ни стоял.
+        val fromHeadset = android.os.SystemClock.elapsedRealtime() < headsetUntil
+        headsetUntil = 0L
+        val phoneOnly = HeadsetPress.phoneMic(ownerChosePhone = app?.phoneMicOnly != false, fromHeadset = fromHeadset)
+        if (fromHeadset) log("запись с кнопки гарнитуры — слушаем гарнитуру")
         runCatching {
             val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
-            val headset = if (app?.phoneMicOnly == false) MicRouting.headsetMic(am) else null
+            val headset = if (!phoneOnly) MicRouting.headsetMic(am) else null
             when {
-                app?.phoneMicOnly != false ->
+                phoneOnly ->
                     MicRouting.builtinMic(am)?.let { recorder.setPreferredDevice(it) }
                 headset != null -> {
                     scoRaised = MicRouting.raise(am) { log(it) }

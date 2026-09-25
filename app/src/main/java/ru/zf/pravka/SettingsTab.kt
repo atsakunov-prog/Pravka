@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.StackGeometry
 import ru.zf.pravka.data.Settings
+import ru.zf.pravka.trigger.HeadsetButtonActivity
 import ru.zf.pravka.trigger.micStateNow
 import ru.zf.pravka.trigger.reloadMicrophone
 import ru.zf.pravka.ui.ChipRow
@@ -1004,7 +1005,64 @@ private fun VoiceSettings(app: PravkaApp) {
             Text(micReport, style = MaterialTheme.typography.bodySmall)
         }
     }
+    HeadsetButtonCard()
     SpeechSection(settings, app.whisperProvider)
+}
+
+/**
+ * Кнопка гарнитуры (25.09.2026): кто отвечает на «помощника» гарнитуры.
+ * «Всегда», когда-то выбранное за Google, делает кнопку для Правки немой —
+ * снаружи это ровно «не работает», поэтому состояние названо словами.
+ */
+@Composable
+private fun HeadsetButtonCard() {
+    val context = LocalContext.current
+    var answer by remember { mutableStateOf(HeadsetButtonActivity.whoAnswers(context)) }
+    PaperCard(
+        label = "кнопка гарнитуры",
+        info = "Долгое нажатие «помощника» на гарнитуре (у Shokz OpenComm2 2025 — Mute две " +
+            "секунды вне звонка) заводит тейк: курсор стоит в поле — Правка в поле, поля нет " +
+            "или экран заблокирован — Засечка. Слушает гарнитура, какой бы кружок микрофона " +
+            "ни стоял: чем нажал, тем и слушаем. Нажатие посреди тейка его заканчивает, как " +
+            "второй тап; закрыла распознавание сама гарнитура — тоже. На локскрине — тот же " +
+            "потолок в 40 секунд. Кнопка голоса на руле машины шлёт ту же команду. В первый " +
+            "раз система спросит, чем открыть, — «Правка», «Всегда»; спрашивает она только " +
+            "на разблокированном экране.",
+    ) {
+        val (status, hint) = when (val a = answer) {
+            HeadsetButtonActivity.Answer.Pravka ->
+                "Правка" to "нажатие гарнитуры — диктовка"
+            HeadsetButtonActivity.Answer.Ask ->
+                "спросит" to "при первом нажатии: «Правка» → «Всегда»"
+            is HeadsetButtonActivity.Answer.Other ->
+                a.label to "отвечает не Правка — тап: сбросить «открывать по умолчанию»"
+            HeadsetButtonActivity.Answer.Nobody ->
+                "никто" to "команду гарнитуры не принимает ни одно приложение"
+        }
+        PaperRow(
+            title = "Кто отвечает на кнопку",
+            icon = Glyphs.Mic,
+            hint = hint,
+            status = status,
+            onClick = {
+                val a = answer
+                if (a is HeadsetButtonActivity.Answer.Other) {
+                    // Выбор «всегда» снимается только в карточке того
+                    // приложения: «Открывать по умолчанию» → «Сбросить».
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                android.net.Uri.fromParts("package", a.packageName, null),
+                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                }
+                // Вернулся из системных настроек — тап по строке перечитает.
+                answer = HeadsetButtonActivity.whoAnswers(context)
+            },
+        )
+    }
 }
 
 @Composable

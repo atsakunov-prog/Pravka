@@ -50,6 +50,12 @@ fun PravkaAccessibilityService.onZasechkaTap(
     anchorEnd: Long = 0L,
     /** Микрофон из редактора записи: сказанное — поправка к ЭТОЙ записи, а не новое дело. */
     editTargetId: Long = 0L,
+    /**
+     * Нажатие кнопки гарнитуры (`ServiceHeadset.kt`). На локскрине взвода не
+     * ждёт: двойной тап — защита от кармана, а гарнитуру в кармане не жмут.
+     * Потолок записи с локскрина — тот же.
+     */
+    fromHeadset: Boolean = false,
 ) {
     touched()
     if (anchorStart > 0L) {
@@ -62,7 +68,7 @@ fun PravkaAccessibilityService.onZasechkaTap(
         zAnchorSetAt = System.currentTimeMillis()
     }
     if (isLockedIdle()) {
-        if (!lockedDoubleTapArmed(System.currentTimeMillis())) {
+        if (!fromHeadset && !lockedDoubleTapArmed(System.currentTimeMillis())) {
             // Первый тап только взводит — и показывает это, иначе жест
             // неотличим от «кнопка сломалась».
             Haptics.start(this)
@@ -190,6 +196,7 @@ internal fun PravkaAccessibilityService.startZasechkaGoogle() {
         formatting = cachedFormatting,
         segmentedSession = cachedSegmented,
         network = cachedNetwork,
+        fromHeadset = headsetTake,
     )
     zSession = session
     speechReady = false
