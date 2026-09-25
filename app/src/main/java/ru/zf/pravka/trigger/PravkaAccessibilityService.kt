@@ -298,6 +298,18 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     internal var headsetTake = false
 
+    /**
+     * Тейк «З» заведён кнопкой гарнитуры: итог развилки («записал коммент»,
+     * «записал еду», «записал дела») говорится голосом — экрана владелец не
+     * видит. Ставится на старте тейка, снимается тем, кто его разобрал.
+     */
+    @Volatile internal var zFromHeadset = false
+
+    /** Голос Правки (`provider/Speaker.kt`); синтезатор заводится при первой фразе. */
+    internal val speakerLazy = lazy {
+        ru.zf.pravka.provider.Speaker(this) { line -> app.eventLog.add("голос: $line") }
+    }
+
     /** Автопилот Засечки: Wi-Fi-места, BT машины, «точно ещё …?». */
     val autoPilot by lazy { AutoPilot(this, app, scope) }
 
@@ -2905,6 +2917,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         lagHandler.removeCallbacks(lagTick)
         configHandler.removeCallbacks(configSettled)
         runCatching { headsetVoice.close() }
+        if (speakerLazy.isInitialized()) runCatching { speakerLazy.value.shutdown() }
         googleSession?.stop()
         googleSession = null
         zSession?.stop()

@@ -51,7 +51,9 @@
   трамплин `trigger/HeadsetButtonActivity.kt` (`ACTION_VOICE_COMMAND`, на
   замке тоже), служба — `trigger/ServiceHeadset.kt`, стек —
   `provider/HeadsetVoice.kt`, решение «поле — Правка, иначе или замок —
-  Засечка» — `core/HeadsetPress.kt`. Геометрия стопки — `core/StackGeometry.kt`,
+  Засечка» — `core/HeadsetPress.kt`; дальше развилка Засечки (мысль к делу,
+  еда, дела — `core/ZasechkaIntent.kt`, `trigger/ServiceZasechkaRoutes.kt`) и
+  голос в конце (`provider/Speaker.kt`). Геометрия стопки — `core/StackGeometry.kt`,
   пружины и сжатие кнопок — `core/ChainPhysics.kt` + `trigger/BubbleMotion.kt`,
   серая «отмена» у любой записи — `trigger/CancelBubble.kt`.
 - **Claude:** `provider/ClaudeProvider.kt` — только транспорт (HTTP, SSE-стрим,

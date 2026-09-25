@@ -164,6 +164,8 @@ internal fun PravkaAccessibilityService.startZasechkaCapture() {
     zButton?.hideInput()
     zButton?.hideAsk()
     zDiscard = false
+    // Итог развилки скажем голосом, только если тейк позвала гарнитура.
+    zFromHeadset = headsetTake
     if (cachedEngine.startsWith("whisper")) {
         zWhisperRecording = true
         zButton?.setRecording(true)
@@ -309,6 +311,7 @@ internal fun PravkaAccessibilityService.onZasechkaLiveDone(text: String) {
         zAnchorStart = 0L
         zAnchorEnd = 0L
         zEditTargetId = 0L
+        zFromHeadset = false
         zButton?.setBusy(false)
         app.eventLog.add("засечка: наговор отменён (${text.length} зн.)")
         Feedback.toast(this, "Отменено")
@@ -336,7 +339,11 @@ internal fun PravkaAccessibilityService.onZasechkaLiveDone(text: String) {
  * затирается — новая фраза дописывается с новой строки: «добавить», не
  * «заменить».
  */
-internal fun PravkaAccessibilityService.onZasechkaCommentText(raw: String) {
+internal fun PravkaAccessibilityService.onZasechkaCommentText(
+    raw: String,
+    /** Сказать итог голосом (тейк с кнопки гарнитуры, развилка «мысль»). */
+    spoken: Boolean = false,
+) {
     val entryId = zCommentFor
     zCommentFor = 0L
     val text = raw.trim()
@@ -370,10 +377,12 @@ internal fun PravkaAccessibilityService.onZasechkaCommentText(raw: String) {
             Haptics.error(this@onZasechkaCommentText)
             zButton?.showNote("💬 Не записал — дела уже нет в ленте\n«$cleaned»", ok = false, holdMs = 5_000)
             app.eventLog.add("засечка: комментарий к $entryId не записан, записи нет; текст: $cleaned")
+            if (spoken) say("коммент не записал")
             return@launch
         }
         app.eventLog.add("засечка: комментарий к «${entry.title}»: $cleaned")
         app.zasechkaSync.kickSoon(app.appScope)
+        if (spoken) say(ru.zf.pravka.core.ZasechkaIntent.said(ru.zf.pravka.core.ZasechkaIntent.Kind.COMMENT))
         val failure = (outcome as? ProofreadEngine.Outcome.Failed)?.message
         if (failure == null) Haptics.success(this@onZasechkaCommentText)
         else Haptics.error(this@onZasechkaCommentText)
@@ -390,6 +399,7 @@ internal fun PravkaAccessibilityService.onZasechkaLiveError(msg: String) {
     zSession = null
     zCommentFor = 0L
     zDiscard = false
+    zFromHeadset = false
     runCatching { stopMicHold() }
     zButton?.hideTicker()
     zButton?.hideCancelBubble()
@@ -400,7 +410,12 @@ internal fun PravkaAccessibilityService.onZasechkaLiveError(msg: String) {
 }
 
 /** Transcript in hand (either engine, or typed): categorize, store, confirm. */
-internal fun PravkaAccessibilityService.onZasechkaText(raw: String, source: String = "voice") {
+internal fun PravkaAccessibilityService.onZasechkaText(
+    raw: String,
+    source: String = "voice",
+    /** false — сказанное уже прошло развилку и вернулось в ленту (мысли некуда лечь). */
+    route: Boolean = true,
+) {
     val text = raw.trim()
     if (text.isBlank()) {
         zButton?.setBusy(false)
@@ -417,6 +432,11 @@ internal fun PravkaAccessibilityService.onZasechkaText(raw: String, source: Stri
     zAnchorStart = 0L
     zAnchorEnd = 0L
     zEditTargetId = 0L
+    val spoken = zFromHeadset
+    zFromHeadset = false
+    // Развилка (`core/ZasechkaIntent.kt`): мысль к делу, еда, дела. Правка
+    // записи и заполнение дыры — всегда лента: там сказанное про время.
+    if (route && anchorStart == 0L && editTargetId == 0L && routeZasechka(text, spoken)) return
     scope.launch {
         val outcome = runCatching {
             app.zasechkaEngine.record(text, source, anchorStart, anchorEnd, editTargetId = editTargetId)
