@@ -70,12 +70,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         /** Сколько якорь времени ждёт свой тейк (см. `onZasechkaTap`). */
         const val Z_ANCHOR_TTL_MS = 2 * 60_000L
 
-        /**
-         * Потолок записи, начатой с заблокированного экрана. Владелец: «через
-         * 40 секунд вообще, потому что я больше и не говорю». Разблокировал —
-         * потолок снимается: он тут, и говорит сколько нужно.
-         */
-        internal const val LOCKED_TAKE_CAP_MS = 40_000L
+        /** Потолок записи с локскрина — `ListenPolicy.lockedCapMs` (у гарнитуры его нет). */
+        internal const val LOCKED_TAKE_CAP_MS = ru.zf.pravka.core.ListenPolicy.LOCKED_TAKE_CAP_MS
 
         /**
          * Через столько без касаний кнопки собираются в стопку. Полминуты —

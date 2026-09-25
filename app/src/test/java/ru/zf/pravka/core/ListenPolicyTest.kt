@@ -55,6 +55,14 @@ class ListenPolicyTest {
     }
 
     @Test
+    fun `потолок локскрина - сорок секунд пальцем, у гарнитуры его нет`() {
+        // Палец на замке: «через 40 секунд, я больше и не говорю».
+        assertEquals(40_000L, ListenPolicy.lockedCapMs(fromHeadset = false))
+        // Гарнитура: как у Правки — до кнопки или десяти минут без слов.
+        assertEquals(0L, ListenPolicy.lockedCapMs(fromHeadset = true))
+    }
+
+    @Test
     fun `остановленную запись не поднимаем`() {
         assertFalse(ListenPolicy.resumeAfterSessionEnd(true, true, 0, 1_000))
         assertFalse(ListenPolicy.resumeAfterSessionEnd(false, false, 0, 1_000))

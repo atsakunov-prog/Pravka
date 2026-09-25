@@ -53,7 +53,7 @@ fun PravkaAccessibilityService.onZasechkaTap(
     /**
      * Нажатие кнопки гарнитуры (`ServiceHeadset.kt`). На локскрине взвода не
      * ждёт: двойной тап — защита от кармана, а гарнитуру в кармане не жмут.
-     * Потолок записи с локскрина — тот же.
+     * Потолка в 40 секунд нет — лимит как у Правки (`ListenPolicy.lockedCapMs`).
      */
     fromHeadset: Boolean = false,
 ) {
@@ -76,10 +76,11 @@ fun PravkaAccessibilityService.onZasechkaTap(
             return
         }
         zButton?.hideNote()
-        // Запись с локскрина живёт 40 секунд. Владелец: «через 40 секунд
-        // вообще, потому что я больше и не говорю». Разблокировал —
-        // потолок снимается, значит он тут и говорит сколько нужно.
-        lockedTakeCapAt = System.currentTimeMillis() + PravkaAccessibilityService.LOCKED_TAKE_CAP_MS
+        // Запись с локскрина пальцем живёт 40 секунд («я больше и не
+        // говорю»), с гарнитуры — как у Правки: до кнопки или десяти минут
+        // без слов. Разблокировал — потолок снимается, он тут и говорит.
+        val cap = ru.zf.pravka.core.ListenPolicy.lockedCapMs(fromHeadset)
+        lockedTakeCapAt = if (cap > 0L) System.currentTimeMillis() + cap else 0L
     }
     if (zSession != null) { stopZasechkaLive(); return }
     if (zWhisperRecording && DictationService.recording) {
