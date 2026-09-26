@@ -399,6 +399,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             onLongPress = ::showZasechkaMenu,
         )
         zButton?.onTickerTap = ::onZasechkaPlateTap
+        // Тап по итогу Засечки — в ленту: там правится записанное.
+        zButton?.onNoteOpen = { openZasechkaTab() }
 
         // Разноска: третья кнопка того же семейства.
         rButton = RaznoskaButtonController(

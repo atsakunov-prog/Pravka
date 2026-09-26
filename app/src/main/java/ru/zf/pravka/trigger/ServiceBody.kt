@@ -351,8 +351,8 @@ internal fun PravkaAccessibilityService.onFoodText(raw: String) {
         eButton?.setBusy(false)
         result.fold(
             onSuccess = { parsed ->
-                Haptics.success(this@onFoodText)
-                showFoodPlate(parsed.meal.id)
+                // Сразу в дневник, а пилюля показывает, что записано (26.09.2026).
+                recordFood(parsed.meal.id)
             },
             onFailure = { e ->
                 // Слова не теряем: неразобранное ждёт во вкладке Спорта.
@@ -560,6 +560,110 @@ internal fun PravkaAccessibilityService.bodyBiasing(): List<String> =
     runCatching { app.bodyEngine.biasing() }.getOrDefault(emptyList())
 
 /**
+ * Наговорил еду — она сразу в дневнике, а пилюля показывает, что записано.
+ * Владелец (26.09.2026): «наговорил, что я съел с утра геркулес, ещё что-то,
+ * и вот он уже подумал, а дальше он просто показывает мне, что он записал. И
+ * это плашка, которая сама пропадает через секунд 5… у каждой еды такой
+ * маленький карандашик, чтобы я мог нажать и отредактировать эту еду, но не
+ * прямо в плашке, где уже там можно будет и редактировать, и всё делать».
+ *
+ * До этого приём ждал «✓ В дневник» на плашке у кнопки, и не нажатый —
+ * так и не считался. Теперь подтверждение — сам наговор: разобралось —
+ * записано (как у «запиши еду» с «З»). Карандаш открывает приём в «Еде» —
+ * там правится всё, от граммов до времени; «Отменить» убирает приём целиком.
+ */
+internal fun PravkaAccessibilityService.recordFood(mealId: Long) {
+    eButton?.setBusy(true)
+    scope.launch {
+        val outcome = runCatching { app.foodEngine.confirm(mealId) }
+            .getOrElse { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                app.eventLog.add("еда: confirm бросил ${e.javaClass.simpleName}: ${e.message}")
+                ru.zf.pravka.core.FoodEngine.ConfirmOutcome(null, "", e.message ?: "не вышло")
+            }
+        eButton?.setBusy(false)
+        val meal = outcome.meal
+        if (meal == null) {
+            Haptics.error(this@recordFood)
+            eButton?.showResult(
+                "Разобрал, а в дневник не записал — приём ждёт во вкладке «Еда»",
+                ok = false,
+                onOpen = { openFoodTab() },
+            )
+            return@launch
+        }
+        Haptics.success(this@recordFood)
+        val kind = meal.kind.replaceFirstChar { it.uppercase() }
+        eButton?.showResult(
+            summary = if (meal.supplement) "$kind: ${meal.shortList}"
+            else "$kind: ${meal.shortList} · ${meal.kcal} ккал",
+            rows = meal.items.map { item ->
+                DictationPill.ResultRow(
+                    title = item.name,
+                    meta = foodItemMeta(item),
+                    onEdit = { openFoodTab("edit:$mealId") },
+                )
+            },
+            footer = foodDayLine(meal) + (if (outcome.ribbon.isNotBlank()) " · к «${outcome.ribbon}»" else ""),
+            action = DictationPill.ResultAction("Отменить") { forgetFood(mealId) },
+            onOpen = { openFoodTab() },
+        )
+        if (outcome.icuError.isNotBlank()) {
+            app.eventLog.add("еда: в intervals.icu не уехало — ${outcome.icuError}")
+        }
+    }
+}
+
+/**
+ * «Отменить» на итоге: приём уходит целиком — из дня, из ленты, из
+ * intervals.icu. Раз записью был сам наговор, отмена — это «не было», а не
+ * «вернуть на плашку» (плашки подтверждения больше нет).
+ */
+internal fun PravkaAccessibilityService.forgetFood(mealId: Long) {
+    scope.launch {
+        runCatching { app.foodEngine.unconfirm(mealId) }
+        runCatching { app.foodEngine.delete(mealId) }
+        Haptics.success(this@forgetFood)
+        Feedback.toast(this@forgetFood, "Приём убран")
+    }
+}
+
+/** Граммы, калории, БЖУ и дозы одной позиции — строкой под названием. */
+internal fun foodItemMeta(item: ru.zf.pravka.core.MealItem): String = listOfNotNull(
+    if (item.pill) "таблетка" else null,
+    if (item.grams > 0) "${item.grams} г" else null,
+    // У таблетки калорий нет: «0 ккал · Б0 Ж0 У0» занимало бы всю
+    // строку и не говорило бы ничего. Вместо них — дозы.
+    if (item.pill) null else "${item.kcal} ккал",
+    if (item.pill) null else "Б${item.protein} Ж${item.fat} У${item.carbs}",
+    item.micro.takeIf { it.isNotEmpty() }
+        ?.let { ru.zf.pravka.core.Micronutrients.short(it, limit = 3) },
+    item.sureness.takeIf { it.isNotBlank() && it != "точно" && !item.pill },
+).joinToString(" · ")
+
+/** Где день после этого приёма: калории к цели и сколько белка ещё добрать. */
+internal suspend fun PravkaAccessibilityService.foodDayLine(meal: ru.zf.pravka.data.FoodStore.Meal): String {
+    val day = app.foodStore.dayTotal(ru.zf.pravka.data.dayKey(meal.ts))
+    val targets = runCatching { app.settings.foodTargets() }.getOrNull()
+    val target = targets?.kcal ?: 0
+    return buildString {
+        append(
+            when {
+                target > 0 && day.kcal <= target -> "за день ${day.kcal} из $target ккал"
+                target > 0 -> "за день ${day.kcal} ккал, цель $target"
+                else -> "за день ${day.kcal} ккал"
+            }
+        )
+        // Белок — его настоящий рычаг («накачаться впервые в жизни»),
+        // и добирают его сознательно: остаток полезнее суммы.
+        val proteinTarget = targets?.protein ?: 0
+        if (proteinTarget > 0 && day.protein < proteinTarget) {
+            append(" · Б ещё ").append(proteinTarget - day.protein)
+        }
+    }
+}
+
+/**
  * Тарелка на плашке: позиции с граммами и КБЖУ, «✎» правит вес на месте,
  * «✕» убирает позицию, «✓ В дневник» записывает приём. До подтверждения
  * приём в сумму дня не идёт и наружу не уезжает — но на диске он уже есть.
@@ -568,21 +672,7 @@ internal fun PravkaAccessibilityService.showFoodPlate(mealId: Long) {
     val meal = app.foodStore.byId(mealId) ?: return
     if (meal.items.isEmpty()) return
     val rows = meal.items.mapIndexed { index, item ->
-        BodyButtonController.PlateRow(
-            index = index,
-            title = item.name,
-            meta = listOfNotNull(
-                if (item.pill) "таблетка" else null,
-                if (item.grams > 0) "${item.grams} г" else null,
-                // У таблетки калорий нет: «0 ккал · Б0 Ж0 У0» занимало бы всю
-                // строку и не говорило бы ничего. Вместо них — дозы.
-                if (item.pill) null else "${item.kcal} ккал",
-                if (item.pill) null else "Б${item.protein} Ж${item.fat} У${item.carbs}",
-                item.micro.takeIf { it.isNotEmpty() }
-                    ?.let { ru.zf.pravka.core.Micronutrients.short(it, limit = 3) },
-                item.sureness.takeIf { it.isNotBlank() && it != "точно" && !item.pill },
-            ).joinToString(" · "),
-        )
+        BodyButtonController.PlateRow(index = index, title = item.name, meta = foodItemMeta(item))
     }
     eButton?.showBody(
         header = meal.kind.uppercase(java.util.Locale("ru")) +
@@ -656,24 +746,7 @@ internal fun PravkaAccessibilityService.confirmFood(mealId: Long) {
             return@launch
         }
         Haptics.success(this@confirmFood)
-        val day = app.foodStore.dayTotal(ru.zf.pravka.data.dayKey(meal.ts))
-        val targets = runCatching { app.settings.foodTargets() }.getOrNull()
-        val target = targets?.kcal ?: 0
-        val tail = buildString {
-            append(
-                when {
-                    target > 0 && day.kcal <= target -> "за день ${day.kcal} из $target ккал"
-                    target > 0 -> "за день ${day.kcal} ккал, цель $target"
-                    else -> "за день ${day.kcal} ккал"
-                }
-            )
-            // Белок — его настоящий рычаг («накачаться впервые в жизни»),
-            // и добирают его сознательно: остаток полезнее суммы.
-            val proteinTarget = targets?.protein ?: 0
-            if (proteinTarget > 0 && day.protein < proteinTarget) {
-                append(" · Б ещё ").append(proteinTarget - day.protein)
-            }
-        }
+        val tail = foodDayLine(meal)
         eButton?.showNote(
             // Горсть таблеток в калориях не измеряется: «✓ 0 ккал» читалось бы
             // как «ничего не записал».

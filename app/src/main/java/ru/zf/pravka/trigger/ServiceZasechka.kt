@@ -535,15 +535,18 @@ internal fun PravkaAccessibilityService.recordZasechkaEntry(
     }
 }
 
+/** Лента Засечки в приложении: там правится всё, что записала кнопка. */
+internal fun PravkaAccessibilityService.openZasechkaTab() {
+    startActivity(
+        android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+            .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+    )
+}
+
 internal fun PravkaAccessibilityService.showZasechkaMenu() {
     touched()
-    val goTab: () -> Unit = {
-        startActivity(
-            android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    }
+    val goTab: () -> Unit = { openZasechkaTab() }
     val openTab = ZasechkaButtonController.MenuItem("Открыть Засечку", onClick = goTab)
     scope.launch {
         val now = System.currentTimeMillis()

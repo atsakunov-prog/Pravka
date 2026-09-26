@@ -91,6 +91,14 @@ class PillLookTest {
     }
 
     @Test
+    fun `итог держится не меньше пяти секунд, служебная реплика - своё`() {
+        assertEquals(5_000L, PillLook.resultHold(2_000))
+        assertEquals(12_000L, PillLook.resultHold(12_000))
+        assertEquals(1_500L, PillLook.resultHold(1_500))
+        assertTrue(PillLook.RESULT_OPEN_HOLD_MS > PillLook.RESULT_HOLD_MS)
+    }
+
+    @Test
     fun `пилюля видна целиком к первой трети`() {
         assertEquals(0f, PillLook.enterAlpha(0f), 0f)
         assertEquals(1f, PillLook.enterAlpha(0.3f), 1e-6f)

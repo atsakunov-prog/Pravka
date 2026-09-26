@@ -214,8 +214,19 @@ internal fun PravkaAccessibilityService.onRaznoskaLiveError(msg: String) {
     Feedback.toast(this, msg)
 }
 
-/** Текст наговора в руках: Опус разбирает, плашка показывает результат. */
-internal fun PravkaAccessibilityService.onRaznoskaText(raw: String) {
+/**
+ * Текст наговора в руках: Опус разбирает, и дальше — по источнику.
+ *
+ * Голос и набор в пилюле ([review] = false): дела сразу уходят в Todoist, а
+ * пилюля показывает, что записано, со «Отменить» (владелец, 26.09.2026:
+ * «он просто показывает мне, что он записал… сама пропадает через секунд
+ * 5»). Так уже жило «запиши дело» с «З»: сказанное вслух — решение.
+ *
+ * Чужой текст ([review] = true — дайджест, расшифровка встречи, выделение):
+ * прежняя плашка с отметками и «ОК». Там дел бывает двадцать, и не все
+ * твои — отправлять их не глядя значило бы засорять Todoist.
+ */
+internal fun PravkaAccessibilityService.onRaznoskaText(raw: String, review: Boolean = false) {
     val text = raw.trim()
     if (text.isBlank()) {
         rButton?.setBusy(false)
@@ -246,15 +257,85 @@ internal fun PravkaAccessibilityService.onRaznoskaText(raw: String) {
         if (draft.tasks.isEmpty()) {
             // Дел не нашлось - наговор всё равно записан: заметки видно
             // во вкладке «Дела», ничего не пропало.
-            Feedback.toast(
-                this@onRaznoskaText,
+            rButton?.showResult(
                 if (draft.notes.isBlank()) "Дел в наговоре не нашлось"
-                else "Дел нет — записал в заметки",
+                else "Дел нет — записал в заметки «Дел»",
+                ok = draft.notes.isNotBlank(),
+                onOpen = { openTodoistTab() },
             )
             return@launch
         }
-        showRaznoskaPlate(draft.id)
+        if (review) showRaznoskaPlate(draft.id) else sendRaznoskaNow(draft.id)
     }
+}
+
+/**
+ * Сказанное — в Todoist сразу, итог — в пилюле: сколько ушло, по тапу —
+ * список с карандашами (правка — во вкладке «Дела»), «Отменить» — всё
+ * только что созданное уходит из Todoist, а разбор возвращается на плашку.
+ */
+internal fun PravkaAccessibilityService.sendRaznoskaNow(draftId: Long) {
+    val draft = app.raznoskaStore.byId(draftId) ?: return
+    val tasks = draft.live.filter { !it.sent }
+    if (tasks.isEmpty()) return
+    rButton?.setBusy(true)
+    scope.launch {
+        val sent = runCatching { app.raznoskaEngine.send(draftId) }
+            .getOrElse { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                ru.zf.pravka.core.RaznoskaEngine.SendOutcome(0, tasks.size, e.message ?: "не отправилось")
+            }
+        rButton?.setBusy(false)
+        val rows = tasks.map { task ->
+            DictationPill.ResultRow(
+                title = task.content,
+                meta = raznMeta(task),
+                warn = if (task.duplicateOf.isBlank()) "" else "похоже: " + task.duplicateOf,
+                onEdit = { openTodoistTab() },
+            )
+        }
+        when {
+            sent.ok -> {
+                Haptics.success(this@sendRaznoskaNow)
+                rButton?.showResult(
+                    summary = "В Todoist: " + raznCount(sent.created) +
+                        (if (tasks.size == 1) " — " + tasks[0].content else ""),
+                    rows = rows,
+                    action = DictationPill.ResultAction("Отменить") { undoRaznoska() },
+                    onOpen = { openTodoistTab() },
+                )
+            }
+            sent.created > 0 -> {
+                Haptics.error(this@sendRaznoskaNow)
+                rButton?.showResult(
+                    "Записал ${sent.created} из ${sent.created + sent.failed}: ${sent.error} — остальные ждут во вкладке «Дела»",
+                    ok = false,
+                    rows = rows,
+                    onOpen = { openTodoistTab() },
+                )
+            }
+            else -> {
+                Haptics.error(this@sendRaznoskaNow)
+                rButton?.showResult(
+                    "Дела не ушли (${sent.error.ifBlank { "без причины" }}) — ждут во вкладке «Дела»",
+                    ok = false,
+                    onOpen = { openTodoistTab() },
+                )
+            }
+        }
+    }
+}
+
+/** Проект, метки, срок и приоритет дела — строкой под названием. */
+internal fun PravkaAccessibilityService.raznMeta(task: ru.zf.pravka.core.ParsedTask): String {
+    val meta = mutableListOf<String>()
+    if (task.projectName.isNotBlank()) meta.add("#" + task.projectName)
+    if (task.labels.isNotEmpty()) meta.add(task.labels.joinToString(" ") { "@" + it })
+    if (task.repeat.isNotBlank()) meta.add(task.repeat)
+    else if (task.due.isNotBlank()) meta.add(raznDate(task.due))
+    if (task.priority != ru.zf.pravka.core.ParsedTask.P4) meta.add(task.priorityLabel)
+    if (task.projectName.isBlank()) meta.add("проект не выбран")
+    return meta.joinToString(" · ")
 }
 
 /**
@@ -268,17 +349,10 @@ internal fun PravkaAccessibilityService.showRaznoskaPlate(draftId: Long) {
     val waiting = tasks.count { !it.sent }
     if (waiting == 0) return
     val rows = tasks.map { task ->
-        val meta = mutableListOf<String>()
-        if (task.projectName.isNotBlank()) meta.add("#" + task.projectName)
-        if (task.labels.isNotEmpty()) meta.add(task.labels.joinToString(" ") { "@" + it })
-        if (task.repeat.isNotBlank()) meta.add(task.repeat)
-        else if (task.due.isNotBlank()) meta.add(raznDate(task.due))
-        if (task.priority != ru.zf.pravka.core.ParsedTask.P4) meta.add(task.priorityLabel)
-        if (task.projectName.isBlank()) meta.add("проект не выбран")
         RaznoskaButtonController.PlateRow(
             id = task.id,
             title = task.content,
-            meta = meta.joinToString(" · "),
+            meta = raznMeta(task),
             warn = if (task.duplicateOf.isBlank()) "" else "⚠ похоже: " + task.duplicateOf,
             sent = task.sent,
         )
@@ -456,7 +530,7 @@ fun PravkaAccessibilityService.raznoskaFromText(raw: String) {
     if (raw.trim().length > limit) {
         Feedback.toast(this, "Текст длинный: взял первые ${limit / 1000} тыс. знаков")
     }
-    onRaznoskaText(text)
+    onRaznoskaText(text, review = true)
 }
 
 /** «Разобрать текст» в меню «Д»: выделение → поле → буфер обмена. */

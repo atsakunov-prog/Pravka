@@ -469,63 +469,36 @@ class ZasechkaButtonController(
 
     fun hideTicker() = pill.hide()
 
-    // ---- Записка: что именно записалось, на две секунды ----
+    // ---- Записка: что именно записалось — итогом в пилюле ----
     //
     // Владелец: «засечка должна баблом на 2 секунды показывать, что за дело
-    // записано. и что за дело исправлено и как». Раньше это был тост — а тост
-    // на современном Android коротким не сделаешь, он душится системой при
-    // частых показах и не даёт ни двух строк, ни цвета. Своя записка рядом с
-    // кнопкой: две строки, свой цвет на удачу и на ошибку, свои две секунды.
+    // записано. и что за дело исправлено и как». Своя записка появилась
+    // вместо тоста (тот душится системой и цвета не даёт); 26.09.2026 она
+    // переехала в пилюлю диктовки — «переделать под этот стиль Gemini… сама
+    // пропадает через секунд 5». Красная — не «записал», а «не смог».
 
-    private var note: android.widget.TextView? = null
-    private val noteDismiss = Runnable { hideNote() }
+    /** Тап по итогу — в приложение (служба ставит: лента Засечки). */
+    var onNoteOpen: (() -> Unit)? = null
 
-    fun hideNote() {
-        val n = note ?: return
-        n.removeCallbacks(noteDismiss)
-        note = null
-        n.animate().alpha(0f).setDuration(160).withEndAction {
-            runCatching { windowManager.removeView(n) }
-        }.start()
-    }
+    fun hideNote() = pill.dropResult()
 
-    /** [ok] = false красит записку в красный: это не «записал», а «не смог». */
-    fun showNote(text: String, ok: Boolean = true, holdMs: Long = 2_000) {
-        hideNote()
-        val view = TextView(service).apply {
-            this.text = text
-            setTextColor(PAPER)
-            textSize = 14f
-            maxLines = 3
-            background = BubbleSkin().apply {
-                cornerRadius = dp(14).toFloat()
-                setColor(if (ok) AMBER else NOTE_BAD)
-            }
-            alpha = 0f
-            setPadding(dp(14), dp(10), dp(14), dp(10))
-            setOnClickListener { hideNote() }
-        }
-        val p = WindowManager.LayoutParams(
-            tickerWidthPx(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-        val bp = params
-        val (w, h) = screenSize()
-        if (bp != null) {
-            val centerX = bp.x + buttonSize / 2
-            p.x = if (centerX < w / 2) bp.x else (bp.x + buttonSize - tickerWidthPx()).coerceAtLeast(dp(8))
-            // Над кнопкой, если она в нижней половине, иначе под ней: записка
-            // не должна закрывать сам палец.
-            p.y = if (bp.y > h / 2) (bp.y - dp(64)).coerceAtLeast(0) else bp.y + buttonSize + dp(8)
-        }
-        note = view
-        runCatching { windowManager.addView(view, p) }
-        view.animate().alpha(0.97f).setDuration(140).start()
-        view.postDelayed(noteDismiss, holdMs)
-    }
+    /** [ok] = false красит итог в красные чернила: это не «записал», а «не смог». */
+    fun showNote(text: String, ok: Boolean = true, holdMs: Long = 2_000) =
+        pill.result(text, ok, onOpen = onNoteOpen, holdMs = holdMs)
+
+    /**
+     * Итог разбора — что записано — в пилюле, на её месте (`DictationPill.result`):
+     * сама уходит через пять секунд, тап раскрывает список с карандашами.
+     */
+    fun showResult(
+        summary: String,
+        rows: List<DictationPill.ResultRow> = emptyList(),
+        footer: String = "",
+        action: DictationPill.ResultAction? = null,
+        onOpen: (() -> Unit)? = null,
+        ok: Boolean = true,
+        holdMs: Long = ru.zf.pravka.core.PillLook.RESULT_HOLD_MS,
+    ) = pill.result(summary, ok, rows, footer, action, onOpen, holdMs)
 
     // ---- Long-press menu: a single column of amber pills ----
 

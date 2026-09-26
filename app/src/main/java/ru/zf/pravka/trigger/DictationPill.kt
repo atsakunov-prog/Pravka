@@ -30,6 +30,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.annotation.DrawableRes
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
@@ -86,6 +87,12 @@ import ru.zf.pravka.ui.Haptics
  *    к предыдущему виду и притягивается к кнопке. А надо, чтобы прямо там, в
  *    этой прекрасной нашей плашке, можно было писать». Туда же уходит всякий
  *    набор кнопок: правка дела, траты, граммов — одно поле на всё.
+ *  - **итог — тоже в ней** ([result]): «что записал» после разбора — та же
+ *    пилюля на том же месте, сама уходит через пять секунд; тап раскрывает
+ *    под ней список записанного, у каждой строки карандаш — править в
+ *    приложении (владелец, 26.09.2026: «он уже подумал, а дальше просто
+ *    показывает мне, что он записал… сама пропадает через секунд 5… у
+ *    каждой еды маленький карандашик, но не прямо в плашке»).
  *
  * Место (`core/PillGeometry.kt`) — три на выбор в «Кнопках на экране»:
  * сверху (с завода), снизу над клавиатурой или над навигацией, у кнопки
@@ -143,6 +150,10 @@ class DictationPill(
         private const val LONG_PRESS_MS = 450L
         /** Пилюля под пальцем чуть поджата — как кнопка, только мягче: она широкая. */
         private const val HELD_SCALE = 0.97f
+        /** Сколько строк раскрытого итога — остальное в приложении. */
+        private const val RESULT_ROWS = 6
+        /** Предупреждение в строке (похоже на дубль): песочный, красный на стекле не читается. */
+        private val SAND = 0xFFF6C177.toInt()
 
         // Отступы экрана — общие на все пилюли: последнее, что узнали.
         // Новая пилюля встаёт по ним сразу, пока не пришёл свежий ответ.
@@ -231,14 +242,46 @@ class DictationPill(
     /** Пилюля — поле ввода (а не бегущая строка). */
     val isEditing: Boolean get() = editing || editReq != null
 
+    /** Строка раскрытого итога: что записано, подробности, карандаш — править в приложении. */
+    class ResultRow(
+        val title: String,
+        val meta: String = "",
+        val warn: String = "",
+        val onEdit: (() -> Unit)? = null,
+    )
+
+    /** Одно действие итога: «Отменить», «Спорт», «Целиком». */
+    class ResultAction(val label: String, val onClick: () -> Unit)
+
+    private class ResultRequest(
+        val summary: String,
+        val ok: Boolean,
+        val rows: List<ResultRow>,
+        val footer: String,
+        val action: ResultAction?,
+        val onOpen: (() -> Unit)?,
+        val holdMs: Long,
+    )
+
+    /** Что показывает итог сейчас; null — пилюля в своём обычном деле (запись, поле). */
+    private var resultReq: ResultRequest? = null
+    private var summaryView: TextView? = null
+    private var actionChip: TextView? = null
+    /** Раскрытый список под (или над) пилюлей и сколько он прибавил окну. */
+    private var card: LinearLayout? = null
+    private var cardExtra = 0
+    private var cardUp = false
+    private val resultDismiss = Runnable { if (resultReq != null) hide() }
+
     val windowCount: Int get() = if (root != null) 1 else 0
 
     // ---- Показ, текст, уход ----
 
     fun show() {
-        // Новая запись поверх набора: поле закрывается, пилюля снова строка.
+        // Новая запись поверх набора или итога: пилюля снова строка.
         if (editing) endEdit()
         editReq = null
+        clearResult()
         val already = visible
         visible = true
         lastText = ""
@@ -257,6 +300,7 @@ class DictationPill(
             stopTravel()
             body?.translationY = 0f
             body?.alpha = 1f
+            root?.alpha = 1f
             rest()
             relayout()
             startPolling()
@@ -350,7 +394,15 @@ class DictationPill(
         val b = body
         if (root == null || b == null) return
         stopTravel()
+        root?.removeCallbacks(resultDismiss)
         val from = b.translationY
+        // С раскрытым итогом гаснет всё окно целиком: список под пилюлей не
+        // должен остаться висеть, пока она уезжает.
+        val whole = root
+        if (card != null && whole != null) {
+            travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f -> whole.alpha = 1f - f }
+            return
+        }
         // Переставленная пальцем гаснет на месте: её окно уже не вытянешь к краю.
         if (place == PillGeometry.Place.BESIDE || manual) {
             travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f -> b.alpha = 1f - f }
@@ -399,7 +451,7 @@ class DictationPill(
             clipToOutline = true
             // Кликабельна всегда: иначе ряд не взял бы касание, и ни долгого
             // нажатия, ни переноса не было бы там, где нет кнопки.
-            setOnClickListener { onTap?.invoke() }
+            setOnClickListener { if (resultReq != null) resultTap() else onTap?.invoke() }
         }
         // mutate: свой экземпляр знака — тинт и альфа не должны уйти в знак на кнопке.
         val l = LeadMark(service, service.getDrawable(glyph)?.mutate()).apply {
@@ -417,7 +469,13 @@ class DictationPill(
         val o = VoiceOrb(service, PillLook.orb(accent)).apply {
             setLevel(level)
             contentDescription = "Отправить"
-            setOnClickListener { if (editing) submitTyped() else if (canSend) onSend?.invoke() }
+            setOnClickListener {
+                when {
+                    editing -> submitTyped()
+                    resultReq != null -> resultTap()
+                    canSend -> onSend?.invoke()
+                }
+            }
             isClickable = canSend
         }
         row.addView(o, LinearLayout.LayoutParams(orbSize, orbSize).apply {
@@ -463,6 +521,7 @@ class DictationPill(
         })
         runCatching { windowManager.addView(frame, p) }
         if (editReq != null) applyEdit()
+        if (resultReq != null) applyResult()
     }
 
     // ---- Набор текстом в самой пилюле ----
@@ -516,7 +575,7 @@ class DictationPill(
         e.setSelection(req.prefill.length)
         e.hint = req.hint
         lead?.cancel = true
-        orb?.arrow = true
+        orb?.mark = VoiceOrb.Mark.ARROW
         orb?.isClickable = true
         // Окно — фокусное: без этого клавиатура к полю не привяжется. Касания
         // мимо пилюли по-прежнему уходят приложению (NOT_TOUCH_MODAL).
@@ -559,7 +618,7 @@ class DictationPill(
         e?.visibility = View.GONE
         ticker?.visibility = View.VISIBLE
         lead?.cancel = onCancel != null
-        orb?.arrow = false
+        orb?.mark = VoiceOrb.Mark.WAVE
         orb?.isClickable = canSend
         val r = root ?: return
         val p = params ?: return
@@ -567,6 +626,336 @@ class DictationPill(
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL.inv()
         p.softInputMode = 0
         runCatching { windowManager.updateViewLayout(r, p) }
+    }
+
+    // ---- Итог: что записано ----
+
+    /**
+     * Показать итог разбора — что записано — на месте пилюли. [summary] — в
+     * одну-две строки на самой пилюле; [rows] — список под ней по тапу, у
+     * строки с [ResultRow.onEdit] карандаш; [footer] — строка под списком;
+     * [action] — одно действие («Отменить»); [onOpen] — тап по итогу без
+     * списка или по строке — в приложение. [ok] = false — итог-ошибка,
+     * красные чернила. Сам уходит через [holdMs], раскрытый — через
+     * [PillLook.RESULT_OPEN_HOLD_MS].
+     *
+     * Идёт запись этой же кнопки (пилюля занята словами) — итог прошлой не
+     * отнимает у неё пилюлю, а говорит тостом.
+     */
+    fun result(
+        summary: String,
+        ok: Boolean = true,
+        rows: List<ResultRow> = emptyList(),
+        footer: String = "",
+        action: ResultAction? = null,
+        onOpen: (() -> Unit)? = null,
+        holdMs: Long = PillLook.RESULT_HOLD_MS,
+    ) {
+        val text = ru.zf.pravka.core.PillText.plain(summary)
+        if (visible && resultReq == null) {
+            ru.zf.pravka.ui.Feedback.toast(service, text.replace('\n', ' '))
+            return
+        }
+        val req = ResultRequest(text, ok, rows, footer, action, onOpen, holdMs)
+        if (visible && root != null) {
+            // Итог поверх итога — меняется на месте, без второго всплытия.
+            collapseCard()
+            resultReq = req
+            applyResult()
+            return
+        }
+        show()
+        resultReq = req
+        if (root != null) applyResult()
+    }
+
+    /** Убрать итог, если он на экране: кнопку выключили, экран сложили. */
+    fun dropResult() {
+        if (resultReq == null) return
+        hide()
+    }
+
+    private fun applyResult() {
+        val req = resultReq ?: return
+        val r = root ?: return
+        val row = body ?: return
+        val tv = ticker ?: return
+        val sv = summaryView ?: TextView(service).apply {
+            setTextColor(PAPER)
+            textSize = 14.5f
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER_VERTICAL
+            includeFontPadding = false
+            setPadding(dp(6), 0, dp(4), 0)
+        }.also { made ->
+            row.addView(made, row.indexOfChild(tv), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            summaryView = made
+        }
+        tv.visibility = View.GONE
+        editor?.visibility = View.GONE
+        sv.visibility = View.VISIBLE
+        sv.text = req.summary
+        lead?.cancel = false
+        val colour = if (req.ok) accent else PillLook.ALERT
+        skin?.setAccent(colour)
+        val o = orb
+        // Справа: есть что раскрыть — галочка вниз; нечего, но есть одно
+        // действие — оно само, словом; иначе — «записано» или «!».
+        val expandable = req.rows.isNotEmpty() || (req.action != null && req.summary.length > 60)
+        if (o != null) {
+            o.setColor(PillLook.orb(colour))
+            o.mark = when {
+                expandable -> VoiceOrb.Mark.CHEVRON
+                !req.ok -> VoiceOrb.Mark.ALERT
+                else -> VoiceOrb.Mark.CHECK
+            }
+            o.isClickable = true
+        }
+        val a = req.action
+        if (a != null && !expandable) {
+            val chip = actionChip ?: TextView(service).apply {
+                setTextColor(PAPER)
+                textSize = 13.5f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
+                gravity = Gravity.CENTER
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(18).toFloat()
+                    setColor(DiskLook.white(0.16f))
+                }
+                setPadding(dp(14), 0, dp(14), 0)
+            }.also { made ->
+                row.addView(made, row.childCount, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, dp(36),
+                ).apply { marginEnd = dp(10); marginStart = dp(4) })
+                actionChip = made
+            }
+            chip.text = a.label
+            chip.visibility = View.VISIBLE
+            chip.setOnClickListener {
+                hide()
+                a.onClick()
+            }
+            o?.visibility = View.GONE
+        } else {
+            actionChip?.visibility = View.GONE
+            o?.visibility = View.VISIBLE
+        }
+        r.removeCallbacks(resultDismiss)
+        r.postDelayed(resultDismiss, PillLook.resultHold(req.holdMs))
+    }
+
+    /** Тап по итогу: есть список — раскрыть (второй тап — убрать), нет — в приложение. */
+    private fun resultTap() {
+        val req = resultReq ?: return
+        if (card != null) {
+            hide()
+            return
+        }
+        val expandable = req.rows.isNotEmpty() || (req.action != null && req.summary.length > 60)
+        if (expandable) {
+            expand()
+        } else {
+            hide()
+            req.onOpen?.invoke()
+        }
+    }
+
+    /** Раскрыть под пилюлей список записанного — у пилюли в нижней половине экрана над ней. */
+    private fun expand() {
+        val req = resultReq ?: return
+        val r = root ?: return
+        val p = params ?: return
+        val row = body ?: return
+        val c = buildCard(req)
+        c.measure(
+            View.MeasureSpec.makeMeasureSpec(p.width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val gap = dp(6)
+        val extra = gap + c.measuredHeight
+        val (_, screenH) = screen()
+        val pillMid = p.y + offY() + room() + dp(PillLook.HEIGHT_DP) / 2
+        val up = pillMid > screenH / 2
+        val pillTop = room()
+        if (up) {
+            (row.layoutParams as FrameLayout.LayoutParams).topMargin = pillTop + extra
+            row.requestLayout()
+            r.addView(c, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, c.measuredHeight).apply {
+                gravity = Gravity.TOP
+                topMargin = pillTop
+            })
+            p.y -= extra
+        } else {
+            r.addView(c, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, c.measuredHeight).apply {
+                gravity = Gravity.TOP
+                topMargin = pillTop + dp(PillLook.HEIGHT_DP) + gap
+            })
+        }
+        p.height += extra
+        card = c
+        cardExtra = extra
+        cardUp = up
+        orb?.mark = VoiceOrb.Mark.CHEVRON
+        runCatching { windowManager.updateViewLayout(r, p) }
+        r.removeCallbacks(resultDismiss)
+        r.postDelayed(resultDismiss, PillLook.RESULT_OPEN_HOLD_MS)
+    }
+
+    /** Список убрать, окно — снова ровно пилюля. */
+    private fun collapseCard() {
+        val c = card ?: return
+        val r = root
+        val p = params
+        r?.removeView(c)
+        if (cardUp) {
+            (body?.layoutParams as? FrameLayout.LayoutParams)?.let { it.topMargin = room() }
+            body?.requestLayout()
+            p?.let { it.y += cardExtra }
+        }
+        p?.let { it.height -= cardExtra }
+        card = null
+        cardExtra = 0
+        cardUp = false
+        if (r != null && p != null) runCatching { windowManager.updateViewLayout(r, p) }
+    }
+
+    /** Пилюля обратно в своё обычное дело: строка, кружок с волной, цвет режима. */
+    private fun clearResult() {
+        if (resultReq == null && card == null) return
+        root?.removeCallbacks(resultDismiss)
+        collapseCard()
+        resultReq = null
+        summaryView?.visibility = View.GONE
+        actionChip?.visibility = View.GONE
+        ticker?.visibility = View.VISIBLE
+        skin?.setAccent(accent)
+        orb?.let {
+            it.visibility = View.VISIBLE
+            it.setColor(PillLook.orb(accent))
+            it.mark = VoiceOrb.Mark.WAVE
+            it.isClickable = canSend
+        }
+        lead?.cancel = onCancel != null
+        root?.alpha = 1f
+    }
+
+    /** Карточка раскрытого итога: строки с карандашом, итог дня, одно действие. */
+    private fun buildCard(req: ResultRequest): LinearLayout {
+        val colour = if (req.ok) accent else PillLook.ALERT
+        val c = LinearLayout(service).apply {
+            orientation = LinearLayout.VERTICAL
+            background = PillSkin(colour, orbCentreFromRight = dp(28).toFloat(), corner = dp(22).toFloat()).apply {
+                setDensity(service.cachedTickerDensity)
+            }
+            clipToOutline = true
+            setPadding(dp(16), dp(10), dp(8), dp(10))
+            // Касание мимо строк — не к приложению под карточкой и не в ряд пилюли.
+            isClickable = true
+        }
+        val dim = DiskLook.withAlpha(PAPER, 0.66f)
+        val shown = req.rows.take(RESULT_ROWS)
+        if (shown.isEmpty()) {
+            // Списка нет — значит раскрывали длинный итог: целиком, без обрезки.
+            c.addView(TextView(service).apply {
+                text = req.summary
+                setTextColor(PAPER)
+                textSize = 14.5f
+                setPadding(0, dp(4), dp(8), dp(4))
+            })
+        }
+        for (item in shown) {
+            val line = LinearLayout(service).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(44)
+            }
+            val texts = LinearLayout(service).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(4), 0, dp(4))
+                setOnClickListener {
+                    hide()
+                    req.onOpen?.invoke()
+                }
+            }
+            texts.addView(TextView(service).apply {
+                text = item.title
+                setTextColor(PAPER)
+                textSize = 15f
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+            if (item.meta.isNotBlank()) texts.addView(TextView(service).apply {
+                text = item.meta
+                setTextColor(dim)
+                textSize = 12f
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+            if (item.warn.isNotBlank()) texts.addView(TextView(service).apply {
+                text = ru.zf.pravka.core.PillText.plain(item.warn)
+                setTextColor(SAND)
+                textSize = 12f
+                maxLines = 2
+            })
+            line.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val edit = item.onEdit
+            if (edit != null) {
+                line.addView(PencilMark(service).apply {
+                    contentDescription = "Править"
+                    setOnClickListener {
+                        hide()
+                        edit()
+                    }
+                }, LinearLayout.LayoutParams(dp(44), dp(44)))
+            }
+            c.addView(line, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+        if (req.rows.size > shown.size) {
+            c.addView(TextView(service).apply {
+                text = "…и ещё ${req.rows.size - shown.size} — в приложении"
+                setTextColor(dim)
+                textSize = 12f
+                setPadding(0, dp(4), 0, dp(2))
+                setOnClickListener {
+                    hide()
+                    req.onOpen?.invoke()
+                }
+            })
+        }
+        val a = req.action
+        if (req.footer.isNotBlank() || a != null) {
+            val bottom = LinearLayout(service).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(6), 0, 0)
+            }
+            bottom.addView(TextView(service).apply {
+                text = req.footer
+                setTextColor(dim)
+                textSize = 12.5f
+                maxLines = 2
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            if (a != null) {
+                bottom.addView(TextView(service).apply {
+                    text = a.label
+                    setTextColor(PAPER)
+                    textSize = 13.5f
+                    typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = dp(16).toFloat()
+                        setColor(DiskLook.white(0.16f))
+                    }
+                    setPadding(dp(14), dp(7), dp(14), dp(7))
+                    setOnClickListener {
+                        hide()
+                        a.onClick()
+                    }
+                })
+            }
+            c.addView(bottom, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+        return c
     }
 
     /**
@@ -636,9 +1025,10 @@ class DictationPill(
         val room = room()
         val rise = if (place == PillGeometry.Place.BOTTOM && travelling) dp(PillLook.RISE_DP) else 0
         val x = spot.x - offX()
-        val y = spot.y - room - offY()
+        // Раскрытый итог растит окно: вниз — только высоту, вверх — и верх.
+        val y = spot.y - room - offY() - (if (cardUp) cardExtra else 0)
         val width = spot.width
-        val height = room + dp(PillLook.HEIGHT_DP) + below() + rise
+        val height = room + dp(PillLook.HEIGHT_DP) + below() + rise + cardExtra
         if (p.x == x && p.y == y && p.width == width && p.height == height) return false
         p.x = x
         p.y = y
@@ -824,11 +1214,18 @@ class DictationPill(
     private fun drop() {
         stopTravel()
         root?.let { runCatching { windowManager.removeView(it) } }
+        root?.removeCallbacks(resultDismiss)
         root = null
         body = null
         lead = null
         editor = null
         editing = false
+        resultReq = null
+        summaryView = null
+        actionChip = null
+        card = null
+        cardExtra = 0
+        cardUp = false
         ticker = null
         orb = null
         skin = null
@@ -889,7 +1286,9 @@ class DictationPill(
                 val now = before ?: continue
                 // Клавиатура открылась или закрылась посреди тейка: пилюля
                 // всплывает заново уже на новом полу — тем же движением.
-                if (abs(spot.y - room() - offY() - now) >= dp(MOVE_DP) && animator == null) enter() else relayout()
+                // Раскрытый вверх итог сдвигает верх окна — сравниваем с тем же сдвигом.
+                val want = spot.y - room() - offY() - (if (cardUp) cardExtra else 0)
+                if (abs(want - now) >= dp(MOVE_DP) && animator == null && card == null) enter() else relayout()
             }
         }
     }
@@ -897,6 +1296,49 @@ class DictationPill(
     private fun stopPolling() {
         pollJob?.cancel()
         pollJob = null
+    }
+
+    // ---- Карандаш у строки итога: править в приложении ----
+
+    /** Штриховой карандаш тем же пером, что знаки режимов; нажатие — кружок под ним. */
+    private class PencilMark(context: Context) : View(context) {
+        private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = PAPER
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        private val disc = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val path = android.graphics.Path()
+        private val density = resources.displayMetrics.density
+
+        override fun drawableStateChanged() {
+            super.drawableStateChanged()
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val cx = width / 2f
+            val cy = height / 2f
+            disc.color = DiskLook.white(if (isPressed) 0.22f else 0.08f)
+            canvas.drawCircle(cx, cy, 15 * density, disc)
+            // Карандаш в сетке 24×24, как пиктограммы режимов: корпус и черта у грифеля.
+            val k = 0.75f * density
+            val ox = cx - 12 * k
+            val oy = cy - 12 * k
+            fun X(v: Float) = ox + v * k
+            fun Y(v: Float) = oy + v * k
+            stroke.strokeWidth = 2 * density * 0.85f
+            path.reset()
+            path.moveTo(X(4f), Y(20f))
+            path.lineTo(X(4f), Y(16f))
+            path.lineTo(X(15f), Y(5f))
+            path.lineTo(X(19f), Y(9f))
+            path.lineTo(X(8f), Y(20f))
+            path.close()
+            canvas.drawPath(path, stroke)
+            canvas.drawLine(X(13f), Y(7f), X(17f), Y(11f), stroke)
+        }
     }
 
     // ---- Слева: ✕ отмены или знак режима ----
@@ -961,13 +1403,25 @@ class DictationPill(
         }
         private var level = 0f
 
-        /** Поле ввода: вместо волны — стрелка «отправить», как у Gemini при наборе. */
-        var arrow = false
+        /**
+         * Что нарисовано в кружке: волна (запись), стрелка «отправить» (поле
+         * ввода, как у Gemini при наборе), галочка вниз «раскрыть» (итог со
+         * списком), галочка «записано» и «!» — итог-ошибка.
+         */
+        enum class Mark { WAVE, ARROW, CHEVRON, CHECK, ALERT }
+
+        var mark = Mark.WAVE
             set(value) {
                 if (field == value) return
                 field = value
                 invalidate()
             }
+
+        fun setColor(color: Int) {
+            if (fill.color == color) return
+            fill.color = color
+            invalidate()
+        }
 
         fun setLevel(value: Float) {
             if (abs(value - level) < 0.01f) return
@@ -1003,14 +1457,35 @@ class DictationPill(
             canvas.drawCircle(cx, cy, r, fill)
             canvas.drawCircle(cx, cy, r, sheen)
             if (isPressed) canvas.drawCircle(cx, cy, r, pressedShade)
-            if (arrow) {
-                // Стрелка вверх: древко и два пера, тем же штрихом, что волна.
-                val len = r * 0.42f
-                val wing = r * 0.26f
-                canvas.drawLine(cx, cy + len, cx, cy - len, bar)
-                canvas.drawLine(cx, cy - len, cx - wing, cy - len + wing, bar)
-                canvas.drawLine(cx, cy - len, cx + wing, cy - len + wing, bar)
-                return
+            when (mark) {
+                Mark.WAVE -> Unit
+                Mark.ARROW -> {
+                    // Стрелка вверх: древко и два пера, тем же штрихом, что волна.
+                    val len = r * 0.42f
+                    val wing = r * 0.26f
+                    canvas.drawLine(cx, cy + len, cx, cy - len, bar)
+                    canvas.drawLine(cx, cy - len, cx - wing, cy - len + wing, bar)
+                    canvas.drawLine(cx, cy - len, cx + wing, cy - len + wing, bar)
+                    return
+                }
+                Mark.CHEVRON -> {
+                    val w = r * 0.34f
+                    canvas.drawLine(cx - w, cy - w * 0.45f, cx, cy + w * 0.55f, bar)
+                    canvas.drawLine(cx, cy + w * 0.55f, cx + w, cy - w * 0.45f, bar)
+                    return
+                }
+                Mark.CHECK -> {
+                    val w = r * 0.36f
+                    canvas.drawLine(cx - w, cy, cx - w * 0.25f, cy + w * 0.7f, bar)
+                    canvas.drawLine(cx - w * 0.25f, cy + w * 0.7f, cx + w, cy - w * 0.65f, bar)
+                    return
+                }
+                Mark.ALERT -> {
+                    val h = r * 0.4f
+                    canvas.drawLine(cx, cy - h, cx, cy + h * 0.25f, bar)
+                    canvas.drawPoint(cx, cy + h * 0.85f, bar)
+                    return
+                }
             }
             val bars = PillLook.bars(level)
             val maxH = r * 0.9f
@@ -1031,7 +1506,12 @@ class DictationPill(
      * гасит заливку сильно, свечение и кромку — слабо: на прозрачном стекле
      * форму держит край, а цвет режима — свечение.
      */
-    private class PillSkin(private val accent: Int, private val orbCentreFromRight: Float) : Drawable() {
+    private class PillSkin(
+        private var accent: Int,
+        private val orbCentreFromRight: Float,
+        /** Скругление; null — пилюля (полвысоты). Раскрытый итог — карточка со своим. */
+        private val corner: Float? = null,
+    ) : Drawable() {
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
         private val glow = Paint(Paint.ANTI_ALIAS_FLAG)
         private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -1042,6 +1522,14 @@ class DictationPill(
         fun setDensity(value: Float) {
             if (value == density && fill.shader != null) return
             density = value
+            build(bounds)
+            invalidateSelf()
+        }
+
+        /** Итог-ошибка красится в красные чернила, итог-успех — обратно в цвет режима. */
+        fun setAccent(value: Int) {
+            if (value == accent) return
+            accent = value
             build(bounds)
             invalidateSelf()
         }
@@ -1060,8 +1548,12 @@ class DictationPill(
                 Shader.TileMode.CLAMP,
             )
             val g = PillLook.glowAlpha(d)
+            // У пилюли свечение — от кружка справа посередине; у карточки —
+            // из правого верхнего угла, туда, где над ней кружок пилюли.
+            val glowY = if (corner == null) b.exactCenterY() else b.top.toFloat()
+            val glowR = if (corner == null) h * 1.9f else minOf(h, w) * 0.9f
             glow.shader = RadialGradient(
-                b.right - orbCentreFromRight, b.exactCenterY(), h * 1.9f,
+                b.right - orbCentreFromRight, glowY, glowR,
                 intArrayOf(
                     DiskLook.withAlpha(accent, g),
                     DiskLook.withAlpha(accent, g * 0.35f),
@@ -1089,7 +1581,7 @@ class DictationPill(
             val b = bounds
             if (b.isEmpty) return
             face.set(b)
-            val r = face.height() / 2f
+            val r = corner ?: (face.height() / 2f)
             canvas.drawRoundRect(face, r, r, fill)
             canvas.drawRoundRect(face, r, r, glow)
             canvas.drawRoundRect(face, r, r, sheen)
@@ -1099,7 +1591,7 @@ class DictationPill(
         }
 
         override fun getOutline(outline: Outline) {
-            outline.setRoundRect(bounds, bounds.height() / 2f)
+            outline.setRoundRect(bounds, corner ?: (bounds.height() / 2f))
         }
 
         override fun setAlpha(alpha: Int) = Unit

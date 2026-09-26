@@ -202,11 +202,22 @@ private fun PravkaAccessibilityService.zasechkaFood(text: String, spoken: Boolea
             return@launch
         }
         Haptics.success(this@zasechkaFood)
-        zButton?.showNote(
-            "🍽 ${done.shortList}\n" +
+        // Итог — в пилюле «З», как у «Е»: что записано, по тапу — позиции с
+        // карандашом (приём в редакторе «Еды») и «Отменить».
+        zButton?.showResult(
+            summary = done.shortList + "\n" +
                 (if (done.supplement) "добавки в дневнике" else "${done.kcal} ккал — в дневнике") +
                 (if (outcome.ribbon.isNotBlank()) " · к «${outcome.ribbon}»" else ""),
-            holdMs = 3_000,
+            rows = done.items.map { item ->
+                DictationPill.ResultRow(
+                    title = item.name,
+                    meta = foodItemMeta(item),
+                    onEdit = { openFoodTab("edit:${done.id}") },
+                )
+            },
+            footer = foodDayLine(done),
+            action = DictationPill.ResultAction("Отменить") { forgetFood(done.id) },
+            onOpen = { openFoodTab() },
         )
         if (spoken) say(ZasechkaIntent.said(ZasechkaIntent.Kind.FOOD))
     }
@@ -259,7 +270,18 @@ private fun PravkaAccessibilityService.zasechkaTasks(text: String, spoken: Boole
         when {
             sent.ok -> {
                 Haptics.success(this@zasechkaTasks)
-                zButton?.showNote("✓ ${raznCount(sent.created)} в Todoist\n$titles", holdMs = 3_000)
+                zButton?.showResult(
+                    summary = "В Todoist: ${raznCount(sent.created)}\n$titles",
+                    rows = tasks.map { task ->
+                        DictationPill.ResultRow(
+                            title = task.content,
+                            meta = raznMeta(task),
+                            onEdit = { openTodoistTab() },
+                        )
+                    },
+                    action = DictationPill.ResultAction("Отменить") { undoRaznoska() },
+                    onOpen = { openTodoistTab() },
+                )
                 if (spoken) say(ZasechkaIntent.said(ZasechkaIntent.Kind.TASKS, count = sent.created))
             }
             sent.created > 0 -> {

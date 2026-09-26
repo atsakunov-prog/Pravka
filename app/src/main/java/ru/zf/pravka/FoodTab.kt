@@ -173,10 +173,18 @@ internal fun FoodTab(
     }
 
     LaunchedEffect(autoAction) {
-        val action = autoAction ?: return@LaunchedEffect
+        // Просьба погашена — следующая (второй карандаш с пилюли при открытой
+        // вкладке) должна сработать снова: иначе вкладка слушалась бы один раз.
+        val action = autoAction ?: run { autoFired = false; return@LaunchedEffect }
         if (autoFired) return@LaunchedEffect
         autoFired = true
         onAutoConsumed()
+        // Карандаш у позиции в итоге еды (пилюля, 26.09.2026): открыть этот
+        // приём в редакторе — «где уже можно будет и редактировать, и всё делать».
+        if (action.startsWith("edit:")) {
+            editing = action.removePrefix("edit:").toLongOrNull()
+            return@LaunchedEffect
+        }
         when (action) {
             "photo" -> {
                 val file = File(context.cacheDir, "eda-shot.jpg")
