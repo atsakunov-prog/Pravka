@@ -67,11 +67,12 @@ import ru.zf.pravka.ui.Haptics
  *    Send'ом»): тот же тап, что по пишущей кнопке, — стоп и дальше как
  *    обычно. Работает, только пока идёт запись: иначе тап по кружку начал
  *    бы новую;
- *  - **долгое нажатие — переставить** («нажимаю на плашку и держу — её можно
- *    двигать… в заход она появится там же, в своём дефолтном месте»): пилюля
- *    едет за пальцем и остаётся там до конца показа; следующий показ — снова
- *    на своём месте. Запоминать не нужно: «там же» — это место, а не
- *    последнее касание;
+ *  - **потянул — переставил** («нажимаю на плашку и держу — её можно
+ *    двигать… в заход она появится там же, в своём дефолтном месте»; и
+ *    следом: «нельзя её двигать, если я беру её и начинаю тянуть»): пилюля
+ *    едет за пальцем сразу, как он поехал, или после удержания, и остаётся
+ *    там до конца показа; следующий показ — снова на своём месте. Запоминать
+ *    не нужно: «там же» — это место, а не последнее касание;
  *  - **посередине — подсказка** «Саша, слушаю» (`core/PillHint.kt`), не
  *    бегущая, а стоящая по центру, как «Ask Gemini»; первое слово её гасит.
  *    У «З», «Д», «₽», «Е» тап посередине — по-прежнему набор вместо голоса.
@@ -523,10 +524,15 @@ class DictationPill(
     // ---- Перенос пальцем ----
 
     /**
-     * Ряд пилюли: долгое нажатие где угодно — даже на ✕ или кружке —
-     * берёт пилюлю в палец. Смотрим на касание до детей (dispatchTouchEvent):
-     * взяли — детям уходит отмена, чтобы ни ✕, ни «отправить» не сработали
-     * от того же пальца, и дальше касание целиком наше.
+     * Ряд пилюли: палец, который ПОЕХАЛ, берёт пилюлю с собой — где угодно,
+     * даже с ✕ или кружка; подержал на месте — тоже взял (с вибрацией: «можно
+     * везти»). Первая версия брала только после удержания, а сдвиг раньше
+     * срока считала сорвавшимся тапом, и владелец (26.09.2026): «почему-то
+     * нельзя её двигать, если я беру её и начинаю тянуть». Тапам это не
+     * мешает: тап — это палец, который не поехал. Смотрим на касание до детей
+     * (dispatchTouchEvent): взяли — детям уходит отмена, чтобы ни ✕, ни
+     * «отправить» не сработали от того же пальца, и дальше касание целиком
+     * наше.
      */
     private inner class PillRow(context: Context) : LinearLayout(context) {
         private var downX = 0f
@@ -535,7 +541,7 @@ class DictationPill(
         private var startY = 0
         private var armed = false
         private var dragging = false
-        private val grab = Runnable { if (armed) startDrag() }
+        private val grab = Runnable { if (armed) startDrag(buzz = true) }
 
         override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
             when (ev.actionMasked) {
@@ -552,8 +558,12 @@ class DictationPill(
                         return true
                     }
                     if (armed && (abs(ev.rawX - downX) > touchSlop || abs(ev.rawY - downY) > touchSlop)) {
-                        armed = false
                         removeCallbacks(grab)
+                        startDrag(buzz = false)
+                        // От точки касания, а не от порога: пилюля остаётся
+                        // под пальцем тем же местом, за которое взяли.
+                        moveTo(ev.rawX - downX, ev.rawY - downY)
+                        return true
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -571,7 +581,8 @@ class DictationPill(
             return super.dispatchTouchEvent(ev)
         }
 
-        private fun startDrag() {
+        /** [buzz] — вибрация, когда взяли удержанием: палец стоит, ему надо сказать «поехали». */
+        private fun startDrag(buzz: Boolean) {
             val p = params ?: return
             armed = false
             // Детям — отмена: палец больше не их, клик не сработает.
@@ -590,7 +601,7 @@ class DictationPill(
             startY = p.y
             scaleX = HELD_SCALE
             scaleY = HELD_SCALE
-            Haptics.start(service)
+            if (buzz) Haptics.start(service)
         }
 
         private fun moveTo(dx: Float, dy: Float) {
