@@ -104,6 +104,7 @@ suspend fun ClaudeProvider.parseFood(
             images = listOfNotNull(image),
             effortOverride = choice.effort,
             routeKey = ModelRoute.FOOD.key,
+            paceChars = text.length,
         )
         val parsed = parseFoodReply(reply.text)
         FoodParse(

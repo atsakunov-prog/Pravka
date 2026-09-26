@@ -1,6 +1,6 @@
 package ru.zf.pravka.core
 
-import kotlin.math.exp
+import kotlin.math.abs
 
 /**
  * Сколько идёт запрос к модели — по собственной истории. Владелец (20.09.2026):
@@ -23,6 +23,13 @@ import kotlin.math.exp
  * Владелец меняет модель на дороге одним тапом в настройках, и вчерашний Опус
  * не должен вечно тянуть оценку Сонета — но и сбрасывать всё на каждой смене
  * незачем, история той же пары «дорога + модель» остаётся ценной.
+ *
+ * Поверх прямой — три вещи ради точности (владелец, 26.09.2026: «не важно,
+ * чтобы было дешевле, важно, чтобы было точнее»), все в [Road]: добавка
+ * холодного кэша (первый запрос после часа тишины пишет голову промпта
+ * заново и идёт дольше), обрезка выбросов (одна минута сети в плохом месте
+ * не должна неделю тянуть прямую) и честная ошибка — насколько отсчёт
+ * промахивается ДО того, как замер лёг в прямую.
  */
 object Pace {
 
@@ -178,39 +185,163 @@ object Pace {
         return Line(acc.n, mean, base, slope, straight = true)
     }
 
+    // ---- Дорога целиком: прямая, холодный кэш, выбросы, честная ошибка ----
+
     /**
-     * Куда дошла дуга: [elapsed] прошло из ожидаемых [expected].
+     * Всё, что прогноз знает об одной тройке «дорога + модель + усилие».
      *
-     * До срока идём ровно — и доходим не до края, а до [HONEST], потому что
-     * оценка средняя, а этот конкретный запрос может идти дольше. Дальше дуга
-     * ПОЛЗЁТ: оставшаяся четверть съедается по экспоненте и никогда не
-     * кончается. Полоса, упёршаяся в край и замершая, читается как «повисло»;
-     * ползущая — как «дольше обычного, но живо».
+     * [acc] — тёплые замеры (холодные ложатся сюда за вычетом своей добавки,
+     * чтобы прямая была одна). [coldN]/[coldSum] — сколько сверху прямой
+     * берёт холодный кэш, тем же забыванием; [warmN] — сколько за этим
+     * тёплых замеров: добавку не от чего отсчитать, если тёплых нет вовсе.
+     * [errN]/[errAbs]/[errBias] —
+     * промах отсчёта по модулю и со знаком (плюс — ответ пришёл ПОЗЖЕ
+     * обещанного), считанный до того, как замер попал в прямую: иначе это
+     * мерило бы, как прямая помнит тот же самый замер. [lastAt] — когда
+     * дорога ходила последний раз: по нему видно, жив ли ещё кэш.
      */
-    fun progress(elapsed: Long, expected: Long): Float {
-        if (expected <= 0L) return 0f
-        if (elapsed <= 0L) return 0f
-        val t = elapsed.toDouble() / expected
-        val p = if (t <= 1.0) {
-            HONEST * t
-        } else {
-            HONEST + (1.0 - HONEST) * (1.0 - exp(-(t - 1.0)))
-        }
-        // Потолок СТРОГО меньше единицы, и это не придирка: в Float
-        // экспонента добегает до 1,0 уже через сотню сроков, а полный круг,
-        // который стоит и ничего не делает, читается как «повисло».
-        return p.toFloat().coerceIn(0f, CEILING)
+    data class Road(
+        val acc: Acc = Acc(),
+        val coldN: Double = 0.0,
+        val coldSum: Double = 0.0,
+        val warmN: Double = 0.0,
+        val errN: Double = 0.0,
+        val errAbs: Double = 0.0,
+        val errBias: Double = 0.0,
+        val lastAt: Long = 0L,
+    ) {
+        /** Средний промах отсчёта по модулю, мс; null — промахов ещё не мерили. */
+        val miss: Double? get() = if (errN < 1.0) null else errAbs / errN
+
+        /** Средний промах со знаком, мс: плюс — ответ приходит позже нуля на кнопке. */
+        val bias: Double? get() = if (errN < 1.0) null else errBias / errN
     }
 
     /**
-     * Докуда дуга доходит к сроку: дальше — только ползком. Было 0,75, и
-     * владелец сразу поймал: «расшифровка правки обычно быстрее, чем прогресс
-     * бар». При точной оценке дуга к сроку стояла на трёх четвертях и
-     * прыгала на конец — читалось как «полоса отстаёт». Девять десятых: к
-     * сроку она почти полная, а запас на «дольше обычного» остаётся.
+     * Голова промпта живёт в кэше час с последнего запроса (`ttl: 1h` в
+     * транспорте). Двумя минутами раньше — уже считаем холодным: часы
+     * телефона и сервера не обязаны совпадать до секунды, а обещать
+     * холодному тёплое хуже, чем наоборот.
      */
-    private const val HONEST = 0.9
+    const val COLD_AFTER_MS = 58L * 60_000
 
-    /** Дальше этого дуга не идёт, пока ответ не пришёл. */
-    const val CEILING = 0.99f
+    /** Больше этого холодный кэш не добавляет: дальше это уже не кэш, а сбой. */
+    const val COLD_MAX_MS = 8_000.0
+
+    /**
+     * Добавка холодного кэша поджата к нулю на столько замеров: один
+     * холодный запрос, случайно медленный по другой причине, не должен
+     * сразу приписать всем холодным лишние три секунды.
+     */
+    private const val COLD_SHRINK = 2.0
+
+    /**
+     * Столько тёплых замеров нужно, чтобы добавке верить наполовину. У
+     * дороги, где кэш холодный всегда (еда раз в несколько часов), отсчитать
+     * добавку не от чего: прямая и добавка учились бы на одних и тех же
+     * замерах и делили бы одно время между собой как придётся. Там добавки
+     * нет, и прямая учит холодное время целиком — его она и обещает.
+     */
+    private const val WARM_SHRINK = 3.0
+
+    /** Промах считаем по последним двум десяткам запросов: видно, как прогноз учится. */
+    const val ERR_DECAY = 0.95
+
+    /** Выбросы режем, когда промахов набралось столько, что «обычный» известен. */
+    const val CLIP_AFTER = 5.0
+    private const val CLIP_K = 3.0
+    private const val CLIP_FRAC = 0.5
+    private const val CLIP_MIN_MS = 1_500.0
+
+    /** Холодный ли кэш у дороги в миг [now]: не ходила ни разу или молчала дольше часа. */
+    fun coldLikely(road: Road?, now: Long): Boolean =
+        road == null || road.lastAt <= 0L || now - road.lastAt >= COLD_AFTER_MS
+
+    /** Сколько сверху прямой берёт холодный кэш у этой дороги, мс. */
+    fun coldExtra(road: Road?): Double =
+        if (road == null) 0.0 else extraOf(road.coldN, road.coldSum, road.warmN)
+
+    private fun extraOf(n: Double, sum: Double, warmN: Double): Double =
+        (sum / (n + COLD_SHRINK)).coerceIn(0.0, COLD_MAX_MS) * (warmN / (warmN + WARM_SHRINK))
+
+    /** Сколько обещать запросу на [chars] знаках, ушедшему в миг [now]. */
+    fun expect(road: Road?, prior: Acc, chars: Int, now: Long): Long {
+        val warm = estimate(mix(road?.acc, prior), chars)
+        val extra = if (coldLikely(road, now)) coldExtra(road) else 0.0
+        return (warm + extra).toLong().coerceIn(MIN_MS, MAX_MS)
+    }
+
+    /**
+     * Ответ пришёл: запрос на [chars] знаках шёл [ms] и закончился в [now].
+     * [cache]: true — голова прочитана из кэша, false — только записана
+     * (холодный), null — кэша на этом запросе нет.
+     *
+     * Холодный замер учит добавку (сколько он лёг выше прямой), а в прямую
+     * идёт без неё. У дороги, где кэш холодный всегда (еда раз в несколько
+     * часов), добавки нет ([WARM_SHRINK]), а прямая учит всё время целиком —
+     * и обещает ровно столько, сколько идёт.
+     */
+    fun learn(road: Road?, prior: Acc, chars: Int, ms: Long, cache: Boolean?, now: Long): Road {
+        val r = road ?: Road()
+        val y = ms.coerceIn(MIN_MS, MAX_MS).toDouble()
+        // Обещано было в миг ухода, а не прихода: холодным кэш считался по нему.
+        val promised = expect(road, prior, chars, now - ms).toDouble()
+        val err = y - promised
+        val warmPred = estimate(mix(r.acc, prior), chars).toDouble()
+        val here = warmPred + if (cache == false) coldExtra(r) else 0.0
+        val kept = clip(y, here, r)
+        var coldN = r.coldN
+        var coldSum = r.coldSum
+        val warmN = r.warmN * DECAY + if (cache == false) 0.0 else 1.0
+        val warmY = if (cache == false) {
+            coldN = coldN * DECAY + 1.0
+            coldSum = coldSum * DECAY + (kept - warmPred)
+            kept - extraOf(coldN, coldSum, warmN)
+        } else {
+            kept
+        }
+        return Road(
+            acc = add(r.acc, chars, warmY.toLong()),
+            coldN = coldN,
+            coldSum = coldSum,
+            warmN = warmN,
+            errN = r.errN * ERR_DECAY + 1.0,
+            errAbs = r.errAbs * ERR_DECAY + abs(err),
+            errBias = r.errBias * ERR_DECAY + err,
+            lastAt = now,
+        )
+    }
+
+    /**
+     * Выброс не тащит прямую: замер дальше трёх обычных промахов от
+     * ожидаемого (но не ближе половины ожидаемого и полутора секунд)
+     * ложится на край коридора. Настоящая перемена — модель стала
+     * медленнее — всё равно дойдёт: промахи растут, и коридор с ними.
+     */
+    private fun clip(y: Double, here: Double, r: Road): Double {
+        if (r.errN < CLIP_AFTER) return y
+        val typical = r.errAbs / r.errN
+        val bound = maxOf(CLIP_K * typical, CLIP_FRAC * here, CLIP_MIN_MS)
+        return y.coerceIn((here - bound).coerceAtLeast(MIN_MS.toDouble()), here + bound)
+    }
+
+    /**
+     * Замеры, снятые без длины (до 26.09.2026 дороги режимов слали «0
+     * знаков» на каждом запросе), — на [chars] знаков весом [weight]: их
+     * среднее честное, но длины за ним не было. Поставленные на типичную
+     * длину, они держат прямую там, где она и была, а наклон дают новые
+     * замеры с настоящей длиной.
+     */
+    fun relocate(acc: Acc, chars: Double, weight: Double): Acc {
+        if (acc.n < 1.0) return acc
+        val w = minOf(weight, acc.n)
+        val mean = acc.sumY / acc.n
+        return Acc(
+            n = w,
+            sumX = w * chars,
+            sumY = w * mean,
+            sumXX = w * chars * chars,
+            sumXY = w * chars * mean,
+        )
+    }
 }

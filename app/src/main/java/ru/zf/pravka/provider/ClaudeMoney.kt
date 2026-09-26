@@ -70,6 +70,7 @@ suspend fun ClaudeProvider.parseMoney(
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
             routeKey = ModelRoute.MONEY.key,
+            paceChars = transcript.length,
         )
         val o = jsonObjectOf(reply.text, "Модель ответила не JSON. Наговор сохранён — разбери ещё раз.")
         val items = mutableListOf<MoneyVoice.Item>()
@@ -174,6 +175,7 @@ private suspend fun ClaudeProvider.moneyText(
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
             routeKey = route.key,
+            paceChars = input.length,
         )
         MoneyText(
             reply.text.trim(), costUsd(choice.model, reply), choice.model,
@@ -214,6 +216,8 @@ suspend fun ClaudeProvider.interpretMoneyAnswer(card: String, spoken: String, pa
                 apiKey, choice.model, parts, "", null,
                 effortOverride = choice.effort,
                 routeKey = ModelRoute.MONEY.key,
+                paceChars = spoken.length,
+                paceKind = "ответ",
             )
             val o = jsonObjectOf(reply.text, "Модель ответила не JSON — скажи ещё раз.")
             val cat = MoneyCategories.of(o.optString("category").trim())?.key

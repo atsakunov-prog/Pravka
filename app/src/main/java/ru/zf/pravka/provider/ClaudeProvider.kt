@@ -257,6 +257,8 @@ class ClaudeProvider(
                     apiKey, model, parts, "", onDelta,
                     effortOverride = choice.effort,
                     routeKey = ModelRoute.PRAVKA.key,
+                    paceChars = content.length,
+                    paceKind = "помощник",
                 )
                 ProofreadResult(
                     text = reply.text,
@@ -752,8 +754,30 @@ $listing
      * Зовётся с потока запроса (IO): и служба, и хранилище сами решают, куда
      * это переложить.
      */
-    internal var workStart: ((route: String, model: String, effort: String, chars: Int) -> Unit)? = null
-    internal var workDone: ((route: String, model: String, effort: String, chars: Int, ms: Long, ok: Boolean) -> Unit)? = null
+    internal var workStart: ((Work) -> Unit)? = null
+
+    /**
+     * [ms] — время УДАЧНОЙ попытки, без упавшей первой и паузы перед повтором:
+     * прогноз учится тому, сколько идёт нормальный запрос, а не сеть в
+     * плохую минуту. [cache]: true — голова прочитана из кэша, false —
+     * только записана (кэш был холодный), null — кэша на запросе нет.
+     */
+    internal var workDone: ((work: Work, ms: Long, ok: Boolean, cache: Boolean?) -> Unit)? = null
+
+    /**
+     * Один запрос глазами прогноза секунд. [chars] — длина того, что сказал
+     * или набрал владелец, а не всего промпта: от неё растёт ответ, а
+     * промпт у дороги почти один и тот же. [photo] — со снимком: картинка
+     * идёт в разы дольше текста, и у неё своя прямая.
+     */
+    internal data class Work(
+        val route: String,
+        val model: String,
+        val effort: String,
+        val chars: Int,
+        val photo: Boolean,
+        val kind: String = "",
+    )
 
     internal fun requestWithOneRetry(
         apiKey: String,
@@ -767,32 +791,66 @@ $listing
         tolerateTruncation: Boolean = false,
         /** Ключ дороги (ModelRoute.key): уезжает в ApiReply.route для доли кэша по дорогам. */
         routeKey: String = "",
+        /**
+         * Сколько знаков сказал владелец — по ним прогноз ждёт ответа
+         * (`core/Pace.kt`). -1 — длина [input]. Дороги режимов кладут фразу
+         * внутрь промпта и шлют пустой [input]: до 26.09.2026 прогноз видел
+         * у них «0 знаков» на каждом запросе и длину не учитывал вовсе.
+         */
+        paceChars: Int = -1,
+        /**
+         * Вид запроса внутри дороги, если он идёт иначе: вопрос тренеру
+         * отвечает абзацами, разбор подходов — строкой JSON, хотя дорога
+         * (и модель) у них одна. Своя прямая у каждого вида.
+         */
+        paceKind: String = "",
     ): ApiReply {
         // Spec 6.1: one retry on network error or timeout; none on client 4xx.
         // Transient server blips (429/500/529 "overloaded") last seconds - one
         // short-backoff retry turns them from a user-visible failure into
         // nothing. A short pause before the network retry too: an instant
         // re-POST into the same dead socket just fails the same way.
-        val chars = input.length
-        val startedAt = System.currentTimeMillis()
-        runCatching { workStart?.invoke(routeKey, model, effortOverride, chars) }
+        val work = Work(
+            route = routeKey,
+            model = model,
+            effort = effortOverride,
+            chars = if (paceChars >= 0) paceChars else input.length,
+            photo = images.isNotEmpty(),
+            kind = paceKind,
+        )
+        var attemptAt = 0L
+        // Каждая попытка — свой отсчёт: повтор после сбоя начинает ждать
+        // заново, и секунды на кнопке честно начинаются сначала.
+        fun attempt(): ApiReply {
+            runCatching { workStart?.invoke(work) }
+            attemptAt = System.currentTimeMillis()
+            return request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
+        }
         val raw = try {
-            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
-        } catch (e: IOException) {
-            Thread.sleep(1000)
-            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
-        } catch (e: ApiException) {
-            if (!e.retryable) throw e
-            Thread.sleep(e.retryDelayMs)
-            request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
+            try {
+                attempt()
+            } catch (e: IOException) {
+                Thread.sleep(1000)
+                attempt()
+            } catch (e: ApiException) {
+                if (!e.retryable) throw e
+                Thread.sleep(e.retryDelayMs)
+                attempt()
+            }
         } catch (e: Throwable) {
-            // Сорвалось — дугу надо погасить, иначе она останется висеть на
-            // стекле до следующего запроса. Замер при этом НЕ пишем: время
-            // упавшего запроса не про то, сколько идёт нормальный.
-            runCatching { workDone?.invoke(routeKey, model, effortOverride, chars, System.currentTimeMillis() - startedAt, false) }
+            // Сорвалось — отсчёт надо погасить. Замер при этом НЕ пишем: время
+            // упавшего запроса не про то, сколько идёт нормальный. Внешний
+            // try — ради упавшего ПОВТОРА: его бросает не тело try, а ветка
+            // catch, и соседняя ветка его бы не поймала.
+            runCatching { workDone?.invoke(work, System.currentTimeMillis() - attemptAt, false, null) }
             throw e
         }
-        runCatching { workDone?.invoke(routeKey, model, effortOverride, chars, System.currentTimeMillis() - startedAt, true) }
+        val cache = when {
+            raw.cacheReadTokens > 0 -> true
+            raw.cacheWriteTokens > 0 -> false
+            else -> null
+        }
+        runCatching { workDone?.invoke(work, System.currentTimeMillis() - attemptAt, true, cache) }
         val reply = raw.copy(route = routeKey)
         // Ответ — в тот же лог отладки, что и запрос (владелец, 18.09.2026: «надо
         // проверить, что точно промпт кэшируется»): единственная правда о кэше —

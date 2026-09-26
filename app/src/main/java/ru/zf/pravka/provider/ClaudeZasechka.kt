@@ -285,6 +285,7 @@ $raw
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
             routeKey = ModelRoute.ZASECHKA.key,
+            paceChars = raw.length,
         )
         parseZasechka(reply.text).copy(
             costUsd = costUsd(choice.model, reply),
@@ -333,6 +334,7 @@ suspend fun ClaudeProvider.zasechkaFork(raw: String, context: String): Result<Za
                 apiKey, choice.model, parts, "", null,
                 effortOverride = choice.effort,
                 routeKey = ModelRoute.ZASECHKA_FORK.key,
+                paceChars = raw.length,
             )
             ZasechkaForkReply(
                 raw = reply.text,

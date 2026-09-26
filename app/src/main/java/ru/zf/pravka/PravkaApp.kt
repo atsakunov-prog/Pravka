@@ -10,6 +10,7 @@ import ru.zf.pravka.core.DictionaryApplier
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.HistoryLog
+import ru.zf.pravka.data.ModelRoute
 import ru.zf.pravka.data.PaceStore
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Recordings
@@ -106,9 +107,15 @@ class PravkaApp : Application() {
         // Сколько идёт запрос — в историю, а ход запроса — тому, кто его
         // показывает (20.09.2026). Та же одна точка на все дороги: здесь
         // известны и дорога, и модель с усилием, и длина входа.
-        claudeProvider.workStart = { route, model, effort, chars ->
-            val expect = paceStore.expect(route, model, effort, chars)
-            workWatcher?.invoke(route, expect, false, true)
+        claudeProvider.workStart = { w ->
+            var expect = paceStore.expect(w.route, w.kind, w.photo, w.model, w.effort, w.chars)
+            // Развилка «З» — лишь первая секунда: следом почти всегда идёт
+            // разбор Засечки той же фразы. Отсчёт обещает оба шага, иначе на
+            // кнопке «1,4… 0», а потом заново «9,8… 0» (26.09.2026).
+            if (w.route == ModelRoute.ZASECHKA_FORK.key) {
+                expect += paceStore.expectNext(ModelRoute.ZASECHKA.key, w.chars)
+            }
+            workWatcher?.invoke(w.route, expect, false, true)
         }
         // Прошлое дуги — из журнала правок, один раз после обновления
         // (владелец, 20.09.2026: «ты не взял всю статистику, а только начал её
@@ -117,11 +124,11 @@ class PravkaApp : Application() {
         appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             runCatching { paceStore.seedFromHistory(historyLog) }
         }
-        claudeProvider.workDone = { route, model, effort, chars, ms, ok ->
+        claudeProvider.workDone = { w, ms, ok, cache ->
             // Замер пишем только с удачного ответа: время упавшего запроса —
             // это время сети, а не время модели.
-            if (ok) paceStore.record(route, model, effort, chars, ms)
-            workWatcher?.invoke(route, 0L, true, ok)
+            if (ok) paceStore.record(w.route, w.kind, w.photo, w.model, w.effort, w.chars, ms, cache)
+            workWatcher?.invoke(w.route, 0L, true, ok)
         }
         // Кэш промпта виден в статистике: транспорт отдаёт расход каждого ответа,
         // сюда падают токены чтения и записи кэша со всех дорог сразу.

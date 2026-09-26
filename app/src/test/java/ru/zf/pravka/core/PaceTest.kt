@@ -80,26 +80,6 @@ class PaceTest {
     }
 
     @Test
-    fun `дуга идёт ровно до срока и дальше только ползёт`() {
-        val t = 4_000L
-        assertEquals(0f, Pace.progress(0, t), 0.001f)
-        assertEquals(0.45f, Pace.progress(t / 2, t), 0.01f)
-        // К сроку дуга почти полная: раньше она стояла на трёх четвертях, и
-        // владелец читал это как «полоса отстаёт от работы».
-        assertEquals(0.9f, Pace.progress(t, t), 0.01f)
-        // После срока — ползёт и НИКОГДА не доходит до края: полоса, упёршаяся
-        // в конец и замершая, читается как «повисло».
-        val late = Pace.progress(t * 3, t)
-        assertTrue(late > 0.9f)
-        assertTrue(late < 1f)
-        assertTrue(Pace.progress(t * 100, t) > late)
-        // И даже через сто сроков круг не замкнётся: замкнуть его может
-        // только пришедший ответ.
-        assertEquals(Pace.CEILING, Pace.progress(t * 100, t), 0f)
-        assertTrue(Pace.CEILING < 1f)
-    }
-
-    @Test
     fun `дорога рассказывает о себе числами, а не на словах`() {
         assertEquals(null, Pace.line(null))
         val acc = honest(points = 40)
@@ -153,9 +133,114 @@ class PaceTest {
         assertEquals(16.0, own.n, 1.5)
     }
 
+    // ---- Дорога целиком (26.09.2026: «важно, чтобы было именно точнее») ----
+
+    private val flat = Pace.prior(2_000.0, 10.0)
+    private val hour = 60 * 60_000L
+
+    /** Длины как у владельца: медиана 134, хвост до шестисот (журнал распознавания). */
+    private val lengths = intArrayOf(40, 70, 134, 134, 283, 90, 590, 60, 200, 134)
+
     @Test
-    fun `без ожидания дуги нет`() {
-        assertEquals(0f, Pace.progress(1_000, 0), 0f)
-        assertEquals(0f, Pace.progress(-5, 4_000), 0f)
+    fun `холодный кэш учится своей добавкой, тёплые не страдают`() {
+        // Правда: 2 с + 10 мс на знак, холодный запрос — ещё полторы секунды.
+        var road: Pace.Road? = null
+        var now = 1_000_000_000L
+        for (i in 0 until 120) {
+            val cold = i % 4 == 0
+            now += if (cold) 2 * hour else 5 * 60_000L
+            val chars = lengths[i % lengths.size]
+            val ms = 2_000L + 10L * chars + (if (cold) 1_500L else 0L)
+            road = Pace.learn(road, flat, chars, ms, cache = !cold, now = now)
+        }
+        val warm = Pace.expect(road, flat, 134, now + 60_000L)
+        val cold = Pace.expect(road, flat, 134, now + 2 * hour)
+        assertEquals(3_340.0, warm.toDouble(), 250.0)
+        assertEquals(1_500.0, (cold - warm).toDouble(), 400.0)
+    }
+
+    @Test
+    fun `дорога, где кэш всегда холодный, обещает ровно своё`() {
+        // Еда: раз в несколько часов, кэш холодный каждый раз. Добавка не
+        // должна считаться дважды — ни в прямой, ни сверху.
+        var road: Pace.Road? = null
+        var now = 1_000_000_000L
+        for (i in 0 until 60) {
+            now += 3 * hour
+            val chars = lengths[i % lengths.size]
+            road = Pace.learn(road, flat, chars, 5_000L + 20L * chars, cache = false, now = now)
+        }
+        val next = Pace.expect(road, flat, 134, now + 3 * hour)
+        assertEquals(5_000.0 + 20 * 134, next.toDouble(), 400.0)
+    }
+
+    @Test
+    fun `минута плохой сети не уводит прямую`() {
+        var road: Pace.Road? = null
+        var now = 1_000_000_000L
+        repeat(40) { i ->
+            now += 60_000L
+            road = Pace.learn(road, flat, 134, 3_000L + (i % 3) * 100L, cache = true, now = now)
+        }
+        val before = Pace.expect(road, flat, 134, now + 60_000L)
+        now += 60_000L
+        road = Pace.learn(road, flat, 134, 60_000L, cache = true, now = now)
+        val after = Pace.expect(road, flat, 134, now + 60_000L)
+        assertTrue("выброс сдвинул на ${after - before} мс", after - before < 300)
+        // А промах этого запроса честно записан целиком — его не прячут.
+        assertTrue(road!!.miss!! > 2_000.0)
+    }
+
+    @Test
+    fun `настоящая перемена всё равно доходит`() {
+        // Модель стала вдвое медленнее — это не выброс, а новая правда.
+        var road: Pace.Road? = null
+        var now = 1_000_000_000L
+        repeat(40) { now += 60_000L; road = Pace.learn(road, flat, 134, 3_000L, cache = true, now = now) }
+        repeat(200) { now += 60_000L; road = Pace.learn(road, flat, 134, 6_000L, cache = true, now = now) }
+        assertEquals(6_000.0, Pace.expect(road, flat, 134, now + 60_000L).toDouble(), 500.0)
+    }
+
+    @Test
+    fun `промах падает, пока дорога учится`() {
+        // Заводская прикидка нарочно мимо: правда — 5 с + 30 мс на знак.
+        var road: Pace.Road? = null
+        var now = 1_000_000_000L
+        var early = 0.0
+        for (i in 0 until 60) {
+            now += 60_000L
+            val chars = lengths[i % lengths.size]
+            road = Pace.learn(road, flat, chars, 5_000L + 30L * chars, cache = true, now = now)
+            if (i == 2) early = road!!.miss!!
+        }
+        val late = road!!.miss!!
+        assertTrue("было $early, стало $late", late < early / 4)
+        // И знак говорит, в какую сторону врали: прикидка обещала меньше.
+        assertTrue(Pace.learn(null, flat, 134, 9_000L, cache = null, now = now).bias!! > 0)
+    }
+
+    @Test
+    fun `холодным считается дорога после часа тишины`() {
+        val now = 10 * hour
+        assertTrue(Pace.coldLikely(null, now))
+        assertTrue(Pace.coldLikely(Pace.Road(), now))
+        assertEquals(false, Pace.coldLikely(Pace.Road(lastAt = now - 10 * 60_000L), now))
+        assertTrue(Pace.coldLikely(Pace.Road(lastAt = now - hour), now))
+    }
+
+    @Test
+    fun `замеры без длины встают на типичную длину и не врут среднему`() {
+        var zero = Pace.Acc()
+        repeat(50) { zero = Pace.add(zero, 0, 7_000L) }
+        val moved = Pace.relocate(zero, 134.0, 4.0)
+        assertEquals(4.0, moved.n, 1e-9)
+        assertEquals(7_000L, Pace.estimate(moved, 134))
+        // Новые замеры с длиной дают наклон, старое держит середину.
+        var acc = moved
+        for (i in 0 until 20) {
+            val chars = lengths[i % lengths.size]
+            acc = Pace.add(acc, chars, 4_000L + 20L * chars)
+        }
+        assertTrue(Pace.estimate(acc, 590) > Pace.estimate(acc, 40) + 5_000)
     }
 }

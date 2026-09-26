@@ -27,6 +27,13 @@ class ButtonCountdown(private val context: Context) {
     private companion object {
         /** Десятые меняются раз в сто миллисекунд — чаще перерисовывать незачем. */
         const val TICK_MS = 50L
+
+        /**
+         * Столько ждём после ответа, прежде чем вернуть колесо: следом может
+         * уйти следующий шаг той же фразы (развилка «З», за ней разбор), и
+         * между ними число не должно мигать колесом.
+         */
+        const val CHAIN_MS = 400L
         private val PAPER = 0xFFF7F3EA.toInt()
     }
 
@@ -37,6 +44,10 @@ class ButtonCountdown(private val context: Context) {
     private var expectMs = 0L
 
     private val tick = Runnable { apply() }
+    private val settle = Runnable {
+        startedAt = 0L
+        apply()
+    }
 
     /** Встать в кнопку рядом с колесом: по центру, поверх него. */
     fun attach(container: FrameLayout, spinner: View) {
@@ -71,6 +82,7 @@ class ButtonCountdown(private val context: Context) {
 
     /** Запрос ушёл: ждать [expectMs] по своей истории. */
     fun start(expectMs: Long) {
+        text?.removeCallbacks(settle)
         startedAt = SystemClock.uptimeMillis()
         this.expectMs = expectMs
         apply()
@@ -78,8 +90,13 @@ class ButtonCountdown(private val context: Context) {
 
     /** Ответ пришёл или сорвался. */
     fun stop() {
-        startedAt = 0L
-        apply()
+        val t = text
+        if (t == null) {
+            startedAt = 0L
+            return
+        }
+        t.removeCallbacks(settle)
+        t.postDelayed(settle, CHAIN_MS)
     }
 
     private fun apply() {
