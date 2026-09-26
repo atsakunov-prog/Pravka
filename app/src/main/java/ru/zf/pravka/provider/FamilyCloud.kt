@@ -47,6 +47,8 @@ interface FamilyCloud {
             is WebDav.WebDavException, is CloudException ->
                 e.message.orEmpty()
             is java.net.UnknownHostException -> "$title: нет сети или адрес не находится (${e.message})"
+            // Android не пускает запрос по http:// (cleartext запрещён).
+            is java.net.UnknownServiceException -> "$title: по http:// Android пароль не отправляет — адрес должен начинаться с https:// (${e.message})"
             is java.net.ConnectException -> "$title: не отвечает (${e.message})"
             is java.net.SocketTimeoutException -> "$title: не ответил вовремя (${e.message})"
             is javax.net.ssl.SSLException -> "$title: не сложилось HTTPS-соединение (${e.message})"

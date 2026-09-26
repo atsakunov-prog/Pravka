@@ -73,11 +73,16 @@ internal class HomeServer(private val context: Context, private val dav: WebDav)
         /** Корень Правки на сервере; Слушалка живёт рядом в своей «Слушалке». */
         const val ROOT = "Правка"
 
-        /** Адрес как вписали: без схемы — https, без слэша в конце — со слэшем. */
+        /**
+         * Адрес как вписали — всегда https и со слэшем в конце. `http://`
+         * здесь не заработает никогда: Android не пускает пароль открытым
+         * текстом (cleartext запрещён), а снаружи сервер и так за HTTPS
+         * роутера (владелец вписал http — «CLEARTEXT communication … not
+         * permitted», 26.09.2026).
+         */
         fun normalize(url: String): String {
             val u = url.trim()
-            val withScheme = if ("://" in u) u else "https://$u"
-            return withScheme.trimEnd('/') + "/"
+            return "https://" + u.substringAfter("://", u).trimEnd('/') + "/"
         }
     }
 }

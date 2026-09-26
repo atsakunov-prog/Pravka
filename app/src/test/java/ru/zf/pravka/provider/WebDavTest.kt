@@ -72,7 +72,9 @@ class WebDavTest {
 
     @Test fun addressIsNormalized() {
         assertEquals("https://webdav.home.example:8443/", HomeServer.normalize(" webdav.home.example:8443 "))
-        assertEquals("http://192.168.1.65:8088/", HomeServer.normalize("http://192.168.1.65:8088"))
+        // http:// Android не пустит (cleartext) — только https.
+        assertEquals("https://webdav.home.example:8443/", HomeServer.normalize("http://webdav.home.example:8443"))
+        assertEquals("https://webdav.home.example:8443/", HomeServer.normalize("https://webdav.home.example:8443///"))
     }
 
     /**
