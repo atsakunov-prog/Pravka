@@ -16,7 +16,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -427,7 +426,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             onLongPress = ::showMoneyMenu,
             ink = MONEY_INK,
             glyphRes = { ModeGlyphs.money() },
-            pillGlyph = { ModeGlyphs.pillMoney() },
+            pillGlyph = R.drawable.ic_mode_money,
             loadPosition = { key -> app.settings.mFabPosition(key) },
             persistPosition = { key, x, y -> app.settings.setMFabPosition(key, x, y) },
         )
@@ -611,18 +610,14 @@ class PravkaAccessibilityService : AccessibilityService() {
         scope.launch { app.settings.diskTuckFlow.collect { cachedDiskTuck = it } }
         scope.launch { app.settings.restSecFlow.collect { cachedRestSec = it } }
         scope.launch {
-            // Буквы или значки — и в каком почерке (версия 3): оба тумблера
-            // перечитывают глифы кнопок вживую, без перезапуска.
-            app.settings.modeIconsFlow.combine(app.settings.iconsGeminiFlow) { icons, gemini -> icons to gemini }
-                .collect { (icons, gemini) ->
-                    ModeGlyphs.icons = icons
-                    ModeGlyphs.gemini = gemini
-                    floatingButton?.refreshGlyph()
-                    zButton?.refreshGlyph()
-                    rButton?.refreshGlyph()
-                    mButton?.refreshGlyph()
-                    eButton?.refreshGlyph()
-                }
+            app.settings.modeIconsFlow.collect {
+                ModeGlyphs.icons = it
+                floatingButton?.refreshGlyph()
+                zButton?.refreshGlyph()
+                rButton?.refreshGlyph()
+                mButton?.refreshGlyph()
+                eButton?.refreshGlyph()
+            }
         }
         // Справочники в память заранее: разбор подходов не должен ждать чтения
         // с диска, а список движений — это пятьдесят килобайт один раз.

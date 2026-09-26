@@ -654,9 +654,10 @@ class Settings(private val context: Context) {
     }
 
     /**
-     * Почерк значков (версия 3): true — как у Gemini, false — наш штрих.
-     * Один на всё: приложение (`ui/Glyphs.kt`), кнопки на стекле со значками
-     * вместо букв и знак режима в пилюле (`trigger/ModeGlyphs.kt`).
+     * Почерк значков приложения (версия 3): true — как у Gemini, false — наш
+     * штрих (`ui/Glyphs.kt`). Кнопки на стекле и знак в пилюле его не
+     * слушают — там всегда наш (владелец: «на кнопках мои значки мне
+     * нравились, давай оставим их»).
      */
     val iconsGeminiFlow = context.dataStore.data.map { it[KEY_ICONS_GEMINI] ?: ICONS_GEMINI_DEFAULT }
     suspend fun setIconsGemini(value: Boolean) {

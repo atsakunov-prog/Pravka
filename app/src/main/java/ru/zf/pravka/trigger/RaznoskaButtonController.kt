@@ -50,7 +50,7 @@ class RaznoskaButtonController(
     private val ink: Int = INK,
     private val glyphRes: () -> Int = { ModeGlyphs.raznoska() },
     /** Знак режима в пилюле диктовки — всегда пиктограмма, не буква. */
-    private val pillGlyph: () -> Int = { ModeGlyphs.pillDelo() },
+    private val pillGlyph: Int = R.drawable.ic_mode_delo,
     private val loadPosition: suspend (String) -> Pair<Float, Float> = { key -> settings.rFabPosition(key) },
     private val persistPosition: suspend (String, Float, Float) -> Unit = { key, x, y -> settings.setRFabPosition(key, x, y) },
 ) : RingButton {

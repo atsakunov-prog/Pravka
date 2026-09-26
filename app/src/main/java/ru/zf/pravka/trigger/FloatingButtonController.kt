@@ -152,7 +152,7 @@ class FloatingButtonController(
     private val pill = DictationPill(
         service, scope,
         accent = ACCENT,
-        glyph = { ModeGlyphs.pillPravka() },
+        glyph = R.drawable.ic_mode_pravka,
         textSizeSp = 17f,
         screen = { screenSize() },
         owner = { params?.let { PillGeometry.Box(it.x, it.y, it.x + buttonSize, it.y + buttonSize) } },

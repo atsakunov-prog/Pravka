@@ -979,10 +979,9 @@ private fun CardsSettings(app: PravkaApp) {
     // Gemini?»): Material Symbols Rounded или наш штрих — сразу везде.
     PaperCard(
         label = "значки",
-        info = "«Как у Gemini» — тонкий скруглённый почерк Google (Material Symbols Rounded): " +
-            "в приложении, на кнопках диска, если на них значки вместо букв, и знак режима в " +
-            "пилюле. «Наши» — прежний штрих, как на кнопках с первого дня. Переключается " +
-            "сразу, без перезапуска; в пилюле — со следующей записи.",
+        info = "«Как у Gemini» — тонкий скруглённый почерк Google (Material Symbols Rounded) " +
+            "во всём приложении. «Наши» — прежний штрих. Кнопки на стекле и знак в пилюле " +
+            "всегда в нашем почерке — это их лицо. Переключается сразу, без перезапуска.",
     ) {
         val gemini by settings.iconsGeminiFlow.collectAsState(initial = Settings.ICONS_GEMINI_DEFAULT)
         ChipRow {
