@@ -38,6 +38,14 @@ class ClaudeProvider(
 ) : ProofreadProvider {
     override val id = "claude"
 
+    /**
+     * Режим отладки: сюда уезжает текст каждого запроса — стабильная часть и
+     * переменная, с размерами. Ставит PravkaApp по настройке владельца
+     * (`debugLogFlow`); null — не пишем ничего. Картинки не логируются, только
+     * их число.
+     */
+    @Volatile var requestLogger: ((String) -> Unit)? = null
+
     class ApiException(
         message: String,
         val retryable: Boolean = false,
@@ -73,6 +81,8 @@ class ClaudeProvider(
         val cacheWriteTokens: Int,  // billed at 2x (1h TTL cache write)
         val cacheReadTokens: Int,   // billed at 0.1x
         val outputTokens: Int,
+        /** Ключ дороги (ModelRoute.key), которой ушёл запрос — для доли кэша по дорогам на экране «$». */
+        val route: String = "",
     )
 
     override suspend fun proofread(
@@ -97,30 +107,12 @@ class ClaudeProvider(
                 val everyday = settings.modelChoice(ModelRoute.PRAVKA)
                 val choice = if (strong) settings.modelChoice(ModelRoute.PRAVKA_STRONG) else everyday
                 val model = choice.model
-                // ONE master template (CLEAN) for every mode; BUSINESS/SOFTEN
-                // are style directives riding in the uncached slot, so all
-                // modes share the same cached prefix.
-                val template = promptStore.effective(ProofreadMode.CLEAN)
-                val styleDirective = if (mode == ProofreadMode.CLEAN) "" else promptStore.effective(mode)
                 // Fiction mode (settings toggle): the PROSE directive rides on
                 // top of the plain CLEAN pass; explicit style modes win over it.
-                val proseOn = mode == ProofreadMode.CLEAN && settings.proseModeFlow.first()
-                val proseDirective =
-                    if (proseOn) promptStore.effective(PromptStore.PromptId.PROSE) else ""
-                val fullDirective = listOf(styleDirective, proseDirective, directive)
-                    .filter { it.isNotBlank() }
-                    .joinToString("\n\n")
-                // Approved learned rules ride in the same uncached slot as the
-                // dictionary block, so the cached CLEAN prefix stays byte-stable.
-                // In prose mode they are message-formatting advice fighting the
-                // prose directive - skipped unless the owner enabled them there.
-                val rulesBlock =
-                    if (proseOn && !settings.rulesInProseFlow.first()) ""
-                    else rulesStore.enabledBlock()
-                val dictAndRules = listOf(dictBlock, rulesBlock)
-                    .filter { it.isNotBlank() }
-                    .joinToString("\n\n")
-                val parts = Prompts.assemble(template, dictAndRules, fullDirective, contextBefore, conversationContext)
+                // Художественная проза — только у владельца: это его книги
+                // (владелец, 25.09.2026: Марианне «мои промпты, но без прозы»).
+                val proseOn = mode == ProofreadMode.CLEAN && author().owner && settings.proseModeFlow.first()
+                val parts = cleanParts(mode, dictBlock, directive, contextBefore, conversationContext, proseOn)
                     // Кэш стабильного префикса — на повседневной модели: там он
                     // читается с каждой диктовки. Переделка на другой модели —
                     // другое пространство кэша, и запись за 2x ушла бы впустую;
@@ -131,7 +123,99 @@ class ClaudeProvider(
                 val reply = requestWithOneRetry(
                     apiKey, model, parts, input, onDelta,
                     effortOverride = choice.effort,
+                    routeKey = (if (strong) ModelRoute.PRAVKA_STRONG else ModelRoute.PRAVKA).key,
                 )
+                ProofreadResult(
+                    text = reply.text,
+                    providerId = id,
+                    latencyMs = System.currentTimeMillis() - started,
+                    changed = reply.text.trim() != input.trim(),
+                    appliedDictEntries = emptyList(),
+                    modelId = model,
+                    inputTokens = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                    outputTokens = reply.outputTokens,
+                    costUsd = costUsd(model, reply),
+                    cacheWriteTokens = reply.cacheWriteTokens,
+                    cacheReadTokens = reply.cacheReadTokens,
+                    prose = proseOn,
+                )
+            }
+        }
+
+    /**
+     * Сборка промпта чистки — одна для дневной кнопки «П» и для ночных батчей
+     * (тень второй модели, эвал золотого набора): тот же шаблон, словарь,
+     * правила и директива прозы. Иначе сравнение моделей мерило бы разницу
+     * промптов, а не моделей.
+     */
+    /**
+     * Кто диктует — профиль установки (род и имя в промпте чистки). Ставит
+     * PravkaApp; с завода — владелец, и тогда шаблон ровно прежний.
+     */
+    @Volatile var author: () -> Prompts.Author = { Prompts.Author.OWNER }
+
+    internal suspend fun cleanParts(
+        mode: ProofreadMode,
+        dictBlock: String,
+        directive: String,
+        contextBefore: String,
+        conversationContext: String,
+        prose: Boolean,
+        /** Другой шаблон CLEAN — для измерения промпта-кандидата (PromptTuner); null — действующий. */
+        template: String? = null,
+    ): Prompts.PromptParts {
+        // ONE master template (CLEAN) for every mode; BUSINESS/SOFTEN
+        // are style directives riding in the uncached slot, so all
+        // modes share the same cached prefix.
+        val template = template ?: promptStore.effective(ProofreadMode.CLEAN)
+        val styleDirective = if (mode == ProofreadMode.CLEAN) "" else promptStore.effective(mode)
+        val proseDirective = if (prose) promptStore.effective(PromptStore.PromptId.PROSE) else ""
+        val fullDirective = listOf(styleDirective, proseDirective, directive)
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+        // Approved learned rules ride in the same uncached slot as the
+        // dictionary block, so the cached CLEAN prefix stays byte-stable.
+        // In prose mode they are message-formatting advice fighting the
+        // prose directive - skipped unless the owner enabled them there.
+        // Since 16.09 the whole block is behind a setting (default off):
+        // measured against the history it changed nothing but greeting
+        // punctuation, while eating ~700 tokens per request.
+        val rulesBlock =
+            if (!settings.rulesInPromptFlow.first()) ""
+            else if (prose && !settings.rulesInProseFlow.first()) ""
+            else rulesStore.enabledBlock()
+        val dictAndRules = listOf(dictBlock, rulesBlock)
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+        val who = author()
+        return Prompts.assemble(Prompts.forAuthor(template, who), dictAndRules, fullDirective, contextBefore, conversationContext, who)
+    }
+
+    /** Промпт обычной чистки без директив и контекста — для тени, эвала и измерения промпта-кандидата. */
+    suspend fun cleanPromptParts(dictBlock: String, prose: Boolean, template: String? = null): Prompts.PromptParts =
+        cleanParts(ProofreadMode.CLEAN, dictBlock, "", "", "", prose, template)
+
+    /**
+     * Одна чистка заданной моделью тем же путём, что дневная кнопка «П»: SSE-поток,
+     * один повтор на сбой сети и 429/5xx, точка кэша, учёт кэша через
+     * usageObserver. Для тени, эвала и измерения промпта-кандидата. Без потока
+     * (ClaudeBatches.single) длинный ответ Опуса с мыслями рвался посреди:
+     * «stream was reset: CANCEL» на семнадцатой диктовке трижды подряд (17.09.2026).
+     */
+    suspend fun cleanOnce(
+        model: String,
+        effort: String,
+        parts: Prompts.PromptParts,
+        input: String,
+        /** Ключ дороги для доли кэша на экране «$»: измерение промпта, сравнение, эвал. */
+        routeKey: String = "",
+    ): Result<ProofreadResult> =
+        withContext(Dispatchers.IO) {
+            runCatchingApi {
+                val apiKey = settings.apiKey()
+                if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
+                val started = System.currentTimeMillis()
+                val reply = requestWithOneRetry(apiKey, model, parts, input, onDelta = null, effortOverride = effort, routeKey = routeKey)
                 ProofreadResult(
                     text = reply.text,
                     providerId = id,
@@ -172,6 +256,7 @@ class ClaudeProvider(
                 val reply = requestWithOneRetry(
                     apiKey, model, parts, "", onDelta,
                     effortOverride = choice.effort,
+                    routeKey = ModelRoute.PRAVKA.key,
                 )
                 ProofreadResult(
                     text = reply.text,
@@ -206,36 +291,41 @@ class ClaudeProvider(
 
     /**
      * Compares the recognizer's raw text, our cleaned output and the owner's
-     * hand-corrected final. Returns dictionary proposals (recurring
-     * recognition errors) and short prompt rules (systematic preferences).
+     * hand-corrected final. Returns DICTIONARY proposals only: recurring
+     * recognition errors and the words he swaps for other words. Rules are
+     * not proposed any more (owner, 08.09.2026: the rule set is complete and
+     * the analyst kept inventing silly ones); [LearnProposals.rules] stays in
+     * the contract for [optimizeRules] and comes back empty from here.
      * Runs on Opus - this is rare, quality matters more than cost.
      */
     suspend fun learn(
         dictated: String,
         cleaned: String,
         final: String,
-    ): Result<LearnProposals> = learnBatch(listOf(Triple(dictated, cleaned, final)))
+        known: List<ru.zf.pravka.core.DictEntry> = emptyList(),
+    ): Result<LearnProposals> = learnBatch(listOf(Triple(dictated, cleaned, final)), known)
 
-    /** Batch flavor: the daily auto-capture analysis sends several edits at once. */
+    /**
+     * Batch flavor: the daily auto-capture analysis sends several edits at
+     * once. [known] is the owner's current dictionary — a word already there
+     * must not come back as a proposal.
+     */
     suspend fun learnBatch(
         cases: List<Triple<String, String, String>>,
+        known: List<ru.zf.pravka.core.DictEntry> = emptyList(),
     ): Result<LearnProposals> = withContext(Dispatchers.IO) {
         runCatchingApi {
             val apiKey = settings.apiKey()
             if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
             require(cases.isNotEmpty()) { "Нет правок для анализа." }
-            // The analyst must SEE the current rule set, or it keeps
-            // re-deriving rules the owner already approved (the gender
-            // agreement rule came back every round before this).
-            val existingRules = rulesStore.all().filter { it.enabled }
-            val existingBlock = if (existingRules.isEmpty()) "" else buildString {
-                append("УЖЕ ДЕЙСТВУЮЩИЕ правила (менять их не надо):\n")
-                existingRules.forEachIndexed { i, r -> append(i + 1).append(". ").append(r.text).append('\n') }
-                append(
-                    "НЕ предлагай эти правила снова — ни дословно, ни перефразированными, " +
-                        "ни их частные случаи. Если правка владельца лишь подтверждает " +
-                        "действующее правило — пропусти её. Предлагай только то, чего в списке нет.\n\n"
-                )
+            val knownBlock = if (known.isEmpty()) "" else buildString {
+                append("УЖЕ В СЛОВАРЕ (не предлагай снова):\n")
+                for (d in known) {
+                    append("- ").append(d.from)
+                    if (d.to.isNotBlank()) append(" → ").append(d.to)
+                    append(" [").append(d.mode.name).append("]\n")
+                }
+                append('\n')
             }
             val casesBlock = buildString {
                 cases.forEachIndexed { i, (dictated, cleaned, final) ->
@@ -251,37 +341,47 @@ class ClaudeProvider(
 - cleaned: что сделала автоматическая чистка (модель);
 - final: как в итоге поправил текст сам владелец. Это эталон.
 
-Сравни cleaned и final в каждом случае и извлеки, чему стоит
-научиться НАСОВСЕМ:
+Сравни cleaned и final и найди только одно: где владелец ЗАМЕНИЛ ОДНО
+СЛОВО (или короткое устойчивое выражение) НА ДРУГОЕ. Это словарная
+запись — и это единственное, что ты возвращаешь:
+{"mode": "HARD" | "HINT" | "PROTECT", "from": "...", "to": "...", "note": "..."}
+- HARD: распознаватель или чистка стабильно пишут слово неверно (имя,
+  термин, бренд): from — неверная форма, to — верная. Подстановка
+  сработает до модели, поэтому from должно быть однозначным — ошибка,
+  которая ни в каком контексте не бывает правильным словом. Живое слово
+  ("поле", "губ", "провод", "морковь") или реальное имя ("Рая") в from —
+  это никогда не HARD, только HINT с условием: "коснулся её губ" не должно
+  становиться "коснулся её ютуб". Словоформа ("Папа → Пап") — не словарь.
+- HINT: владелец предпочитает одно слово другому («фидбэк» → «обратная
+  связь»), но замена зависит от контекста: from — что он вычёркивает,
+  to — что ставит, note — когда. Модель увидит это как подсказку.
+- PROTECT: редкое правильное слово, которое чистка «исправляет» зря:
+  from — само слово, to — пустая строка.
 
-1. "dict" — словарные записи для ПОВТОРЯЕМЫХ ошибок распознавания
-   (имена, термины, которые распознаватель пишет неверно):
-   {"mode": "HARD" | "PROTECT", "from": "...", "to": "...", "note": "..."}
-   HARD: from — неверная форма, to — верная. PROTECT: from — редкое
-   правильное слово, to — пустая строка.
-
-2. "rules" — правила для промпта чистки. Каждое правило:
-   {"rule": "...", "before": "...", "after": "..."}
-   - "rule": императив не длиннее 140 символов, по-русски. Обобщай
-     НАМЕРЕНИЕ владельца и указывай УСЛОВИЕ применимости («в
-     сообщениях-перечнях…», «в деловой переписке…»), а не буквальную
-     подстановку слов. Разовая правка по смыслу правилом НЕ является.
-   - "before"/"after": короткий фрагмент (до 120 символов) из правок
-     владельца, показывающий правило в действии.
+Чего НЕ делать:
+- Не выводить правил, стилистических предпочтений и обобщений. Перестановка
+  фраз, знаки, регистр, длина, тон — не словарь. Всё это пропускай.
+- Не превращать разовую правку по смыслу в запись: слово стоит записи,
+  только если то же исправление повторится в следующей диктовке.
+- Сомневаешься — не предлагай. Пустой список лучше выдумки.
 
 Ответ — СТРОГО JSON без пояснений:
-{"dict": [...], "rules": [...]}
-Если учиться нечему — пустые массивы.
+{"dict": [...]}
+Если учиться нечему — {"dict": []}.
 
-$existingBlock$casesBlock
+$knownBlock$casesBlock
 """.trimIndent()
             val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
             val choice = settings.modelChoice(ModelRoute.PRAVKA_LEARN)
             val reply = requestWithOneRetry(
                 apiKey, choice.model, parts, "", null,
                 effortOverride = choice.effort,
+                routeKey = ModelRoute.PRAVKA_LEARN.key,
             )
+            // Rules the model returns anyway are dropped here, not queued:
+            // nobody asked for them.
             parseLearn(reply.text).copy(
+                rules = emptyList(),
                 costUsd = costUsd(choice.model, reply),
                 tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
                 tokensOut = reply.outputTokens,
@@ -346,6 +446,7 @@ $listing
             val reply = requestWithOneRetry(
                 apiKey, choice.model, parts, "", null,
                 effortOverride = choice.effort,
+                routeKey = ModelRoute.PRAVKA_LEARN.key,
             )
             val parsed = parseLearn(reply.text)
             require(parsed.rules.isNotEmpty()) { "Модель не вернула правил — набор не тронут." }
@@ -387,6 +488,48 @@ $listing
         val tokensOut: Int,
         val model: String,
         val latencyMs: Long,
+    )
+
+    /** Деньги: наговор, разобранный на траты (`ClaudeMoney.parseMoney`). */
+    data class MoneyParse(
+        val items: List<ru.zf.pravka.core.MoneyVoice.Item>,
+        val notes: String,
+        val costUsd: Double,
+        val model: String,
+        val tokensIn: Int = 0,
+        val tokensOut: Int = 0,
+    )
+
+    /** Деньги: догадки по неузнанным получателям выписки (`ClaudeMoney.hintPayees`). */
+    data class MoneyHints(
+        val groups: List<Hint>,
+        val costUsd: Double,
+        val model: String,
+        val tokensIn: Int = 0,
+        val tokensOut: Int = 0,
+    ) {
+        data class Hint(val key: String, val category: String, val who: String, val sure: Boolean, val question: String)
+    }
+
+    /** Деньги: ответ текстом — на вопрос из вкладки или паттерны (`ClaudeMoney`). */
+    data class MoneyText(
+        val text: String,
+        val costUsd: Double,
+        val model: String,
+        val tokensIn: Int = 0,
+        val tokensOut: Int = 0,
+    )
+
+    /** Деньги: голосовой ответ владельца на карточку вопроса, разобранный в раскладку. */
+    data class MoneyAnswer(
+        val category: String,
+        val who: String,
+        val remember: Boolean,
+        val comment: String,
+        val unsure: Boolean,
+        val costUsd: Double,
+        val tokensIn: Int = 0,
+        val tokensOut: Int = 0,
     )
 
     /** «суббота, 22 августа 2026 (2026-08-22)»: модели нужны оба вида. */
@@ -529,7 +672,7 @@ $listing
                 val d = array.optJSONObject(i) ?: continue
                 val mode = d.optString("mode")
                 val from = d.optString("from").trim()
-                if (from.isEmpty() || mode !in listOf("HARD", "PROTECT")) continue
+                if (from.isEmpty() || mode !in listOf("HARD", "HINT", "PROTECT")) continue
                 dict.add(DictProposal(mode, from, d.optString("to").trim(), d.optString("note").trim()))
             }
         }
@@ -584,6 +727,25 @@ $listing
      */
     data class ImagePart(val mediaType: String, val base64: String)
 
+    /**
+     * Кто смотрит на расход каждого удачного ответа (16.09.2026): PravkaApp
+     * подписывает сюда счётчики кэша в Stats — одна точка на все дороги, вместо
+     * того чтобы тащить cache_read через каждый Parse-контракт режимов.
+     */
+    internal var usageObserver: ((ApiReply) -> Unit)? = null
+
+    /**
+     * Кто смотрит, КОГДА запрос идёт и сколько шёл (20.09.2026). Одна точка на
+     * все дороги, как и у расхода: здесь известны и дорога, и модель, и длина
+     * входа — то есть ровно то, из чего считается ожидание
+     * (`core/Pace.kt`). Дуга прогресса на стекле диска живёт отсюда.
+     *
+     * Зовётся с потока запроса (IO): и служба, и хранилище сами решают, куда
+     * это переложить.
+     */
+    internal var workStart: ((route: String, model: String, effort: String, chars: Int) -> Unit)? = null
+    internal var workDone: ((route: String, model: String, effort: String, chars: Int, ms: Long, ok: Boolean) -> Unit)? = null
+
     internal fun requestWithOneRetry(
         apiKey: String,
         model: String,
@@ -594,13 +756,18 @@ $listing
         maxTokensOverride: Int = 0,
         effortOverride: String = "",
         tolerateTruncation: Boolean = false,
+        /** Ключ дороги (ModelRoute.key): уезжает в ApiReply.route для доли кэша по дорогам. */
+        routeKey: String = "",
     ): ApiReply {
         // Spec 6.1: one retry on network error or timeout; none on client 4xx.
         // Transient server blips (429/500/529 "overloaded") last seconds - one
         // short-backoff retry turns them from a user-visible failure into
         // nothing. A short pause before the network retry too: an instant
         // re-POST into the same dead socket just fails the same way.
-        return try {
+        val chars = input.length
+        val startedAt = System.currentTimeMillis()
+        runCatching { workStart?.invoke(routeKey, model, effortOverride, chars) }
+        val raw = try {
             request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
         } catch (e: IOException) {
             Thread.sleep(1000)
@@ -609,7 +776,31 @@ $listing
             if (!e.retryable) throw e
             Thread.sleep(e.retryDelayMs)
             request(apiKey, model, parts, input, onDelta, images, maxTokensOverride, effortOverride, tolerateTruncation)
+        } catch (e: Throwable) {
+            // Сорвалось — дугу надо погасить, иначе она останется висеть на
+            // стекле до следующего запроса. Замер при этом НЕ пишем: время
+            // упавшего запроса не про то, сколько идёт нормальный.
+            runCatching { workDone?.invoke(routeKey, model, effortOverride, chars, System.currentTimeMillis() - startedAt, false) }
+            throw e
         }
+        runCatching { workDone?.invoke(routeKey, model, effortOverride, chars, System.currentTimeMillis() - startedAt, true) }
+        val reply = raw.copy(route = routeKey)
+        // Ответ — в тот же лог отладки, что и запрос (владелец, 18.09.2026: «надо
+        // проверить, что точно промпт кэшируется»): единственная правда о кэше —
+        // поля usage ответа, а не наличие точки в запросе.
+        requestLogger?.let { log ->
+            runCatching {
+                val total = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens
+                val share = if (total > 0) 100 * reply.cacheReadTokens / total else 0
+                log(
+                    "=== ОТВЕТ · $model · вход $total токенов, из кэша ${reply.cacheReadTokens} ($share%), " +
+                        "записано в кэш ${reply.cacheWriteTokens} · выход ${reply.outputTokens} · $" +
+                        "%.4f".format(java.util.Locale.US, costUsd(model, reply)) + "\n"
+                )
+            }
+        }
+        runCatching { usageObserver?.invoke(reply) }
+        return reply
     }
 
     private fun request(
@@ -636,19 +827,17 @@ $listing
         // Снимок тарелки - это ещё ~1600 токенов на картинку (1568x1568 max):
         // без этой прибавки бюджет ответа сжимается до пола и разбор еды по
         // фото обрывается на середине JSON.
-        val estimatedInputTokens =
-            (parts.dictPart.length + input.length) / 2 + 1 + images.size * 1600
         // Модели с адаптивными размышлениями считают мысли в тот же
         // max_tokens: без запаса переделка в 350 знаков сжигала бюджет на
         // мыслях и умирала с stop_reason=max_tokens, не выдав ни слова
         // (владелец видел бесконечный спиннер, 18.08.2026). Кому мысли
         // выключены — решает RequestPolicy, а не имя модели в этом файле.
         val thinkingOff = RequestPolicy.thinkingOff(model, effortOverride)
-        val thinkingHeadroom = RequestPolicy.thinkingHeadroom(model, effortOverride)
         // Оценка по длине входа врёт там, где длинный вход просит короткий
         // ответ и наоборот (разбор «Итогов»): такой вызов задаёт бюджет сам.
+        // Сама формула — в RequestPolicy: ею же считают батчи тени и эвала.
         val maxTokens = if (maxTokensOverride > 0) maxTokensOverride
-        else (estimatedInputTokens * 13 / 10 + 300 + thinkingHeadroom).coerceIn(1024, 16384)
+        else RequestPolicy.maxTokens(model, effortOverride, parts.dictPart.length + input.length, images.size)
 
         val body = JSONObject().apply {
             put("model", model)
@@ -676,21 +865,6 @@ $listing
                         put(
                             "content",
                             JSONArray().apply {
-                                // Картинки первыми: так у модели сначала кадр,
-                                // потом инструкция, что с ним делать.
-                                for (img in images) put(
-                                    JSONObject().apply {
-                                        put("type", "image")
-                                        put(
-                                            "source",
-                                            JSONObject().apply {
-                                                put("type", "base64")
-                                                put("media_type", img.mediaType)
-                                                put("data", img.base64)
-                                            }
-                                        )
-                                    }
-                                )
                                 // Cache breakpoint sits on the stable template prefix
                                 // ONLY - the dict block varies per request and would
                                 // invalidate the cache on every dictation. 1h TTL:
@@ -716,6 +890,25 @@ $listing
                                         }
                                     }
                                 )
+                                // Картинки — ПОСЛЕ стабильной головы, но до переменного
+                                // хвоста: голова — это свод правил, как системный промпт,
+                                // и кадр перед ней ломал кэш (разбор еды по фото платил
+                                // за запись впустую, 16.09.2026). Порядок «правила →
+                                // кадр → что с ним делать» — тот же, что у системного
+                                // промпта с картинкой в первом сообщении.
+                                for (img in images) put(
+                                    JSONObject().apply {
+                                        put("type", "image")
+                                        put(
+                                            "source",
+                                            JSONObject().apply {
+                                                put("type", "base64")
+                                                put("media_type", img.mediaType)
+                                                put("data", img.base64)
+                                            }
+                                        )
+                                    }
+                                )
                                 put(
                                     JSONObject().apply {
                                         put("type", "text")
@@ -727,6 +920,26 @@ $listing
                     }
                 )
             )
+        }
+
+        requestLogger?.let { log ->
+            runCatching {
+                val variable = parts.dictPart + input + parts.afterInput
+                val sb = StringBuilder()
+                sb.append("=== ЗАПРОС · ").append(model)
+                    .append(" · max_tokens ").append(maxTokens)
+                if (effortOverride.isNotBlank()) sb.append(" · effort ").append(effortOverride)
+                if (thinkingOff) sb.append(" · thinking off")
+                if (images.isNotEmpty()) sb.append(" · картинок ").append(images.size)
+                sb.append(" · стабильная ").append(parts.stablePrefix.length).append(" зн.")
+                    .append(if (parts.cacheStableAlways) " (кэш)" else "")
+                    .append(" · переменная ").append(variable.length).append(" зн.\n")
+                if (parts.stablePrefix.isNotBlank()) {
+                    sb.append("--- стабильная часть ---\n").append(parts.stablePrefix).append('\n')
+                }
+                sb.append("--- переменная часть ---\n").append(variable).append("\n=== КОНЕЦ ЗАПРОСА ===\n")
+                log(sb.toString())
+            }
         }
 
         val request = Request.Builder()

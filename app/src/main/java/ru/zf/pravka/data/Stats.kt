@@ -5,7 +5,6 @@ import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import java.util.Calendar
 import java.util.Locale
 import kotlinx.coroutines.flow.Flow
@@ -13,7 +12,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import ru.zf.pravka.core.ProofreadMode
 
-private val Context.statsDataStore by preferencesDataStore(name = "stats")
+// В папке базы (DataRoot): счётчики и деньги по дорогам — часть базы.
+private val Context.statsDataStore get() = DataRoot.preferences(this, "stats")
 
 // Persistent usage counters. Only numbers live here - no text of any fix
 // is ever persisted (spec section 14).
@@ -31,6 +31,9 @@ class Stats(private val context: Context) {
         val latencyCount: Long,
         val tokensIn: Long,
         val tokensOut: Long,
+        /** Сколько входа пришло из кэша промпта и сколько в него записано — видно, работает ли кэш. */
+        val cacheReadTokens: Long,
+        val cacheWriteTokens: Long,
         val costTodayUsd: Double,
         val costWeekUsd: Double,
         val costMonthUsd: Double,
@@ -51,6 +54,8 @@ class Stats(private val context: Context) {
         val LATENCY_COUNT = longPreferencesKey("latency_count")
         val TOKENS_IN = longPreferencesKey("tokens_in")
         val TOKENS_OUT = longPreferencesKey("tokens_out")
+        val CACHE_READ = longPreferencesKey("cache_read_tokens")
+        val CACHE_WRITE = longPreferencesKey("cache_write_tokens")
         val COST_TOTAL = longPreferencesKey("cost_total_micros")
     }
 
@@ -63,6 +68,74 @@ class Stats(private val context: Context) {
             Locale.US, "cost_%04d%02d%02d",
             cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH),
         )
+    }
+
+    /**
+     * Ведро дороги за день: route_<дорога>_YYYYMMDD, микродоллары, живёт 62 дня,
+     * как и cost_. Владелец (17.09.2026): «за день шесть долларов, и растёт
+     * каждый день — что-то не то»; общая сумма на это не отвечает, а разложенная
+     * по дорогам — отвечает сразу (Засечка на Fable — две трети дня).
+     */
+    private fun routeKey(route: String, daysAgo: Int = 0): String =
+        "route_" + route + "_" + dayKey(daysAgo).removePrefix("cost_")
+
+    private fun MutablePreferences.addRoute(route: String, micros: Long) {
+        if (route.isBlank() || micros == 0L) return
+        val k = longPreferencesKey(routeKey(route))
+        this[k] = (this[k] ?: 0) + micros
+    }
+
+    /**
+     * Вход дороги за день и сколько из него пришло из кэша: rin_<дорога>_YYYYMMDD
+     * и rcr_<дорога>_YYYYMMDD, живут 62 дня. Владелец (18.09.2026): «надо
+     * проверить, что точно промпт кэшируется». Общая строка кэша на это не
+     * отвечает: в ней вся история до появления кэша и все дороги вперемешку.
+     * Доля по дороге за последние дни — отвечает: у чистки голова CLEAN должна
+     * давать больше половины входа из кэша, ноль — значит, префикс кто-то сломал.
+     */
+    suspend fun recordRouteUsage(route: String, inputTokens: Int, cacheReadTokens: Int) {
+        if (route.isBlank() || inputTokens <= 0) return
+        val date = dayKey(0).removePrefix("cost_")
+        context.statsDataStore.edit { p ->
+            val kin = longPreferencesKey("rin_" + route + "_" + date)
+            p[kin] = (p[kin] ?: 0) + inputTokens
+            if (cacheReadTokens > 0) {
+                val kcr = longPreferencesKey("rcr_" + route + "_" + date)
+                p[kcr] = (p[kcr] ?: 0) + cacheReadTokens
+            }
+        }
+    }
+
+    /** Дорога за период: деньги, вход в токенах и сколько входа пришло из кэша. */
+    data class RouteSpend(val route: String, val usd: Double, val inputTokens: Long, val cacheReadTokens: Long) {
+        /** Доля входа из кэша в процентах; null — вход по дороге ещё не считался (сборки до 18.09). */
+        val cacheShare: Int? get() = if (inputTokens > 0) (100 * cacheReadTokens / inputTokens).toInt() else null
+    }
+
+    /** Деньги по дорогам за [days] дней, дороже — первыми: ответ на «куда уходят деньги». */
+    suspend fun routeCosts(days: Int): List<RouteSpend> {
+        val prefs = context.statsDataStore.data.first()
+        val from = dayKey(days.coerceIn(1, 62) - 1).removePrefix("cost_")
+        val sums = HashMap<String, Long>()
+        val inputs = HashMap<String, Long>()
+        val reads = HashMap<String, Long>()
+        for ((k, v) in prefs.asMap()) {
+            val name = k.name
+            val bucket = when {
+                name.startsWith("route_") -> sums
+                name.startsWith("rin_") -> inputs
+                name.startsWith("rcr_") -> reads
+                else -> continue
+            }
+            val prefixLen = name.indexOf('_') + 1
+            if (name.length < prefixLen + 10) continue
+            val date = name.takeLast(8)
+            if (date < from) continue
+            val route = name.substring(prefixLen, name.length - 9)
+            bucket[route] = (bucket[route] ?: 0L) + ((v as? Long) ?: 0L)
+        }
+        return sums.entries.sortedByDescending { it.value }
+            .map { RouteSpend(it.key, it.value / 1_000_000.0, inputs[it.key] ?: 0L, reads[it.key] ?: 0L) }
     }
 
     private fun daysSinceMonday(): Int {
@@ -87,6 +160,8 @@ class Stats(private val context: Context) {
             latencyCount = p[Keys.LATENCY_COUNT] ?: 0,
             tokensIn = p[Keys.TOKENS_IN] ?: 0,
             tokensOut = p[Keys.TOKENS_OUT] ?: 0,
+            cacheReadTokens = p[Keys.CACHE_READ] ?: 0,
+            cacheWriteTokens = p[Keys.CACHE_WRITE] ?: 0,
             costTodayUsd = costMicros(0) / 1_000_000.0,
             costWeekUsd = costMicros(daysSinceMonday()) / 1_000_000.0,
             costMonthUsd = costMicros(dayOfMonth() - 1) / 1_000_000.0,
@@ -102,6 +177,8 @@ class Stats(private val context: Context) {
         tokensIn: Int,
         tokensOut: Int,
         costUsd: Double,
+        /** Ключ дороги (ModelRoute.key) — для разложения денег по дорогам. */
+        route: String = "",
     ) {
         context.statsDataStore.edit { p ->
             p[Keys.TOTAL] = (p[Keys.TOTAL] ?: 0) + 1
@@ -121,14 +198,29 @@ class Stats(private val context: Context) {
             val todayKey = longPreferencesKey(dayKey(0))
             p[todayKey] = (p[todayKey] ?: 0) + micros
             p[Keys.COST_TOTAL] = (p[Keys.COST_TOTAL] ?: 0) + micros
+            p.addRoute(route, micros)
             pruneOldDayKeys(p)
+        }
+    }
+
+    /**
+     * Токены кэша промпта — отдельными счётчиками ко ВСЕМ дорогам (16.09.2026,
+     * владелец: «кэширование — супер-тема для экономии, давай сделаем везде,
+     * где эффективно»). Пишет транспорт через ClaudeProvider.usageObserver и
+     * батчи ночного разбора; на экране стоимости — доля входа из кэша.
+     */
+    suspend fun recordCache(readTokens: Int, writeTokens: Int) {
+        if (readTokens <= 0 && writeTokens <= 0) return
+        context.statsDataStore.edit { p ->
+            p[Keys.CACHE_READ] = (p[Keys.CACHE_READ] ?: 0) + readTokens
+            p[Keys.CACHE_WRITE] = (p[Keys.CACHE_WRITE] ?: 0) + writeTokens
         }
     }
 
     /** Cost/token accounting for non-proofread API calls: assist actions,
      *  learning (Opus), the dictionary miner and eval runs. Money and tokens
      *  land in the same counters the owner reads in Статистика. */
-    suspend fun recordAux(costUsd: Double, tokensIn: Int, tokensOut: Int) {
+    suspend fun recordAux(costUsd: Double, tokensIn: Int, tokensOut: Int, route: String = "") {
         context.statsDataStore.edit { p ->
             p[Keys.TOKENS_IN] = (p[Keys.TOKENS_IN] ?: 0) + tokensIn
             p[Keys.TOKENS_OUT] = (p[Keys.TOKENS_OUT] ?: 0) + tokensOut
@@ -136,6 +228,7 @@ class Stats(private val context: Context) {
             val todayKey = longPreferencesKey(dayKey(0))
             p[todayKey] = (p[todayKey] ?: 0) + micros
             p[Keys.COST_TOTAL] = (p[Keys.COST_TOTAL] ?: 0) + micros
+            p.addRoute(route, micros)
             pruneOldDayKeys(p)
         }
     }
@@ -149,8 +242,13 @@ class Stats(private val context: Context) {
         if (p[marker] == today) return
         p[marker] = today
         val cutoff = dayKey(62)
+        val cutoffDate = cutoff.removePrefix("cost_")
         p.asMap().keys
-            .filter { it.name.length == cutoff.length && it.name.startsWith("cost_2") && it.name < cutoff }
+            .filter {
+                (it.name.length == cutoff.length && it.name.startsWith("cost_2") && it.name < cutoff) ||
+                    ((it.name.startsWith("route_") || it.name.startsWith("rin_") || it.name.startsWith("rcr_")) &&
+                        it.name.length >= 14 && it.name.takeLast(8) < cutoffDate)
+            }
             .forEach { p.remove(longPreferencesKey(it.name)) }
     }
 
@@ -170,6 +268,15 @@ class Stats(private val context: Context) {
             iso to ((prefs[longPreferencesKey(key)] ?: 0L) / 1_000_000.0)
         }
     }
+
+    /**
+     * Потолок дня для ночных автоматов сравнивают с этим, а не с costTodayUsd:
+     * в три ночи «сегодня» — три часа и ноль долларов, и потолок не ловил ничего
+     * (18.09.2026: день на $11,58 — и разбор ночью стартовал как ни в чём не
+     * бывало). Максимум из вчера и сегодня: ночью это вчерашний день, днём —
+     * текущий.
+     */
+    suspend fun costRecentDayUsd(): Double = dailyCosts(2).maxOf { it.second }
 
     suspend fun recordError() {
         context.statsDataStore.edit { p ->

@@ -11,6 +11,11 @@ object Prompts {
     const val PLACEHOLDER_INPUT = "{INPUT}"
     const val PLACEHOLDER_DICT = "{DICT}"
 
+    // Справочник витаминов и элементов: ключи, единицы, нормы. Стоит в
+    // СТАБИЛЬНОЙ части промпта (выше словаря и выше {VARS}) — он не меняется
+    // от запроса к запросу и обязан жить под часовым кэшем.
+    const val PLACEHOLDER_MICRO = "{MICRO}"
+
     // Factory CLEAN v2.0: merged from the owner's external review (another (…см. prompts/PromptsPravka.kt)
     val CLEAN_CLAUDE: String get() = ru.zf.pravka.core.prompts.PromptsPravka.CLEAN_CLAUDE
 
@@ -42,6 +47,17 @@ object Prompts {
     // ---- Разноска: наговор -> дела в Todoist. Runs on Opus (the split is the (…см. prompts/PromptsRaznoska.kt)
     val TASKS: String get() = ru.zf.pravka.core.prompts.PromptsRaznoska.TASKS
 
+    // ---- Деньги: наговор -> траты (Опус) и подсказки сверки (…см. prompts/PromptsMoney.kt)
+    val MONEY: String get() = ru.zf.pravka.core.prompts.PromptsMoney.MONEY
+
+    val MONEY_MATCH: String get() = ru.zf.pravka.core.prompts.PromptsMoney.MONEY_MATCH
+
+    val MONEY_ASK: String get() = ru.zf.pravka.core.prompts.PromptsMoney.MONEY_ASK
+
+    val MONEY_PATTERNS: String get() = ru.zf.pravka.core.prompts.PromptsMoney.MONEY_PATTERNS
+
+    val MONEY_ANSWER: String get() = ru.zf.pravka.core.prompts.PromptsMoney.MONEY_ANSWER
+
     // ---- Еда: сказанное -> КБЖУ. Работает на Сонете: это не суждение, а (…см. prompts/PromptsFood.kt)
     val FOOD: String get() = ru.zf.pravka.core.prompts.PromptsFood.FOOD
 
@@ -66,7 +82,6 @@ object Prompts {
 
     val PATTERNS: String get() = ru.zf.pravka.core.prompts.PromptsAnalysis.PATTERNS
 
-    val CHAT_HANDOFF: String get() = ru.zf.pravka.core.prompts.PromptsAnalysis.CHAT_HANDOFF
 
     val RULES: String get() = ru.zf.pravka.core.prompts.PromptsBody.RULES
 
@@ -91,6 +106,84 @@ object Prompts {
         val beforeInput: String get() = stablePrefix + dictPart
     }
 
+    /**
+     * Кто диктует (профиль установки, 25.09.2026). Промпт чистки писался под
+     * владельца: «Кто диктует: мужчина» и дальше его темы — сделки, приложения,
+     * IFS, проза. Для Марианны это значило бы «я сделала» → «я сделал».
+     */
+    data class Author(val name: String, val female: Boolean, val owner: Boolean) {
+        companion object {
+            /** Владелец: шаблон и приписки — ровно прежние, байт в байт (кэш промпта). */
+            val OWNER = Author("Саша", female = false, owner = true)
+        }
+    }
+
+    private const val WHO_START = "Кто диктует:"
+    private const val WHO_END = "Сначала пойми по содержанию"
+    private const val TOPICS = "Он диктует:"
+
+    /** Первая строка абзаца «Кто диктует»: имя, пол и род авторской речи. */
+    private fun whoLine(a: Author): String {
+        val (kind, rod, say, notSay) = if (a.female) listOf("женщина", "женском", "я подумала", "я подумал")
+        else listOf("мужчина", "мужском", "я подумал", "я подумала")
+        return "$WHO_START ${a.name}, $kind. Авторская речь от первого лица — всегда\n" +
+            "в $rod роде (\"$say\", не \"$notSay\")."
+    }
+
+    /**
+     * Шаблон чистки под автора (владелец, 25.09.2026: «промпты надо ей дать мои,
+     * но без художественной прозы и с пониманием, что диктует женщина»).
+     * У владельца — как есть, байт в байт. У другого абзац «Кто диктует» — тот
+     * же владельцев, но: имя и род автора; без оговорки «в прозе род по
+     * персонажу» и без пункта «художественную прозу…»; «сообщения жене» —
+     * «родным». Остальной текст не трогается: правила формы вида «в прозе —
+     * словами» без прозы просто не срабатывают. Маркеров нет (свой текст
+     * владельца, переписанный правкой промпта) — род первой строкой сверху,
+     * иначе чистка писала бы её «я сделала» мужским родом.
+     */
+    fun forAuthor(template: String, author: Author): String {
+        if (author.owner) return template
+        val start = template.indexOf(WHO_START)
+        val end = template.indexOf(WHO_END)
+        if (start < 0 || end <= start) return whoLine(author) + "\n\n" + template
+        val topics = ownerTopics(template.substring(start, end))
+        val pronoun = if (author.female) "Она диктует:" else "Он диктует:"
+        val body = if (topics != null) " $pronoun\n$topics" else " $pronoun что угодно: сообщения родным,\n" +
+            "друзьям и коллегам, рабочие и учебные заметки, списки дел,\nвопросы ассистенту.\n"
+        return template.substring(0, start) + whoLine(author) + body + template.substring(end)
+    }
+
+    /**
+     * Темы владельца из его абзаца — пункты после «Он диктует:», без
+     * художественной прозы. null — абзац не той формы (переписан), тогда
+     * берётся нейтральный список.
+     */
+    private fun ownerTopics(paragraph: String): String? {
+        val at = paragraph.indexOf(TOPICS)
+        if (at < 0) return null
+        val items = paragraph.substring(at + TOPICS.length).trim('\n', ' ')
+            .split("\n— ").map { it.removePrefix("— ").trimEnd() }
+            .filter { it.isNotBlank() && !it.startsWith("художественн") }
+            .map { it.replace("сообщения жене, детям и коллегам", "сообщения родным, детям и коллегам") }
+        if (items.isEmpty()) return null
+        val last = items.last().trimEnd(';', ',', '.') + "."
+        return (items.dropLast(1) + last).joinToString("\n") { "— $it" } + "\n"
+    }
+
+    /**
+     * Кто диктует — приписка в начало промптов режимов (Засечка, Дела, Еда,
+     * Деньги, Тело) у не-владельца. Промпты написаны про Сашу: «владелец»,
+     * «Саша диктует», примеры с его семьёй. Для владельца — пусто (кэш цел).
+     */
+    fun speakerNote(author: Author): String {
+        if (author.owner) return ""
+        val rod = if (author.female) "женский («я купила», не «я купил»)" else "мужской («я купил», не «я купила»)"
+        return "ВАЖНО: диктует не Саша, а ${author.name} (${if (author.female) "женщина" else "мужчина"}). " +
+            "Всё, что ниже сказано об авторе — «владелец», «Саша диктует», «его», — относится к " +
+            "${author.name}: «я», «мне», «мой» в диктовке — это ${author.name}; род автора — $rod. " +
+            "Саша в тексте — отдельный человек из семьи.\n\n"
+    }
+
     // Splits at {DICT} and {INPUT} (empty dict block leaves no stray blank
     // lines). If a user-edited template loses {INPUT}, the input is appended
     // at the end - never silently dropped.
@@ -111,6 +204,8 @@ object Prompts {
         // context is "tone, gender, what we're talking about" material -
         // stuffing both under the seam instruction neutered the second.
         conversation: String = "",
+        /** Кто диктует: род в приписке к разговору. С завода — владелец. */
+        author: Author = Author.OWNER,
     ): PromptParts {
         val inputIdx = template.indexOf(PLACEHOLDER_INPUT)
         val before = if (inputIdx >= 0) template.substring(0, inputIdx) else template
@@ -124,10 +219,11 @@ object Prompts {
             extras += "ДОПОЛНИТЕЛЬНОЕ ЗАДАНИЕ ПОВЕРХ ПРАВКИ:\n" + directive.trim() + "\n\n"
         }
         if (conversation.isNotBlank()) {
+            val gender = if (author.female) "автор — женщина, «говорила», а не «говорил»"
+            else "автор — мужчина, «говорил», а не «говорила»"
             extras += "Ниже в тегах <разговор> — предыдущие сообщения автора в этом же " +
                 "чате. Используй их, чтобы понять, о чём идёт речь, выдержать тон и " +
-                "правильно согласовать род и имена (автор — мужчина, «говорил», а не " +
-                "«говорила»). Сами сообщения не правь и в ответ не включай.\n" +
+                "правильно согласовать род и имена ($gender). Сами сообщения не правь и в ответ не включай.\n" +
                 "<разговор>\n" + conversation.trim() + "\n</разговор>\n\n"
         }
         if (context.isNotBlank()) {

@@ -64,28 +64,43 @@ suspend fun ClaudeProvider.splitTasks(
             throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         }
         require(transcript.isNotBlank()) { "Пустой наговор — разбирать нечего." }
-        val template = promptStore.effective(PromptStore.PromptId.TASKS)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.TASKS)
         val catalog = catalogBlock.ifBlank {
             "Каталог проектов не загружен — оставь project пустым, владелец выберет сам."
         }
-        var prompt = template
-            .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
+        // Кэш (16.09.2026): правила и каталог проектов стабильны от наговора к
+        // наговору — они голова под часовым кэшем; дата, словарь и сам наговор
+        // — хвост. Граница — {TODAY}: в заводском шаблоне он стоит после
+        // каталога. Если владелец в «Промптах» увёл словарь выше даты, голова
+        // менялась бы каждый раз — тогда кэш не ставим, а не платим за запись.
+        val cut = template.indexOf("{TODAY}")
+        fun fill(s: String) = s
             .replace("{CATALOG}", catalog)
             .replace("{TODAY}", todayContext())
-        prompt = if (prompt.contains(Prompts.PLACEHOLDER_INPUT)) {
-            prompt.replace(Prompts.PLACEHOLDER_INPUT, transcript)
+            .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
+        val headTemplate = if (cut > 0) template.substring(0, cut) else ""
+        val head = fill(headTemplate)
+        var tail = fill(if (cut > 0) template.substring(cut) else template)
+        tail = if (tail.contains(Prompts.PLACEHOLDER_INPUT)) {
+            tail.replace(Prompts.PLACEHOLDER_INPUT, transcript)
         } else {
             // Владелец отредактировал промпт и потерял {INPUT}: дописываем
             // наговор в конец, а не теряем его - то же правило, что в
             // Prompts.assemble().
-            prompt.trimEnd() + "\n\nНаговор:\n" + transcript
+            tail.trimEnd() + "\n\nНаговор:\n" + transcript
         }
-        val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
+        val parts = Prompts.PromptParts(
+            stablePrefix = head,
+            dictPart = tail,
+            afterInput = "",
+            cacheStableAlways = head.isNotBlank() && !headTemplate.contains(Prompts.PLACEHOLDER_DICT),
+        )
         val started = System.currentTimeMillis()
         val choice = settings.modelChoice(ModelRoute.RAZNOSKA)
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.RAZNOSKA.key,
         )
         val (tasks, notes) = parseTasks(reply.text, knownLabels, resolveProject)
         SplitResult(

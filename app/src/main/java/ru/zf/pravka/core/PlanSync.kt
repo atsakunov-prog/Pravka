@@ -141,7 +141,7 @@ class PlanSync(
             )
             return true
         }
-        runCatching { stats.recordAux(parsed.costUsd, parsed.tokensIn, parsed.tokensOut) }
+        runCatching { stats.recordAux(parsed.costUsd, parsed.tokensIn, parsed.tokensOut, route = ru.zf.pravka.data.ModelRoute.BODY_LIGHT.key) }
         store.setRules(
             PlanStore.Rules(
                 blockTitle = page.title,

@@ -51,7 +51,7 @@
     <string name="speech_download_done">Модель распознавания скачана</string>
     <string name="speech_download_failed">Не удалось скачать: %1$s</string>
     <string name="speech_hint">Диктовка на устройстве, офлайн. Короткое нажатие плавающей кнопки — запись, ещё раз — вставка и правка. Долгое нажатие — только правка уже написанного. Аудио сохраняется всегда: если расшифровка не удалась, запись можно расшифровать позже во вкладке ниже.</string>
-    <string name="speech_hint_google">Быстрый потоковый движок Google (тот же, что в голосовом вводе клавиатуры). Работает в реальном времени, офлайн. Короткое нажатие плавающей кнопки — старт, ещё раз — стоп, вставка и правка. Долгое нажатие — только правка уже написанного. В этом режиме аудиофайл не сохраняется (движок сам держит микрофон).</string>
+    <string name="speech_hint_google">Быстрый потоковый движок Google (тот же, что в голосовом вводе клавиатуры). Работает в реальном времени; путь — офлайн-пакет или сеть, выбор ниже. Короткое нажатие плавающей кнопки — старт, ещё раз — стоп, вставка и правка. Долгое нажатие — только правка уже написанного. В этом режиме аудиофайл не сохраняется (движок сам держит микрофон).</string>
     <string name="google_ready">Готово (тот же движок, что в голосовом вводе клавиатуры)</string>
     <string name="google_unavailable">Недоступно. Включи офлайн-распознавание речи в настройках Android / Google.</string>
     <string name="google_prepare">Подготовить русскую модель</string>
@@ -74,14 +74,9 @@
     <string name="tab_settings">Настройки</string>
     <string name="tab_dictionary">Словарь</string>
     <string name="tab_prompts">Промпты</string>
-    <string name="tab_stats">Статистика</string>
-    <string name="tab_transcripts">Расшифровки</string>
-    <string name="transcripts_hint">Все расшифровки, свежие сверху. Нажми на любую — текст скопируется. Под каждой — движок, длина аудио, время расшифровки и число символов.</string>
+    <string name="tab_stats">Статистика диктовки</string>
     <string name="transcripts_empty">Пока пусто — надиктуй что-нибудь.</string>
     <string name="transcript_copied">Скопировано</string>
-    <string name="transcripts_export_json">Выгрузить JSON</string>
-    <string name="transcripts_export_csv">Выгрузить метрики (CSV)</string>
-    <string name="transcripts_export_log">Выгрузить лог диктовки</string>
     <string name="draft_header">Прерванная диктовка — восстановленный текст</string>
     <string name="draft_copy">Копировать</string>
     <string name="draft_delete">Удалить</string>
@@ -125,12 +120,15 @@
     <string name="prompt_title_meeting">Встреча (расшифровка)</string>
     <string name="prompt_title_tasks">Разноска (дела)</string>
     <string name="prompt_title_food">Еда (КБЖУ)</string>
+    <string name="prompt_title_money">Деньги (траты голосом)</string>
+    <string name="prompt_title_money_match">Деньги (подсказки сверки)</string>
+    <string name="prompt_title_money_ask">Деньги (вопрос Claude)</string>
+    <string name="prompt_title_money_patterns">Деньги (паттерны)</string>
+    <string name="prompt_title_money_answer">Деньги (голосовой ответ на вопрос)</string>
     <string name="prompt_title_coach">Спорт (разбор тренировок)</string>
     <string name="prompt_title_trainer">Тренер (вопрос про упражнение)</string>
     <string name="prompt_title_body">Тело (подходы, еда, зарядка)</string>
     <string name="prompt_title_rules">Правила блока из Notion</string>
-    <string name="prompt_title_patterns">Паттерны: ночной поиск повторов</string>
-    <string name="prompt_title_handoff">Запрос для чата (копируется в Выгрузках)</string>
     <string name="tab_learning">Обучение</string>
     <string name="tab_logs">Логи</string>
     <string name="prompt_modified">изменён</string>
@@ -141,7 +139,7 @@
     <string name="prompt_reset">Вернуть заводской</string>
     <string name="prompt_reset_confirm">Точно вернуть?</string>
 
-    <string name="stats_header">Статистика</string>
+    <string name="stats_header">Стоимость API</string>
     <string name="stats_total">Всего правок</string>
     <string name="stats_clean">— чистка</string>
     <string name="stats_business">— деловой стиль</string>
@@ -187,11 +185,14 @@
 
     <!-- Спорт и еда -->
     <string name="tab_more">Ещё</string>
-    <string name="tab_sport">Тело (С)</string>
-    <string name="tab_food">Тело (Е)</string>
-    <string name="tab_export">Выгрузки</string>
-    <string name="tab_itogi">Паттерны</string>
+    <string name="tab_sport">Спорт</string>
+    <string name="tab_food">Еда</string>
+    <string name="tab_money">Деньги</string>
+    <string name="money_share_label">Деньги: выписка</string>
+    <string name="tab_report">Общая статистика</string>
+    <string name="tab_reviews">Разборы</string>
     <string name="e_busy">Микрофон занят другой записью — сначала заверши её</string>
+    <string name="m_busy_pravka">Идёт наговор трат — останови его кнопкой «₽»</string>
     <string name="e_busy_pravka">Идёт запись Тела — останови её кнопкой «Т»</string>
     <string name="e_parse_failed">Не разобрал — скажи ещё раз или набери текстом</string>
     <string name="action_label_tasks">Разноска</string>
@@ -228,4 +229,5 @@
     <string name="upd_error">Не дошло: %1$s</string>
     <string name="upd_branch_label">Обновляться из ветки (пусто = из своей)</string>
     <string name="upd_branch_hint">Сейчас ждём сборки из «%1$s». Ветка apk-builds одна на весь репозиторий, и её перезаписывает КАЖДАЯ ветка: номер там — номер запуска сборки, а не место в истории. Поэтому чужую линию Правка показывает, но не ставит. После слияния работы в другую ветку впиши её имя сюда.</string>
+    <string name="money_push_label">Правка: пуши банка → Деньги</string>
 </resources>

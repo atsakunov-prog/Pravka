@@ -6,6 +6,9 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import ru.zf.pravka.data.FoodStore
 import ru.zf.pravka.data.SportStore
 import ru.zf.pravka.data.StrengthStore
@@ -33,11 +36,23 @@ class NotionLifeSchemaTest {
     private fun entry(
         id: Long, start: Long, end: Long, title: String, category: String,
         source: String = "voice", raw: String = "", client: String = "", comment: String = "",
+        useful: Int = 0,
     ) = ZasechkaStore.Entry(
         id = id, start = start, end = end, raw = raw, title = title, category = category,
-        client = client, useful = 0, source = source, synced = false, createdAt = start,
+        client = client, useful = useful, source = source, synced = false, createdAt = start,
         comment = comment,
     )
+
+    private fun hhmm(ms: Long): String = SimpleDateFormat("HH:mm", Locale.US).format(Date(ms))
+
+    /** Начало ISO-строки даты со временем в зоне JVM — без смещения, его формат пишет сам. */
+    private fun isoLocal(ms: Long): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).format(Date(ms))
+
+    private fun titleText(row: org.json.JSONObject, key: String): String =
+        row.getJSONObject(key).getJSONArray("title").getJSONObject(0).getJSONObject("text").getString("content")
+
+    private fun dateStart(row: org.json.JSONObject, key: String): String =
+        row.getJSONObject(key).getJSONObject("date").getString("start")
 
     @Test
     fun `в каждой базе ровно один заголовок и нет одноимённых колонок`() {
@@ -73,6 +88,51 @@ class NotionLifeSchemaTest {
     }
 
     @Test
+    fun `длинный комментарий едет кусками, а не обрезается`() {
+        // Мысли за долгое дело складываются в один комментарий; хвост за
+        // 1900-м знаком раньше молча терялся в зеркале.
+        val thoughts = (1..60).joinToString("\n") { "Мысль номер $it: " + "слово ".repeat(12).trim() }
+        assertTrue(thoughts.length > 2 * NotionLifeSchema.TEXT_CHUNK)
+        val e = entry(45, now - 90 * 60_000L, now - 30 * 60_000L, "Работа над отчётом", "Работа", comment = thoughts)
+        val arr = NotionLifeSchema.ribbonRow(e, minutes = 60, worth = 7, now = now).getJSONObject("Комментарий").getJSONArray("rich_text")
+        assertTrue(arr.length() >= 3)
+        val glued = StringBuilder()
+        for (i in 0 until arr.length()) {
+            val piece = arr.getJSONObject(i).getJSONObject("text").getString("content")
+            assertTrue("кусок $i длиннее лимита Notion", piece.length <= NotionLifeSchema.TEXT_CHUNK)
+            glued.append(piece)
+        }
+        assertEquals(thoughts, glued.toString())
+        // Книга Excel склеивает куски в одну ячейку.
+        assertEquals(Xlsx.Cell.Text(thoughts), LifeXlsx.cell(NotionLifeSchema.ZASECHKA.columns.first { it.name == "Комментарий" }, NotionLifeSchema.ribbonRow(e, 60, 7, now)))
+    }
+
+    @Test
+    fun `начало и конец дела - две даты, для глаз - Когда и Время коротко, оценка - числом или пустотой`() {
+        val start = now - 90 * 60_000L
+        val end = now - 30 * 60_000L
+        val e = entry(44, start, end, "Разговор с Наташей", "Работа: звонки", useful = 4)
+        val row = NotionLifeSchema.ribbonRow(e, minutes = 60, worth = 7, now = now)
+        assertFits(NotionLifeSchema.ZASECHKA, row)
+        // По-экселевски: «Начало» и «Конец» — настоящие даты, «Минуты» — их
+        // разность; диапазона «Дата» в строке больше нет (он в retired).
+        assertTrue(dateStart(row, "Начало").startsWith(isoLocal(start)))
+        assertTrue(dateStart(row, "Конец").startsWith(isoLocal(end)))
+        assertFalse(row.has("Дата"))
+        assertTrue(NotionLifeSchema.ZASECHKA.retired.contains("Дата"))
+        // Владелец: «первая колонка — название, вторая — 14:59–16:16, без
+        // сентябрей». Notion показывает даты длинно, поэтому для глаз — текст.
+        assertEquals("Разговор с Наташей", titleText(row, "Дело"))
+        assertEquals("${hhmm(start)}–${hhmm(end)}", text(row, "Время"))
+        assertEquals(NotionLifeSchema.humanDay(NotionLifeSchema.dayKey(start)), text(row, "Когда"))
+        assertEquals(4, row.getJSONObject("Оценка").getInt("number"))
+        // Не оценивал — колонка стирается, а не получает ноль: иначе средняя
+        // оценка по дням считалась бы с нулями.
+        val bare = NotionLifeSchema.ribbonRow(e.copy(useful = 0), minutes = 60, worth = 7, now = now)
+        assertTrue(bare.getJSONObject("Оценка").isNull("number"))
+    }
+
+    @Test
     fun `заполнитель и авто-факты помечаются словами`() {
         assertEquals("заполнитель", NotionLifeSchema.recorded("gap"))
         assertEquals("auto", NotionLifeSchema.sourceKind("gap"))
@@ -96,6 +156,88 @@ class NotionLifeSchemaTest {
         assertEquals(380, row.getJSONObject("Ккал").getInt("number"))
         assertEquals("фото", row.getJSONObject("Записано").getJSONObject("select").getString("name"))
         assertEquals("завтрак", row.getJSONObject("Вид").getJSONObject("select").getString("name"))
+        assertEquals("Завтрак · Омлет, Капучино", titleText(row, "Приём"))
+        assertEquals(hhmm(now), text(row, "Время"))
+        assertEquals(NotionLifeSchema.humanDay(NotionLifeSchema.dayKey(now)), text(row, "Когда"))
+        assertTrue(dateStart(row, "Дата").startsWith(isoLocal(now)))
+        // Уверенность приёма — по самой слабой позиции: «точно» и «примерно» дают «примерно».
+        assertEquals("примерно", row.getJSONObject("Уверенность").getJSONObject("select").getString("name"))
+    }
+
+    @Test
+    fun `витамины приёма едут своей колонкой, а таблетка помечена в составе`() {
+        val m = FoodStore.Meal(
+            id = 8, ts = now, createdAt = now, kind = "завтрак", raw = "творог и витамин D",
+            items = listOf(
+                MealItem(
+                    name = "Творог 5%", grams = 200, kcal = 234, protein = 33, fat = 10, carbs = 3,
+                    sureness = "точно", micro = mapOf("ca" to 240.0, "b12" to 2.0),
+                ),
+                MealItem(
+                    name = "Витамин D3 2000 МЕ", grams = 0, kcal = 0, protein = 0, fat = 0, carbs = 0,
+                    sureness = "точно", micro = mapOf("vd" to 50.0), pill = true,
+                ),
+            ),
+            confirmed = true,
+        )
+        val row = NotionLifeSchema.mealRow(m)
+        assertFits(NotionLifeSchema.EDA, row)
+        assertEquals("Витамин D 50 мкг · Витамин B12 2 мкг · Кальций 240 мг", text(row, "Витамины"))
+        assertTrue(text(row, "Состав").contains("Витамин D3 2000 МЕ (таблетка)"))
+    }
+
+    @Test
+    fun `сутки витаминов ложатся в свою базу колонкой на вещество`() {
+        val date = NotionLifeSchema.dayKey(now)
+        val total = FoodStore.DayTotal(
+            date = date, kcal = 1800, protein = 120, fat = 60, carbs = 180, fiber = 20, meals = 3,
+            micro = mapOf("ca" to 900.0, "vd" to 52.5, "mg" to 120.0, "vc" to 2500.0),
+            microFood = mapOf("ca" to 900.0, "mg" to 120.0, "vc" to 2500.0),
+            microPills = mapOf("vd" to 50.0),
+            pills = "Витамин D3 2000 МЕ",
+        )
+        val row = NotionLifeSchema.vitaminRow(total)!!
+        assertFits(NotionLifeSchema.VITAMINY, row)
+        assertEquals(52.5, row.getJSONObject("Витамин D, мкг").getDouble("number"), 0.001)
+        assertEquals(900.0, row.getJSONObject("Кальций, мг").getDouble("number"), 0.001)
+        // Вещества, которого за день не было, в строке нет вовсе: ноль в Notion
+        // читался бы как измеренный ноль.
+        assertFalse(row.has("Йод, мкг"))
+        assertTrue(text(row, "Мало").contains("Магний"))
+        assertEquals("Витамин C", text(row, "Перебор"))
+        assertEquals("Витамин D3 2000 МЕ", text(row, "Из банки"))
+        assertEquals("v$date", text(row, "Ключ"))
+        // Пустые сутки строкой не становятся: «витаминов не ел» и «не считали» -
+        // разные вещи.
+        assertNull(NotionLifeSchema.vitaminRow(total.copy(micro = emptyMap())))
+    }
+
+    @Test
+    fun `справочник норм ложится строкой на вещество`() {
+        for ((i, n) in Micronutrients.ALL.withIndex()) {
+            val row = NotionLifeSchema.normRow(n, i + 1)
+            assertFits(NotionLifeSchema.NORMY, row)
+            assertEquals(n.name, titleText(row, "Вещество"))
+            assertEquals(n.why, text(row, "Зачем"))
+            assertEquals("n:" + n.id, text(row, "Ключ"))
+            // Колонка справочника обязана совпасть с колонкой «Витаминов»,
+            // иначе VLOOKUP в книге Excel ищет то, чего нет.
+            assertTrue(NotionLifeSchema.VITAMINY.has(text(row, "Колонка")))
+        }
+    }
+
+    @Test
+    fun `уверенность приёма - самая слабая среди позиций`() {
+        fun item(s: String) = MealItem(name = "x", grams = 100, kcal = 100, protein = 5, fat = 5, carbs = 5, sureness = s)
+        assertEquals("точно", NotionLifeSchema.mealSureness(listOf(item("точно"), item("точно"))))
+        assertEquals("наугад", NotionLifeSchema.mealSureness(listOf(item("точно"), item("наугад"), item("примерно"))))
+        assertEquals("примерно", NotionLifeSchema.mealSureness(listOf(item("примерно"))))
+        // Модель уверенности не назвала — колонка не пишется, чем гадать.
+        assertNull(NotionLifeSchema.mealSureness(listOf(item(""))))
+        assertNull(NotionLifeSchema.mealSureness(listOf(item("точно"), item(""))))
+        assertNull(NotionLifeSchema.mealSureness(emptyList()))
+        // Все варианты — из списка опций колонки, иначе Notion заведёт лишнюю опцию.
+        assertTrue(NotionLifeSchema.SURENESS.containsAll(listOf("точно", "примерно", "наугад")))
     }
 
     @Test
@@ -112,6 +254,13 @@ class NotionLifeSchemaTest {
         assertEquals("бег", row.getJSONObject("Вид").getJSONObject("select").getString("name"))
         assertEquals("5:53", row.getJSONObject("Темп").getJSONArray("rich_text").getJSONObject(0).getJSONObject("text").getString("content"))
         assertEquals(32, row.getJSONObject("Минуты").getInt("number"))
+        // Как у дела: две даты вместо диапазона, для глаз — «Когда» и «Время».
+        val start = now - 3_600_000L
+        val end = start + 1920 * 1000L
+        assertTrue(dateStart(row, "Начало").startsWith(isoLocal(start)))
+        assertTrue(dateStart(row, "Конец").startsWith(isoLocal(end)))
+        assertEquals("Бег · Утренний бег", titleText(row, "Тренировка"))
+        assertEquals("${hhmm(start)}–${hhmm(end)}", text(row, "Время"))
     }
 
     @Test
@@ -121,11 +270,30 @@ class NotionLifeSchemaTest {
             exercises = listOf(StrengthStore.ExerciseLog(exerciseId = "goblet", name = "Гоблет")),
             feel = 2, note = "тяжело пошли свинги", minutes = 35, done = true,
         )
-        assertFits(NotionLifeSchema.SILOVYE, NotionLifeSchema.sessionRow(s))
+        val sRow = NotionLifeSchema.sessionRow(s)
+        assertFits(NotionLifeSchema.SILOVYE, sRow)
+        assertEquals("05.09 · сб · Силовая A", titleText(sRow, "Сессия"))
+        // День один, и колонка дня одна: «Дата» дублировала «День».
+        assertEquals("2026-09-05", dateStart(sRow, "День"))
+        assertFalse(sRow.has("Дата"))
         val g = StrengthStore.GtgDay(date = "2026-09-05", charged = true, hangSec = 25, negatives = 3, knee = "зелёный")
         val row = NotionLifeSchema.gtgRow(g)
         assertFits(NotionLifeSchema.ZARYADKA, row)
         assertEquals("выполнена", row.getJSONObject("Статус").getJSONObject("select").getString("name"))
+    }
+
+    @Test
+    fun `силовая с одними галочками чек-листа тоже едет, пустая - нет`() {
+        val bare = StrengthStore.Session(id = 2, date = "2026-09-06", block = "A · дом", title = "Силовая A", exercises = emptyList())
+        assertFalse("пустая сессия — не строка", NotionLifeSchema.sessionMatters(bare))
+        assertTrue("галочки чек-листа — сессия", NotionLifeSchema.sessionMatters(bare.copy(checkedIds = listOf("goblet"))))
+        assertTrue("самочувствие — сессия", NotionLifeSchema.sessionMatters(bare.copy(feel = 3)))
+        assertTrue("закрыта кнопкой — сессия", NotionLifeSchema.sessionMatters(bare.copy(done = true)))
+        assertTrue("минуты — сессия", NotionLifeSchema.sessionMatters(bare.copy(minutes = 20)))
+        val row = NotionLifeSchema.sessionRow(bare.copy(checkedIds = listOf("goblet", "swing")))
+        assertFits(NotionLifeSchema.SILOVYE, row)
+        assertEquals(2, row.getJSONObject("Галочек").getInt("number"))
+        assertEquals(0, row.getJSONObject("Упражнений").getInt("number"))
     }
 
     @Test
@@ -172,10 +340,26 @@ class NotionLifeSchemaTest {
         assertEquals(-10.5, row.getJSONObject("TSB").getDouble("number"), 0.01)
         assertEquals(86.3, row.getJSONObject("Вес кг").getDouble("number"), 0.01)
         assertEquals(145, row.getJSONObject("Белок съедено").getInt("number"))
+        assertEquals(70, row.getJSONObject("Жиры съедено").getInt("number"))
+        assertEquals(210, row.getJSONObject("Углеводы съедено").getInt("number"))
         assertFalse("нулевая готовность не пишется", row.has("Готовность"))
         assertEquals("h2026-09-04", text(row, "Ключ"))
         val empty = h.copy(restingHr = 0, hrv = 0, sleepHours = 0.0, steps = 0, weightKg = 0.0, vo2max = 0.0, ctl = 0.0, atl = 0.0, kcal = 0, protein = 0)
         assertNull(NotionLifeSchema.healthRow(empty))
+    }
+
+    @Test
+    fun `завтрашний прогноз формы строкой не становится`() {
+        // intervals отдаёт день вперёд с одними CTL/ATL: «08.09 · вт» при живом
+        // 07.09 читался как мусор. День наступит — строка появится.
+        val tomorrow = SportStore.Health(
+            date = "2026-09-08", restingHr = 0, hrv = 0, sleepHours = 0.0, sleepScore = 0, sleepQuality = 0,
+            steps = 0, weightKg = 0.0, vo2max = 0.0, ctl = 16.0, atl = 17.9, readiness = 0,
+            kcal = 0, protein = 0, fat = 0, carbs = 0, comments = "",
+        )
+        assertNull(NotionLifeSchema.healthRow(tomorrow, today = "2026-09-07"))
+        assertNotNull(NotionLifeSchema.healthRow(tomorrow, today = "2026-09-08"))
+        assertNotNull(NotionLifeSchema.healthRow(tomorrow, today = "2026-09-09"))
     }
 
     @Test

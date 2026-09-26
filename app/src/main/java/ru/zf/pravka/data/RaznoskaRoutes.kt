@@ -47,7 +47,7 @@ class RaznoskaRoutes(private val context: Context) {
     }
 
     private val mutex = Mutex()
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
     private var loaded = false
 
     private val _routesFlow = MutableStateFlow<List<Route>>(emptyList())

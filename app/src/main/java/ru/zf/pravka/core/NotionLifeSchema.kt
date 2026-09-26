@@ -55,9 +55,28 @@ object NotionLifeSchema {
      * появляется колонка: синхронизатор перечитывает базу только при смене
      * версии, иначе новая колонка в коде так и осталась бы только в коде, а
      * каждая строка ленты уезжала бы в Notion с неизвестным свойством (400).
-     * 4 — «Комментарий» в Засечке.
+     * 4 — «Комментарий» в Засечке. 5 (07.09) — «Оценка» в Засечке,
+     * «Уверенность» в Еде, «Жиры съедено» и «Углеводы съедено» в Форме,
+     * «Галочек» в Силовых; заодно синхронизатор выравнивает названия и
+     * описания баз по коду — «Категории» в Notion два дня звались
+     * «Справочником», хотя код и текст хаба говорили «Категории».
+     * 6 (07.09, вечер) — время по-экселевски и без «сентябрей». У дела и
+     * тренировки «Начало» и «Конец» — две настоящие даты со временем вместо
+     * одного диапазона «Дата» (владелец: «начало — это начальная дата, конец —
+     * конечная, а минуты — разница, как в Excel»); они для сортировки и счёта.
+     * Для глаз — две короткие текстовые колонки рядом с названием: «Когда» =
+     * «07.09 · пн» и «Время» = «14:59–16:16» (владелец: «первая колонка — Еда с
+     * Борей, вторая — 14:59–16:16, только вывести нормально, без этих
+     * сентябрей»: Notion показывает дату полностью, «September 7, 2026 2:59
+     * PM», и формат его свойства из API не сменить). Дубли «Дата» + «День» в
+     * Силовых и Зарядке убраны.
+     * 7 (13.09) — витамины и элементы: база «Витамины» (сутки одной строкой,
+     * колонка на вещество) и справочник «Нормы» с суточной нормой, верхним
+     * пределом и объяснением, зачем каждое нужно. Колонка на вещество, а не
+     * строка на вещество: в Notion и в Excel так строится график «магний по
+     * месяцам» одним кликом, а длинный формат пришлось бы сначала свернуть.
      */
-    const val VERSION = 4
+    const val VERSION = 7
 
     data class Column(
         val name: String,
@@ -89,11 +108,19 @@ object NotionLifeSchema {
     private fun urlCol(name: String, d: String = "") = Column(name, "url", description = d)
 
     private const val DAY_DESC = "сутки Саши (Europe/Moscow) датой без времени: складывать и группировать дни по этому полю"
+    private const val WHEN_DESC = "«07.09 · пн» — день коротко, для глаз; складывать и группировать по «День»"
     private const val MONTH_DESC = "YYYY-MM — для группировки и итогов по месяцам"
     private const val WEEK_DESC = "ISO-неделя YYYY-Wnn (понедельник—воскресенье) — для итогов по неделям"
 
     private fun monthCol() = selCol("Месяц", emptyList(), MONTH_DESC)
     private fun weekCol() = selCol("Неделя", emptyList(), WEEK_DESC)
+
+    /**
+     * Уверенность приёма еды — самая слабая среди позиций: «точно» (упаковка,
+     * штрихкод, рацион), «примерно» (продукт понятен, порция на глаз), «наугад»
+     * (незнакомое составное блюдо). Читателю таблицы это важнее, чем позиции.
+     */
+    val SURENESS = listOf("точно", "примерно", "наугад")
 
     /** Как строка попала в ленту — словами владельца, а не кодами. */
     val RECORDED = listOf("голос", "текст", "правка руками", "из Todoist", "метка NFC", "автопилот", "авто: телефон или часы", "заполнитель")
@@ -106,9 +133,12 @@ object NotionLifeSchema {
         description = "Таймшит: строка на дело основного трека. Минуты складываются в сутки ровно в 1440.",
         columns = listOf(
             titleCol("Дело"),
-            dateCol("Дата", "начало и конец дела; для порядка внутри дня"),
+            textCol("Когда", WHEN_DESC),
+            textCol("Время", "«14:59–16:16» по часам Саши — то же, что «Начало» и «Конец», но коротко и без часового пояса"),
+            dateCol("Начало", "начало дела, дата со временем; для сортировки и счёта"),
+            dateCol("Конец", "конец дела, дата со временем; Минуты = Конец − Начало"),
             dateCol("День", DAY_DESC),
-            numCol("Минуты", "разность минут суток: сумма за День = 1440 (у сегодняшнего — сколько прошло)"),
+            numCol("Минуты", "Конец − Начало в целых минутах суток: сумма за День = 1440 (у сегодняшнего — сколько прошло)"),
             selCol("Категория", ZasechkaStore.DEFAULT_CATEGORIES.map { it.name }),
             textCol("Клиент"),
             numCol("Ценность часа", "ценность часа категории на шкале владельца, от −10 до +10"),
@@ -120,12 +150,16 @@ object NotionLifeSchema {
             weekCol(),
             textCol("Надиктовано", "голос Саши как есть, с ошибками распознавания"),
             textCol("Комментарий", "комментарий Саши к делу: что было внутри, чем кончилось"),
+            numCol("Оценка", "оценка дела 1–5 (★ в ленте): ставится редко, пусто — не оценивал"),
             textCol("EntryId", "ключ синхронизатора"),
         ),
         retired = listOf(
             "Домен", "Бюджет", "Носитель ID", "Поверх", "Носитель", "Параллели", "Детали",
             "Полезность", "Приём", "Ккал", "Белок", "Жиры", "Углеводы", "Км", "Пульс", "Ватт",
             "Load", "Самочувствие", "Сон ч", "Сон счёт",
+            // Диапазон «начало → конец» в одной ячейке владелец читать не смог:
+            // «здесь всё внутри одной даты». Его заменили «Начало» и «Конец».
+            "Дата",
         ),
     )
 
@@ -136,10 +170,12 @@ object NotionLifeSchema {
         knownId = "93a2ddd886df43798e8b7b3bd5989e9b",
         description = "Дневник еды: строка на подтверждённый приём с КБЖУ и составом.",
         columns = listOf(
-            titleCol("Приём"),
-            dateCol("Дата", "когда съедено"),
+            titleCol("Приём", "«Завтрак · Геркулес, творог»: вид и состав коротко"),
+            textCol("Когда", WHEN_DESC),
+            textCol("Время", "«07:24» по часам Саши"),
+            dateCol("Дата", "когда съедено, дата со временем; для сортировки"),
             dateCol("День", DAY_DESC),
-            selCol("Вид", listOf("завтрак", "обед", "ужин", "перекус")),
+            selCol("Вид", MealItem.KINDS, "«добавки» — горсть таблеток без еды"),
             numCol("Ккал"),
             numCol("Белок"),
             numCol("Жиры"),
@@ -147,8 +183,10 @@ object NotionLifeSchema {
             numCol("Клетчатка"),
             numCol("Граммы"),
             numCol("Позиций"),
-            textCol("Состав", "позиции с граммами и ккал"),
+            textCol("Состав", "позиции с граммами и ккал; таблетки помечены"),
+            textCol("Витамины", "заметные вещества приёма: «Кальций 270 мг · Витамин B12 1,9 мкг». По дням они сложены в базе «Витамины»"),
             selCol("Записано", listOf("голос", "текст", "фото", "штрихкод", "рацион")),
+            selCol("Уверенность", SURENESS, "самая слабая уверенность среди позиций: точно — упаковка, штрихкод или рацион; примерно — порция на глаз; наугад — незнакомое составное блюдо"),
             monthCol(),
             textCol("Надиктовано"),
             textCol("Заметка модели", "чего не хватило для точного разбора"),
@@ -163,8 +201,11 @@ object NotionLifeSchema {
         knownId = "14959c11b0c24f84913458a9c3bd50a8",
         description = "Тренировки из intervals.icu (Garmin): строка на активность.",
         columns = listOf(
-            titleCol("Тренировка"),
-            dateCol("Дата"),
+            titleCol("Тренировка", "«Бег · Москва Бег»: вид и имя активности с часов"),
+            textCol("Когда", WHEN_DESC),
+            textCol("Время", "«16:04–16:40» по часам Саши"),
+            dateCol("Начало", "старт активности, дата со временем; для сортировки"),
+            dateCol("Конец", "старт плюс elapsed"),
             dateCol("День", DAY_DESC),
             selCol("Вид", listOf("бег", "вело", "силовая", "ходьба", "прочее")),
             numCol("Минуты", "elapsed с потолком правдоподобия"),
@@ -191,6 +232,7 @@ object NotionLifeSchema {
             urlCol("Ссылка"),
             textCol("WorkoutId", "ключ синхронизатора"),
         ),
+        retired = listOf("Дата"),
     )
 
     // ---- Силовые голосом ----
@@ -200,19 +242,21 @@ object NotionLifeSchema {
         knownId = "d404dbc567a446a19eb9c513790b760f",
         description = "Журнал силовых, надиктованный владельцу: строка на сессию с подходами.",
         columns = listOf(
-            titleCol("Сессия"),
-            dateCol("Дата"),
+            titleCol("Сессия", "«05.09 · сб · Силовая A»"),
             dateCol("День", DAY_DESC),
             textCol("Блок", "блок плана: «A · дом», «Турник»"),
             numCol("Минуты"),
             numCol("Самочувствие", "1–5, где 1 отлично"),
             checkCol("Сделано", "владелец закрыл сессию"),
-            numCol("Упражнений"),
+            numCol("Упражнений", "упражнения с надиктованными подходами"),
+            numCol("Галочек", "упражнения, отмеченные в чек-листе без чисел: «сделал по схеме»"),
             textCol("Упражнения", "подходы: «Гоблет 3×12 @16; Свинги 2×15 @16»"),
             monthCol(),
             textCol("Надиктовано"),
             textCol("SessionId", "ключ синхронизатора"),
         ),
+        // «Дата» и «День» были одним и тем же днём в двух колонках.
+        retired = listOf("Дата"),
     )
 
     // ---- Зарядка (GTG) ----
@@ -222,8 +266,7 @@ object NotionLifeSchema {
         knownId = "6d24bc844f9345d5a7a4f9dabe776dbb",
         description = "Зарядка и GTG-цепочка: строка на день.",
         columns = listOf(
-            titleCol("Зарядка"),
-            dateCol("Дата"),
+            titleCol("Зарядка", "«24.08 · пн · выполнена»"),
             dateCol("День", DAY_DESC),
             selCol("Статус", listOf("выполнена", "частично", "пропущена")),
             checkCol("Сделана"),
@@ -238,6 +281,7 @@ object NotionLifeSchema {
             textCol("Заметка"),
             textCol("GtgId", "ключ синхронизатора"),
         ),
+        retired = listOf("Дата"),
     )
 
     // ---- Категории: единственная справочная таблица ----
@@ -308,12 +352,72 @@ object NotionLifeSchema {
             numCol("Готовность"),
             numCol("Ккал съедено", "из дневника еды, если уехало в wellness"),
             numCol("Белок съедено"),
+            numCol("Жиры съедено"),
+            numCol("Углеводы съедено"),
             textCol("Комментарий", "заметка дня в intervals"),
             textCol("Ключ", "ключ синхронизатора"),
         ),
     )
 
-    val ALL: List<Db> = listOf(ZASECHKA, EDA, TRENIROVKI, SILOVYE, ZARYADKA, TELEFON, FORMA, KATEGORII)
+    // ---- Витамины и элементы: суточные суммы ----
+
+    /**
+     * Сутки одной строкой, колонка на вещество.
+     *
+     * Почему не колонки в «Еде» и не строка на вещество. В «Еде» строка — это
+     * приём, и двадцать витаминных колонок в ней стояли бы пустыми у каждого
+     * стакана воды. Длинный формат (день × вещество) читается человеком, но
+     * график «магний по месяцам» из него без сводной таблицы не построить, а
+     * ради графиков вся эта выгрузка и живёт. Норму, предел и «зачем» держит
+     * рядом справочник «Нормы» — в самой таблице им делать нечего, они не
+     * меняются от дня ко дню.
+     */
+    val VITAMINY = Db(
+        name = "Витамины",
+        knownId = "",
+        description = "Витамины и элементы по дням: сколько набралось за сутки едой и таблетками. Норма, предел и зачем — в справочнике «Нормы».",
+        columns = listOf(
+            titleCol("День"),
+            dateCol("Дата"),
+            monthCol(),
+            weekCol(),
+        ) + Micronutrients.ALL.map { n ->
+            // Описание колонки — то же «зачем», что владелец видит под полоской
+            // в приложении: в Notion оно всплывает по наведению на заголовок.
+            numCol("${n.name}, ${n.unit}", n.why)
+        } + listOf(
+            numCol("Закрыто норм", "сколько веществ добрали до нормы (натрий считается закрытым, пока он НЕ добран)"),
+            numCol("Веществ всего", "сколько их в справочнике на день записи"),
+            textCol("Мало", "чего меньше половины нормы"),
+            textCol("Перебор", "что выше верхнего предела"),
+            textCol("Из банки", "что выпито таблетками, с дозами"),
+            textCol("Ключ", "ключ синхронизатора"),
+        ),
+    )
+
+    // ---- Нормы: второй справочник рядом с «Категориями» ----
+
+    val NORMY = Db(
+        name = "Нормы",
+        knownId = "",
+        description = "Справочник витаминов и элементов: суточная норма мужчины 43 лет, верхний предел, зачем вещество нужно и где его брать едой.",
+        columns = listOf(
+            titleCol("Вещество"),
+            selCol("Группа", listOf(Micronutrients.VITAMINS, Micronutrients.MINERALS, Micronutrients.OTHER)),
+            textCol("Единица"),
+            numCol("Норма в день", "у натрия это ПОТОЛОК, а не цель"),
+            numCol("Верхний предел", "выше которого регулярно ходить незачем; пусто — не установлен"),
+            textCol("Зачем", "зачем это вещество нужно — одной фразой"),
+            textCol("Где брать", "чем закрывается едой"),
+            textCol("Колонка", "как это вещество названо колонкой в «Витаминах»"),
+            numCol("Порядок"),
+            textCol("Ключ", "ключ синхронизатора"),
+        ),
+    )
+
+    val ALL: List<Db> = listOf(
+        ZASECHKA, EDA, VITAMINY, TRENIROVKI, SILOVYE, ZARYADKA, TELEFON, FORMA, KATEGORII, NORMY,
+    )
 
     fun byName(name: String): Db? = ALL.firstOrNull { it.name == name }
 
@@ -360,15 +464,35 @@ object NotionLifeSchema {
     fun number(v: Number) = JSONObject().put("number", v)
     fun checkbox(on: Boolean) = JSONObject().put("checkbox", on)
     fun link(u: String) = JSONObject().put("url", if (u.isBlank()) JSONObject.NULL else u)
-    fun dateRange(start: Long, end: Long) = JSONObject().put(
-        "date", JSONObject().put("start", dateTime.format(Date(start))).put("end", dateTime.format(Date(end))),
-    )
     fun dateSingle(ms: Long) = JSONObject().put("date", JSONObject().put("start", dateTime.format(Date(ms))))
     fun dateDay(date: String) = JSONObject().put("date", JSONObject().put("start", date))
+    /** Число, которого может и не быть: ноль стирает значение в Notion, а не пишет «0». */
+    fun numberOrEmpty(v: Int) = JSONObject().put("number", if (v > 0) v else JSONObject.NULL)
+    fun numberOrEmpty(v: Double) = JSONObject().put("number", if (v > 0) v else JSONObject.NULL)
 
-    private fun textArray(text: String): JSONArray =
-        if (text.isBlank()) JSONArray()
-        else JSONArray().put(JSONObject().put("text", JSONObject().put("content", text.take(1900))))
+    /** Notion принимает до 2000 знаков в одном куске rich_text и до ста кусков в поле. */
+    const val TEXT_CHUNK = 1900
+    private const val TEXT_CHUNKS_MAX = 100
+
+    /**
+     * Массив rich_text для значения, заголовка или описания базы. Длинный
+     * текст режется на куски по [TEXT_CHUNK] знаков, а не обрезается: до
+     * 09.09 всё после 1900-го знака молча пропадало, а комментарий к делу
+     * стал дневником мыслей — за трёхчасовое дело их набирается на страницу,
+     * и терять хвост в зеркале нельзя. Читатели (`plainText` синка,
+     * `LifeXlsx.text`) склеивают куски обратно.
+     */
+    fun textArray(text: String): JSONArray {
+        val arr = JSONArray()
+        if (text.isBlank()) return arr
+        var from = 0
+        while (from < text.length && arr.length() < TEXT_CHUNKS_MAX) {
+            val to = minOf(text.length, from + TEXT_CHUNK)
+            arr.put(JSONObject().put("text", JSONObject().put("content", text.substring(from, to))))
+            from = to
+        }
+        return arr
+    }
 
     /** «2026-09-05» для момента времени — сутки владельца. */
     fun dayKey(ms: Long): String = iso.format(Date(ms))
@@ -414,6 +538,9 @@ object NotionLifeSchema {
     }
 
     fun clock(ms: Long): String = hm.format(Date(ms))
+
+    /** «14:59–16:16» — начало и конец по часам владельца, колонка «Время». */
+    fun span(start: Long, end: Long): String = clock(start) + "–" + clock(end)
 
     /** «5:53» из секунд на километр. */
     fun pace(secPerKm: Int): String =
@@ -472,7 +599,11 @@ object NotionLifeSchema {
     fun ribbonRow(e: ZasechkaStore.Entry, minutes: Long, worth: Int, now: Long): JSONObject = JSONObject().apply {
         val end = if (e.open) now else e.end
         put("Дело", title(e.title.ifBlank { e.category.ifBlank { "без названия" } }))
-        put("Дата", dateRange(e.start, end))
+        // Для глаз — коротко и словами; для сортировки и счёта — даты ниже.
+        put("Когда", rich(humanDay(dayKey(e.start))))
+        put("Время", rich(span(e.start, end)))
+        put("Начало", dateSingle(e.start))
+        put("Конец", dateSingle(end))
         put("День", dateDay(dayKey(e.start)))
         put("Минуты", number(minutes))
         if (e.category.isNotBlank()) put("Категория", select(e.category))
@@ -488,15 +619,18 @@ object NotionLifeSchema {
         put("Надиктовано", rich(e.raw.substringBefore("\nКБЖУ:").trim()))
         // Кладётся и пустым: снятый комментарий должен стереться и в Notion.
         put("Комментарий", rich(e.comment))
+        put("Оценка", numberOrEmpty(e.useful))
         put("EntryId", rich("t${e.id}"))
     }
 
     fun mealRow(m: FoodStore.Meal): JSONObject = JSONObject().apply {
         val kind = m.kind.trim().lowercase()
         put("Приём", title(cap(kind.ifBlank { "приём" }) + (if (m.shortList.isNotBlank()) " · ${m.shortList}" else "")))
+        put("Когда", rich(humanDay(dayKey(m.ts))))
+        put("Время", rich(clock(m.ts)))
         put("Дата", dateSingle(m.ts))
         put("День", dateDay(dayKey(m.ts)))
-        if (kind in setOf("завтрак", "обед", "ужин", "перекус")) put("Вид", select(kind))
+        if (kind in MealItem.KINDS) put("Вид", select(kind))
         put("Ккал", number(m.kcal))
         put("Белок", number(m.protein))
         put("Жиры", number(m.fat))
@@ -508,12 +642,15 @@ object NotionLifeSchema {
             "Состав",
             rich(
                 m.items.joinToString("; ") { i ->
-                    "${i.name} ${i.grams} г · ${i.kcal} ккал" +
+                    if (i.pill) "${i.name} (таблетка)"
+                    else "${i.name} ${i.grams} г · ${i.kcal} ккал" +
                         (if (i.sureness.isNotBlank()) " (${i.sureness})" else "")
                 },
             ),
         )
+        put("Витамины", rich(Micronutrients.short(m.micro, limit = 12)))
         put("Записано", select(mealRecorded(m.source)))
+        mealSureness(m.items)?.let { put("Уверенность", select(it)) }
         put("Месяц", select(monthKey(dayKey(m.ts))))
         put("Надиктовано", rich(m.raw))
         put("Заметка модели", rich(m.note))
@@ -523,8 +660,12 @@ object NotionLifeSchema {
     fun workoutRow(w: SportStore.Workout): JSONObject = JSONObject().apply {
         val kindName = SportCoach.sportName(w.type)
         val name = kindName + (if (w.name.isNotBlank() && !w.name.equals(w.type, true) && !w.name.equals(kindName, true)) " · ${w.name}" else "")
+        val end = w.start + w.seconds * 1000L
         put("Тренировка", title(name))
-        put("Дата", dateRange(w.start, w.start + w.seconds * 1000L))
+        put("Когда", rich(humanDay(dayKey(w.start))))
+        put("Время", rich(span(w.start, end)))
+        put("Начало", dateSingle(w.start))
+        put("Конец", dateSingle(end))
         put("День", dateDay(dayKey(w.start)))
         put("Вид", select(sportKind(w.type)))
         put("Минуты", number(w.minutes))
@@ -555,15 +696,41 @@ object NotionLifeSchema {
         put("WorkoutId", rich("w${w.id.ifBlank { w.start.toString() }}"))
     }
 
+    /**
+     * Уверенность приёма — по самой слабой позиции: одно «наугад» в составе
+     * делает наугад и весь приём. Пусто — модель уверенности не назвала.
+     */
+    fun mealSureness(items: List<MealItem>): String? {
+        val s = items.map { it.sureness.trim().lowercase() }.filter { it.isNotBlank() }
+        return when {
+            s.any { it.contains("наугад") } -> "наугад"
+            s.any { it.contains("примерн") } -> "примерно"
+            s.isNotEmpty() && s.size == items.size && s.all { it.contains("точн") } -> "точно"
+            else -> null
+        }
+    }
+
+    /**
+     * Какая силовая сессия достойна строки в Notion. Раньше — только с
+     * надиктованными подходами или закрытая кнопкой «сделано»; сессия,
+     * отмеченная галочками чек-листа («сделал по схеме»), с одним лишь
+     * самочувствием или минутами, в Notion не попадала — и база «Силовые»
+     * стояла пустой при живом журнале (07.09).
+     */
+    fun sessionMatters(s: StrengthStore.Session): Boolean =
+        !s.empty || s.done || s.checkedIds.isNotEmpty() || s.feel > 0 || s.minutes > 0 || s.note.isNotBlank()
+
     fun sessionRow(s: StrengthStore.Session): JSONObject = JSONObject().apply {
-        put("Сессия", title(s.title.ifBlank { s.block.ifBlank { "силовая" } }))
-        put("Дата", dateDay(s.date))
+        // День в заголовке, как у зарядки: в таблице заголовок — первая
+        // колонка, и «05.09 · пт · Силовая A» читается без даты рядом.
+        put("Сессия", title("${humanDay(s.date)} · ${s.title.ifBlank { s.block.ifBlank { "силовая" } }}"))
         put("День", dateDay(s.date))
         put("Блок", rich(s.block))
         if (s.minutes > 0) put("Минуты", number(s.minutes))
         if (s.feel in 1..5) put("Самочувствие", number(s.feel))
         put("Сделано", checkbox(s.done))
         put("Упражнений", number(s.exercises.size))
+        put("Галочек", number(s.checkedIds.size))
         put("Упражнения", rich(s.exercises.joinToString("; ") { "${it.name} ${it.compact()}" }))
         put("Месяц", select(monthKey(s.date)))
         put("Надиктовано", rich(s.note))
@@ -572,7 +739,6 @@ object NotionLifeSchema {
 
     fun gtgRow(g: StrengthStore.GtgDay): JSONObject = JSONObject().apply {
         put("Зарядка", title("${humanDay(g.date)} · ${g.status()}"))
-        put("Дата", dateDay(g.date))
         put("День", dateDay(g.date))
         put("Статус", select(g.status()))
         put("Сделана", checkbox(g.charged))
@@ -639,8 +805,15 @@ object NotionLifeSchema {
         }
     }
 
-    /** Строка «Формы»: wellness intervals за сутки. null — пустой день. */
-    fun healthRow(h: SportStore.Health): JSONObject? {
+    /**
+     * Строка «Формы»: wellness intervals за сутки. null — пустой день или
+     * день, который ещё не наступил: выгрузка спрашивает intervals до
+     * завтра включительно (тренировка вечером в поясе впереди), и на завтра
+     * приезжает прогноз CTL/ATL — строка «08.09 · вт» с двумя числами при
+     * живом 07.09 читалась как мусор. Наступит день — строка появится.
+     */
+    fun healthRow(h: SportStore.Health, today: String = dayKey(System.currentTimeMillis())): JSONObject? {
+        if (h.date > today) return null
         val any = h.ctl > 0 || h.atl > 0 || h.restingHr > 0 || h.hrv > 0 || h.sleepHours > 0 ||
             h.steps > 0 || h.weightKg > 0 || h.vo2max > 0 || h.readiness > 0
         if (!any) return null
@@ -663,8 +836,61 @@ object NotionLifeSchema {
             if (h.readiness > 0) put("Готовность", number(h.readiness))
             if (h.kcal > 0) put("Ккал съедено", number(h.kcal))
             if (h.protein > 0) put("Белок съедено", number(h.protein))
+            if (h.fat > 0) put("Жиры съедено", number(h.fat))
+            if (h.carbs > 0) put("Углеводы съедено", number(h.carbs))
             put("Комментарий", rich(h.comments))
             put("Ключ", rich("h${h.date}"))
         }
+    }
+
+    /** Как вещество названо колонкой в «Витаминах»: «Витамин D, мкг». */
+    fun microColumn(n: Micronutrients.Nutrient): String = "${n.name}, ${n.unit}"
+
+    /**
+     * Строка «Витаминов»: сутки. null — за день веществ не посчитано вовсе
+     * (еды не записано, или записана одна вода): строка из двадцати пустых
+     * колонок читалась бы как «за день не съел ни одного витамина», а это
+     * неправда — просто не считали.
+     */
+    fun vitaminRow(t: FoodStore.DayTotal): JSONObject? {
+        if (t.micro.isEmpty()) return null
+        return JSONObject().apply {
+            put("День", title(humanDay(t.date)))
+            put("Дата", dateDay(t.date))
+            put("Месяц", select(monthKey(t.date)))
+            put("Неделя", select(weekKey(t.date)))
+            for (n in Micronutrients.ALL) {
+                val v = t.micro[n.id] ?: continue
+                // Сотая доля единицы: витамин D в 50,25 мкг — это уже выдумка.
+                put(microColumn(n), number(Math.round(v * 100.0) / 100.0))
+            }
+            put(
+                "Закрыто норм",
+                number(
+                    Micronutrients.ALL.count {
+                        Micronutrients.level(it, t.micro[it.id] ?: 0.0) == Micronutrients.Level.OK
+                    }
+                ),
+            )
+            put("Веществ всего", number(Micronutrients.ALL.size))
+            put("Мало", rich(Micronutrients.lacking(t.micro).joinToString(", ") { it.name }))
+            put("Перебор", rich(Micronutrients.over(t.micro).joinToString(", ") { it.name }))
+            put("Из банки", rich(t.pills))
+            put("Ключ", rich("v${t.date}"))
+        }
+    }
+
+    /** Строка «Норм»: одно вещество справочника. */
+    fun normRow(n: Micronutrients.Nutrient, order: Int): JSONObject = JSONObject().apply {
+        put("Вещество", title(n.name))
+        put("Группа", select(n.group))
+        put("Единица", rich(n.unit))
+        put("Норма в день", number(n.norm))
+        put("Верхний предел", numberOrEmpty(n.ceiling))
+        put("Зачем", rich(n.why))
+        put("Где брать", rich(n.source))
+        put("Колонка", rich(microColumn(n)))
+        put("Порядок", number(order))
+        put("Ключ", rich("n:" + n.id))
     }
 }

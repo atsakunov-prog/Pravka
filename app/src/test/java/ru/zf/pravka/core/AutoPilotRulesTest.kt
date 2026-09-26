@@ -2,6 +2,7 @@ package ru.zf.pravka.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.zf.pravka.core.AutoPilotRules.Arrival
@@ -129,6 +130,90 @@ class AutoPilotRulesTest {
     fun `наушники - не машина`() {
         assertFalse(AutoPilotRules.isCar("AirPods", "11:22", "Volvo", "AA:BB"))
         assertFalse(AutoPilotRules.isCar("", "", "Volvo", ""))
+    }
+
+    // ---- машина после отъезда: одна дорога, не две ----
+
+    @Test
+    fun `машина через три минуты после потери дома - поездка с момента отъезда`() {
+        // Вышел из дома в 9:00 (сеть пропала), в 9:03 подключилась машина:
+        // дорога началась у двери, «Работа» закрывается в 9:00.
+        val left = now - 3 * m
+        val start = AutoPilotRules.carTripStart(
+            connectedAt = now, leftPlace = "дом", leftAtMs = left, openStart = now - 3 * h,
+        )
+        assertEquals(left, start)
+    }
+
+    @Test
+    fun `отъезда не было - поездка с подключения`() {
+        assertEquals(now, AutoPilotRules.carTripStart(now, "", 0L, now - h))
+    }
+
+    @Test
+    fun `сеть пропала давно - это другая история, поездка с подключения`() {
+        val start = AutoPilotRules.carTripStart(
+            connectedAt = now, leftPlace = "дом", leftAtMs = now - 40 * m, openStart = now - 3 * h,
+        )
+        assertEquals(now, start)
+    }
+
+    @Test
+    fun `после отъезда владелец начал дело сам - его не режем`() {
+        // Ушёл из Летово в 15:30, в 15:33 сказал «звонок с Ильёй», в 15:36
+        // машина подключилась: звонок остаётся звонком, поездка — с 15:36.
+        val start = AutoPilotRules.carTripStart(
+            connectedAt = now, leftPlace = "Летово", leftAtMs = now - 6 * m, openStart = now - 3 * m,
+        )
+        assertEquals(now, start)
+    }
+
+    @Test
+    fun `ничего не открыто - поездка всё равно с момента отъезда`() {
+        val left = now - 10 * m
+        assertEquals(left, AutoPilotRules.carTripStart(now, "дом", left, null))
+    }
+
+    // ---- якорь времени из пуша ----
+
+    @Test
+    fun `якорь годится, если после него ничего не началось`() {
+        // Машина отключилась в 14:00, «Сказать» нажато в 14:05, открыта
+        // поездка с 13:00: сказанное начинается в 14:00.
+        val anchor = now - 5 * m
+        assertEquals(anchor, AutoPilotRules.anchoredStart(anchor, now, latestRealStart = now - h))
+    }
+
+    @Test
+    fun `дело, начатое ровно в якорь, якорь не ломает`() {
+        val anchor = now - 5 * m
+        assertEquals(anchor, AutoPilotRules.anchoredStart(anchor, now, latestRealStart = anchor))
+    }
+
+    @Test
+    fun `после якоря владелец уже что-то начал - якорь не годится`() {
+        val anchor = now - 20 * m
+        assertNull(AutoPilotRules.anchoredStart(anchor, now, latestRealStart = now - 10 * m))
+    }
+
+    @Test
+    fun `якорь в будущем, пустой или старше шести часов - не годится`() {
+        assertNull(AutoPilotRules.anchoredStart(0L, now, 0L))
+        assertNull(AutoPilotRules.anchoredStart(now + m, now, 0L))
+        assertNull(AutoPilotRules.anchoredStart(now - 7 * h, now, 0L))
+    }
+
+    // ---- дело места ----
+
+    @Test
+    fun `дело места находится без регистра, пустое название - дела нет`() {
+        val deals = mapOf(
+            "Летово" to PlaceDeal("Забираю Серёжу", "Семья"),
+            "дача" to PlaceDeal("", ""),
+        )
+        assertEquals("Забираю Серёжу", AutoPilotRules.dealFor("летово", deals)?.title)
+        assertNull(AutoPilotRules.dealFor("дача", deals))
+        assertNull(AutoPilotRules.dealFor("дом", deals))
     }
 
     // ---- дорога по словам ----

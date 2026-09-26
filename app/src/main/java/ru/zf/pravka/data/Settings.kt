@@ -5,13 +5,17 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import ru.zf.pravka.core.PlaceDeal
+import ru.zf.pravka.core.StackGeometry
 
-private val Context.dataStore by preferencesDataStore(name = "settings")
+// Файл — в папке базы (DataRoot), а не намертво в filesDir: ключи, модели и
+// тумблеры едут вместе с лентой, когда базу копируют на другой телефон.
+private val Context.dataStore get() = DataRoot.preferences(this, "settings")
 
 class Settings(private val context: Context) {
 
@@ -19,29 +23,68 @@ class Settings(private val context: Context) {
         // Каталог моделей. Кто где работает — не здесь: заводские значения
         // дорог лежат в ModelRoute, выбор владельца читается modelChoice().
         const val MODEL_SONNET = "claude-sonnet-5"
-        const val MODEL_OPUS = "claude-opus-5"
+        const val MODEL_OPUS = "claude-opus-5-5"
+        // Прежний Опус (до 22.09.2026): не в каталоге выбора, но живёт в
+        // хранилище старых сборок и в батчах, отправленных до обновления.
+        const val MODEL_OPUS_5 = "claude-opus-5"
         const val MODEL_FABLE = "claude-fable-5-1"
 
         // Dictation engines.
         const val SPEECH_GOOGLE = "google"          // live streaming, Gboard's engine
+        // Тот же Google по сетевому пути — не выбор движка, а метка тейка в
+        // «Расшифровках», чтобы офлайн-пакет и сеть сравнивались по журналу.
+        const val SPEECH_GOOGLE_NET = "google-net"
         const val SPEECH_WHISPER_SMALL = "whisper-small"
         const val SPEECH_WHISPER_BASE = "whisper-base"
 
         private val KEY_API_KEY = stringPreferencesKey("anthropic_api_key")
         private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
         private val KEY_FAB_ALPHA = floatPreferencesKey("fab_alpha")
+        private val KEY_TICKER_WIDTH = intPreferencesKey("ticker_width_dp")
         private val KEY_SPEECH_ENGINE = stringPreferencesKey("speech_engine")
         private val KEY_SPEECH_SEGMENTED = booleanPreferencesKey("speech_segmented")
         private val KEY_SPEECH_FORMATTING = booleanPreferencesKey("speech_formatting")
+        private val KEY_SPEECH_BIASING = booleanPreferencesKey("speech_biasing")
+        private val KEY_SPEECH_NETWORK = booleanPreferencesKey("speech_network")
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
+        private val KEY_RULES_IN_PROMPT = booleanPreferencesKey("rules_in_prompt")
+        private val KEY_NIGHT_REVIEW = booleanPreferencesKey("night_review_enabled")
+        private val KEY_NIGHT_DAILY = booleanPreferencesKey("night_daily_enabled")
+        private val KEY_NIGHT_REVIEW_HOUR = intPreferencesKey("night_review_hour")
+        private val KEY_PROMPT_TUNE = booleanPreferencesKey("prompt_tune_enabled")
+        private val KEY_NIGHT_BUDGET = intPreferencesKey("night_budget_usd")
+        private val KEY_MIGRATED_OPUS = booleanPreferencesKey("migrated_pravka_opus_1")
+        private val KEY_MIGRATED_OPUS_55 = booleanPreferencesKey("migrated_opus_5_5")
+        private val KEY_MIGRATED_SPEECH_NET = booleanPreferencesKey("migrated_speech_network_1")
+        private val KEY_PLAN_RULES_LAST_RUN = longPreferencesKey("plan_rules_last_run")
+        private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
+        // Суточная копия базы ночью (DailyBackup) — с завода включена.
+        private val KEY_DAILY_BACKUP = booleanPreferencesKey("daily_backup")
         private val KEY_LEARN_PERIOD_H = intPreferencesKey("learn_period_hours")
         private val KEY_LEARN_AUTO = booleanPreferencesKey("learn_auto_capture")
 
         // Засечка (timesheet).
         private val KEY_Z_ENABLED = booleanPreferencesKey("z_enabled")
         private val KEY_STACK_IDLE = booleanPreferencesKey("buttons_stack_idle")
+        private val KEY_DISK = booleanPreferencesKey("buttons_disk")
+        private val KEY_DISK_TUCK = booleanPreferencesKey("disk_auto_tuck")
+        private val KEY_DISK_LIGHT = booleanPreferencesKey("disk_light_glass")
+        private val KEY_DISK_GAP = intPreferencesKey("disk_gap_dp")
+        private val KEY_DISK_GEAR = intPreferencesKey("disk_gear_pct")
+        private val KEY_DISK_PLATE_ALPHA = floatPreferencesKey("disk_plate_alpha")
+        private val KEY_DISK_FACE_ALPHA = floatPreferencesKey("disk_face_alpha")
+        private val KEY_DISK_SOCKET_ALPHA = floatPreferencesKey("disk_socket_alpha")
+        private val KEY_DISK_FROST = booleanPreferencesKey("disk_frost")
+        private val KEY_DISK_RAIL = booleanPreferencesKey("disk_rail")
+        private val KEY_DISK_INERTIA = booleanPreferencesKey("disk_inertia")
+        private val KEY_DISK_ROLL = floatPreferencesKey("disk_roll_k")
+        // Плашки приложения: те же слои, что у стекла, и своя темнота.
+        private val KEY_CARD_DARK = floatPreferencesKey("card_darken")
+        private val KEY_CARD_BEVEL = booleanPreferencesKey("card_bevel")
+        private val KEY_CARD_LIGHT = booleanPreferencesKey("card_light")
+        private val KEY_CARD_GRAIN = booleanPreferencesKey("card_grain")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -52,6 +95,14 @@ class Settings(private val context: Context) {
         private val KEY_Z_CHECKINS = booleanPreferencesKey("z_checkins")
         // Разноска: третья кнопка «Д» (она про дела).
         private val KEY_R_ENABLED = booleanPreferencesKey("r_enabled")
+        // Деньги: кнопка «₽» и тумблер «+ ЗФ» во вкладке.
+        private val KEY_M_ENABLED = booleanPreferencesKey("m_enabled")
+        private val KEY_M_WITH_ZF = booleanPreferencesKey("m_with_zf")
+        private val KEY_M_PUSH = booleanPreferencesKey("m_push")
+        // Образцы денежных уведомлений для разборщиков новых банков — только по тумблеру.
+        private val KEY_M_PUSH_SAMPLES = booleanPreferencesKey("m_push_samples")
+        private val KEY_M_SCOPE_P = booleanPreferencesKey("m_scope_personal")
+        private val KEY_M_SCOPE_Z = booleanPreferencesKey("m_scope_zf")
         private val KEY_ICU_ATHLETE = stringPreferencesKey("icu_athlete_id")
         private val KEY_ICU_KEY = stringPreferencesKey("icu_api_key")
         private val KEY_TODOIST_TOKEN = stringPreferencesKey("todoist_token")
@@ -91,6 +142,9 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_PLACES = stringPreferencesKey("auto_places")
         private val KEY_AUTO_SEEN = stringPreferencesKey("auto_seen_ssids")
         private val KEY_AUTO_VISIBLE = stringPreferencesKey("auto_visible_ssids")
+        private val KEY_AUTO_PLACE_DEALS = stringPreferencesKey("auto_place_deals")
+        /** Заводские дела мест — см. [autoPlaceDealsFlow]. */
+        private val FACTORY_PLACE_DEALS = mapOf("Летово" to PlaceDeal("Забираю Серёжу", "Семья"))
         private val KEY_NFC_TAGS = stringPreferencesKey("nfc_tags")
         private val KEY_AUTO_CAR_BT = stringPreferencesKey("auto_car_bt")
         private val KEY_AUTO_CAR_BT_ADDR = stringPreferencesKey("auto_car_bt_addr")
@@ -105,6 +159,34 @@ class Settings(private val context: Context) {
 
         const val FAB_SIZE_DEFAULT = 48
         const val FAB_ALPHA_DEFAULT = 0.35f
+        /** Ширина бегущей строки у кнопок, dp (владелец, 15.09: «размер плашки по горизонтали — в общие настройки»). */
+        const val TICKER_WIDTH_DEFAULT = 340
+        const val TICKER_WIDTH_MIN = 160
+        const val TICKER_WIDTH_MAX = 900
+
+        /**
+         * Просвет диска, dp: от шестерёнки до кнопок его полтора
+         * (`DiskGeometry.ringRadius`), поэтому он и есть ручка «размер
+         * диска» — тарелка растёт вместе с кольцом.
+         */
+        const val DISK_GAP_DEFAULT = 8
+        const val DISK_GAP_MIN = 2
+        const val DISK_GAP_MAX = 28
+
+        /**
+         * Охота диска катиться при переезде. Половина настоящего качения:
+         * на полной единице кольцо за один взмах через экран уходит на
+         * полтора оборота, и кнопки успевают уехать из-под руки.
+         */
+        const val DISK_ROLL_DEFAULT = 0.5f
+
+        /**
+         * Насколько плашки приложения темнее заводского тона. Владелец
+         * (20.09.2026): «плашки в самом приложении стали другие, но мне
+         * понравилось. Давай их только сделаем потемнее и с такими же
+         * эффектами, как и диск».
+         */
+        const val CARD_DARK_DEFAULT = 0.26f
 
         // Заводские цели КБЖУ: посчитаны по Миффлину-Сан-Жеору для владельца
         // (86 кг, 180 см, 1982) при умеренной активности, белок 1,8 г/кг.
@@ -151,6 +233,16 @@ class Settings(private val context: Context) {
     /** Модель и усилие для дороги — читается перед каждым запросом. */
     suspend fun modelChoice(route: ModelRoute): ModelChoice = modelChoiceFlow(route).first()
 
+    /**
+     * Сколько дорог владелец увёл от заводского — строка «Модели» в меню
+     * настроек пишет «своих: 2» вместо полотна из семнадцати дорог.
+     */
+    fun modelChoicesChangedFlow(): Flow<Int> = context.dataStore.data.map { prefs ->
+        ModelRoute.entries.count { route ->
+            !ModelChoice.of(route, prefs[modelKey(route)], prefs[effortKey(route)]).isDefaultFor(route)
+        }
+    }
+
     suspend fun setModel(route: ModelRoute, model: String) {
         if (model !in Models.ALL) return
         context.dataStore.edit { it[modelKey(route)] = model }
@@ -183,6 +275,45 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_SPEECH_SEGMENTED] = value }
     }
 
+    // Подсказывать распознавателю слова словаря (EXTRA_BIASING_STRINGS). Владелец
+    // (15.09.2026) сравнивает скорость с клавиатурой Google, а список
+    // подсказок — единственное, чем наш вызов того же движка отличается от
+    // неё; тумблер — чтобы проверить на слух, не он ли тормозит.
+    val speechBiasingFlow = context.dataStore.data.map { it[KEY_SPEECH_BIASING] ?: true }
+    suspend fun setSpeechBiasing(value: Boolean) {
+        context.dataStore.edit { it[KEY_SPEECH_BIASING] = value }
+    }
+
+    // Путь распознавания Google (16.09.2026, заводское изменено 22.09.2026).
+    // Сетевой путь — тот, каким идёт голосовой ввод клавиатуры Google на
+    // русском (пиксельная модель Assistant voice typing русского не знает):
+    // серверная модель чётче офлайн-пакета на именах, редких словах и
+    // английских терминах, а без сети система сама падает на пакет. Офлайн —
+    // работает без сети, голос не уходит с телефона.
+    //
+    // Заводское теперь СЕТЬ. Владелец (22.09.2026): «гугловский движок
+    // облачный — и важно, чтобы он был главным, а то чуть-чуть ухудшилось
+    // качество распознавания». Сравнение он провёл, выбор сделан; офлайн
+    // остаётся тумблером и запасом, на который система падает сама.
+    val speechNetworkFlow = context.dataStore.data.map { it[KEY_SPEECH_NETWORK] ?: true }
+    suspend fun setSpeechNetwork(value: Boolean) {
+        context.dataStore.edit { it[KEY_SPEECH_NETWORK] = value }
+    }
+
+    /**
+     * Сетевой путь — один раз и на уже стоящем телефоне. Смена заводского
+     * значения сама по себе ничего не переключает: в DataStore лежит выбор,
+     * сделанный 16.09, и он сильнее любого нового «по умолчанию». Ровно та же
+     * история, что с чисткой на Опусе ([migratePravkaToOpus]).
+     */
+    suspend fun migrateSpeechToNetwork() {
+        context.dataStore.edit { p ->
+            if (p[KEY_MIGRATED_SPEECH_NET] == true) return@edit
+            p[KEY_MIGRATED_SPEECH_NET] = true
+            if (p[KEY_SPEECH_NETWORK] != true) p[KEY_SPEECH_NETWORK] = true
+        }
+    }
+
     val speechFormattingFlow = context.dataStore.data.map { it[KEY_SPEECH_FORMATTING] ?: false }
     suspend fun setSpeechFormatting(value: Boolean) {
         context.dataStore.edit { it[KEY_SPEECH_FORMATTING] = value }
@@ -194,8 +325,130 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_PROSE_MODE] = value }
     }
 
+    // Режим отладки (15.09.2026): каждый запрос к Claude целиком — в
+    // отдельный лог, чтобы владелец мог выгрузить и посмотреть, не уезжает ли
+    // в модель лишнего. Выключен — транспорт ничего не пишет.
+    val mPushSamplesFlow = context.dataStore.data.map { it[KEY_M_PUSH_SAMPLES] ?: false }
+    suspend fun setMPushSamples(value: Boolean) {
+        context.dataStore.edit { it[KEY_M_PUSH_SAMPLES] = value }
+    }
+
+    val dailyBackupFlow = context.dataStore.data.map { it[KEY_DAILY_BACKUP] ?: true }
+    suspend fun setDailyBackup(value: Boolean) {
+        context.dataStore.edit { it[KEY_DAILY_BACKUP] = value }
+    }
+
+    val debugLogFlow = context.dataStore.data.map { it[KEY_DEBUG_LOG] ?: false }
+    suspend fun setDebugLog(value: Boolean) {
+        context.dataStore.edit { it[KEY_DEBUG_LOG] = value }
+    }
+
     // Formatting rules are usually message-oriented and would fight the prose
     // directive - off in prose mode unless the owner flips this.
+    // Постоянные правила владельца в промпте CLEAN (16.09.2026). Выключено:
+    // разбор 1200 чисток до и после появления правил (29.08) не показал
+    // разницы в пунктуации и длине предложений, а из 54 правил в запрос
+    // попадали только первые восемь — потолок RulesStore.PROMPT_CAP — и они
+    // повторяют сам промпт. Единственный видимый эффект — приветствие с «!».
+    // Тумблер в настройках Правки возвращает блок целиком.
+    val rulesInPromptFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROMPT] ?: false }
+    suspend fun setRulesInPrompt(value: Boolean) {
+        context.dataStore.edit { it[KEY_RULES_IN_PROMPT] = value }
+    }
+
+    // Ночной разбор (16.09.2026). Владелец: «ежедневный разбор… чтобы каждую
+    // ночь делал всё, что ты сейчас сделал». Включён с завода — он его и
+    // просил; час — три ночи: телефон на зарядке, никто не диктует, батч
+    // успевает к утру. Расписание и политика — core/NightReviewPolicy.kt.
+    val nightReviewEnabledFlow = context.dataStore.data.map { it[KEY_NIGHT_REVIEW] ?: true }
+    suspend fun setNightReviewEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_NIGHT_REVIEW] = value }
+    }
+
+    /**
+     * Разбор суток каждую ночь — отдельно от недельного (18.09.2026; владелец:
+     * «может, нам оставить только недельный?»). Заводское — выключен: ослышка
+     * становится словарной, когда повторяется, а за сутки она редко повторится;
+     * шесть ночей по $0,6–0,7 давали в основном ту же картину, что одна
+     * недельная. Кнопка «Сутки» в плашке «Ночью» работает независимо от тумблера.
+     */
+    val nightDailyEnabledFlow = context.dataStore.data.map { it[KEY_NIGHT_DAILY] ?: false }
+    suspend fun setNightDailyEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_NIGHT_DAILY] = value }
+    }
+
+    val nightReviewHourFlow = context.dataStore.data.map { it[KEY_NIGHT_REVIEW_HOUR] ?: 3 }
+    suspend fun setNightReviewHour(value: Int) {
+        context.dataStore.edit { it[KEY_NIGHT_REVIEW_HOUR] = value.coerceIn(0, 23) }
+    }
+
+    // Недельная правка промпта (17.09.2026): в ночь на субботу Fable читает
+    // идеи недели, предлагает правку CLEAN, новый промпт измеряется и
+    // принимается только если лучше; через неделю — откат, если правок руками
+    // стало больше. Движок — core/PromptTuner.kt, политика — core/PromptTunePolicy.kt.
+    val promptTuneEnabledFlow = context.dataStore.data.map { it[KEY_PROMPT_TUNE] ?: true }
+    suspend fun setPromptTuneEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_PROMPT_TUNE] = value }
+    }
+
+    // Дневной потолок для ночных автоматов (17.09.2026; владелец: «за день
+    // шесть долларов… уже восемь!»). Когда расход за сутки по всему
+    // приложению выше потолка, автоматы сами не стартуют, а идущая чистка
+    // тени или измерение промпта останавливаются до следующих суток; ручной
+    // запуск кнопкой потолок не смотрит. Заводское — $4.
+    val nightBudgetUsdFlow = context.dataStore.data.map { it[KEY_NIGHT_BUDGET] ?: 4 }
+    suspend fun setNightBudgetUsd(value: Int) {
+        context.dataStore.edit { it[KEY_NIGHT_BUDGET] = value.coerceIn(1, 50) }
+    }
+
+    /**
+     * Разовая миграция 18.09.2026: чистка — на Опус. Заводское поменялось в
+     * ModelRoutes, но у дороги мог стоять явный выбор «Сонет» с прошлых сборок —
+     * владелец просил включить Опус, а не оставить как было. Явный Fable или
+     * уже Опус не трогаем. Метка — чтобы миграция не спорила с его будущим
+     * возвратом на Сонет.
+     */
+    suspend fun migratePravkaToOpus() {
+        context.dataStore.edit { p ->
+            if (p[KEY_MIGRATED_OPUS] == true) return@edit
+            p[KEY_MIGRATED_OPUS] = true
+            val key = modelKey(ModelRoute.PRAVKA)
+            if (p[key] == null || p[key] == MODEL_SONNET) p[key] = MODEL_OPUS
+        }
+    }
+
+    /**
+     * Разовая миграция 22.09.2026: Опус 5.5 и новые усилия по режимам. Владелец
+     * просил «везде заменить», поэтому на дорогах, где заводская теперь Опус 5.5,
+     * явный выбор прежнего Опуса или Fable снимается целиком — вместе с
+     * усилием — и дорога берёт новые заводские (правка medium, засечка и еда
+     * xhigh, спорт medium, разборы max). Явный Сонет — осознанный выбор
+     * дешёвой модели (веер переключает на него чистку) — не трогаем.
+     * Метка — чтобы миграция не спорила с его будущими настройками.
+     */
+    suspend fun migrateToOpus55() {
+        context.dataStore.edit { p ->
+            if (p[KEY_MIGRATED_OPUS_55] == true) return@edit
+            p[KEY_MIGRATED_OPUS_55] = true
+            for (route in ModelRoute.entries) {
+                if (route.defaultModel != MODEL_OPUS) continue
+                val saved = p[modelKey(route)]
+                if (saved == null || saved == MODEL_OPUS_5 || saved == MODEL_OPUS || saved == MODEL_FABLE) {
+                    p.remove(modelKey(route))
+                    p.remove(effortKey(route))
+                }
+            }
+        }
+    }
+
+    // Когда последний раз читались правила блока из Notion — переживает
+    // перезапуск: в день с семью сборками правила перечитывались и разбирались
+    // Опусом семь раз (16.09.2026), потому что метка жила в памяти процесса.
+    suspend fun planRulesLastRun(): Long = context.dataStore.data.map { it[KEY_PLAN_RULES_LAST_RUN] ?: 0L }.first()
+    suspend fun setPlanRulesLastRun(ms: Long) {
+        context.dataStore.edit { it[KEY_PLAN_RULES_LAST_RUN] = ms }
+    }
+
     val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }
     suspend fun setRulesInProse(value: Boolean) {
         context.dataStore.edit { it[KEY_RULES_IN_PROSE] = value }
@@ -235,6 +488,172 @@ class Settings(private val context: Context) {
     val stackIdleFlow = context.dataStore.data.map { it[KEY_STACK_IDLE] ?: true }
     suspend fun setStackIdle(value: Boolean) {
         context.dataStore.edit { it[KEY_STACK_IDLE] = value }
+    }
+
+    /**
+     * Диск вместо стопки (владелец, 19.09.2026): четыре кнопки по кольцу
+     * вокруг шестерёнки, крутится пальцем, у края виден наполовину. Включён с
+     * завода — владелец хочет посмотреть; тумблер обязателен: «если не
+     * получится, откатим» должно быть одним движением, без пересборки.
+     */
+    val diskModeFlow = context.dataStore.data.map { it[KEY_DISK] ?: true }
+    suspend fun setDiskMode(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK] = value }
+    }
+
+    /**
+     * Автоуборка диска (владелец, 19.09.2026): «что-то написал в еде, и через
+     * 30 секунд диск пришёл к ближайшему краю и прилепился, так что остались
+     * только засечка и правка». Полминуты без касаний — к ближайшему краю и
+     * домой. Тумблер обязателен: выдвинутый руками диск, который сам уезжает,
+     * без объяснения выглядит как поломка.
+     */
+    val diskTuckFlow = context.dataStore.data.map { it[KEY_DISK_TUCK] ?: true }
+    suspend fun setDiskTuck(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK_TUCK] = value }
+    }
+
+    /**
+     * Светлое стекло диска (владелец, 19.09.2026, ночь): «давай его сделаем
+     * наоборот, светлее, чем бэкграунд. А то теряется иногда. И сделаем
+     * тумблер в настройках: светлее/темнее». С завода светлое — это и есть
+     * просьба; тёмные чернила остаются вторым положением, потому что фон под
+     * диском бывает любой, и какое стекло на нём не теряется, видно только на
+     * самом телефоне. Числа обеих шкурок — `core/DiskLook.kt`.
+     */
+    val diskLightFlow = context.dataStore.data.map { it[KEY_DISK_LIGHT] ?: true }
+    suspend fun setDiskLight(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK_LIGHT] = value }
+    }
+
+    /**
+     * Ручки вида диска (владелец, 19.09.2026: «и нужно всё это в настройки.
+     * Прозрачность, размер»). Раньше эти числа жили в `core/DiskLook.kt` и
+     * правились только пересборкой — а подобрать их можно лишь на живом
+     * экране, глядя на свой фон.
+     *
+     * Плотности хранятся как `Float?`: НЕТ ключа — «как посчитается»
+     * (формула из `DiskLook`, она следит и за прозрачностью кнопок, и за
+     * тем, какое стекло). Есть ключ — владелец двинул ползунок, и дальше
+     * слово за ним. Поэтому у плотностей нет «заводского числа»: заводское —
+     * это сама формула, и до первого касания ползунка ничего не застывает.
+     * [resetDiskLook] убирает ключи и возвращает всё в счёт.
+     */
+    val diskGapFlow = context.dataStore.data.map { it[KEY_DISK_GAP] ?: DISK_GAP_DEFAULT }
+    suspend fun setDiskGap(dp: Int) {
+        context.dataStore.edit { it[KEY_DISK_GAP] = dp.coerceIn(DISK_GAP_MIN, DISK_GAP_MAX) }
+    }
+
+    val diskGearFlow = context.dataStore.data.map { it[KEY_DISK_GEAR] ?: StackGeometry.GEAR_PCT_DEFAULT }
+    suspend fun setDiskGear(percent: Int) {
+        context.dataStore.edit {
+            it[KEY_DISK_GEAR] = percent.coerceIn(StackGeometry.GEAR_PCT_MIN, StackGeometry.GEAR_PCT_MAX)
+        }
+    }
+
+    /** Плотность стекла; null — считать по `DiskLook.plateAlpha`. */
+    val diskPlateAlphaFlow = context.dataStore.data.map { it[KEY_DISK_PLATE_ALPHA] }
+    suspend fun setDiskPlateAlpha(value: Float) {
+        context.dataStore.edit { it[KEY_DISK_PLATE_ALPHA] = value.coerceIn(0f, 1f) }
+    }
+
+    /** Плотность лица кнопки на диске; null — считать по `DiskLook.faceAlpha`. */
+    val diskFaceAlphaFlow = context.dataStore.data.map { it[KEY_DISK_FACE_ALPHA] }
+    suspend fun setDiskFaceAlpha(value: Float) {
+        context.dataStore.edit { it[KEY_DISK_FACE_ALPHA] = value.coerceIn(0.2f, 1f) }
+    }
+
+    /** Плотность тени кнопки на стекле; null — считать по `DiskLook.socketAlpha`. */
+    val diskSocketAlphaFlow = context.dataStore.data.map { it[KEY_DISK_SOCKET_ALPHA] }
+    suspend fun setDiskSocketAlpha(value: Float) {
+        context.dataStore.edit { it[KEY_DISK_SOCKET_ALPHA] = value.coerceIn(0f, 0.6f) }
+    }
+
+    /**
+     * Матовое стекло — зерно по тарелке. Системное размытие фона сюда не
+     * годится: оно размывает прямоугольник окна, а окно у круглой тарелки
+     * квадратное (см. `DiskLook.frostAlpha`). Тумблер — владелец просил
+     * выключение отдельно от всего остального.
+     */
+    val diskFrostFlow = context.dataStore.data.map { it[KEY_DISK_FROST] ?: true }
+    suspend fun setDiskFrost(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK_FROST] = value }
+    }
+
+    /** Рельс — канавка по кольцу, на котором сидят кнопки. */
+    val diskRailFlow = context.dataStore.data.map { it[KEY_DISK_RAIL] ?: true }
+    suspend fun setDiskRail(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK_RAIL] = value }
+    }
+
+    /** Инерция: диск катится, пока его везут. */
+    val diskInertiaFlow = context.dataStore.data.map { it[KEY_DISK_INERTIA] ?: true }
+    suspend fun setDiskInertia(value: Boolean) {
+        context.dataStore.edit { it[KEY_DISK_INERTIA] = value }
+    }
+
+    /** Насколько охотно катится: 1,0 — качение без проскальзывания. */
+    val diskRollFlow = context.dataStore.data.map { it[KEY_DISK_ROLL] ?: DISK_ROLL_DEFAULT }
+    suspend fun setDiskRoll(value: Float) {
+        context.dataStore.edit { it[KEY_DISK_ROLL] = value.coerceIn(0f, 1.5f) }
+    }
+
+    /** Насколько затемнять плашки приложения (0 — заводской тон). */
+    val cardDarkFlow = context.dataStore.data.map { it[KEY_CARD_DARK] ?: CARD_DARK_DEFAULT }
+    suspend fun setCardDark(value: Float) {
+        context.dataStore.edit { it[KEY_CARD_DARK] = value.coerceIn(0f, 0.6f) }
+    }
+
+    /** Фаска по кромке плашки — та же, что у кнопок на стекле. */
+    val cardBevelFlow = context.dataStore.data.map { it[KEY_CARD_BEVEL] ?: true }
+    suspend fun setCardBevel(value: Boolean) {
+        context.dataStore.edit { it[KEY_CARD_BEVEL] = value }
+    }
+
+    /** Свет сверху на плашке. */
+    val cardLightFlow = context.dataStore.data.map { it[KEY_CARD_LIGHT] ?: true }
+    suspend fun setCardLight(value: Boolean) {
+        context.dataStore.edit { it[KEY_CARD_LIGHT] = value }
+    }
+
+    /** Зерно на плашке — тот же иней, что на стекле диска. */
+    val cardGrainFlow = context.dataStore.data.map { it[KEY_CARD_GRAIN] ?: true }
+    suspend fun setCardGrain(value: Boolean) {
+        context.dataStore.edit { it[KEY_CARD_GRAIN] = value }
+    }
+
+    /** Вернуть вид диска в счёт: размеры — к заводским, плотности — к формулам. */
+    suspend fun resetDiskLook() {
+        context.dataStore.edit {
+            it.remove(KEY_DISK_GAP)
+            it.remove(KEY_DISK_GEAR)
+            it.remove(KEY_DISK_PLATE_ALPHA)
+            it.remove(KEY_DISK_FACE_ALPHA)
+            it.remove(KEY_DISK_SOCKET_ALPHA)
+            it.remove(KEY_DISK_ROLL)
+        }
+    }
+
+    /**
+     * Где стоит диск: центр долями рабочей области экрана и поворот в
+     * градусах, отдельно на каждый размер экрана (у складного их два).
+     * Умолчание — за правым краем на высоте «П»: первая же расстановка
+     * докует его к краю.
+     */
+    suspend fun diskPlace(screenKey: String): Triple<Float, Float, Float> {
+        val prefs = context.dataStore.data.first()
+        val x = prefs[floatPreferencesKey("disk_x_$screenKey")] ?: 1f
+        val y = prefs[floatPreferencesKey("disk_y_$screenKey")] ?: 0.45f
+        val r = prefs[floatPreferencesKey("disk_r_$screenKey")] ?: 0f
+        return Triple(x, y, r)
+    }
+
+    suspend fun setDiskPlace(screenKey: String, xFraction: Float, yFraction: Float, rotation: Float) {
+        context.dataStore.edit {
+            it[floatPreferencesKey("disk_x_$screenKey")] = xFraction
+            it[floatPreferencesKey("disk_y_$screenKey")] = yFraction
+            it[floatPreferencesKey("disk_r_$screenKey")] = rotation
+        }
     }
 
     val zEnabledFlow = context.dataStore.data.map { it[KEY_Z_ENABLED] ?: true }
@@ -321,6 +740,43 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_R_ENABLED] = value }
     }
 
+    // Деньги: кнопка «₽» на экране (23.09.2026). Включена с завода — владелец
+    // попросил её четвёртой на диске; выключается тумблером в настройках Денег.
+    val mEnabledFlow = context.dataStore.data.map { it[KEY_M_ENABLED] ?: true }
+    suspend fun setMEnabled(value: Boolean) {
+        context.dataStore.edit { it[KEY_M_ENABLED] = value }
+    }
+
+    /**
+     * Итоги Денег с ЗФ или без: «расходы ЗФ… включая ZF или не включая ZF,
+     * потому что это мой доход основной» (владелец, 23.09.2026). С завода —
+     * без: вкладка сначала отвечает, сколько стоит семья.
+     */
+    val mWithZfFlow = context.dataStore.data.map { it[KEY_M_WITH_ZF] ?: false }
+    suspend fun setMWithZf(value: Boolean) {
+        context.dataStore.edit { it[KEY_M_WITH_ZF] = value }
+    }
+
+    /**
+     * Ловить пуши Т-Банка и чата «Плати по миру» (владелец, 23.09.2026). С
+     * завода включено, но без «Доступа к уведомлениям» ничего не делает —
+     * тумблер для того, чтобы выключить, не отзывая доступ.
+     */
+    /**
+     * Кнопки «Личное · ЗФ» наверху Денег (владелец, 23.09.2026). С завода —
+     * личное; «ЗФ» с завода — как был прежний тумблер «+ ЗФ».
+     */
+    val mScopePersonalFlow = context.dataStore.data.map { it[KEY_M_SCOPE_P] ?: true }
+    val mScopeZfFlow = context.dataStore.data.map { it[KEY_M_SCOPE_Z] ?: (it[KEY_M_WITH_ZF] ?: false) }
+    suspend fun setMScope(personal: Boolean, zf: Boolean) {
+        context.dataStore.edit { it[KEY_M_SCOPE_P] = personal; it[KEY_M_SCOPE_Z] = zf }
+    }
+
+    val mPushFlow = context.dataStore.data.map { it[KEY_M_PUSH] ?: true }
+    suspend fun setMPush(value: Boolean) {
+        context.dataStore.edit { it[KEY_M_PUSH] = value }
+    }
+
     // ---- Notion: правила блока ----
 
     /**
@@ -344,7 +800,12 @@ class Settings(private val context: Context) {
     // ---- Тело: силовые, зарядка, GTG ----
 
     /** Кнопка «Т»: одна на подходы, еду и зарядку — намерение решает модель. */
-    val tEnabledFlow = context.dataStore.data.map { it[KEY_T_ENABLED] ?: true }
+    /**
+     * Зелёная кнопка тела/еды на стекле. С завода ВЫКЛЮЧЕНА (владелец,
+     * 19.09.2026 вечер: «уберём кружок спорт») — на стекле остаются «П», «З»
+     * и «Д». Тумблер в настройках Еды возвращает её четвёртой.
+     */
+    val tEnabledFlow = context.dataStore.data.map { it[KEY_T_ENABLED] ?: false }
     suspend fun setTEnabled(value: Boolean) {
         context.dataStore.edit { it[KEY_T_ENABLED] = value }
     }
@@ -497,6 +958,53 @@ class Settings(private val context: Context) {
         }
     }
 
+    /**
+     * Дело, которое место начинает само по приезду: имя места → название и
+     * категория. Владелец (08.09.2026): «вышел из машины и через некоторое
+     * время подсоединился к Wi-Fi Летова — ставится „Летово, забираю Серёжу“,
+     * потому что скорее всего это оно». Ключ — ИМЯ места, не SSID: у одного
+     * места может быть две сети, а дело одно. Заводское значение — ровно этот
+     * случай; правится в настройках автопилота. Пустая строка в хранилище —
+     * владелец всё убрал, заводское не возвращается.
+     */
+    val autoPlaceDealsFlow = context.dataStore.data.map { prefs ->
+        val raw = prefs[KEY_AUTO_PLACE_DEALS]
+        if (raw == null) FACTORY_PLACE_DEALS
+        else runCatching {
+            val o = org.json.JSONObject(raw)
+            o.keys().asSequence().associateWith { k ->
+                val d = o.optJSONObject(k)
+                PlaceDeal(d?.optString("title").orEmpty(), d?.optString("category").orEmpty())
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    /** Пустое [title] — у места дела больше нет. */
+    suspend fun setAutoPlaceDeal(place: String, title: String, category: String) {
+        if (place.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val cur = prefs[KEY_AUTO_PLACE_DEALS]?.let { raw ->
+                runCatching { org.json.JSONObject(raw) }.getOrNull()
+            } ?: org.json.JSONObject().also { o ->
+                // Первая правка: заводское переезжает в хранилище целиком,
+                // иначе оно бы исчезло вместе с ключом.
+                for ((k, v) in FACTORY_PLACE_DEALS) {
+                    o.put(k, org.json.JSONObject().put("title", v.title).put("category", v.category))
+                }
+            }
+            // Одно место — одна запись, без регистра.
+            val same = cur.keys().asSequence().filter { it.equals(place.trim(), ignoreCase = true) }.toList()
+            same.forEach { cur.remove(it) }
+            if (title.isNotBlank()) {
+                cur.put(
+                    place.trim(),
+                    org.json.JSONObject().put("title", title.trim()).put("category", category.trim()),
+                )
+            }
+            prefs[KEY_AUTO_PLACE_DEALS] = cur.toString()
+        }
+    }
+
     // ---- Метки NFC: наклейка = засечка ----
 
     /**
@@ -570,9 +1078,13 @@ class Settings(private val context: Context) {
     }
 
     /**
-     * Слушать ТОЛЬКО встроенный микрофон телефона: Bluetooth машины и
-     * наушники не перехватывают диктовку. Владелец: «когда еду в машине,
-     * Правка меня не слышит» — салонный микрофон далеко и глухо.
+     * Кто слушает диктовку. true — встроенный микрофон телефона: Bluetooth
+     * машины и наушники диктовку не перехватывают (владелец: «когда еду в
+     * машине, Правка меня не слышит» — салонный микрофон далеко и глухо).
+     * false — Bluetooth-гарнитура: перед тейком поднимается SCO и слушает её
+     * микрофон (`provider/MicRouting.kt`). Переключается кружком в веере
+     * шестерёнки над «П» (`trigger/StackSettingsController.kt`) и тумблером
+     * в Общих — это одно и то же состояние.
      */
     val phoneMicOnlyFlow = context.dataStore.data.map { it[KEY_PHONE_MIC_ONLY] ?: true }
     suspend fun setPhoneMicOnly(value: Boolean) {
@@ -686,6 +1198,13 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_FAB_ALPHA] = alpha.coerceIn(0.15f, 1f) }
     }
 
+    // Ширина бегущей строки — одна на все четыре кнопки; на экране режется
+    // так, чтобы кнопка и поле рядом с ней остались видны.
+    val tickerWidthFlow = context.dataStore.data.map { it[KEY_TICKER_WIDTH] ?: TICKER_WIDTH_DEFAULT }
+    suspend fun setTickerWidth(dp: Int) {
+        context.dataStore.edit { it[KEY_TICKER_WIDTH] = dp.coerceIn(TICKER_WIDTH_MIN, TICKER_WIDTH_MAX) }
+    }
+
     // Floating button position - free placement, stored as x/y fractions of
     // the screen, separately per screen size (the foldable has two).
     suspend fun fabPosition(screenKey: String): Pair<Float, Float> {
@@ -730,6 +1249,21 @@ class Settings(private val context: Context) {
         context.dataStore.edit {
             it[floatPreferencesKey("rfab_x_$screenKey")] = xFraction
             it[floatPreferencesKey("rfab_y_$screenKey")] = yFraction
+        }
+    }
+
+    // Деньги — в связке после «Д»: по умолчанию под ней.
+    suspend fun mFabPosition(screenKey: String): Pair<Float, Float> {
+        val prefs = context.dataStore.data.first()
+        val x = prefs[floatPreferencesKey("mfab_x_$screenKey")] ?: 0.92f
+        val y = prefs[floatPreferencesKey("mfab_y_$screenKey")] ?: 0.88f
+        return x to y
+    }
+
+    suspend fun setMFabPosition(screenKey: String, xFraction: Float, yFraction: Float) {
+        context.dataStore.edit {
+            it[floatPreferencesKey("mfab_x_$screenKey")] = xFraction
+            it[floatPreferencesKey("mfab_y_$screenKey")] = yFraction
         }
     }
 

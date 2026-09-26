@@ -106,6 +106,10 @@ class NotionPlanSync(
      */
     suspend fun fetchBlockPage(force: Boolean = false): BlockPage? {
         val now = System.currentTimeMillis()
+        // Метка последнего чтения — в настройках, не в памяти процесса: иначе
+        // каждая новая сборка (в день их бывает семь) перечитывает страницы и
+        // гоняет Опус по правилам блока заново.
+        if (lastRun == 0L) lastRun = settings.planRulesLastRun()
         if (!force && now - lastRun < PERIOD_MS) return null
         val token = settings.notionToken().trim()
         if (token.isBlank()) {
@@ -155,6 +159,7 @@ class NotionPlanSync(
                 }.trim()
 
                 lastRun = now
+                settings.setPlanRulesLastRun(now)
                 // Блока нет, но хаб прочитался — это рабочее состояние, а не
                 // ошибка. Говорим об этом отдельной строкой, не красной.
                 lastError = if (block == null && httpError.isNotBlank()) httpError else ""

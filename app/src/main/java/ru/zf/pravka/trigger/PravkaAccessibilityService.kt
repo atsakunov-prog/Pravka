@@ -16,11 +16,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import ru.zf.pravka.PravkaApp
 import ru.zf.pravka.R
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.core.ProofreadMode
+import ru.zf.pravka.core.StackGeometry
 import ru.zf.pravka.core.UndoStack
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.provider.GoogleSpeechSession
@@ -42,8 +47,28 @@ class PravkaAccessibilityService : AccessibilityService() {
         // A reply chain: entries closer than this are one conversation.
         internal const val CONVO_GAP_MS = 10L * 60 * 1000
 
+        /**
+         * Бегущая строка, пока движок ещё не слышит, и когда уже слышит.
+         * Владелец (22.09.2026): «сделай эти «подожди» и «говори» на всех
+         * кнопках». У «З», «Д» и «Т» роль второй подсказки играет их
+         * собственное приглашение («🎙 говори…», «🎙 наговори дела…»): оно и
+         * зовёт говорить, и напоминает, что именно. Врало оно ровно так же —
+         * висело с первого мига, когда движок ещё глух.
+         */
+        /**
+         * Чернила «₽»: фиолетовые — пятый цвет рядом с оранжевым «П»,
+         * янтарным «З», синим «Д» и зелёным «Е». Красный был бы ближе к деньгам,
+         * но красным кнопка горит на записи — спутать нельзя.
+         */
+        val MONEY_INK = 0xFF5B4A8C.toInt()
+
+        internal const val HINT_WAIT = "секунду…"
+        internal const val HINT_SPEAK = "🎙 говори"
+
         /** Окно двойного тапа по «З» на локскрине. */
         internal const val LOCK_DOUBLE_TAP_MS = 1_500L
+        /** Сколько якорь времени ждёт свой тейк (см. `onZasechkaTap`). */
+        const val Z_ANCHOR_TTL_MS = 2 * 60_000L
 
         /**
          * Потолок записи, начатой с заблокированного экрана. Владелец: «через
@@ -61,22 +86,25 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Internal bookkeeping prefs, read by the Learning tab too.
         const val PREFS_INTERNAL = "pravka_internal"
         const val KEY_LAST_LEARN_BATCH = "last_learn_batch"
-        const val KEY_LAST_RULES_OPT = "last_rules_opt"
+
+        /** Окно захвата правок после доставки и его продление на каждую правку. */
+        const val CAPTURE_MS = 10L * 60 * 1000
+        const val CAPTURE_EXTEND_MS = 5L * 60 * 1000
+        /** Тишина после последней правки, после которой её разбирают. */
+        const val DIGEST_QUIET_MS = 30L * 1000
 
         // Засечка reminder anti-spam: one morning/evening nudge per day, one
         // gap nudge per distinct gap.
         internal const val KEY_Z_MORNING_DAY = "z_morning_day"
         internal const val KEY_Z_EVENING_DAY = "z_evening_day"
+        /** Сборка, на которой служба поднималась в прошлый раз (см. `ServiceNotifPermission.kt`). */
+        internal const val KEY_SEEN_BUILD = "svc_seen_build"
+        /** На какой сборке уже просили вернуть уведомления — раз на сборку. */
+        internal const val KEY_NOTIF_NUDGED_BUILD = "notif_nudged_build"
         internal const val KEY_Z_GAP_NOTIFIED = "z_gap_notified_end"
         internal const val KEY_Z_BEAT_AT = "z_beat_at"
         internal const val KEY_Z_ASK_AT = "z_ask_at"
         internal const val KEY_Z_ASK_ID = "z_ask_entry"
-        internal const val KEY_Z_LEARN_DAY = "z_learn_day"
-
-        // Pomodoro survives a service restart: the deadline is on disk.
-        internal const val KEY_Z_POMO_ENDS = "z_pomo_ends"
-        internal const val KEY_Z_POMO_BREAK = "z_pomo_break"
-        internal const val KEY_Z_POMO_DAY_PREFIX = "z_pomo_n_"
 
         // Chrome flavors whose url bar the per-site watcher reads.
 
@@ -85,8 +113,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         // is at its busiest, and a synchronous a11y query into it can hang
         // for the full accessibility timeout and freeze the transition (the
         // owner's 3-10s black screen on fold/unfold).
-        const val RULES_OPT_PERIOD_MS = 7L * 24 * 3600 * 1000
-        const val RULES_OPT_MIN_COUNT = 6
     }
 
     // An uncaught exception in any launched job used to kill the whole app
@@ -113,6 +139,17 @@ class PravkaAccessibilityService : AccessibilityService() {
     // 0 — обычная запись в ленту. Сбрасывается на старте обычного тейка, чтобы
     // брошенное окно ввода не увело следующую фразу в чужой комментарий.
     @Volatile internal var zCommentFor = 0L
+    /**
+     * Якорь времени ближайшего тейка Засечки (см. `onZasechkaTap`): с какого
+     * момента и до какого считать сказанное. Ноль — «сейчас», как обычно.
+     */
+    @Volatile internal var zAnchorStart = 0L
+    @Volatile internal var zAnchorEnd = 0L
+    /** Запись, которую правит ближайший тейк «З» (микрофон в редакторе записи); 0 — обычный тап. */
+    @Volatile internal var zEditTargetId = 0L
+    @Volatile internal var zAnchorSetAt = 0L
+    /** Серая «отмена» у «З»: ближайший итог тейка выбрасывается. */
+    @Volatile internal var zDiscard = false
     @Volatile internal var cachedZEnabled = true
     @Volatile internal var cachedStackIdle = true
     @Volatile internal var cachedZGapMin = 45
@@ -128,8 +165,30 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal var rSession: GoogleSpeechSession? = null
     @Volatile internal var rWhisperRecording = false
     @Volatile internal var rTypeInstead = false
+    /** Серая «отмена» у «Д»: ближайший итог тейка выбрасывается. */
+    @Volatile internal var rDiscard = false
     @Volatile internal var cachedREnabled = true
     internal var micRequestForRaznoska = false
+
+    // Деньги: четвёртая кнопка на диске, «₽» (23.09.2026). Тот же контроллер,
+    // что у «Д» (`RaznoskaButtonController` со своим лицом): наговор уезжает
+    // Опусу на разбор трат, плашка с отметками и «ОК». Ни поля, ни ленты.
+    internal var mButton: RaznoskaButtonController? = null
+    internal var mSession: GoogleSpeechSession? = null
+    @Volatile internal var mWhisperRecording = false
+    @Volatile internal var mTypeInstead = false
+    /** Серая «отмена» у «₽»: ближайший итог тейка выбрасывается. */
+    @Volatile internal var mDiscard = false
+    /**
+     * Наговор, заказанный вкладкой «Деньги» (ответ на карточку, вопрос
+     * Claude): текст уходит сюда, а не в разбор трат. Движок тот же, что у
+     * «₽», — не системный диалог Google (владелец, 23.09.2026: «надо
+     * использовать тот голосовой, что у нас есть»).
+     */
+    internal var mTabSink: ((String) -> Unit)? = null
+    internal var mTabPrompt: String = ""
+    @Volatile internal var cachedMEnabled = true
+    internal var micRequestForMoney = false
 
     // Тело: четвёртая кнопка и свой захват. Одна на подходы, еду, зарядку и
     // вопросы - намерение определяет модель тем же вызовом, что и разбор. Ни
@@ -138,15 +197,48 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal var eButton: BodyButtonController? = null
     /** Ручка под хвостом: галочка, выпускает и убирает «Д» и «Е». */
     internal var tailHandle: StackHandleController? = null
-    /** Ручка над «П»: многоточие, убирает и возвращает ВСЕ четыре кнопки. */
-    internal var topHandle: StackHandleController? = null
+    /**
+     * Шестерёнка над «П» с веером быстрых настроек (модель чистки, микрофон,
+     * обновления, «спрятать всё») и красная точка, в которую всё сжимается.
+     * Заменила верхнюю ручку с многоточием и плашку микрофона между «П» и «З»
+     * (владелец, 18.09.2026: «убираем грязь из стекла кнопок»).
+     */
+    internal var stackSettings: StackSettingsController? = null
+    /**
+     * Диск (владелец, 19.09.2026): те же четыре кнопки по кольцу вокруг
+     * шестерёнки, крутится пальцем, у края виден наполовину. Включается
+     * тумблером «Диск вместо стопки» в Общих; выключен — прежняя стопка с
+     * ручкой. Пока настройка не прочитана — стопка.
+     */
+    internal var disk: DiskController? = null
+
+    /**
+     * Каким цветом идёт дуга: цветом той кнопки, чья работа сейчас. Дорога
+     * без своей кнопки (ночные разборы, эвалы) берёт цвет Правки — это её
+     * хозяйство.
+     */
+    private fun workColour(route: String): Int = when {
+        route.startsWith("zasechka") -> ZasechkaButtonController.AMBER
+        route.startsWith("raznoska") || route.startsWith("dela") -> RaznoskaButtonController.INK
+        route.startsWith("money") -> MONEY_INK
+        route.startsWith("body") || route.startsWith("sport") ||
+            route.startsWith("food") || route.startsWith("eda") -> BodyButtonController.INK
+        else -> FloatingButtonController.ACCENT
+    }
+    @Volatile internal var cachedDiskMode = false
+    private var diskModeApplied = false
+    /** Автоуборка диска: полминуты без касаний — к ближайшему краю и домой. */
+    @Volatile internal var cachedDiskTuck = true
     internal var eSession: GoogleSpeechSession? = null
     @Volatile internal var eWhisperRecording = false
     @Volatile internal var eTypeInstead = false
-    @Volatile internal var cachedEEnabled = true
+    /** Серая «отмена» у «Т»: ближайший итог тейка выбрасывается. */
+    @Volatile internal var eDiscard = false
+    /** «Е» с завода выключена (19.09.2026): до чтения настройки считаем так же. */
+    @Volatile internal var cachedEEnabled = false
     internal var micRequestForFood = false
-    // Отдых между подходами: дедлайн на диске не нужен - это минуты, а не
-    // помидор, и переживать перезапуск службы ему незачем.
+    // Отдых между подходами: дедлайн на диске не нужен - это минуты, и
+    // переживать перезапуск службы ему незачем.
     @Volatile internal var restUntil = 0L
     @Volatile internal var cachedRestSec = 90
 
@@ -162,6 +254,18 @@ class PravkaAccessibilityService : AccessibilityService() {
     // Live streaming dictation session.
     internal var googleSession: GoogleSpeechSession? = null
     internal var googleStartedAt = 0L
+
+    /**
+     * Движок уже слышит. Между тапом и этим мигом он ГЛУХ (будится процесс
+     * службы, поднимается модель), и владелец в это окно успевает сказать
+     * первые слова в никуда. Совсем окно не убрать — микрофон не наш, — но
+     * молчать о нём нельзя: бегущая строка говорит «секунду…», а на готовности
+     * меняется на приглашение говорить (вместе с тиком, который был и раньше).
+     *
+     * Флаг ОДИН на все четыре кнопки, а не по флагу на режим: микрофон один,
+     * и живой тейк в любой миг ровно один — это же правило стережёт [micBusy].
+     */
+    internal var speechReady = false
     // Precomputed vocabulary bias and engine choice, so starting a take is
     // instant: no DataStore read and no dictionary load on the tap -> speak
     // path, which was clipping the first words.
@@ -171,19 +275,53 @@ class PravkaAccessibilityService : AccessibilityService() {
     // the tap -> listening path touches no storage.
     @Volatile internal var cachedSegmented: Boolean = true
     @Volatile internal var cachedFormatting: Boolean = false
+    @Volatile internal var cachedBiasingOn: Boolean = true
+    // Путь распознавания Google: офлайн-пакет (заводское) или системный с сетью.
+    @Volatile internal var cachedNetwork: Boolean = false
+    /** Ширина бегущей строки, dp — общая для «П», «З», «Д» и «Т» (Settings.tickerWidthFlow). */
+    @Volatile internal var cachedTickerWidthDp: Int = Settings.TICKER_WIDTH_DEFAULT
 
     internal val app: PravkaApp by lazy { application as PravkaApp }
 
     /** Автопилот Засечки: Wi-Fi-места, BT машины, «точно ещё …?». */
     val autoPilot by lazy { AutoPilot(this, app, scope) }
 
+    /**
+     * Кнопка стоит на стекле, только если включены и её тумблер («Кнопки на
+     * экране»), и сам режим в профиле: выключенная Засечка — это и без «З».
+     */
+    private fun withMode(toggle: kotlinx.coroutines.flow.Flow<Boolean>, mode: ru.zf.pravka.data.Profile.Mode) =
+        kotlinx.coroutines.flow.combine(toggle, app.profileStore.flow) { on, p -> on && (p?.has(mode) ?: true) }
+            .distinctUntilChanged()
+
+    /** Запущен ли автопилот: он живёт, пока в профиле включена Засечка. */
+    private var autoPilotOn = false
+
     override fun onServiceConnected() {
         super.onServiceConnected()
-        runCatching { autoPilot.start() }
+        // Автопилот — часть Засечки: выключили режим в профиле — гаснут и
+        // слежка за Wi-Fi и машиной, и вопросы о новых сетях.
+        scope.launch {
+            app.profileStore.flow
+                .map { it?.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA) ?: true }
+                .distinctUntilChanged()
+                .collect { on ->
+                    if (on && !autoPilotOn) {
+                        runCatching { autoPilot.start() }
+                        autoPilotOn = true
+                    } else if (!on && autoPilotOn) {
+                        runCatching { autoPilot.stop() }
+                        autoPilotOn = false
+                    }
+                }
+        }
         instance = this
         // A fresh "connected" after takes were mid-flight = the process died
         // and the system rebound the service. Makes crashes visible in the log.
         app.eventLog.add("service connected")
+        // Сборка, обновление и уведомления — в журнал; выключенные уведомления
+        // после обновления — вопрос владельцу (ServiceNotifPermission.kt).
+        runCatching { checkNotificationsAfterUpdate() }
         floatingButton = FloatingButtonController(
             service = this,
             scope = scope,
@@ -204,20 +342,42 @@ class PravkaAccessibilityService : AccessibilityService() {
             app.settings.speechFormattingFlow.collect { cachedFormatting = it }
         }
         scope.launch {
-            app.settings.convoContextFlow.collect { cachedConvoContext = it }
+            app.settings.speechBiasingFlow.collect { cachedBiasingOn = it }
         }
         scope.launch {
-            app.settings.learnPeriodHoursFlow.collect { cachedLearnPeriodH = it }
-        }
-        // Auto-capture off (the owner's default now) means the service does not
-        // even SUBSCRIBE to text-change events: no event per keystroke in every
-        // app, no event.source binder round trip on this main thread.
-        scope.launch {
-            app.settings.learnAutoFlow.collect {
-                cachedLearnAuto = it
-                applyEventSubscription(it)
+            app.settings.speechNetworkFlow.collect {
+                cachedNetwork = it
+                // Первый прогрев — как только известен путь: служба
+                // распознавания просыпается заранее, и первому тейку не
+                // приходится ждать её на своих первых словах.
+                warmSpeech()
             }
         }
+        scope.launch {
+            app.settings.tickerWidthFlow.collect {
+                cachedTickerWidthDp = it
+                // Открытая строка перестраивается сразу — настройку крутят, глядя на неё.
+                floatingButton?.repositionTickerIfVisible()
+                zButton?.repositionTickerIfVisible()
+                rButton?.repositionTickerIfVisible()
+                mButton?.repositionTickerIfVisible()
+                eButton?.repositionTickerIfVisible()
+            }
+        }
+        scope.launch {
+            app.settings.convoContextFlow.collect { cachedConvoContext = it }
+        }
+        // Усилие чистки для ряда в меню «П»: меню строится на главном потоке,
+        // а DataStore с него не читают (Fold).
+        scope.launch {
+            app.settings.modelChoiceFlow(ru.zf.pravka.data.ModelRoute.PRAVKA).collect { cachedPravkaEffort = it.effort }
+        }
+        // Автообучение снято (владелец, 15.09.2026: «он уже обучился
+        // достаточно, оставить только по кнопке»): служба не подписывается на
+        // события текста вообще — ни события на каждое нажатие клавиши, ни
+        // binder-вызова за event.source на главном потоке. Учиться можно
+        // «Обучить» из меню «П» и «Разобрать сейчас» во вкладке Обучение.
+        applyEventSubscription(false)
         refreshLearnBadge()
 
         // Засечка: the second button, visible everywhere while enabled.
@@ -225,7 +385,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             service = this,
             scope = scope,
             settings = app.settings,
-            onShortTap = ::onZasechkaTap,
+            onShortTap = { onZasechkaTap() },
             onLongPress = ::showZasechkaMenu,
         )
         zButton?.onTickerTap = ::onZasechkaPlateTap
@@ -240,6 +400,20 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
         rButton?.onTickerTap = ::onRaznoskaTickerTap
 
+        // Деньги: четвёртая кнопка — контроллер «Д» со своим цветом, буквой и местом.
+        mButton = RaznoskaButtonController(
+            service = this,
+            scope = scope,
+            settings = app.settings,
+            onShortTap = ::onMoneyTap,
+            onLongPress = ::showMoneyMenu,
+            ink = MONEY_INK,
+            glyphRes = { ModeGlyphs.money() },
+            loadPosition = { key -> app.settings.mFabPosition(key) },
+            persistPosition = { key, x, y -> app.settings.setMFabPosition(key, x, y) },
+        )
+        mButton?.onTickerTap = ::onMoneyTickerTap
+
         // Еда: четвёртая кнопка того же семейства.
         eButton = BodyButtonController(
             service = this,
@@ -250,92 +424,107 @@ class PravkaAccessibilityService : AccessibilityService() {
         )
         eButton?.onTickerTap = ::onFoodTickerTap
 
-        // Две серые ручки. Нижняя, с галочкой, выпускает «Д» и «Е»; верхняя,
-        // с многоточием, убирает и возвращает всё разом — владелец: «наверху
-        // над плашкой ещё одну серую штучку маленькую, куда я буду нажимать,
-        // и все кнопки будут в неё убираться».
-        tailHandle = StackHandleController(this, dots = false).also { h ->
+        // Серая ручка под хвостом, с галочкой: выпускает и убирает «Д» и «Е».
+        tailHandle = StackHandleController(this, scope, app.settings).also { h ->
             h.onTap = {
                 touched()
                 if (stacked) expandButtons() else collapseButtons()
             }
         }
-        topHandle = StackHandleController(this, dots = true).also { h ->
-            h.onTap = {
+
+        // Шестерёнка над «П» (StackSettingsController): веер быстрых
+        // настроек и точка «всё убрано». Заменила верхнюю ручку с
+        // многоточием и плашку микрофона — владелец: «убираем грязь из стекла
+        // кнопок: наушники и верхнюю с тремя точками». Ставит её на место
+        // refreshHandles.
+        stackSettings = StackSettingsController(this, scope, app.settings).also { s ->
+            s.onTouched = { touched() }
+            s.onHideAll = { setAllHidden(true) }
+            s.onShowAll = { setAllHidden(false) }
+            // Палец на шестерёнке — тоже палец на диске: вторым он делает щипок.
+            s.onRawTouch = { rx, ry, action -> disk?.finger("head", rx, ry, action) }
+            // Голову таскают, как кнопку, и за ней едет вся цепочка. Иначе,
+            // когда всё убрано, точка единственная на экране — и приросла бы
+            // к месту навсегда. Координаты «П» считает сама шестерёнка,
+            // ровно обратно своему moveTo: после броска голова остаётся там,
+            // где палец её отпустил, без доводки и прыжка.
+            s.onDragged = { hx, hy, dropped ->
                 touched()
-                setAllHidden(!allHidden)
-            }
-            // Ручку таскают, как кнопку, и за ней едет вся цепочка. Иначе,
-            // когда всё убрано, она единственная на экране — и приросла бы
-            // к месту навсегда.
-            h.onDragged = { hx, hy, dropped ->
-                touched()
-                val size = floatingButton?.buttonSizePx() ?: 0
-                val gap = (8 * resources.displayMetrics.density).toInt()
-                val lift = h.sizePx + (5 * resources.displayMetrics.density).toInt()
-                // Ровно обратное тому, что делает moveTo(above = true): так
-                // ручка после броска остаётся там же, где палец её отпустил,
-                // без доводки и прыжка.
-                val px = hx - (size - h.sizePx) / 2
-                val py = hy + lift
-                floatingButton?.followTo(px, py, dropped)
-                zButton?.followTo(px, py + (size + gap), dropped)
-                // Спрятанные ставим под «З»: оттуда они и выезжают.
-                rButton?.followTo(px, py + (if (stacked) 1 else 2) * (size + gap), dropped)
-                eButton?.followTo(px, py + (if (stacked) 1 else 3) * (size + gap), dropped)
-                val slot = when {
-                    stacked -> 1
-                    cachedEEnabled -> 3
-                    else -> 2
+                if (cachedDiskMode) {
+                    // Диск: голова — его центр; переезд и докование считает он.
+                    disk?.onHeadDragged(hx, hy, dropped)
+                } else {
+                    val size = floatingButton?.buttonSizePx() ?: 0
+                    val (px, py) = s.buttonOrigin(hx, hy, size)
+                    followChain(null, px, py, dropped)
                 }
-                tailHandle?.moveTo(px, py + slot * (size + gap), size, above = false)
             }
         }
 
         // The linked chain (owner's design): drag any bubble and the others
-        // trail behind on a rubber band, in order "П" - "З" - "Д" - "Т".
-        val pairGap = (8 * resources.displayMetrics.density).toInt()
+        // trail behind, in order "П" - "З" - "Д" - "Т". Бусы, а не строй:
+        // каждая едет на своей пружине, и чем дальше звено от пальца
+        // (`link`), тем мягче пружина — хвост приезжает последним
+        // (`core/ChainPhysics.kt`). Смещения считает slotOffset.
         // Перетаскивание больше НЕ разворачивает стопку: спрятанное должно
         // оставаться спрятанным, куда бы связку ни увезли. Раньше здесь
         // стоял expandButtons(), и «Д» с «Е» выскакивали от любого сдвига
         // пальцем — то есть спрятать их надолго было попросту нельзя.
-        floatingButton?.onDragged = { x, y, dropped ->
-            touched()
-            val size = floatingButton?.buttonSizePx() ?: 0
-            zButton?.followTo(x, y + size + pairGap, dropped)
-            rButton?.followTo(x, y + (if (stacked) 1 else 2) * (size + pairGap), dropped)
-            eButton?.followTo(x, y + (if (stacked) 1 else 3) * (size + pairGap), dropped)
-            refreshHandles()
+        // Порядок связки: П · З · Д · Е (если включена). Один обработчик на
+        // всех: тянут кнопку — остальные встают по своим слотам от неё;
+        // спрятанные (стопка сложена) лежат под «З».
+        chainButtons().forEach { b ->
+            b.onDragged = { x, y, dropped ->
+                touched()
+                followChain(b, x, y, dropped)
+            }
         }
-        zButton?.onDragged = { x, y, dropped ->
-            touched()
-            val size = floatingButton?.buttonSizePx() ?: 0
-            floatingButton?.followTo(x, y - size - pairGap, dropped)
-            rButton?.followTo(x, y + (if (stacked) 0 else 1) * (size + pairGap), dropped)
-            eButton?.followTo(x, y + (if (stacked) 0 else 2) * (size + pairGap), dropped)
-            refreshHandles()
-        }
-        rButton?.onDragged = { x, y, dropped ->
-            touched()
-            val size = floatingButton?.buttonSizePx() ?: 0
-            zButton?.followTo(x, y - size - pairGap, dropped)
-            floatingButton?.followTo(x, y - 2 * (size + pairGap), dropped)
-            eButton?.followTo(x, y + size + pairGap, dropped)
-            refreshHandles()
-        }
-        eButton?.onDragged = { x, y, dropped ->
-            touched()
-            val size = floatingButton?.buttonSizePx() ?: 0
-            rButton?.followTo(x, y - size - pairGap, dropped)
-            zButton?.followTo(x, y - 2 * (size + pairGap), dropped)
-            floatingButton?.followTo(x, y - 3 * (size + pairGap), dropped)
-            refreshHandles()
-        }
+        // Пока бусы догоняют, ручка и шестерёнка едут за ними кадр в кадр —
+        // иначе галочка встала бы на будущее место хвоста раньше него.
+        val chainFrame: () -> Unit = { refreshHandles() }
+        chainButtons().forEach { it.onFrame = chainFrame }
         floatingButton?.pairAnchor = anchor@{
+            // На диске «П» появляется в своём слоте кольца.
+            if (cachedDiskMode) return@anchor floatingButton?.let { disk?.slotOrigin(it) }
             if (!cachedZEnabled) return@anchor null
             val (zx, zy) = zButton?.currentPosition() ?: return@anchor null
-            val size = floatingButton?.buttonSizePx() ?: return@anchor null
-            zx to (zy - size - pairGap)
+            zx to (zy - slotOffset(1))
+        }
+        // Диск (`DiskController`): те же четыре кнопки по кольцу вокруг
+        // шестерёнки. Палец на кнопке крутит диск, а не везёт кнопку —
+        // контроллеры в режиме диска отдают касание сюда (`onRingDrag`).
+        disk = DiskController(this, scope, app.settings).also { d ->
+            d.head = stackSettings
+            d.onTouched = { touched() }
+            d.buttonSize = { floatingButton?.buttonSizePx() ?: 0 }
+            // Порядок по кольцу — тот же, что в связке: П · З · Д · Е.
+            floatingButton?.let { b -> d.add(b) { true } }
+            zButton?.let { b -> d.add(b) { cachedZEnabled } }
+            rButton?.let { b -> d.add(b) { cachedREnabled } }
+            mButton?.let { b -> d.add(b) { cachedMEnabled } }
+            eButton?.let { b -> d.add(b) { cachedEEnabled } }
+            chainButtons().forEach { b ->
+                b.onRingDrag = { rx, ry, lx, ly, action -> d.onRingDrag(b, rx, ry, lx, ly, action) }
+            }
+        }
+        // Кнопка слышит: громкость микрофона раздаём всем кнопкам, пульсирует
+        // та, что пишет (владелец, 20.09.2026). Поле у сессии общее — микрофон
+        // один, живая сессия в любой миг одна.
+        GoogleSpeechSession.levelSink = { level ->
+            chainButtons().forEach { it.setLevel(level) }
+        }
+        // Дуга прогресса по кромке стекла (владелец, 20.09.2026): запрос к
+        // модели пошёл — по кромке побежала полоса, ожидание считает
+        // `core/Pace.kt` по своей истории. Приходит это с потока запроса,
+        // поэтому на главный кладём руками.
+        app.workWatcher = { route, expect, done, ok ->
+            chromeHandler.post {
+                // Диск читаем уже на главном: между запросом и кадром его
+                // могли выключить тумблером «Круг · Стопка».
+                disk?.let { d ->
+                    if (done) d.finishWork(ok) else d.startWork(expect, workColour(route))
+                }
+            }
         }
         // The "П" lives on screen permanently (owner: "пусть будет всегда") -
         // no field-following, no window watching. Without a focused field a
@@ -344,7 +533,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         floatingButton?.show()
         chromeHandler.post(chromeTicker)
         scope.launch {
-            app.settings.zEnabledFlow.collect {
+            withMode(app.settings.zEnabledFlow, ru.zf.pravka.data.Profile.Mode.ZASECHKA).collect {
                 cachedZEnabled = it
                 zButton?.setEnabled(it)
                 // setEnabled показывает кнопку — а набор мог быть убран в
@@ -354,7 +543,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch {
-            app.settings.rEnabledFlow.collect {
+            withMode(app.settings.rEnabledFlow, ru.zf.pravka.data.Profile.Mode.DELA).collect {
                 cachedREnabled = it
                 rButton?.setEnabled(it)
                 // setEnabled показывает кнопку — а набор мог быть убран в
@@ -364,7 +553,15 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch {
-            app.settings.tEnabledFlow.collect {
+            withMode(app.settings.mEnabledFlow, ru.zf.pravka.data.Profile.Mode.MONEY).collect {
+                cachedMEnabled = it
+                mButton?.setEnabled(it)
+                if (allHidden) mButton?.setStacked(true)
+                refreshHandles()
+            }
+        }
+        scope.launch {
+            withMode(app.settings.tEnabledFlow, ru.zf.pravka.data.Profile.Mode.FOOD).collect {
                 cachedEEnabled = it
                 eButton?.setEnabled(it)
                 // setEnabled показывает кнопку — а набор мог быть убран в
@@ -383,6 +580,15 @@ class PravkaAccessibilityService : AccessibilityService() {
                 if (!it && stacked && !allHidden) expandButtons()
             }
         }
+        scope.launch {
+            app.settings.diskModeFlow.collect { on ->
+                if (diskModeApplied && on == cachedDiskMode) return@collect
+                diskModeApplied = true
+                cachedDiskMode = on
+                applyDiskMode(on)
+            }
+        }
+        scope.launch { app.settings.diskTuckFlow.collect { cachedDiskTuck = it } }
         scope.launch { app.settings.restSecFlow.collect { cachedRestSec = it } }
         scope.launch {
             app.settings.modeIconsFlow.collect {
@@ -390,6 +596,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 floatingButton?.refreshGlyph()
                 zButton?.refreshGlyph()
                 rButton?.refreshGlyph()
+                mButton?.refreshGlyph()
                 eButton?.refreshGlyph()
             }
         }
@@ -414,7 +621,6 @@ class PravkaAccessibilityService : AccessibilityService() {
             launch { app.zasechkaStore.clientsFlow.collect { zClientsCached = it } }
         }
         zReminderHandler.postDelayed(zReminderTick, 60_000)
-        restorePomodoro()
         lagExpectedAt = 0L
         lagHandler.removeCallbacks(lagTick)
         lagHandler.postDelayed(lagTick, 2_000)
@@ -462,32 +668,23 @@ class PravkaAccessibilityService : AccessibilityService() {
                 if (source.isEditable) cachedFocus = WeakReference(source)
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
-                // Only the learning auto-capture needs these; without it the
-                // whole branch (and its binder call for event.source) is dead.
-                if (!cachedLearnAuto) return
+                // События текста приходят только в окне захвата после доставки
+                // (armCapture) — вне его служба на них даже не подписана.
+                if (SystemClock.elapsedRealtime() > captureUntil) return
                 val source = event.source ?: return
                 if (source.isEditable) {
                     cachedFocus = WeakReference(source)
-                    // Learning auto-capture: the owner may be hand-editing a
-                    // text we just delivered. Throttled: at most one field read
-                    // per second, and only within the watch window of a take.
+                    // Владелец правит и сразу шлёт (15.09: «лаг всего одна секунда,
+                    // иначе я просто правил и отправлял»): читаем поле почти на
+                    // каждое нажатие (раз в 300 мс) и ещё раз через 300 мс после
+                    // последнего — последнее состояние перед отправкой должно быть
+                    // увидено. Опустевшее поле — это отправка: разбор сразу.
                     val now = SystemClock.elapsedRealtime()
-                    if (now - lastWatchProbeAt > 1000 && now - lastDeliveryAt < ru.zf.pravka.data.EditWatchStore.WATCH_WINDOW_MS) {
+                    ripenessHandler.removeCallbacks(trailingProbe)
+                    ripenessHandler.postDelayed(trailingProbe, 300)
+                    if (now - lastWatchProbeAt > 300) {
                         lastWatchProbeAt = now
-                        val pkg = runCatching { source.packageName?.toString() }.getOrNull()
-                        val current = runCatching { source.effectiveText() }.getOrDefault("")
-                        if (!pkg.isNullOrBlank() && current.isNotBlank()) {
-                            scope.launch {
-                                val firstEdit = app.editWatch.onFieldText(pkg, current, ::wordOverlap)
-                                if (firstEdit) {
-                                    app.learnLog.add(
-                                        "правка замечена: поле в $pkg, ${current.length} зн. — созреет через " +
-                                            "${ru.zf.pravka.data.EditWatchStore.RIPE_QUIET_MS / 60000} мин"
-                                    )
-                                    scheduleRipenessCheck()
-                                }
-                            }
-                        }
+                        probeWatchedField(source)
                     }
                 }
             }
@@ -534,9 +731,32 @@ class PravkaAccessibilityService : AccessibilityService() {
     fun isLockedIdle(): Boolean {
         val locked = runCatching { keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)
         if (!locked) return false
-        return googleSession == null && zSession == null && rSession == null &&
-            eSession == null && !zWhisperRecording && !rWhisperRecording &&
-            !eWhisperRecording && !DictationService.recording
+        return !micBusy()
+    }
+
+    /**
+     * Микрофон занят тейком — любого режима и любого движка. Одна точка на
+     * всех, кто про это спрашивает: карманный сторож на замке, прогрев движка
+     * и «перезагрузить микрофон».
+     */
+    fun micBusy(): Boolean =
+        googleSession != null || zSession != null || rSession != null || eSession != null ||
+            mSession != null || mWhisperRecording ||
+            zWhisperRecording || rWhisperRecording || eWhisperRecording ||
+            DictationService.recording
+
+    /**
+     * Палец ЛЁГ на кнопку — будим движок распознавания, не дожидаясь, чем
+     * касание кончится. Владелец (22.09.2026): «первые несколько слов он не
+     * слышит». Между `startListening()` и готовностью движок глух, и дороже
+     * всего там разбудить процесс службы распознавания — эту часть и платим
+     * заранее, пока палец ещё на стекле. Дёшево и идемпотентно: тёплый клиент
+     * живёт две минуты и продлевается сам.
+     */
+    fun warmSpeech() {
+        if (cachedEngine.startsWith("whisper")) return
+        if (micBusy()) return
+        GoogleSpeechSession.warmUp(this, cachedNetwork) { line -> app.eventLog.add(line) }
     }
 
     /** Short tap: stop the active session if any, else start per the engine. */
@@ -558,6 +778,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (eSession != null || eWhisperRecording) {
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.e_busy_pravka))
+            return
+        }
+        if (mSession != null || mWhisperRecording) {
+            Haptics.error(this)
+            Feedback.toast(this, getString(R.string.m_busy_pravka))
             return
         }
         if (googleSession != null) { stopLiveDictation(); return }
@@ -606,6 +831,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         } else if (micRequestForRaznoska) {
             micRequestForRaznoska = false
             startRaznoskaCapture()
+        } else if (micRequestForMoney) {
+            micRequestForMoney = false
+            startMoneyCapture()
         } else if (micRequestForZasechka) {
             micRequestForZasechka = false
             startZasechkaCapture()
@@ -614,20 +842,27 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    // Names/terms/brands the recognizer should be biased toward - the owner's
-    // dictionary (both protected forms and the correct sides of replacements).
+    // Names/terms/brands the recognizer should be biased toward: ТОЛЬКО верные
+    // формы — защищённые слова и правые части замен и подсказок, не больше 40
+    // (ослышки в списке учили движок ошибаться, длинный список тормозил старт).
+    // Порядок внутри сорока — `core/BiasingList.kt`: слова владельца впереди
+    // семени, латиница наравне. Одна строка в журнал — видно, что подсказки
+    // владельца доехали, а не вытеснены заводскими.
     private suspend fun collectBiasing(): List<String> = runCatching {
-        val words = LinkedHashSet<String>()
-        for (e in app.dictionaryStore.all()) {
-            e.from.takeIf { it.isNotBlank() }?.let { words.add(it) }
-            e.to.takeIf { it.isNotBlank() }?.let { words.add(it) }
-        }
-        words.toList()
+        val store = app.dictionaryStore
+        val built = ru.zf.pravka.core.BiasingList.build(store.all(), isSeed = store::isSeed)
+        app.eventLog.add("подсказки движку: ${built.describe()}")
+        built.strings
     }.getOrDefault(emptyList())
 
     fun startRecordingNow() {
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
+        probeFieldEdits(dictationTarget?.get())
+        discardTake = false
         floatingButton?.setRecording(true)
+        // Серая «отмена» — и у записи через Whisper: файл выбрасывается
+        // нерасшифрованным.
+        floatingButton?.showCancelBubble { cancelLiveDictation() }
         Haptics.start(this)
         startDictation()
     }
@@ -642,13 +877,18 @@ class PravkaAccessibilityService : AccessibilityService() {
             return
         }
         googleStartedAt = SystemClock.elapsedRealtime()
+        speechReady = false
         lastDraftAt = 0L
         discardTake = false
+        // Путь фиксируем на старте: настройку могут переключить посреди тейка,
+        // а в «Расшифровках» тейк должен значиться тем путём, которым шёл.
+        val network = cachedNetwork
         val session = GoogleSpeechSession(
             this,
-            biasing = cachedBiasing,
+            biasing = if (cachedBiasingOn) cachedBiasing else emptyList(),
             formatting = cachedFormatting,
             segmentedSession = cachedSegmented,
+            network = network,
         )
         googleSession = session
         // Start listening FIRST, then dress the UI: the button, the ticker's
@@ -658,7 +898,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         session.start(
             // A distinct tick the moment the recognizer is actually listening,
             // so the owner knows when to start and stops clipping first words.
-            onReady = { Haptics.success(this) },
+            onReady = {
+                speechReady = true
+                floatingButton?.updateTicker(HINT_SPEAK, force = true)
+                Haptics.success(this)
+            },
             // Live text feeds the on-screen ticker; a throttled copy goes to disk
             // so an interrupted take (phone dies, killed) can still be recovered.
             onPartial = { live ->
@@ -671,7 +915,9 @@ class PravkaAccessibilityService : AccessibilityService() {
                 lastDraftAt = SystemClock.elapsedRealtime()
                 app.liveDraft.save(text)
             },
-            onDone = { text -> onLiveDone(Settings.SPEECH_GOOGLE, text) },
+            onDone = { text ->
+                onLiveDone(if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, text)
+            },
             onError = { msg -> onLiveError(msg) },
             onLog = { line -> app.eventLog.add(line) },
         )
@@ -679,8 +925,13 @@ class PravkaAccessibilityService : AccessibilityService() {
         // host app - deliberately AFTER startListening() is already issued, so
         // it can't clip the first word.
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
+        probeFieldEdits(dictationTarget?.get())
         floatingButton?.setRecording(true)
         floatingButton?.showTicker()
+        // Строка открывается пустой, и эта пустота врёт: слышать движок
+        // начинает позже. Пишем в неё, чего ждём, — если он уже успел
+        // отозваться, там к этому мигу стоит «говори».
+        if (!speechReady) floatingButton?.updateTicker(HINT_WAIT)
         floatingButton?.showCancelBubble { cancelLiveDictation() }
         Haptics.start(this)
         // Foreground-mic holder so the recognizer survives app switches. If it
@@ -706,6 +957,7 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal data class ConvoEntry(val pkg: String, val at: Long, val text: String)
     internal val convo = ArrayDeque<ConvoEntry>()
     @Volatile internal var cachedConvoContext: Boolean = true
+    @Volatile internal var cachedPravkaEffort: String = ru.zf.pravka.data.ModelRoute.PRAVKA.defaultEffort
     @Volatile internal var cachedLearnPeriodH: Int = 3
     @Volatile internal var cachedLearnAuto: Boolean = false
 
@@ -786,10 +1038,20 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var discardTake = false
 
     fun cancelLiveDictation() {
-        if (googleSession == null) return
-        discardTake = true
-        app.eventLog.add("cancel requested")
-        stopLiveDictation()
+        when {
+            googleSession != null -> {
+                discardTake = true
+                app.eventLog.add("cancel requested")
+                stopLiveDictation()
+            }
+            // Запись «П» через Whisper: чужие флаги не стоят, значит файл наш.
+            DictationService.recording && !zWhisperRecording && !rWhisperRecording && !eWhisperRecording && !mWhisperRecording -> {
+                discardTake = true
+                app.eventLog.add("cancel requested (whisper)")
+                floatingButton?.setBusy(true)
+                stopDictation()  // -> onRecordingSaved выбросит файл
+            }
+        }
     }
 
     /** Second tap or the notification's Stop button: finalize the live take. */
@@ -868,6 +1130,23 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (zWhisperRecording) {
             zWhisperRecording = false
             zButton?.setRecording(false)
+            zButton?.hideCancelBubble()
+            // Серая «отмена»: файл выбрасывается нерасшифрованным, якоря и
+            // адресат комментария сбрасываются — следующая фраза уже не про них.
+            if (zDiscard) {
+                zDiscard = false
+                zTypeInstead = false
+                zCommentFor = 0L
+                zAnchorStart = 0L
+                zAnchorEnd = 0L
+                zEditTargetId = 0L
+                file?.let { app.recordings.delete(it.name) }
+                zButton?.hideTicker()
+                zButton?.setBusy(false)
+                app.eventLog.add("засечка: наговор отменён (whisper)")
+                Feedback.toast(this, "Отменено")
+                return
+            }
             // Plate tap mid-take: the audio is discarded UNTRANSCRIBED (the
             // whole point is confidentiality) and the type-in box opens.
             if (zTypeInstead) {
@@ -912,6 +1191,17 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (rWhisperRecording) {
             rWhisperRecording = false
             rButton?.setRecording(false)
+            rButton?.hideCancelBubble()
+            if (rDiscard) {
+                rDiscard = false
+                rTypeInstead = false
+                file?.let { app.recordings.delete(it.name) }
+                rButton?.hideTicker()
+                rButton?.setBusy(false)
+                app.eventLog.add("разноска: наговор отменён (whisper)")
+                Feedback.toast(this, "Отменено")
+                return
+            }
             if (rTypeInstead) {
                 rTypeInstead = false
                 file?.let { app.recordings.delete(it.name) }
@@ -945,10 +1235,26 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             return
         }
+        // Деньги на Whisper — тем же путём, со своим флагом.
+        if (mWhisperRecording) {
+            onMoneyWhisperSaved(file)
+            return
+        }
         // Еда на Whisper — тем же путём, со своим флагом.
         if (eWhisperRecording) {
             eWhisperRecording = false
             eButton?.setRecording(false)
+            eButton?.hideCancelBubble()
+            if (eDiscard) {
+                eDiscard = false
+                eTypeInstead = false
+                file?.let { app.recordings.delete(it.name) }
+                eButton?.hideTicker()
+                eButton?.setBusy(false)
+                app.eventLog.add("еда: наговор отменён (whisper)")
+                Feedback.toast(this, "Отменено")
+                return
+            }
             if (eTypeInstead) {
                 eTypeInstead = false
                 file?.let { app.recordings.delete(it.name) }
@@ -982,6 +1288,17 @@ class PravkaAccessibilityService : AccessibilityService() {
             return
         }
         floatingButton?.setRecording(false)
+        floatingButton?.hideCancelBubble()
+        if (discardTake) {
+            // Серая «отмена» у записи через Whisper: файл выбрасывается
+            // нерасшифрованным, в поле ничего не идёт.
+            discardTake = false
+            file?.let { app.recordings.delete(it.name) }
+            floatingButton?.setBusy(false)
+            app.eventLog.add("take discarded (whisper)")
+            Feedback.toast(this, "Отменено")
+            return
+        }
         if (file == null) {
             floatingButton?.setBusy(false)
             Haptics.error(this)
@@ -1199,21 +1516,147 @@ class PravkaAccessibilityService : AccessibilityService() {
             canUndo -> "↩︎ Откатить последнюю"
             else -> "Готово к правке"
         }
+        // Ряд усилия чистки сверху (владелец, 22.09.2026: «для Опуса надо
+        // варьировать для художки и для обычных текстов… прямо наверху три
+        // кнопки»). Выбор постоянный — та же настройка, что в «Моделях», а не
+        // на один раз: художку правят подряд, и каждый раз жать заново — лишнее.
+        val current = cachedPravkaEffort
+        val efforts = ru.zf.pravka.data.Models.PRAVKA_QUICK_EFFORTS.map { e ->
+            val on = e == current
+            FloatingButtonController.MenuItem(if (on) "● $e" else e, if (on) accent else FloatingButtonController.MUTED) {
+                setPravkaEffort(e)
+            }
+        }
         floatingButton?.toggleMenu(
-            listOf(
+            topRow = efforts,
+            groups = listOf(
                 listOf(
                     FloatingButtonController.MenuItem(state, accent) {
                         if (canUndo && !busy) undoLast()
                     },
                     FloatingButtonController.MenuItem(getString(R.string.quick_clean), red) { runProofread(ProofreadMode.CLEAN) },
+                    FloatingButtonController.MenuItem("Чистка буфера", red) { cleanClipboardIntoField() },
                     FloatingButtonController.MenuItem(getString(R.string.redo_polish), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
                     FloatingButtonController.MenuItem("Обучить", red) { learnFromField() },
                     FloatingButtonController.MenuItem("Сброс", red) { resetStuck() },
                     FloatingButtonController.MenuItem("Открыть Правку", red) { openPravkaPrompts() },
+                    FloatingButtonController.MenuItem("Настройки", red) { openSettingsTab("PRAVKA") },
                     FloatingButtonController.MenuItem("Закрыть", red) { floatingButton?.hideMenu() },
                 ),
             )
         )
+    }
+
+    private fun setPravkaEffort(effort: String) {
+        cachedPravkaEffort = effort
+        scope.launch { app.settings.setEffort(ru.zf.pravka.data.ModelRoute.PRAVKA, effort) }
+        Haptics.start(this)
+        app.eventLog.add("чистка: усилие $effort (меню «П»)")
+        Feedback.toast(this, "Правка: усилие $effort")
+    }
+
+    /**
+     * «Чистка буфера» из меню «П» (владелец, 16.09.2026): «брать то, что
+     * сейчас в буфере, править и вставлять в активный текстбокс».
+     *
+     * Буфер служба сама НЕ читает: с Android 10 его отдают только окну в
+     * фокусе или клавиатуре, а службе доступности в фоне приходит null.
+     * Поэтому вставляет чужое приложение — ACTION_PASTE в поле под курсором
+     * (фокус у него, ему буфер отдадут), а мы по разнице текста «до/после»
+     * (`TextSpans.insertedSpan`) находим вставленный кусок, выделяем ровно
+     * его и пускаем ту же чистку, что после диктовки: стрим прямо в поле,
+     * только по выделению, история и деньги — как обычно. Поля под курсором
+     * нет — пробуем прочитать буфер сами (вдруг фокус у нашего окна) и уйти
+     * дорогой «без поля»: буфер и уведомление.
+     */
+    private fun cleanClipboardIntoField() {
+        if (busy) return
+        busy = true
+        scope.launch {
+            val svc = this@PravkaAccessibilityService
+            val node = runCatching { focusedEditableNode() }.getOrNull()
+            if (node == null) {
+                busy = false
+                val text = runCatching { ru.zf.pravka.target.ClipboardTarget(svc).read() }
+                    .getOrNull()?.trim().orEmpty()
+                if (text.isEmpty()) {
+                    app.eventLog.add("clipboard clean: no field, clipboard unreadable or empty")
+                    Haptics.error(svc)
+                    Feedback.toast(svc, "Нет поля под курсором — поставь курсор в текстбокс и повтори.")
+                } else {
+                    app.eventLog.add("clipboard clean: no field -> clean without field len=${text.length}")
+                    cleanWithoutField(text)
+                }
+                return@launch
+            }
+            // Node calls throw when the window died — must not wedge busy.
+            val before = runCatching { Triple(node.effectiveText(), node.textSelectionStart, node.textSelectionEnd) }
+                .getOrNull()
+            if (before == null) {
+                busy = false
+                Haptics.error(svc)
+                Feedback.toast(svc, "Поле не читается — открой его заново и повтори.")
+                return@launch
+            }
+            val (existing, selStart, selEnd) = before
+            val pasted = runCatching { node.performAction(AccessibilityNodeInfo.ACTION_PASTE) }.getOrDefault(false)
+            if (!pasted) {
+                busy = false
+                app.eventLog.add("clipboard clean: paste rejected")
+                Haptics.error(svc)
+                Feedback.toast(svc, "Поле не приняло вставку из буфера.")
+                return@launch
+            }
+            // Вставляет чужой процесс, поле дорисовывается не мгновенно —
+            // ждём изменения текста до трёх раз. Узел после вставки может
+            // протухнуть (refresh() = false): тогда берём живой фокус заново,
+            // иначе прочитаем старый текст и решим, что вставки не было.
+            var live: AccessibilityNodeInfo = node
+            var after: String? = null
+            for (wait in longArrayOf(150L, 250L, 400L)) {
+                kotlinx.coroutines.delay(wait)
+                val fresh = runCatching { live.refresh() }.getOrDefault(false)
+                if (!fresh) live = runCatching { focusedEditableNode() }.getOrNull() ?: live
+                after = runCatching { live.effectiveText() }.getOrNull()
+                if (after != null && after != existing) break
+            }
+            if (after == null || after == existing) {
+                busy = false
+                app.eventLog.add("clipboard clean: nothing pasted (after==before)")
+                Haptics.error(svc)
+                Feedback.toast(svc, "В буфере нет текста — вставлять нечего.")
+                return@launch
+            }
+            val span = ru.zf.pravka.core.TextSpans.insertedSpan(existing, after, selStart, selEnd)
+            if (span == null) {
+                busy = false
+                app.eventLog.add("clipboard clean: span not found existing=${existing.length} after=${after.length}")
+                Haptics.error(svc)
+                Feedback.toast(svc, "Вставил, но границы вставки не нашёл — чистку не запускал.")
+                return@launch
+            }
+            val selArgs = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, span.first)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, (span.last + 1).coerceAtMost(after.length))
+            }
+            val selected = runCatching { live.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs) }
+                .getOrDefault(false)
+            app.eventLog.add(
+                "clipboard clean: pasted existing=${existing.length} after=${after.length} " +
+                    "span=${span.first}..${span.last + 1} selected=$selected"
+            )
+            // Дальше — обычная чистка по выделению; runProofread ставит busy сам
+            // и без точки приостановки между этими двумя строками.
+            busy = false
+            // Как у диктовки: без выделения чистить можно только пустое до того
+            // поле — иначе перепишем чужие абзацы, а не вставку.
+            if (selected || existing.isEmpty()) {
+                runProofread(ProofreadMode.CLEAN, pinnedNode = live)
+            } else {
+                Haptics.error(svc)
+                Feedback.toast(svc, "Вставил, но выделить кусок не удалось — всё поле чистить не стал.")
+            }
+        }
     }
 
     /** «Открыть Правку»: приложение на экране промптов — там он их и правит. */
@@ -1249,6 +1692,119 @@ class PravkaAccessibilityService : AccessibilityService() {
         ripenessHandler.postDelayed(ripenessCheck, 11L * 60 * 1000)
     }
 
+    // ---- Захват правок владельца: окно после доставки, разбор по тишине ----
+    //
+    // Владелец (15.09.2026): «как именно он следит за тем, что я правлю? там
+    // раньше был крутой механизм». Механизм тот же — EditWatchStore помнит
+    // доставленное и ловит правку по событиям текста, — но подписка на события
+    // теперь НЕ постоянная (постоянная стоила плавности при складывании и по
+    // умолчанию была выключена, то есть не работала): служба подписывается
+    // ровно после доставки, на CAPTURE_MS, продлевает окно, пока владелец
+    // правит, и отписывается тишиной. Разбор — не Опусом по расписанию, а
+    // локально: через DIGEST_QUIET_MS после последней правки или сразу, как
+    // только поле опустело (сообщение отправлено). Одно слово → в словарь
+    // (core/EditDiff.kt), сложнее → в журнал правок очередью для «Разобрать
+    // сейчас». Разбор идёт по сохранённому состоянию поля, само поле к этому
+    // моменту может быть уже пустым.
+    @Volatile internal var captureUntil = 0L
+    private val disarmCapture = object : Runnable {
+        override fun run() {
+            val left = captureUntil - SystemClock.elapsedRealtime()
+            if (left <= 0) applyEventSubscription(false)
+            else ripenessHandler.postDelayed(this, left + 500)
+        }
+    }
+    private val digestRunnable = Runnable { digestEdits(DIGEST_QUIET_MS) }
+
+    internal fun armCapture() {
+        captureUntil = SystemClock.elapsedRealtime() + CAPTURE_MS
+        applyEventSubscription(true)
+        ripenessHandler.removeCallbacks(disarmCapture)
+        ripenessHandler.postDelayed(disarmCapture, CAPTURE_MS + 500)
+    }
+
+    internal fun scheduleDigest() {
+        ripenessHandler.removeCallbacks(digestRunnable)
+        ripenessHandler.postDelayed(digestRunnable, DIGEST_QUIET_MS + 500)
+    }
+
+    /** Дочитать поле через паузу после последнего события — хвост правки. */
+    private val trailingProbe = Runnable { cachedFocus?.get()?.let { probeWatchedField(it) } }
+
+    /**
+     * Одно чтение поля в окне захвата: непустое — сравнить с доставленным и
+     * запомнить как последнее состояние; пустое — сообщение отправлено, правка
+     * устоялась, разбираем немедленно по сохранённому состоянию.
+     */
+    private fun probeWatchedField(source: AccessibilityNodeInfo) {
+        val pkg = runCatching { source.packageName?.toString() }.getOrNull() ?: return
+        val current = runCatching { source.effectiveText() }.getOrDefault("")
+        if (current.isBlank()) {
+            digestEdits(0L)
+            return
+        }
+        scope.launch {
+            val firstEdit = app.editWatch.onFieldText(pkg, current, ::wordOverlap)
+            if (firstEdit) app.learnLog.add("правка замечена: поле в $pkg, ${current.length} зн.")
+            // Пока правит — окно захвата продлевается, а разбор ждёт тишины.
+            captureUntil = SystemClock.elapsedRealtime() + CAPTURE_EXTEND_MS
+            scheduleDigest()
+        }
+    }
+
+    /**
+     * Разбор устоявшихся правок: одно слово → словарь без модели, остальное → в
+     * журнал правок очередью для Опуса по кнопке. Зовётся по тишине после
+     * правки, по опустевшему полю и перед каждым новым тейком.
+     */
+    private fun digestEdits(quietMs: Long) {
+        scope.launch(Dispatchers.Default) {
+            runCatching {
+                val quiet = app.editWatch.quietEdited(quietMs)
+                for (entry in quiet) {
+                    val edited = entry.lastSeen
+                    val sub = ru.zf.pravka.core.EditDiff.singleSubstitution(entry.baseline, edited)
+                    val known = app.dictionaryStore.all()
+                    when {
+                        sub != null && known.any { it.from.equals(sub.from, ignoreCase = true) } -> {
+                            app.corrections.append(entry.pkg, entry.dictated, entry.cleaned, edited, "same:${sub.from}", done = true)
+                        }
+                        // Та же основа, другое окончание («Папа → Пап») — правка под
+                        // контекст, не ослышка: HARD из неё переписывал каждое «папа»
+                        // во всех текстах (16.09). В словарь без модели не идёт —
+                        // в очередь «Разобрать сейчас», где Опус видит контекст.
+                        sub != null && sub.inflection -> {
+                            app.corrections.append(entry.pkg, entry.dictated, entry.cleaned, edited, "pending", done = false)
+                            app.learnLog.add("правка формы слова (${sub.from} → ${sub.to}) — не словарь, в очередь «Разобрать сейчас»")
+                        }
+                        sub != null -> {
+                            val mode = if (sub.similar) ru.zf.pravka.core.DictMode.HARD else ru.zf.pravka.core.DictMode.HINT
+                            app.dictionaryStore.add(
+                                sub.from, sub.to, mode,
+                                if (mode == ru.zf.pravka.core.DictMode.HINT) "владелец предпочитает это слово" else "правка руками",
+                            )
+                            app.corrections.append(
+                                entry.pkg, entry.dictated, entry.cleaned, edited,
+                                "dict:$mode:${sub.from}→${sub.to}", done = true,
+                            )
+                            app.learnLog.add("В СЛОВАРЬ из правки руками: ${sub.from} → ${sub.to} [$mode]")
+                            app.eventLog.add("edit→dict: ${sub.from} → ${sub.to} [$mode]")
+                            cachedBiasing = collectBiasing()
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                Feedback.toast(this@PravkaAccessibilityService, "Словарь: «${sub.from}» → «${sub.to}»")
+                            }
+                        }
+                        else -> {
+                            app.corrections.append(entry.pkg, entry.dictated, entry.cleaned, edited, "pending", done = false)
+                            app.learnLog.add("правка руками сложнее одного слова — в очередь «Разобрать сейчас» (${entry.pkg})")
+                        }
+                    }
+                    app.editWatch.markDigested(entry.id, edited)
+                }
+            }.onFailure { app.eventLog.add("digest edits failed: ${it.message}") }
+        }
+    }
+
     /** The learning tab's "Разобрать сейчас": no 12h gate, no quiet wait. */
     fun runLearnBatchNow() = maybeRunLearnBatch(force = true)
 
@@ -1264,38 +1820,38 @@ class PravkaAccessibilityService : AccessibilityService() {
                 val internal = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
                 val last = internal.getLong(KEY_LAST_LEARN_BATCH, 0L)
                 if (!force && System.currentTimeMillis() - last < cachedLearnPeriodH * 3600_000L) return@launch
-                val ripe = app.editWatch.ripe(quietMs = if (force) 0L else ru.zf.pravka.data.EditWatchStore.RIPE_QUIET_MS)
-                if (ripe.isEmpty()) {
+                // Очередь — сложные правки из журнала (CorrectionsLog): одно
+                // слово в словарь уходит само, Опусу достаётся то, что диффом
+                // не разобрать. Устоявшиеся, но ещё не разобранные — досыпаем
+                // прямо здесь, не дожидаясь таймера тишины.
+                if (app.editWatch.quietEdited(0L).isNotEmpty()) {
+                    digestEdits(0L)
+                    kotlinx.coroutines.delay(1500)
+                }
+                val pending = app.corrections.pending().takeLast(8)
+                if (pending.isEmpty()) {
                     if (force) {
-                        val watched = app.editWatch.all()
-                        app.learnLog.add(
-                            "разбор вручную: зрелых правок нет (в наблюдении ${watched.size}, " +
-                                "изменённых ${watched.count { it.editedTs > 0 }})"
-                        )
-                        Feedback.toast(this@PravkaAccessibilityService, "Разбирать нечего: изменённых текстов нет.")
+                        app.learnLog.add("разбор вручную: сложных правок в очереди нет")
+                        Feedback.toast(this@PravkaAccessibilityService, "Разбирать нечего: сложных правок нет, одиночные уже в словаре.")
                     }
                     return@launch
                 }
-                val cases = ripe.take(5).map { Triple(it.dictated, it.cleaned, it.lastSeen) }
+                val cases = pending.map { Triple(it.dictated, it.cleaned, it.edited) }
                 app.eventLog.add("learn batch: ${cases.size} edits")
                 app.learnLog.add("батч-анализ: правок к разбору — ${cases.size}")
                 if (force) Feedback.toast(this@PravkaAccessibilityService, "Разбираю правок: ${cases.size} (Опус)…")
-                val result = app.claudeProvider.learnBatch(cases)
+                val result = app.claudeProvider.learnBatch(cases, app.dictionaryStore.all())
                 result.onSuccess { proposals ->
                     internal.edit().putLong(KEY_LAST_LEARN_BATCH, System.currentTimeMillis()).apply()
-                    app.editWatch.remove(ripe.take(5).map { it.id })
-                    app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
+                    app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut, route = ru.zf.pravka.data.ModelRoute.PRAVKA_LEARN.key)
                     app.learnLog.add("батч-анализ стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
-                    val q = queueProposals(proposals)
-                    app.eventLog.add(
-                        "learn batch: dict=${proposals.dict.size} rules=${proposals.rules.size} " +
-                            "auto+=${q.autoDict} pending+=${q.pendingRules}"
-                    )
-                    if (q.autoDict > 0 || q.pendingRules > 0) {
-                        showLearnNotification(q)
-                        refreshLearnBadge()
-                    }
-                    maybeAutoOptimizeRules(internal)
+                    val added = queueProposals(proposals)
+                    app.corrections.markDone(pending.map { it.id }, "opus: в словарь $added")
+                    app.eventLog.add("learn batch: dict=${proposals.dict.size} added=$added")
+                    // Тишина после «Разобрать сейчас» читается как поломка —
+                    // пустой результат тоже называется словами.
+                    if (added > 0) showLearnNotification(added)
+                    else if (force) Feedback.toast(this@PravkaAccessibilityService, "Ничего словарного в правках не нашлось.")
                 }.onFailure { e ->
                     app.stats.recordError()
                     app.eventLog.add("learn batch failed: ${e.message}")
@@ -1303,50 +1859,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
             } finally {
                 learnBatchRunning = false
-            }
-        }
-    }
-
-    /**
-     * Ночной разбор Засечки: раз в сутки, глубокой ночью, сопоставить
-     * надиктовки с тем, что из них получилось.
-     *
-     * БАТЧЕМ — и это не мелочь: разбор идёт Опусом на сотне пар, а батч стоит
-     * ровно половину. Ночью ответа никто не ждёт, так что единственная цена
-     * батча (он отвечает в течение часа, а обещает сутки) здесь не цена
-     * вовсе. Заявка уходит в окно 3–5 утра, ответ забирается на любом
-     * последующем тике одним дешёвым GET. Нет нового материала — до сети
-     * дело не доходит вовсе.
-     */
-    private suspend fun zasechkaLearnTick() {
-        val prefs = getSharedPreferences(PREFS_INTERNAL, MODE_PRIVATE)
-        val cal = java.util.Calendar.getInstance()
-        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-        val today = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
-            .format(java.util.Date())
-        // Заявка уходит ночью, ответ забирается на любом тике: батч отвечает
-        // обычно в течение часа, но обещаны сутки. Опрос — один дешёвый GET.
-        if (hour in 3..5 && prefs.getString(KEY_Z_LEARN_DAY, "") != today) {
-            prefs.edit().putString(KEY_Z_LEARN_DAY, today).apply()
-            app.zasechkaEngine.learnSubmit()
-        }
-        val got = app.zasechkaEngine.learnCollect()
-        if (got > 0) app.eventLog.add("засечка-обучение: ночью предложено правил — $got")
-        refreshZasechkaBadge()
-    }
-
-    /** ⭐ над «З», пока предложенные правила ждут суда. Тап — в Засечку. */
-    private suspend fun refreshZasechkaBadge() {
-        val pending = runCatching { app.zasechkaRules.all().count { it.pending } }.getOrDefault(0)
-        if (pending == 0) {
-            zButton?.hideLearnBadge()
-        } else {
-            zButton?.showLearnBadge("⭐") {
-                startActivity(
-                    android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
-                        .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_ZASECHKA)
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
             }
         }
     }
@@ -1367,83 +1879,39 @@ class PravkaAccessibilityService : AccessibilityService() {
         floatingButton?.hideLearnBadge()
     }
 
-    // Weekly housekeeping (owner's request): when the rule set has grown,
-    // Opus consolidates it automatically - dubs merged, contradictions out,
-    // no hard size cap. Runs after a successful learn batch, at
-    // most once per RULES_OPT_PERIOD_MS; the result is applied directly and
-    // logged (the manual button with its preview dialog stays available).
-    private suspend fun maybeAutoOptimizeRules(internal: android.content.SharedPreferences) {
-        val last = internal.getLong(KEY_LAST_RULES_OPT, 0L)
-        if (System.currentTimeMillis() - last < RULES_OPT_PERIOD_MS) return
-        val rules = app.rulesStore.all()
-        if (rules.size < RULES_OPT_MIN_COUNT) return
-        app.learnLog.add("автооптимизация набора правил (раз в неделю): ${rules.size} шт., запускаю Опус…")
-        app.claudeProvider.optimizeRules(rules)
-            .onSuccess { opt ->
-                app.stats.recordAux(opt.costUsd, opt.tokensIn, opt.tokensOut)
-                app.rulesStore.replaceAll(opt.rules.map { Triple(it.text, it.before, it.after) })
-                internal.edit().putLong(KEY_LAST_RULES_OPT, System.currentTimeMillis()).apply()
-                app.learnLog.add(
-                    "АВТООПТИМИЗАЦИЯ: набор заменён, ${rules.size} → ${opt.rules.size}, " +
-                        "стоила $" + "%.4f".format(java.util.Locale.US, opt.costUsd)
-                )
-            }
-            .onFailure { e ->
-                app.stats.recordError()
-                app.learnLog.add("автооптимизация НЕ УДАЛАСЬ: ${e.message} (набор не тронут)")
-            }
-    }
-
-    data class QueueResult(val autoDict: Int, val pendingRules: Int)
-
     /**
-     * Owner's split (2026-08-20): dictionary findings ("Поли" -> "Полли",
-     * "фор раннер" -> "Forerunner") are mechanical - they go STRAIGHT into
-     * the dictionary, marked "авто" so they're easy to review or delete.
-     * RULES are judgment calls - they stay pending until approved. A rule
-     * proposal matching an EXISTING rule counts as a confirmation (its ×N
-     * grows) instead of being silently dropped.
+     * Находки разбора идут ПРЯМО в словарь с пометкой «авто-обучение» — их
+     * легко найти и снять. Правил разбор больше не предлагает (владелец,
+     * 08.09.2026: «там уже всё, что возможно, придумано, а он додумывает
+     * дурацкие вещи; упор — на замены одного слова другим, и это в словарь»),
+     * поэтому и очереди на одобрение у него нет: что не стало словом, не
+     * стало ничем. Слово, которое в словаре уже есть, не дублируется.
      */
-    private suspend fun queueProposals(proposals: ru.zf.pravka.provider.ClaudeProvider.LearnProposals): QueueResult {
+    private suspend fun queueProposals(proposals: ru.zf.pravka.provider.ClaudeProvider.LearnProposals): Int {
         val known = app.dictionaryStore.all().map { it.from.lowercase() }.toHashSet()
-        var autoDict = 0
+        var added = 0
         proposals.dict
             .filter { it.from.isNotBlank() && it.from.lowercase() !in known }
             .forEach { d ->
-                val mode = if (d.mode == "PROTECT") ru.zf.pravka.core.DictMode.PROTECT
-                    else ru.zf.pravka.core.DictMode.HARD
+                val mode = when (d.mode) {
+                    "PROTECT" -> ru.zf.pravka.core.DictMode.PROTECT
+                    "HINT" -> ru.zf.pravka.core.DictMode.HINT
+                    else -> ru.zf.pravka.core.DictMode.HARD
+                }
                 val note = listOf(d.note.trim(), "авто-обучение").filter { it.isNotBlank() }.joinToString(" · ")
                 app.dictionaryStore.add(d.from, d.to, mode, note)
-                autoDict++
+                added++
                 app.learnLog.add("В СЛОВАРЬ автоматически: ${d.from} → ${d.to} [${d.mode}]")
             }
         // New words must bias the recognizer too, same as a manual add.
-        if (autoDict > 0) cachedBiasing = collectBiasing()
-        // Duplicates of EXISTING rules are prevented at the source now: the
-        // learn prompt carries the current rule set with a "don't re-propose"
-        // instruction (the old confirm-counter never worked usefully).
-        val fresh = mutableListOf<ru.zf.pravka.data.LearnStore.Suggestion>()
-        for (r in proposals.rules) {
-            fresh.add(
-                ru.zf.pravka.data.LearnStore.Suggestion(
-                    id = 0, kind = "rule", text = r.text,
-                    exampleBefore = r.before, exampleAfter = r.after,
-                )
-            )
-            app.learnLog.add("предложение (правило): ${r.text}")
-        }
-        return QueueResult(autoDict, app.learnStore.add(fresh))
+        if (added > 0) cachedBiasing = collectBiasing()
+        return added
     }
 
     /** One human sentence out of a learn round's outcome. */
-    private fun learnSummary(q: QueueResult): String {
-        val parts = mutableListOf<String>()
-        if (q.autoDict > 0) parts.add("в словарь добавлено: ${q.autoDict}")
-        if (q.pendingRules > 0) parts.add("правил на одобрение: ${q.pendingRules} (раздел «Обучение»)")
-        return parts.joinToString(", ").replaceFirstChar { it.uppercase() } + "."
-    }
+    private fun learnSummary(added: Int): String = "В словарь добавлено: $added."
 
-    private fun showLearnNotification(q: QueueResult) {
+    private fun showLearnNotification(added: Int) {
         runCatching {
             val nm = getSystemService(android.app.NotificationManager::class.java)
             val channelId = "pravka-learning"
@@ -1463,7 +1931,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             )
             val notif = android.app.Notification.Builder(this, channelId)
                 .setContentTitle("Правка научилась новому")
-                .setContentText(learnSummary(q))
+                .setContentText(learnSummary(added))
                 .setSmallIcon(android.R.drawable.ic_menu_edit)
                 .setContentIntent(open)
                 .setAutoCancel(true)
@@ -1508,18 +1976,17 @@ class PravkaAccessibilityService : AccessibilityService() {
                 dictated = match.first,
                 cleaned = match.second,
                 final = current,
+                known = app.dictionaryStore.all(),
             )
             busy = false
             floatingButton?.setBusy(false)
             result.onSuccess { proposals ->
-                app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut)
+                app.stats.recordAux(proposals.costUsd, proposals.tokensIn, proposals.tokensOut, route = ru.zf.pravka.data.ModelRoute.PRAVKA_LEARN.key)
                 app.learnLog.add("разбор стоил $" + "%.4f".format(java.util.Locale.US, proposals.costUsd))
-                val q = queueProposals(proposals)
-                app.eventLog.add(
-                    "learn: dict=${proposals.dict.size} rules=${proposals.rules.size} " +
-                        "auto+=${q.autoDict} pending+=${q.pendingRules}"
-                )
-                if (q.pendingRules > 0) refreshLearnBadge()
+                val added = queueProposals(proposals)
+                app.eventLog.add("learn: dict=${proposals.dict.size} added=$added")
+                val pkgNow = runCatching { node?.packageName?.toString() }.getOrNull().orEmpty()
+                app.corrections.append(pkgNow, match.first, match.second, current, "opus («Обучить»): в словарь $added", done = true)
                 // This edit is analyzed - close its auto-watch so the batch
                 // doesn't re-analyze the same text later.
                 val closed = app.editWatch.all()
@@ -1529,11 +1996,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                     app.editWatch.remove(closed)
                     app.learnLog.add("наблюдение закрыто: разобрано вручную (${closed.size})")
                 }
-                if (q.autoDict == 0 && q.pendingRules == 0) {
-                    Feedback.toast(this@PravkaAccessibilityService, "Ничего системного в правках не нашлось.")
+                if (added == 0) {
+                    Feedback.toast(this@PravkaAccessibilityService, "Ничего словарного в правках не нашлось.")
                 } else {
                     Haptics.success(this@PravkaAccessibilityService)
-                    Feedback.toast(this@PravkaAccessibilityService, learnSummary(q))
+                    Feedback.toast(this@PravkaAccessibilityService, learnSummary(added))
                 }
             }.onFailure { e ->
                 app.stats.recordError()
@@ -1541,6 +2008,32 @@ class PravkaAccessibilityService : AccessibilityService() {
                 Haptics.error(this@PravkaAccessibilityService)
                 Feedback.toast(this@PravkaAccessibilityService, e.message ?: "Ошибка обучения")
             }
+        }
+    }
+
+    /**
+     * Правки владельца → словарь, без слежки за полями. Перед новым тейком поле
+     * читается один раз (его и так ищут как цель вставки) и сравнивается с
+     * тем, что мы в него прислали: поменялось одно слово — запись в словарь
+     * сразу, без модели (`core/EditDiff.kt`: похожее слово — замена, иное —
+     * подсказка); сложнее — остаётся кнопке «Разобрать сейчас». Владелец
+     * (15.09.2026): «должны добавляться правки, если я правлю тот текст,
+     * который он уже прислал в текстбокс». Один binder-вызов не на главном
+     * потоке, никаких подписок на события.
+     */
+    private fun probeFieldEdits(node: AccessibilityNodeInfo?) {
+        if (node == null) return
+        scope.launch(Dispatchers.Default) {
+            val pkg = runCatching { node.packageName?.toString() }.getOrNull() ?: return@launch
+            val current = runCatching { node.effectiveText() }.getOrDefault("")
+            if (current.isBlank()) return@launch
+            runCatching {
+                // Правка, сделанная без событий (окно захвата истекло, служба
+                // перезапускалась): поле сравнивается с доставленным здесь; сам
+                // разбор общий, и тишины он уже не ждёт — правка устоялась.
+                app.editWatch.onFieldText(pkg, current, ::wordOverlap, windowMs = 6L * 3600 * 1000)
+            }.onFailure { app.eventLog.add("edit probe failed: ${it.message}") }
+            if (app.editWatch.quietEdited(0L).isNotEmpty()) digestEdits(0L)
         }
     }
 
@@ -1590,7 +2083,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             floatingButton?.setBusy(false)
             busy = false
             result.onSuccess { r ->
-                app.stats.recordAux(r.costUsd, r.inputTokens, r.outputTokens)
+                app.stats.recordAux(r.costUsd, r.inputTokens, r.outputTokens, route = ru.zf.pravka.data.ModelRoute.PRAVKA.key)
                 ru.zf.pravka.target.ClipboardTarget(this@PravkaAccessibilityService).write(r.text)
                 app.historyLog.append(
                     mode = "ASSIST_" + tag.uppercase(),
@@ -1729,9 +2222,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                     app.editWatch.watch(pkg, watchDictated, outcome.result.text)
                     lastDeliveryAt = SystemClock.elapsedRealtime()
                     convoUpdateLast(pkg, outcome.result.text)
+                    // Окно захвата: события текста только теперь и только на время.
+                    armCapture()
                 }
             }
-            maybeRunLearnBatch()
+            // Авторазбора Опусом после чистки больше нет: батч идёт только по кнопке.
             // The post-fix result bar is gone (owner: it covered the keyboard).
             // Undo lives in the long-press FAB menu; the word diff and quick
             // add-to-dictionary went with the bar.
@@ -1852,17 +2347,29 @@ class PravkaAccessibilityService : AccessibilityService() {
         // не складываем никогда — кнопка, уехавшая под другую в тот момент,
         // когда её собираются нажать, это худший из возможных сюрпризов.
         val working = busy || googleSession != null || zSession != null ||
-            rSession != null || eSession != null || DictationService.recording ||
-            zWhisperRecording || rWhisperRecording || eWhisperRecording
-        if (!stacked && cachedStackIdle && !working && !screenLocked &&
-            now - lastTouchAt >= STACK_IDLE_MS
-        ) {
+            rSession != null || eSession != null || mSession != null || DictationService.recording ||
+            zWhisperRecording || rWhisperRecording || eWhisperRecording || mWhisperRecording
+        val quiet = !working && !screenLocked && now - lastTouchAt >= STACK_IDLE_MS
+        if (cachedDiskMode) {
+            // Диск: полминуты без касаний — к ближайшему краю и домой, свой
+            // тумблер («Автоматически убирать диск к краю»); стопочный его
+            // не касается.
+            if (cachedDiskTuck && quiet) disk?.tuck()
+            // Утопания глубже уборки больше нет (владелец, 22.09.2026: «убери
+            // ещё полный док, когда он через 5 минут ещё больше засовывает
+            // кнопки подальше. Это не нужно»): убранный диск и так отдаёт
+            // «П» и «З» целиком, а прятать их глубже значило бы прятать
+            // инструмент.
+        } else if (!stacked && cachedStackIdle && quiet) {
             collapseButtons()
-        } else {
-            // Самолечение: при старте службы позиции кнопок могло ещё не
-            // быть, и стрелка тогда не нарисовалась. Тик её донесёт. Он же
-            // вернёт кнопки, если складывание почему-то не доиграло свой
-            // configSettled: остаться без кнопок насовсем нельзя.
+        }
+        // Самолечение: при старте службы позиции кнопок могло ещё не
+        // быть, и стрелка тогда не нарисовалась. Тик её донесёт. Он же
+        // вернёт кнопки, если складывание почему-то не доиграло свой
+        // configSettled: остаться без кнопок насовсем нельзя. В стопке —
+        // когда не складываем на этом тике; на диске — всегда: диск не
+        // складывается, `stacked` у него не поднимается никогда.
+        if (cachedDiskMode || stacked || !(cachedStackIdle && quiet)) {
             if (!folding) setFolded(false)
             refreshHandles()
         }
@@ -1896,22 +2403,23 @@ class PravkaAccessibilityService : AccessibilityService() {
      * размечают день; ручка и есть стрелка.
      */
     internal fun collapseButtons() {
+        if (cachedDiskMode) {
+            // Диск не складывается — убирается к краю и домой: «П» и «З» внутрь экрана.
+            disk?.tuck()
+            return
+        }
         if (stacked) return
         val (x, y) = floatingButton?.currentPosition() ?: return
-        val size = floatingButton?.buttonSizePx() ?: 0
-        val gap = (8 * resources.displayMetrics.density).toInt()
         stacked = true
-        // «П» и «З» остаются на своих местах в цепочке и работают как обычно.
-        val underZ = y + size + gap
-        zButton?.followTo(x, underZ, true)
-        // «Д» и «Е» схлопываются В «З» и прячутся: оттуда же и выедут.
-        // Раньше они оставались торчать краями — и наезжали на саму «З».
-        rButton?.followTo(x, underZ, true)
-        eButton?.followTo(x, underZ, true)
-        floatingButton?.setStacked(false)
-        zButton?.setStacked(false)
-        rButton?.setStacked(true)
-        eButton?.setStacked(true)
+        // Первые две («П» и «З») остаются на своих местах и работают как
+        // обычно; всё, что дальше по связке («Д», «Е»), схлопывается В «З» и
+        // прячется: оттуда же и выедет. Раньше спрятанные
+        // оставались торчать краями — и наезжали на саму «З».
+        val underZ = y + slotOffset(1)
+        chain().forEachIndexed { j, b ->
+            if (j >= 1) b.followTo(x, underZ, true)
+            b.setStacked(j >= 2)
+        }
         refreshHandles()
     }
 
@@ -1928,62 +2436,174 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (allHidden == hidden) return
         allHidden = hidden
         if (hidden) {
-            floatingButton?.setStacked(true)
-            zButton?.setStacked(true)
-            rButton?.setStacked(true)
-            eButton?.setStacked(true)
+            stackSettings?.hideFan()
+            chainButtons().forEach { it.setStacked(true) }
             // Значки и плашки привязаны к кнопкам: без них они висели бы
             // посреди экрана сами по себе. Убрать — значит убрать всё.
             floatingButton?.hideLearnBadge()
-            zButton?.hideLearnBadge()
+            floatingButton?.hideCancelBubble()
             zButton?.hideTicker()
+            zButton?.hideCancelBubble()
             rButton?.hideTicker()
             rButton?.hidePlate()
+            rButton?.hideCancelBubble()
+            mButton?.hideTicker()
+            mButton?.hidePlate()
+            mButton?.hideCancelBubble()
             eButton?.hideTicker()
             eButton?.hidePlate()
-            stacked = true
+            eButton?.hideCancelBubble()
+            stacked = !cachedDiskMode
+            disk?.setAllHidden(true)
+        } else if (cachedDiskMode) {
+            // Диск: кнопки возвращаются прямо на кольцо, тарелка — под них.
+            stacked = false
+            chainButtons().forEach { it.setStacked(false) }
+            disk?.setAllHidden(false)
+            refreshLearnBadge()
         } else {
             stacked = true      // чтобы expandButtons развёз все четыре
             expandButtons(silent = true)
             refreshLearnBadge()
-            scope.launch { refreshZasechkaBadge() }
         }
         refreshHandles()
         Haptics.start(this)
     }
 
     /**
-     * Ручки на местах. Нижняя — под ХВОСТОМ: сложено, значит под «З»,
-     * разложено — под последней включённой кнопкой. Верхняя — над «П», и
-     * когда всё убрано, она остаётся единственным, что видно на экране:
-     * иначе кнопки было бы не вернуть.
+     * Диск или стопка. Диск (владелец, 19.09.2026) — те же четыре кнопки на
+     * кольце вокруг шестерёнки (`DiskController`), стопка — прежний столбик с
+     * ручкой. Переключается тумблером в Общих на живой службе: владелец
+     * сказал «если не получится — откатим», и откат обязан быть одним
+     * движением, без пересборки.
+     */
+    private fun applyDiskMode(on: Boolean) {
+        chainButtons().forEach { it.ringMode = on }
+        stackSettings?.ringMode = on
+        if (on) {
+            tailHandle?.hide()
+            // На диске спрятанных нет: всё, что не убрано в точку, стоит на кольце.
+            stacked = false
+            if (!allHidden) chainButtons().forEach { it.setStacked(false) }
+            disk?.setAllHidden(allHidden)
+            disk?.show()
+        } else {
+            disk?.hide()
+            stackSettings?.clearance = 0
+            // Обратно в стопку: каждая кнопка возвращается на своё сохранённое
+            // место — той же дорогой, что после поворота экрана.
+            chainButtons().forEach { it.onConfigurationChanged() }
+        }
+        refreshHandles()
+    }
+
+    /** Все кнопки связки по порядку: П · З · Д · ₽ · Е — включённые и нет. */
+    internal fun chainButtons(): List<RingButton> =
+        listOfNotNull(floatingButton, zButton, rButton, mButton, eButton)
+
+    /** Включённые кнопки связки по порядку — то, что реально стоит на экране. */
+    internal fun chain(): List<RingButton> = listOfNotNull(
+        floatingButton,
+        zButton?.takeIf { cachedZEnabled },
+        rButton?.takeIf { cachedREnabled },
+        mButton?.takeIf { cachedMEnabled },
+        eButton?.takeIf { cachedEEnabled },
+    )
+
+    /** Слот кнопки с номером [index] в связке сейчас: сложено — всё после «З» лежит под «З». */
+    private fun chainSlot(index: Int): Int = if (stacked) minOf(index, 1) else index
+
+    /**
+     * Связка едет за [from] — кнопкой, чей левый верхний угол теперь в
+     * ([x], [y]); null — за головой над «П», тогда едут все, включая «П».
+     * Бусы: чем дальше звено от пальца (`link`), тем мягче пружина.
+     */
+    private fun followChain(from: RingButton?, x: Int, y: Int, dropped: Boolean) {
+        val list = chain()
+        val i = if (from == null) 0 else list.indexOf(from)
+        if (i < 0) return
+        val top = y - slotOffset(chainSlot(i))
+        list.forEachIndexed { j, b ->
+            if (b === from) return@forEachIndexed
+            val link = if (from == null) j + 1 else abs(j - i)
+            b.followTo(x, top + slotOffset(chainSlot(j)), dropped, link = link)
+        }
+        refreshHandles()
+    }
+
+    /**
+     * Экран настроек приложения — пункт «Настройки» в меню долгого нажатия
+     * каждой кнопки (владелец, 19.09.2026: «в меню длинного тапа на каждую
+     * кнопку тоже возможность открыть настройки»).
+     */
+    /**
+     * «Настройки» из меню кнопки. [group] — имя группы этой кнопки
+     * (`SettingsGroup`): долгое нажатие на «З» → «Настройки» открывает
+     * Засечку, а не меню всех групп (24.09.2026).
+     */
+    internal fun openSettingsTab(group: String? = null) {
+        runCatching {
+            startActivity(
+                android.content.Intent(this, ru.zf.pravka.MainActivity::class.java)
+                    .putExtra(ru.zf.pravka.MainActivity.EXTRA_TAB, ru.zf.pravka.MainActivity.TAB_SETTINGS)
+                    .apply { if (group != null) putExtra(ru.zf.pravka.MainActivity.EXTRA_SETTINGS_GROUP, group) }
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
+    /**
+     * Ручка и шестерёнка на местах. Ручка — под ХВОСТОМ: сложено, значит под
+     * «З», разложено — под последней включённой кнопкой; причём под её
+     * ТЕКУЩИМ местом, а не расчётным: пока бусы догоняют палец, хвост ещё в
+     * пути, и галочка, вставшая на его будущее место раньше него, читалась бы
+     * как чужая. Шестерёнка — над «П»; когда всё убрано, на её месте красная
+     * точка — единственное, что видно на экране: иначе кнопки было бы не
+     * вернуть.
      *
      * Нечего прятать — ручки нет: ручка от ящика, которого не существует,
      * хуже, чем её отсутствие.
      */
     internal fun refreshHandles() {
         if (folding) return
+        if (cachedDiskMode) {
+            // Диск: шестерёнка (или точка) стоит в его центре, ручки-галочки нет —
+            // прятать под краем и без неё есть чему.
+            stackSettings?.show(dot = allHidden)
+            tailHandle?.hide()
+            disk?.refresh()
+            return
+        }
         val (x, y) = floatingButton?.currentPosition() ?: return
         val size = floatingButton?.buttonSizePx() ?: return
-        val gap = (8 * resources.displayMetrics.density).toInt()
 
-        topHandle?.let { h ->
-            h.show(allHidden)
-            h.moveTo(x, y, size, above = true)
+        stackSettings?.let { s ->
+            s.show(dot = allHidden)
+            s.moveTo(x, y, size)
         }
 
         val tail = tailHandle ?: return
-        if (allHidden || !cachedZEnabled || (!cachedREnabled && !cachedEEnabled)) {
+        val list = chain()
+        // В связке две кнопки или меньше — прятать нечего, и ручки нет.
+        if (allHidden || list.size <= 2) {
             tail.hide()
             return
         }
-        val slot = when {
-            stacked -> 1
-            cachedEEnabled -> 3
-            else -> 2
-        }
+        val lastSlot = if (stacked) 1 else list.size - 1
+        val (lx, ly) = list[lastSlot].currentPosition() ?: (x to (y + slotOffset(lastSlot)))
         tail.show(stacked)
-        tail.moveTo(x, y + slot * (size + gap), size, above = false)
+        tail.moveTo(lx, ly, size, above = false)
+    }
+
+    /**
+     * Смещение верха слота стопки от верха «П»: 1 — «З», 2 — «Д», 3 — «Т».
+     * Просвет между кнопками одинаковый; арифметика одна на всех —
+     * `core/StackGeometry.kt`, под тестами.
+     */
+    internal fun slotOffset(slot: Int): Int {
+        val size = floatingButton?.buttonSizePx() ?: 0
+        val gap = (8 * resources.displayMetrics.density).toInt()
+        return StackGeometry.slotOffset(slot, size, gap)
     }
 
     /**
@@ -1993,35 +2613,58 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     internal fun expandButtons(silent: Boolean = false): Boolean {
         if (!silent) touched()
+        // На диске прятаться некуда и разворачивать нечего: тап — сразу дело.
+        if (cachedDiskMode) return false
         if (!stacked) return false
         val (x, y) = floatingButton?.currentPosition() ?: return false
         stacked = false
-        val size = floatingButton?.buttonSizePx() ?: 0
-        val gap = (8 * resources.displayMetrics.density).toInt()
-        // Сначала показать, потом развезти: тогда «Д» и «Е» видно, как они
+        // Сначала показать, потом развезти: тогда видно, как спрятанные
         // выезжают из-под «З», а не как они появляются готовыми на местах.
-        floatingButton?.setStacked(false)
-        zButton?.setStacked(false)
-        rButton?.setStacked(false)
-        eButton?.setStacked(false)
-        zButton?.followTo(x, y + size + gap, true)
-        rButton?.followTo(x, y + 2 * (size + gap), true)
-        eButton?.followTo(x, y + 3 * (size + gap), true)
+        // setStacked(false) — всем, и выключенным: иначе кнопка, включённая
+        // позже тумблером, осталась бы убранной.
+        chainButtons().forEach { it.setStacked(false) }
+        chain().forEachIndexed { j, b -> if (j >= 1) b.followTo(x, y + slotOffset(j), true) }
         refreshHandles()
         if (!silent) Haptics.start(this)
         return true
     }
 
-    // ---- Помидоры: the "З" button doubles as a pomodoro timer ----
+    // ---- Экран во время диктовки ----
 
-    internal var pomodoroEndsAt = 0L
-    internal var pomodoroIsBreak = false
-    internal val pomodoroHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    internal val pomodoroTicker = object : Runnable {
-        override fun run() {
-            tickPomodoro()
-            if (pomodoroEndsAt > 0) pomodoroHandler.postDelayed(this, 15_000)
+    private var screenKeeper: android.view.View? = null
+
+    /**
+     * Пока идёт любой тейк — Правки, Засечки, Дел, Тела — экран не гаснет.
+     * Владелец: «когда начитываю, Правка не держит экран: он гаснет, и
+     * приходится тыкать в текстбокс». Служба не Activity и своего окна с
+     * содержимым не имеет, поэтому держит крошечное невидимое окно 1×1 с
+     * FLAG_KEEP_SCREEN_ON: система не гасит экран, пока видно хотя бы одно
+     * окно с этим флагом, — это и есть штатный способ, устаревшие
+     * SCREEN_*_WAKE_LOCK не нужны. Окно живёт ровно столько, сколько микрофон
+     * (зовёт DictationService на старте и стопе), и снимается из
+     * WindowManager, а не прячется: складыванию Fold каждое наше окно стоит
+     * перерисовки.
+     */
+    fun keepScreenOn(on: Boolean) {
+        val wm = getSystemService(android.view.WindowManager::class.java) ?: return
+        if (!on) {
+            val v = screenKeeper ?: return
+            screenKeeper = null
+            runCatching { wm.removeView(v) }
+            return
         }
+        if (screenKeeper != null) return
+        val v = android.view.View(this)
+        val p = android.view.WindowManager.LayoutParams(
+            1, 1,
+            android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+            android.graphics.PixelFormat.TRANSLUCENT,
+        ).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.START }
+        screenKeeper = v
+        if (runCatching { wm.addView(v, p) }.isFailure) screenKeeper = null
     }
 
     // ---- Засечка reminders: the button itself nags about the gaps ----
@@ -2029,52 +2672,104 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal val zReminderHandler = android.os.Handler(android.os.Looper.getMainLooper())
     internal val zReminderTick = object : Runnable {
         override fun run() {
+            // Режимы профиля (25.09.2026): выключенный режим не работает и в
+            // фоне — ни синков, ни уведомлений, ни вызовов Claude. Правка,
+            // копии и обновления идут всегда.
+            // База была недоступна со старта, а доступ вернулся (выдали с
+            // уведомления, минуя приложение): сторы прочли её пустой и сейчас
+            // смогли бы записать эту пустоту поверх. Процесс — заново, очередь
+            // записи не дописываем; службу система поднимет сама.
+            if (ru.zf.pravka.data.DataRoot.refreshAccess(this@PravkaAccessibilityService)) {
+                android.util.Log.w("Pravka", "база: доступ вернулся — перезапуск процесса")
+                Runtime.getRuntime().exit(0)
+            }
+            val mode = app.profileStore
+            val zasechka = mode.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA)
+            val sport = mode.has(ru.zf.pravka.data.Profile.Mode.SPORT)
+            val food = mode.has(ru.zf.pravka.data.Profile.Mode.FOOD)
+            val dela = mode.has(ru.zf.pravka.data.Profile.Mode.DELA)
+            val money = mode.has(ru.zf.pravka.data.Profile.Mode.MONEY)
             // Midnight housekeeping first: a дело running across 00:00 splits
             // into yesterday's closed head and today's open tail, so the new
             // day's ribbon and totals are right from the first minutes.
-            scope.launch { runCatching { app.zasechkaStore.normalize() } }
+            if (zasechka) scope.launch { runCatching { app.zasechkaStore.normalize() } }
             // The sweeps next: they may close a gap (a YouTube session, a
             // call, a workout becomes an entry) that the reminder would
             // otherwise nag about. Fire-and-forget - the check reads current data.
-            scope.launch { app.phoneSweeper.sweep() }
-            scope.launch { app.icuSweeper.sweep() }
+            // Телефон по дням — слой Засечки; тренировки в ленту — и Спорт, и Засечка.
+            if (zasechka) scope.launch { app.phoneSweeper.sweep() }
+            if (zasechka && sport) scope.launch { app.icuSweeper.sweep() }
+            // Ночной разбор: запустить назревший прогон или спросить статус
+            // батча. Сам себя дросселирует (раз в 10 минут), тику не мешает.
+            // Отметка тика — пульс для табло «что работает»: нет тика — стоят все.
+            app.lastNightTickMs = System.currentTimeMillis()
+            scope.launch {
+                runCatching { app.nightReview.tick() }
+                    .onFailure { app.nightLog.add("ночной разбор: тик упал: ${it.message}") }
+            }
+            // Недельная правка промпта — в ночь на субботу, тем же тиком.
+            scope.launch {
+                runCatching { app.promptTuner.tick() }
+                    .onFailure { app.nightLog.add("правка промпта: тик упал: ${it.message}") }
+            }
+            // Сравнение моделей само не стартует — тик только докручивает начатое кнопкой.
+            scope.launch {
+                runCatching { app.modelCompare.tick() }
+                    .onFailure { app.nightLog.add("сравнение: тик упал: ${it.message}") }
+            }
             // Спорт и еда: свой кэш и своя недоставленная почта. Оба звонка
             // сами себя дросселируют (30 минут у выгрузки, «уже уехало» у
             // еды), так что пятиминутный тик может дёргать их сколько хочет.
-            scope.launch {
+            if (sport) scope.launch {
                 runCatching { app.icuSportSync.refresh() }
                 // Приехало новое с часов — уведомление с вердиктом по его
                 // правилам и кнопками самочувствия. Замыкает петлю feel,
                 // которую иначе надо помнить самому.
                 runCatching { notifyArrivedWorkouts() }
-                runCatching { autoPilot.tick() }
-                runCatching { analysisTick() }
             }
-            scope.launch { runCatching { app.foodEngine.syncPending() } }
+            // Автопилот — Засечки, а не Спорта: раньше жил в той же корутине.
+            if (zasechka && autoPilotOn) scope.launch { runCatching { autoPilot.tick() } }
+            if (food) scope.launch { runCatching { app.foodEngine.syncPending() } }
+            // Общие Деньги: обмен с семейным Drive — свои правки туда, чужие
+            // сюда. Без входа молчит; второй обмен поверх идущего не встаёт.
+            if (money) scope.launch { runCatching { app.moneyDriveSync.sync("тик") } }
             // Дневник в Notion: галочки, feel, колено и вес уезжают сами.
             // Свой дроссель на полчаса и свой «ничего не изменилось» внутри.
-            scope.launch { runCatching { app.notionDiarySync.sync() } }
+            // В нём и спорт, и итог еды — живёт, пока жив хоть один из них.
+            if (sport || food) scope.launch { runCatching { app.notionDiarySync.sync() } }
             // Вся жизнь в Notion: полный обход раз в час, очередь разгребается
             // каждый тик пачкой — Notion пускает три запроса в секунду.
             scope.launch { runCatching { app.notionLifeSync.sync() } }
             // План: календарь раз в час, правила блока раз в сутки — оба
             // звонка дросселируются сами.
-            scope.launch { runCatching { app.planSync.refresh() } }
+            if (sport) scope.launch { runCatching { app.planSync.refresh() } }
             // Подходы: ждут активность от часов и уезжают, как только она
             // появится. Свой дроссель на десять минут внутри.
-            scope.launch { runCatching { app.strengthEngine.syncPending() } }
+            if (sport) scope.launch { runCatching { app.strengthEngine.syncPending() } }
             // Закрылось дело, пришедшее из Todoist - в задачу уезжает время.
-            scope.launch { runCatching { app.todoistSync.flushLinks() } }
+            // Время берётся из ленты — нужны и Дела, и Засечка.
+            if (dela && zasechka) scope.launch { runCatching { app.todoistSync.flushLinks() } }
             // Копии на диск: сама проверка стоит один listFiles, копирование
             // уходит на writer-поток и случается раз в час (имя файла = часовая
             // засечка), так что тик может дёргать её сколько угодно.
             ru.zf.pravka.data.Backups.tick(this@PravkaAccessibilityService) { line ->
                 app.eventLog.add(line)
             }
+            // Суточная копия всей базы — ночью (DailyBackup): решение и архив
+            // на writer-потоке, главный поток тут только спрашивает тумблер.
+            scope.launch {
+                if (runCatching { app.settings.dailyBackupFlow.first() }.getOrDefault(true)) {
+                    ru.zf.pravka.data.DailyBackup.tick(
+                        this@PravkaAccessibilityService,
+                        app.profileStore.current?.id ?: "user",
+                    ) { line -> app.eventLog.add(line) }
+                }
+            }
+            // Та же копия — в семейный Google Drive, как только снята (по Wi-Fi).
+            // Без входа в Google молчит; решение — чтение двух маленьких файлов.
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.driveBackup.tick() } }
             // Обновления: сам решает, прошли ли сутки, сам тянет и сам говорит.
             scope.launch { runCatching { app.updates.tick() } }
-            // Ночной разбор Засечки и значок над «З».
-            scope.launch { runCatching { zasechkaLearnTick() } }
             zasechkaReminderCheck()
             zReminderHandler.postDelayed(this, 5 * 60_000L)
         }
@@ -2111,6 +2806,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         zButton?.hideInput()
         rButton?.hideInput()
         rButton?.hidePlate()
+        mButton?.hideInput()
+        mButton?.hidePlate()
         eButton?.hideInput()
         eButton?.hidePlate()
         // И обе серые ручки — с ними же. Это два лишних оверлейных окна, а
@@ -2120,7 +2817,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         // складывание уже прошло; полсекунды без ручки никто не заметит.
         folding = true
         tailHandle?.hide()
-        topHandle?.hide()
+        stackSettings?.hideAll()
+        disk?.setFolded(true)
         // И сами кнопки. Владелец показал, где ответ: «если все кнопки
         // сложить в три точки, то никаких проблем нет, складывается всё
         // отлично» — в журнале при этом «наших окон 0». Значит дело не в том,
@@ -2138,9 +2836,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         // transition must relayout and WAIT for. If a freeze report ever comes
         // back with a big number here, the leak is ours; a small one clears us.
         runCatching {
-            val n = (floatingButton?.windowCount() ?: 0) + (zButton?.windowCount() ?: 0) +
-                (rButton?.windowCount() ?: 0) + (eButton?.windowCount() ?: 0) +
-                (tailHandle?.windowCount() ?: 0) + (topHandle?.windowCount() ?: 0)
+            val n = chainButtons().sumOf { it.windowCount() } +
+                (tailHandle?.windowCount() ?: 0) + (stackSettings?.windowCount() ?: 0) +
+                (disk?.windowCount() ?: 0) + (if (screenKeeper != null) 1 else 0)
             app.eventLog.add("смена конфигурации: наших окон $n")
         }
     }
@@ -2154,20 +2852,18 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Снять или вернуть окна всех четырёх кнопок на время складывания. */
     private fun setFolded(value: Boolean) {
-        floatingButton?.setFolded(value)
-        zButton?.setFolded(value)
-        rButton?.setFolded(value)
-        eButton?.setFolded(value)
+        chainButtons().forEach { it.setFolded(value) }
     }
 
     internal val configHandler = android.os.Handler(android.os.Looper.getMainLooper())
     internal val configSettled = Runnable {
         folding = false
+        // Тарелка диска — раньше кнопок: порядок окон одного типа — порядок
+        // добавления, а стеклу положено лежать под ними.
+        disk?.setFolded(false)
         setFolded(false)
-        floatingButton?.onConfigurationChanged()
-        zButton?.onConfigurationChanged()
-        rButton?.onConfigurationChanged()
-        eButton?.onConfigurationChanged()
+        chainButtons().forEach { it.onConfigurationChanged() }
+        disk?.onConfigurationChanged()
         refreshHandles()
     }
 
@@ -2177,8 +2873,10 @@ class PravkaAccessibilityService : AccessibilityService() {
         instance = null
         runCatching { autoPilot.stop() }
         ripenessHandler.removeCallbacks(ripenessCheck)
+        ripenessHandler.removeCallbacks(digestRunnable)
+        ripenessHandler.removeCallbacks(disarmCapture)
+        ripenessHandler.removeCallbacks(trailingProbe)
         zReminderHandler.removeCallbacks(zReminderTick)
-        pomodoroHandler.removeCallbacks(pomodoroTicker)
         chromeHandler.removeCallbacks(chromeTicker)
         lagHandler.removeCallbacks(lagTick)
         configHandler.removeCallbacks(configSettled)
@@ -2191,19 +2889,24 @@ class PravkaAccessibilityService : AccessibilityService() {
         eSession?.stop()
         eSession = null
         runCatching { stopMicHold() }
+        keepScreenOn(false)
         floatingButton?.destroy()
         floatingButton = null
         zButton?.destroy()
         zButton = null
         rButton?.destroy()
         rButton = null
+        mButton?.destroy()
+        mButton = null
         restHandler.removeCallbacks(restTick)
         eButton?.destroy()
         eButton = null
         tailHandle?.hide()
         tailHandle = null
-        topHandle?.hide()
-        topHandle = null
+        stackSettings?.destroy()
+        stackSettings = null
+        disk?.destroy()
+        disk = null
         scope.cancel()
         super.onDestroy()
     }

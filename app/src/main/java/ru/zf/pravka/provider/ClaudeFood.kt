@@ -63,7 +63,7 @@ suspend fun ClaudeProvider.parseFood(
             throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         }
         require(text.isNotBlank() || image != null) { "Нечего разбирать: ни слов, ни снимка." }
-        val template = promptStore.effective(PromptStore.PromptId.FOOD)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.FOOD)
         var prompt = template
             .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
             .replace("{NOW}", nowContext())
@@ -72,6 +72,7 @@ suspend fun ClaudeProvider.parseFood(
             // история приёмов живая — в переменном хвосте после словаря.
             .replace("{RATION}", rationBlock.ifBlank { "—" })
             .replace("{RECENT}", recentBlock.ifBlank { "—" })
+        prompt = withMicro(prompt)
         if (image != null) prompt = prompt.trimEnd() + "\n\n" + Prompts.FOOD_PHOTO_HINT
         val said = text.ifBlank { "(без слов — только снимок)" }
         prompt = if (prompt.contains(Prompts.PLACEHOLDER_INPUT)) {
@@ -82,25 +83,27 @@ suspend fun ClaudeProvider.parseFood(
         // Правила еды стабильны — под кэш; словарь, время и вход в хвосте.
         // Сплит по маркеру словаря: правил его шаблон может и не иметь
         // (правится в «Промптах») — тогда весь текст уезжает хвостом.
-        // Со снимком кэш не включаем: блок изображения стоит ПЕРЕД
-        // текстом и ломает префикс — платили бы за запись впустую.
+        // Со снимком кэш тоже работает: с 16.09 транспорт ставит картинку
+        // ПОСЛЕ стабильной головы, а не перед ней (раньше кадр ломал префикс,
+        // и тарелка по фото платила полную цену за те же правила).
         val cut = prompt.indexOf("Словарь владельца")
         val parts = if (cut > 0) {
             Prompts.PromptParts(
                 stablePrefix = prompt.substring(0, cut),
                 dictPart = prompt.substring(cut),
                 afterInput = "",
-                cacheStableAlways = image == null,
+                cacheStableAlways = true,
             )
         } else {
             Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
         }
         val started = System.currentTimeMillis()
-        val choice = settings.modelChoice(ModelRoute.BODY)
+        val choice = settings.modelChoice(ModelRoute.FOOD)
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", null,
             images = listOfNotNull(image),
             effortOverride = choice.effort,
+            routeKey = ModelRoute.FOOD.key,
         )
         val parsed = parseFoodReply(reply.text)
         FoodParse(
@@ -124,6 +127,22 @@ private class FoodReply(
     val note: String,
 )
 
+/**
+ * Подставляет справочник веществ. Плейсхолдера в шаблоне может не быть:
+ * владелец правил промпт руками ещё до того, как витамины появились, и его
+ * правка живёт в PromptStore. Тогда блок встаёт перед словарём — то есть в
+ * тот же кэшируемый кусок, где он и должен быть, — а не пропадает молча.
+ */
+private fun withMicro(prompt: String): String {
+    val block = ru.zf.pravka.core.Micronutrients.promptBlock()
+    if (prompt.contains(Prompts.PLACEHOLDER_MICRO)) {
+        return prompt.replace(Prompts.PLACEHOLDER_MICRO, block)
+    }
+    val cut = prompt.indexOf("Словарь владельца")
+    return if (cut > 0) prompt.substring(0, cut) + block + "\n\n" + prompt.substring(cut)
+    else prompt.trimEnd() + "\n\n" + block
+}
+
 private fun ClaudeProvider.parseFoodReply(raw: String): FoodReply {
     val o = jsonObjectOf(raw, "Модель ответила не JSON. Скажи ещё раз или поправь руками.")
     val out = mutableListOf<ru.zf.pravka.core.MealItem>()
@@ -141,6 +160,8 @@ private fun ClaudeProvider.parseFoodReply(raw: String): FoodReply {
             carbs = t.optInt("carbs", 0).coerceIn(0, 1000),
             fiber = t.optInt("fiber", 0).coerceIn(0, 200),
             sureness = t.optString("sure").trim().take(12),
+            micro = microOf(t.optJSONObject("micro")),
+            pill = t.optBoolean("pill", false),
         )
         // Калорий модель не дала, а макросы дала - считаем сами, чтобы
         // позиция не пришла в дневник нулевой.
@@ -153,4 +174,22 @@ private fun ClaudeProvider.parseFoodReply(raw: String): FoodReply {
         items = out,
         note = o.optString("note").trim(),
     )
+}
+
+/**
+ * Витамины позиции из ответа модели. Чужие ключи и отрицательные числа
+ * выбрасываются здесь же: «хром» и «холин» модель называет охотно, а норм для
+ * них у нас нет, и показать их всё равно нечем.
+ */
+internal fun microOf(o: JSONObject?): Map<String, Double> {
+    if (o == null) return emptyMap()
+    val out = LinkedHashMap<String, Double>()
+    for (key in o.keys()) {
+        val n = ru.zf.pravka.core.Micronutrients.byId(key) ?: continue
+        val v = o.optDouble(key, 0.0)
+        // Потолок в сто норм — заслон от съехавшей запятой: «кальций 260000»
+        // раскрасил бы день перебором и уехал бы в Notion как факт.
+        if (v > 0 && v.isFinite()) out[n.id] = minOf(v, n.norm * 100)
+    }
+    return out
 }

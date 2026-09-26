@@ -68,7 +68,7 @@ suspend fun ClaudeProvider.parseBody(
             throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         }
         require(text.isNotBlank()) { "Пустая фраза — разбирать нечего." }
-        val template = promptStore.effective(PromptStore.PromptId.BODY)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.BODY)
         // Стабильная часть — до маркера {VARS}: инструкция и оба
         // справочника. Она и уходит под точку кэша.
         val split = template.indexOf(Prompts.PLACEHOLDER_VARS)
@@ -79,10 +79,18 @@ suspend fun ClaudeProvider.parseBody(
         // подменяем прочерком на случай, если владелец в правленом шаблоне
         // оставил {DICT} над {VARS}: пусть кэш живёт, а словарь ему уедет
         // в хвосте.
-        val head = (if (split >= 0) template.substring(0, split) else template)
+        val micro = ru.zf.pravka.core.Micronutrients.promptBlock()
+        var head = (if (split >= 0) template.substring(0, split) else template)
             .replace("{EXERCISES}", exerciseBook.ifBlank { "Справочник упражнений не загружен." })
             .replace("{RATION}", rationBook.ifBlank { "Справочник рациона не загружен." })
+            .replace(Prompts.PLACEHOLDER_MICRO, micro)
             .replace(Prompts.PLACEHOLDER_DICT, "—")
+        // Владелец мог поправить шаблон ещё до того, как появились витамины, и
+        // его правка живёт в PromptStore. Тогда справочник дописывается в конец
+        // головы — то есть в тот же кэшируемый кусок, — а не пропадает молча:
+        // без ключей модель напишет вещества по-своему, и мы их выбросим.
+        if (!head.contains(micro)) head = head.trimEnd() + "\n\n" + micro + "\n"
+
         var tail = if (split >= 0) template.substring(split + Prompts.PLACEHOLDER_VARS.length) else ""
         tail = tail
             .replace(Prompts.PLACEHOLDER_DICT, dictBlock.ifBlank { "—" })
@@ -112,6 +120,7 @@ suspend fun ClaudeProvider.parseBody(
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.BODY.key,
         )
         parseBodyReply(reply, choice.model).copy(latencyMs = System.currentTimeMillis() - started)
     }
@@ -189,6 +198,8 @@ private fun ClaudeProvider.parseBodyReply(reply: ApiReply, model: String): BodyP
                 carbs = t.optInt("carbs", 0).coerceIn(0, 1000),
                 fiber = t.optInt("fiber", 0).coerceIn(0, 200),
                 sureness = t.optString("sure").trim().take(12),
+                micro = microOf(t.optJSONObject("micro")),
+                pill = t.optBoolean("pill", false),
             )
             items.add(if (item.kcal == 0) item.copy(kcal = item.kcalFromMacros()) else item)
         }
@@ -253,6 +264,7 @@ suspend fun ClaudeProvider.extractRules(pageText: String): Result<RulesParse> = 
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.BODY_LIGHT.key,
         )
         val o = jsonObjectOf(reply.text, "Правила блока не разобрались — модель ответила не JSON.")
         val week = mutableListOf<Pair<String, String>>()
@@ -311,7 +323,7 @@ suspend fun ClaudeProvider.coach(
         if (apiKey.isBlank()) {
             throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         }
-        val template = promptStore.effective(PromptStore.PromptId.COACH)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.COACH)
         var prompt = template
             .replace("{CONTEXT}", contextBlock.ifBlank { "Данных нет — выгрузка не удалась." })
             .replace("{TODAY}", todayContext())
@@ -327,6 +339,7 @@ suspend fun ClaudeProvider.coach(
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", onDelta,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.BODY.key,
         )
         CoachAnswer(
             text = reply.text.trim(),
@@ -356,7 +369,7 @@ suspend fun ClaudeProvider.trainer(
         if (apiKey.isBlank()) {
             throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
         }
-        val template = promptStore.effective(PromptStore.PromptId.TRAINER)
+        val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.TRAINER)
         var prompt = template
             .replace("{FOCUS}", focusBlock.ifBlank { "Упражнение не из справочника." })
             .replace("{WEEK}", weekBlock.ifBlank { "Правил недели в кэше нет." })
@@ -372,6 +385,7 @@ suspend fun ClaudeProvider.trainer(
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", onDelta,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.BODY_LIGHT.key,
         )
         CoachAnswer(
             text = reply.text.trim(),

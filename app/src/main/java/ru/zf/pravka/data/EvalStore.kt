@@ -22,8 +22,8 @@ class EvalStore(private val context: Context) {
     private var loaded = false
     private val items = mutableListOf<Item>()
 
-    private fun file() = File(context.filesDir, "pravka-eval.jsonl")
-    private fun resultsFile() = File(context.filesDir, "pravka-eval-results.json")
+    private fun file() = File(DataRoot.dir(context), "pravka-eval.jsonl")
+    private fun resultsFile() = File(DataRoot.dir(context), "pravka-eval-results.json")
 
     private fun ensureLoaded() {
         if (loaded) return

@@ -45,7 +45,8 @@ fun PravkaAccessibilityService.onRaznoskaTap() {
     }
     // Один микрофон на все три кнопки: чужую запись эта не перехватывает.
     if (googleSession != null || zSession != null || zWhisperRecording ||
-        eSession != null || eWhisperRecording || DictationService.recording
+        eSession != null || eWhisperRecording || mSession != null || mWhisperRecording ||
+        DictationService.recording
     ) {
         Haptics.error(this)
         Feedback.toast(this, getString(R.string.r_busy))
@@ -59,16 +60,21 @@ fun PravkaAccessibilityService.onRaznoskaTap() {
     startRaznoskaCapture()
 }
 
+/** Приглашение говорить в бегущей строке «Д» — одно на оба движка. */
+internal fun raznoskaTickerPrompt(): String = "🎙 наговори дела… (тап сюда — набрать текстом)"
+
 internal fun PravkaAccessibilityService.startRaznoskaCapture() {
     rButton?.hideInput()
     rButton?.hidePlate()
+    rDiscard = false
     if (cachedEngine.startsWith("whisper")) {
         rWhisperRecording = true
         rButton?.setRecording(true)
         // У Whisper живых слов нет, но плашка нужна: это ещё и цель тапа
         // «набрать текстом».
         rButton?.showTicker()
-        rButton?.updateTicker("🎙 наговори дела… (тап сюда — набрать текстом)")
+        rButton?.updateTicker(raznoskaTickerPrompt())
+        rButton?.showCancelBubble { cancelRaznoskaTake() }
         Haptics.start(this)
         startDictation()
     } else {
@@ -98,10 +104,17 @@ internal fun PravkaAccessibilityService.startRaznoskaGoogle() {
         biasing = (cachedBiasing + zClientsCached + raznBiasing()).distinct(),
         formatting = cachedFormatting,
         segmentedSession = cachedSegmented,
+        network = cachedNetwork,
     )
     rSession = session
+    speechReady = false
     session.start(
-        onReady = { Haptics.success(this) },
+        onReady = {
+            // Движок услышал — только теперь приглашение говорить правда.
+            speechReady = true
+            rButton?.updateTicker(raznoskaTickerPrompt(), force = true)
+            Haptics.success(this)
+        },
         onPartial = { live -> rButton?.updateTicker(live) },
         // Наговор длиннее засечки, но короче диктовки главы: черновик на
         // диск не пишем, повторить его дешевле, чем чинить.
@@ -112,9 +125,28 @@ internal fun PravkaAccessibilityService.startRaznoskaGoogle() {
     )
     rButton?.setRecording(true)
     rButton?.showTicker()
-    rButton?.updateTicker("🎙 наговори дела… (тап сюда — набрать текстом)")
+    // Пока движок глух, строка говорит об этом, а не зовёт говорить в пустоту.
+    if (!speechReady) rButton?.updateTicker(PravkaAccessibilityService.HINT_WAIT)
+    rButton?.showCancelBubble { cancelRaznoskaTake() }
     Haptics.start(this)
     runCatching { startMicHold() }
+}
+
+/** Серая «отмена» у «Д»: наговор выбрасывается, ни одного дела в Todoist не уйдёт. */
+internal fun PravkaAccessibilityService.cancelRaznoskaTake() {
+    when {
+        rSession != null -> {
+            rDiscard = true
+            app.eventLog.add("разноска: отмена наговора")
+            stopRaznoskaLive()
+        }
+        rWhisperRecording && DictationService.recording -> {
+            rDiscard = true
+            rButton?.setBusy(true)
+            app.eventLog.add("разноска: отмена наговора")
+            stopDictation()
+        }
+    }
 }
 
 internal fun PravkaAccessibilityService.stopRaznoskaLive() {
@@ -150,7 +182,16 @@ internal fun PravkaAccessibilityService.onRaznoskaLiveDone(text: String) {
     rSession = null
     runCatching { stopMicHold() }
     runCatching { rButton?.hideTicker() }
+    runCatching { rButton?.hideCancelBubble() }
     rButton?.setRecording(false)
+    if (rDiscard) {
+        rDiscard = false
+        rTypeInstead = false
+        rButton?.setBusy(false)
+        app.eventLog.add("разноска: наговор отменён (${text.length} зн.)")
+        Feedback.toast(this, "Отменено")
+        return
+    }
     if (rTypeInstead) {
         rTypeInstead = false
         rButton?.setBusy(false)
@@ -162,8 +203,10 @@ internal fun PravkaAccessibilityService.onRaznoskaLiveDone(text: String) {
 
 internal fun PravkaAccessibilityService.onRaznoskaLiveError(msg: String) {
     rSession = null
+    rDiscard = false
     runCatching { stopMicHold() }
     rButton?.hideTicker()
+    rButton?.hideCancelBubble()
     rButton?.setRecording(false)
     rButton?.setBusy(false)
     Haptics.error(this)
@@ -485,6 +528,7 @@ internal fun PravkaAccessibilityService.showRaznoskaMenu() {
                     if (newest != null) showRaznoskaPlate(newest.id) else openTodoistTab()
                 },
                 RaznoskaButtonController.MenuItem("Открыть Дело") { openTodoistTab() },
+                RaznoskaButtonController.MenuItem("Настройки") { openSettingsTab("DELA") },
                 RaznoskaButtonController.MenuItem("Закрыть") { rButton?.hideMenu() },
             )
         )

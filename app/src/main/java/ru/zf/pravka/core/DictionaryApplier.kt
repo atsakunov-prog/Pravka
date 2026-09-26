@@ -60,9 +60,16 @@ class DictionaryApplier(private val store: DictionaryStore) {
                 }
             }
             if (protects.isNotEmpty()) {
-                append("Не исправляй эти слова, они написаны верно:\n")
-                append(protects.joinToString(", ") { it.from })
-                append("\n")
+                // Словарь задаёт написание, не падеж: PROTECT «Марианн» ловил
+                // «Марианны» (допуск окончаний) и модель писала «самой Марианн»
+                // (лог ночного разбора 17.09.2026, 55 срабатываний).
+                append("Эти имена и термины написаны верно — не исправляй их на созвучные; ")
+                append("падеж, в котором слово стоит в тексте, сохраняй (словарь задаёт написание, а не форму):\n")
+                for (pr in protects) {
+                    append("- ").append(pr.from)
+                    if (pr.note.isNotBlank()) append(" (").append(pr.note).append(")")
+                    append("\n")
+                }
             }
         }.trim()
     }
@@ -74,7 +81,12 @@ class DictionaryApplier(private val store: DictionaryStore) {
         fun boundaryRegex(from: String, withRussianEndings: Boolean): Regex? {
             val trimmed = from.trim()
             if (trimmed.isEmpty()) return null
-            val suffix = if (withRussianEndings && trimmed.last().isCyrillic()) "[а-яёА-ЯЁ]{0,3}" else ""
+            // Хвост окончаний — только для слов от трёх букв: у «та» он ловил
+            // «так» и «там», и подсказка «та — это ТА» уезжала в промпт 753 раза
+            // (16.09.2026), у «Ви» — «вид» и «вижу».
+            val suffix =
+                if (withRussianEndings && trimmed.length >= 3 && trimmed.last().isCyrillic()) "[а-яёА-ЯЁ]{0,3}"
+                else ""
             return runCatching {
                 Regex("(?iu)(?<![\\p{L}\\p{N}])" + Regex.escape(trimmed) + suffix + "(?![\\p{L}\\p{N}])")
             }.getOrNull()

@@ -1,0 +1,20 @@
+<!-- «₽» на плавающей кнопке в режиме иконок: 52% от кружка, как у остальных. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:scaleX="0.52"
+        android:scaleY="0.52"
+        android:pivotX="12"
+        android:pivotY="12">
+        <path
+            android:pathData="M9,20V4h5a4.5,4.5 0,0 1,0 9H6.5M6.5,16.5H14"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="2"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:fillColor="#00000000"/>
+    </group>
+</vector>

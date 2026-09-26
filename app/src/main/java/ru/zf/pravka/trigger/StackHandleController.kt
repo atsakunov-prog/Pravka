@@ -12,33 +12,39 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import kotlin.math.abs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import ru.zf.pravka.data.Settings
 
 /**
- * Серая ручка от ящика: маленький кружок, из которого выпадают кнопки.
+ * Серая ручка от ящика: маленький кружок с галочкой под хвостом стопки, из
+ * которого выпадают «Д» и «Е» и в который они убираются.
  *
- * Их две, и делают они разное:
- *   СВЕРХУ, над «П», с многоточием — убирает и возвращает ВСЕ четыре кнопки.
- *   СНИЗУ, под хвостом, с галочкой — убирает и возвращает «Д» и «Е».
+ * Ручек было две: вторая, с многоточием над «П», убирала все четыре кнопки.
+ * С 18.09.2026 её место заняла шестерёнка (`StackSettingsController`), а
+ * «убрать всё» стало кружком в её веере — владелец: «убираем грязь из стекла
+ * кнопок… верхнюю с тремя точками».
  *
- * Оба глифа РИСУЮТСЯ, а не пишутся текстом, и это не педантизм. Первая
- * версия ставила в TextView символ «⌄»: у него своя высота в шрифте, он сидит
- * в кружке заметно выше центра, и владелец сказал прямо — «какая-то галочка
- * не посередине, выглядит очень некрасиво». Нарисованный глиф центрируется
- * по построению, в любом шрифте и при любом размере.
+ * Глиф РИСУЕТСЯ, а не пишется текстом, и это не педантизм. Первая версия
+ * ставила в TextView символ «⌄»: у него своя высота в шрифте, он сидит в
+ * кружке заметно выше центра, и владелец сказал прямо — «какая-то галочка не
+ * посередине, выглядит очень некрасиво». Нарисованный глиф центрируется по
+ * построению, в любом шрифте и при любом размере.
  *
  * Серый, а не янтарный: ручка — не пятая кнопка. Кнопки заявляют о себе
- * цветом, ручка обязана молчать.
+ * цветом, ручка обязана молчать. Прозрачность — та же настройка, что у
+ * кнопок: стекло должно быть одной плотности.
  */
 class StackHandleController(
     private val service: PravkaAccessibilityService,
-    private val dots: Boolean,
+    scope: CoroutineScope,
+    settings: Settings,
 ) {
 
     private companion object {
         /** Приглушённый «ink-soft» из палитры: рядом с янтарём он не спорит. */
         private val GREY = 0xFF6E6659.toInt()
         private val PAPER = 0xFFF7F3EA.toInt()
-        private const val ALPHA = 0.72f
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -47,6 +53,7 @@ class StackHandleController(
 
     private var glyph: HandleGlyph? = null
     private var params: WindowManager.LayoutParams? = null
+    private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
 
     val sizePx: Int = dp(22)
 
@@ -54,23 +61,32 @@ class StackHandleController(
 
     /**
      * Ручку можно таскать, как кнопку. Владелец: «надо сделать так, чтобы это
-     * многоточие можно было двигать точно так же, как правку». По-другому и
-     * нельзя: когда все кнопки убраны, ручка — единственное, что на экране, и
-     * если она приросла к месту, то место уже не поменять.
+     * многоточие можно было двигать точно так же, как правку». У галочки
+     * связка не едет (она стоит под хвостом и сама едет за ним), но жест
+     * перетаскивания глотается, чтобы промах не читался как тап.
      */
     var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
 
     private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
+
+    init {
+        scope.launch {
+            settings.fabAlphaFlow.collect {
+                idleAlpha = it
+                glyph?.alpha = it
+            }
+        }
+    }
 
     fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
     @SuppressLint("ClickableViewAccessibility")
     fun show(collapsed: Boolean) {
         if (glyph == null) {
-            val v = HandleGlyph(service, dots).apply {
-                alpha = ALPHA
+            val v = HandleGlyph(service).apply {
+                alpha = idleAlpha
                 elevation = dp(3).toFloat()
-                background = GradientDrawable().apply {
+                background = BubbleSkin().apply {
                     shape = GradientDrawable.OVAL
                     setColor(GREY)
                 }
@@ -89,11 +105,15 @@ class StackHandleController(
                         startX = p.x
                         startY = p.y
                         dragging = false
+                        BubbleMotion.press(v)
                     }
                     MotionEvent.ACTION_MOVE -> {
                         val dx = event.rawX - downX
                         val dy = event.rawY - downY
-                        if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) dragging = true
+                        if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                            dragging = true
+                            BubbleMotion.lift(v)
+                        }
                         if (dragging) {
                             val bounds = runCatching { windowManager.currentWindowMetrics.bounds }
                                 .getOrNull()
@@ -106,6 +126,7 @@ class StackHandleController(
                         }
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        BubbleMotion.release(v)
                         if (dragging) {
                             onDragged?.invoke(p.x, p.y, true)
                         } else if (event.actionMasked == MotionEvent.ACTION_UP) {
@@ -140,7 +161,7 @@ class StackHandleController(
 
     /**
      * Перепись окон для журнала складывания: каждое наше оверлейное окно
-     * складывание Fold пересчитывает и ждёт, и ручки тут не исключение.
+     * складывание Fold пересчитывает и ждёт, и ручка тут не исключение.
      */
     fun windowCount(): Int = if (glyph != null) 1 else 0
 
@@ -166,16 +187,17 @@ class StackHandleController(
     }
 
     /**
-     * Глиф ручки. Рисуется от центра вида, поэтому сидит ровно посередине
-     * кружка — в отличие от символа в шрифте, у которого свои поля.
+     * Глиф ручки: галочка, нарисованная от центра вида, поэтому сидит ровно
+     * посередине кружка — в отличие от символа в шрифте, у которого свои поля.
      */
-    private class HandleGlyph(context: Context, private val dots: Boolean) : View(context) {
+    private class HandleGlyph(context: Context) : View(context) {
 
-        /** Только для галочки: вверх = «уберутся», вниз = «выпадут». */
+        /** Вверх = «уберутся», вниз = «выпадут». */
         var pointUp = false
 
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = PAPER
+            style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
@@ -186,23 +208,13 @@ class StackHandleController(
             if (w <= 0f || h <= 0f) return
             val cx = w / 2f
             val cy = h / 2f
-            if (dots) {
-                paint.style = Paint.Style.FILL
-                val r = w * 0.075f
-                val gap = w * 0.215f
-                canvas.drawCircle(cx - gap, cy, r, paint)
-                canvas.drawCircle(cx, cy, r, paint)
-                canvas.drawCircle(cx + gap, cy, r, paint)
-            } else {
-                paint.style = Paint.Style.STROKE
-                paint.strokeWidth = w * 0.095f
-                val dx = w * 0.19f
-                val dy = h * 0.095f
-                val tip = if (pointUp) cy - dy else cy + dy
-                val side = if (pointUp) cy + dy else cy - dy
-                canvas.drawLine(cx - dx, side, cx, tip, paint)
-                canvas.drawLine(cx, tip, cx + dx, side, paint)
-            }
+            paint.strokeWidth = w * 0.095f
+            val dx = w * 0.19f
+            val dy = h * 0.095f
+            val tip = if (pointUp) cy - dy else cy + dy
+            val side = if (pointUp) cy + dy else cy - dy
+            canvas.drawLine(cx - dx, side, cx, tip, paint)
+            canvas.drawLine(cx, tip, cx + dx, side, paint)
         }
     }
 }

@@ -2,21 +2,21 @@ package ru.zf.pravka
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -26,6 +26,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -35,6 +38,13 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.data.TodoistStore
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.GlyphButton
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.PaperField
+import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.RowRule
+import ru.zf.pravka.ui.ScreenPad
 
 // Вкладка «Дела»: список Todoist, тап по делу = оно становится текущим в
 // ленте. Сверху - Разноска: наговорённые дела, которые ещё не уехали в
@@ -43,8 +53,14 @@ import ru.zf.pravka.ui.Feedback
 // Группы: «Сегодня» (и всё просроченное - оно и есть сегодняшнее) раскрыта,
 // «Без даты и без проекта» (входящие) и проекты свёрнуты. Поиск - простой
 // фильтр по вхождению слова, он показывает плоский список поверх групп.
+//
+// Второе издание (24.09.2026): до него во вкладке не было ни одной плашки —
+// дела и группы лежали прямо на фоне, и вкладка выглядела черновиком рядом с
+// соседними. Теперь каждая группа — своя плашка со счётом в подписи и
+// шевроном, сверху — строки состояния и поиск без плашки: это не раздел, а
+// то, чем ищут по разделам.
 @Composable
-fun TodoistTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
+fun TodoistTab(app: PravkaApp) {
     val store = app.todoistStore
     val tasks by store.tasksFlow.collectAsState()
     val projects by store.projectsFlow.collectAsState()
@@ -98,62 +114,74 @@ fun TodoistTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 32.dp),
+        contentPadding = ScreenPad.Padding,
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         item {
-            Text("Дела", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "Тап по делу — оно становится текущим в ленте. Когда дело закончится, " +
-                    "в задачу Todoist уедет коммент со временем. Кнопка «Д» — наговорить " +
-                    "новые дела сюда.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            if (running != null) {
-                Text(
-                    "Сейчас идёт: ${running.title.ifBlank { "без названия" }}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 6.dp),
+            // Название и пояснение живут в общей шапке (ui/Frame.kt); тут —
+            // только то, что меняется: идущее дело, поиск, состояние синка.
+            Column(Modifier.fillMaxWidth()) {
+                if (running != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+                    ) {
+                        Icon(
+                            Glyphs.Timer,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Сейчас идёт: ${running.title.ifBlank { "без названия" }}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                PaperField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = "Поиск по делам",
+                    trailing = {
+                        Icon(
+                            Glyphs.Search,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    },
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    GlyphButton(
+                        Glyphs.Refresh,
+                        "обновить из Todoist",
+                        onClick = { app.appScope.launch { app.todoistSync.refresh(force = true) } },
+                    )
+                    Text(
+                        status,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // Токен живёт в «Настройках → Дела» вместе с остальными ключами.
+                // Здесь про него только напоминание, и то лишь пока его нет.
+                if (token.isBlank()) {
+                    Text(
+                        "Токена Todoist нет — дела приехать не могут. Он вставляется " +
+                            "в «Настройках», группа «Дела».",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(start = 4.dp),
+                    )
+                }
             }
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Поиск по делам") },
-                singleLine = true,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = {
-                    app.appScope.launch { app.todoistSync.refresh(force = true) }
-                }) { Text("Обновить") }
-                TextButton(onClick = onOpenSettings) { Text("Настройки") }
-                Text(
-                    status,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 4.dp),
-                )
-            }
-            // Токен живёт в «Настройках → Дела» вместе с остальными ключами.
-            // Здесь про него только напоминание, и то лишь пока его нет.
-            if (token.isBlank()) {
-                Text(
-                    "Токена Todoist нет — дела приехать не могут. Он вставляется " +
-                        "в «Настройках», группа «Дела».",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            Spacer(Modifier.height(6.dp))
         }
 
         // Разноска: разобранные наговоры, которые ещё не уехали в Todoist.
@@ -164,15 +192,11 @@ fun TodoistTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
         if (needle.isNotEmpty()) {
             val found = tasks.filter { it.content.lowercase().contains(needle) }
                 .sortedWith(compareByDescending<TodoistStore.Task> { it.priority }.thenBy { it.order })
-            item {
-                Text(
-                    "Найдено: ${found.size}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            items(found) { task ->
-                TaskRow(task, projectName[task.projectId].orEmpty(), starting == task.id, onPick)
+            item(key = "found") {
+                PaperCard(label = "найдено · ${found.size}") {
+                    if (found.isEmpty()) PaperHint("Ни одно дело этого слова не содержит.")
+                    TaskRows(found, projectName, starting, onPick)
+                }
             }
         } else {
             group("today", "Сегодня", todayTasks, expanded, projectName, starting, onPick) {
@@ -196,13 +220,12 @@ fun TodoistTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
 
         if (tasks.isEmpty()) {
             item {
-                Text(
-                    if (token.isBlank()) "Вставь токен — и дела приедут."
-                    else "Дел нет. Нажми «Обновить».",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 12.dp),
-                )
+                Box(Modifier.padding(start = 4.dp)) {
+                    PaperHint(
+                        if (token.isBlank()) "Вставь токен — и дела приедут."
+                        else "Дел нет. Нажми «Обновить».",
+                    )
+                }
             }
         }
     }
@@ -211,8 +234,9 @@ fun TodoistTab(app: PravkaApp, onOpenSettings: () -> Unit = {}) {
 private fun Set<String>.toggle(key: String): Set<String> =
     if (key in this) this - key else this + key
 
-// Заголовок группы + её дела. Свёрнутая группа показывает только счёт -
-// список должен читаться сверху вниз, а не листаться насквозь.
+// Группа — одна плашка: название и счёт в подписи, шеврон справа. Свёрнутая
+// показывает первые дела одной строкой, а не пустую плашку: список должен
+// читаться сверху вниз, а не листаться насквозь (24.09.2026).
 private fun androidx.compose.foundation.lazy.LazyListScope.group(
     key: String,
     title: String,
@@ -225,37 +249,53 @@ private fun androidx.compose.foundation.lazy.LazyListScope.group(
 ) {
     if (list.isEmpty()) return
     val isOpen = key in expanded
-    item(key = "h:$key") {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onToggle)
-                .padding(top = 10.dp, bottom = 2.dp),
+    item(key = "g:$key") {
+        val sorted = list.sortedWith(compareByDescending<TodoistStore.Task> { it.priority }.thenBy { it.order })
+        // Подпись плашки не переносится под шеврон: длинное имя проекта
+        // выдавило бы его из строки, и раскрытую группу стало бы не свернуть.
+        val name = if (title.length > 30) title.take(29).trimEnd() + "…" else title
+        PaperCard(
+            label = "$name · ${list.size}",
+            trailing = {
+                GlyphButton(
+                    Glyphs.ChevronDown,
+                    if (isOpen) "свернуть" else "раскрыть",
+                    onClick = onToggle,
+                    size = 30.dp,
+                    modifier = Modifier.rotate(if (isOpen) 180f else 0f),
+                )
+            },
         ) {
-            Text(
-                if (isOpen) "▾" else "▸",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.width(18.dp),
-            )
-            Text(
-                title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                list.size.toString(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (isOpen) {
+                TaskRows(sorted, projectName, starting, onPick)
+            } else {
+                Text(
+                    sorted.take(4).joinToString(" · ") { it.content },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onToggle)
+                        .padding(vertical = 2.dp),
+                )
+            }
         }
     }
-    if (!isOpen) return
-    items(list.sortedWith(compareByDescending<TodoistStore.Task> { it.priority }.thenBy { it.order })) { task ->
+}
+
+/** Дела плашки строками, между ними — волосяная линия. */
+@Composable
+private fun TaskRows(
+    list: List<TodoistStore.Task>,
+    projectName: Map<String, String>,
+    starting: String,
+    onPick: (TodoistStore.Task) -> Unit,
+) {
+    list.forEachIndexed { i, task ->
+        if (i > 0) RowRule()
         TaskRow(task, projectName[task.projectId].orEmpty(), starting == task.id, onPick)
     }
 }
@@ -269,20 +309,21 @@ private fun TaskRow(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
             .clickable(enabled = !busy) { onPick(task) }
-            .padding(start = 18.dp, top = 5.dp, bottom = 5.dp),
+            .padding(vertical = 8.dp),
     ) {
         // Приоритет цветом точки: p1 красная, p2 оранжевая, p3 синяя, p4 - никак.
         val dot = when (task.priority) {
             4 -> MaterialTheme.colorScheme.error
-            3 -> androidx.compose.ui.graphics.Color(0xFFF97316)
-            2 -> androidx.compose.ui.graphics.Color(0xFF3B82F6)
+            3 -> Color(0xFFF97316)
+            2 -> Color(0xFF3B82F6)
             else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
         }
-        Text("•", color = dot, style = MaterialTheme.typography.bodyMedium)
+        DelaPriorityDot(dot)
         Column(Modifier.weight(1f)) {
             Text(
                 task.content,
@@ -301,11 +342,17 @@ private fun TaskRow(
                 )
             }
         }
-        Text(
-            if (busy) "…" else "▶",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.primary,
-        )
+        // «Запустить в ленте» — значком, а не символом «▶» (24.09.2026).
+        if (busy) {
+            Text("…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+        } else {
+            Icon(
+                Glyphs.Play,
+                contentDescription = "начать в ленте",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+        }
     }
 }
 
@@ -318,35 +365,30 @@ internal fun TodoistSettings(app: PravkaApp) {
     val token by app.settings.todoistTokenFlow.collectAsState(initial = "")
     val status by app.todoistStore.statusFlow.collectAsState()
     var draft by remember(token) { mutableStateOf(token) }
-    Column {
-        Text(
-            "Todoist → Настройки → Интеграции → Разработчик → API-токен. " +
-                "Ключ живёт только на телефоне.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { draft = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Токен Todoist") },
-            singleLine = true,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = {
-                app.appScope.launch {
-                    app.settings.setTodoistToken(draft.trim())
-                    app.todoistSync.refresh(force = true)
-                }
-            }) { Text("Сохранить и проверить") }
+    ru.zf.pravka.ui.PaperCard(
+        label = "токен",
+        info = "Todoist → Настройки → Интеграции → Разработчик → API-токен. Ключ живёт только на телефоне.",
+    ) {
+        ru.zf.pravka.ui.PaperField(value = draft, onValueChange = { draft = it }, label = "Токен Todoist")
+        if (status.isNotBlank()) {
             Text(
                 status,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+                maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        Spacer(Modifier.height(6.dp))
+        Row {
+            Spacer(Modifier.weight(1f))
+            ru.zf.pravka.ui.PaperButton("Сохранить и проверить", primary = true, onClick = {
+                app.appScope.launch {
+                    app.settings.setTodoistToken(draft.trim())
+                    app.todoistSync.refresh(force = true)
+                }
+            })
+        }
     }
 }
+

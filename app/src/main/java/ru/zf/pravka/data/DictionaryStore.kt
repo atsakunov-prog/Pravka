@@ -31,16 +31,23 @@ class DictionaryStore(private val context: Context) {
     private var entries = mutableListOf<DictEntry>()
     private var nextId = 1L
     private var seedVersion = 1
+    // Ключи записей заводского семени (`from` без регистра + вид) — тот же ключ,
+    // что у слияния семени при обновлении. Нужен подсказкам распознавателю:
+    // слова владельца идут впереди семени, а у самой записи признака нет.
+    @Volatile private var seedKeys: Set<Pair<String, DictMode>> = emptySet()
 
     private val _entriesFlow = MutableStateFlow<List<DictEntry>>(emptyList())
     val entriesFlow: StateFlow<List<DictEntry>> = _entriesFlow
 
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
 
     suspend fun all(): List<DictEntry> = mutex.withLock {
         ensureLoaded()
         entries.toList()
     }
+
+    /** Запись из заводского семени, а не владельца (по `from` и виду, как при слиянии семени). */
+    fun isSeed(e: DictEntry): Boolean = (e.from.lowercase() to e.mode) in seedKeys
 
     suspend fun add(from: String, to: String, mode: DictMode, note: String): DictEntry = mutex.withLock {
         ensureLoaded()
@@ -112,6 +119,8 @@ class DictionaryStore(private val context: Context) {
                 JSONObject(context.assets.open(SEED_ASSET).bufferedReader().use { it.readText() })
             }.getOrNull()
             val assetSeedVersion = seedRoot?.optInt("seedVersion", 1) ?: 1
+            seedKeys = seedRoot?.let { runCatching { parseEntries(it) }.getOrNull() }
+                .orEmpty().map { it.from.lowercase() to it.mode }.toHashSet()
 
             // A corrupt dictionary quarantines to .corrupt instead of staying
             // in place: the reseed below then can't overwrite the owner's data.
@@ -130,6 +139,16 @@ class DictionaryStore(private val context: Context) {
             // the entries missing locally (deleted-by-owner entries do NOT
             // resurrect unless the seed version was bumped again).
             if (fileRoot != null && seedRoot != null && assetSeedVersion > seedVersion) {
+                // Семя умеет и СНИМАТЬ записи (список "remove") — для того, что
+                // автоматика положила в словарь ошибочно (16.09.2026: HARD
+                // «Папа → Пап» из правки руками). Только полное совпадение
+                // from + to + вида, чтобы не задеть заведённое владельцем.
+                val removals = parseRemovals(seedRoot)
+                if (removals.isNotEmpty()) {
+                    entries.removeAll { e ->
+                        Triple(e.from.lowercase(), e.to.lowercase(), e.mode) in removals
+                    }
+                }
                 val existing = entries.map { it.from.lowercase() to it.mode }.toHashSet()
                 for (e in parseEntries(seedRoot)) {
                     if ((e.from.lowercase() to e.mode) !in existing) {
@@ -161,6 +180,20 @@ class DictionaryStore(private val context: Context) {
     private fun persistQueued() {
         val json = toJson(entries).toString(2)
         DiskWriter.post { StoreFiles.writeAtomic(file, json) }
+    }
+
+    /** Список "remove" семени: (from, to, вид) в нижнем регистре — что снять при слиянии. */
+    private fun parseRemovals(root: JSONObject): Set<Triple<String, String, DictMode>> {
+        val array = root.optJSONArray("remove") ?: return emptySet()
+        val out = HashSet<Triple<String, String, DictMode>>()
+        for (i in 0 until array.length()) {
+            val o = array.optJSONObject(i) ?: continue
+            val mode = runCatching { DictMode.valueOf(o.optString("mode", "HARD")) }.getOrNull() ?: continue
+            val from = o.optString("from").trim().lowercase()
+            if (from.isEmpty()) continue
+            out.add(Triple(from, o.optString("to", "").trim().lowercase(), mode))
+        }
+        return out
     }
 
     private fun parseEntries(root: JSONObject): MutableList<DictEntry> {

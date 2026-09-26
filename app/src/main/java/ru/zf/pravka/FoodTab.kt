@@ -5,13 +5,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,23 +17,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -47,6 +30,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -60,14 +44,34 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
 import ru.zf.pravka.core.MealItem
+import ru.zf.pravka.core.Micronutrients
 import ru.zf.pravka.data.FoodStore
 import ru.zf.pravka.data.RationBook
+import ru.zf.pravka.ui.ChipRow
+import ru.zf.pravka.ui.DayNav
 import ru.zf.pravka.ui.Feedback
+import ru.zf.pravka.ui.GlyphButton
 import ru.zf.pravka.ui.GoalBar
 import ru.zf.pravka.ui.GoalRow
+import ru.zf.pravka.ui.IconAction
+import ru.zf.pravka.ui.MicroBar
+import ru.zf.pravka.ui.MicroOver
+import ru.zf.pravka.ui.microColor
+import ru.zf.pravka.ui.PaperAlert
 import ru.zf.pravka.ui.PaperCard
+import ru.zf.pravka.ui.PaperChip
+import ru.zf.pravka.ui.PaperField
 import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.PaperIconButton
 import ru.zf.pravka.ui.PaperLabel
+import ru.zf.pravka.ui.Glyphs
+import ru.zf.pravka.ui.PaperButton
+import ru.zf.pravka.ui.PaperTextButton
+import ru.zf.pravka.ui.PaperToggle
+import ru.zf.pravka.ui.ScreenPad
+import ru.zf.pravka.ui.SheetAction
+import ru.zf.pravka.ui.SummaryLine
+import ru.zf.pravka.ui.VoiceInput
 
 // Вкладка «Еда»: дневник приёмов с КБЖУ.
 //
@@ -93,7 +97,6 @@ private val CARBS_COLOR = Color(0xFF16A34A)
 @Composable
 internal fun FoodTab(
     app: PravkaApp,
-    onOpenSettings: () -> Unit = {},
     // «Сфоткай тарелку»/«штрихкод» с кнопки еды: вкладка открывается и сразу
     // запускает камеру или сканер, без лишнего тапа.
     autoAction: String? = null,
@@ -220,37 +223,24 @@ internal fun FoodTab(
 
     LazyColumn(
         Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = ScreenPad.Padding,
+        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
         // ---- День и его итог ----
+        // Один навигатор дня на все вкладки (24.09.2026): «Сегодня» и дата под
+        // ним; дальше вчерашнего дата и есть название — второй раз её не пишем.
         item {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                IconButton(onClick = { dayOffset += 1 }) {
-                    Icon(Icons.Filled.KeyboardArrowLeft, contentDescription = "Раньше")
-                }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        when (dayOffset) {
-                            0 -> "Сегодня"
-                            1 -> "Вчера"
-                            else -> dayTitleFormat.format(Date(dayStart))
-                        },
-                        style = MaterialTheme.typography.headlineSmall,
-                    )
-                    if (dayOffset in 0..1) PaperHint(dayTitleFormat.format(Date(dayStart)))
-                }
-                IconButton(
-                    onClick = { if (dayOffset > 0) dayOffset -= 1 },
-                    enabled = dayOffset > 0,
-                ) {
-                    Icon(Icons.Filled.KeyboardArrowRight, contentDescription = "Позже")
-                }
-            }
+            val dayTitle = dayTitleFormat.format(Date(dayStart))
+            DayNav(
+                title = when (dayOffset) {
+                    0 -> "Сегодня"
+                    1 -> "Вчера"
+                    else -> dayTitle.replaceFirstChar { it.uppercase() }
+                },
+                subtitle = if (dayOffset in 0..1) dayTitle else null,
+                onPrev = { dayOffset += 1 },
+                onNext = if (dayOffset > 0) ({ dayOffset -= 1 }) else null,
+            )
         }
         item {
             PaperCard(label = if (total.empty) "за день ничего" else "за день") {
@@ -276,49 +266,48 @@ internal fun FoodTab(
             }
         }
 
+        // ---- Витамины и элементы ----
+        item { MicroCard(total) }
+
         // ---- Что съел: четыре дороги ----
         item {
-            PaperCard(label = "записать") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Омлет из трёх яиц и тост с авокадо") },
-                        minLines = 1,
-                        maxLines = 4,
-                        enabled = !busy,
-                    )
-                    IconButton(onClick = { parseText(draft.trim()) }, enabled = !busy) {
-                        if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Filled.Send, contentDescription = "Разобрать")
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = {
+            // Строка ввода — общая на все вкладки (24.09.2026); снимок, галерея
+            // и штрихкод — значками с подписью над полем: три кнопки словами и
+            // значками в ряд на узком внешнем экране Fold не встают. Пока Claude разбирает,
+            // крутилка — в строке подписи плашки: поле и значки при этом гаснут.
+            PaperCard(
+                label = "записать",
+                info = "Голосом — кнопка «Т» на экране. Снимок читается вместе с " +
+                    "подписью из поля: там уточняют невидимое (масло в салате, " +
+                    "сахар в кофе).",
+                trailing = if (busy) {
+                    { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
+                } else null,
+            ) {
+                VoiceInput(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    placeholder = "Омлет из трёх яиц и тост с авокадо",
+                    onSend = { parseText(draft.trim()) },
+                    enabled = !busy,
+                    sendEnabled = !busy && draft.isNotBlank(),
+                    extras = {
+                        IconAction(Glyphs.Camera, "Снять", enabled = !busy, onClick = {
                             val file = File(context.cacheDir, "eda-shot.jpg")
                             pendingPhoto = file
                             val uri = androidx.core.content.FileProvider.getUriForFile(
                                 context, BuildConfig.APPLICATION_ID + ".files", file
                             )
                             camera.launch(uri)
-                        },
-                        enabled = !busy,
-                    ) { Text("📷 Снять") }
-                    OutlinedButton(
-                        onClick = {
+                        })
+                        IconAction(Glyphs.Image, "Галерея", enabled = !busy, onClick = {
                             gallery.launch(
                                 androidx.activity.result.PickVisualMediaRequest(
                                     ActivityResultContracts.PickVisualMedia.ImageOnly
                                 )
                             )
-                        },
-                        enabled = !busy,
-                    ) { Text("🖼 Из галереи") }
-                    OutlinedButton(
-                        onClick = {
+                        })
+                        IconAction(Glyphs.Barcode, "Штрихкод", enabled = !busy, onClick = {
                             ru.zf.pravka.ui.scanBarcode(
                                 context = context,
                                 onFail = { message -> Feedback.toast(app, message, long = true) },
@@ -338,15 +327,8 @@ internal fun FoodTab(
                                     }
                                 }
                             }
-                        },
-                        enabled = !busy,
-                    ) { Text("▥ Штрихкод") }
-                }
-                Spacer(Modifier.height(6.dp))
-                PaperHint(
-                    "Голосом — кнопка «Т» на экране. Снимок читается вместе с " +
-                        "подписью из поля выше: там уточняют невидимое (масло в " +
-                        "салате, сахар в кофе)."
+                        })
+                    },
                 )
             }
         }
@@ -468,8 +450,7 @@ internal fun FoodTab(
             }
         }
 
-        // ---- Настройки ----
-        item { SettingsLink("Настройки еды: цели и куда уезжает", onOpenSettings) }
+        // Настройки режима — за шестерёнкой в шапке вкладки.
     }
 
     val editMeal = editing?.let { id -> meals.firstOrNull { it.id == id } }
@@ -478,6 +459,123 @@ internal fun FoodTab(
             app = app,
             meal = editMeal,
             onClose = { editing = null },
+        )
+    }
+}
+
+/** Сколько дефицитов показывает свёрнутая карточка — и полосками, и в строке. */
+private const val LOW_SHOWN = 4
+
+/**
+ * Витамины и элементы за день: полоска на вещество, засечка нормы, светофор.
+ *
+ * Свёрнутая карточка показывает не первые попавшиеся вещества, а те, которых
+ * МАЛО: это единственная строка, по которой можно что-то сделать сегодня.
+ * Остальные полоски — по тапу: они нужны раз в неделю, а места занимают
+ * весь экран.
+ */
+@Composable
+private fun MicroCard(total: FoodStore.DayTotal) {
+    var open by remember { mutableStateOf(false) }
+    val totals = total.micro
+    val low = remember(totals) { Micronutrients.lacking(totals) }
+    val over = remember(totals) { Micronutrients.over(totals) }
+    val shown = if (open) Micronutrients.ALL else low.take(LOW_SHOWN)
+    // Пояснения — за «i», раскрытие — шевроном (24.09.2026): на плашке сама
+    // сводка дня, а откуда цифры и что значит риска — по требованию.
+    PaperCard(
+        label = "витамины и элементы",
+        info = "Свёрнутая плашка показывает то, чего мало; все ${Micronutrients.ALL.size} " +
+            "полосок — по стрелке. Вещества приезжают с разбором еды и с рационом; " +
+            "таблетки скажи отдельно — «выпил витамин D и магний». Риска на полоске — " +
+            "суточная норма мужчины 43 лет. Цифры считает модель по составу еды и точно — " +
+            "по рациону и штрихкоду: это порядок величины, а не анализ крови. У натрия " +
+            "норма — потолок, а не цель.",
+        trailing = {
+            GlyphButton(
+                Glyphs.ChevronDown,
+                if (open) "свернуть" else "все ${Micronutrients.ALL.size}",
+                onClick = { open = !open },
+                modifier = Modifier.rotate(if (open) 180f else 0f),
+                size = 32.dp,
+            )
+        },
+    ) {
+        if (totals.isEmpty() && !open) {
+            PaperHint("За этот день веществ не посчитано.")
+            return@PaperCard
+        }
+        // Одна строка вместо двадцати полосок: что закрыто, чего мало, что
+        // перебрано. Свёрнутую карточку читают именно её.
+        val okCount = Micronutrients.ALL.count {
+            Micronutrients.level(it, totals[it.id] ?: 0.0) == Micronutrients.Level.OK
+        }
+        // Список дефицитов режем: в пустой день их девятнадцать, и строка
+        // превращается в стену, из которой не следует ничего.
+        val lowNames = low.take(LOW_SHOWN).joinToString(", ") { it.name.lowercase() } +
+            (if (low.size > LOW_SHOWN) " и ещё ${low.size - LOW_SHOWN}" else "")
+        Text(
+            "Норму закрыли $okCount из ${Micronutrients.ALL.size}" +
+                (if (low.isEmpty()) "" else " · мало: $lowNames"),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (over.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Перебор: " + over.joinToString(", ") { it.name.lowercase() },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MicroOver,
+            )
+        }
+        if (total.pills.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            PaperHint("Из банки: " + total.pills)
+        }
+        if (shown.isEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            PaperHint("Ничего в дефиците — все полоски по стрелке.")
+            return@PaperCard
+        }
+        Spacer(Modifier.height(10.dp))
+        for (n in shown) {
+            MicroRow(
+                nutrient = n,
+                value = totals[n.id] ?: 0.0,
+                fromPills = total.microPills[n.id] ?: 0.0,
+            )
+        }
+    }
+}
+
+/** Одно вещество: сколько от нормы, светофором, и зачем оно нужно. */
+@Composable
+private fun MicroRow(
+    nutrient: Micronutrients.Nutrient,
+    value: Double,
+    fromPills: Double,
+) {
+    val level = Micronutrients.level(nutrient, value)
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(nutrient.name, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                Micronutrients.amount(value) + " / " + Micronutrients.amount(nutrient.norm) +
+                    " " + nutrient.unit + " · " + Micronutrients.word(level),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = microColor(level),
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        MicroBar(nutrient, value)
+        Spacer(Modifier.height(4.dp))
+        PaperHint(
+            (if (fromPills > 0) "из банки " + Micronutrients.amount(fromPills) + " " +
+                nutrient.unit + " · " else "") + nutrient.why + ". " + nutrient.source
         )
     }
 }
@@ -543,14 +641,23 @@ private fun MealCard(
                     )
                     PaperHint(
                         listOfNotNull(
+                            if (item.pill) "таблетка" else null,
                             if (item.grams > 0) "${item.grams} г" else null,
-                            "Б${item.protein} Ж${item.fat} У${item.carbs}",
-                            item.sureness.takeIf { it.isNotBlank() },
+                            // У таблетки макросов нет — писать «Б0 Ж0 У0» значит
+                            // занимать строку ничем.
+                            if (item.pill) null else "Б${item.protein} Ж${item.fat} У${item.carbs}",
+                            item.sureness.takeIf { it.isNotBlank() && !item.pill },
+                            item.micro.takeIf { it.isNotEmpty() }?.let { Micronutrients.short(it, limit = 4) },
                         ).joinToString(" · ")
                     )
                 }
                 Text("${item.kcal}", style = MaterialTheme.typography.bodyMedium)
             }
+        }
+        val mealMicro = meal.micro
+        if (mealMicro.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            PaperHint("Витамины приёма: " + Micronutrients.short(mealMicro, limit = 8))
         }
         if (meal.note.isNotBlank()) {
             Spacer(Modifier.height(6.dp))
@@ -563,33 +670,35 @@ private fun MealCard(
         val photo = app.foodStore.photoFile(meal.photo)
         if (photo != null) {
             Spacer(Modifier.height(6.dp))
-            PaperHint("📷 снимок сохранён (${photo.length() / 1024} КБ)")
+            PaperHint("Снимок сохранён (${photo.length() / 1024} КБ)")
         }
         if (meal.raw.isNotBlank() && meal.raw != meal.shortList) {
             Spacer(Modifier.height(6.dp))
             PaperHint("Сказано: «${meal.raw}»")
         }
         Spacer(Modifier.height(10.dp))
+        // Одна главная — «Записать» справа, под большим пальцем (24.09.2026).
+        // Мелкие ручки слева значками; «Поправить» — кружком с кромкой: словом
+        // рядом с «Записать» и двумя значками он на внешнем экране Fold не
+        // встаёт, а у обоих видов карточки ручка правки должна быть одна.
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (pendingState) {
-                Button(onClick = onConfirm) { Text("✓ Записать") }
-            }
-            OutlinedButton(onClick = onEdit) { Text("Поправить") }
+            GlyphButton(Glyphs.Delete, "убрать приём", onClick = onDelete)
             if (onReparse != null) {
-                TextButton(onClick = onReparse) { Text("Заново") }
+                GlyphButton(Glyphs.Refresh, "разобрать заново", onClick = onReparse)
             }
             // Убрать из дня — не то же, что удалить: разбор остаётся ждать, и
             // приём можно записать заново, поправив.
             if (onUnconfirm != null) {
-                TextButton(onClick = onUnconfirm) { Text("Из дня") }
+                PaperTextButton("Из дня", onClick = onUnconfirm, icon = Glyphs.Undo)
             }
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Clear, contentDescription = "Убрать")
+            PaperIconButton(Glyphs.Edit, "поправить", onClick = onEdit)
+            if (pendingState) {
+                Spacer(Modifier.width(8.dp))
+                PaperButton("Записать", onClick = onConfirm, icon = Glyphs.Check, primary = true)
             }
         }
         if (!pendingState) {
@@ -614,90 +723,78 @@ private fun MealEditDialog(app: PravkaApp, meal: FoodStore.Meal, onClose: () -> 
     }
     var names by remember(meal.id) { mutableStateOf(meal.items.map { it.name }) }
 
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text("Поправить приём") },
-        text = {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (k in MealItem.KINDS) {
-                        FilterChip(
-                            selected = kind == k,
-                            onClick = { kind = k },
-                            label = { Text(k) },
-                        )
-                    }
+    // Лист вместо AlertDialog (24.09.2026): одно окно на всё приложение, и
+    // лист сам поднимается над клавиатурой — полей тут по два на позицию.
+    // «Отмены» нет: закрывают крестик и свайп, а сохранение ничего не ломает.
+    PaperAlert(
+        onDismiss = onClose,
+        title = "Поправить приём",
+        icon = Glyphs.Edit,
+        subtitle = meal.kind.replaceFirstChar { it.uppercase() } + " · " +
+            mealTimeFormat.format(Date(meal.ts)) + " · ${meal.kcal} ккал",
+        confirm = SheetAction("Сохранить", icon = Glyphs.Check) {
+            scope.launch {
+                // Сначала позиции: вес меняет КБЖУ пропорционально, а имя
+                // просто переписывается — модель за него не отвечает.
+                val updated = meal.items.mapIndexed { index, item ->
+                    val newGrams = grams.getOrElse(index) { "" }.toIntOrNull() ?: 0
+                    val renamed = names.getOrElse(index) { item.name }.trim()
+                        .ifBlank { item.name }
+                    val scaled = if (newGrams > 0 && newGrams != item.grams) {
+                        item.scaledTo(newGrams)
+                    } else item
+                    scaled.copy(name = renamed)
                 }
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = time,
-                    onValueChange = { time = it },
-                    label = { Text("Во сколько (ЧЧ:ММ)") },
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(10.dp))
-                meal.items.forEachIndexed { index, item ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = names.getOrElse(index) { item.name },
-                            onValueChange = { v ->
-                                names = names.toMutableList().also { it[index] = v }
-                            },
-                            modifier = Modifier.weight(1f),
-                            label = { Text("Что") },
-                            singleLine = true,
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        OutlinedTextField(
-                            value = grams.getOrElse(index) { "" },
-                            onValueChange = { v ->
-                                grams = grams.toMutableList().also {
-                                    it[index] = v.filter { c -> c.isDigit() }.take(4)
-                                }
-                            },
-                            modifier = Modifier.width(96.dp),
-                            label = { Text("Грамм") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        )
-                    }
-                    PaperHint(
-                        "${item.kcal} ккал · Б${item.protein} Ж${item.fat} У${item.carbs}" +
-                            " — пересчитается по новому весу"
-                    )
-                    Spacer(Modifier.height(6.dp))
+                app.foodEngine.replaceItems(meal.id, updated)
+                if (kind != meal.kind) app.foodEngine.setKind(meal.id, kind)
+                parseClock(meal.ts, time)?.let { ts ->
+                    if (ts != meal.ts) app.foodEngine.setTime(meal.id, ts)
                 }
+                onClose()
             }
         },
-        confirmButton = {
-            TextButton(onClick = {
-                scope.launch {
-                    // Сначала позиции: вес меняет КБЖУ пропорционально, а имя
-                    // просто переписывается — модель за него не отвечает.
-                    val updated = meal.items.mapIndexed { index, item ->
-                        val newGrams = grams.getOrElse(index) { "" }.toIntOrNull() ?: 0
-                        val renamed = names.getOrElse(index) { item.name }.trim()
-                            .ifBlank { item.name }
-                        val scaled = if (newGrams > 0 && newGrams != item.grams) {
-                            item.scaledTo(newGrams)
-                        } else item
-                        scaled.copy(name = renamed)
-                    }
-                    app.foodEngine.replaceItems(meal.id, updated)
-                    if (kind != meal.kind) app.foodEngine.setKind(meal.id, kind)
-                    parseClock(meal.ts, time)?.let { ts ->
-                        if (ts != meal.ts) app.foodEngine.setTime(meal.id, ts)
-                    }
-                    onClose()
+    ) {
+        ChipRow {
+            for (k in MealItem.KINDS) {
+                PaperChip(k, selected = kind == k, onClick = { kind = k })
+            }
+        }
+        PaperField(
+            value = time,
+            onValueChange = { time = it },
+            label = "Во сколько (ЧЧ:ММ)",
+        )
+        meal.items.forEachIndexed { index, item ->
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PaperField(
+                        value = names.getOrElse(index) { item.name },
+                        onValueChange = { v ->
+                            names = names.toMutableList().also { it[index] = v }
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = "Что",
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    PaperField(
+                        value = grams.getOrElse(index) { "" },
+                        onValueChange = { v ->
+                            grams = grams.toMutableList().also {
+                                it[index] = v.filter { c -> c.isDigit() }.take(4)
+                            }
+                        },
+                        modifier = Modifier.width(96.dp),
+                        label = "Грамм",
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
                 }
-            }) { Text("Сохранить") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
-    )
+                PaperHint(
+                    "${item.kcal} ккал · Б${item.protein} Ж${item.fat} У${item.carbs}" +
+                        " — пересчитается по новому весу"
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -711,9 +808,7 @@ internal fun BodyFoodSettings(app: PravkaApp) {
     val carbs by app.settings.foodCarbsFlow.collectAsState(initial = 0)
     val toIcu by app.settings.foodToIcuFlow.collectAsState(initial = true)
     val toRibbon by app.settings.foodToRibbonFlow.collectAsState(initial = true)
-    val tEnabled by app.settings.tEnabledFlow.collectAsState(initial = true)
     val meals by app.foodStore.mealsFlow.collectAsState()
-    val scope = rememberCoroutineScope()
 
     var kcalText by remember(kcal) { mutableStateOf(kcal.toString()) }
     var proteinText by remember(protein) { mutableStateOf(protein.toString()) }
@@ -731,87 +826,77 @@ internal fun BodyFoodSettings(app: PravkaApp) {
         }
     }
 
-    PaperCard(label = "настройки еды") {
-        Text("Цели на день", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            NumberField("Ккал", kcalText, Modifier.weight(1f)) { kcalText = it }
-            NumberField("Белки", proteinText, Modifier.weight(1f)) { proteinText = it }
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            NumberField("Жиры", fatText, Modifier.weight(1f)) { fatText = it }
-            NumberField("Углеводы", carbsText, Modifier.weight(1f)) { carbsText = it }
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = saveTargets) { Text("Сохранить цели") }
-            OutlinedButton(onClick = {
-                // Считаем от настоящего веса из intervals.icu, а не от памяти:
-                // Миффлин-Сан-Жеор при умеренной активности, белок 1,8 г/кг,
-                // жиры 0,9 г/кг, углеводы — остаток.
-                val weight = app.sportStore.lastWeight()
-                    .takeIf { it > 0 } ?: app.sportStore.profileFlow.value.weightKg
-                if (weight <= 0) {
-                    Feedback.toast(app, "Вес неизвестен — он приезжает из intervals.icu")
-                } else {
-                    val computed = computeTargets(weight)
-                    kcalText = computed.kcal.toString()
-                    proteinText = computed.protein.toString()
-                    fatText = computed.fat.toString()
-                    carbsText = computed.carbs.toString()
-                    Feedback.toast(app, "Посчитал от ${Math.round(weight)} кг — проверь и сохрани")
-                }
-            }) { Text("Посчитать от веса") }
-        }
-        Spacer(Modifier.height(14.dp))
-        SwitchRow(
-            "Кнопка «Т» на экране",
-            "Четвёртая в связке под «Д». Одна на всё тело: подходы, еда, " +
-                "зарядка, вопрос — намерение определяет модель.",
-            tEnabled,
-        ) { v -> app.appScope.launch { app.settings.setTEnabled(v) } }
-        SwitchRow(
-            "Приписывать к ленте",
-            "КБЖУ дописывается к записи «Еда» в Засечке, если она в это время " +
-                "есть. Своих записей лента от еды не отращивает.",
-            toRibbon,
-        ) { v -> app.appScope.launch { app.settings.setFoodToRibbon(v) } }
-        SwitchRow(
-            "Писать в intervals.icu",
-            "Итог дня уезжает в wellness (ккал, Б/Ж/У) — там эти поля пустуют, " +
-                "и оттуда их видит разбор тренировок.",
-            toIcu,
-        ) { v -> app.appScope.launch { app.settings.setFoodToIcu(v) } }
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
-                app.appScope.launch {
-                    val intent = app.foodStore.shareCsvIntent()
-                    runCatching {
-                        context.startActivity(
-                            android.content.Intent.createChooser(intent, "Дневник еды")
-                        )
+    Column(verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap)) {
+        PaperCard(
+            label = "цели на день",
+            info = "«Посчитать от веса» берёт настоящий вес из intervals.icu: Миффлин-Сан-Жеор " +
+                "при умеренной активности, белок 1,8 г/кг, жиры 0,9 г/кг, углеводы — остаток. " +
+                "Посчитанное ложится в поля — проверь и сохрани.",
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                NumberField("Ккал", kcalText, Modifier.weight(1f)) { kcalText = it }
+                NumberField("Белки", proteinText, Modifier.weight(1f)) { proteinText = it }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                NumberField("Жиры", fatText, Modifier.weight(1f)) { fatText = it }
+                NumberField("Углеводы", carbsText, Modifier.weight(1f)) { carbsText = it }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                PaperButton("От веса", icon = Glyphs.Sport, onClick = {
+                    // Считаем от настоящего веса из intervals.icu, а не от памяти.
+                    val weight = app.sportStore.lastWeight()
+                        .takeIf { it > 0 } ?: app.sportStore.profileFlow.value.weightKg
+                    if (weight <= 0) {
+                        Feedback.toast(app, "Вес неизвестен — он приезжает из intervals.icu")
+                    } else {
+                        val computed = computeTargets(weight)
+                        kcalText = computed.kcal.toString()
+                        proteinText = computed.protein.toString()
+                        fatText = computed.fat.toString()
+                        carbsText = computed.carbs.toString()
+                        Feedback.toast(app, "Посчитал от ${Math.round(weight)} кг — проверь и сохрани")
                     }
-                }
-            }) { Text("Выгрузить CSV") }
-            OutlinedButton(onClick = {
-                scope.launch {
-                    val done = app.foodEngine.syncPending(force = true)
-                    Feedback.toast(
-                        app,
-                        if (done > 0) "Дней уехало: $done" else "Всё уже на месте",
-                    )
-                }
-            }) { Text("Донести в intervals.icu") }
+                })
+                Spacer(Modifier.weight(1f))
+                PaperButton("Сохранить", primary = true, onClick = saveTargets)
+            }
         }
-        Spacer(Modifier.height(8.dp))
-        PaperHint(
-            "В дневнике ${meals.count { it.confirmed }} записанных приёмов. " +
-                "Файл food.json — в часовых копиях вместе с лентой."
-        )
+
+        PaperCard(label = "куда уходит еда") {
+            PaperToggle(
+                title = "Приписывать к ленте",
+                checked = toRibbon,
+                onCheckedChange = { v -> app.appScope.launch { app.settings.setFoodToRibbon(v) } },
+                info = "КБЖУ дописывается к записи «Еда» в Засечке, если она в это время " +
+                    "есть. Своих записей лента от еды не отращивает.",
+            )
+            PaperToggle(
+                title = "Писать в intervals.icu",
+                checked = toIcu,
+                onCheckedChange = { v -> app.appScope.launch { app.settings.setFoodToIcu(v) } },
+                info = "Итог дня уезжает в wellness (ккал, Б/Ж/У) — там эти поля пустуют, " +
+                    "и оттуда их видит разбор тренировок.",
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PaperHint(
+                    "Записанных приёмов: ${meals.count { it.confirmed }}. " +
+                        "Файл food.json — в часовых копиях вместе с лентой.",
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            PaperButton("Донести в intervals.icu", icon = Glyphs.Upload, onClick = {
+                app.appScope.launch {
+                    val done = app.foodEngine.syncPending(force = true)
+                    Feedback.toast(app, if (done > 0) "Дней уехало: $done" else "Всё уже на месте")
+                }
+            })
+        }
     }
 }
+
 
 @Composable
 private fun NumberField(
@@ -820,34 +905,13 @@ private fun NumberField(
     modifier: Modifier = Modifier,
     onChange: (String) -> Unit,
 ) {
-    OutlinedTextField(
+    PaperField(
         value = value,
         onValueChange = { onChange(it.filter { c -> c.isDigit() }.take(4)) },
         modifier = modifier,
-        label = { Text(label) },
-        singleLine = true,
+        label = label,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
     )
-}
-
-@Composable
-private fun SwitchRow(
-    title: String,
-    hint: String,
-    checked: Boolean,
-    onChange: (Boolean) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium)
-            PaperHint(hint)
-        }
-        Spacer(Modifier.width(10.dp))
-        Switch(checked = checked, onCheckedChange = onChange)
-    }
 }
 
 @Composable
@@ -995,54 +1059,60 @@ private fun RationSection(app: PravkaApp, dayStart: Long) {
         }
     }
 
+    // Свёрнутый рацион — одна строка-сводка с шевроном (24.09.2026), а что это
+    // и как им пользоваться — за «i»: абзац про этикетки нужен раз, а стоял
+    // на свёрнутой плашке каждый день.
     PaperCard(
         label = "мой рацион",
-        trailing = {
-            TextButton(onClick = { open = !open }) {
-                Text(if (open) "скрыть" else "показать")
-            }
-        },
+        info = "Штатная еда с настоящих этикеток: завтрак, обед, ужин и восемь " +
+            "вариантов углеводного слота. Тап вместо диктовки — бесплатно, " +
+            "точно и без интернета. Тап по строке — записать порцию, тап по " +
+            "граммам — сменить вес.",
     ) {
-        if (!open) {
-            PaperHint(
-                "Штатная еда с настоящих этикеток: завтрак, обед, ужин и восемь " +
-                    "вариантов углеводного слота. Тап вместо диктовки — бесплатно, " +
-                    "точно и без интернета."
-            )
-            return@PaperCard
-        }
-        if (!loaded) {
-            PaperHint("Читаю справочник…")
-            return@PaperCard
-        }
-        PaperHint("Тап по строке — записать порцию. Тап по граммам — сменить вес.")
-        for ((meal, list) in app.rationBook.byMeal()) {
-            val set = list.filter { it.defaultGrams > 0 }
-            val kcal = set.sumOf { Math.round(it.kcal100 * it.defaultGrams / 100.0).toInt() }
-            Spacer(Modifier.height(14.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        RationBook.mealTitle(meal),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    PaperHint("${set.size} поз. · $kcal ккал")
-                }
-                // «Слот · опция» — это варианты на замену пюре, а не приём:
-                // целиком их не едят, и кнопки «весь слот» быть не должно.
-                if (set.size > 1 && !meal.contains("Слот")) {
-                    OutlinedButton(onClick = {
-                        put(meal, set.map { it to it.defaultGrams })
-                    }) { Text("Весь " + RationBook.mealTitle(meal).lowercase()) }
-                }
+        SummaryLine(
+            title = "Штатная еда с этикеток",
+            summary = if (loaded) "${app.rationBook.byMeal().sumOf { it.second.size }} поз." else "",
+            expanded = open,
+            onToggle = { open = !open },
+        ) {
+            if (!loaded) {
+                PaperHint("Читаю справочник…")
+                return@SummaryLine
             }
-            for (p in list) {
-                RationRow(
-                    product = p,
-                    onPut = { put(meal, listOf(p to p.defaultGrams)) },
-                    onGrams = { asking = p },
-                )
+            // Своя колонка без шага: у набора шаг 8 между всеми детьми, а тут
+            // строки рациона плотные и отбиваются только заголовки приёмов.
+            Column {
+                for ((meal, list) in app.rationBook.byMeal()) {
+                    val set = list.filter { it.defaultGrams > 0 }
+                    val kcal = set.sumOf { Math.round(it.kcal100 * it.defaultGrams / 100.0).toInt() }
+                    Spacer(Modifier.height(10.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                RationBook.mealTitle(meal),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            PaperHint("${set.size} поз. · $kcal ккал")
+                        }
+                        // «Слот · опция» — это варианты на замену пюре, а не приём:
+                        // целиком их не едят, и кнопки «весь слот» быть не должно.
+                        if (set.size > 1 && !meal.contains("Слот")) {
+                            PaperButton(
+                                "Весь " + RationBook.mealTitle(meal).lowercase(),
+                                onClick = { put(meal, set.map { it to it.defaultGrams }) },
+                                icon = Glyphs.Plus,
+                            )
+                        }
+                    }
+                    for (p in list) {
+                        RationRow(
+                            product = p,
+                            onPut = { put(meal, listOf(p to p.defaultGrams)) },
+                            onGrams = { asking = p },
+                        )
+                    }
+                }
             }
         }
     }
@@ -1093,7 +1163,7 @@ private fun RationRow(
         }
         Spacer(Modifier.width(10.dp))
         // Граммы — своя кнопка: порция меняется чаще, чем состав.
-        TextButton(onClick = onGrams) { Text("$grams г") }
+        PaperTextButton("$grams г", onClick = onGrams)
     }
 }
 
@@ -1107,33 +1177,25 @@ private fun GramsDialog(
         mutableStateOf(product.defaultGrams.takeIf { it > 0 }?.toString() ?: "100")
     }
     val grams = text.toIntOrNull() ?: 0
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text(product.shortName) },
-        text = {
-            Column {
-                NumberField("Граммы", text, Modifier.fillMaxWidth()) { text = it }
-                Spacer(Modifier.height(8.dp))
-                if (grams > 0) {
-                    val i = product.item(grams)
-                    Text(
-                        "${i.kcal} ккал · Б${i.protein} Ж${i.fat} У${i.carbs}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                if (product.note.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    PaperHint(product.note)
-                }
-            }
+    PaperAlert(
+        onDismiss = onClose,
+        title = product.shortName,
+        icon = Glyphs.Food,
+        subtitle = RationBook.mealTitle(product.meal),
+        confirm = SheetAction("Записать", icon = Glyphs.Check, enabled = grams > 0) {
+            if (grams > 0) onPut(grams)
         },
-        confirmButton = {
-            Button(onClick = { if (grams > 0) onPut(grams) }, enabled = grams > 0) {
-                Text("Записать")
-            }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Отмена") } },
-    )
+    ) {
+        NumberField("Граммы", text, Modifier.fillMaxWidth()) { text = it }
+        if (grams > 0) {
+            val i = product.item(grams)
+            Text(
+                "${i.kcal} ккал · Б${i.protein} Ж${i.fat} У${i.carbs}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        if (product.note.isNotBlank()) PaperHint(product.note)
+    }
 }
 
 private fun r(per100: Double, grams: Int): Int = Math.round(per100 * grams / 100.0).toInt()

@@ -5,6 +5,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Маршрут микрофона: поднять и опустить канал гарнитуры, попросить
+         встроенный вход, снять заглушку. Без этого разрешения система НЕ
+         ругается - она молча отказывает (AudioService пишет в свой лог
+         "Audio Settings Permission Denial" и возвращает управление), и
+         выглядит это ровно как "в машине Правка меня не слышит": канал
+         хендс-фри остаётся поднятым, распознаватель слушает салонный
+         микрофон у лобового. Разрешение обычное, спрашивать нечего -
+         выдаётся при установке (22.09.2026). -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -49,6 +58,23 @@
     <uses-permission android:name="android.permission.NFC" />
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
 
+    <!-- База в папке Documents/Pravka (24.09.2026): владелец копирует её
+         руками, а приложение после переустановки или на другом телефоне
+         должно прочитать базу, которую само не создавало. Своими система
+         считает только файлы этой же установки, поэтому Android 11+ —
+         «Доступ ко всем файлам» (выдаётся владельцем в настройках, по кнопке
+         в «Настройки → База данных»); до Android 10 — обычная запись.
+         Личное приложение, не Play Store: особое разрешение уместно. -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
@@ -65,7 +91,8 @@
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Pravka"
-        android:allowBackup="true">
+        android:allowBackup="true"
+        android:requestLegacyExternalStorage="true">
 
         <!-- Штрихкод еды: просим Play Services подтянуть модуль сканера при
              установке, а не при первом сканировании. Иначе первый скан в
@@ -81,6 +108,31 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Кнопка «Вернуться в Правку» на странице после входа в Google
+                 (provider/GoogleAuth.kt): просто поднимает приложение. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pravka" android:host="google" />
+            </intent-filter>
+        </activity>
+
+        <!-- Возврат из браузера после входа в Google (provider/GoogleAuth.kt):
+             Android-клиент Google отдаёт код на адрес со схемой-пакетом. -->
+        <activity
+            android:name=".trigger.GoogleAuthActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="ru.zf.pravka" android:path="/oauth2redirect" />
             </intent-filter>
         </activity>
 
@@ -127,6 +179,15 @@
 
         <activity
             android:name=".trigger.MicPermissionActivity"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false" />
+
+        <!-- Трамплин за разрешением на уведомления: служба замечает, что они
+             выключены (после обновления), а спросить умеет только Activity. -->
+        <activity
+            android:name=".trigger.NotifPermissionActivity"
             android:theme="@style/Theme.Transparent"
             android:excludeFromRecents="true"
             android:noHistory="true"
@@ -203,6 +264,40 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
+
+        <!-- Деньги: «Поделиться» выпиской Тинькова/Альфы (CSV) или текстом чата
+             «Плати по миру». Своя подпись в листе «Поделиться», чтобы не путать
+             с Правкой; несколько файлов разом — недельный пакет. -->
+        <activity
+            android:name=".trigger.MoneyShareActivity"
+            android:label="@string/money_share_label"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="application/csv" />
+                <data android:mimeType="application/vnd.ms-excel" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+            </intent-filter>
+        </activity>
+
+        <!-- Деньги: пуши Т-Банка и чата «Плати по миру» → журнал. Своя служба,
+             не служба доступности (Fold: на оконные события не подписываемся);
+             доступ выдаёт владелец в «Доступе к уведомлениям». -->
+        <service
+            android:name=".trigger.MoneyNotificationListener"
+            android:label="@string/money_push_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <activity
             android:name=".trigger.ProcessTextActivity"

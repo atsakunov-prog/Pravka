@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Значок источника микрофона: наушники со штангой — слушает Bluetooth-гарнитура.
+     Штриховой, в одном языке с пиктограммами режимов и телефончиком рядом. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M4,14v-2a8,8 0 0,1 16,0v2"
+        android:strokeColor="#F7F3EA"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"/>
+    <path
+        android:pathData="M4,14h2a1,1 0 0,1 1,1v3a1,1 0 0,1 -1,1H5a1,1 0 0,1 -1,-1v-4z"
+        android:strokeColor="#F7F3EA"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"/>
+    <path
+        android:pathData="M20,14h-2a1,1 0 0,0 -1,1v3a1,1 0 0,0 1,1h1a1,1 0 0,0 1,-1v-4z"
+        android:strokeColor="#F7F3EA"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"/>
+    <path
+        android:pathData="M19,19v1a2,2 0 0,1 -2,2h-4"
+        android:strokeColor="#F7F3EA"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"/>
+</vector>

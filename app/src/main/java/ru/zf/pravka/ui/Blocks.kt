@@ -6,21 +6,31 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.util.Locale
+import ru.zf.pravka.core.Micronutrients
 
 // Общие кирпичи бумажной вёрстки: заголовок раздела, карточка, подсказка,
 // полоска «сколько от цели». Настройки Правки держат такие же у себя внутри
@@ -38,32 +48,101 @@ fun PaperLabel(text: String, color: Color? = null) {
     )
 }
 
-/** Карточка с необязательной подписью над ней. */
+/**
+ * Фаска по кромке плашки: светлая линия сверху, тёмная снизу, посередине её
+ * нет. Один штрих с продольным градиентом — ровный кант по всему периметру
+ * читался бы как рамка виджета, а разный сверху и снизу — как толщина
+ * предмета. То же правило, что у `trigger/BubbleSkin.kt` на стекле: свет в
+ * приложении и на кнопках должен падать с одной стороны, иначе это два
+ * дизайна в одном экране.
+ */
+fun Modifier.bevel(shape: Shape? = null): Modifier = composed {
+    border(
+        width = 1.dp,
+        brush = Brush.verticalGradient(
+            0f to Color.White.copy(alpha = CardLook.RIM_LIGHT),
+            0.5f to Color.Transparent,
+            1f to Color.Black.copy(alpha = CardLook.RIM_SHADE),
+        ),
+        shape = shape ?: MaterialTheme.shapes.medium,
+    )
+}
+
+/**
+ * Карточка с необязательной подписью над ней. [info] — пояснение, которое
+ * раньше лежало абзацем в конце плашки: теперь оно за «i» в строке подписи
+ * (24.09.2026), а на плашке остаётся сама вещь.
+ */
 @Composable
 fun PaperCard(
     label: String? = null,
     labelColor: Color? = null,
     trailing: (@Composable () -> Unit)? = null,
+    info: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(Modifier.fillMaxWidth()) {
-        if (label != null || trailing != null) {
+        if (label != null || trailing != null || info != null) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (label != null) PaperLabel(label, labelColor) else Box {}
-                trailing?.invoke()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (info != null) InfoButton(label ?: "Пояснение", info, size = 30.dp)
+                    trailing?.invoke()
+                }
             }
         }
-        Card(Modifier.fillMaxWidth()) {
-            Column(
+        // Узор знаков режима — на самой плашке, под текстом (владелец, 15.09).
+        val decor = LocalModeDecor.current
+        // Фаска, свет сверху и зерно — те же слои, что у стекла диска
+        // (владелец, 20.09.2026: «сделаешь тогда их характеристики и у
+        // плашек», потом «потемнее и с такими же эффектами, как и диск»).
+        // Плоский прямоугольник тёмного тёплого цвета читается пылью; тот же
+        // цвет с ребром, светом и зерном — предметом. Каждый слой со своим
+        // тумблером: `ui/CardLook.kt`.
+        val look = LocalCardLook.current
+        Card(
+            modifier = Modifier.fillMaxWidth().then(if (look.bevel) Modifier.bevel() else Modifier),
+            colors = CardDefaults.cardColors(
+                containerColor = darkened(MaterialTheme.colorScheme.surfaceContainerLow, look.darken),
+            ),
+        ) {
+            Box(
                 Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                content = content,
-            )
+                    // Блик полосой по верхней трети и лёгкое затенение по
+                    // нижней пятой — ровно как у плашек на стекле, а не
+                    // градиент во всю высоту: тот читался заливкой.
+                    .then(
+                        if (look.light) Modifier
+                            .background(
+                                Brush.verticalGradient(
+                                    0f to Color.White.copy(alpha = CardLook.SHEEN),
+                                    CardLook.SHEEN_SPAN * 0.55f to Color.White.copy(alpha = CardLook.SHEEN * 0.3f),
+                                    CardLook.SHEEN_SPAN to Color.Transparent,
+                                )
+                            )
+                            .background(
+                                Brush.verticalGradient(
+                                    1f - CardLook.FOOT_SPAN to Color.Transparent,
+                                    1f to Color.Black.copy(alpha = CardLook.FOOT),
+                                )
+                            )
+                        else Modifier
+                    )
+                    .then(if (look.grain) Modifier.grain(CardLook.GRAIN) else Modifier)
+                    .then(if (decor != null) Modifier.glyphPattern(decor) else Modifier),
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    content = content,
+                )
+            }
         }
     }
 }
@@ -76,11 +155,6 @@ fun PaperHint(text: String, color: Color? = null) {
         style = MaterialTheme.typography.bodySmall,
         color = color ?: MaterialTheme.colorScheme.onSurfaceVariant,
     )
-}
-
-@Composable
-fun PaperTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.headlineSmall)
 }
 
 /**
@@ -141,5 +215,70 @@ fun GoalRow(
             )
         }
         GoalBar(value, target, color)
+    }
+}
+
+// ---- Витамины и элементы: полоска со светофором и засечкой нормы ----
+
+/** Цвета светофора веществ. Держатся здесь, чтобы вкладка и отчёт светили одинаково. */
+val MicroLow = Color(0xFFDC2626)     // меньше половины нормы
+val MicroMid = Color(0xFFCA8A04)     // половина - четыре пятых
+val MicroOk = Color(0xFF16A34A)      // норма закрыта
+val MicroOver = Color(0xFFEA580C)    // выше верхнего предела
+
+fun microColor(level: Micronutrients.Level): Color = when (level) {
+    Micronutrients.Level.LOW -> MicroLow
+    Micronutrients.Level.MID -> MicroMid
+    Micronutrients.Level.OK -> MicroOk
+    Micronutrients.Level.OVER -> MicroOver
+}
+
+/**
+ * Полоска вещества: заливка светофором и ЗАСЕЧКА нормы поперёк.
+ *
+ * Почему засечка, а не край полоски (как у калорий). У калорий цель — это
+ * потолок, и упереться в правый край там осмысленно. У витамина норма — не
+ * потолок, а отметка «достаточно»: с таблетками её переходят легко и иногда
+ * нарочно (витамин D зимой), и перебор надо ВИДЕТЬ, а не упирать в границу.
+ * Поэтому шкала полоски шире нормы, норма стоит риской внутри, и сразу видно
+ * не только «добрал ли», но и «насколько мимо».
+ */
+@Composable
+fun MicroBar(
+    nutrient: Micronutrients.Nutrient,
+    value: Double,
+    height: Dp = 10.dp,
+) {
+    val scale = nutrient.scale()
+    val level = Micronutrients.level(nutrient, value)
+    val track = MaterialTheme.colorScheme.surfaceVariant
+    val shape = RoundedCornerShape(height / 2)
+    // Риска должна читаться и на пустом треке, и поверх заливки, поэтому она
+    // тёмная с прозрачностью, а не белая и не цвета темы.
+    val notchColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+        .compositeOver(track)
+    val fill = if (scale <= 0) 0f else (value / scale).toFloat().coerceIn(0f, 1f)
+    val notch = if (scale <= 0) 0f else (nutrient.norm / scale).toFloat().coerceIn(0.02f, 0.98f)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(height)
+            .background(track, shape)
+    ) {
+        if (fill > 0f) {
+            Box(
+                Modifier
+                    .fillMaxWidth(fill)
+                    .height(height)
+                    .background(microColor(level), shape)
+            )
+        }
+        // Засечка нормы. Долями ширины, а не смещением в dp: ширина полоски
+        // известна только на измерении, а вес в Row отдаёт её сам.
+        Row(Modifier.fillMaxWidth().height(height)) {
+            Spacer(Modifier.weight(notch))
+            Box(Modifier.width(2.dp).fillMaxHeight().background(notchColor))
+            Spacer(Modifier.weight(1f - notch))
+        }
     }
 }

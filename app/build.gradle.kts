@@ -61,6 +61,18 @@ val buildBranch: String = (project.findProperty("buildBranch") as? String)?.take
     }.getOrDefault("")
 val buildTimestamp: String = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(ZonedDateTime.now())
 
+// Клиент Google для входа в семейный Drive (общие Деньги, provider/GoogleAuth.kt).
+// ID клиента не секрет — Google показывает его в каждой ссылке входа, поэтому
+// он вписан здесь. Заводской клиент — Android (пакет ru.zf.pravka и подпись
+// pravka.jks), секрета у него нет. Секрет бывает только у клиента Desktop: тогда
+// CI берёт его из секретов GitHub (GOOGLE_CLIENT_SECRET вместе с его
+// GOOGLE_CLIENT_ID), локальная сборка — из local.properties (google.clientSecret).
+val googleClientId: String = System.getenv("GOOGLE_CLIENT_ID")?.trim()?.takeIf { it.isNotEmpty() }
+    ?: prop("google.clientId", "85341821733-72cnjhi0rhcm713s3sv90mmnn977v28s.apps.googleusercontent.com")!!
+val googleClientSecret: String = System.getenv("GOOGLE_CLIENT_SECRET")?.trim()?.takeIf { it.isNotEmpty() }
+    ?: prop("google.clientSecret", "")!!
+fun kotlinString(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
 android {
     namespace = "ru.zf.pravka"
     compileSdk = 36
@@ -77,6 +89,8 @@ android {
         // свою линию: сборка соседней ветки имеет номер больше, но это не
         // «новее», это другая работа. См. data/Updates.kt.
         buildConfigField("String", "BUILD_BRANCH", "\"$buildBranch\"")
+        buildConfigField("String", "GOOGLE_CLIENT_ID", kotlinString(googleClientId))
+        buildConfigField("String", "GOOGLE_CLIENT_SECRET", kotlinString(googleClientSecret))
         // whisper.cpp is built only for the Pixel's arm64 - keeps the APK
         // and the CI native build small (no x86/armv7 the owner never uses).
         ndk {

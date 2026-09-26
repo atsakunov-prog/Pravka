@@ -3,14 +3,14 @@ package ru.zf.pravka.data
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.Prompts
 
-private val Context.promptDataStore by preferencesDataStore(name = "prompts")
+// В папке базы (DataRoot): свои промпты владельца — часть базы.
+private val Context.promptDataStore get() = DataRoot.preferences(this, "prompts")
 
 // Owner-editable prompt overrides (spec section 7). Factory texts stay as
 // constants in Prompts.kt; DataStore holds only the overrides, so an APK
@@ -29,6 +29,12 @@ class PromptStore(private val context: Context) {
         TASKS("tasks"),
         // Еда: сказанное -> КБЖУ (Сонет).
         FOOD("food"),
+        // Деньги: наговор -> траты и подсказки сверки выписок (Опус).
+        MONEY("money"),
+        MONEY_MATCH("money_match"),
+        MONEY_ASK("money_ask"),
+        MONEY_PATTERNS("money_patterns"),
+        MONEY_ANSWER("money_answer"),
         // Спорт: вопрос по своим тренировкам (Опус).
         COACH("coach"),
         // Тренер-консультант: короткий вопрос про упражнение (Сонет).
@@ -39,10 +45,7 @@ class PromptStore(private val context: Context) {
         RULES("rules"),
         // Паттерны: ночной поиск повторов по всему логу (Опус). Разборы
         // владелец делает сам в чате — здесь только охота за повторами.
-        PATTERNS("patterns"),
-        // Запрос, который владелец копирует в чат вместе с выгрузкой CSV:
-        // туда подставляются его подтверждённые и отклонённые паттерны.
-        CHAT_HANDOFF("chat_handoff");
+        PATTERNS("patterns");
 
         companion object {
             fun of(mode: ProofreadMode): PromptId = when (mode) {
@@ -61,12 +64,16 @@ class PromptStore(private val context: Context) {
         PromptId.MEETING -> Prompts.MEETING
         PromptId.TASKS -> Prompts.TASKS
         PromptId.FOOD -> Prompts.FOOD
+        PromptId.MONEY -> Prompts.MONEY
+        PromptId.MONEY_MATCH -> Prompts.MONEY_MATCH
+        PromptId.MONEY_ASK -> Prompts.MONEY_ASK
+        PromptId.MONEY_PATTERNS -> Prompts.MONEY_PATTERNS
+        PromptId.MONEY_ANSWER -> Prompts.MONEY_ANSWER
         PromptId.COACH -> Prompts.COACH
         PromptId.TRAINER -> Prompts.TRAINER
         PromptId.BODY -> Prompts.BODY
         PromptId.RULES -> Prompts.RULES
         PromptId.PATTERNS -> Prompts.PATTERNS
-        PromptId.CHAT_HANDOFF -> Prompts.CHAT_HANDOFF
     }
 
     fun overrideFlow(id: PromptId): Flow<String?> =
@@ -82,8 +89,59 @@ class PromptStore(private val context: Context) {
         context.promptDataStore.edit { it[stringPreferencesKey(id.storageKey)] = text }
     }
 
+    /** Свои тексты владельца (переопределения заводских) — для набора промптов. */
+    suspend fun overrides(): Map<PromptId, String> {
+        val prefs = context.promptDataStore.data.first()
+        return PromptId.entries.mapNotNull { id -> prefs[stringPreferencesKey(id.storageKey)]?.let { id to it } }.toMap()
+    }
+
+    /**
+     * Принять набор с другой установки: каждый текст из него ложится своим
+     * переопределением. Чего в наборе нет — остаётся как было (там у
+     * отправителя заводской, а он у всех один — из APK). Возвращает, сколько
+     * текстов принято.
+     */
+    suspend fun importSet(texts: Map<String, String>): Int {
+        val known = texts.mapNotNull { (key, text) ->
+            PromptId.entries.firstOrNull { it.storageKey == key }?.let { it to text }
+        }
+        if (known.isEmpty()) return 0
+        context.promptDataStore.edit { p -> for ((id, text) in known) p[stringPreferencesKey(id.storageKey)] = text }
+        return known.size
+    }
+
     /** "Вернуть заводской": removes the override, factory text applies again. */
     suspend fun resetToFactory(id: PromptId) {
         context.promptDataStore.edit { it.remove(stringPreferencesKey(id.storageKey)) }
+    }
+}
+
+/**
+ * Набор промптов одним файлом — чтобы отдать свои промпты другой установке
+ * (владелец, 25.09.2026: Марианне «промпты надо дать мои»). Свои тексты
+ * владельца — те, что он правил руками и что приняла недельная правка
+ * промпта, — живут только в его базе; заводские у всех одни, из APK, поэтому
+ * в набор не едут. Род и «без прозы» у получателя накладываются при сборке
+ * запроса (`Prompts.forAuthor`, `Prompts.speakerNote`), а не в тексте.
+ */
+internal object PromptSet {
+    const val FORMAT = "pravka-prompts"
+
+    fun encode(from: String, texts: Map<String, String>, now: Long): String =
+        org.json.JSONObject()
+            .put("format", FORMAT)
+            .put("version", 1)
+            .put("from", from)
+            .put("exportedAt", now)
+            .put("prompts", org.json.JSONObject().also { o -> texts.forEach { (k, v) -> o.put(k, v) } })
+            .toString(2)
+
+    /** Тексты набора: ключ промпта — текст. Не наш файл — исключение с понятным текстом. */
+    fun decode(text: String): Pair<String, Map<String, String>> {
+        val o = org.json.JSONObject(text)
+        require(o.optString("format") == FORMAT) { "это не набор промптов Правки" }
+        val p = o.optJSONObject("prompts") ?: org.json.JSONObject()
+        val map = p.keys().asSequence().associateWith { p.getString(it) }
+        return o.optString("from") to map
     }
 }

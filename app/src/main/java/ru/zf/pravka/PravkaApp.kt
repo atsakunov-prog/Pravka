@@ -2,12 +2,15 @@ package ru.zf.pravka
 
 import android.app.Application
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import ru.zf.pravka.core.DictionaryApplier
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.data.DictionaryStore
 import ru.zf.pravka.data.HistoryLog
+import ru.zf.pravka.data.PaceStore
 import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Recordings
 import ru.zf.pravka.data.Settings
@@ -28,22 +31,122 @@ import ru.zf.pravka.target.ClipboardTarget
 class PravkaApp : Application() {
 
     /**
-     * «Слушать только микрофон телефона» — кэш для горячих дорог записи:
-     * DictationService стартует на главном потоке, читать DataStore там
-     * нельзя. Значение держит коллектор ниже, по умолчанию включено.
+     * Кто слушает диктовку (true — телефон, false — Bluetooth-гарнитура) —
+     * кэш для горячих дорог записи: DictationService стартует на главном
+     * потоке, читать DataStore там нельзя. Значение держит коллектор ниже,
+     * по умолчанию телефон; переключает значок между «П» и «З».
      */
     @Volatile var phoneMicOnly: Boolean = true
 
     override fun onCreate() {
         super.onCreate()
+        // Где база — решается первым, до любого стора: все они открывают свои
+        // файлы в DataRoot.dir, и здесь же закрепляется переезд, подготовленный
+        // кнопкой «Перенести базу в папку» (пока в папки ещё никто не пишет).
+        ru.zf.pravka.data.DataRoot.init(this)
+        ru.zf.pravka.data.DataRoot.startNote.takeIf { it.isNotBlank() }?.let { eventLog.add("база: $it") }
+        // Кто пользуется — сразу за местом базы: от профиля зависят первые же
+        // шаги старта (сеять ли наличные владельца, какие режимы живы).
+        profileStore.init().takeIf { it.isNotBlank() }?.let { eventLog.add(it) }
+        // Входы выключенных режимов из чужих меню («Поделиться», выделение, NFC) —
+        // выключены в системе; следим за профилем, чтобы тумблер действовал сразу.
+        appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            profileStore.flow.collect { p -> ru.zf.pravka.trigger.ModeEntries.sync(this@PravkaApp, p) }
+        }
+        if (ru.zf.pravka.data.DataRoot.where.value == ru.zf.pravka.data.DataRoot.Where.FOLDER_NO_ACCESS) {
+            eventLog.add("база: папка ${ru.zf.pravka.data.DataRoot.dir(this)} недоступна — нет доступа к файлам")
+            ru.zf.pravka.data.DataRoot.notifyNoAccess(this)
+        }
         // Копии на диск: раз в час их снимает тик службы, но старт процесса -
         // после обновления APK или перезагрузки телефона - тоже хороший момент
         // (и единственный, если служба доступности почему-то выключена).
         ru.zf.pravka.data.Backups.tick(this) { line -> eventLog.add(line) }
         appScope.launch { settings.phoneMicOnlyFlow.collect { phoneMicOnly = it } }
+        // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет;
+        // затем все дороги Опуса и Fable — на Опус 5.5 с новыми усилиями (22.09).
+        appScope.launch {
+            runCatching { settings.migratePravkaToOpus() }
+            runCatching { settings.migrateToOpus55() }
+        }
+        // Распознавание — по сетевому пути Google (22.09.2026): владелец выбрал
+        // облачный движок главным, а лежащее в DataStore старое «офлайн»
+        // сильнее нового заводского.
+        appScope.launch { runCatching { settings.migrateSpeechToNetwork() } }
+        // Тень снята (18.09.2026; владелец: «убери эту тень, она снова запустилась
+        // и ест деньги»): её прогоны, застрявшие активными, закрываются, движка
+        // больше нет. Затем — ревизия батчей у Anthropic: всё идущее, за чем в
+        // приложении нет живого прогона, гасится.
+        appScope.launch { runCatching { ru.zf.pravka.core.NightSweep.onStart(this@PravkaApp) } }
+        // Переразбор истории (core/HistoryFixes.kt): правка разбора, пришедшая
+        // с этой сборкой, один раз проходит по накопленному и выводит его заново
+        // из сырья — вчерашний пуш не остаётся вчерашним разбором.
+        appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { ru.zf.pravka.core.HistoryFixes.runPending(this@PravkaApp) { line -> eventLog.add(line) } }
+        }
+        // Деньги: записи со слов владельца (наличные мимо выписок) — в журнал, один раз.
+        // Только у самого владельца: у Марианны это были бы чужие 3,88 млн.
+        if (profileStore.owner && profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) {
+            appScope.launch { runCatching { moneyEngine.seedManual() } }
+        }
+        // Общие Деньги через семейный Drive (data/MoneyDriveSync.kt): правка
+        // уходит через полминуты тишины, а не с каждым нажатием; дальше —
+        // тик службы раз в пять минут. Нет входа или Деньги выключены — молчит.
+        appScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            @OptIn(kotlinx.coroutines.FlowPreview::class)
+            moneyStore.stateFlow.drop(1).debounce(30_000L)
+                .collect { runCatching { moneyDriveSync.sync("правка") } }
+        }
+        // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
+        // свой лог, пока тумблер включён (Настройки → Общее).
+        appScope.launch {
+            settings.debugLogFlow.collect { on ->
+                claudeProvider.requestLogger = if (on) ({ text -> requestLog.add(text) }) else null
+            }
+        }
+        // Сколько идёт запрос — в историю, а ход запроса — тому, кто его
+        // показывает (20.09.2026). Та же одна точка на все дороги: здесь
+        // известны и дорога, и модель с усилием, и длина входа.
+        claudeProvider.workStart = { route, model, effort, chars ->
+            val expect = paceStore.expect(route, model, effort, chars)
+            workWatcher?.invoke(route, expect, false, true)
+        }
+        // Прошлое дуги — из журнала правок, один раз после обновления
+        // (владелец, 20.09.2026: «ты не взял всю статистику, а только начал её
+        // собирать. Посмотри, в аппе есть логи»). Журнал — мегабайты, поэтому
+        // не на старте службы и не на главном потоке: фоновая корутина.
+        appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { paceStore.seedFromHistory(historyLog) }
+        }
+        claudeProvider.workDone = { route, model, effort, chars, ms, ok ->
+            // Замер пишем только с удачного ответа: время упавшего запроса —
+            // это время сети, а не время модели.
+            if (ok) paceStore.record(route, model, effort, chars, ms)
+            workWatcher?.invoke(route, 0L, true, ok)
+        }
+        // Кэш промпта виден в статистике: транспорт отдаёт расход каждого ответа,
+        // сюда падают токены чтения и записи кэша со всех дорог сразу.
+        claudeProvider.usageObserver = { r ->
+            appScope.launch {
+                stats.recordCache(r.cacheReadTokens, r.cacheWriteTokens)
+                // И по дороге: доля входа из кэша в строке экрана «$» — единственная
+                // проверка, что точка кэша не просто стоит в запросе, а читается.
+                stats.recordRouteUsage(r.route, r.inputTokens + r.cacheWriteTokens + r.cacheReadTokens, r.cacheReadTokens)
+            }
+        }
     }
 
+    /**
+     * Кто показывает ход запроса: служба ставит сюда свою дугу на стекле
+     * диска. Отдельным полем, а не подпиской в транспорте: на `workStart`
+     * поле одно, и хранилище истории уже его заняло.
+     */
+    var workWatcher: ((route: String, expectMs: Long, done: Boolean, ok: Boolean) -> Unit)? = null
+
     val settings by lazy { Settings(this) }
+    /** Кто пользуется установкой и какие режимы включены (data/Profile.kt). */
+    internal val profileStore by lazy { ru.zf.pravka.data.ProfileStore(this) }
+    /** История «сколько идёт запрос» по тройкам «дорога + модель + усилие». */
+    val paceStore by lazy { PaceStore(this) }
     val promptStore by lazy { PromptStore(this) }
     val stats by lazy { Stats(this) }
     val dictionaryStore by lazy { DictionaryStore(this) }
@@ -51,6 +154,8 @@ class PravkaApp : Application() {
     val transcriptionLog by lazy { TranscriptionLog(this) }
     val liveDraft by lazy { LiveDraft(this) }
     val eventLog by lazy { EventLog(this) }
+    /** Лог запросов к Claude в режиме отладки: один запрос — десятки килобайт, потолок 4 МБ. */
+    val requestLog by lazy { EventLog(this, "claude-requests.log", maxBytes = 4L * 1024 * 1024) }
 
     val httpClient by lazy {
         OkHttpClient.Builder()
@@ -72,24 +177,65 @@ class PravkaApp : Application() {
     val rulesStore by lazy { ru.zf.pravka.data.RulesStore(this) }
     val learnStore by lazy { ru.zf.pravka.data.LearnStore(this) }
     val editWatch by lazy { ru.zf.pravka.data.EditWatchStore(this) }
+    /** Журнал правок руками: надиктовано → модель → владелец, навсегда. */
+    val corrections by lazy { ru.zf.pravka.data.CorrectionsLog(this) }
     val evalStore by lazy { ru.zf.pravka.data.EvalStore(this) }
-    val claudeProvider by lazy { ClaudeProvider(settings, promptStore, httpClient, rulesStore) }
+    val claudeProvider by lazy {
+        ClaudeProvider(settings, promptStore, httpClient, rulesStore).also { p ->
+            p.author = {
+                profileStore.current?.let { ru.zf.pravka.core.Prompts.Author(it.name, it.female, it.owner) }
+                    ?: ru.zf.pravka.core.Prompts.Author.OWNER
+            }
+        }
+    }
+    // Ночной разбор: батчи Anthropic, память прогонов и движок (core/NightReview.kt).
+    val claudeBatches by lazy { ru.zf.pravka.provider.ClaudeBatches(settings, httpClient) }
+    val nightReviewStore by lazy { ru.zf.pravka.data.NightReviewStore(this) }
+    /**
+     * Единый журнал ночных автоматов (17.09.2026; владелец: «единый лог,
+     * который будет показывать, что работает, что нет»): разбор, тень, правка
+     * промпта и эвал пишут сюда, а не в общий лог службы, — читается в
+     * «Разборах» и уходит в лог для Claude Code.
+     */
+    val nightLog by lazy { EventLog(this, "night.log") }
+    /** Когда служба последний раз запускала ночные тики: нет тика двадцать минут — автоматы стоят, табло скажет. */
+    @Volatile var lastNightTickMs: Long = 0L
+    val nightReview by lazy {
+        ru.zf.pravka.core.NightReview(
+            settings, claudeBatches, nightReviewStore, dictionaryStore, rulesStore, historyLog,
+            transcriptionLog, corrections, promptStore, stats, nightLog,
+        )
+    }
+    // Недельная правка промпта: идеи недели → предложение → измерение → принять или нет (core/PromptTuner.kt).
+    val promptVersions by lazy { ru.zf.pravka.data.PromptVersions(this) }
+    val promptTuner by lazy {
+        ru.zf.pravka.core.PromptTuner(
+            settings, claudeBatches, nightReviewStore, promptVersions, promptStore, historyLog, corrections,
+            DictionaryApplier(dictionaryStore), claudeProvider, stats, nightLog,
+        )
+    }
+    // Ручное сравнение трёх моделей (Сонет · Опус · Опус low) на диктовках периода — только кнопкой (core/ModelCompare.kt).
+    val modelCompare by lazy {
+        ru.zf.pravka.core.ModelCompare(
+            settings, claudeBatches, nightReviewStore, historyLog, DictionaryApplier(dictionaryStore), claudeProvider, stats, nightLog,
+        )
+    }
     val dictMiner by lazy { DictMiner(settings, httpClient, stats) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
 
     // Засечка (timesheet): store, the Sheets mirror, phrase -> entry pipeline.
-    // Самообучение Засечки: поправки владельца копятся, разбор превращает их
-    // в правила, правила он одобряет — и они едут в промпт. Ровно как в
-    // Правке, но про смысл, а не про текст.
-    val zasechkaCorrections by lazy { ru.zf.pravka.data.ZasechkaCorrections(this) }
+    // Правила разбора Засечки: набор, одобренный владельцем, едет в каждый
+    // разбор. Ночное самообучение, которое их предлагало, снято (08.09.2026):
+    // «все паттерны уже найдены», а ⭐ над «З» раздражала.
     val zasechkaRules by lazy { ru.zf.pravka.data.RulesStore(this, "zasechka-rules.json") }
 
     val zasechkaStore by lazy {
         ru.zf.pravka.data.ZasechkaStore(this).also { store ->
             store.logger = { line -> eventLog.add(line) }
-            store.correctionLogger = { before, after ->
-                appScope.launch { runCatching { zasechkaCorrections.record(before, after) } }
+            store.freshCategories = {
+                if (profileStore.owner) ru.zf.pravka.data.ZasechkaStore.DEFAULT_CATEGORIES
+                else ru.zf.pravka.data.ZasechkaStore.neutralCategories()
             }
         }
     }
@@ -99,7 +245,7 @@ class PravkaApp : Application() {
     val zasechkaEngine by lazy {
         ru.zf.pravka.core.ZasechkaEngine(
             claudeProvider, zasechkaStore, stats, eventLog, zasechkaSync, appScope,
-            zasechkaRules, zasechkaCorrections,
+            zasechkaRules,
         )
     }
 
@@ -125,6 +271,100 @@ class PravkaApp : Application() {
             stats = stats,
             eventLog = eventLog,
         )
+    }
+
+    // Деньги: журнал трат и выписок (money.json) — незаменимые данные, как
+    // лента. Там же — правила справочника, которые владелец вписал или
+    // запомнил ответами; заводские — в assets (moneyFactoryRules ниже).
+    /** Сырьё выписок: каждый загруженный файл как есть, в `imports/` базы (data/ImportArchive.kt). */
+    internal val importArchive by lazy { ru.zf.pravka.data.ImportArchive { ru.zf.pravka.data.DataRoot.dir(this) } }
+    /** Образцы денежных уведомлений для разборщиков новых банков (data/PushSamples.kt). */
+    internal val pushSamples by lazy { ru.zf.pravka.data.PushSamples(this) }
+    val moneyStore by lazy { ru.zf.pravka.data.MoneyStore(this) { eventLog.add(it) } }
+    val moneyExport by lazy { ru.zf.pravka.data.MoneyExport(this, moneyStore) }
+    val cbrRates by lazy { ru.zf.pravka.data.CbrRates(httpClient) { eventLog.add(it) } }
+    val moneyEngine by lazy {
+        ru.zf.pravka.core.MoneyEngine(
+            claude = claudeProvider,
+            dictionary = DictionaryApplier(dictionaryStore),
+            dictionaryStore = dictionaryStore,
+            store = moneyStore,
+            rates = cbrRates,
+            stats = stats,
+            eventLog = eventLog,
+            // Хозяин трат — пользователь установки. Заводские файлы Денег
+            // (справочник получателей, остатки и счета ЗФ, наличные) написаны
+            // про владельца и его семью: чужой установке их не показываем и в
+            // Claude не отправляем.
+            owner = { profileStore.current?.id ?: "user" },
+            factory = { if (profileStore.owner) moneyFactoryRules else emptyList() },
+            factoryBalances = { if (profileStore.owner) moneyFactoryBalances else emptyList() },
+            factoryAccountsText = {
+                if (!profileStore.owner) ""
+                else runCatching { assets.open("money_balances.txt").bufferedReader().use { it.readText() } }.getOrDefault("")
+            },
+            factoryManual = {
+                if (!profileStore.owner) ""
+                else runCatching { assets.open("money_manual.txt").bufferedReader().use { it.readText() } }.getOrDefault("")
+            },
+            keepImport = { bytes -> importArchive.keep(bytes) },
+        )
+    }
+
+    /**
+     * Заводской справочник получателей (владелец, 23.09.2026: «сделай всё в
+     * публичном репозитории»). Читается один раз; не прочитался — пусто, и
+     * работают правила владельца и безличные.
+     */
+    // Семейный Google Drive: вход через браузер, ключ — в закрытой памяти
+    // (provider/GoogleAuth.kt); обмен Деньгами — data/MoneyDriveSync.kt.
+    // Свой клиент: выгрузка первого журнала — мегабайты по мобильной сети.
+    private val googleHttp by lazy {
+        httpClient.newBuilder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build()
+    }
+    val googleAuth by lazy { ru.zf.pravka.provider.GoogleAuth(this, googleHttp) }
+    val googleDrive by lazy { ru.zf.pravka.provider.GoogleDrive(googleAuth, googleHttp) }
+    internal val moneyDriveSync by lazy {
+        ru.zf.pravka.data.MoneyDriveSync(
+            context = this,
+            store = moneyStore,
+            auth = googleAuth,
+            drive = googleDrive,
+            profile = { profileStore.current },
+            reconcile = { moneyEngine.reconcile() },
+            log = { eventLog.add(it) },
+        )
+    }
+
+    /** Ночная копия базы — ещё и в семейный Drive, `Правка/Копии базы` (data/DriveBackup.kt). */
+    internal val driveBackup by lazy {
+        ru.zf.pravka.data.DriveBackup(
+            context = this,
+            auth = googleAuth,
+            drive = googleDrive,
+            user = { profileStore.current?.id ?: "user" },
+            log = { eventLog.add(it) },
+        )
+    }
+
+    /** Заводские остатки счетов — снимок владельца (`assets/money_balances.txt`). */
+    val moneyFactoryBalances: List<ru.zf.pravka.core.MoneyCashflow.Anchor> by lazy {
+        runCatching {
+            ru.zf.pravka.core.MoneyCashflow.parseAnchors(assets.open("money_balances.txt").bufferedReader().use { it.readText() })
+        }.getOrDefault(emptyList())
+    }
+
+    val moneyFactoryRules: List<ru.zf.pravka.core.MoneyRules.Rule> by lazy {
+        runCatching {
+            assets.open("money_payees.txt").bufferedReader().use { it.readText() }
+                .let { ru.zf.pravka.core.MoneyRules.parseText(it) }
+                .also { r -> if (r.errors.isNotEmpty()) eventLog.add("деньги: заводской справочник — ${r.errors}") }
+                .rules
+        }.getOrElse { e -> eventLog.add("деньги: заводской справочник не прочитался — ${e.message}"); emptyList() }
     }
 
     // Спорт: кэш тренировочной жизни из intervals.icu и разбор своих
@@ -178,38 +418,10 @@ class PravkaApp : Application() {
     // диске), файл в assets — семя и запас без сети: карточка тренировки
     // открывается каждый день, в том числе в подвале на даче. Рацион — пока
     // только из assets. Оба собираются из Notion скриптом tools/gen_reference.py.
-    // Итоги: ночной разбор жизненного лога батчем (половина цены за то, что
-    // ответ не нужен немедленно). Числа считает AnalysisBuilder, модель их
-    // только интерпретирует.
+    // Паттерны: ночной поиск повторов снят (владелец, 15.09.2026: «паттерны
+    // убираем, и поиск их убираем»). Стор остался — в нём лежат найденные
+    // раньше паттерны и вердикты владельца, их читает синк Notion.
     val analysisStore by lazy { ru.zf.pravka.data.AnalysisStore(this).also { it.logger = { l -> eventLog.add(l) } } }
-    val analysisBuilder by lazy {
-        ru.zf.pravka.core.AnalysisBuilder(
-            zasechka = zasechkaStore,
-            sport = sportStore,
-            strength = strengthStore,
-            food = foodStore,
-            plan = planStore,
-            icu = icuSportSync,
-            reports = analysisStore,
-            todoist = todoistStore,
-            stats = stats,
-            transcripts = transcriptionLog,
-            history = historyLog,
-            raznoska = raznoskaStore,
-            diary = notionDiarySync,
-        )
-    }
-    val analysisEngine by lazy {
-        ru.zf.pravka.core.AnalysisEngine(
-            claude = claudeProvider,
-            builder = analysisBuilder,
-            store = analysisStore,
-            prompts = promptStore,
-            settings = settings,
-            stats = stats,
-            eventLog = eventLog,
-        )
-    }
 
     val exerciseBook by lazy { ru.zf.pravka.data.ExerciseBook(this) }
     val rationBook by lazy { ru.zf.pravka.data.RationBook(this) }
@@ -255,17 +467,22 @@ class PravkaApp : Application() {
         ru.zf.pravka.data.NotionLifeSync(
             context = this,
             settings = settings,
-            zasechka = zasechkaStore,
-            food = foodStore,
-            sport = sportStore,
-            strength = strengthStore,
+            rows = lifeRows,
             analysis = analysisStore,
-            phone = phoneStore,
             client = httpClient,
             eventLog = eventLog,
             provider = claudeProvider,
+            stats = stats,
         )
     }
+    // Строки всей жизни по базам — одним сборщиком для Notion и для книги
+    // Excel, чтобы выгрузка и синк не разошлись ни на строку.
+    val lifeRows by lazy {
+        ru.zf.pravka.data.LifeRows(zasechkaStore, foodStore, sportStore, strengthStore, phoneStore)
+    }
+    // Единственная выгрузка: вся жизнь одной книгой xlsx, лист на базу Notion
+    // («Ещё → Выгрузки»). Владелец: «в Excel мне как-то удобнее».
+    val lifeExport by lazy { ru.zf.pravka.data.LifeExport(this, lifeRows) }
     val planSync by lazy {
         ru.zf.pravka.core.PlanSync(
             icu = icuSportSync,
@@ -305,19 +522,6 @@ class PravkaApp : Application() {
             planStore = planStore,
             stats = stats,
             eventLog = eventLog,
-        )
-    }
-
-    // Сводка дня и недели для чата: таймшит, подходы, здоровье, еда — одним
-    // текстом, без единого запроса в сеть.
-    val digestBuilder by lazy {
-        ru.zf.pravka.core.DigestBuilder(
-            context = this,
-            zasechka = zasechkaStore,
-            sport = sportStore,
-            strength = strengthStore,
-            food = foodStore,
-            plan = planStore,
         )
     }
 

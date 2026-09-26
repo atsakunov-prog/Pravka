@@ -17,6 +17,8 @@ import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
+import ru.zf.pravka.core.DiskLook
+import ru.zf.pravka.core.MicLevel
 import ru.zf.pravka.data.Settings
 
 // Разноска: третья кнопка, «Д» — она про ДЕЛА. Тот же
@@ -31,19 +33,30 @@ import ru.zf.pravka.data.Settings
 // Собственное окно у кнопки только одно. Тикер, меню и плашка дел УХОДЯТ из
 // WindowManager, когда не нужны: скрытое оверлейное окно всё равно стоит
 // пересчёта при каждом складывании Fold (см. README, «больная тема»).
+//
+// Тот же класс водит и «₽» (Деньги, 23.09.2026): кнопка с плашкой-отметками и
+// «ОК» — ровно то, что нужно тратам, и правило «новая функция на стекле — не
+// пятая переписанная копия контроллера» (docs/agreements.md) велит не
+// копировать тысячу строк, а дать им другое лицо: цвет [ink], букву [glyphRes]
+// и своё место в настройках ([loadPosition] / [persistPosition]). По умолчанию —
+// ровно прежняя «Д».
 class RaznoskaButtonController(
     private val service: PravkaAccessibilityService,
     private val scope: CoroutineScope,
     private val settings: Settings,
     private val onShortTap: () -> Unit,
     private val onLongPress: () -> Unit,
-) {
+    private val ink: Int = INK,
+    private val glyphRes: () -> Int = { ModeGlyphs.raznoska() },
+    private val loadPosition: suspend (String) -> Pair<Float, Float> = { key -> settings.rFabPosition(key) },
+    private val persistPosition: suspend (String, Float, Float) -> Unit = { key, x, y -> settings.setRFabPosition(key, x, y) },
+) : RingButton {
 
     companion object {
         private const val LONG_PRESS_MS = 450L
         private const val TICKER_ALPHA = 0.86f
-        private const val TICKER_W_MULT = 6
-        private const val TICKER_LINES = 3
+        // Тикер — та же бегущая строка, что у «П» (MarqueeTickerView); ширина —
+        // настройка владельца, Settings.tickerWidthFlow.
         // Сколько дел показывать в плашке: остальное — в приложении.
         private const val PLATE_ROWS = 6
 
@@ -62,7 +75,19 @@ class RaznoskaButtonController(
     private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
 
     private var buttonSize = dp(Settings.FAB_SIZE_DEFAULT)
-    private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
+    /** Прозрачность кнопок — настройка владельца (слайдер в Общих). */
+    private var fabAlpha = Settings.FAB_ALPHA_DEFAULT
+
+    /**
+     * Лицо кнопки: на диске плотнее настройки. Светлое стекло просвечивало
+     * сквозь полупрозрачную кнопку, и владелец читал это как «диск над
+     * кнопками, а не наоборот» (19.09.2026). Порядок окон тут ни при чём —
+     * дело в плотности; «не мешать приложению» на диске держит тарелка.
+     */
+    private val idleAlpha: Float get() = DiskLook.faceAlpha(fabAlpha, ringMode, faceOverride)
+
+    /** Ползунок «плотность кнопок» из настроек; null — считать по формуле. */
+    private var faceOverride: Float? = null
 
     private var button: FrameLayout? = null
     private var background: GradientDrawable? = null
@@ -76,13 +101,71 @@ class RaznoskaButtonController(
     private var attached = false
     /** Идёт складывание: окно снято на время перехода. */
     private var folded = false
+    /** Диск: окно кнопки целиком за краем экрана — снято из WindowManager (см. `DiskController`). */
+    private var offscreen = false
+
+    /**
+     * Кнопка на диске (`DiskController`): сама себя не ставит и не тащит —
+     * палец крутит диск ([onRingDrag]); цели [followTo] не режутся краем
+     * экрана, а окну разрешено выезжать за край (FLAG_LAYOUT_NO_LIMITS). В
+     * стопке флага нет: там за край кнопка не заходит, и прижимать её к
+     * экрану должен WindowManager, как и раньше.
+     */
+    override var ringMode: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            // Режим сменился — сменилась и плотность лица (DiskLook.faceAlpha);
+            // ставим её ДО ранних возвратов ниже: те про окно, а не про цвет.
+            applyFaceAlpha()
+            val p = params ?: return
+            val noLimits = WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            p.flags = if (value) p.flags or noLimits else p.flags and noLimits.inv()
+            if (attached) button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
+        }
+
+    /**
+     * Пульс по громкости: на записи кнопка поджата (`MicLevel.QUIET`) и
+     * распрямляется от голоса. Наружу расти нельзя — окно ровно с кружок и
+     * срезало бы его по краям, — поэтому растём «из поджатого».
+     */
+    override fun setLevel(level: Float) {
+        if (!recording) return
+        val v = button ?: return
+        micPulse = MicLevel.smooth(micPulse, level)
+        val s = MicLevel.scale(micPulse)
+        v.animate().cancel()
+        v.scaleX = s
+        v.scaleY = s
+    }
+
+    /** Сглаженная громкость: замеры приходят рывками, кнопка не должна дрожать. */
+    private var micPulse = 0f
+
+    /** Запись кончилась — кнопка распрямляется из пульса в свой размер. */
+    private fun restPulse() {
+        micPulse = 0f
+        button?.let { v ->
+            v.animate().cancel()
+            v.scaleX = 1f
+            v.scaleY = 1f
+        }
+    }
+
+    /** Поставить лицу текущую плотность — пока кнопка не занята и не пишет. */
+    private fun applyFaceAlpha() {
+        cancelBubble.setAlpha(idleAlpha)
+        if (!busy && !recording) button?.alpha = idleAlpha
+    }
+
+    override var onRingDrag: ((Float, Float, Float, Float, Int) -> Unit)? = null
     private var busy = false
     private var recording = false
     private var enabled = false
     private var collectorsStarted = false
 
     private var ticker: FrameLayout? = null
-    private var tickerText: TextView? = null
+    private var tickerText: MarqueeTickerView? = null
     private var tickerParams: WindowManager.LayoutParams? = null
     private var tickerVisible = false
 
@@ -111,6 +194,8 @@ class RaznoskaButtonController(
             hidePlate()
             hideMenu()
             hideInput()
+            hideCancelBubble()
+            follower.stop()
             button?.let { runCatching { windowManager.removeView(it) } }
             attached = false
             button = null
@@ -126,6 +211,7 @@ class RaznoskaButtonController(
 
     fun setRecording(value: Boolean) {
         recording = value
+        if (!value) restPulse()
         recDot?.visibility = if (value) View.VISIBLE else View.GONE
         applyFace()
     }
@@ -141,30 +227,38 @@ class RaznoskaButtonController(
                 b.alpha = 1f
             }
             busy -> {
-                background?.setColor(INK)
+                background?.setColor(ink)
                 b.alpha = 1f
             }
             else -> {
-                background?.setColor(INK)
+                background?.setColor(ink)
                 b.alpha = idleAlpha
             }
         }
     }
 
-    fun onConfigurationChanged() {
+    override fun onConfigurationChanged() {
         cachedScreen = null
         val p = params ?: return
+        if (ringMode) {
+            // На диске место кнопки — дело диска: он перечитает свою позицию
+            // под новый экран и расставит всех. Своё сохранённое место — для стопки.
+            repositionTickerIfVisible()
+            repositionCancelBubble()
+            return
+        }
         scope.launch {
-            val (xFraction, yFraction) = settings.rFabPosition(positionKey())
+            val (xFraction, yFraction) = loadPosition(positionKey())
             applyPosition(p, xFraction, yFraction)
             button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
             repositionTickerIfVisible()
+            repositionCancelBubble()
         }
     }
 
     // ---- Связка трёх кнопок: эта может ехать за другой на резинке ----
 
-    var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
+    override var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
 
 
     /**
@@ -179,7 +273,7 @@ class RaznoskaButtonController(
      * [applyStash]. Пока несколько мест пишут одно поле, побеждает
      * последнее, и это всегда не то, которого ждёшь.
      */
-    fun setStacked(value: Boolean) {
+    override fun setStacked(value: Boolean) {
         stashed = value
         val v = button ?: return
         if (value) {
@@ -215,7 +309,7 @@ class RaznoskaButtonController(
      * Исключение — идущая запись: кнопку «стоп» отнимать нельзя даже на
      * полсекунды, иначе останавливать наговор будет нечем.
      */
-    fun setFolded(value: Boolean) {
+    override fun setFolded(value: Boolean) {
         folded = value && !recording
         applyStash()
     }
@@ -233,7 +327,7 @@ class RaznoskaButtonController(
     private fun applyStash() {
         val v = button ?: return
         val p = params ?: return
-        val want = !stashed && !folded && enabled
+        val want = !stashed && !folded && enabled && !offscreen
         // Кнопка должна быть видна, а её не видно — чиним вид целиком:
         // видимость, масштаб, альфу. Проверка идёт ДО выхода «нечего
         // менять», и это не перестраховка, а разбор двух подряд промахов.
@@ -263,50 +357,60 @@ class RaznoskaButtonController(
         }
     }
 
-    fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
+    override fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
-    fun buttonSizePx(): Int = buttonSize
+    /** Диск: окно целиком за краем — снять; показался край — вернуть. Своё поле, не `stashed`. */
+    override fun setOffscreen(value: Boolean) {
+        if (offscreen == value) return
+        offscreen = value
+        applyStash()
+    }
 
-    private var followTargetX = 0
-    private var followTargetY = 0
-    private var followSettle = false
-    private var following = false
-    private val followStep = object : Runnable {
-        override fun run() {
-            val p = params ?: return
-            val view = button ?: return
-            val dx = followTargetX - p.x
-            val dy = followTargetY - p.y
-            if (abs(dx) <= 2 && abs(dy) <= 2) {
-                p.x = followTargetX
-                p.y = followTargetY
-                runCatching { windowManager.updateViewLayout(view, p) }
-                repositionTickerIfVisible()
-                following = false
-                if (followSettle) savePosition(view, p)
-                return
-            }
-            p.x += followInc(dx)
-            p.y += followInc(dy)
+    /** Снять и повесить заново — поверх окон, добавленных позже (тарелка диска). */
+    override fun reattach() {
+        val v = button ?: return
+        val p = params ?: return
+        if (!attached) return
+        runCatching { windowManager.removeView(v) }
+        runCatching { windowManager.addView(v, p) }
+    }
+
+    override fun buttonSizePx(): Int = buttonSize
+
+    /** Каждый кадр догонялки: ручка и шестерёнка едут за бусами (служба ставит refreshHandles). */
+    override var onFrame: (() -> Unit)? = null
+
+    // Пружина вместо «30 % пути за кадр»: у бусины есть скорость, она
+    // догоняет, чуть проскакивает и успокаивается; звено дальше от пальца —
+    // мягче (`core/ChainPhysics.kt`, под тестами). Цикл общий на четыре
+    // кнопки — `ChainFollower` в `BubbleMotion.kt`.
+    private val follower = ChainFollower(
+        apply = frame@{ x, y ->
+            val p = params ?: return@frame
+            val view = button ?: return@frame
+            p.x = x
+            p.y = y
             runCatching { windowManager.updateViewLayout(view, p) }
             repositionTickerIfVisible()
-            view.postDelayed(this, 16)
-        }
-    }
+            repositionCancelBubble()
+            onFrame?.invoke()
+        },
+        onSettled = settled@{ settle ->
+            val p = params ?: return@settled
+            val view = button ?: return@settled
+            if (settle) savePosition(view, p)
+        },
+    )
 
-    private fun followInc(d: Int): Int {
-        val step = (d * 0.30f).toInt()
-        return if (step != 0) step else if (d > 0) 1 else -1
-    }
-
-    fun followTo(x: Int, y: Int, settle: Boolean) {
+    /** Ехать к ([x], [y]); [link] — через сколько бусин от той, что тянут. */
+    override fun followTo(x: Int, y: Int, settle: Boolean, link: Int, snap: Boolean) {
         if (!enabled) return
         val view = button ?: return
         val p = params ?: return
         val (w, h) = screenSize()
-        followTargetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
-        followTargetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
-        followSettle = settle
+        // На диске цель не режется краем: кнопке положено выезжать за него.
+        val targetX = if (ringMode) x else x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
+        val targetY = if (ringMode) y else y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
         // ОТКРЕПЛЁННОЕ окно догонять нечем: view.post у view без окна не
         // выполняется вовсе — он ждёт следующего прикрепления. Владелец
         // увидел это так: убрал всё в три точки, оттащил их, и через пару
@@ -316,20 +420,22 @@ class RaznoskaButtonController(
         //
         // Поэтому спрятанная кнопка встаёт на место сразу, без резинки:
         // догонять всё равно некому, а координаты обязаны быть настоящими.
-        if (!attached) {
-            following = false
-            view.removeCallbacks(followStep)
-            p.x = followTargetX
-            p.y = followTargetY
+        //
+        // С [snap] — то же самое для видимой кнопки: диск ведёт свою анимацию
+        // сам и ставит кнопки кадр в кадр, пружина здесь только мешала бы.
+        if (!attached || snap) {
+            follower.stop()
+            p.x = targetX
+            p.y = targetY
             runCatching { windowManager.updateViewLayout(view, p) }
+            if (attached) {
+                repositionTickerIfVisible()
+                repositionCancelBubble()
+            }
             if (settle) savePosition(view, p)
             return
         }
-        if (!following) {
-            following = true
-            view.removeCallbacks(followStep)
-            view.post(followStep)
-        }
+        follower.follow(p.x, p.y, targetX, targetY, link, settle)
     }
 
     // ---- Тикер: живые слова, пока идёт наговор ----
@@ -341,7 +447,7 @@ class RaznoskaButtonController(
         if (ticker == null) createTicker()
         positionTicker()
         val t = ticker ?: return
-        tickerText?.text = ""
+        tickerText?.reset()
         lastTickerText = ""
         lastTickerAt = 0L
         runCatching { windowManager.updateViewLayout(t, tickerParams) }
@@ -353,28 +459,23 @@ class RaznoskaButtonController(
         }
     }
 
-    private fun tickerHeightPx(): Int = dp(TICKER_LINES * 24 + 16)
+    // Одна строка высотой с кнопку, вровень с ней.
+    private fun tickerHeightPx(): Int = maxOf(buttonSize, dp(40))
 
     private var lastTickerText = ""
     private var lastTickerAt = 0L
 
-    fun updateTicker(text: String) {
+    fun updateTicker(text: String, force: Boolean = false) {
         val tv = tickerText ?: return
-        val tail = text.takeLast(300)
-        if (tail == lastTickerText) return
+        if (text == lastTickerText) return
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTickerAt < 120) return
+        // [force] — для подсказки службы («секунду…» и приглашение говорить):
+        // она приходит ровно одна за тейк, и проглотить её потолком частоты
+        // значит соврать о том, слышит движок или ещё нет.
+        if (!force && now - lastTickerAt < 60) return
         lastTickerAt = now
-        lastTickerText = tail
-        tv.text = tail
-        tv.post {
-            val layout = tv.layout ?: return@post
-            if (layout.lineCount > TICKER_LINES) {
-                val cut = layout.getLineStart(layout.lineCount - TICKER_LINES)
-                val current = tv.text?.toString() ?: return@post
-                if (cut in 1 until current.length) tv.text = current.substring(cut)
-            }
-        }
+        lastTickerText = text
+        tv.setTickerText(text)
     }
 
     fun repositionTickerIfVisible() {
@@ -402,21 +503,16 @@ class RaznoskaButtonController(
     @SuppressLint("ClickableViewAccessibility")
     private fun createTicker() {
         val pill = FrameLayout(service)
-        pill.background = GradientDrawable().apply {
+        pill.background = BubbleSkin().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = buttonSize / 2f
-            setColor(INK)
+            setColor(ink)
         }
         pill.elevation = dp(4).toFloat()
+        // Дети режутся по овалу плашки: фейды бегущей строки повторяют её форму.
+        pill.clipToOutline = true
         pill.setOnClickListener { onTickerTap?.invoke() }
-        val tv = TextView(service).apply {
-            setTextColor(PAPER)
-            textSize = 16f
-            maxLines = TICKER_LINES
-            gravity = Gravity.BOTTOM or Gravity.START
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            setLineSpacing(0f, 1.05f)
-        }
+        val tv = MarqueeTickerView(service, plateColor = ink, textColor = PAPER, textSizeSp = 16f)
         tickerText = tv
         pill.addView(
             tv,
@@ -438,9 +534,10 @@ class RaznoskaButtonController(
         pill.visibility = View.GONE
     }
 
+    // Ширина — настройка владельца (одна на все кнопки), кнопка рядом остаётся видна.
     private fun tickerWidthPx(): Int {
         val (w, _) = screenSize()
-        return (buttonSize * TICKER_W_MULT).coerceAtMost(w - dp(24))
+        return minOf(dp(service.cachedTickerWidthDp), (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
     }
 
     private fun positionTicker() {
@@ -462,7 +559,7 @@ class RaznoskaButtonController(
 
     /** Перечитать глиф после переключения «иконки вместо букв». */
     fun refreshGlyph() {
-        glyph?.setImageResource(ModeGlyphs.raznoska())
+        glyph?.setImageResource(glyphRes())
     }
 
     class MenuItem(val label: String, val onClick: () -> Unit)
@@ -485,9 +582,9 @@ class RaznoskaButtonController(
                 text = item.label
                 setTextColor(PAPER)
                 textSize = 15f
-                background = GradientDrawable().apply {
+                background = BubbleSkin().apply {
                     cornerRadius = dp(18).toFloat()
-                    setColor(INK)
+                    setColor(ink)
                 }
                 alpha = 0.96f
                 setPadding(dp(16), dp(9), dp(16), dp(9))
@@ -570,10 +667,10 @@ class RaznoskaButtonController(
         val chosen = shown.filter { !it.sent }.map { it.id }.toMutableSet()
         val sheet = LinearLayout(service).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
-                setColor(INK)
+                setColor(ink)
             }
             alpha = 0.96f
             elevation = dp(4).toFloat()
@@ -593,13 +690,13 @@ class RaznoskaButtonController(
         )
         // Кнопка «ОК» создаётся заранее: отметки меняют её счёт.
         val okButton = TextView(service).apply {
-            setTextColor(INK)
+            setTextColor(ink)
             textSize = 15f
             typeface = android.graphics.Typeface.create(
                 android.graphics.Typeface.SANS_SERIF,
                 android.graphics.Typeface.BOLD,
             )
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 cornerRadius = dp(16).toFloat()
                 setColor(PAPER)
             }
@@ -759,7 +856,7 @@ class RaznoskaButtonController(
 
     /** Отмеченный кружок - залитый бумагой, снятый - только обводка. */
     private fun paintCheck(view: TextView, on: Boolean) {
-        view.background = GradientDrawable().apply {
+        view.background = BubbleSkin().apply {
             shape = GradientDrawable.OVAL
             if (on) {
                 setColor(PAPER)
@@ -768,7 +865,7 @@ class RaznoskaButtonController(
                 setStroke(dp(2), PAPER_DIM)
             }
         }
-        view.setTextColor(if (on) INK else 0x00FFFFFF)
+        view.setTextColor(if (on) ink else 0x00FFFFFF)
     }
 
     // Рядом с кнопкой, на той стороне, где есть место - то же правило, что у
@@ -797,10 +894,10 @@ class RaznoskaButtonController(
         val row = LinearLayout(service).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
-                setColor(INK)
+                setColor(ink)
             }
             alpha = 0.96f
             elevation = dp(4).toFloat()
@@ -820,13 +917,13 @@ class RaznoskaButtonController(
             row.addView(
                 TextView(service).apply {
                     this.text = actionLabel
-                    setTextColor(INK)
+                    setTextColor(ink)
                     textSize = 14f
                     typeface = android.graphics.Typeface.create(
                         android.graphics.Typeface.SANS_SERIF,
                         android.graphics.Typeface.BOLD,
                     )
-                    background = GradientDrawable().apply {
+                    background = BubbleSkin().apply {
                         cornerRadius = dp(14).toFloat()
                         setColor(PAPER)
                     }
@@ -868,10 +965,10 @@ class RaznoskaButtonController(
         hideTicker()
         val row = LinearLayout(service).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
-                setColor(INK)
+                setColor(ink)
             }
             elevation = dp(4).toFloat()
             gravity = Gravity.CENTER_VERTICAL
@@ -962,19 +1059,44 @@ class RaznoskaButtonController(
         p.x = p.x.coerceIn(0, (w - plateW).coerceAtLeast(0))
     }
 
+    // ---- Серая «отмена» у идущей записи: как на «П» (владелец, 18.09.2026) ----
+    // Общая на четыре кнопки (`CancelBubble.kt`): под ближним концом бегущей
+    // строки, а не под кнопкой — под кнопкой стоит следующая кнопка стопки;
+    // прозрачность — как у кнопок.
+
+    private val cancelBubble = CancelBubble(service, windowManager)
+
+    fun showCancelBubble(onCancel: () -> Unit) {
+        cancelBubble.show(idleAlpha, onCancel)
+        repositionCancelBubble()
+    }
+
+    /** Пилюля едет за кнопкой: тащат, догоняет, повернули экран. */
+    fun repositionCancelBubble() {
+        if (!cancelBubble.shown) return
+        val bp = params ?: return
+        val (w, h) = screenSize()
+        cancelBubble.place(bp.x, bp.y, buttonSize, w, h)
+    }
+
+    fun hideCancelBubble() = cancelBubble.hide()
+
     /** Диагностика: сколько окон эта кнопка держит прямо сейчас. */
-    fun windowCount(): Int =
+    override fun windowCount(): Int =
         // Именно attached, а не «button != null»: спрятанная кнопка держит
         // свой View, но окна в WindowManager у неё нет — и в перепись,
         // которой меряют цену складывания, она входить не должна.
         (if (attached) 1 else 0) + (if (ticker != null) 1 else 0) +
+            (if (cancelBubble.shown) 1 else 0) +
             (if (menu != null) 1 else 0) + (if (plate != null) 1 else 0) +
             (if (input != null) 1 else 0)
 
-    fun destroy() {
+    override fun destroy() {
         hideMenu()
         hidePlate()
         hideInput()
+        hideCancelBubble()
+        follower.stop()
         button?.let { runCatching { windowManager.removeView(it) } }
         attached = false
         button = null
@@ -985,16 +1107,14 @@ class RaznoskaButtonController(
     @SuppressLint("ClickableViewAccessibility")
     private fun create() {
         val container = FrameLayout(service)
-        val bg = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(INK)
-        }
+        // Не плоский кружок: выпуклая клавиша со светом сверху (`BubbleSkin`).
+        val bg = BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(ink) }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()
         container.alpha = idleAlpha
 
-        glyph = ImageView(service).apply { setImageResource(ModeGlyphs.raznoska()) }
+        glyph = ImageView(service).apply { setImageResource(glyphRes()) }
         container.addView(
             glyph,
             FrameLayout.LayoutParams(
@@ -1030,6 +1150,7 @@ class RaznoskaButtonController(
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            if (ringMode) flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             val (w, h) = screenSize()
             x = w - buttonSize
             y = (h * 0.75f).toInt()
@@ -1041,9 +1162,11 @@ class RaznoskaButtonController(
         container.visibility = if (enabled) View.VISIBLE else View.GONE
 
         scope.launch {
-            val (xFraction, yFraction) = settings.rFabPosition(positionKey())
-            applyPosition(p, xFraction, yFraction)
-            runCatching { windowManager.updateViewLayout(container, p) }
+            val (xFraction, yFraction) = loadPosition(positionKey())
+            if (!ringMode) {
+                applyPosition(p, xFraction, yFraction)
+                runCatching { windowManager.updateViewLayout(container, p) }
+            }
         }
         // Размер и прозрачность — общие ручки на все три кнопки. Подписка
         // ставится один раз за жизнь службы: тумблер «Д» убирает окно и может
@@ -1062,21 +1185,31 @@ class RaznoskaButtonController(
             }
             scope.launch {
                 settings.fabAlphaFlow.collect { alpha ->
-                    idleAlpha = alpha
-                    if (!busy && !recording) {
-                        button?.alpha = idleAlpha
-                    }
+                    fabAlpha = alpha
+                    applyFaceAlpha()
+                }
+            }
+            scope.launch {
+                settings.diskFaceAlphaFlow.collect { value ->
+                    faceOverride = value
+                    applyFaceAlpha()
                 }
             }
         }
 
-        container.setOnTouchListener(DragTouchListener())
+        container.setOnTouchListener(DragTouchListener().also { touch = it })
     }
 
     private fun applyPosition(p: WindowManager.LayoutParams, xFraction: Float, yFraction: Float) {
         val (w, h) = screenSize()
         p.x = ((w - buttonSize) * xFraction.coerceIn(0f, 1f)).toInt()
         p.y = ((h - buttonSize) * yFraction.coerceIn(0f, 1f)).toInt()
+    }
+
+    private var touch: DragTouchListener? = null
+
+    override fun cancelGesture() {
+        touch?.swallow()
     }
 
     private inner class DragTouchListener : View.OnTouchListener {
@@ -1086,8 +1219,21 @@ class RaznoskaButtonController(
         private var startY = 0
         private var dragging = false
         private var longPressFired = false
+        private var pressed: View? = null
+        /** Диск взяли двумя пальцами — этот жест кнопке больше не принадлежит. */
+        private var swallowed = false
+
+        fun swallow() {
+            if (swallowed) return
+            swallowed = true
+            pressed?.let { v ->
+                v.removeCallbacks(longPressRunnable)
+                BubbleMotion.release(v)
+            }
+        }
         private val longPressRunnable = Runnable {
             longPressFired = true
+            pressed?.let { BubbleMotion.nod(it) }
             if (!busy && !recording) onLongPress()
         }
 
@@ -1104,28 +1250,55 @@ class RaznoskaButtonController(
                     startY = p.y
                     dragging = false
                     longPressFired = false
+                    swallowed = false
+                    pressed = view
                     view.alpha = 1f
+                    // Сжалась под пальцем (`BubbleMotion`): кнопка отвечает на касание телом.
+                    BubbleMotion.press(view)
+                    // Палец лёг — будим движок распознавания, не дожидаясь, чем
+                    // кончится касание: между тапом и «слышу» движок глух, и
+                    // самое дорогое в этом окне можно оплатить прямо сейчас.
+                    service.warmSpeech()
                     view.postDelayed(longPressRunnable, LONG_PRESS_MS)
+                    if (ringMode) onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_DOWN)
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    // Диск слышит каждый сдвиг, и до порога тоже: второй палец
+                    // на стекле делает из касания щипок, и этот палец везёт
+                    // диск. Порог для поворота диск держит свой. Кнопка сама
+                    // на диске не едет — палец крутит диск, диск ставит кнопку.
+                    if (ringMode && !longPressFired) {
+                        onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_MOVE)
+                    }
+                    if (swallowed) return true
                     val dx = event.rawX - startRawX
                     val dy = event.rawY - startRawY
                     if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
                         dragging = true
                         view.removeCallbacks(longPressRunnable)
+                        BubbleMotion.lift(view)
                     }
-                    if (dragging && !longPressFired) {
+                    if (dragging && !longPressFired && !ringMode) {
                         p.x = startX + dx.toInt()
                         p.y = startY + dy.toInt()
                         runCatching { windowManager.updateViewLayout(view, p) }
                         repositionTickerIfVisible()
+                        repositionCancelBubble()
                         onDragged?.invoke(p.x, p.y, false)
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     view.removeCallbacks(longPressRunnable)
+                    pressed = null
+                    BubbleMotion.release(view)
                     applyFace()
-                    if (dragging) {
+                    if (ringMode) {
+                        // Диск: отпустили — щёлкнуть по ближайшей четверти; тап остаётся тапом.
+                        onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_UP)
+                        if (!swallowed && !dragging && !longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
+                            if (!busy) onShortTap()
+                        }
+                    } else if (dragging) {
                         savePosition(view, p)
                         onDragged?.invoke(p.x, p.y, true)
                     } else if (!longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
@@ -1144,6 +1317,6 @@ class RaznoskaButtonController(
         runCatching { windowManager.updateViewLayout(view, p) }
         val xFraction = p.x.toFloat() / (w - buttonSize).coerceAtLeast(1)
         val yFraction = p.y.toFloat() / (h - buttonSize).coerceAtLeast(1)
-        scope.launch { settings.setRFabPosition(positionKey(), xFraction, yFraction) }
+        scope.launch { persistPosition(positionKey(), xFraction, yFraction) }
     }
 }

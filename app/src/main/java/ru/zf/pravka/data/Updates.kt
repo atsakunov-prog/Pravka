@@ -24,15 +24,17 @@ import ru.zf.pravka.R
 // приложение само раз в сутки смотрит, нет ли сборки свежее, само её тянет и
 // говорит «готово, ставить?». Play Store в этой истории нет и не будет.
 //
-// Источник - ветка `apk-builds`: CI после каждого пуша кладёт туда APK и
-// `build-info.txt` рядом. Репозиторий публичный, raw.githubusercontent отдаёт
-// оба файла без токена - нового секрета в приложении не завелось.
+// Источник - ветка `apk-builds`: CI после каждого пуша в линию `pravka` кладёт
+// туда APK и `build-info.txt` рядом. Репозиторий публичный, raw.githubusercontent
+// отдаёт оба файла без токена - нового секрета в приложении не завелось.
 //
-// ГЛАВНАЯ ОСТОРОЖНОСТЬ. Ветка `apk-builds` одна на весь репозиторий, и
-// форс-пушит её КАЖДАЯ ветка: Правка, Слушалка, любая случайная. Номер сборки
-// там - номер запуска workflow, а не место в истории, поэтому чужая сборка
-// всегда «новее» по числу и при этом не содержит твоей работы. Три замка:
-//   1. ветка. Обновляемся только на сборку из СВОЕЙ линии (BUILD_BRANCH);
+// ГЛАВНАЯ ОСТОРОЖНОСТЬ. Ветка `apk-builds` общая со Слушалкой: у каждой свои
+// файлы (её - `slushalka.apk` + `slushalka-build-info.txt`), но номер сборки -
+// номер запуска workflow, общий на репозиторий, поэтому чужая сборка всегда
+// «новее» по числу и при этом не содержит твоей работы. Три замка:
+//   1. линия. Обновляемся только на сборку с `branch=` нашей линии ([LINE]);
+//      до 06.09 линией было имя ветки сборки, и оно менялось при каждом
+//      переезде - обновления молча прекращались. Теперь это константа;
 //   2. имя файла. Берётся из build-info («apk=…»), а не угадывается;
 //   3. сам APK. Перед установкой проверяется, что это ru.zf.pravka с тем самым
 //      versionCode - пока качали, в ветку мог приехать следующий билд. Если
@@ -52,6 +54,15 @@ class Updates(
         const val DEFAULT_INFO_URL =
             "https://raw.githubusercontent.com/atsakunov-prog/Pravka/apk-builds/build-info.txt"
         private const val FALLBACK_APK = "pravka-debug.apk"
+
+        /**
+         * Линия Правки - ветка, из которой CI публикует сборки для телефона.
+         * Константа, а не BuildConfig.BUILD_BRANCH: имя ветки сборки менялось
+         * при каждом переезде работы, и после слияния обновления молча
+         * прекращались (4 сентября так «не обновлялась» вкладка Тела). Поле
+         * «Обновляться из ветки» в настройках осталось на случай переезда.
+         */
+        const val LINE = "pravka"
 
         /** Раз в сутки - ровно то, что просил владелец. */
         const val CHECK_PERIOD_MS = 24 * 3_600_000L
@@ -91,12 +102,12 @@ class Updates(
         build.versionCode > BuildConfig.VERSION_CODE && sameLine(build)
 
     /**
-     * Ветка, из которой принимаем обновления: своя, если владелец не назвал
+     * Ветка, из которой принимаем обновления: [LINE], если владелец не назвал
      * другую. Обновляется на каждой проверке и на каждом тике - настройку
      * читать синхронно нельзя, а показывать карточку надо сразу.
      */
     @Volatile
-    var line: String = BuildConfig.BUILD_BRANCH
+    var line: String = LINE
         private set
 
     data class State(
@@ -137,7 +148,7 @@ class Updates(
         if (!checking.compareAndSet(false, true)) return _state.value.latest
         _state.value = _state.value.copy(checking = true, error = "")
         try {
-            line = settings.updBranchFlow.first().trim().ifBlank { BuildConfig.BUILD_BRANCH }
+            line = settings.updBranchFlow.first().trim().ifBlank { LINE }
             val url = settings.updUrlFlow.first().trim().ifBlank { DEFAULT_INFO_URL }
             val now = System.currentTimeMillis()
             val body = withContext(Dispatchers.IO) {
@@ -372,7 +383,7 @@ class Updates(
      */
     suspend fun tick() {
         if (!settings.updAutoFlow.first()) return
-        line = settings.updBranchFlow.first().trim().ifBlank { BuildConfig.BUILD_BRANCH }
+        line = settings.updBranchFlow.first().trim().ifBlank { LINE }
         val now = System.currentTimeMillis()
         if (now - prefs().getLong(KEY_LAST_CHECK, 0L) >= CHECK_PERIOD_MS) check(force = true)
         val build = _state.value.latest ?: return

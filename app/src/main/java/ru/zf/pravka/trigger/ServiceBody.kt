@@ -131,7 +131,8 @@ fun PravkaAccessibilityService.onFoodTap() {
     }
     // Один микрофон на все четыре кнопки: чужую запись эта не перехватывает.
     if (googleSession != null || zSession != null || zWhisperRecording ||
-        rSession != null || rWhisperRecording || DictationService.recording
+        rSession != null || rWhisperRecording || mSession != null || mWhisperRecording ||
+        DictationService.recording
     ) {
         Haptics.error(this)
         Feedback.toast(this, getString(R.string.e_busy))
@@ -145,14 +146,19 @@ fun PravkaAccessibilityService.onFoodTap() {
     startFoodCapture()
 }
 
+/** Приглашение говорить в бегущей строке «Т» — одно на оба движка. */
+internal fun bodyTickerPrompt(): String = "🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)"
+
 internal fun PravkaAccessibilityService.startFoodCapture() {
     eButton?.hideInput()
     eButton?.hidePlate()
+    eDiscard = false
     if (cachedEngine.startsWith("whisper")) {
         eWhisperRecording = true
         eButton?.setRecording(true)
         eButton?.showTicker()
-        eButton?.updateTicker("🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)")
+        eButton?.updateTicker(bodyTickerPrompt())
+        eButton?.showCancelBubble { cancelFoodTake() }
         Haptics.start(this)
         startDictation()
     } else {
@@ -182,10 +188,17 @@ internal fun PravkaAccessibilityService.startFoodGoogle() {
         biasing = (cachedBiasing + bodyBiasing()).distinct(),
         formatting = cachedFormatting,
         segmentedSession = cachedSegmented,
+        network = cachedNetwork,
     )
     eSession = session
+    speechReady = false
     session.start(
-        onReady = { Haptics.success(this) },
+        onReady = {
+            // Движок услышал — только теперь приглашение говорить правда.
+            speechReady = true
+            eButton?.updateTicker(bodyTickerPrompt(), force = true)
+            Haptics.success(this)
+        },
         onPartial = { live -> eButton?.updateTicker(live) },
         // Приём пищи — две фразы: черновик на диск не пишем, повторить
         // дешевле, чем чинить (то же решение, что у Разноски).
@@ -196,9 +209,28 @@ internal fun PravkaAccessibilityService.startFoodGoogle() {
     )
     eButton?.setRecording(true)
     eButton?.showTicker()
-    eButton?.updateTicker("🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)")
+    // Пока движок глух, строка говорит об этом, а не зовёт говорить в пустоту.
+    if (!speechReady) eButton?.updateTicker(PravkaAccessibilityService.HINT_WAIT)
+    eButton?.showCancelBubble { cancelFoodTake() }
     Haptics.start(this)
     runCatching { startMicHold() }
+}
+
+/** Серая «отмена» у «Т»: наговор выбрасывается — ни в дневник, ни в подходы, ни в ленту. */
+internal fun PravkaAccessibilityService.cancelFoodTake() {
+    when {
+        eSession != null -> {
+            eDiscard = true
+            app.eventLog.add("еда: отмена наговора")
+            stopFoodLive()
+        }
+        eWhisperRecording && DictationService.recording -> {
+            eDiscard = true
+            eButton?.setBusy(true)
+            app.eventLog.add("еда: отмена наговора")
+            stopDictation()
+        }
+    }
 }
 
 internal fun PravkaAccessibilityService.stopFoodLive() {
@@ -234,7 +266,16 @@ internal fun PravkaAccessibilityService.onFoodLiveDone(text: String) {
     eSession = null
     runCatching { stopMicHold() }
     runCatching { eButton?.hideTicker() }
+    runCatching { eButton?.hideCancelBubble() }
     eButton?.setRecording(false)
+    if (eDiscard) {
+        eDiscard = false
+        eTypeInstead = false
+        eButton?.setBusy(false)
+        app.eventLog.add("еда: наговор отменён (${text.length} зн.)")
+        Feedback.toast(this, "Отменено")
+        return
+    }
     if (eTypeInstead) {
         eTypeInstead = false
         eButton?.setBusy(false)
@@ -246,8 +287,10 @@ internal fun PravkaAccessibilityService.onFoodLiveDone(text: String) {
 
 internal fun PravkaAccessibilityService.onFoodLiveError(msg: String) {
     eSession = null
+    eDiscard = false
     runCatching { stopMicHold() }
     eButton?.hideTicker()
+    eButton?.hideCancelBubble()
     eButton?.setRecording(false)
     eButton?.setBusy(false)
     Haptics.error(this)
@@ -528,10 +571,15 @@ internal fun PravkaAccessibilityService.showFoodPlate(mealId: Long) {
             index = index,
             title = item.name,
             meta = listOfNotNull(
+                if (item.pill) "таблетка" else null,
                 if (item.grams > 0) "${item.grams} г" else null,
-                "${item.kcal} ккал",
-                "Б${item.protein} Ж${item.fat} У${item.carbs}",
-                item.sureness.takeIf { it.isNotBlank() && it != "точно" },
+                // У таблетки калорий нет: «0 ккал · Б0 Ж0 У0» занимало бы всю
+                // строку и не говорило бы ничего. Вместо них — дозы.
+                if (item.pill) null else "${item.kcal} ккал",
+                if (item.pill) null else "Б${item.protein} Ж${item.fat} У${item.carbs}",
+                item.micro.takeIf { it.isNotEmpty() }
+                    ?.let { ru.zf.pravka.core.Micronutrients.short(it, limit = 3) },
+                item.sureness.takeIf { it.isNotBlank() && it != "точно" && !item.pill },
             ).joinToString(" · "),
         )
     }
@@ -539,7 +587,11 @@ internal fun PravkaAccessibilityService.showFoodPlate(mealId: Long) {
         header = meal.kind.uppercase(java.util.Locale("ru")) +
             (if (meal.source == "barcode") " · ШТРИХКОД" else ""),
         rows = rows,
-        footer = "${meal.kcal} ккал · Б${meal.protein} Ж${meal.fat} У${meal.carbs}",
+        footer = if (meal.supplement) {
+            ru.zf.pravka.core.Micronutrients.short(meal.micro, limit = 5).ifBlank { "без дозировок" }
+        } else {
+            "${meal.kcal} ккал · Б${meal.protein} Ж${meal.fat} У${meal.carbs}"
+        },
         note = meal.note,
         onEditItem = { index -> editFoodItem(mealId, index) },
         onDropItem = { index -> dropFoodItem(mealId, index) },
@@ -622,7 +674,12 @@ internal fun PravkaAccessibilityService.confirmFood(mealId: Long) {
             }
         }
         eButton?.showNote(
-            "✓ ${meal.kcal} ккал · $tail",
+            // Горсть таблеток в калориях не измеряется: «✓ 0 ккал» читалось бы
+            // как «ничего не записал».
+            if (meal.supplement) {
+                "✓ " + ru.zf.pravka.core.Micronutrients.short(meal.micro, limit = 4)
+                    .ifBlank { "добавки записаны" }
+            } else "✓ ${meal.kcal} ккал · $tail",
             "↩︎",
             onAction = { undoFood(mealId) },
         )
@@ -696,6 +753,7 @@ internal fun PravkaAccessibilityService.showFoodMenu() {
             listOf(
                 BodyButtonController.MenuItem(head) { openFoodTab() },
                 BodyButtonController.MenuItem("Записать еду") { onFoodTap() },
+                BodyButtonController.MenuItem("Настройки") { openSettingsTab("FOOD") },
                 BodyButtonController.MenuItem("Закрыть") { eButton?.hideMenu() },
             )
         )
