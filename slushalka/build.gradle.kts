@@ -28,11 +28,6 @@ val versionProps = Properties().apply {
 }
 val buildNumber: Int = (project.findProperty("buildNumber") as? String)?.toIntOrNull()
     ?: versionProps.getProperty("buildNumber", "1").trim().toInt()
-/**
- * Android-клиент Google в проекте семейного аккаунта — общий с Правкой (её
- * пакет и подпись; ответ входа приходит на ru.zf.pravka:/slushalka).
- */
-val GOOGLE_CLIENT_ID = "85341821733-72cnjhi0rhcm713s3sv90mmnn977v28s.apps.googleusercontent.com"
 val buildTimestamp: String = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(ZonedDateTime.now())
 
 android {
@@ -46,10 +41,6 @@ android {
         versionCode = buildNumber
         versionName = "1.1.$buildNumber"
         buildConfigField("String", "BUILD_TIME", "\"$buildTimestamp\"")
-        // Клиент Google (тип Android, общий с Правкой) для входа в семейный
-        // Drive — data/GoogleAuth.kt. ID не секрет: Google показывает его в
-        // каждой ссылке входа; секрета у Android-клиента нет.
-        buildConfigField("String", "GOOGLE_CLIENT_ID", "\"${prop("google.clientId", GOOGLE_CLIENT_ID)}\"")
     }
 
     // The same shared keystore as Правка: a different key would break

@@ -76,8 +76,7 @@ fun CloudScreen(app: SlushalkaApp, onBack: () -> Unit, onSettings: () -> Unit) {
                         Text("Облако")
                         if (prefs.cloudReady) {
                             Text(
-                                (if (prefs.cloudDrive) "Google Drive · ${prefs.driveEmail}" else prefs.cloudUrl.substringAfter("://")) +
-                                    " · " + prefs.cloudDir,
+                                prefs.cloudUrl.substringAfter("://") + " · " + prefs.cloudDir,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -103,9 +102,9 @@ fun CloudScreen(app: SlushalkaApp, onBack: () -> Unit, onSettings: () -> Unit) {
                     Icon(Glyphs.Cloud, contentDescription = null, modifier = Modifier.size(48.dp))
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "Облако не настроено. Подойдёт семейный Google Drive (вход через браузер) или " +
-                            "любой WebDAV. Через него поедут позиции, вопросы и пометки, а книги можно " +
-                            "держать там и качать на полку по одной.",
+                        "Облако не настроено. Подойдёт Яндекс.Диск (логин и пароль приложения), " +
+                            "Nextcloud или любой другой WebDAV. Через него поедут позиции, вопросы и " +
+                            "пометки, а книги можно держать там и качать на полку по одной.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

@@ -20,10 +20,6 @@ import okio.source
 import org.xmlpull.v1.XmlPullParser
 
 /**
- * Облако: семейный Google Drive (`DriveCloud`, вход браузером — 25.09.2026)
- * или WebDAV. Дела одни и те же, выбор — в настройках (`Prefs.cloudKind`);
- * ниже — WebDAV.
- *
  * Облако по WebDAV: Яндекс.Диск (логин и «пароль приложения»), Nextcloud,
  * Box, Koofr - кто угодно, кто говорит WebDAV. Протокол простой - PROPFIND,
  * GET, PUT, MKCOL поверх HTTP - и не требует ни регистрации приложения, ни
@@ -34,11 +30,7 @@ import org.xmlpull.v1.XmlPullParser
  * библиотеки ([PositionSync]); `Книги/<папка книги>/` - книги целиком, как
  * они лежат на полке.
  */
-class Cloud(private val settings: Settings, private val drive: DriveCloud? = null) {
-
-    /** Выбран семейный Google Drive: все дела — туда, WebDAV молчит. */
-    private val onDrive: Boolean get() = drive != null && settings.now().cloudDrive
-
+class Cloud(private val settings: Settings) {
 
     data class Item(val path: String, val name: String, val dir: Boolean, val size: Long, val modified: Long)
 
@@ -70,7 +62,7 @@ class Cloud(private val settings: Settings, private val drive: DriveCloud? = nul
     }
 
     /** Проверка настроек: папка есть или заводится, логин и пароль приняты. */
-    suspend fun check(): Result<Unit> = if (onDrive) drive!!.check() else withContext(Dispatchers.IO) {
+    suspend fun check(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             if (!ready) throw CloudException("Облако не настроено: адрес, логин и пароль приложения")
             ensureDir("")
@@ -80,7 +72,7 @@ class Cloud(private val settings: Settings, private val drive: DriveCloud? = nul
     }
 
     /** Что лежит в папке (без неё самой). */
-    suspend fun list(path: String): Result<List<Item>> = if (onDrive) drive!!.list(path) else withContext(Dispatchers.IO) {
+    suspend fun list(path: String): Result<List<Item>> = withContext(Dispatchers.IO) {
         runCatching {
             val body = """<?xml version="1.0" encoding="utf-8"?>
                 <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>"""
@@ -101,7 +93,7 @@ class Cloud(private val settings: Settings, private val drive: DriveCloud? = nul
     }
 
     /** Файл целиком - для маленьких файлов синхронизации. null - файла нет. */
-    suspend fun getText(path: String): Result<String?> = if (onDrive) drive!!.getText(path) else withContext(Dispatchers.IO) {
+    suspend fun getText(path: String): Result<String?> = withContext(Dispatchers.IO) {
         runCatching {
             val req = auth(Request.Builder().url(url(path))).get().build()
             http.newCall(req).execute().use { resp ->
@@ -113,7 +105,7 @@ class Cloud(private val settings: Settings, private val drive: DriveCloud? = nul
     }
 
     /** Большой файл - потоком, с долей скачанного: книга качается главами по сотне мегабайт. */
-    suspend fun download(path: String, sink: (InputStream, Long) -> Unit): Result<Unit> = if (onDrive) drive!!.download(path, sink) else withContext(Dispatchers.IO) {
+    suspend fun download(path: String, sink: (InputStream, Long) -> Unit): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val req = auth(Request.Builder().url(url(path))).get().build()
             http.newCall(req).execute().use { resp ->
@@ -124,7 +116,7 @@ class Cloud(private val settings: Settings, private val drive: DriveCloud? = nul
         }
     }
 
-    suspend fun putText(path: String, text: String): Result<Unit> = if (onDrive) drive!!.putText(path, text) else withContext(Dispatchers.IO) {
+    suspend fun putText(path: String, text: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             ensureDir(path.substringBeforeLast('/', ""))
             val req = auth(Request.Builder().url(url(path)))
@@ -137,7 +129,7 @@ class Cloud(private val settings: Settings, private val drive: DriveCloud? = nul
     }
 
     /** Выгрузить файл потоком - аудио книги в память не помещается. */
-    suspend fun upload(path: String, size: Long, open: () -> InputStream?): Result<Unit> = if (onDrive) drive!!.upload(path, size, open) else withContext(Dispatchers.IO) {
+    suspend fun upload(path: String, size: Long, open: () -> InputStream?): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             ensureDir(path.substringBeforeLast('/', ""))
             val body = object : RequestBody() {
