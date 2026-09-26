@@ -1010,6 +1010,14 @@ private fun CardsSettings(app: PravkaApp) {
             onValueChangeFinished = { scope.launch { settings.setAppGlow(glowSlider) } },
             valueRange = 0f..1f,
         )
+        val motion by settings.appGlowMotionFlow.collectAsState(initial = true)
+        PaperToggle(
+            "Переливы",
+            motion,
+            { on -> scope.launch { settings.setAppGlowMotion(on) } },
+            info = "Свет медленно плывёт, светлый и глубокий тон одного цвета перетекают друг в " +
+                "друга. Выключено — свет стоит на месте.",
+        )
     }
 }
 

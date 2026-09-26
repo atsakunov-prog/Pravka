@@ -71,6 +71,7 @@ import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.SheetAction
 import ru.zf.pravka.ui.SummaryLine
 import ru.zf.pravka.ui.VoiceInput
+import ru.zf.pravka.trigger.onFoodTap
 
 // Вкладка «Еда»: дневник приёмов с КБЖУ.
 //
@@ -112,6 +113,9 @@ internal fun FoodTab(
     var dayOffset by remember { mutableStateOf(0) }
     var draft by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    val ownerName = app.profileStore.flow.collectAsState().value?.name
+    // Еда голосом разбирается в службе — её ожидание видно по общему потоку запросов.
+    val talking = ru.zf.pravka.ui.rememberRouteBusy(app.liveWork, "food")
     var editing by remember { mutableStateOf<Long?>(null) }
     // Куда камера положит кадр: файл нужен ДО съёмки, чтобы отдать в интент URI.
     var pendingPhoto by remember { mutableStateOf<File?>(null) }
@@ -233,6 +237,70 @@ internal fun FoodTab(
         contentPadding = ScreenPad.Padding,
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
+        // ---- Что съел: пилюля наверху, четыре дороги в ней ----
+        // Версия 3, второй заход (26.09.2026, вечер): «в еде должна быть вот эта
+        // „записать еду“, и там как раз снять, галерея, штрихкод — это можно
+        // добавить в саму плашку… должна быть единая система». Пилюля первой
+        // строкой вкладки: слева в ней снимок, галерея и штрихкод, посередине
+        // поле (подпись к снимку — там же: масло в салате, сахар в кофе),
+        // кружок — голос (тот же тап, что «Е») или «отправить». Пока Claude
+        // разбирает — искры и секунды.
+        item {
+            VoiceInput(
+                value = draft,
+                onValueChange = { draft = it },
+                placeholder = if (busy || talking) "Разбираю…" else ru.zf.pravka.core.PillHint.say(ownerName, "что съел?"),
+                onSend = { parseText(draft.trim()) },
+                onMic = {
+                    val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                    if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+                    else service.onFoodTap()
+                },
+                enabled = !busy,
+                sendEnabled = !busy && draft.isNotBlank(),
+                busy = busy || talking,
+                maxLines = 4,
+                leading = {
+                    ru.zf.pravka.ui.PillAction(Glyphs.Camera, "снять", enabled = !busy, onClick = {
+                        val file = File(context.cacheDir, "eda-shot.jpg")
+                        pendingPhoto = file
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            context, BuildConfig.APPLICATION_ID + ".files", file
+                        )
+                        camera.launch(uri)
+                    })
+                    ru.zf.pravka.ui.PillAction(Glyphs.Image, "галерея", enabled = !busy, onClick = {
+                        gallery.launch(
+                            androidx.activity.result.PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                            )
+                        )
+                    })
+                    ru.zf.pravka.ui.PillAction(Glyphs.Barcode, "штрихкод", enabled = !busy, onClick = {
+                        ru.zf.pravka.ui.scanBarcode(
+                            context = context,
+                            onFail = { message -> Feedback.toast(app, message, long = true) },
+                        ) { code ->
+                            busy = true
+                            app.appScope.launch {
+                                val result = runCatching { app.foodEngine.parseBarcode(code) }
+                                    .getOrElse { Result.failure(it) }
+                                busy = false
+                                result.onFailure { e ->
+                                    Feedback.toast(
+                                        app,
+                                        (e.message ?: "Штрихкод не нашёлся") +
+                                            " — сними этикетку камерой",
+                                        long = true,
+                                    )
+                                }
+                            }
+                        }
+                    })
+                },
+            )
+        }
+
         // ---- День и его итог ----
         // Один навигатор дня на все вкладки (24.09.2026): «Сегодня» и дата под
         // ним; дальше вчерашнего дата и есть название — второй раз её не пишем.
@@ -275,71 +343,6 @@ internal fun FoodTab(
 
         // ---- Витамины и элементы ----
         item { MicroCard(total) }
-
-        // ---- Что съел: четыре дороги ----
-        item {
-            // Строка ввода — общая на все вкладки (24.09.2026); снимок, галерея
-            // и штрихкод — значками с подписью над полем: три кнопки словами и
-            // значками в ряд на узком внешнем экране Fold не встают. Пока Claude разбирает,
-            // крутилка — в строке подписи плашки: поле и значки при этом гаснут.
-            PaperCard(
-                label = "записать",
-                info = "Голосом — кнопка «Т» на экране. Снимок читается вместе с " +
-                    "подписью из поля: там уточняют невидимое (масло в салате, " +
-                    "сахар в кофе).",
-                trailing = if (busy) {
-                    { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
-                } else null,
-            ) {
-                VoiceInput(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    placeholder = "Омлет из трёх яиц и тост с авокадо",
-                    onSend = { parseText(draft.trim()) },
-                    enabled = !busy,
-                    sendEnabled = !busy && draft.isNotBlank(),
-                    busy = busy,
-                    extras = {
-                        IconAction(Glyphs.Camera, "Снять", enabled = !busy, onClick = {
-                            val file = File(context.cacheDir, "eda-shot.jpg")
-                            pendingPhoto = file
-                            val uri = androidx.core.content.FileProvider.getUriForFile(
-                                context, BuildConfig.APPLICATION_ID + ".files", file
-                            )
-                            camera.launch(uri)
-                        })
-                        IconAction(Glyphs.Image, "Галерея", enabled = !busy, onClick = {
-                            gallery.launch(
-                                androidx.activity.result.PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly
-                                )
-                            )
-                        })
-                        IconAction(Glyphs.Barcode, "Штрихкод", enabled = !busy, onClick = {
-                            ru.zf.pravka.ui.scanBarcode(
-                                context = context,
-                                onFail = { message -> Feedback.toast(app, message, long = true) },
-                            ) { code ->
-                                busy = true
-                                app.appScope.launch {
-                                    val result = runCatching { app.foodEngine.parseBarcode(code) }
-                                        .getOrElse { Result.failure(it) }
-                                    busy = false
-                                    result.onFailure { e ->
-                                        Feedback.toast(
-                                            app,
-                                            (e.message ?: "Штрихкод не нашёлся") +
-                                                " — сними этикетку камерой",
-                                            long = true,
-                                        )
-                                    }
-                                }
-                            }
-                        })
-                    },
-                )
-            }
-        }
 
         // ---- Мой рацион: то, что повторяется каждый день ----
         item { RationSection(app, dayStart) }

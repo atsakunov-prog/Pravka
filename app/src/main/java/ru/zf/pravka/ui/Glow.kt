@@ -2,6 +2,14 @@ package ru.zf.pravka.ui
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -22,9 +30,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.ui.platform.LocalDensity
@@ -91,11 +96,17 @@ fun GlowBusy(active: Boolean) {
 }
 
 /**
- * Свет вкладки — слой под содержимым. Рисуется один раз на размер
- * (`drawWithCache`), а сила — прозрачностью слоя: прокрутка ленты и переход
- * «ждёт — не ждёт» его не перерисовывают. Три пятна одной краски: сам цвет
- * слева, светлый тон справа, глубокий посередине, — к середине экрана они
- * сходят в фон.
+ * Свет вкладки — слой под содержимым: три КРУГЛЫХ пятна одной краски (второй
+ * заход, 26.09.2026: «наверху свечение какое-то круглое», «должно как-то
+ * двигаться», «переливы… в рамках одного цвета»). Сам цвет — большое пятно
+ * слева, светлый тон — справа, глубокий — ниже посередине; каждое медленно
+ * обходит свою петлю, светлое и глубокое дышат силой навстречу друг другу —
+ * это и есть перелив, оттенок не трогается.
+ *
+ * Дёшево нарочно: каждое пятно рисуется один раз на размер (`drawWithCache`)
+ * в своём слое, а движение и дыхание — свойства слоя (сдвиг и прозрачность),
+ * их меняет рендер без перерисовки. Прокрутка ленты слой не трогает. Пока
+ * вкладка не на экране, часы кадров стоят — и перелив тоже.
  */
 @Composable
 fun ModeGlowLayer(decor: ModeDecor) {
@@ -107,47 +118,90 @@ fun ModeGlowLayer(decor: ModeDecor) {
     if (target <= 0f && alpha <= 0.001f) return
     // Свет начинается с самого верха экрана, под строкой состояния, как у
     // Gemini: слой стоит под шапкой, а рисует выше себя на высоту строки.
-    // Обрезки у слоя нет, и строку состояния система рисует поверх.
     val top = WindowInsets.statusBars.getTop(LocalDensity.current).toFloat()
     val tone = remember(accent) { Color(ModeGlow.tone(accent)) }
     val light = remember(accent) { Color(ModeGlow.light(accent)) }
     val deep = remember(accent) { Color(ModeGlow.deep(accent)) }
+    val moving = look.glowMotion
+    val t = rememberInfiniteTransition(label = "modeGlowDrift")
+    val a = t.loop(ModeGlow.DRIFT_MS, "a").takeIf { moving }
+    val b = t.loop((ModeGlow.DRIFT_MS * 1.37f).toInt(), "b").takeIf { moving }
+    val c = t.loop((ModeGlow.DRIFT_MS * 1.71f).toInt(), "c").takeIf { moving }
+    val breath = t.loop(ModeGlow.SHIMMER_MS, "breath").takeIf { moving }
+    Box(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }) {
+        // Глубокое — ниже и шире: тело света; дышит навстречу светлому.
+        GlowBlob(deep, cx = 0.52f, cy = 0.5f, r = 0.66f, top = top, phase = c, dx = 0.7f, dy = 0.5f, breath = breath, inverse = true)
+        // Сам цвет — главное пятно у левого верхнего угла.
+        GlowBlob(tone, cx = 0.18f, cy = 0.04f, r = 0.9f, top = top, phase = a, dx = 1f, dy = 0.6f, breath = null, inverse = false)
+        // Светлый тон — справа сверху: блик, который переливается.
+        GlowBlob(light, cx = 0.86f, cy = 0.08f, r = 0.7f, top = top, phase = b, dx = 0.8f, dy = 0.7f, breath = breath, inverse = false)
+    }
+}
+
+/** Угол петли: от нуля до полного круга за [periodMs], ровно, по кругу. */
+@Composable
+private fun androidx.compose.animation.core.InfiniteTransition.loop(periodMs: Int, label: String): State<Float> =
+    animateFloat(
+        initialValue = 0f,
+        targetValue = (2 * PI).toFloat(),
+        animationSpec = infiniteRepeatable(tween(periodMs, easing = LinearEasing), RepeatMode.Restart),
+        label = label,
+    )
+
+/**
+ * Одно круглое пятно света: круговой градиент с центром в долях ширины
+ * ([cx], [cy] — от верха экрана, под строкой состояния; [r] — радиус в
+ * долях ширины). [phase] — угол его петли, [breath] — фаза дыхания силы;
+ * null — стоит на месте и не дышит (тумблер «Переливы» выключен).
+ */
+@Composable
+private fun GlowBlob(
+    color: Color,
+    cx: Float,
+    cy: Float,
+    r: Float,
+    top: Float,
+    phase: State<Float>?,
+    dx: Float,
+    dy: Float,
+    breath: State<Float>?,
+    inverse: Boolean,
+) {
     Box(
         Modifier
             .fillMaxSize()
-            .graphicsLayer { this.alpha = alpha }
+            .graphicsLayer {
+                val u = minOf(size.width, ModeGlow.MAX_HEIGHT_DP.dp.toPx())
+                phase?.value?.let { p ->
+                    translationX = cos(p) * ModeGlow.DRIFT * u * dx
+                    translationY = sin(p) * ModeGlow.DRIFT * u * dy
+                }
+                breath?.value?.let { q ->
+                    val wave = (sin(q) + 1f) / 2f
+                    val k = if (inverse) 1f - wave else wave
+                    this.alpha = 1f - ModeGlow.SHIMMER * k
+                }
+            }
             .drawWithCache {
+                // Меркой — ширина, но не шире [MAX_HEIGHT_DP]: на развороте Fold
+                // круги от ширины заливали бы весь экран, а свет — это верх.
                 val w = size.width
-                val h = minOf(size.height * ModeGlow.HEIGHT_FRACTION, ModeGlow.MAX_HEIGHT_DP.dp.toPx()) + top
+                val u = minOf(w, ModeGlow.MAX_HEIGHT_DP.dp.toPx())
+                val center = Offset(w * cx, u * cy - top)
+                val radius = u * r
+                val brush = Brush.radialGradient(
+                    0f to color,
+                    0.35f to color.copy(alpha = 0.55f),
+                    0.7f to color.copy(alpha = 0.14f),
+                    1f to color.copy(alpha = 0f),
+                    center = center,
+                    radius = radius,
+                )
                 onDrawBehind {
-                    translate(top = -top) {
-                        ellipse(deep, 0.8f, cx = w * 0.55f, cy = h * 0.42f, rx = w * 0.7f, ry = h * 0.58f)
-                        ellipse(tone, 1f, cx = 0f, cy = 0f, rx = w * 1.05f, ry = h)
-                        ellipse(light, 0.85f, cx = w, cy = 0f, rx = w * 0.95f, ry = h * 0.9f)
-                    }
+                    drawCircle(brush, radius = radius, center = center)
                 }
             },
     )
-}
-
-/**
- * Эллиптическое пятно света: круговой градиент, сжатый по вертикали. Радиус
- * круга — [rx]; сжатие делает из него [ry]. Центр и прямоугольник заданы в
- * несжатых координатах, поэтому делятся на коэффициент сжатия.
- */
-private fun DrawScope.ellipse(color: Color, peak: Float, cx: Float, cy: Float, rx: Float, ry: Float) {
-    if (rx <= 0f || ry <= 0f) return
-    val k = ry / rx
-    val brush = Brush.radialGradient(
-        0f to color.copy(alpha = peak),
-        0.45f to color.copy(alpha = peak * 0.4f),
-        1f to color.copy(alpha = 0f),
-        center = Offset(cx, cy / k),
-        radius = rx,
-    )
-    scale(1f, k, pivot = Offset.Zero) {
-        drawRect(brush, topLeft = Offset(0f, 0f), size = Size(size.width, (cy + ry) / k))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -182,4 +236,15 @@ fun rememberClaudeSeconds(work: StateFlow<PravkaApp.LiveWork?>): State<String?> 
         }
     }
     return seconds
+}
+
+/**
+ * Ждёт ли Claude на одной из дорог [routes] прямо сейчас — для пилюль, чья
+ * работа идёт в службе (Дела, Деньги, еда голосом): вкладка своего флага не
+ * держит, а поток запросов общий на всё приложение.
+ */
+@Composable
+fun rememberRouteBusy(work: StateFlow<PravkaApp.LiveWork?>, vararg routes: String): Boolean {
+    val live by work.collectAsState()
+    return live?.route?.let { it in routes } == true
 }

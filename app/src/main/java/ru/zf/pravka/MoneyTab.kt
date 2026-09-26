@@ -53,6 +53,7 @@ import ru.zf.pravka.core.MoneyMerchants
 import ru.zf.pravka.core.MoneyStats
 import ru.zf.pravka.trigger.PravkaAccessibilityService
 import ru.zf.pravka.trigger.onMoneyTap
+import ru.zf.pravka.trigger.onMoneyText
 import ru.zf.pravka.trigger.showMoneyPlate
 import ru.zf.pravka.ui.ChipRow
 import ru.zf.pravka.ui.DayNav
@@ -224,6 +225,10 @@ internal fun MoneyTab(
     ) {
         // «Личное · ЗФ» — в шапке, вторым тоном названия (версия 3,
         // `MoneyScopeSheet`): строка чипов первой строкой вкладки ушла туда.
+        // Первой строкой — пилюля «что потратил?» (версия 3, второй заход:
+        // «в каждом должно быть наверху вот такая плашка… единая система»):
+        // кружок — тот же тап, что «₽», набранное — тот же разбор, что у голоса.
+        MoneySpendPill(app)
         Segments(
             options = listOf("Сводка", if (waiting > 0) "Разобрать · $waiting" else "Разобрать", "Журнал"),
             selected = part,
@@ -236,12 +241,7 @@ internal fun MoneyTab(
             PART_SUMMARY -> {
                 // ---- Спросить Claude — наверху, как просил владелец ----
                 AskCard(app)
-                // Траты голосом прямо отсюда — тот же тап, что по «₽»: плашка с суммами и «ОК».
-                PaperButton("Наговорить траты", icon = Glyphs.Mic, onClick = {
-                    val service = PravkaAccessibilityService.instance
-                    if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
-                    else service.onMoneyTap()
-                })
+                // «Наговорить траты» — пилюлей наверху вкладки (версия 3, второй заход).
 
                 PeriodCard(kind, { kind = it }, period, { period = it }, totals)
 
@@ -895,4 +895,38 @@ internal fun MoneyScopeSheet(app: PravkaApp, personal: Boolean, zf: Boolean, onD
                 "исключаются: остаются только операции с внешним миром."
         )
     }
+}
+
+/**
+ * Пилюля наверху Денег — «Саша, что потратил?» (версия 3, второй заход). Голос —
+ * тот же тап, что по «₽» (плашка с суммами, молчание — «да»); набранное — тот же
+ * разбор, что у пилюли «₽» при наборе. Ждём Claude — искры и секунды.
+ */
+@Composable
+private fun MoneySpendPill(app: PravkaApp) {
+    var draft by remember { mutableStateOf("") }
+    val ownerName = app.profileStore.flow.collectAsState().value?.name
+    val talking = ru.zf.pravka.ui.rememberRouteBusy(app.liveWork, "money")
+    ru.zf.pravka.ui.VoiceInput(
+        value = draft,
+        onValueChange = { draft = it },
+        placeholder = if (talking) "Разбираю…" else ru.zf.pravka.core.PillHint.say(ownerName, "что потратил?"),
+        onSend = {
+            val text = draft.trim()
+            val service = PravkaAccessibilityService.instance
+            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+            else if (text.isNotEmpty()) {
+                draft = ""
+                service.onMoneyText(text)
+            }
+        },
+        onMic = {
+            val service = PravkaAccessibilityService.instance
+            if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+            else service.onMoneyTap()
+        },
+        sendEnabled = draft.isNotBlank(),
+        maxLines = 3,
+        busy = talking,
+    )
 }

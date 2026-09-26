@@ -186,7 +186,9 @@ class PravkaApp : Application() {
 
     val httpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(5, TimeUnit.SECONDS)
+            // 10 с, а не 5 (26.09.2026): через VPN рукопожатие с api.anthropic.com
+            // бывает дольше пяти секунд, и живое соединение считалось мёртвым.
+            .connectTimeout(10, TimeUnit.SECONDS)
             // Spec 6.1 said 25s, sized for the proxy. Without streaming the
             // API returns the whole body only after generation completes, and
             // real long dictations (5000+ chars) already hit 25s.
@@ -209,6 +211,7 @@ class PravkaApp : Application() {
     val evalStore by lazy { ru.zf.pravka.data.EvalStore(this) }
     val claudeProvider by lazy {
         ClaudeProvider(settings, promptStore, httpClient, rulesStore).also { p ->
+            p.transportLog = { line -> eventLog.add(line) }
             p.author = {
                 profileStore.current?.let { ru.zf.pravka.core.Prompts.Author(it.name, it.female, it.owner) }
                     ?: ru.zf.pravka.core.Prompts.Author.OWNER

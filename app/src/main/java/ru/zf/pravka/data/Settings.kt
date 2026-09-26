@@ -91,6 +91,7 @@ class Settings(private val context: Context) {
         private val KEY_CARD_GRAIN = booleanPreferencesKey("card_grain")
         private val KEY_APP_GLOW = floatPreferencesKey("app_glow")
         private val KEY_ICONS_GEMINI = booleanPreferencesKey("icons_gemini")
+        private val KEY_APP_GLOW_MOTION = booleanPreferencesKey("app_glow_motion")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -651,6 +652,12 @@ class Settings(private val context: Context) {
     val appGlowFlow = context.dataStore.data.map { it[KEY_APP_GLOW] ?: ru.zf.pravka.core.ModeGlow.DEFAULT }
     suspend fun setAppGlow(value: Float) {
         context.dataStore.edit { it[KEY_APP_GLOW] = value.coerceIn(0f, 1f) }
+    }
+
+    /** Свет режима плывёт и переливается; выключено — стоит на месте. */
+    val appGlowMotionFlow = context.dataStore.data.map { it[KEY_APP_GLOW_MOTION] ?: true }
+    suspend fun setAppGlowMotion(value: Boolean) {
+        context.dataStore.edit { it[KEY_APP_GLOW_MOTION] = value }
     }
 
     /**

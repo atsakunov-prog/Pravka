@@ -318,6 +318,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
     val categoryNames = remember(categories) { categories.map { it.name } }
     val clients by store.clientsFlow.collectAsState()
     val syncStatus by app.zasechkaSync.statusFlow.collectAsState()
+    val ownerName = app.profileStore.flow.collectAsState().value?.name
     LaunchedEffect(Unit) { store.all() }  // first read triggers the load
 
     // Режим «Неделя» и кнопка отмены сняты (владелец, 15.09.2026: «я их не
@@ -404,6 +405,35 @@ internal fun ZasechkaTab(app: PravkaApp) {
         contentPadding = ScreenPad.Padding,
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
+        // ---- quick add: one dense row, voice or typed ----
+        // Версия 3, второй заход (26.09.2026, вечер): пилюля — ПЕРВОЙ строкой
+        // вкладки, над днём («в каждом должно быть наверху вот такая плашка…
+        // в Засечке там написано „чем занят“»). Единая система: наверху каждой
+        // вкладки — то, что сказать режиму.
+        // Общая строка ввода набора (24.09.2026): микрофон · поле · отправить.
+        // Микрофон — тот же тап «З», что на стекле. На время разбора поле не
+        // гасим: в общей строке оно гаснет вместе с микрофоном, а тапнуть его
+        // и сказать следующее, пока модель думает над прошлым, можно было и
+        // раньше. Отправка до конца разбора закрыта, как и была.
+        if (dayOffset == 0) {
+            item {
+                VoiceInput(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    placeholder = if (processing) "Разбираю…" else ru.zf.pravka.core.PillHint.say(ownerName, "чем занят?"),
+                    onSend = submitText,
+                    onMic = {
+                        val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                        if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
+                        else service.onZasechkaTap()
+                    },
+                    sendEnabled = !processing && draft.isNotBlank(),
+                    maxLines = 1,
+                    busy = processing,
+                )
+            }
+        }
+
         // Название и значки — в общей шапке (ui/Frame.kt). Здесь сразу день.
         // ---- date navigation ----
         item {
@@ -421,31 +451,6 @@ internal fun ZasechkaTab(app: PravkaApp) {
                 worthOf(e.category) * e.durationMsIn(rangeStart, rangeTo, now).toDouble() / 3_600_000.0
             }
             RainbowScoreBar(kotlin.math.round(balance).toInt(), weekMode = false)
-        }
-
-        // ---- quick add: one dense row, voice or typed ----
-        // Общая строка ввода набора (24.09.2026): микрофон · поле · отправить.
-        // Микрофон — тот же тап «З», что на стекле. На время разбора поле не
-        // гасим: в общей строке оно гаснет вместе с микрофоном, а тапнуть его
-        // и сказать следующее, пока модель думает над прошлым, можно было и
-        // раньше. Отправка до конца разбора закрыта, как и была.
-        if (dayOffset == 0) {
-            item {
-                VoiceInput(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    placeholder = if (processing) "Разбираю…" else "Чем занят?",
-                    onSend = submitText,
-                    onMic = {
-                        val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
-                        if (service == null) Feedback.toast(context, context.getString(R.string.toast_no_service))
-                        else service.onZasechkaTap()
-                    },
-                    sendEnabled = !processing && draft.isNotBlank(),
-                    maxLines = 1,
-                    busy = processing,
-                )
-            }
         }
 
         // ---- the day's history first (owner's layout), newest on top. An

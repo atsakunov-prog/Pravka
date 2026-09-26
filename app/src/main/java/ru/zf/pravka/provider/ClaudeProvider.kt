@@ -70,6 +70,20 @@ class ClaudeProvider(
     // of letting a zombie stream bill to completion in the background.
     private val activeCalls = java.util.concurrent.CopyOnWriteArraySet<okhttp3.Call>()
 
+    private companion object {
+        /**
+         * Сколько ждать заголовков ответа после отправки запроса. Anthropic
+         * присылает их, как только принял запрос (обычно за секунду-две, ещё
+         * до размышлений модели), поэтому 25 с тишины — мёртвое соединение.
+         */
+        const val HEADERS_WAIT_MS = 25_000L
+    }
+
+    /** Один поток на всех сторожей начала ответа: проверка раз в секунду, работы на микросекунды. */
+    private val watchdog = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "claude-watchdog").apply { isDaemon = true }
+    }
+
     /** Hard-cancels every in-flight API call. */
     fun cancelActive() {
         activeCalls.forEach { runCatching { it.cancel() } }
@@ -745,6 +759,9 @@ $listing
      */
     internal var usageObserver: ((ApiReply) -> Unit)? = null
 
+    /** Строка в журнал службы о судьбе соединения: мёртвый пул, «не достучались». */
+    internal var transportLog: ((String) -> Unit)? = null
+
     /**
      * Кто смотрит, КОГДА запрос идёт и сколько шёл (20.09.2026). Одна точка на
      * все дороги, как и у расхода: здесь известны и дорога, и модель, и длина
@@ -1019,30 +1036,91 @@ $listing
         // Опус думает адаптивно, и на разборе «Итогов» пауза между кусками
         // потока доходит до минут: 90-секундный таймаут общего клиента рвёт
         // ровно те запросы, ради которых он и заводился длинным.
-        val callClient =
-            if (maxTokensOverride > 30_000) {
-                client.newBuilder()
-                    .readTimeout(10, java.util.concurrent.TimeUnit.MINUTES)
-                    .build()
-            } else client
+        // Сторож начала ответа (26.09.2026, владелец: «что-то сломалось в
+        // транспорте до Клода. Пишет, что сеть молчала до таймаута»). Пул
+        // держит соединение тёплым (`warmClaudeConnection`), а VPN или смена
+        // сети убивают его МОЛЧА: без обрыва, просто чёрная дыра. Запрос
+        // уходит в мёртвый сокет, ответа нет, и через 90 с readTimeout —
+        // «сеть молчала», без повтора. Anthropic отвечает заголовками сразу,
+        // как принял запрос, ещё до первой мысли модели, поэтому «запрос
+        // отправлен, а заголовков нет [HEADERS_WAIT_MS]» — это мёртвое
+        // соединение, а не долгая мысль: рвём, выбрасываем пул и повторяем
+        // один раз на свежем (IOException — `requestWithOneRetry` повторит).
+        val watch = HeadersWatch()
+        val callClient = client.newBuilder().eventListener(watch).apply {
+            if (maxTokensOverride > 30_000) readTimeout(10, java.util.concurrent.TimeUnit.MINUTES)
+        }.build()
         val call = callClient.newCall(request)
         activeCalls.add(call)
+        val dog = watchdog.scheduleWithFixedDelay({
+            val sent = watch.bodySentAt
+            if (watch.headersAt == 0L && sent != 0L &&
+                android.os.SystemClock.elapsedRealtime() - sent > HEADERS_WAIT_MS
+            ) {
+                watch.stalled = true
+                call.cancel()
+            }
+        }, 1, 1, java.util.concurrent.TimeUnit.SECONDS)
         try {
             return executeStreaming(call, onDelta, tolerateTruncation)
         } catch (e: IOException) {
+            if (watch.stalled) {
+                client.connectionPool.evictAll()
+                transportLog?.invoke("claude: нет ответа ${HEADERS_WAIT_MS / 1000} с после отправки — соединение мёртвое, пул сброшен, повтор")
+                throw IOException(
+                    "Claude не ответил за ${HEADERS_WAIT_MS / 1000} с после отправки — соединение " +
+                        "оборвалось молча (VPN или смена сети). Попробуй ещё раз."
+                )
+            }
             // "Сброс" closed the socket: that is a cancellation, not a network
             // error - it must NOT fall into the retry path and re-bill.
             if (call.isCanceled()) throw kotlin.coroutines.cancellation.CancellationException("Отменено")
             if (e is java.io.InterruptedIOException) {
-                // Read timeout after 90s of silence: the server almost
-                // certainly finished (and billed) the generation - a blind
-                // re-POST doubles the cost for an answer the owner stopped
-                // waiting for long ago. Fail honestly instead.
-                throw ApiException("Сеть молчала до таймаута. Проверь интернет и попробуй ещё раз.")
+                if (watch.headersAt == 0L) {
+                    // Таймаут ДО ответа — соединиться не вышло (connectTimeout)
+                    // или запрос так и не ушёл: модель ещё ничего не делала и
+                    // денег не взяла. Это не «сеть молчала», а «не достучались»:
+                    // пул — в мусор, и `requestWithOneRetry` повторит.
+                    client.connectionPool.evictAll()
+                    transportLog?.invoke("claude: не достучались (${e.message ?: e.javaClass.simpleName}) — пул сброшен, повтор")
+                    throw IOException(
+                        "Не достучались до Claude: соединение не установилось. Проверь интернет или VPN " +
+                            "и попробуй ещё раз."
+                    )
+                }
+                // Read timeout after 90s of silence MID-ANSWER: the server
+                // almost certainly finished (and billed) the generation - a
+                // blind re-POST doubles the cost for an answer the owner
+                // stopped waiting for long ago. Fail honestly instead.
+                transportLog?.invoke("claude: ответ начался и замолчал до таймаута")
+                throw ApiException("Claude начал отвечать и замолчал до таймаута. Проверь интернет и попробуй ещё раз.")
             }
             throw e
         } finally {
+            dog.cancel(false)
             activeCalls.remove(call)
+        }
+    }
+
+    /**
+     * Где запрос: отправлен ли целиком и пришли ли заголовки ответа. Отсчёт
+     * сторожа идёт от конца отправки, а не от начала: снимок тарелки на
+     * мобильной сети уходит секундами, и это не молчание сервера.
+     */
+    private class HeadersWatch : okhttp3.EventListener() {
+        @Volatile var bodySentAt = 0L
+        @Volatile var headersAt = 0L
+        @Volatile var stalled = false
+
+        override fun requestBodyEnd(call: okhttp3.Call, byteCount: Long) {
+            bodySentAt = android.os.SystemClock.elapsedRealtime()
+        }
+
+        // «Конец» заголовков, а не «начало»: в разных версиях OkHttp начало
+        // зовётся то до чтения, то после, а конец — всегда после того, как
+        // сервер правда ответил. Сторож должен смотреть на ответ, а не на намерение.
+        override fun responseHeadersEnd(call: okhttp3.Call, response: okhttp3.Response) {
+            headersAt = android.os.SystemClock.elapsedRealtime()
         }
     }
 

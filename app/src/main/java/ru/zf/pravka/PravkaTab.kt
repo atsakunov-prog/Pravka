@@ -55,6 +55,8 @@ import ru.zf.pravka.data.dayStartMs
 import ru.zf.pravka.target.PlainTextTarget
 import ru.zf.pravka.ui.ChipRow
 import ru.zf.pravka.ui.ThinkingLine
+import ru.zf.pravka.ui.PillAction
+import ru.zf.pravka.ui.VoiceInput
 import ru.zf.pravka.ui.bevel
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.GlyphButton
@@ -194,6 +196,8 @@ private object CleanBoxState {
     val streaming = mutableStateOf("")
     val error = mutableStateOf<String?>(null)
     val busy = mutableStateOf(false)
+    /** Что ушло на чистку — пузырём справа; поле пилюли после отправки пустое, как у Gemini. */
+    val sent = mutableStateOf("")
 }
 
 @Composable
@@ -204,6 +208,7 @@ private fun CleanBox(app: PravkaApp) {
     var streaming by CleanBoxState.streaming
     var error by CleanBoxState.error
     var busy by CleanBoxState.busy
+    var sent by CleanBoxState.sent
 
     fun clipboardText(): String {
         val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -214,6 +219,8 @@ private fun CleanBox(app: PravkaApp) {
         val input = text.trim()
         if (input.isEmpty() || busy) return
         busy = true
+        sent = input
+        text = ""
         result = null
         error = null
         streaming = ""
@@ -259,90 +266,66 @@ private fun CleanBox(app: PravkaApp) {
         }
     }
 
-    // «Очистить» — в строке подписи плашки (24.09.2026): три кнопки в ряд со
-    // значками на узком экране Fold не влезают, а «Из буфера» и «Причесать»
-    // должны стоять под пальцем. Видна, пока в поле есть текст; место под неё
-    // держится всегда, чтобы плашка не прыгала, когда текст появляется.
-    PaperCard(
-        label = "причесать текст",
-        trailing = {
-            Box(Modifier.height(40.dp), contentAlignment = Alignment.CenterEnd) {
-                if (text.isNotEmpty() && !busy) {
-                    PaperTextButton("Очистить", onClick = { text = ""; result = null; error = null; streaming = "" })
-                }
-            }
-        },
-    ) {
-        // Версия 3: как разговор у Gemini. Пока текст правится и когда он
-        // готов, вставленное лежит пузырём справа — это реплика владельца, а
-        // ответ идёт под ней. Тап по пузырю — снова поле, править исходное.
-        if (busy || result != null) {
-            SourceBubble(text, onEdit = if (busy) null else ({ result = null; error = null; streaming = "" }))
-        } else {
-            PaperField(
-                value = text,
-                onValueChange = { text = it },
-                singleLine = false,
-                minLines = 3,
-                maxLines = 12,
-                enabled = !busy,
-                placeholder = "Вставь текст — причешу и положу в буфер",
-            )
-        }
-        if (busy) {
-            // Вместо полоски прогресса — искры и секунды до ответа (то же
-            // обещание, что на кнопке), а ответ течёт с кареткой краской режима.
-            Spacer(Modifier.height(12.dp))
-            ThinkingLine("Причёсываю")
-            if (streaming.isNotBlank()) {
-                Spacer(Modifier.height(8.dp))
-                StreamingText(streaming)
-            }
-        }
-        error?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        }
-        result?.let { r ->
-            Spacer(Modifier.height(12.dp))
-            PaperLabel("результат — уже в буфере")
-            SelectionContainer {
-                Text(r, style = MaterialTheme.typography.bodyMedium)
-            }
-            PaperTextButton("Скопировать ещё раз", icon = Glyphs.Copy, onClick = {
-                putClipboard(context, r)
-                Feedback.toast(context, context.getString(R.string.transcript_copied))
-            })
-        }
-        if (!busy) {
-            Spacer(Modifier.height(8.dp))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PaperButton(
-                    "Из буфера",
-                    icon = Glyphs.Paste,
-                    onClick = {
+    // Версия 3, второй заход (26.09.2026, вечер): «в Правке там написано
+    // „вставь текст — причешу, положу в буфер“ — и вот это и должно быть в
+    // обычной плашке, такой же, как вылезает, когда нажимаем на кнопку».
+    // Поле — сама пилюля наверху вкладки: слева «из буфера» (или ✕, когда
+    // текст есть), кружок — «причесать». Отправленное уходит пузырём в
+    // плашку ниже, под ним искры с секундами и ответ; пилюля снова пустая.
+    Column(verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap)) {
+        VoiceInput(
+            value = text,
+            onValueChange = { text = it },
+            placeholder = "Вставь текст — причешу",
+            onSend = { clean() },
+            sendEnabled = text.isNotBlank() && !busy,
+            enabled = !busy,
+            maxLines = 8,
+            busy = busy,
+            leading = {
+                if (text.isEmpty()) {
+                    PillAction(Glyphs.Paste, "вставить из буфера", onClick = {
                         val fromClip = clipboardText()
-                        if (fromClip.isBlank()) {
-                            Feedback.toast(context, "Буфер обмена пуст")
-                        } else {
-                            text = fromClip
-                            result = null
-                            error = null
-                        }
-                    },
-                )
-                Spacer(Modifier.weight(1f))
-                if (result == null) {
-                    PaperButton(
-                        "Причесать",
-                        icon = Glyphs.Pravka,
-                        primary = true,
-                        enabled = text.isNotBlank(),
-                        onClick = { clean() },
-                    )
+                        if (fromClip.isBlank()) Feedback.toast(context, "Буфер обмена пуст")
+                        else text = fromClip
+                    })
+                } else {
+                    PillAction(Glyphs.Close, "очистить", onClick = { text = "" })
+                }
+            },
+        )
+        if (busy || result != null || error != null) {
+            PaperCard(
+                label = if (result != null) "результат — уже в буфере" else "причесать текст",
+                trailing = if (!busy) {
+                    { PaperTextButton("Убрать", onClick = { sent = ""; result = null; error = null; streaming = "" }) }
+                } else null,
+            ) {
+                // Тап по пузырю — исходник снова в пилюлю: поправить и причесать ещё раз.
+                if (sent.isNotBlank()) {
+                    SourceBubble(sent, onEdit = if (busy) null else ({ text = sent; result = null; error = null; streaming = "" }))
+                }
+                if (busy) {
+                    Spacer(Modifier.height(12.dp))
+                    ThinkingLine("Причёсываю")
+                    if (streaming.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        StreamingText(streaming)
+                    }
+                }
+                error?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+                result?.let { r ->
+                    Spacer(Modifier.height(12.dp))
+                    SelectionContainer {
+                        Text(r, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    PaperTextButton("Скопировать ещё раз", icon = Glyphs.Copy, onClick = {
+                        putClipboard(context, r)
+                        Feedback.toast(context, context.getString(R.string.transcript_copied))
+                    })
                 }
             }
         }

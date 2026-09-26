@@ -110,10 +110,17 @@ fun PaperCard(
         // плашки берут тон режима, нижние остаются прежними. Там, где света
         // нет (служебные экраны, выключенный ползунок), плашка — прежний тон:
         // фон под ней чуть темнее её самой, и сквозь неё видно только его.
+        // Второй заход (26.09.2026, вечер): «серые плашки на этом фоне выглядят
+        // не очень… сделать их не серыми, а тёмными, но того же цвета». Во
+        // вкладке режима плашка — тёмный тон его краски (`ModeGlow.card`), на
+        // служебных экранах — прежний нейтральный.
+        val accent = decor?.glowAccent
+        val base = if (accent != null) Color(ru.zf.pravka.core.ModeGlow.card(accent))
+        else MaterialTheme.colorScheme.surfaceContainerLow
         Card(
             modifier = Modifier.fillMaxWidth().then(if (look.bevel) Modifier.bevel() else Modifier),
             colors = CardDefaults.cardColors(
-                containerColor = darkened(MaterialTheme.colorScheme.surfaceContainerLow, look.darken)
+                containerColor = darkened(base, look.darken)
                     .copy(alpha = if (look.glow > 0f) CardLook.GLASS else 1f),
             ),
         ) {

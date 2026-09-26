@@ -23,6 +23,12 @@ object PillHint {
     /** Засечка ждёт мысль к текущему делу — это надо узнать с первого взгляда. */
     fun thought(name: String?): String = address(name, "слушаю мысль к делу")
 
+    /**
+     * Приглашение пилюли наверху вкладки (26.09.2026, вечер: «в каждом должно
+     * быть наверху вот такая плашка»): «Саша, чем занят?», «Саша, что съел?».
+     */
+    fun say(name: String?, what: String): String = address(name, what)
+
     private fun address(name: String?, what: String): String {
         val n = name?.trim().orEmpty()
         return if (n.isEmpty()) what.replaceFirstChar { it.uppercase() } else "$n, $what"

@@ -291,6 +291,17 @@ internal fun SportTab(app: PravkaApp) {
     val lightIndex = 2 + dayGroups.sumOf { 1 + it.second.size }
 
     Column(Modifier.fillMaxWidth()) {
+        // Версия 3, второй заход (26.09.2026, вечер): пилюля — первой строкой
+        // вкладки, как у всех («в спорте должно быть тоже сверху: например, итог
+        // зарядки на сегодня, и такая же плашка»). Тот же роутер, что у «Т»:
+        // зарядка, подходы, ощущение — он сам поймёт, о чём сказано.
+        ru.zf.pravka.ui.TopPill {
+            BodyTalkBox(
+                app = app,
+                hint = ru.zf.pravka.core.PillHint.say(app.profileStore.flow.collectAsState().value?.name, "итог зарядки?"),
+                whereSaid = "",
+            )
+        }
         Segments(
             options = PARTS,
             selected = part,
@@ -2009,15 +2020,8 @@ private fun ZaryadkaChecklist(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Spacer(Modifier.height(10.dp))
-        // Итог словами вместо тапов: «всё сделал, чувствовал себя хорошо,
-        // подтягивания два». Разбирает тот же роутер, что у кнопки «Т»:
-        // charged, числа, заметка — и всё это уедет в intervals и в Дневник.
-        BodyTalkBox(
-            app = app,
-            hint = "Итог: всё сделал, вис 40, подтягивания 2…",
-            whereSaid = "в карточке зарядки",
-        )
+        // Итог словами — пилюлей наверху вкладки (версия 3, второй заход):
+        // тот же роутер «Т», charged, числа, заметка — в intervals и Дневник.
     }
     asking?.let { (title, exercise, auto) ->
         CoachDialog(app, title, exercise, autoAsk = auto, onClose = { asking = null })

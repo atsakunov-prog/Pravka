@@ -49,6 +49,8 @@ data class CardLook(
     val grain: Boolean = true,
     /** Сила свечения режима во вкладке, 0 — выключено (`core/ModeGlow.kt`). */
     val glow: Float = ru.zf.pravka.core.ModeGlow.DEFAULT,
+    /** Свет плывёт и переливается (тумблер «Переливы»); выключено — стоит. */
+    val glowMotion: Boolean = true,
 ) {
     companion object {
         /**
@@ -80,7 +82,7 @@ data class CardLook(
          * прежними. Цвет не подмешивается нарочно — его приносит свет, и
          * ровно там, где он есть. Ниже — текст на плашке начинает плыть.
          */
-        const val GLASS = 0.84f
+        const val GLASS = 0.76f
 
         /**
          * Главная кнопка и выбранный чип — клавиши, как кнопки на стекле
@@ -112,8 +114,9 @@ fun ProvideCardLook(settings: Settings, content: @Composable () -> Unit) {
     val light by settings.cardLightFlow.collectAsState(initial = true)
     val grain by settings.cardGrainFlow.collectAsState(initial = true)
     val glow by settings.appGlowFlow.collectAsState(initial = ru.zf.pravka.core.ModeGlow.DEFAULT)
+    val glowMotion by settings.appGlowMotionFlow.collectAsState(initial = true)
     CompositionLocalProvider(
-        LocalCardLook provides CardLook(darken, bevel, light, grain, glow),
+        LocalCardLook provides CardLook(darken, bevel, light, grain, glow, glowMotion),
         content = content,
     )
 }

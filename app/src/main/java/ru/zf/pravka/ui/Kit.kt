@@ -912,6 +912,12 @@ fun VoiceInput(
     sendIcon: ImageVector = Glyphs.Send,
     extras: (@Composable RowScope.() -> Unit)? = null,
     busy: Boolean = false,
+    /**
+     * Свои значки слева В САМОЙ пилюле вместо знака режима (владелец: «снять,
+     * галерея, штрихкод… это можно добавить в саму плашку»). Пока ждём
+     * Claude, на их месте искры.
+     */
+    leading: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val c = MaterialTheme.colorScheme
     val decor = LocalModeDecor.current ?: ModeDecor.SERVICE
@@ -966,13 +972,19 @@ fun VoiceInput(
         ) {
             // Слева — знак режима, как у пилюли на стекле, пока нечего
             // отменять; ждём Claude — искры: «одно действие — один значок».
-            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-                Icon(
-                    if (busy) Glyphs.Spark else decorGlyph(decor),
-                    contentDescription = null,
-                    tint = ink.copy(alpha = 0.82f),
-                    modifier = Modifier.size(20.dp),
-                )
+            if (leading != null && !busy) {
+                CompositionLocalProvider(LocalContentColor provides ink.copy(alpha = 0.86f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, content = leading)
+                }
+            } else {
+                Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                    Icon(
+                        if (busy) Glyphs.Spark else decorGlyph(decor),
+                        contentDescription = null,
+                        tint = ink.copy(alpha = 0.82f),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
             TextField(
                 value = value,
@@ -1085,6 +1097,40 @@ private fun PillOrb(
             else -> Icon(sendIcon, contentDescription = null, tint = ink.copy(alpha = if (active) 1f else 0.6f), modifier = Modifier.size(19.dp))
         }
     }
+}
+
+/**
+ * Значок внутри пилюли слева — мишень 40 dp, цвет — чернила пилюли. Для
+ * [VoiceInput.leading]: снимок, галерея, штрихкод, «из буфера».
+ */
+@Composable
+fun PillAction(icon: ImageVector, description: String, onClick: () -> Unit, enabled: Boolean = true) {
+    Box(
+        Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = LocalContentColor.current.copy(alpha = if (enabled) LocalContentColor.current.alpha else 0.35f),
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+/**
+ * Пилюля наверху вкладки — единое место «сказать режиму» (26.09.2026, вечер,
+ * владелец: «в каждом должно быть наверху вот такая плашка… как вылезает, когда
+ * нажимаем на кнопку… должна быть единая система»). Та же [VoiceInput] с полями
+ * экрана: во вкладке она первой строкой под шапкой.
+ */
+@Composable
+fun TopPill(content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 4.dp)) { content() }
 }
 
 /** Знак режима — тот же, что у его кнопки внизу и на стекле. */

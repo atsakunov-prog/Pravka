@@ -45,6 +45,9 @@ import ru.zf.pravka.ui.PaperField
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.RowRule
 import ru.zf.pravka.ui.ScreenPad
+import ru.zf.pravka.ui.VoiceInput
+import ru.zf.pravka.trigger.onRaznoskaTap
+import ru.zf.pravka.trigger.onRaznoskaText
 
 // Вкладка «Дела»: список Todoist, тап по делу = оно становится текущим в
 // ленте. Сверху - Разноска: наговорённые дела, которые ещё не уехали в
@@ -69,6 +72,12 @@ fun TodoistTab(app: PravkaApp) {
     val ribbon by app.zasechkaStore.entriesFlow.collectAsState()
 
     var query by remember { mutableStateOf("") }
+    // Поиск — значком в строке синка (26.09.2026, вечер: «сверху там не поиск по
+    // делам, а наоборот, такая же плашка, где написано „говори дела“»).
+    var searching by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf("") }
+    val ownerName = app.profileStore.flow.collectAsState().value?.name
+    val talking = ru.zf.pravka.ui.rememberRouteBusy(app.liveWork, "raznoska")
     var expanded by remember { mutableStateOf(setOf("today")) }
     var starting by remember { mutableStateOf("") }
 
@@ -117,6 +126,33 @@ fun TodoistTab(app: PravkaApp) {
         contentPadding = ScreenPad.Padding,
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
+        // ---- Пилюля наверху: сказать дела (версия 3, второй заход) ----
+        // Та же пилюля, что выезжает у «Д»: кружок — голос (тот же тап, что по
+        // кнопке), набранное — тот же разбор, что у голоса, и плашка с «ОК».
+        item {
+            VoiceInput(
+                value = draft,
+                onValueChange = { draft = it },
+                placeholder = if (talking) "Разбираю…" else ru.zf.pravka.core.PillHint.say(ownerName, "говори дела"),
+                onSend = {
+                    val text = draft.trim()
+                    val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                    if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+                    else if (text.isNotEmpty()) {
+                        draft = ""
+                        service.onRaznoskaText(text)
+                    }
+                },
+                onMic = {
+                    val service = ru.zf.pravka.trigger.PravkaAccessibilityService.instance
+                    if (service == null) Feedback.toast(app, app.getString(R.string.toast_no_service))
+                    else service.onRaznoskaTap()
+                },
+                sendEnabled = draft.isNotBlank(),
+                maxLines = 4,
+                busy = talking,
+            )
+        }
         item {
             // Название и пояснение живут в общей шапке (ui/Frame.kt); тут —
             // только то, что меняется: идущее дело, поиск, состояние синка.
@@ -143,19 +179,6 @@ fun TodoistTab(app: PravkaApp) {
                         )
                     }
                 }
-                PaperField(
-                    value = query,
-                    onValueChange = { query = it },
-                    label = "Поиск по делам",
-                    trailing = {
-                        Icon(
-                            Glyphs.Search,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    },
-                )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     GlyphButton(
                         Glyphs.Refresh,
@@ -168,6 +191,22 @@ fun TodoistTab(app: PravkaApp) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    GlyphButton(
+                        if (searching) Glyphs.Close else Glyphs.Search,
+                        if (searching) "закрыть поиск" else "поиск по делам",
+                        onClick = {
+                            if (searching) query = ""
+                            searching = !searching
+                        },
+                    )
+                }
+                if (searching || query.isNotEmpty()) {
+                    PaperField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = "Поиск по делам",
                     )
                 }
                 // Токен живёт в «Настройках → Дела» вместе с остальными ключами.
