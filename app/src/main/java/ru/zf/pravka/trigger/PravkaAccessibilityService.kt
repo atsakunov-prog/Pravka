@@ -2819,6 +2819,12 @@ class PravkaAccessibilityService : AccessibilityService() {
                     ) { line -> app.eventLog.add(line) }
                 }
             }
+            // Секунды на кнопке: раз в сутки ночью — вся история заново всеми
+            // способами счёта, остаётся лучший (core/PaceTune.kt). Журналы —
+            // мегабайты: только фоновый поток, итог — в журнал автоматов.
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { app.paceStore.tuneIfDue(app.historyLog) { line -> app.nightLog.add(line) } }
+            }
             // Та же копия — в семейный Google Drive, как только снята (по Wi-Fi).
             // Без входа в Google молчит; решение — чтение двух маленьких файлов.
             scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.driveBackup.tick() } }

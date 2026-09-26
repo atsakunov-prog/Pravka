@@ -1579,7 +1579,14 @@ private fun LogsTab(app: PravkaApp) {
                 // Сколько шёл каждый запрос к Claude и сколько обещала кнопка —
                 // то, по чему прогноз секунд проверяется снаружи (26.09.2026).
                 LogExport(onClick = {
-                    share(app.paceStore.shareCsvIntent(), "Замеры Claude")
+                    // Журнал замеров — мегабайты строк: собирается не на главном потоке.
+                    app.appScope.launch {
+                        val intent = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            runCatching { app.paceStore.shareCsvIntent() }.getOrNull()
+                        }
+                        if (intent == null) Feedback.toast(context, "Не собралась")
+                        else share(intent, "Замеры Claude")
+                    }
                 }, label = "Замеры Claude (CSV)")
                 LogExport(onClick = {
                     // exportJson — suspend: собирается в области приложения, файл во

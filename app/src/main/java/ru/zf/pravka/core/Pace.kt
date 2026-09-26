@@ -72,16 +72,16 @@ object Pace {
         val sumXY: Double = 0.0,
     )
 
-    /** Ещё один замер: [chars] символов входа заняли [ms] миллисекунд. */
-    fun add(acc: Acc, chars: Int, ms: Long): Acc {
+    /** Ещё один замер: [chars] символов входа заняли [ms] миллисекунд; прошлое тускнеет на [decay]. */
+    fun add(acc: Acc, chars: Int, ms: Long, decay: Double = DECAY): Acc {
         val x = chars.coerceAtLeast(0).toDouble()
         val y = ms.coerceIn(MIN_MS, MAX_MS).toDouble()
         return Acc(
-            n = acc.n * DECAY + 1.0,
-            sumX = acc.sumX * DECAY + x,
-            sumY = acc.sumY * DECAY + y,
-            sumXX = acc.sumXX * DECAY + x * x,
-            sumXY = acc.sumXY * DECAY + x * y,
+            n = acc.n * decay + 1.0,
+            sumX = acc.sumX * decay + x,
+            sumY = acc.sumY * decay + y,
+            sumXX = acc.sumXX * decay + x * x,
+            sumXY = acc.sumXY * decay + x * y,
         )
     }
 
@@ -188,6 +188,25 @@ object Pace {
     // ---- Дорога целиком: прямая, холодный кэш, выбросы, честная ошибка ----
 
     /**
+     * КАК дорога считает — то, что ночная калибровка (`core/PaceTune.kt`)
+     * подбирает по её же истории (владелец, 26.09.2026: «раз в день ночью она
+     * может запускать этот расчёт»). [decay] — забывание на замер; [clip] —
+     * резать ли выбросы; [cold] — учить ли добавку холодного кэша; [shift] —
+     * сдвиг обещания, мс. Сдвиг нужен потому, что прямая учит СРЕДНЕЕ, а
+     * среднее тянет длинный хвост медленных ответов: отсчёт точнее всего,
+     * когда промахивается одинаково часто в обе стороны, — на медиане.
+     * Заводское — [Tune] по умолчанию: так дорога и считала до калибровки.
+     */
+    data class Tune(
+        val decay: Double = DECAY,
+        val clip: Boolean = true,
+        val cold: Boolean = true,
+        val shift: Double = 0.0,
+    ) {
+        val factory: Boolean get() = this == Tune()
+    }
+
+    /**
      * Всё, что прогноз знает об одной тройке «дорога + модель + усилие».
      *
      * [acc] — тёплые замеры (холодные ложатся сюда за вычетом своей добавки,
@@ -209,6 +228,7 @@ object Pace {
         val errAbs: Double = 0.0,
         val errBias: Double = 0.0,
         val lastAt: Long = 0L,
+        val tune: Tune = Tune(),
     ) {
         /** Средний промах отсчёта по модулю, мс; null — промахов ещё не мерили. */
         val miss: Double? get() = if (errN < 1.0) null else errAbs / errN
@@ -259,7 +279,7 @@ object Pace {
 
     /** Сколько сверху прямой берёт холодный кэш у этой дороги, мс. */
     fun coldExtra(road: Road?): Double =
-        if (road == null) 0.0 else extraOf(road.coldN, road.coldSum, road.warmN)
+        if (road == null || !road.tune.cold) 0.0 else extraOf(road.coldN, road.coldSum, road.warmN)
 
     private fun extraOf(n: Double, sum: Double, warmN: Double): Double =
         (sum / (n + COLD_SHRINK)).coerceIn(0.0, COLD_MAX_MS) * (warmN / (warmN + WARM_SHRINK))
@@ -268,7 +288,7 @@ object Pace {
     fun expect(road: Road?, prior: Acc, chars: Int, now: Long): Long {
         val warm = estimate(mix(road?.acc, prior), chars)
         val extra = if (coldLikely(road, now)) coldExtra(road) else 0.0
-        return (warm + extra).toLong().coerceIn(MIN_MS, MAX_MS)
+        return (warm + extra + (road?.tune?.shift ?: 0.0)).toLong().coerceIn(MIN_MS, MAX_MS)
     }
 
     /**
@@ -283,25 +303,28 @@ object Pace {
      */
     fun learn(road: Road?, prior: Acc, chars: Int, ms: Long, cache: Boolean?, now: Long): Road {
         val r = road ?: Road()
+        val t = r.tune
         val y = ms.coerceIn(MIN_MS, MAX_MS).toDouble()
         // Обещано было в миг ухода, а не прихода: холодным кэш считался по нему.
         val promised = expect(road, prior, chars, now - ms).toDouble()
         val err = y - promised
         val warmPred = estimate(mix(r.acc, prior), chars).toDouble()
-        val here = warmPred + if (cache == false) coldExtra(r) else 0.0
-        val kept = clip(y, here, r)
+        // Холодный замер отдельно — только если дорога учит добавку.
+        val coldHere = cache == false && t.cold
+        val here = warmPred + if (coldHere) coldExtra(r) else 0.0
+        val kept = if (t.clip) clip(y, here, r) else y
         var coldN = r.coldN
         var coldSum = r.coldSum
-        val warmN = r.warmN * DECAY + if (cache == false) 0.0 else 1.0
-        val warmY = if (cache == false) {
-            coldN = coldN * DECAY + 1.0
-            coldSum = coldSum * DECAY + (kept - warmPred)
+        val warmN = r.warmN * t.decay + if (coldHere) 0.0 else 1.0
+        val warmY = if (coldHere) {
+            coldN = coldN * t.decay + 1.0
+            coldSum = coldSum * t.decay + (kept - warmPred)
             kept - extraOf(coldN, coldSum, warmN)
         } else {
             kept
         }
         return Road(
-            acc = add(r.acc, chars, warmY.toLong()),
+            acc = add(r.acc, chars, warmY.toLong(), t.decay),
             coldN = coldN,
             coldSum = coldSum,
             warmN = warmN,
@@ -309,6 +332,7 @@ object Pace {
             errAbs = r.errAbs * ERR_DECAY + abs(err),
             errBias = r.errBias * ERR_DECAY + err,
             lastAt = now,
+            tune = t,
         )
     }
 

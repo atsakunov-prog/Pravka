@@ -164,6 +164,58 @@ class HistoryLog(private val context: Context) {
         return tail.toList()
     }
 
+    /**
+     * Запрос журнала для ночной калибровки секунд (`core/PaceTune.kt`): когда
+     * закончился, режим, модель, длина надиктованного, сколько шёл и как
+     * прошёл кэш (true — прочитан, false — только записан, null — не было).
+     */
+    data class PaceRow(
+        val at: Long,
+        val mode: String,
+        val model: String,
+        val chars: Int,
+        val ms: Long,
+        val cache: Boolean?,
+    )
+
+    /**
+     * ВСЕ удачные запросы журнала — и прошлый файл (`.1`, до ротации), и
+     * нынешний, по порядку. Построчно и без текстов в памяти: журнал это
+     * мегабайты правок. Звать не на главном потоке.
+     */
+    fun readPaceRows(): List<PaceRow> {
+        val stamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
+        val out = ArrayList<PaceRow>()
+        for (f in listOf(File(DataRoot.dir(context), "$FILE_NAME.1"), file)) {
+            if (!f.exists()) continue
+            runCatching {
+                f.forEachLine { line ->
+                    val o = runCatching { JSONObject(line) }.getOrNull() ?: return@forEachLine
+                    if (o.has("error")) return@forEachLine
+                    val model = o.optString("model")
+                    val ms = o.optLong("latency_ms", 0L)
+                    if (model.isBlank() || ms <= 0L) return@forEachLine
+                    val at = runCatching { stamp.parse(o.optString("ts"))?.time }.getOrNull() ?: return@forEachLine
+                    val read = o.optInt("cache_read_tokens", 0)
+                    val write = o.optInt("cache_write_tokens", 0)
+                    out += PaceRow(
+                        at = at,
+                        mode = o.optString("mode"),
+                        model = model,
+                        chars = o.optString("input").length,
+                        ms = ms,
+                        cache = when {
+                            read > 0 -> true
+                            write > 0 -> false
+                            else -> null
+                        },
+                    )
+                }
+            }
+        }
+        return out
+    }
+
     /** Что делал сам владелец в приложении: режим, день, деньги. Без текстов. */
     data class Meta(val date: String, val mode: String, val costUsd: Double, val changed: Boolean)
 

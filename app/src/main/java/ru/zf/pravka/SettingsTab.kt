@@ -443,22 +443,54 @@ private fun AppSettings(app: PravkaApp, serviceEnabled: Boolean, onOpenAccessibi
             "Выгрузка — все замеры CSV: что обещано и что вышло.",
     ) {
         val context = LocalContext.current
-        val pace = remember { app.paceStore.summary() }
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        var round by remember { mutableStateOf(0) }
+        var busy by remember { mutableStateOf(false) }
+        val pace = remember(round) { app.paceStore.summary() }
         for (line in pace) Text("· $line", style = MaterialTheme.typography.bodySmall)
-        val samples = remember { app.paceStore.logSize() }
+        // Журнал замеров и калибровка — файлы: считаем не на главном потоке.
+        val samples by androidx.compose.runtime.produceState(0, round) {
+            value = withContext(Dispatchers.IO) { app.paceStore.logSize() }
+        }
+        val (tunedAt, tuned) = remember(round) { app.paceStore.lastTune() }
+        if (tunedAt > 0L) {
+            val stamp = remember { java.text.SimpleDateFormat("d MMMM, HH:mm", Locale.forLanguageTag("ru")) }
+            PaperHint("Калибровка — ${stamp.format(java.util.Date(tunedAt))}")
+            for (line in tuned) Text(line.trim(), style = MaterialTheme.typography.bodySmall)
+        } else {
+            PaperHint("Калибровки ещё не было: первая пройдёт сама, в ближайший тик службы, дальше — раз в сутки ночью.")
+        }
+        ru.zf.pravka.ui.PaperTextButton(
+            if (busy) "Считаю…" else "Пересчитать сейчас",
+            icon = Glyphs.Refresh,
+            enabled = !busy,
+            onClick = {
+                busy = true
+                scope.launch {
+                    val lines = withContext(Dispatchers.IO) {
+                        runCatching { app.paceStore.tuneNow(app.historyLog) }
+                            .getOrElse { e -> listOf("не посчиталось: ${e.message}") }
+                    }
+                    runCatching { app.nightLog.add(lines.firstOrNull().orEmpty() + " (кнопкой)") }
+                    busy = false
+                    round++
+                }
+            },
+        )
         if (samples > 0) {
             ru.zf.pravka.ui.PaperTextButton(
                 "Выгрузить замеры · $samples",
                 icon = Glyphs.Export,
                 onClick = {
-                    runCatching { app.paceStore.shareCsvIntent() }
-                        .onSuccess { intent ->
+                    scope.launch {
+                        val intent = withContext(Dispatchers.IO) { runCatching { app.paceStore.shareCsvIntent() } }
+                        intent.onSuccess { i ->
                             context.startActivity(
-                                android.content.Intent.createChooser(intent, "Замеры Claude")
+                                android.content.Intent.createChooser(i, "Замеры Claude")
                                     .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                             )
-                        }
-                        .onFailure { e -> ru.zf.pravka.ui.Feedback.toast(context, "Не собралась: ${e.message}") }
+                        }.onFailure { e -> ru.zf.pravka.ui.Feedback.toast(context, "Не собралась: ${e.message}") }
+                    }
                 },
             )
         }

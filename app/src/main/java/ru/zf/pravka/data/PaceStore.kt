@@ -12,20 +12,22 @@ import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.core.Pace
 import ru.zf.pravka.core.PaceSeed
+import ru.zf.pravka.core.PaceTune
 
 /**
  * История «сколько идёт запрос» по тройкам «дорога + модель + усилие»
  * (усилие — с 22.09.2026: на xhigh Опус думает в разы дольше, чем на medium,
- * и общая прямая врала бы обоим). Считает `core/Pace.kt`, здесь хранение,
- * ключи и журнал замеров.
+ * и общая прямая врала бы обоим). Считает `core/Pace.kt`, калибрует ночью
+ * `core/PaceTune.kt`, здесь хранение, ключи и журнал замеров.
  *
  * Ключ дороги — ещё и ВИД запроса ([kind]: вопрос тренеру отвечает абзацами,
  * разбор подходов — строкой) и снимок ([photo]: картинка идёт в разы дольше
  * текста). Модель у них одна, а время — нет (26.09.2026).
  *
  * Читают это с потока запроса в миг, когда он уходит, и ждать диска некогда.
- * Поэтому всё живёт в памяти, а на диск уезжает следом, через `DiskWriter` —
- * тем же порядком, что и журналы.
+ * Поэтому дороги живут в памяти, а на диск уезжают следом, через `DiskWriter`.
+ * Каждый замер ещё и дописывается строкой в свой журнал ([LOG_FILE]) — по нему
+ * ночная калибровка прогоняет историю заново, и его же выгружает CSV.
  *
  * Пустой дороги не бывает: пока своих замеров нет, работает заводская прикидка
  * (`core/PaceSeed.kt`), а дорога Правки при первом запуске после обновления
@@ -38,6 +40,16 @@ class PaceStore(private val context: Context) {
 
     private companion object {
         private const val FILE_NAME = "pace.json"
+
+        /**
+         * Журнал замеров: строка JSON на запрос. Дописывается в конец, а не
+         * переписывается целиком: нужна долгая история, а переписывать
+         * мегабайт на каждом ответе незачем.
+         */
+        private const val LOG_FILE = "pace-log.jsonl"
+
+        /** Больше этого — остаётся вторая половина: полгода работы с запасом. */
+        private const val LOG_MAX_BYTES = 4L * 1024 * 1024
 
         /**
          * Номер разбора журнала. Разбор прошёл — больше к журналу не ходим,
@@ -70,12 +82,13 @@ class PaceStore(private val context: Context) {
             "food", "body", "body_light",
         )
 
-        /** Сколько последних замеров держать для выгрузки: неделя-две работы. */
-        private const val LOG_KEEP = 1_500
+        /** В настройках — дороги, по которым ходили за последний месяц; остальные числом. */
+        private const val RECENT_MS = 30L * 24 * 3_600_000
     }
 
-    /** Один замер для выгрузки: что обещали и что вышло. */
+    /** Один замер журнала: что обещали и что вышло. */
     private data class Sample(
+        /** Когда запрос УШЁЛ. */
         val at: Long,
         val key: String,
         val chars: Int,
@@ -84,26 +97,48 @@ class PaceStore(private val context: Context) {
         /** 1 — кэш прочитан, 0 — записан (холодный), -1 — кэша нет. */
         val cache: Int,
         val coldExpected: Boolean,
-    )
+    ) {
+        fun json(): String = JSONObject()
+            .put("t", at).put("k", key).put("c", chars).put("e", expected)
+            .put("a", actual).put("h", cache).put("p", coldExpected)
+            .toString()
+
+        companion object {
+            fun of(o: JSONObject) = Sample(
+                at = o.optLong("t"),
+                key = o.optString("k"),
+                chars = o.optInt("c"),
+                expected = o.optLong("e"),
+                actual = o.optLong("a"),
+                cache = o.optInt("h", -1),
+                coldExpected = o.optBoolean("p", false),
+            )
+        }
+    }
 
     private val file: File by lazy { File(DataRoot.dir(context), FILE_NAME) }
+    private val logFile: File by lazy { File(DataRoot.dir(context), LOG_FILE) }
 
     /** Ключ — «дорога[·вид][·фото]|модель|усилие». */
     private val roads = HashMap<String, Pace.Road>()
-    private val log = ArrayDeque<Sample>()
     private var seed = 0
     private var charsVersion = 0
+    private var tuneAt = 0L
+    private var tuneLines: List<String> = emptyList()
     private var loaded = false
 
     @Synchronized
     fun load() {
         if (loaded) return
         loaded = true
+        var legacyLog: List<Sample> = emptyList()
         runCatching {
             if (!file.exists()) return@runCatching
             val root = JSONObject(file.readText())
             seed = root.optInt("seed", 0)
             charsVersion = root.optInt("chars", 0)
+            tuneAt = root.optLong("tuneAt", 0L)
+            tuneLines = root.optJSONArray("tuneLines")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
             // До 20.09.2026 в корне лежали сразу дороги — читаем и так.
             val stored = root.optJSONObject("roads") ?: root
             for (name in stored.keys()) {
@@ -128,25 +163,21 @@ class PaceStore(private val context: Context) {
                     errAbs = o.optDouble("ea", 0.0),
                     errBias = o.optDouble("eb", 0.0),
                     lastAt = o.optLong("at", 0L),
+                    tune = Pace.Tune(
+                        decay = o.optDouble("td", Pace.DECAY),
+                        clip = o.optBoolean("tc", true),
+                        cold = o.optBoolean("tk", true),
+                        shift = o.optDouble("ts", 0.0),
+                    ),
                 )
             }
+            // Сборка 26.09 (утро) держала журнал прямо в pace.json — он
+            // переезжает в свой файл один раз.
             root.optJSONArray("log")?.let { arr ->
-                for (i in 0 until arr.length()) {
-                    val s = arr.optJSONObject(i) ?: continue
-                    log.addLast(
-                        Sample(
-                            at = s.optLong("t"),
-                            key = s.optString("k"),
-                            chars = s.optInt("c"),
-                            expected = s.optLong("e"),
-                            actual = s.optLong("a"),
-                            cache = s.optInt("h", -1),
-                            coldExpected = s.optBoolean("p", false),
-                        )
-                    )
-                }
+                legacyLog = (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let(Sample::of) }
             }
         }
+        var dirty = legacyLog.isNotEmpty()
         if (charsVersion < CHARS_VERSION) {
             for ((k, r) in roads.entries.toList()) {
                 val route = k.substringBefore('|')
@@ -155,10 +186,18 @@ class PaceStore(private val context: Context) {
                 }
             }
             charsVersion = CHARS_VERSION
+            dirty = true
+        }
+        if (dirty) {
             val snapshot = HashMap(roads)
-            val logSnap = log.toList()
             val at = seed
-            DiskWriter.post { persist(snapshot, logSnap, at) }
+            val lines = legacyLog.map { it.json() }
+            val tAt = tuneAt
+            val tLines = tuneLines
+            DiskWriter.post {
+                if (lines.isNotEmpty()) appendLog(lines)
+                persist(snapshot, at, tAt, tLines)
+            }
         }
     }
 
@@ -193,9 +232,7 @@ class PaceStore(private val context: Context) {
             roads[k] = r.copy(acc = Pace.add(r.acc, t.chars, t.ms))
         }
         seed = SEED_VERSION
-        val snapshot = HashMap(roads)
-        val logSnap = log.toList()
-        DiskWriter.post { persist(snapshot, logSnap, SEED_VERSION) }
+        persistLater()
     }
 
     /**
@@ -228,8 +265,8 @@ class PaceStore(private val context: Context) {
             .filter { it.key.substringBefore('|') == route }
             .maxByOrNull { it.value.lastAt }
         if (last != null) {
-            val (_, model, effort) = last.key.split('|').let { Triple(it[0], it.getOrElse(1) { "" }, it.getOrElse(2) { "" }) }
-            return Pace.expect(last.value, PaceSeed.prior(model, effort), chars, now)
+            val parts = last.key.split('|')
+            return Pace.expect(last.value, PaceSeed.prior(parts.getOrElse(1) { "" }, parts.getOrElse(2) { "" }), chars, now)
         }
         val def = ModelRoute.entries.firstOrNull { it.key == route }?.let { ModelChoice.defaultOf(it) }
             ?: return 0L
@@ -261,45 +298,143 @@ class PaceStore(private val context: Context) {
         // В накопителе только свои замеры: прикидка подмешивается на оценке
         // и тает, а не оседает в сумме навсегда.
         roads[k] = Pace.learn(before, prior, chars, ms, cache, now)
-        log.addLast(
-            Sample(
-                at = startedAt,
-                key = k,
-                chars = chars,
-                expected = promised,
-                actual = ms,
-                cache = when (cache) { true -> 1; false -> 0; null -> -1 },
-                coldExpected = Pace.coldLikely(before, startedAt),
-            )
-        )
-        while (log.size > LOG_KEEP) log.removeFirst()
+        val line = Sample(
+            at = startedAt,
+            key = k,
+            chars = chars,
+            expected = promised,
+            actual = ms,
+            cache = when (cache) { true -> 1; false -> 0; null -> -1 },
+            coldExpected = Pace.coldLikely(before, startedAt),
+        ).json()
         val snapshot = HashMap(roads)
-        val logSnap = log.toList()
         val at = seed
-        DiskWriter.post { persist(snapshot, logSnap, at) }
+        val tAt = tuneAt
+        val tLines = tuneLines
+        DiskWriter.post {
+            appendLog(listOf(line))
+            persist(snapshot, at, tAt, tLines)
+        }
     }
+
+    // ---- Ночная калибровка ----
+
+    /** Раз в сутки ночью (`PaceTune.due`) — из пятиминутного тика службы, НЕ с главного потока. */
+    fun tuneIfDue(history: HistoryLog, log: (String) -> Unit) {
+        val now = System.currentTimeMillis()
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val last = synchronized(this) {
+            load()
+            tuneAt
+        }
+        if (!PaceTune.due(now, last, hour)) return
+        val lines = tuneNow(history)
+        lines.forEach(log)
+    }
+
+    /**
+     * Прогнать ВСЮ историю каждой дороги заново всеми способами счёта и
+     * оставить лучший (`core/PaceTune.kt`). История — журнал замеров плюс,
+     * для Правки, журнал правок с июля (раньше журнала замеров; позже —
+     * замеры уже в журнале, дважды не считаем). Диск и счёт — ВНЕ замка: у
+     * кнопки в это время может уйти запрос. Звать не на главном потоке.
+     * Возвращает итог строками — для настроек и журнала автоматов.
+     */
+    fun tuneNow(history: HistoryLog): List<String> {
+        val started = System.currentTimeMillis()
+        // Что было у дорог ДО чтения журнала: пришёл замер, пока считали, —
+        // дорогу не трогаем (его в прогоне нет), её возьмёт следующая ночь.
+        val before: Map<String, Long> = synchronized(this) {
+            load()
+            roads.mapValues { it.value.lastAt }
+        }
+        val logged = readLog()
+        val historyRows = runCatching { history.readPaceRows() }.getOrDefault(emptyList())
+        val byKey = HashMap<String, MutableList<PaceTune.Sample>>()
+        // С какого мига дорога пишет свой журнал: журнал правок раньше этого —
+        // история, позже — те же запросы второй раз. По ДОРОГЕ, а не по
+        // ключу: усилия журнал правок не знает и мог бы лечь не в тот ключ.
+        val firstLogged = HashMap<String, Long>()
+        for (s in logged) {
+            val done = s.at + s.actual
+            byKey.getOrPut(s.key) { ArrayList() } += PaceTune.Sample(done, s.chars, s.actual, cacheOf(s.cache))
+            val route = s.key.substringBefore('|').substringBefore('·')
+            firstLogged[route] = minOf(firstLogged[route] ?: Long.MAX_VALUE, done)
+        }
+        var fromHistory = 0
+        for (r in historyRows) {
+            if (!PaceSeed.counts(r.model)) continue
+            val route = PaceSeed.route(r.mode) ?: continue
+            if (r.at >= (firstLogged[route] ?: Long.MAX_VALUE)) continue
+            val kind = if (r.mode.startsWith("ASSIST_")) "помощник" else ""
+            val k = key(route, kind, false, r.model, "")
+            byKey.getOrPut(k) { ArrayList() } += PaceTune.Sample(r.at, r.chars, r.ms, r.cache)
+            fromHistory++
+        }
+        val results = HashMap<String, PaceTune.Result>()
+        for ((k, samples) in byKey) {
+            val parts = k.split('|')
+            val prior = PaceSeed.prior(parts.getOrElse(1) { "" }, parts.getOrElse(2) { "" })
+            runCatching { PaceTune.tune(samples, prior) }.getOrNull()?.let { results[k] = it }
+        }
+        val took = System.currentTimeMillis() - started
+        val total = byKey.values.sumOf { it.size }
+        val lines = ArrayList<String>()
+        lines += "секунды: калибровка · замеров %d (из журнала правок %d) · дорог %d · %.1f с".format(
+            Locale.US, total, fromHistory, results.size, took / 1000.0,
+        )
+        synchronized(this) {
+            for ((k, res) in results) {
+                val current = roads[k]
+                if (current != null && current.lastAt != (before[k] ?: 0L)) continue
+                roads[k] = res.road
+                lines += "  %s: %s · мимо ±%.1f с (по-заводскому ±%.1f) · замеров %d".format(
+                    Locale.US,
+                    label(k),
+                    PaceTune.describe(res.tune),
+                    res.miss / 1000.0,
+                    res.factoryMiss / 1000.0,
+                    res.n,
+                )
+            }
+            val few = byKey.count { (k, v) -> k !in results && v.isNotEmpty() }
+            if (few > 0) lines += "  ещё дорог: $few — замеров меньше ${PaceTune.MIN_SAMPLES}, считают по-заводскому"
+            tuneAt = started
+            tuneLines = lines.toList()
+            persistLater()
+        }
+        return lines
+    }
+
+    /** Когда была калибровка и что вышло — для настроек. */
+    @Synchronized
+    fun lastTune(): Pair<Long, List<String>> {
+        load()
+        return tuneAt to tuneLines
+    }
+
+    // ---- Показать ----
 
     /**
      * Что прогноз знает о каждой дороге — строками для настроек. Владелец
      * (20.09.2026): «ты точно рассчитал средние? И ты точно учитываешь модель
      * и количество знаков? Короче, посмотри». Единственный честный ответ на
      * такой вопрос — показать числа: прямую, по которой считает кнопка,
-     * добавку холодного кэша и то, НАСКОЛЬКО отсчёт промахивается (с
-     * 26.09.2026: «по секундам посмотри, обучается ли он сам»). Промах
-     * меряется до того, как замер лёг в прямую, — это ошибка прогноза, а не
-     * то, как прямая помнит сама себя.
+     * добавку холодного кэша, способ, выбранный калибровкой, и то, НАСКОЛЬКО
+     * отсчёт промахивается (с 26.09.2026: «по секундам посмотри, обучается ли
+     * он сам»). Промах меряется до того, как замер лёг в прямую, — это ошибка
+     * прогноза, а не то, как прямая помнит сама себя.
      */
     @Synchronized
-    fun summary(): List<String> {
+    fun summary(now: Long = System.currentTimeMillis()): List<String> {
         load()
-        val lines = roads.entries
+        val (recent, old) = roads.entries.partition { it.value.lastAt <= 0L || now - it.value.lastAt < RECENT_MS }
+        val lines = recent
             .sortedByDescending { it.value.acc.n }
             .map { (key, road) ->
                 val parts = key.split('|')
-                val road0 = parts[0]
                 val modelId = parts.getOrElse(1) { "" }
                 val effort = parts.getOrElse(2) { "" }
-                val model = PaceSeed.shortModel(modelId) + if (effort.isNotBlank()) " $effort" else ""
                 // Показываем ту самую прямую, по которой считает кнопка, —
                 // со всем, что в неё сейчас подмешано.
                 val l = Pace.line(Pace.mix(road.acc, PaceSeed.prior(modelId, effort)))
@@ -319,19 +454,20 @@ class PaceStore(private val context: Context) {
                     }
                     " · мимо ±%.1f с%s".format(Locale.US, m / 1000.0, side)
                 }.orEmpty()
+                val tuned = if (road.tune.factory) "" else " · калибровка: " + PaceTune.describe(road.tune)
                 val n = road.acc.n.roundToInt()
                 val tail = if (road.acc.n < Pace.PRIOR_FADE_AT) " + прикидка" else ""
-                "$road0 · $model: $body$cold$miss · замеров $n$tail"
+                "${label(key)}: $body$cold$miss$tuned · замеров $n$tail"
             }
-        return lines + "с завода, пока замеров нет: ${PaceSeed.factoryLine()}"
+        val oldLine = if (old.isEmpty()) emptyList()
+        else listOf("без дела больше месяца: ${old.size} (модели и дороги, которыми больше не ходят)")
+        return lines + oldLine + "с завода, пока замеров нет: ${PaceSeed.factoryLine()}"
     }
 
-    /** Сколько замеров лежит для выгрузки. */
-    @Synchronized
-    fun logSize(): Int {
-        load()
-        return log.size
-    }
+    /** Сколько замеров лежит для выгрузки. Читает файл — звать не на главном потоке. */
+    fun logSize(): Int = runCatching {
+        if (!logFile.exists()) 0 else logFile.useLines { it.count { l -> l.isNotBlank() } }
+    }.getOrDefault(0)
 
     /**
      * Замеры CSV-файлом — поделиться. Колонки: когда ушёл, дорога, вид,
@@ -341,23 +477,18 @@ class PaceStore(private val context: Context) {
      * считает то, что показывает.
      */
     fun shareCsvIntent(): Intent {
-        val rows = synchronized(this) {
-            load()
-            log.toList()
-        }
+        val rows = readLog()
         val stamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
         val csv = buildString {
             append("ts,route,kind,photo,model,effort,chars,expected_sec,actual_sec,miss_sec,cache,cold_expected\n")
             for (s in rows) {
                 val parts = s.key.split('|')
                 val head = parts[0].split('·')
-                val route = head[0]
-                val photo = head.drop(1).contains("фото")
-                val kind = head.drop(1).filter { it != "фото" }.joinToString("·")
+                val tags = head.drop(1)
                 append(stamp.format(Date(s.at))).append(',')
-                append(route).append(',')
-                append(kind).append(',')
-                append(photo).append(',')
+                append(head[0]).append(',')
+                append(tags.filter { it != "фото" }.joinToString("·")).append(',')
+                append(tags.contains("фото")).append(',')
                 append(parts.getOrElse(1) { "" }).append(',')
                 append(parts.getOrElse(2) { "" }).append(',')
                 append(s.chars).append(',')
@@ -373,6 +504,18 @@ class PaceStore(private val context: Context) {
         return shareFileIntent(context, out, "text/csv")
     }
 
+    // ---- Внутреннее ----
+
+    /** «pravka · opus-5-5 medium», «body·вопрос · sonnet-5 high». */
+    private fun label(key: String): String {
+        val parts = key.split('|')
+        val effort = parts.getOrElse(2) { "" }
+        return parts[0] + " · " + PaceSeed.shortModel(parts.getOrElse(1) { "" }) +
+            if (effort.isNotBlank()) " $effort" else ""
+    }
+
+    private fun cacheOf(code: Int): Boolean? = when (code) { 1 -> true; 0 -> false; else -> null }
+
     private fun key(route: String, kind: String, photo: Boolean, model: String, effort: String): String {
         val head = buildString {
             append(route.ifBlank { "общая" })
@@ -382,7 +525,40 @@ class PaceStore(private val context: Context) {
         return head + "|" + model + "|" + Models.effectiveEffort(model, effort)
     }
 
-    private fun persist(snapshot: Map<String, Pace.Road>, logSnap: List<Sample>, seedAt: Int) {
+    /** Весь журнал замеров по порядку. Звать не на главном потоке. */
+    private fun readLog(): List<Sample> {
+        // Дописи ещё в очереди писателя — дождаться их, чтобы выгрузка и
+        // калибровка видели последний ответ, а не позапрошлый.
+        DiskWriter.drain(5_000L)
+        return runCatching {
+            if (!logFile.exists()) emptyList()
+            else logFile.useLines { seq ->
+                seq.mapNotNull { l -> runCatching { Sample.of(JSONObject(l)) }.getOrNull() }.toList()
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /** Только на writer-потоке. */
+    private fun appendLog(lines: List<String>) {
+        runCatching {
+            if (logFile.exists() && logFile.length() > LOG_MAX_BYTES) {
+                val keep = logFile.readLines().let { it.subList(it.size / 2, it.size) }
+                StoreFiles.writeAtomic(logFile, keep.joinToString("\n", postfix = "\n"))
+            }
+            logFile.appendText(lines.joinToString("\n", postfix = "\n"))
+        }
+    }
+
+    /** Под замком: снимок и запись на writer-потоке. */
+    private fun persistLater() {
+        val snapshot = HashMap(roads)
+        val at = seed
+        val tAt = tuneAt
+        val tLines = tuneLines
+        DiskWriter.post { persist(snapshot, at, tAt, tLines) }
+    }
+
+    private fun persist(snapshot: Map<String, Pace.Road>, seedAt: Int, tAt: Long, tLines: List<String>) {
         runCatching {
             val out = JSONObject()
             for ((k, r) in snapshot) {
@@ -400,20 +576,11 @@ class PaceStore(private val context: Context) {
                         .put("en", r.errN)
                         .put("ea", r.errAbs)
                         .put("eb", r.errBias)
-                        .put("at", r.lastAt),
-                )
-            }
-            val arr = JSONArray()
-            for (s in logSnap) {
-                arr.put(
-                    JSONObject()
-                        .put("t", s.at)
-                        .put("k", s.key)
-                        .put("c", s.chars)
-                        .put("e", s.expected)
-                        .put("a", s.actual)
-                        .put("h", s.cache)
-                        .put("p", s.coldExpected)
+                        .put("at", r.lastAt)
+                        .put("td", r.tune.decay)
+                        .put("tc", r.tune.clip)
+                        .put("tk", r.tune.cold)
+                        .put("ts", r.tune.shift),
                 )
             }
             StoreFiles.writeAtomic(
@@ -421,8 +588,9 @@ class PaceStore(private val context: Context) {
                 JSONObject()
                     .put("seed", seedAt)
                     .put("chars", CHARS_VERSION)
+                    .put("tuneAt", tAt)
+                    .put("tuneLines", JSONArray(tLines))
                     .put("roads", out)
-                    .put("log", arr)
                     .toString(),
             )
         }
