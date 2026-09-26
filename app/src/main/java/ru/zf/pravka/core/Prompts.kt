@@ -80,6 +80,9 @@ object Prompts {
     // ---- Тренер-консультант: короткий вопрос про упражнение. Сонет и никакой (…см. prompts/PromptsBody.kt)
     val TRAINER: String get() = ru.zf.pravka.core.prompts.PromptsBody.TRAINER
 
+    // ---- Засечка: развилка — лента, мысль к делу, еда или дела. Сонет, одно (…см. prompts/PromptsZasechka.kt)
+    val ZASECHKA_FORK: String get() = ru.zf.pravka.core.prompts.PromptsZasechka.FORK
+
     val PATTERNS: String get() = ru.zf.pravka.core.prompts.PromptsAnalysis.PATTERNS
 
 

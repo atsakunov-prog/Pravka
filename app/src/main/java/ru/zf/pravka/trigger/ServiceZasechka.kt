@@ -435,9 +435,25 @@ internal fun PravkaAccessibilityService.onZasechkaText(
     zEditTargetId = 0L
     val spoken = zFromHeadset
     zFromHeadset = false
-    // Развилка (`core/ZasechkaIntent.kt`): мысль к делу, еда, дела. Правка
-    // записи и заполнение дыры — всегда лента: там сказанное про время.
-    if (route && anchorStart == 0L && editTargetId == 0L && routeZasechka(text, spoken)) return
+    // Развилка: Сонет решает, что это за фраза — лента, мысль к делу, еда
+    // или дела (`ServiceZasechkaRoutes.kt`). Правка записи и заполнение дыры —
+    // всегда лента: там сказанное про время.
+    if (route && anchorStart == 0L && editTargetId == 0L) {
+        forkZasechka(text, source, spoken)
+        return
+    }
+    recordZasechkaEntry(text, source, anchorStart, anchorEnd, editTargetId)
+}
+
+/** Разбор ленты (Опус) и записка об итоге — после развилки или мимо неё. */
+internal fun PravkaAccessibilityService.recordZasechkaEntry(
+    text: String,
+    source: String,
+    anchorStart: Long = 0L,
+    anchorEnd: Long = 0L,
+    editTargetId: Long = 0L,
+) {
+    zButton?.setBusy(true)
     scope.launch {
         val outcome = runCatching {
             app.zasechkaEngine.record(text, source, anchorStart, anchorEnd, editTargetId = editTargetId)
@@ -449,8 +465,8 @@ internal fun PravkaAccessibilityService.onZasechkaText(
             }
         zButton?.setBusy(false)
         if (outcome == null) {
-            Haptics.error(this@onZasechkaText)
-            Feedback.toast(this@onZasechkaText, getString(R.string.z_record_failed))
+            Haptics.error(this@recordZasechkaEntry)
+            Feedback.toast(this@recordZasechkaEntry, getString(R.string.z_record_failed))
             return@launch
         }
         zButton?.setRemind(false)
@@ -465,21 +481,21 @@ internal fun PravkaAccessibilityService.onZasechkaText(
             .joinToString(" · ")
         when {
             outcome.action == "none" -> {
-                Haptics.success(this@onZasechkaText)
+                Haptics.success(this@recordZasechkaEntry)
                 zButton?.showNote(
                     "🤷 Не записал: ${outcome.say.ifBlank { "это не про ленту" }}",
                     ok = false,
                 )
             }
             outcome.action == "stop" -> {
-                Haptics.success(this@onZasechkaText)
+                Haptics.success(this@recordZasechkaEntry)
                 zButton?.showNote(
                     "⏹ «${entry.title}» закрыто\n" +
                         "${zTime(entry.start)}–${zTime(entry.end)}, ${entry.durationMin()} мин"
                 )
             }
             outcome.action == "insert" && outcome.error == null -> {
-                Haptics.success(this@onZasechkaText)
+                Haptics.success(this@recordZasechkaEntry)
                 zButton?.showNote(
                     "⤵ Вставлено «${entry.title}»\n" +
                         "${zTime(entry.start)}–${zTime(entry.end)}" +
@@ -488,7 +504,7 @@ internal fun PravkaAccessibilityService.onZasechkaText(
                 )
             }
             outcome.action == "edit" -> {
-                Haptics.success(this@onZasechkaText)
+                Haptics.success(this@recordZasechkaEntry)
                 zButton?.showNote(
                     "✏️ Исправлено ${zTime(entry.start)}–${zTime(entry.end)}\n" +
                         "«${outcome.previousTitle}» → «${entry.title}»" +
@@ -496,11 +512,11 @@ internal fun PravkaAccessibilityService.onZasechkaText(
                 )
             }
             outcome.action == "delete" -> {
-                Haptics.success(this@onZasechkaText)
+                Haptics.success(this@recordZasechkaEntry)
                 zButton?.showNote("🗑 Удалено «${entry.title}» ${zTime(entry.start)}")
             }
             outcome.categorized -> {
-                Haptics.success(this@onZasechkaText)
+                Haptics.success(this@recordZasechkaEntry)
                 zButton?.showNote(
                     "⏱ ${entry.title}\nс ${zTime(entry.start)}" +
                         (if (tail.isBlank()) "" else " · $tail")
@@ -508,7 +524,7 @@ internal fun PravkaAccessibilityService.onZasechkaText(
             }
             else -> {
                 // Saved raw: quieter success, the owner sorts it in the tab.
-                Haptics.error(this@onZasechkaText)
+                Haptics.error(this@recordZasechkaEntry)
                 zButton?.showNote(
                     getString(R.string.z_saved_raw, outcome.error ?: ""),
                     ok = false,

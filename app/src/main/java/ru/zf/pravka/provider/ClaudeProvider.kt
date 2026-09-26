@@ -478,6 +478,15 @@ $listing
         val tokensOut: Int,
     )
 
+    /** Развилка Засечки: сырой ответ Сонета (читает `ZasechkaIntent.fromModel`) и деньги. */
+    data class ZasechkaForkReply(
+        val raw: String,
+        val costUsd: Double,
+        val tokensIn: Int,
+        val tokensOut: Int,
+        val latencyMs: Long,
+    )
+
     // ---- Разноска: наговор -> дела в Todoist (Опус) ----
 
     data class SplitResult(

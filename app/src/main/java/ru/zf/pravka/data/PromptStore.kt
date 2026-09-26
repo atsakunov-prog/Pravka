@@ -27,6 +27,8 @@ class PromptStore(private val context: Context) {
         MEETING("meeting"),
         // Разноска: наговор -> дела в Todoist (Опус).
         TASKS("tasks"),
+        // Засечка: развилка — лента, мысль к делу, еда или дела (Сонет).
+        ZASECHKA_FORK("zasechka_fork"),
         // Еда: сказанное -> КБЖУ (Сонет).
         FOOD("food"),
         // Деньги: наговор -> траты и подсказки сверки выписок (Опус).
@@ -63,6 +65,7 @@ class PromptStore(private val context: Context) {
         PromptId.PROSE -> Prompts.PROSE
         PromptId.MEETING -> Prompts.MEETING
         PromptId.TASKS -> Prompts.TASKS
+        PromptId.ZASECHKA_FORK -> Prompts.ZASECHKA_FORK
         PromptId.FOOD -> Prompts.FOOD
         PromptId.MONEY -> Prompts.MONEY
         PromptId.MONEY_MATCH -> Prompts.MONEY_MATCH

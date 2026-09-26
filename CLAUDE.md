@@ -52,7 +52,9 @@
   замке тоже), служба — `trigger/ServiceHeadset.kt`, стек —
   `provider/HeadsetVoice.kt`, решение «поле — Правка, иначе или замок —
   Засечка» — `core/HeadsetPress.kt`; дальше развилка Засечки (мысль к делу,
-  еда, дела — `core/ZasechkaIntent.kt`, `trigger/ServiceZasechkaRoutes.kt`) и
+  еда, дела — решает Сонет, `ClaudeZasechka.zasechkaFork` +
+  `core/prompts/PromptsZasechka.kt`, запас — слова `core/ZasechkaIntent.kt`;
+  дороги — `trigger/ServiceZasechkaRoutes.kt`) и
   голос в конце (`provider/Speaker.kt`). Геометрия стопки — `core/StackGeometry.kt`,
   пружины и сжатие кнопок — `core/ChainPhysics.kt` + `trigger/BubbleMotion.kt`,
   серая «отмена» у любой записи — `trigger/CancelBubble.kt`.
@@ -254,7 +256,8 @@ CI (`.github/workflows/build-apk.yml`) собирает APK на каждый п
    medium): правка текста — medium, Засечка — xhigh, Еда (своя дорога
    `FOOD`) — xhigh, спорт (`BODY`) — medium, Дела — high, Деньги: голос (`MONEY`) — high,
    подсказки сверки (`MONEY_MATCH`) — xhigh, вопрос про деньги (`MONEY_ASK`) —
-   high, паттерны трат (`MONEY_PATTERNS`) — xhigh; разборы (ночной,
+   high, паттерны трат (`MONEY_PATTERNS`) — xhigh; развилка Засечки
+   (`ZASECHKA_FORK`: лента, мысль, еда или дела) — Сонет на low; разборы (ночной,
    проверка, правка промпта, судья, сверка паттернов) — Опус 5.5 на max
    батчами; подсказки тренера — Сонет. Разборы режимов — со стабильным
    префиксом под часовым кэшем (словарь `{DICT}` — в переменном хвосте).

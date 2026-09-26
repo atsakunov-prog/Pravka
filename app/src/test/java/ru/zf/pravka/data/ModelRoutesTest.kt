@@ -48,6 +48,10 @@ class ModelRoutesTest {
             assertEquals(route.name, effort, route.defaultEffort)
         }
         assertEquals(Settings.MODEL_SONNET, ModelRoute.BODY_LIGHT.defaultModel)
+        // Развилка Засечки (26.09.2026): одно слово из четырёх — Сонет на low,
+        // секунда до разбора Опусом.
+        assertEquals(Settings.MODEL_SONNET, ModelRoute.ZASECHKA_FORK.defaultModel)
+        assertEquals("low", ModelRoute.ZASECHKA_FORK.defaultEffort)
         // Fable нигде не заводской, но остаётся в каталоге выбора.
         assertTrue(ModelRoute.entries.none { it.defaultModel == Settings.MODEL_FABLE })
         assertTrue(Settings.MODEL_FABLE in Models.ALL)

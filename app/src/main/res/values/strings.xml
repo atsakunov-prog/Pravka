@@ -119,6 +119,7 @@
     <string name="prompt_title_prose">Художественная проза</string>
     <string name="prompt_title_meeting">Встреча (расшифровка)</string>
     <string name="prompt_title_tasks">Разноска (дела)</string>
+    <string name="prompt_title_zasechka_fork">Засечка (развилка: лента, мысль, еда, дела)</string>
     <string name="prompt_title_food">Еда (КБЖУ)</string>
     <string name="prompt_title_money">Деньги (траты голосом)</string>
     <string name="prompt_title_money_match">Деньги (подсказки сверки)</string>

@@ -114,6 +114,53 @@ class ZasechkaIntentTest {
         assertRoute(Kind.TASKS, "", "Запиши дело.")
     }
 
+    // ---- ответ Сонета (развилка моделью, 26.09.2026) ----
+
+    @Test
+    fun `ответ Сонета читается в вид и текст`() {
+        val r = ZasechkaIntent.fromModel(
+            """{"kind": "tasks", "text": "Позвонить Илье завтра", "why": "дело на потом"}""",
+            original = "надо бы завтра позвонить Илье",
+        )
+        assertEquals(Kind.TASKS, r?.kind)
+        assertEquals("Позвонить Илье завтра", r?.text)
+        assertEquals("дело на потом", r?.why)
+    }
+
+    @Test
+    fun `лента всегда получает фразу как сказана, а не пересказ модели`() {
+        val r = ZasechkaIntent.fromModel(
+            """{"kind": "entry", "text": "Созвон с Ильёй", "why": "занятие"}""",
+            original = "начал созвон с Ильёй по отчёту",
+        )
+        assertEquals(Kind.ENTRY, r?.kind)
+        assertEquals("начал созвон с Ильёй по отчёту", r?.text)
+    }
+
+    @Test
+    fun `пустой текст у модели - берём сказанное целиком`() {
+        val r = ZasechkaIntent.fromModel("""{"kind": "comment", "text": "  "}""", original = "Илья тянет с подписанием")
+        assertEquals(Kind.COMMENT, r?.kind)
+        assertEquals("Илья тянет с подписанием", r?.text)
+    }
+
+    @Test
+    fun `обёртка кодом и слова вокруг не мешают`() {
+        val r = ZasechkaIntent.fromModel(
+            "```json\n{\"kind\": \"FOOD\", \"text\": \"Борщ\"}\n```",
+            original = "съел борщ",
+        )
+        assertEquals(Kind.FOOD, r?.kind)
+        assertEquals("Борщ", r?.text)
+    }
+
+    @Test
+    fun `непонятный ответ - null, и решают слова`() {
+        assertEquals(null, ZasechkaIntent.fromModel("не знаю", original = "съел борщ"))
+        assertEquals(null, ZasechkaIntent.fromModel("""{"kind": "music"}""", original = "съел борщ"))
+        assertEquals(null, ZasechkaIntent.fromModel("""{"kind": "tasks""", original = "съел борщ"))
+    }
+
     @Test
     fun `что сказать в конце`() {
         assertEquals("записал коммент", ZasechkaIntent.said(Kind.COMMENT))

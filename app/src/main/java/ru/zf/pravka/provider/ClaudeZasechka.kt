@@ -26,6 +26,7 @@ import ru.zf.pravka.provider.ClaudeProvider.DictProposal
 import ru.zf.pravka.provider.ClaudeProvider.RuleProposal
 import ru.zf.pravka.provider.ClaudeProvider.OptimizedRules
 import ru.zf.pravka.provider.ClaudeProvider.ZasechkaParse
+import ru.zf.pravka.provider.ClaudeProvider.ZasechkaForkReply
 import ru.zf.pravka.provider.ClaudeProvider.SplitResult
 import ru.zf.pravka.provider.ClaudeProvider.FoodParse
 import ru.zf.pravka.provider.ClaudeProvider.BodyParse
@@ -292,6 +293,56 @@ $raw
         )
     }
 }
+
+/**
+ * Развилка Засечки (26.09.2026): лента, мысль к текущему делу, еда или дела —
+ * до разбора Опусом. Сонет на low без размышлений: ответ — одно слово в JSON,
+ * и секунда здесь дороже глубины. Ответ читает `ZasechkaIntent.fromModel`;
+ * сырой текст уходит наверх, чтобы непрочитанный ответ был виден в журнале
+ * целиком, а не общей фразой. [context] — «Сейчас: … Идёт: …», хвост после
+ * {NOW}: правила над ним стабильны и стоят под кэшем.
+ */
+suspend fun ClaudeProvider.zasechkaFork(raw: String, context: String): Result<ZasechkaForkReply> =
+    withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) {
+                throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+            }
+            require(raw.isNotBlank()) { "Пустая фраза — развилке нечего решать." }
+            val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.ZASECHKA_FORK)
+            val cut = template.indexOf("{NOW}")
+            val head = if (cut > 0) template.substring(0, cut) else ""
+            var tail = (if (cut > 0) template.substring(cut) else template).replace("{NOW}", context)
+            tail = if (tail.contains(Prompts.PLACEHOLDER_INPUT)) {
+                tail.replace(Prompts.PLACEHOLDER_INPUT, raw)
+            } else {
+                // Владелец потерял {INPUT} в «Промптах»: фраза дописывается в
+                // конец, а не теряется — то же правило, что у Разноски.
+                tail.trimEnd() + "\n\nФраза:\n" + raw
+            }
+            val parts = Prompts.PromptParts(
+                stablePrefix = head,
+                dictPart = tail,
+                afterInput = "",
+                cacheStableAlways = head.isNotBlank(),
+            )
+            val started = System.currentTimeMillis()
+            val choice = settings.modelChoice(ModelRoute.ZASECHKA_FORK)
+            val reply = requestWithOneRetry(
+                apiKey, choice.model, parts, "", null,
+                effortOverride = choice.effort,
+                routeKey = ModelRoute.ZASECHKA_FORK.key,
+            )
+            ZasechkaForkReply(
+                raw = reply.text,
+                costUsd = costUsd(choice.model, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+                latencyMs = System.currentTimeMillis() - started,
+            )
+        }
+    }
 
 private fun ClaudeProvider.parseZasechka(raw: String): ZasechkaParse {
     var text = raw.trim()
