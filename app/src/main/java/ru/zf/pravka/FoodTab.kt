@@ -5,7 +5,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -299,6 +298,7 @@ internal fun FoodTab(
                     onSend = { parseText(draft.trim()) },
                     enabled = !busy,
                     sendEnabled = !busy && draft.isNotBlank(),
+                    busy = busy,
                     extras = {
                         IconAction(Glyphs.Camera, "Снять", enabled = !busy, onClick = {
                             val file = File(context.cacheDir, "eda-shot.jpg")
@@ -924,14 +924,13 @@ private fun NumberField(
 
 @Composable
 private fun kindColor(kind: String): Color {
-    val dark = isSystemInDarkTheme()
     val hue = when (kind.trim().lowercase()) {
         "завтрак" -> 45f
         "обед" -> 25f
         "ужин" -> 280f
         else -> 150f
     }
-    return if (dark) Color.hsv(hue, 0.5f, 0.92f) else Color.hsv(hue, 0.62f, 0.66f)
+    return Color.hsv(hue, 0.5f, 0.92f)
 }
 
 // ---- Мелочи ----

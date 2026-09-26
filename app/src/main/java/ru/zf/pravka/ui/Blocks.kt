@@ -104,10 +104,17 @@ fun PaperCard(
         // цвет с ребром, светом и зерном — предметом. Каждый слой со своим
         // тумблером: `ui/CardLook.kt`.
         val look = LocalCardLook.current
+        // Версия 3: плашка — матовое стекло над светом режима (`ui/Glow.kt`).
+        // Цвет режима на неё не подмешивается — его приносит свет вкладки,
+        // который просвечивает сквозь плашку ровно там, где он есть: верхние
+        // плашки берут тон режима, нижние остаются прежними. Там, где света
+        // нет (служебные экраны, выключенный ползунок), плашка — прежний тон:
+        // фон под ней чуть темнее её самой, и сквозь неё видно только его.
         Card(
             modifier = Modifier.fillMaxWidth().then(if (look.bevel) Modifier.bevel() else Modifier),
             colors = CardDefaults.cardColors(
-                containerColor = darkened(MaterialTheme.colorScheme.surfaceContainerLow, look.darken),
+                containerColor = darkened(MaterialTheme.colorScheme.surfaceContainerLow, look.darken)
+                    .copy(alpha = if (look.glow > 0f) CardLook.GLASS else 1f),
             ),
         ) {
             Box(

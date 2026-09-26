@@ -7,7 +7,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -869,6 +868,7 @@ internal fun SportTab(app: PravkaApp) {
                             onSend = ask,
                             sendEnabled = !asking,
                             enabled = !asking,
+                            busy = asking,
                         )
                         if (asking && streaming.isBlank()) {
                             Spacer(Modifier.height(10.dp))
@@ -1024,6 +1024,7 @@ private fun CoachDialog(
                 sendEnabled = !busy && question.isNotBlank(),
                 enabled = !busy,
                 maxLines = 3,
+                busy = busy,
             )
         },
     ) {
@@ -1721,11 +1722,8 @@ private fun DoneLine(text: String, modifier: Modifier = Modifier, big: Boolean =
 /** Идёт запрос: крутилка и слово — на месте ответа, пока его нет. */
 @Composable
 private fun BusyLine(text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-        Spacer(Modifier.width(8.dp))
-        PaperHint(text)
-    }
+    // Версия 3: вместо колеса — искры и секунды до ответа, как у Правки.
+    ru.zf.pravka.ui.ThinkingLine(text.removeSuffix("…"))
 }
 
 /**
@@ -2138,6 +2136,7 @@ private fun BodyTalkBox(app: PravkaApp, hint: String, whereSaid: String) {
         sendEnabled = !busy && draft.isNotBlank(),
         enabled = !busy,
         maxLines = 3,
+        busy = busy,
     )
     if (busy) {
         Spacer(Modifier.height(8.dp))
@@ -2759,15 +2758,14 @@ private fun ZoneBars(zones: List<Int>) {
 
 @Composable
 private fun zoneColor(index: Int): Color {
-    val dark = isSystemInDarkTheme()
     // Пятая зона красная, первая синяя: тот же язык, что у радуги Засечки.
+    // Тон — ночной: приложение всегда тёмное (версия 3).
     val hue = (210f - index * 34f).coerceAtLeast(0f)
-    return if (dark) Color.hsv(hue, 0.55f, 0.92f) else Color.hsv(hue, 0.66f, 0.68f)
+    return Color.hsv(hue, 0.55f, 0.92f)
 }
 
 @Composable
 private fun sportColor(type: String): Color {
-    val dark = isSystemInDarkTheme()
     val hue = when (type) {
         "Run", "TrailRun", "VirtualRun" -> 20f
         "Ride", "VirtualRide", "GravelRide", "MountainBikeRide" -> 200f
@@ -2776,7 +2774,7 @@ private fun sportColor(type: String): Color {
         "Swim" -> 185f
         else -> 265f
     }
-    return if (dark) Color.hsv(hue, 0.5f, 0.92f) else Color.hsv(hue, 0.62f, 0.66f)
+    return Color.hsv(hue, 0.5f, 0.92f)
 }
 
 @Composable

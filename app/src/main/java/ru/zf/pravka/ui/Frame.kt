@@ -1,6 +1,11 @@
 package ru.zf.pravka.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -116,7 +121,8 @@ fun Modifier.glyphPattern(decor: ModeDecor): Modifier {
 
 /**
  * Вкладка целиком: режим для узора плашек, краска режима (`Kit.kt`,
- * [tint]) и содержимое. Фон — чистый, тёмный.
+ * [tint]), свет режима сверху (`ui/Glow.kt`, версия 3) и содержимое. Фон —
+ * тёмный; свет лежит под содержимым и к середине экрана сходит в него.
  */
 @Composable
 fun ModeFrame(decor: ModeDecor, content: @Composable () -> Unit) {
@@ -125,8 +131,12 @@ fun ModeFrame(decor: ModeDecor, content: @Composable () -> Unit) {
         typography = MaterialTheme.typography,
         shapes = MaterialTheme.shapes,
     ) {
-        CompositionLocalProvider(LocalModeDecor provides decor) {
-            Box(Modifier.fillMaxSize()) { content() }
+        val glow = remember(decor) { GlowState() }
+        CompositionLocalProvider(LocalModeDecor provides decor, LocalGlowState provides glow) {
+            Box(Modifier.fillMaxSize()) {
+                ModeGlowLayer(decor)
+                content()
+            }
         }
     }
 }
@@ -143,7 +153,14 @@ fun TabHeader(
     onBack: (() -> Unit)? = null,
     subtitle: String? = null,
     glyph: ImageVector? = null,
-    actions: @Composable RowScope.() -> Unit = {},
+    /**
+     * Второй тон названия — главный выбор вкладки, как «Pro Extended ⌄» у
+     * Gemini (версия 3): у Правки — модель чистки, у Денег — «Личное · ЗФ».
+     * Только там, где выбор настоящий; тап — [onTitleExtra].
+     */
+    titleExtra: String? = null,
+    onTitleExtra: (() -> Unit)? = null,
+    actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val badge = icon ?: glyph?.let { rememberVectorPainter(it) }
     Row(
@@ -184,11 +201,44 @@ fun TabHeader(
             // черта одной длины под словами разной длины читалась ссылкой
             // или опечаткой вёрстки; режим теперь держит значок в краске
             // режима слева, а название — просто название.
-            Text(
-                title,
-                style = MaterialTheme.typography.headlineSmall,
-                maxLines = 1,
-            )
+            if (titleExtra == null) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    maxLines = 1,
+                )
+            } else {
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .then(if (onTitleExtra != null) Modifier.clickable(onClick = onTitleExtra) else Modifier),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.headlineSmall,
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        titleExtra,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Normal,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (onTitleExtra != null) {
+                        Icon(
+                            Glyphs.ChevronDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 2.dp).size(16.dp),
+                        )
+                    }
+                }
+            }
             if (subtitle != null) {
                 Text(
                     subtitle,
@@ -199,11 +249,40 @@ fun TabHeader(
                 )
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-            actions()
-        }
+        if (actions != null) HeaderCapsule(actions)
     }
 }
+
+/**
+ * Значки шапки — в одной стеклянной капсуле, как карандаш с тремя точками
+ * у Gemini (версия 3). Не прихоть: тонкие серые значки на свете режима
+ * тонут, капсула даёт им подложку — тёмное стекло с той же фаской, что у
+ * плашек, светлой сверху и тёмной снизу.
+ */
+@Composable
+private fun HeaderCapsule(actions: @Composable RowScope.() -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Row(
+        Modifier
+            .clip(shape)
+            .background(CAPSULE_GLASS)
+            .border(
+                1.dp,
+                Brush.verticalGradient(
+                    0f to Color.White.copy(alpha = 0.12f),
+                    0.5f to Color.Transparent,
+                    1f to Color.Black.copy(alpha = 0.3f),
+                ),
+                shape,
+            )
+            .padding(horizontal = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = actions,
+    )
+}
+
+/** Тёмное стекло капсулы: ночь фона на просвет — свет режима под ней чуть виден. */
+private val CAPSULE_GLASS = Color(0x8C0C0B09)
 
 /** Значок действия в шапке: штриховая пиктограмма цветом второго плана. */
 @Composable

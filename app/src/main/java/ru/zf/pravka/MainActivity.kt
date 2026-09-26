@@ -37,9 +37,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -58,8 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -268,6 +264,10 @@ class MainActivity : ComponentActivity() {
                 // протаскивать четыре тумблера через каждый вызов значило бы
                 // править их все ради одного.
                 ru.zf.pravka.ui.ProvideCardLook(app.settings) {
+                // Секунды до ответа Claude — одни часы на всё приложение
+                // (версия 3): строка «Причёсываю · ещё 6 с» и кружок строки ввода.
+                val claudeSeconds = ru.zf.pravka.ui.rememberClaudeSeconds(app.liveWork)
+                androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalClaudeSeconds provides claudeSeconds) {
                 MainScreen(
                     app = app,
                     initialTab = initialTab,
@@ -301,6 +301,7 @@ class MainActivity : ComponentActivity() {
                         )
                     },
                 )
+                }
                 }
             }
         }
@@ -636,62 +637,61 @@ private fun MainScreen(
     // Системное «назад» закрывает верхний экран, а не приложение.
     BackHandler(enabled = pages.isNotEmpty()) { pop() }
 
+    // Два вида (версия 3): сложенный Fold — кнопки внизу, разложенный —
+    // колонка слева, как у Gemini на развороте (`ui/Nav.kt`). Решает ширина
+    // окна, а не модель телефона: складывание пересобирает экран само.
+    val wide = LocalConfiguration.current.screenWidthDp >= ru.zf.pravka.ui.WIDE_DP
+    val scheme = MaterialTheme.colorScheme
+    val navModes = BOTTOM_TABS.filter { live(it.first) && (!wide || it.first != Tab.MORE) }.map { (item, glyph) ->
+        // Семь кнопок — порядок и подписи владельца: Правка, Засечка, Дело,
+        // Спорт, Еда, Деньги, Ещё (Деньги — 23.09.2026). Тап закрывает и
+        // верхний экран: владелец хочет вкладку, а не то, что над ней. На
+        // развороте «Ещё» не кнопка — его пункты стоят в колонке строками.
+        val selected = when {
+            wide -> tab == item && tab != Tab.MORE
+            item == Tab.MORE -> tab == Tab.MORE || page != null
+            else -> tab == item && page == null
+        }
+        ru.zf.pravka.ui.NavItem(
+            glyph = glyph,
+            label = stringResource(item.titleRes),
+            ink = decorOf(item).tint(scheme).primary,
+            selected = selected,
+            onClick = { tab = item; pages = emptyList() },
+        )
+    }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            val navLine = MaterialTheme.colorScheme.outlineVariant
-            // Семь кнопок — порядок и подписи владельца: Правка, Засечка,
-            // Дело, Спорт, Еда, Деньги, Ещё. Пиктограммы те же, что могут
-            // встать на плавающие кнопки: перо, часы, галочка, гантеля,
-            // вилка, рубль — один язык на всё приложение (`ui/Glyphs.kt`).
-            // Тап по кнопке закрывает и верхний экран: владелец хочет
-            // вкладку, а не то, что над ней.
-            // Панель — на фоне вкладки, а не своей плитой (владелец,
-            // 20.09.2026: «кнопки внизу темноватые, выглядит как будто они
-            // немного грязные»). Тёмно-тёплая плита под тёмным фоном и была
-            // той грязью: два почти одинаковых тона, между ними ступенька.
-            // Теперь панель — продолжение фона, сверху волосяная линия, а
-            // выбранная кнопка держится акцентом, а не подложкой-пятном.
-            // Акцент — краской своего режима (24.09.2026): Засечка янтарная,
-            // Дело синее, как их кнопки на стекле.
-            // Седьмая кнопка — Деньги (владелец, 23.09.2026: «вкладка внизу
-            // точно должна быть»). Договорённость «ровно шесть» этим
-            // пересмотрена — см. docs/agreements.md.
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.background,
-                modifier = Modifier.drawBehind {
-                    drawLine(
-                        color = navLine,
-                        start = Offset(0f, 0f),
-                        end = Offset(size.width, 0f),
-                        strokeWidth = 1.dp.toPx(),
+        bottomBar = { if (!wide) ru.zf.pravka.ui.ModeBottomBar(navModes) },
+    ) { padding ->
+        Row(Modifier.padding(padding)) {
+        if (wide) {
+            val first = pages.firstOrNull()
+            val serviceInk = scheme.primary
+            ru.zf.pravka.ui.ModeRail(
+                title = stringResource(R.string.app_name),
+                modes = navModes,
+                service = SERVICE_TABS.filter { it != Tab.SETTINGS }.map { t ->
+                    ru.zf.pravka.ui.NavItem(
+                        glyph = serviceGlyph(t),
+                        label = stringResource(t.titleRes),
+                        ink = serviceInk,
+                        selected = tab == Tab.MORE && first == Page.Service(t),
+                        onClick = { tab = Tab.MORE; pages = listOf(Page.Service(t)) },
                     )
                 },
-            ) {
-                for ((item, glyph) in BOTTOM_TABS.filter { live(it.first) }) {
-                    val selected = if (item == Tab.MORE) tab == Tab.MORE || page != null
-                    else tab == item && page == null
-                    val ink = decorOf(item).tint(MaterialTheme.colorScheme).primary
-                    NavigationBarItem(
-                        selected = selected,
-                        // Повторный тап по «Ещё» возвращает список: иначе из
-                        // Логов обратно к списку пришлось бы жать «назад».
-                        onClick = { tab = item; pages = emptyList() },
-                        icon = { Icon(glyph, contentDescription = null) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = ink,
-                            selectedTextColor = ink,
-                            indicatorColor = ink.copy(alpha = 0.14f),
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                        label = { Text(stringResource(item.titleRes), maxLines = 1, softWrap = false) },
-                    )
-                }
-            }
-        },
-    ) { padding ->
-        Column(Modifier.padding(padding)) {
+                serviceLabel = stringResource(R.string.tab_more),
+                person = profile?.name?.takeIf { it.isNotBlank() },
+                settings = ru.zf.pravka.ui.NavItem(
+                    glyph = Glyphs.Gear,
+                    label = stringResource(R.string.tab_settings),
+                    ink = serviceInk,
+                    selected = tab == Tab.MORE && first == Page.Service(Tab.SETTINGS),
+                    onClick = { tab = Tab.MORE; pages = listOf(Page.Service(Tab.SETTINGS)) },
+                ),
+            )
+        }
+        Column(Modifier.weight(1f)) {
             // Пуши выключены — говорим сверху, а не в глубине настроек
             // автопилота: без них молчат автопилот, напоминания и обновления.
             if (!notifEnabled) NotificationsBanner(onFixNotifications)
@@ -774,9 +774,18 @@ private fun MainScreen(
                         Column {
                             when (tab) {
                                 Tab.PRAVKA -> {
+                                    // Модель чистки — вторым тоном названия, как «Pro Extended ⌄»
+                                    // у Gemini (версия 3); тап — группа «Модели».
+                                    val cleanFlow = remember { app.settings.modelChoiceFlow(ru.zf.pravka.data.ModelRoute.PRAVKA) }
+                                    val clean by cleanFlow.collectAsState(initial = null)
                                     TabHeader(
                                         title = stringResource(R.string.tab_pravka),
                                         icon = painterResource(R.drawable.ic_mode_pravka),
+                                        titleExtra = clean?.let { c ->
+                                            ru.zf.pravka.data.Models.label(c.model).substringBefore(' ') + " · " +
+                                                ru.zf.pravka.data.Models.effectiveEffort(c.model, c.effort)
+                                        },
+                                        onTitleExtra = { pages = listOf(Page.ModeSettings(SettingsGroup.MODELS)) },
                                         actions = {
                                             StatsAction { pages = listOf(Page.Service(Tab.STATS)) }
                                             CostAction(openCost)
@@ -822,9 +831,20 @@ private fun MainScreen(
                                     SportTab(app)
                                 }
                                 Tab.MONEY -> {
+                                    // «Личное · ЗФ» — вторым тоном названия (версия 3): от них
+                                    // зависит вся вкладка, и выбор стоит там, где её имя.
+                                    val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
+                                    val zOn by app.settings.mScopeZfFlow.collectAsState(initial = false)
+                                    var scopeSheet by remember { mutableStateOf(false) }
                                     TabHeader(
                                         title = stringResource(R.string.tab_money),
                                         icon = painterResource(R.drawable.ic_mode_money),
+                                        titleExtra = when {
+                                            pOn && zOn -> "Всё"
+                                            zOn -> "ЗФ"
+                                            else -> "Личное"
+                                        },
+                                        onTitleExtra = { scopeSheet = true },
                                         actions = {
                                             ExportAction { moneyExport = true }
                                             StatsAction(openReport)
@@ -837,6 +857,7 @@ private fun MainScreen(
                                         exportRequested = moneyExport,
                                         onExportHandled = { moneyExport = false },
                                     )
+                                    if (scopeSheet) MoneyScopeSheet(app, pOn, zOn, onDismiss = { scopeSheet = false })
                                 }
                                 else -> {
                                     TabHeader(
@@ -859,6 +880,7 @@ private fun MainScreen(
                     }
                 }
             }
+        }
         }
     }
 

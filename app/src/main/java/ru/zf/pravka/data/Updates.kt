@@ -205,7 +205,7 @@ class Updates(
         // Общая с Слушалкой ветка пишет «pravka=», своя - «versionName=».
         val name = map["pravka"]?.takeIf { it.isNotBlank() }
             ?: map["versionName"]?.takeIf { it.isNotBlank() }
-            ?: "2.0.$code"
+            ?: "3.0.$code"
         return Build(
             versionName = name,
             versionCode = code,

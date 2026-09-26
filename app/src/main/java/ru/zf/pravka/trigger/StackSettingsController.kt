@@ -116,7 +116,7 @@ class StackSettingsController(
      * Какое под головой стекло — от него зависит цвет шестерёнки без
      * подложки: чернила на бумаге, бумага на чернилах. Ставит диск.
      */
-    var glassLight = true
+    var glassLight = ru.zf.pravka.data.Settings.DISK_LIGHT_DEFAULT
         set(value) {
             if (field == value) return
             field = value

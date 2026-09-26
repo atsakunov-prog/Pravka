@@ -74,7 +74,11 @@ class FloatingButtonController(
     private var recDot: View? = null
     private var progress: ProgressBar? = null
     /** Секунды до ответа вместо колеса (`core/Countdown.kt`), пока кнопка занята. */
-    private val replyClock = ButtonCountdown(service)
+    // Секунды до ответа — и на кнопке, и в её пилюле: искры и число (версия 3).
+    // Пилюлю лямбда берёт при вызове: отсчёт заговорит, когда кнопка уже собрана.
+    private val replyClock = ButtonCountdown(service).also { c ->
+        c.onLabel = { waiting, label -> pill.countdown(waiting, label) }
+    }
     private var params: WindowManager.LayoutParams? = null
     /** Убрана в ручку: сильнее любых других причин показать кнопку. */
     private var stashed = false

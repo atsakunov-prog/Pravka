@@ -18,6 +18,12 @@ import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.unit.dp
 import ru.zf.pravka.data.Settings
 import java.util.Random
 
@@ -41,6 +47,8 @@ data class CardLook(
     val bevel: Boolean = true,
     val light: Boolean = true,
     val grain: Boolean = true,
+    /** Сила свечения режима во вкладке, 0 — выключено (`core/ModeGlow.kt`). */
+    val glow: Float = ru.zf.pravka.core.ModeGlow.DEFAULT,
 ) {
     companion object {
         /**
@@ -64,6 +72,33 @@ data class CardLook(
         const val RIM_SHADE = 0.05f
         /** Зерно: у диска оно на просвет, тут — по плотному тону, и хватает меньшего. */
         const val GRAIN = 0.03f
+
+        /**
+         * Плашка — матовое стекло над свечением режима (версия 3): сквозь
+         * неё просвечивает свет вкладки, поэтому у верхних плашек тон сам
+         * берёт цвет режима, а нижние, куда свет не достаёт, остаются
+         * прежними. Цвет не подмешивается нарочно — его приносит свет, и
+         * ровно там, где он есть. Ниже — текст на плашке начинает плыть.
+         */
+        const val GLASS = 0.84f
+
+        /**
+         * Главная кнопка и выбранный чип — клавиши, как кнопки на стекле
+         * (версия 3, владелец: «их сделать как кнопки с таким же вот
+         * отблеском?»). Что нажимается — блестит клавишей; что читается —
+         * матовая плашка: на большой плашке с текстом такой же блик читался
+         * бы пластиком. Числа — прямоугольной ветки `trigger/BubbleSkin.kt`:
+         * блик по верхней трети, низ вдвое мягче кружка, фаска светлая
+         * сверху и тёмная снизу.
+         */
+        const val KEY_SHEEN = 0.26f
+        const val KEY_SHEEN_SPAN = 0.34f
+        const val KEY_FOOT = 0.1f
+        const val KEY_FOOT_SPAN = 0.2f
+        const val KEY_RIM_LIGHT = 0.34f
+        const val KEY_RIM_SHADE = 0.12f
+        /** Нажатая клавиша: блик гаснет до этой доли, как у кнопок на стекле. */
+        const val KEY_PRESSED_LIGHT = 0.3f
     }
 }
 
@@ -76,8 +111,9 @@ fun ProvideCardLook(settings: Settings, content: @Composable () -> Unit) {
     val bevel by settings.cardBevelFlow.collectAsState(initial = true)
     val light by settings.cardLightFlow.collectAsState(initial = true)
     val grain by settings.cardGrainFlow.collectAsState(initial = true)
+    val glow by settings.appGlowFlow.collectAsState(initial = ru.zf.pravka.core.ModeGlow.DEFAULT)
     CompositionLocalProvider(
-        LocalCardLook provides CardLook(darken, bevel, light, grain),
+        LocalCardLook provides CardLook(darken, bevel, light, grain, glow),
         content = content,
     )
 }
@@ -108,4 +144,38 @@ private fun grainBitmap(): ImageBitmap {
         pixels[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
     }
     return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888).asImageBitmap()
+}
+
+/**
+ * Лицо клавиши: заливка [color], блик по верхней трети, мягкая тень снизу и
+ * фаска — те же три слоя, что у кнопок на стекле (`trigger/BubbleSkin.kt`).
+ * [lit] = false — клавиша под пальцем: свет с неё соскользнул, тень осталась.
+ */
+fun Modifier.keyFace(color: Color, shape: Shape, lit: Boolean = true): Modifier {
+    val sheen = CardLook.KEY_SHEEN * if (lit) 1f else CardLook.KEY_PRESSED_LIGHT
+    return this
+        .clip(shape)
+        .background(color)
+        .background(
+            Brush.verticalGradient(
+                0f to Color.White.copy(alpha = sheen),
+                CardLook.KEY_SHEEN_SPAN * 0.55f to Color.White.copy(alpha = sheen * 0.3f),
+                CardLook.KEY_SHEEN_SPAN to Color.Transparent,
+            )
+        )
+        .background(
+            Brush.verticalGradient(
+                1f - CardLook.KEY_FOOT_SPAN to Color.Transparent,
+                1f to Color.Black.copy(alpha = CardLook.KEY_FOOT),
+            )
+        )
+        .border(
+            1.dp,
+            Brush.verticalGradient(
+                0f to Color.White.copy(alpha = CardLook.KEY_RIM_LIGHT * if (lit) 1f else CardLook.KEY_PRESSED_LIGHT),
+                0.5f to Color.Transparent,
+                1f to Color.Black.copy(alpha = CardLook.KEY_RIM_SHADE),
+            ),
+            shape,
+        )
 }

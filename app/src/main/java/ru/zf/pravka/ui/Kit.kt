@@ -1,6 +1,19 @@
 package ru.zf.pravka.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import ru.zf.pravka.core.PillLook
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,7 +45,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -181,7 +193,33 @@ fun PaperButton(
     }
     val padding = PaddingValues(start = if (icon != null) 14.dp else 18.dp, end = 18.dp, top = 8.dp, bottom = 8.dp)
     if (primary) {
-        Button(onClick = onClick, modifier = modifier, enabled = enabled, contentPadding = padding, content = inner)
+        // Версия 3: главная кнопка — клавиша, как кнопки на стекле: краска
+        // режима, блик сверху, фаска; под пальцем блик гаснет (`keyFace`).
+        // Цвета и высота — как у Material Button, чтобы ни одна плашка не
+        // сдвинулась от замены.
+        val c = MaterialTheme.colorScheme
+        val shape = RoundedCornerShape(50)
+        val interaction = remember { MutableInteractionSource() }
+        val pressed by interaction.collectIsPressedAsState()
+        Row(
+            modifier
+                .defaultMinSize(minWidth = 58.dp, minHeight = 40.dp)
+                .keyFace(if (enabled) c.primary else c.onSurface.copy(alpha = 0.12f), shape, lit = enabled && !pressed)
+                .clickable(
+                    interactionSource = interaction,
+                    indication = LocalIndication.current,
+                    enabled = enabled,
+                    role = Role.Button,
+                    onClick = onClick,
+                )
+                .padding(padding),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CompositionLocalProvider(LocalContentColor provides if (enabled) c.onPrimary else c.onSurface.copy(alpha = 0.38f)) {
+                ProvideTextStyle(MaterialTheme.typography.labelLarge) { inner() }
+            }
+        }
     } else {
         OutlinedButton(
             onClick = onClick,
@@ -361,9 +399,11 @@ fun PaperChip(
 ) {
     val c = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(50)
+    // Выбранный чип — прозрачная клавиша краски режима (версия 3): блик и
+    // фаска те же, что у главной кнопки, заливка — на просвет.
     val fill = when {
-        selected && warn -> c.error.copy(alpha = 0.18f)
-        selected -> c.primary.copy(alpha = 0.18f)
+        selected && warn -> c.error.copy(alpha = 0.2f)
+        selected -> c.primary.copy(alpha = 0.2f)
         else -> Color.Transparent
     }
     val ink = when {
@@ -375,9 +415,7 @@ fun PaperChip(
     Row(
         Modifier
             .defaultMinSize(minHeight = 34.dp)
-            .clip(shape)
-            .background(fill)
-            .then(if (selected) Modifier else Modifier.border(1.dp, c.outlineVariant, shape))
+            .then(if (selected) Modifier.keyFace(fill, shape) else Modifier.clip(shape).border(1.dp, c.outlineVariant, shape))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -845,10 +883,19 @@ fun PaperField(
 }
 
 /**
- * Одна строка ввода на все вкладки: микрофон · поле-пилюля · «отправить».
- * Засечка, Еда, Деньги и «спросить про тренировки» пишут в одно и то же
- * место одинаково: раньше у каждой была своя сборка из поля и кнопок.
- * [extras] — значки перед полем (камера, галерея, штрихкод у Еды).
+ * Одна строка ввода на все вкладки — в одежде пилюли диктовки (версия 3,
+ * 26.09.2026). До этого — микрофон · поле · «отправить» тремя деталями; теперь
+ * это та же пилюля, что выезжает поверх приложений (`trigger/DictationPill.kt`),
+ * и числа у неё те же (`core/PillLook.kt`): заливка — цвет режима, уведённый
+ * в чернила, слева гуще чернил, у кружка гуще цвета, от кружка по стеклу
+ * свечение, блик по верхней трети и светлая кромка. Одна вещь на стекле и в
+ * приложении, а не две похожие.
+ *
+ * Кружок справа — как у Gemini: пусто и есть [onMic] — голос (три полоски);
+ * есть текст — «отправить» ([sendIcon]); [busy] — ждём Claude: слева искры,
+ * в кружке секунды до ответа (`LocalClaudeSeconds`, то же обещание, что на
+ * кнопке), и свет вкладки ярче. Слева — знак режима.
+ * [extras] — значки над строкой (камера, галерея, штрихкод у Еды).
  */
 @Composable
 fun VoiceInput(
@@ -864,53 +911,214 @@ fun VoiceInput(
     maxLines: Int = 4,
     sendIcon: ImageVector = Glyphs.Send,
     extras: (@Composable RowScope.() -> Unit)? = null,
+    busy: Boolean = false,
 ) {
     val c = MaterialTheme.colorScheme
+    val decor = LocalModeDecor.current ?: ModeDecor.SERVICE
+    val accent = decor.pillAccent
+    GlowBusy(busy)
+    val d = PillLook.DENSITY_DEFAULT
+    val start = Color(PillLook.bodyStart(accent)).copy(alpha = d)
+    val end = Color(PillLook.bodyEnd(accent)).copy(alpha = d)
+    val glow = Color(accent)
+    val glowA = PillLook.glowAlpha(d)
+    val shape = RoundedCornerShape(28.dp)
+    val ink = Color(0xFFF7F3EA)
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (extras != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, content = extras)
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (onMic != null) {
-                PaperIconButton(Glyphs.Mic, if (listening) "остановить" else "голосом", onClick = onMic, active = listening, enabled = enabled)
-                Spacer(Modifier.width(8.dp))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = PillLook.HEIGHT_DP.dp)
+                .clip(shape)
+                .background(Brush.horizontalGradient(listOf(start, end)))
+                .drawBehind {
+                    // Свечение от кружка голоса — центр ровно под ним.
+                    val orbX = size.width - (6 + 22).dp.toPx()
+                    drawRect(
+                        Brush.radialGradient(
+                            0f to glow.copy(alpha = glowA),
+                            0.45f to glow.copy(alpha = glowA * 0.35f),
+                            1f to glow.copy(alpha = 0f),
+                            center = Offset(orbX, size.height / 2f),
+                            radius = PillLook.HEIGHT_DP.dp.toPx() * 1.9f,
+                        )
+                    )
+                }
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.White.copy(alpha = PillLook.sheenAlpha(d)),
+                        0.45f to Color.Transparent,
+                    )
+                )
+                .border(
+                    1.dp,
+                    Brush.verticalGradient(
+                        0f to Color.White.copy(alpha = PillLook.rimAlpha(d)),
+                        1f to Color.White.copy(alpha = PillLook.rimAlpha(d) * 0.35f),
+                    ),
+                    shape,
+                )
+                .padding(start = 4.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Слева — знак режима, как у пилюли на стекле, пока нечего
+            // отменять; ждём Claude — искры: «одно действие — один значок».
+            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                Icon(
+                    if (busy) Glyphs.Spark else decorGlyph(decor),
+                    contentDescription = null,
+                    tint = ink.copy(alpha = 0.82f),
+                    modifier = Modifier.size(20.dp),
+                )
             }
             TextField(
                 value = value,
                 onValueChange = onValueChange,
-                modifier = Modifier.weight(1f).heightIn(min = 44.dp),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                 enabled = enabled,
-                placeholder = { Text(placeholder, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                placeholder = {
+                    Text(
+                        placeholder,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                },
                 maxLines = maxLines,
-                shape = RoundedCornerShape(22.dp),
-                textStyle = MaterialTheme.typography.bodyMedium,
+                textStyle = MaterialTheme.typography.bodyLarge,
                 keyboardOptions = KeyboardOptions(imeAction = if (maxLines == 1) ImeAction.Send else ImeAction.Default),
-                keyboardActions = KeyboardActions(onSend = { if (sendEnabled) onSend() }),
+                keyboardActions = KeyboardActions(onSend = { if (sendEnabled && enabled) onSend() }),
                 colors = TextFieldDefaults.colors(
-                    focusedContainerColor = c.onSurface.copy(alpha = 0.07f),
-                    unfocusedContainerColor = c.onSurface.copy(alpha = 0.07f),
-                    disabledContainerColor = c.onSurface.copy(alpha = 0.04f),
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent,
                     focusedIndicatorColor = Color.Transparent,
                     unfocusedIndicatorColor = Color.Transparent,
                     disabledIndicatorColor = Color.Transparent,
+                    focusedTextColor = c.onSurface,
+                    unfocusedTextColor = c.onSurface,
+                    disabledTextColor = c.onSurface.copy(alpha = 0.6f),
+                    focusedPlaceholderColor = ink.copy(alpha = 0.64f),
+                    unfocusedPlaceholderColor = ink.copy(alpha = 0.64f),
+                    disabledPlaceholderColor = ink.copy(alpha = 0.5f),
+                    cursorColor = ink,
                 ),
             )
-            Spacer(Modifier.width(8.dp))
-            Box(
-                Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(if (sendEnabled && enabled) c.primary else c.onSurface.copy(alpha = 0.08f))
-                    .clickable(enabled = sendEnabled && enabled, onClick = onSend),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    sendIcon,
-                    contentDescription = "отправить",
-                    tint = if (sendEnabled && enabled) c.onPrimary else c.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.size(19.dp),
-                )
+            PillOrb(
+                accent = accent,
+                busy = busy,
+                voice = onMic != null && value.isBlank(),
+                listening = listening,
+                sendIcon = sendIcon,
+                active = when {
+                    busy -> false
+                    onMic != null && value.isBlank() -> enabled || listening
+                    else -> sendEnabled && enabled
+                },
+                onClick = {
+                    if (onMic != null && value.isBlank()) onMic() else if (sendEnabled && enabled) onSend()
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Кружок пилюли — клавиша цвета режима (`keyFace`), почти чистый цвет: одно
+ * пятно краски на всей строке, как у пилюли на стекле. Голос — три полоски
+ * (выше, пока слушает), «отправить» — стрелка, ожидание — секунды до ответа
+ * или искры, если обещанное время вышло.
+ */
+@Composable
+private fun PillOrb(
+    accent: Int,
+    busy: Boolean,
+    voice: Boolean,
+    listening: Boolean,
+    sendIcon: ImageVector,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    val ink = Color(0xFFF7F3EA)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Box(
+        Modifier
+            .size(44.dp)
+            .keyFace(Color(PillLook.orb(accent)).copy(alpha = if (active || busy) 1f else 0.5f), CircleShape, lit = !pressed)
+            .clickable(
+                interactionSource = interaction,
+                indication = LocalIndication.current,
+                enabled = active,
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .semantics { contentDescription = if (voice) (if (listening) "остановить" else "голосом") else "отправить" },
+        contentAlignment = Alignment.Center,
+    ) {
+        when {
+            busy -> {
+                val seconds by LocalClaudeSeconds.current
+                val label = seconds
+                if (label != null) {
+                    Text(
+                        label,
+                        color = ink,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = if (label.length > 3) 12.sp else 14.sp,
+                        style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+                    )
+                } else {
+                    Icon(Glyphs.Spark, contentDescription = null, tint = ink, modifier = Modifier.size(18.dp))
+                }
             }
+            voice -> Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+                val k = if (listening) 1.25f else 1f
+                for (h in listOf(10, 18, 13)) {
+                    Box(Modifier.width(3.dp).height((h * k).dp).clip(RoundedCornerShape(2.dp)).background(ink))
+                }
+            }
+            else -> Icon(sendIcon, contentDescription = null, tint = ink.copy(alpha = if (active) 1f else 0.6f), modifier = Modifier.size(19.dp))
+        }
+    }
+}
+
+/** Знак режима — тот же, что у его кнопки внизу и на стекле. */
+internal fun decorGlyph(decor: ModeDecor): ImageVector = when (decor) {
+    ModeDecor.PRAVKA, ModeDecor.SERVICE -> Glyphs.Pravka
+    ModeDecor.ZASECHKA -> Glyphs.Zasechka
+    ModeDecor.DELA -> Glyphs.Delo
+    ModeDecor.SPORT -> Glyphs.Sport
+    ModeDecor.FOOD -> Glyphs.Food
+    ModeDecor.MONEY -> Glyphs.Money
+}
+
+/**
+ * «Причёсываю · ещё 6 с» — Claude работает, и видно сколько ждать (версия 3):
+ * искры краской режима, слово, секунды из того же обещания, что на кнопке.
+ * Секунды вышли — остаётся слово с искрами: замершее «0,0» читалось бы
+ * «повисло». Пока строка на экране, свет вкладки ярче.
+ */
+@Composable
+fun ThinkingLine(label: String, modifier: Modifier = Modifier) {
+    GlowBusy(true)
+    val c = MaterialTheme.colorScheme
+    val seconds by LocalClaudeSeconds.current
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Icon(Glyphs.Spark, contentDescription = null, tint = c.primary, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+        val s = seconds
+        if (s != null) {
+            Text(
+                " · ещё $s с",
+                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                color = c.onSurfaceVariant,
+            )
         }
     }
 }

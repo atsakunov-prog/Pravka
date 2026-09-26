@@ -112,7 +112,7 @@ internal enum class SettingsGroup(
     GOOGLE("Google Drive", "семейный аккаунт: общие Деньги, копии базы", SettingsShelf.LINKS, Glyphs.Cloud),
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, Glyphs.Disk),
     DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, Glyphs.Palette),
-    CARDS("Плашки приложения", "темнее, фаска, свет, зерно", SettingsShelf.LOOK, Glyphs.Layers),
+    CARDS("Плашки приложения", "свечение режима, темнее, фаска, свет, зерно", SettingsShelf.LOOK, Glyphs.Layers),
     DATA("База данных", "где лежит, переезд в папку, как копировать", SettingsShelf.APP, Glyphs.Archive),
     APP("Обновления и служба", "служба, обновления, копии ленты, отладка", SettingsShelf.APP, Glyphs.Phone),
 }
@@ -797,7 +797,7 @@ private fun DiskSettings(app: PravkaApp) {
     val settings = app.settings
     val diskMode by settings.diskModeFlow.collectAsState(initial = true)
     val fabAlpha by settings.fabAlphaFlow.collectAsState(initial = Settings.FAB_ALPHA_DEFAULT)
-    val diskLight by settings.diskLightFlow.collectAsState(initial = true)
+    val diskLight by settings.diskLightFlow.collectAsState(initial = Settings.DISK_LIGHT_DEFAULT)
 
     if (!diskMode) {
         PaperCard { PaperHint("Кнопки сейчас стоят стопкой — вид диска заработает, когда выберешь «Круг» в «Кнопках на экране».") }
@@ -970,6 +970,28 @@ private fun CardsSettings(app: PravkaApp) {
         PaperToggle("Свет сверху", cardLight, { on -> scope.launch { settings.setCardLight(on) } })
         val cardGrain by settings.cardGrainFlow.collectAsState(initial = true)
         PaperToggle("Зерно", cardGrain, { on -> scope.launch { settings.setCardGrain(on) } })
+    }
+    // Версия 3 (26.09.2026): свет режима сверху вкладки — в цвете её кнопки и
+    // только в нём. Ноль — выключено: свет — это фон, а фон владелец однажды
+    // уже отклонил (знаки по фону, 15.09), поэтому он с ручкой с первого дня.
+    PaperCard(
+        label = "свечение режима",
+        info = "Свет сверху каждой вкладки — цвета её кнопки на стекле: Правка оранжевая, " +
+            "Засечка янтарная, Дела синие, Спорт зелёный, Еда оливковая, Деньги фиолетовые. " +
+            "Другие цвета в него не подмешиваются. Пока Claude отвечает во вкладке, свет " +
+            "ярче — одним плавным переходом, без мигания. Плашки сквозь себя его чуть " +
+            "пропускают, поэтому верхние берут цвет режима сами. Ноль — выключить.",
+    ) {
+        val glow by settings.appGlowFlow.collectAsState(initial = ru.zf.pravka.core.ModeGlow.DEFAULT)
+        var glowSlider by remember(glow) { mutableStateOf(glow) }
+        PaperSlider(
+            title = "Сила",
+            valueText = if (glowSlider <= 0.001f) "выключено" else "${(glowSlider * 100).toInt()} %",
+            value = glowSlider,
+            onValueChange = { glowSlider = it },
+            onValueChangeFinished = { scope.launch { settings.setAppGlow(glowSlider) } },
+            valueRange = 0f..1f,
+        )
     }
 }
 

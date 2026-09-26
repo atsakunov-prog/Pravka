@@ -28,7 +28,9 @@ fun prop(key: String, default: String? = null): String? =
 // ---------------------------------------------------------------------------
 // Build counter: version.properties holds a single buildNumber that is
 // incremented on every assemble/install/deliver invocation.
-// versionCode = buildNumber, versionName = 2.0.<buildNumber>
+// versionCode = buildNumber, versionName = 3.0.<buildNumber>
+// «3» — третье издание вида (26.09.2026, владелец: «давай это назовём
+// версия 3»). Сравнивает сборки только versionCode: имя — для глаз.
 // ---------------------------------------------------------------------------
 // CI passes -PbuildNumber=<run number> instead of touching version.properties.
 val versionFile = rootProject.file("version.properties")
@@ -48,7 +50,7 @@ val buildNumber: Int = overrideBuildNumber ?: run {
     }
     n
 }
-val appVersionName = "2.0.$buildNumber"
+val appVersionName = "3.0.$buildNumber"
 // CI передаёт своё имя ветки; локально спрашиваем git, а если и его нет -
 // пусто, и тогда самообновление просто не проверяет ветку.
 val buildBranch: String = (project.findProperty("buildBranch") as? String)?.takeIf { it.isNotBlank() }

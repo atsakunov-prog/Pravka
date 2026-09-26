@@ -39,6 +39,13 @@ class ButtonCountdown(private val context: Context) {
 
     private var text: TextView? = null
     private var spinner: View? = null
+
+    /**
+     * Кому ещё сказать «ждём, осталось столько» (версия 3): пилюле кнопки —
+     * искры и секунды в ней ([DictationPill.countdown]). Зовётся на каждое
+     * решение отсчёта; кто слушает, сам не перерисовывается без перемены.
+     */
+    var onLabel: ((waiting: Boolean, label: String?) -> Unit)? = null
     private var busy = false
     private var startedAt = 0L
     private var expectMs = 0L
@@ -102,11 +109,13 @@ class ButtonCountdown(private val context: Context) {
     private fun apply() {
         val t = text ?: return
         t.removeCallbacks(tick)
-        val label = if (busy && startedAt != 0L) {
+        val waiting = busy && startedAt != 0L
+        val label = if (waiting) {
             Countdown.label(expectMs - (SystemClock.uptimeMillis() - startedAt))
         } else {
             null
         }
+        onLabel?.invoke(waiting, label)
         if (label != null) {
             t.text = label
             t.visibility = View.VISIBLE

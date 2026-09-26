@@ -112,6 +112,7 @@ internal fun AskCard(app: PravkaApp) {
             listening = listening,
             sendEnabled = !busy && question.isNotBlank(),
             sendIcon = Glyphs.Spark,
+            busy = busy,
         )
         MoneyVoiceBar("ask")
         if (answer.isEmpty() && !busy) {

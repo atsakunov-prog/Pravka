@@ -4,6 +4,7 @@ import android.app.Application
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import ru.zf.pravka.core.DictionaryApplier
@@ -116,6 +117,7 @@ class PravkaApp : Application() {
                 expect += paceStore.expectNext(ModelRoute.ZASECHKA.key, w.chars)
             }
             workWatcher?.invoke(w.route, expect, false, true)
+            liveWork.value = LiveWork(w.route, expect, android.os.SystemClock.uptimeMillis())
         }
         // Прошлое дуги — из журнала правок, один раз после обновления
         // (владелец, 20.09.2026: «ты не взял всю статистику, а только начал её
@@ -129,6 +131,7 @@ class PravkaApp : Application() {
             // это время сети, а не время модели.
             if (ok) paceStore.record(w.route, w.kind, w.photo, w.model, w.effort, w.chars, ms, cache)
             workWatcher?.invoke(w.route, 0L, true, ok)
+            liveWork.update { cur -> if (cur?.route == w.route) null else cur }
         }
         // Кэш промпта виден в статистике: транспорт отдаёт расход каждого ответа,
         // сюда падают токены чтения и записи кэша со всех дорог сразу.
@@ -149,6 +152,17 @@ class PravkaApp : Application() {
      * истории уже его заняло.
      */
     var workWatcher: ((route: String, expectMs: Long, done: Boolean, ok: Boolean) -> Unit)? = null
+
+    /**
+     * Запрос к Claude, который идёт прямо сейчас, — для приложения (версия 3,
+     * 26.09.2026): строка «Причёсываю · ещё 6 с» и секунды в кружке строки
+     * ввода считаются из того же обещания, что и секунды на кнопке. Отдельный
+     * поток рядом с [workWatcher]: поле у службы одно, и отнимать его у
+     * кнопок ради вкладки нельзя. [startedAt] — `SystemClock.uptimeMillis`.
+     */
+    data class LiveWork(val route: String, val expectMs: Long, val startedAt: Long)
+
+    val liveWork = kotlinx.coroutines.flow.MutableStateFlow<LiveWork?>(null)
 
     val settings by lazy { Settings(this) }
     /** Кто пользуется установкой и какие режимы включены (data/Profile.kt). */

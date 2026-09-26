@@ -8,7 +8,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -98,11 +97,10 @@ internal fun categoryHue(name: String): Float = ru.zf.pravka.core.CategoryRainbo
 
 @Composable
 internal fun categoryColor(name: String): Color {
-    val dark = isSystemInDarkTheme()
-    if (name.isBlank()) return if (dark) Color(0xFF9A9184) else Color(0xFF8A8172)
+    // Тон — ночной: приложение всегда тёмное (версия 3).
+    if (name.isBlank()) return Color(0xFF9A9184)
     // Softened rainbow (owner: "чуть-чуть помягче") - same hues, less punch.
-    return if (dark) Color.hsv(categoryHue(name), 0.55f, 0.94f)
-    else Color.hsv(categoryHue(name), 0.68f, 0.64f)
+    return Color.hsv(categoryHue(name), 0.55f, 0.94f)
 }
 
 private fun capFirst(s: String): String = s.replaceFirstChar { it.uppercase() }
@@ -445,6 +443,7 @@ internal fun ZasechkaTab(app: PravkaApp) {
                     },
                     sendEnabled = !processing && draft.isNotBlank(),
                     maxLines = 1,
+                    busy = processing,
                 )
             }
         }

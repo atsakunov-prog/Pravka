@@ -191,6 +191,36 @@ class DictationPill(
     /** Пилюля на экране или уже в пути туда — серой «отмене» у кнопки тогда не место. */
     val showing: Boolean get() = visible
 
+    /** Кнопка-хозяйка ждёт Claude (версия 3): слева искры вместо знака режима. */
+    private var waiting = false
+    /** Сколько осталось — «12», «9,4»; null — срок вышел или ждать нечего. */
+    private var waitLabel: String? = null
+
+    /**
+     * Искры с секундами (версия 3, владелец 26.09.2026: «ещё что можно в самой
+     * плашке делать — вот эти искры с секундами»). Зовёт отсчёт кнопки-хозяйки
+     * (`ButtonCountdown.onLabel`) — те же моменты и то же число, что на самой
+     * кнопке: ждём ответа — слева искры, в кружке секунды. Пилюли на экране
+     * нет — запоминаем: она может выехать посреди ожидания (стрим сильной
+     * модели), и тогда встанет уже с ними. Всё остальное в пилюле — как было.
+     */
+    fun countdown(waiting: Boolean, label: String?) {
+        if (this.waiting == waiting && waitLabel == label) return
+        this.waiting = waiting
+        waitLabel = label
+        applyWait()
+    }
+
+    /**
+     * Искры и секунды — только в обычном деле пилюли: итог «что записано»
+     * держит свою галочку, а поле набора — стрелку «отправить».
+     */
+    private fun applyWait() {
+        val on = waiting && resultReq == null && !editing
+        lead?.spark = on
+        orb?.seconds = if (on) waitLabel else null
+    }
+
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val density = service.resources.displayMetrics.density
     private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
@@ -459,6 +489,7 @@ class DictationPill(
             // кликабельным, и знак режима глотал бы тап, положенный ряду.
             setOnClickListener { if (editing) cancelTyped() else onCancel?.invoke() }
             cancel = onCancel != null
+            spark = waiting && resultReq == null && !editing
         }
         // Мишень ✕ — во всю высоту и 48 dp в ширину: крестик маленький, палец нет.
         row.addView(l, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.MATCH_PARENT).apply {
@@ -477,6 +508,7 @@ class DictationPill(
                 }
             }
             isClickable = canSend
+            seconds = if (waiting && resultReq == null && !editing) waitLabel else null
         }
         row.addView(o, LinearLayout.LayoutParams(orbSize, orbSize).apply {
             marginStart = dp(4)
@@ -569,6 +601,7 @@ class DictationPill(
             editor = made
         }
         editing = true
+        applyWait()
         tv.visibility = View.GONE
         e.visibility = View.VISIBLE
         e.setText(req.prefill)
@@ -615,6 +648,7 @@ class DictationPill(
         }
         editing = false
         editReq = null
+        applyWait()
         e?.visibility = View.GONE
         ticker?.visibility = View.VISIBLE
         lead?.cancel = onCancel != null
@@ -661,11 +695,13 @@ class DictationPill(
             // Итог поверх итога — меняется на месте, без второго всплытия.
             collapseCard()
             resultReq = req
+            applyWait()
             applyResult()
             return
         }
         show()
         resultReq = req
+        applyWait()
         if (root != null) applyResult()
     }
 
@@ -837,6 +873,7 @@ class DictationPill(
             it.isClickable = canSend
         }
         lead?.cancel = onCancel != null
+        applyWait()
         root?.alpha = 1f
     }
 
@@ -1365,6 +1402,16 @@ class DictationPill(
                 invalidate()
             }
 
+        /** Ждём Claude — искры вместо знака режима (✕ отмены важнее: он остаётся). */
+        var spark = false
+            set(value) {
+                if (field == value) return
+                field = value
+                invalidate()
+            }
+
+        private val sparkPath = android.graphics.Path()
+
         override fun drawableStateChanged() {
             super.drawableStateChanged()
             invalidate()
@@ -1373,6 +1420,10 @@ class DictationPill(
         override fun onDraw(canvas: Canvas) {
             val cx = width / 2f
             val cy = height / 2f
+            if (!cancel && spark) {
+                drawSpark(canvas, cx, cy)
+                return
+            }
             if (!cancel) {
                 val g = glyph ?: return
                 val half = (11 * density).toInt()
@@ -1388,6 +1439,36 @@ class DictationPill(
             val arm = 6 * density
             canvas.drawLine(cx - arm, cy - arm, cx + arm, cy + arm, stroke)
             canvas.drawLine(cx - arm, cy + arm, cx + arm, cy - arm, stroke)
+        }
+
+        /**
+         * Искры — тот же знак, что `ui/Glyphs.Spark` в приложении («Claude —
+         * искры»): большая четырёхлучевая и малая справа внизу, в сетке 24×24.
+         */
+        private fun drawSpark(canvas: Canvas, cx: Float, cy: Float) {
+            val k = 0.92f * density
+            val ox = cx - 12 * k
+            val oy = cy - 12 * k
+            fun star(x: Float, y: Float, r: Float, w: Float) {
+                // Луч r, перетяжка w — точки те же, что в пути значка.
+                sparkPath.moveTo(ox + x * k, oy + (y - r) * k)
+                sparkPath.lineTo(ox + (x + w) * k, oy + (y - w) * k)
+                sparkPath.lineTo(ox + (x + r) * k, oy + y * k)
+                sparkPath.lineTo(ox + (x + w) * k, oy + (y + w) * k)
+                sparkPath.lineTo(ox + x * k, oy + (y + r) * k)
+                sparkPath.lineTo(ox + (x - w) * k, oy + (y + w) * k)
+                sparkPath.lineTo(ox + (x - r) * k, oy + y * k)
+                sparkPath.lineTo(ox + (x - w) * k, oy + (y - w) * k)
+                sparkPath.close()
+            }
+            sparkPath.reset()
+            star(11f, 10f, 7f, 1.9f)
+            star(19f, 18f, 3f, 0.8f)
+            stroke.strokeWidth = 2 * density * 0.85f
+            stroke.strokeJoin = Paint.Join.ROUND
+            stroke.alpha = (255 * 0.9f).toInt()
+            canvas.drawPath(sparkPath, stroke)
+            stroke.alpha = 255
         }
     }
 
@@ -1416,6 +1497,22 @@ class DictationPill(
                 field = value
                 invalidate()
             }
+
+        /** Секунды до ответа Claude (версия 3) — поверх знака, как число на занятой кнопке. */
+        var seconds: String? = null
+            set(value) {
+                if (field == value) return
+                field = value
+                invalidate()
+            }
+
+        private val digits = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            this.color = PAPER
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
+            // Цифры одной ширины: «9,4» → «9,3» не должно ёрзать по кружку.
+            fontFeatureSettings = "tnum"
+        }
 
         fun setColor(color: Int) {
             if (fill.color == color) return
@@ -1457,6 +1554,12 @@ class DictationPill(
             canvas.drawCircle(cx, cy, r, fill)
             canvas.drawCircle(cx, cy, r, sheen)
             if (isPressed) canvas.drawCircle(cx, cy, r, pressedShade)
+            seconds?.let { s ->
+                digits.textSize = r * (if (s.length > 3) 0.62f else 0.74f)
+                val base = cy - (digits.descent() + digits.ascent()) / 2f
+                canvas.drawText(s, cx, base, digits)
+                return
+            }
             when (mark) {
                 Mark.WAVE -> Unit
                 Mark.ARROW -> {

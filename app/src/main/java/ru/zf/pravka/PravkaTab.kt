@@ -1,5 +1,6 @@
 package ru.zf.pravka
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,7 +19,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -34,7 +34,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -49,6 +54,8 @@ import ru.zf.pravka.data.TranscriptionLog
 import ru.zf.pravka.data.dayStartMs
 import ru.zf.pravka.target.PlainTextTarget
 import ru.zf.pravka.ui.ChipRow
+import ru.zf.pravka.ui.ThinkingLine
+import ru.zf.pravka.ui.bevel
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.GlyphButton
 import ru.zf.pravka.ui.Glyphs
@@ -266,54 +273,30 @@ private fun CleanBox(app: PravkaApp) {
             }
         },
     ) {
-        PaperField(
-            value = text,
-            onValueChange = { text = it },
-            singleLine = false,
-            minLines = 3,
-            maxLines = 12,
-            enabled = !busy,
-            placeholder = "Вставь текст — причешу и положу в буфер",
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PaperButton(
-                "Из буфера",
-                icon = Glyphs.Paste,
+        // Версия 3: как разговор у Gemini. Пока текст правится и когда он
+        // готов, вставленное лежит пузырём справа — это реплика владельца, а
+        // ответ идёт под ней. Тап по пузырю — снова поле, править исходное.
+        if (busy || result != null) {
+            SourceBubble(text, onEdit = if (busy) null else ({ result = null; error = null; streaming = "" }))
+        } else {
+            PaperField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = false,
+                minLines = 3,
+                maxLines = 12,
                 enabled = !busy,
-                onClick = {
-                    val fromClip = clipboardText()
-                    if (fromClip.isBlank()) {
-                        Feedback.toast(context, "Буфер обмена пуст")
-                    } else {
-                        text = fromClip
-                        result = null
-                        error = null
-                    }
-                },
-            )
-            Spacer(Modifier.weight(1f))
-            PaperButton(
-                if (busy) "Правлю…" else "Причесать",
-                icon = Glyphs.Pravka,
-                primary = true,
-                enabled = text.isNotBlank() && !busy,
-                onClick = { clean() },
+                placeholder = "Вставь текст — причешу и положу в буфер",
             )
         }
         if (busy) {
-            Spacer(Modifier.height(8.dp))
-            if (streaming.isBlank()) {
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-            } else {
-                Text(
-                    streaming,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            // Вместо полоски прогресса — искры и секунды до ответа (то же
+            // обещание, что на кнопке), а ответ течёт с кареткой краской режима.
+            Spacer(Modifier.height(12.dp))
+            ThinkingLine("Причёсываю")
+            if (streaming.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                StreamingText(streaming)
             }
         }
         error?.let {
@@ -321,7 +304,7 @@ private fun CleanBox(app: PravkaApp) {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         result?.let { r ->
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             PaperLabel("результат — уже в буфере")
             SelectionContainer {
                 Text(r, style = MaterialTheme.typography.bodyMedium)
@@ -331,7 +314,78 @@ private fun CleanBox(app: PravkaApp) {
                 Feedback.toast(context, context.getString(R.string.transcript_copied))
             })
         }
+        if (!busy) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PaperButton(
+                    "Из буфера",
+                    icon = Glyphs.Paste,
+                    onClick = {
+                        val fromClip = clipboardText()
+                        if (fromClip.isBlank()) {
+                            Feedback.toast(context, "Буфер обмена пуст")
+                        } else {
+                            text = fromClip
+                            result = null
+                            error = null
+                        }
+                    },
+                )
+                Spacer(Modifier.weight(1f))
+                if (result == null) {
+                    PaperButton(
+                        "Причесать",
+                        icon = Glyphs.Pravka,
+                        primary = true,
+                        enabled = text.isNotBlank(),
+                        onClick = { clean() },
+                    )
+                }
+            }
+        }
     }
+}
+
+/**
+ * Вставленный текст пузырём справа — реплика владельца, как у Gemini
+ * (версия 3). Стекло на просвет, скругление у «хвоста» меньше. Длинное
+ * сворачивается до восьми строк: читать исходник целиком незачем, он в поле
+ * по тапу. [onEdit] = null — тап не действует (идёт правка).
+ */
+@Composable
+private fun SourceBubble(text: String, onEdit: (() -> Unit)?) {
+    val shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp)
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth(0.88f)
+                .clip(shape)
+                .background(Color.White.copy(alpha = 0.08f))
+                .bevel(shape)
+                .then(if (onEdit != null) Modifier.clickable(onClick = onEdit) else Modifier)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+        )
+    }
+}
+
+/** Ответ, который ещё пишется: текст и каретка краской режима в его конце. */
+@Composable
+private fun StreamingText(text: String) {
+    val caret = MaterialTheme.colorScheme.primary
+    Text(
+        buildAnnotatedString {
+            append(text)
+            withStyle(SpanStyle(color = caret, fontWeight = FontWeight.Bold)) { append(" ▍") }
+        },
+        style = MaterialTheme.typography.bodyMedium,
+    )
 }
 
 private fun engineLabel(engine: String): String = when (engine) {

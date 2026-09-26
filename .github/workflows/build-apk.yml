@@ -101,8 +101,8 @@ jobs:
             fi
             cp "$APK" "$PUB/pravka-debug.apk"
             {
-              echo "pravka=2.0.${RUN}"
-              echo "versionName=2.0.${RUN}"
+              echo "pravka=3.0.${RUN}"
+              echo "versionName=3.0.${RUN}"
               echo "apk=pravka-debug.apk"
               echo "versionCode=${RUN}"
               echo "commit=${GITHUB_SHA}"

@@ -181,7 +181,7 @@ class DiskController(
     private var allHidden = false
     private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
     /** Какое стекло у тарелки — бумага или чернила; тумблер в Общих. */
-    private var lightGlass = true
+    private var lightGlass = Settings.DISK_LIGHT_DEFAULT
     // Ручки вида диска из настроек (владелец: «и нужно всё это в настройки»).
     // Размеры — числа, плотности — null, пока владелец не двинул ползунок:
     // до тех пор их считает `DiskLook`, следя за прозрачностью кнопок и стеклом.
@@ -1528,7 +1528,7 @@ class DiskController(
         private val railPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
         private val frostPaint = Paint().apply { isFilterBitmap = false }
         private var fillAlpha = 0.16f
-        private var light = true
+        private var light = Settings.DISK_LIGHT_DEFAULT
         /** Плотность тени кнопки: null — считать от плотности стекла. */
         private var socketAlpha: Float? = null
         private var frost = true

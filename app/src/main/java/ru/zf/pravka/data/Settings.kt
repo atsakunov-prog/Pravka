@@ -89,6 +89,7 @@ class Settings(private val context: Context) {
         private val KEY_CARD_BEVEL = booleanPreferencesKey("card_bevel")
         private val KEY_CARD_LIGHT = booleanPreferencesKey("card_light")
         private val KEY_CARD_GRAIN = booleanPreferencesKey("card_grain")
+        private val KEY_APP_GLOW = floatPreferencesKey("app_glow")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -191,6 +192,15 @@ class Settings(private val context: Context) {
          * эффектами, как и диск».
          */
         const val CARD_DARK_DEFAULT = 0.26f
+
+        /**
+         * Стекло диска с завода — тёмное (версия 3, владелец 26.09.2026:
+         * «сделать дефолтным скин тёмного цвета»). С 19.09 было светлым —
+         * бумага; теперь всё приложение — ночь, и тарелка под кнопками та
+         * же ночь. Кто выбрал «Светлее» сам, тот при нём и остался: ключ
+         * записан, заводское его не трогает.
+         */
+        const val DISK_LIGHT_DEFAULT = false
 
         // Заводские цели КБЖУ: посчитаны по Миффлину-Сан-Жеору для владельца
         // (86 кг, 180 см, 1982) при умеренной активности, белок 1,8 г/кг.
@@ -520,12 +530,12 @@ class Settings(private val context: Context) {
     /**
      * Светлое стекло диска (владелец, 19.09.2026, ночь): «давай его сделаем
      * наоборот, светлее, чем бэкграунд. А то теряется иногда. И сделаем
-     * тумблер в настройках: светлее/темнее». С завода светлое — это и есть
-     * просьба; тёмные чернила остаются вторым положением, потому что фон под
-     * диском бывает любой, и какое стекло на нём не теряется, видно только на
-     * самом телефоне. Числа обеих шкурок — `core/DiskLook.kt`.
+     * тумблер в настройках: светлее/темнее». С 26.09.2026 с завода снова
+     * тёмное ([DISK_LIGHT_DEFAULT]); бумага — второе положение, потому что
+     * фон под диском бывает любой, и какое стекло на нём не теряется, видно
+     * только на самом телефоне. Числа обеих шкурок — `core/DiskLook.kt`.
      */
-    val diskLightFlow = context.dataStore.data.map { it[KEY_DISK_LIGHT] ?: true }
+    val diskLightFlow = context.dataStore.data.map { it[KEY_DISK_LIGHT] ?: DISK_LIGHT_DEFAULT }
     suspend fun setDiskLight(value: Boolean) {
         context.dataStore.edit { it[KEY_DISK_LIGHT] = value }
     }
@@ -624,6 +634,15 @@ class Settings(private val context: Context) {
     val cardGrainFlow = context.dataStore.data.map { it[KEY_CARD_GRAIN] ?: true }
     suspend fun setCardGrain(value: Boolean) {
         context.dataStore.edit { it[KEY_CARD_GRAIN] = value }
+    }
+
+    /**
+     * Свечение режима во вкладке (версия 3): сила 0..1, ноль — выключено.
+     * Числа света — `core/ModeGlow.kt`; ползунок — «Плашки приложения».
+     */
+    val appGlowFlow = context.dataStore.data.map { it[KEY_APP_GLOW] ?: ru.zf.pravka.core.ModeGlow.DEFAULT }
+    suspend fun setAppGlow(value: Float) {
+        context.dataStore.edit { it[KEY_APP_GLOW] = value.coerceIn(0f, 1f) }
     }
 
     /** Вернуть вид диска в счёт: размеры — к заводским, плотности — к формулам. */

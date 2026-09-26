@@ -3,7 +3,6 @@ package ru.zf.pravka
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -221,7 +220,6 @@ private fun thousands(n: Int): String =
 /** Цвета видов спорта — те же оттенки, что у строк тренировок во вкладке «Тело». */
 @Composable
 private fun sportInk(type: String): Color {
-    val dark = isSystemInDarkTheme()
     val hue = when (type) {
         "Run", "TrailRun", "VirtualRun" -> 20f
         "Ride", "VirtualRide", "GravelRide", "MountainBikeRide" -> 200f
@@ -230,7 +228,7 @@ private fun sportInk(type: String): Color {
         "Swim" -> 185f
         else -> 265f
     }
-    return if (dark) Color.hsv(hue, 0.55f, 0.92f) else Color.hsv(hue, 0.66f, 0.68f)
+    return Color.hsv(hue, 0.55f, 0.92f)
 }
 
 @Composable

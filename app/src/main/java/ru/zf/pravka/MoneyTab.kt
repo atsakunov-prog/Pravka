@@ -59,13 +59,13 @@ import ru.zf.pravka.ui.DayNav
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.GlyphButton
 import ru.zf.pravka.ui.Glyphs
-import ru.zf.pravka.ui.InfoButton
 import ru.zf.pravka.ui.PaperAlert
 import ru.zf.pravka.ui.PaperButton
 import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperChip
 import ru.zf.pravka.ui.PaperField
 import ru.zf.pravka.ui.PaperHint
+import ru.zf.pravka.ui.PaperSheet
 import ru.zf.pravka.ui.PaperTextButton
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.Segments
@@ -222,29 +222,8 @@ internal fun MoneyTab(
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
-        // ---- Личное · ЗФ — первой строкой: от них зависит вся вкладка ----
-        ChipRow {
-            // Последнюю включённую не выключить: пустая вкладка читается как поломка.
-            PaperChip(
-                "Личное",
-                selected = ms.personal,
-                onClick = { if (ms.zf) scope.launch { app.settings.setMScope(personal = !ms.personal, zf = true) } },
-            )
-            PaperChip(
-                "ЗФ",
-                selected = ms.zf,
-                onClick = { if (ms.personal) scope.launch { app.settings.setMScope(personal = true, zf = !ms.zf) } },
-            )
-            InfoButton(
-                "Личное · ЗФ",
-                "Сейчас: " + (if (ms.both) "всё вместе, без ВГО" else if (ms.zf) "только ЗФ" else "только личное") + ". " +
-                    "Итоги, категории и графики — по назначению траты: кофе с бизнес-карты — личное, " +
-                    "Anthropic с личной карты — ЗФ. ДДС и счета — по стороне, то есть по тому, чей счёт. " +
-                    "Когда включены обе, внутригрупповые обороты (ВГО) между личным и ЗФ взаимно " +
-                    "исключаются и остаются только операции с внешним миром. Последнюю включённую " +
-                    "кнопку не выключить: пустая вкладка читалась бы поломкой.",
-            )
-        }
+        // «Личное · ЗФ» — в шапке, вторым тоном названия (версия 3,
+        // `MoneyScopeSheet`): строка чипов первой строкой вкладки ушла туда.
         Segments(
             options = listOf("Сводка", if (waiting > 0) "Разобрать · $waiting" else "Разобрать", "Журнал"),
             selected = part,
@@ -888,3 +867,32 @@ internal data class TabCalc(
     val questions: List<MoneyEngine.Question>,
     val journal: List<MoneyEntry>,
 )
+
+/**
+ * «Личное · ЗФ» — окно из шапки (версия 3): «Деньги Личное ⌄», как выбор
+ * модели у Gemini. Три положения вместо двух тумблеров: «ничего» у двух
+ * тумблеров не бывает (пустая вкладка читалась бы поломкой), поэтому
+ * тумблеры и так были тремя положениями, только спрятанными.
+ */
+@Composable
+internal fun MoneyScopeSheet(app: PravkaApp, personal: Boolean, zf: Boolean, onDismiss: () -> Unit) {
+    val scope = app.appScope
+    val pick: (Boolean, Boolean) -> Unit = { p, z ->
+        scope.launch { app.settings.setMScope(personal = p, zf = z) }
+        onDismiss()
+    }
+    PaperSheet(onDismiss = onDismiss, title = "Чьи деньги", icon = Glyphs.Money) {
+        ChipRow {
+            PaperChip("Личное", selected = personal && !zf, onClick = { pick(true, false) })
+            PaperChip("ЗФ", selected = zf && !personal, onClick = { pick(false, true) })
+            PaperChip("Всё", selected = personal && zf, onClick = { pick(true, true) })
+        }
+        Spacer(Modifier.height(12.dp))
+        PaperHint(
+            "Итоги, категории и графики — по назначению траты: кофе с бизнес-карты — личное, " +
+                "Anthropic с личной карты — ЗФ. ДДС и счета — по стороне, то есть по тому, чей счёт. " +
+                "«Всё» — вместе, и тогда внутригрупповые обороты (ВГО) между личным и ЗФ взаимно " +
+                "исключаются: остаются только операции с внешним миром."
+        )
+    }
+}

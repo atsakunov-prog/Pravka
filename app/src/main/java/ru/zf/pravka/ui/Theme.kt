@@ -1,12 +1,10 @@
 package ru.zf.pravka.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -19,20 +17,7 @@ import androidx.compose.ui.unit.sp
 // голубой accent (tertiary) for contrast. Serif headings carry the same
 // language as the launcher icon and the floating buttons.
 
-private val Accent = Color(0xFFEA580C)
-private val AccentDeep = Color(0xFF9A3412)
 private val AccentBright = Color(0xFFFB923C)
-
-private val Paper = Color(0xFFF7F3EA)
-private val PaperCard = Color(0xFFFEFCF6)
-private val PaperDim = Color(0xFFEFE9DC)
-private val Ink = Color(0xFF241F19)
-private val InkSoft = Color(0xFF6E6659)
-private val PaperLine = Color(0xFFDDD5C4)
-private val Sand = Color(0xFFF6E3C3)
-private val Wave = Color(0xFF0E7490)
-private val WavePale = Color(0xFFD3ECF4)
-private val WaveDeep = Color(0xFF0F4C5C)
 
 // Ночь: текст живёт в плашках, фон под ними — тёмный (владелец, 15.09, второй
 // заход: «плашки должны быть на более тёмном фоне»); сами плашки на три тона
@@ -45,45 +30,15 @@ private val WaveDeep = Color(0xFF0F4C5C)
 // чуть нейтральнее, линии посветлели; заодно у плашек появилась фаска
 // (`ui/Blocks.kt`), та же, что у кнопок на стекле, — она и делает половину
 // работы, потому что грязным выглядит не цвет, а плоскость.
-private val NightBg = Color(0xFF131210)
+// Версия 3 (26.09.2026): фон ещё на ступень глубже — на нём читается свечение
+// режима (`ui/Glow.kt`), а плашки остаются на три тона светлее.
+private val NightBg = Color(0xFF100F0D)
 private val NightCard = Color(0xFF332F2A)
 private val NightCardHigh = Color(0xFF3D3934)
 private val NightText = Color(0xFFF0EADF)
 private val NightTextSoft = Color(0xFFB2A896)
 private val NightLine = Color(0xFF4C463C)
 private val WaveBright = Color(0xFF6CC3DD)
-
-private val LightColors = lightColorScheme(
-    primary = Accent,
-    onPrimary = Color(0xFFFFF8F0),
-    primaryContainer = Color(0xFFFAE1CB),
-    onPrimaryContainer = AccentDeep,
-    secondary = InkSoft,
-    onSecondary = Paper,
-    secondaryContainer = Sand,
-    onSecondaryContainer = Color(0xFF5C3A10),
-    tertiary = Wave,
-    onTertiary = Color(0xFFF4FBFD),
-    tertiaryContainer = WavePale,
-    onTertiaryContainer = WaveDeep,
-    background = Paper,
-    onBackground = Ink,
-    surface = Paper,
-    onSurface = Ink,
-    surfaceVariant = PaperDim,
-    onSurfaceVariant = InkSoft,
-    surfaceContainerLowest = PaperCard,
-    surfaceContainerLow = PaperCard,
-    surfaceContainer = PaperDim,
-    surfaceContainerHigh = PaperCard,
-    surfaceContainerHighest = PaperCard,
-    outline = Color(0xFFB4AA97),
-    outlineVariant = PaperLine,
-    error = Color(0xFFA8261B),
-    onError = Color(0xFFFFF8F0),
-    errorContainer = Color(0xFFF6D9D2),
-    onErrorContainer = Color(0xFF701408),
-)
 
 private val DarkColors = darkColorScheme(
     primary = AccentBright,
@@ -141,10 +96,18 @@ private val PravkaShapes = Shapes(
     extraLarge = RoundedCornerShape(28.dp),
 )
 
+/**
+ * Тема приложения — всегда ночь (версия 3, владелец 26.09.2026: «зафиксируй
+ * тёмную тему везде, потому что у Марианны светлая тема, и выглядит это не
+ * очень красиво»). Светлая схема жила с первых сборок, но всё, что сделано
+ * после, — плашки с фаской и зерном, пилюля, свечение режима, стекло диска —
+ * рисовалось и проверялось на тёмном; на бумажном фоне те же слои читались
+ * грязью. Системная тема телефона приложение больше не перекрашивает.
+ */
 @Composable
 fun PravkaTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
+        colorScheme = DarkColors,
         typography = pravkaTypography(),
         shapes = PravkaShapes,
         content = content,
