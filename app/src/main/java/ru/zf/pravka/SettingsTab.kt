@@ -427,74 +427,8 @@ private fun AppSettings(app: PravkaApp, serviceEnabled: Boolean, onOpenAccessibi
                 "«Запросы к Claude». Лог растёт быстро, держи включённым, пока смотришь.",
         )
     }
-    // Что знают секунды на кнопке (владелец: «ты точно рассчитал средние? И
-    // ты точно учитываешь модель и количество знаков? Короче, посмотри»; и
-    // 26.09.2026: «по секундам посмотри, обучается ли он сам»). Показываем
-    // числа и промах: пересказывать их было бы ответом ни о чём.
-    PaperCard(
-        label = "что знают секунды на кнопке",
-        info = "Ожидание считается по своей истории, отдельно на каждую тройку «дорога + " +
-            "модель + усилие»: основание плюс цена знака сказанного, сверху — добавка, " +
-            "если кэш промпта остыл (дорога молчала дольше часа). Учится на каждом " +
-            "удачном ответе, без Claude и без ночных заданий: пять сумм на дорогу. " +
-            "«Мимо ±» — насколько отсчёт промахивался на последних двух десятках " +
-            "запросов, до того как замер лёг в прямую; «позже» — ответ приходил после " +
-            "нуля. Одна минута плохой сети прямую не уводит: выброс ложится на край. " +
-            "Выгрузка — все замеры CSV: что обещано и что вышло.",
-    ) {
-        val context = LocalContext.current
-        val scope = androidx.compose.runtime.rememberCoroutineScope()
-        var round by remember { mutableStateOf(0) }
-        var busy by remember { mutableStateOf(false) }
-        val pace = remember(round) { app.paceStore.summary() }
-        for (line in pace) Text("· $line", style = MaterialTheme.typography.bodySmall)
-        // Журнал замеров и калибровка — файлы: считаем не на главном потоке.
-        val samples by androidx.compose.runtime.produceState(0, round) {
-            value = withContext(Dispatchers.IO) { app.paceStore.logSize() }
-        }
-        val (tunedAt, tuned) = remember(round) { app.paceStore.lastTune() }
-        if (tunedAt > 0L) {
-            val stamp = remember { java.text.SimpleDateFormat("d MMMM, HH:mm", Locale.forLanguageTag("ru")) }
-            PaperHint("Калибровка — ${stamp.format(java.util.Date(tunedAt))}")
-            for (line in tuned) Text(line.trim(), style = MaterialTheme.typography.bodySmall)
-        } else {
-            PaperHint("Калибровки ещё не было: первая пройдёт сама, в ближайший тик службы, дальше — раз в сутки ночью.")
-        }
-        ru.zf.pravka.ui.PaperTextButton(
-            if (busy) "Считаю…" else "Пересчитать сейчас",
-            icon = Glyphs.Refresh,
-            enabled = !busy,
-            onClick = {
-                busy = true
-                scope.launch {
-                    val lines = withContext(Dispatchers.IO) {
-                        runCatching { app.paceStore.tuneNow(app.historyLog) }
-                            .getOrElse { e -> listOf("не посчиталось: ${e.message}") }
-                    }
-                    runCatching { app.nightLog.add(lines.firstOrNull().orEmpty() + " (кнопкой)") }
-                    busy = false
-                    round++
-                }
-            },
-        )
-        if (samples > 0) {
-            ru.zf.pravka.ui.PaperTextButton(
-                "Выгрузить замеры · $samples",
-                icon = Glyphs.Export,
-                onClick = {
-                    scope.launch {
-                        val intent = withContext(Dispatchers.IO) { runCatching { app.paceStore.shareCsvIntent() } }
-                        intent.onSuccess { i ->
-                            context.startActivity(
-                                android.content.Intent.createChooser(i, "Замеры Claude")
-                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
-                        }.onFailure { e -> ru.zf.pravka.ui.Feedback.toast(context, "Не собралась: ${e.message}") }
-                    }
-                },
-            )
-        }
-    }
+    // Секунды на кнопке переехали в «Модели» (26.09.2026: «выведи эту
+    // статистику в настройки/модели») — рядом с выбором, где они и нужны.
 }
 
 /**

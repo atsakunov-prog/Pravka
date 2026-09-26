@@ -84,10 +84,44 @@ class PaceStore(private val context: Context) {
 
         /** В настройках — дороги, по которым ходили за последний месяц; остальные числом. */
         private const val RECENT_MS = 30L * 24 * 3_600_000
+
+        /** Сколько последних запросов держать на ключ для примеров. */
+        private const val RECENT_KEEP = 5
     }
 
+    /** Откуда у дороги её обещание. */
+    enum class Source {
+        /** Своих замеров хватает — прикидки в обещании нет. */
+        OWN,
+        /** Своих мало: обещание — свои вместе с соседкой или заводской прикидкой. */
+        MIXED,
+        /** Своих нет: прямая этой же дороги на другой модели через коэффициенты. */
+        SIBLING,
+        /** Своих нет и соседки нет: заводская прикидка. */
+        FACTORY,
+    }
+
+    /**
+     * Что дорога обещает и почему — для «Моделей» (владелец, 26.09.2026:
+     * «выведи эту статистику в настройки/модели? И примеры. И не забудь про
+     * остальное: засечка, тело, дело, еда, деньги»). [examples] — длина фразы
+     * и сколько ждать при тёплом кэше; [sibling] — чья прямая пересчитана
+     * (подпись «дорога · модель усилие»), пусто — заводская прикидка.
+     */
+    data class View(
+        val source: Source,
+        val own: Int,
+        val sibling: String,
+        val line: Pace.Line?,
+        val examples: List<Pair<Int, Long>>,
+        val coldExtra: Double,
+        val miss: Double?,
+        val bias: Double?,
+        val tune: Pace.Tune,
+    )
+
     /** Один замер журнала: что обещали и что вышло. */
-    private data class Sample(
+    data class Sample(
         /** Когда запрос УШЁЛ. */
         val at: Long,
         val key: String,
@@ -126,6 +160,13 @@ class PaceStore(private val context: Context) {
     private var tuneAt = 0L
     private var tuneLines: List<String> = emptyList()
     private var loaded = false
+
+    /**
+     * Последние замеры каждого ключа — примеры для «Моделей». Собирается из
+     * журнала один раз ([recent], с фонового потока), дальше пополняется
+     * на каждом ответе.
+     */
+    private var recentByKey: HashMap<String, ArrayDeque<Sample>>? = null
 
     @Synchronized
     fun load() {
@@ -304,13 +345,18 @@ class PaceStore(private val context: Context) {
             actual = ms,
             cache = when (cache) { true -> 1; false -> 0; null -> -1 },
             coldExpected = Pace.coldLikely(before, startedAt),
-        ).json()
+        )
+        recentByKey?.getOrPut(k) { ArrayDeque() }?.let { q ->
+            q.addLast(line)
+            while (q.size > RECENT_KEEP) q.removeFirst()
+        }
+        val json = line.json()
         val snapshot = HashMap(roads)
         val at = seed
         val tAt = tuneAt
         val tLines = tuneLines
         DiskWriter.post {
-            appendLog(listOf(line))
+            appendLog(listOf(json))
             persist(snapshot, at, tAt, tLines)
         }
     }
@@ -500,6 +546,88 @@ class PaceStore(private val context: Context) {
         val out = File(context.cacheDir, "pravka-claude-timings.csv")
         out.writeText(csv)
         return shareFileIntent(context, out, "text/csv")
+    }
+
+    // ---- «Модели»: что обещает любая пара модели и усилия ----
+
+    /**
+     * Что обещает дорога [route] (вида [kind], со снимком — [photo]) на
+     * модели [model] с усилием [effort] — в том числе на ещё не выбранной:
+     * ровно то, что получит кнопка, если тапнуть этот чип. Длины — [lengths].
+     */
+    @Synchronized
+    fun view(
+        route: String,
+        kind: String,
+        photo: Boolean,
+        model: String,
+        effort: String,
+        lengths: List<Int>,
+    ): View {
+        load()
+        val k = key(route, kind, photo, model, effort)
+        val road = roads[k]
+        val prior = priorOf(k)
+        val sib = sibling(k)
+        val own = road?.acc?.n ?: 0.0
+        val source = when {
+            own >= Pace.PRIOR_FADE_AT -> Source.OWN
+            own >= 1.0 -> Source.MIXED
+            sib != null -> Source.SIBLING
+            else -> Source.FACTORY
+        }
+        // Примеры — при тёплом кэше: холодная добавка показывается отдельно.
+        val warmAt = road?.lastAt?.takeIf { it > 0L } ?: System.currentTimeMillis()
+        val warmRoad = road ?: Pace.Road(lastAt = warmAt)
+        return View(
+            source = source,
+            own = own.roundToInt(),
+            sibling = if (source == Source.OWN) "" else sib?.key?.let(::label).orEmpty(),
+            line = Pace.line(Pace.mix(road?.acc, prior)),
+            examples = lengths.map { it to Pace.expect(warmRoad, prior, it, warmAt) },
+            coldExtra = Pace.coldExtra(road),
+            miss = road?.miss,
+            bias = road?.bias,
+            tune = road?.tune ?: Pace.Tune(),
+        )
+    }
+
+    /** Виды и снимки, которые у дороги [route] уже встречались: «вопрос», «ответ», снимок. */
+    @Synchronized
+    fun kindsOf(route: String): List<Pair<String, Boolean>> {
+        load()
+        return roads.keys
+            .map { it.substringBefore('|').split('·') }
+            .filter { it[0] == route }
+            .map { parts -> parts.drop(1).filter { it != "фото" }.joinToString("·") to parts.contains("фото") }
+            .distinct()
+            .sortedWith(compareBy({ it.first }, { it.second }))
+    }
+
+    /**
+     * Последние запросы (до [limit]) дороги на этой модели и усилии — что
+     * обещано и что вышло. Первый раз читает журнал замеров: звать не на
+     * главном потоке.
+     */
+    fun recent(route: String, kind: String, photo: Boolean, model: String, effort: String, limit: Int = 3): List<Sample> {
+        val ready = synchronized(this) { recentByKey != null }
+        if (!ready) {
+            val all = readLog()
+            synchronized(this) {
+                if (recentByKey == null) {
+                    val map = HashMap<String, ArrayDeque<Sample>>()
+                    for (s in all) {
+                        val q = map.getOrPut(s.key) { ArrayDeque() }
+                        q.addLast(s)
+                        while (q.size > RECENT_KEEP) q.removeFirst()
+                    }
+                    recentByKey = map
+                }
+            }
+        }
+        return synchronized(this) {
+            recentByKey?.get(key(route, kind, photo, model, effort))?.toList()?.takeLast(limit)?.reversed().orEmpty()
+        }
     }
 
     // ---- Внутреннее ----
