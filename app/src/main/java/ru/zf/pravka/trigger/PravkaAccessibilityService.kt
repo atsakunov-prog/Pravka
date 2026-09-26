@@ -276,8 +276,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var cachedNetwork: Boolean = false
     /** Ширина бегущей строки, dp — общая для «П», «З», «Д» и «Т» (Settings.tickerWidthFlow). */
     @Volatile internal var cachedTickerWidthDp: Int = Settings.TICKER_WIDTH_DEFAULT
-    /** Пилюля диктовки снизу посередине (true) или у кнопки — Settings.tickerBottomFlow. */
-    @Volatile internal var cachedTickerBottom: Boolean = true
+    /** Где всплывает пилюля диктовки: сверху, снизу или у кнопки — Settings.tickerPlaceFlow. */
+    @Volatile internal var cachedTickerPlace: ru.zf.pravka.core.PillGeometry.Place = ru.zf.pravka.core.PillGeometry.Place.TOP
     /** Плотность стекла пилюли — Settings.tickerDensityFlow. */
     @Volatile internal var cachedTickerDensity: Float = ru.zf.pravka.core.PillLook.DENSITY_DEFAULT
 
@@ -387,10 +387,10 @@ class PravkaAccessibilityService : AccessibilityService() {
                 repositionTickers()
             }
         }
-        // Место пилюли решается на показе: переключатель «Снизу · У кнопки»
-        // подействует со следующего тейка, а плотность — сразу, на открытой.
+        // Место пилюли решается на показе: переключатель «Сверху · Снизу · У
+        // кнопки» подействует со следующего тейка, а плотность — сразу, на открытой.
         scope.launch {
-            app.settings.tickerBottomFlow.collect { cachedTickerBottom = it }
+            app.settings.tickerPlaceFlow.collect { cachedTickerPlace = it }
         }
         scope.launch {
             app.settings.tickerDensityFlow.collect {

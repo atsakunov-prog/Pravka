@@ -5,8 +5,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.zf.pravka.core.PillGeometry.Box
 
-// Пилюля диктовки снизу (docs/pravka.md, «Пилюля диктовки»): посередине над
-// клавиатурой или над навигацией, и никогда — поверх кнопки, которая пишет.
+// Пилюля диктовки (docs/pravka.md, «Пилюля диктовки»): посередине под строкой
+// состояния (с завода) или над клавиатурой, и никогда — поверх кнопки, которая пишет.
 class PillGeometryTest {
 
     // Телефон в пикселях при плотности 2,5: 412 × 915 dp.
@@ -92,6 +92,50 @@ class PillGeometryTest {
         val s = PillGeometry.bottom(w, floor, 850, pillH, side, gap, minW, listOf(button, cancel))
         assertTrue(!overlaps(box(s), button))
         assertTrue(!overlaps(box(s), cancel))
+    }
+
+    @Test
+    fun `потолок - под строкой состояния или под вырезом, что глубже`() {
+        assertEquals(80 + gap, PillGeometry.ceiling(statusTop = 80, cutoutTop = 0, gap = gap))
+        assertEquals(120 + gap, PillGeometry.ceiling(statusTop = 80, cutoutTop = 120, gap = gap))
+    }
+
+    @Test
+    fun `сверху без препятствий - посередине, верхним краем под потолком`() {
+        val ceiling = PillGeometry.ceiling(80, 0, gap)
+        val s = PillGeometry.top(w, ceiling, 850, pillH, side, gap, minW, emptyList())
+        assertEquals(ceiling, s.y)
+        assertEquals((w - 850) / 2, s.x)
+        assertEquals(850, s.width)
+    }
+
+    @Test
+    fun `сверху кнопка у правого края - пилюля ужимается влево`() {
+        val ceiling = PillGeometry.ceiling(80, 0, gap)
+        val button = Box(w - 130, ceiling, w - 10, ceiling + 120)
+        val s = PillGeometry.top(w, ceiling, 850, pillH, side, gap, minW, listOf(button))
+        assertTrue(!overlaps(box(s), button))
+        assertEquals("под тем же потолком", ceiling, s.y)
+        assertTrue(s.width >= minW)
+    }
+
+    @Test
+    fun `сверху кнопка посередине - пилюля опускается под неё`() {
+        val ceiling = PillGeometry.ceiling(80, 0, gap)
+        val button = Box(w / 2 - 60, ceiling + 10, w / 2 + 60, ceiling + 130)
+        val s = PillGeometry.top(w, ceiling, 850, pillH, side, gap, minW, listOf(button))
+        assertTrue(!overlaps(box(s), button))
+        assertEquals(button.bottom + gap, s.y)
+        assertEquals(850, s.width)
+    }
+
+    @Test
+    fun `место из настройки - по ключу, незнакомое - нет`() {
+        assertEquals(PillGeometry.Place.TOP, PillGeometry.Place.fromKey("top"))
+        assertEquals(PillGeometry.Place.BOTTOM, PillGeometry.Place.fromKey("bottom"))
+        assertEquals(PillGeometry.Place.BESIDE, PillGeometry.Place.fromKey("button"))
+        assertEquals(null, PillGeometry.Place.fromKey(null))
+        assertEquals(null, PillGeometry.Place.fromKey("left"))
     }
 
     @Test

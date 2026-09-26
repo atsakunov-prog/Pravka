@@ -41,7 +41,9 @@ class Settings(private val context: Context) {
         private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
         private val KEY_FAB_ALPHA = floatPreferencesKey("fab_alpha")
         private val KEY_TICKER_WIDTH = intPreferencesKey("ticker_width_dp")
+        /** Прожил одну сборку (26.09): «снизу» да/нет. Читается только ради перехода на [KEY_TICKER_PLACE]. */
         private val KEY_TICKER_BOTTOM = booleanPreferencesKey("ticker_bottom")
+        private val KEY_TICKER_PLACE = stringPreferencesKey("ticker_place")
         private val KEY_TICKER_DENSITY = floatPreferencesKey("ticker_density")
         private val KEY_SPEECH_ENGINE = stringPreferencesKey("speech_engine")
         private val KEY_SPEECH_SEGMENTED = booleanPreferencesKey("speech_segmented")
@@ -1207,12 +1209,18 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_TICKER_WIDTH] = dp.coerceIn(TICKER_WIDTH_MIN, TICKER_WIDTH_MAX) }
     }
 
-    // Где всплывает пилюля диктовки (владелец, 26.09.2026, по образцу Gemini):
-    // снизу посередине над клавиатурой — с завода; «У кнопки» — прежнее место,
-    // откат одним движением.
-    val tickerBottomFlow = context.dataStore.data.map { it[KEY_TICKER_BOTTOM] ?: true }
-    suspend fun setTickerBottom(value: Boolean) {
-        context.dataStore.edit { it[KEY_TICKER_BOTTOM] = value }
+    // Где всплывает пилюля диктовки (владелец, 26.09.2026, по образцу Gemini).
+    // Сначала было «снизу над клавиатурой», тем же днём: «пускай сверху
+    // вылезает!» — сверху стало заводским; «Снизу» осталось выбором, «У
+    // кнопки» — прежнее место, откат одним движением. Кто успел выбрать «У
+    // кнопки» в сборке с тумблером да/нет, там и остаётся.
+    val tickerPlaceFlow = context.dataStore.data.map { p ->
+        ru.zf.pravka.core.PillGeometry.Place.fromKey(p[KEY_TICKER_PLACE])
+            ?: if (p[KEY_TICKER_BOTTOM] == false) ru.zf.pravka.core.PillGeometry.Place.BESIDE
+            else ru.zf.pravka.core.PillGeometry.Place.TOP
+    }
+    suspend fun setTickerPlace(place: ru.zf.pravka.core.PillGeometry.Place) {
+        context.dataStore.edit { it[KEY_TICKER_PLACE] = place.key }
     }
 
     // Плотность стекла пилюли: «прозрачнее… просто прозрачность очень сильно

@@ -36,10 +36,10 @@
   Пока микрофон наш, экран не гаснет: `DictationService` зовёт
   `PravkaAccessibilityService.keepScreenOn` (окно 1×1 с `FLAG_KEEP_SCREEN_ON`).
   Тикер диктовки — бегущая строка `trigger/MarqueeTickerView.kt` в пилюле
-  диктовки `trigger/DictationPill.kt` (одна на все кнопки: снизу посередине
-  над клавиатурой, как у Gemini; место — `core/PillGeometry.kt`, вид и
-  пружина — `core/PillLook.kt`; клавиатуру отдаёт метрика своего окна, не
-  чужие окна).
+  диктовки `trigger/DictationPill.kt` (одна на все кнопки, в одежде Gemini:
+  с завода выезжает сверху из-под строки состояния, выбором — снизу над
+  клавиатурой или у кнопки; место — `core/PillGeometry.kt`, вид и пружина —
+  `core/PillLook.kt`; отступы экрана отдаёт метрика своего окна, не чужие окна).
   Кто слушает — телефон или Bluetooth-гарнитура — выбирает владелец кружком
   в веере шестерёнки над «П» (`trigger/StackSettingsController.kt`,
   состояние — `settings.phoneMicOnlyFlow`); маршрутом звука (канал гарнитуры,

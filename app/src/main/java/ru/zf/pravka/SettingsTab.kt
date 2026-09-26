@@ -746,20 +746,26 @@ private fun ButtonsSettings(app: PravkaApp) {
     }
 
     // Пилюля диктовки (владелец, 26.09.2026, по образцу Gemini): «она будет
-    // вылезать не рядом с кнопкой… над клавиатурой, если клавиатура включена,
-    // или внизу экрана». «У кнопки» — прежнее место, откат одним движением.
-    val tickerBottom by settings.tickerBottomFlow.collectAsState(initial = true)
+    // вылезать не рядом с кнопкой», и тем же днём — «пускай сверху
+    // вылезает!». «У кнопки» — прежнее место, откат одним движением.
+    val tickerPlace by settings.tickerPlaceFlow.collectAsState(initial = ru.zf.pravka.core.PillGeometry.Place.TOP)
     PaperCard(
         label = "бегущая строка",
         info = "Пока идёт запись, живые слова бегут по пилюле цвета кнопки: слева знак режима, " +
-            "справа кружок, который дышит голосом. Снизу — всплывает посередине над клавиатурой, " +
-            "а без неё — над полосой навигации, и кнопки на экране не накрывает: не хватает места " +
-            "вбок — встаёт над ними. Клавиатура открылась посреди записи — пилюля переплывает " +
-            "на неё за полсекунды. У кнопки — прежнее место сбоку. Место меняется со следующей записи.",
+            "справа кружок, который дышит голосом. Сверху — выезжает из-под строки состояния " +
+            "посередине, как уведомление; клавиатуре и полю ввода не мешает. Снизу — всплывает " +
+            "над клавиатурой (если телефон отдаёт её высоту), а без неё — над полосой навигации. " +
+            "Кнопки на экране пилюля не накрывает: не хватает места вбок — отходит за них. " +
+            "У кнопки — прежнее место сбоку. Место меняется со следующей записи.",
     ) {
         ChipRow {
-            PaperChip("Снизу", selected = tickerBottom, onClick = { scope.launch { settings.setTickerBottom(true) } })
-            PaperChip("У кнопки", selected = !tickerBottom, onClick = { scope.launch { settings.setTickerBottom(false) } })
+            for ((label, place) in listOf(
+                "Сверху" to ru.zf.pravka.core.PillGeometry.Place.TOP,
+                "Снизу" to ru.zf.pravka.core.PillGeometry.Place.BOTTOM,
+                "У кнопки" to ru.zf.pravka.core.PillGeometry.Place.BESIDE,
+            )) {
+                PaperChip(label, selected = tickerPlace == place, onClick = { scope.launch { settings.setTickerPlace(place) } })
+            }
         }
         Spacer(Modifier.height(6.dp))
         // Одна ширина на все кнопки (владелец, 15.09: «поставим в общих

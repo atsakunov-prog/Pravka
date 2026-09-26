@@ -84,6 +84,13 @@ class PillLookTest {
     }
 
     @Test
+    fun `сверху - запас под пилюлей вмещает проскок вниз`() {
+        // Сверху путь длиннее (из-под строки состояния целиком), и проскок с ним.
+        assertTrue(PillLook.topTravelDp() > PillLook.HEIGHT_DP)
+        assertTrue(PillLook.overshoot() * PillLook.topTravelDp() <= PillLook.TOP_ROOM_DP)
+    }
+
+    @Test
     fun `пилюля видна целиком к первой трети`() {
         assertEquals(0f, PillLook.enterAlpha(0f), 0f)
         assertEquals(1f, PillLook.enterAlpha(0.3f), 1e-6f)

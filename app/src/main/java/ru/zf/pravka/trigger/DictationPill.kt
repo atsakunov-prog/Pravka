@@ -50,34 +50,42 @@ import ru.zf.pravka.core.PillLook
  * экрана… всплывать снизу… наверху немножко так вниз делает… — оп — назад.
  * И дальше точно так же всё поведение, как в плашке».
  *
- * Поэтому поведение прежнее, до вызова: `showTicker` / `updateTicker` /
+ * Тем же днём, увидев, что клавиатуру приходится угадывать: «можно и без
+ * этого… Или даже лучше: пускай сверху вылезает!» — и заводским стало место
+ * СВЕРХУ: под строкой состояния посередине. Клавиатура всегда внизу, делить
+ * ей с пилюлей нечего, и поле ввода мессенджера тоже остаётся открытым.
+ *
+ * Поведение прежнее, до вызова: `showTicker` / `updateTicker` /
  * `hideTicker` у каждой кнопки теперь просто зовут сюда, у «З», «Д», «₽» и
  * «Е» тап по пилюле по-прежнему глушит микрофон и открывает набор, у «П» она
  * по-прежнему не ловит касаний. Новое — место, вид и движение:
  *
- *  - **место** — посередине над клавиатурой или над навигацией
- *    (`core/PillGeometry.kt`), кнопки на экране и «отмену» не накрывает; выбор
- *    «Снизу · У кнопки» в «Кнопках на экране» возвращает прежнее место;
+ *  - **место** (`core/PillGeometry.kt`) — три на выбор в «Кнопках на
+ *    экране»: сверху (с завода), снизу над клавиатурой или над навигацией, у
+ *    кнопки (прежнее, откат). Кнопки на экране и «отмену» пилюля не
+ *    накрывает;
  *  - **вид** — стекло цвета режима, уведённого в чернила, с градиентом к
  *    кружку голоса справа и свечением от него; слева знак режима — там, где у
  *    Gemini плюс (`core/PillLook.kt`);
- *  - **движение** — всплывает снизу на пружине с одним проскоком и уходит
- *    вниз.
+ *  - **движение** — пружина с одним проскоком: сверху пилюля выезжает
+ *    из-под строки состояния, чуть проскакивает вниз и возвращается; снизу —
+ *    всплывает с «оп» вверх.
  *
- * Клавиатуру служба не подсматривает: правило Fold — «за чужими окнами не
- * подглядывать, на оконные события не подписываться». Высоту клавиатуры
- * отдаёт метрика СВОЕГО окна (`WindowManager.currentWindowMetrics` —
- * «сырые» отступы экрана, клавиатура в них есть), одним вызовом в
- * WindowManager, и не на главном потоке службы: на показ и раз в
- * [POLL_MS], пока пилюля видна, — клавиатура может открыться посреди тейка.
- * Складывание идёт — не спрашиваем вовсе.
+ * Сверху окно не меняется вовсе: его верх стоит ровно по нижнему краю строки
+ * состояния, пилюля выезжает из-за этого края (как уведомление), а под ней
+ * запас на проскок ([PillLook.TOP_ROOM_DP]). Над строкой состояния окно не
+ * заходит — там у «З» и «Д» оно ловило бы касания и мешало стянуть шторку.
  *
- * Окно — ровно пилюля и небольшой запас над ней ([PillLook.ROOM_DP]): в
- * него помещается проскок пружины. На время всплытия и ухода окно
- * вытягивается вниз на глубину всплытия, после — ужимается обратно, не
- * двигая верх: пилюля внутри окна при этом не сдвигается ни на пиксель.
- * Окно, которое и едет, и растёт, система догоняет рывком — здесь оно только
- * меняет высоту, и только по прозрачному краю.
+ * Снизу нужна клавиатура, а служба её не подсматривает: правило Fold — «за
+ * чужими окнами не подглядывать, на оконные события не подписываться».
+ * Высоту клавиатуры отдаёт метрика СВОЕГО окна
+ * (`WindowManager.currentWindowMetrics` — «сырые» отступы экрана, клавиатура
+ * в них есть), одним вызовом в WindowManager, не на главном потоке службы: на
+ * показ и раз в [POLL_MS], пока пилюля видна. Складывание идёт — не
+ * спрашиваем вовсе. Окно снизу — пилюля и запас над ней ([PillLook.ROOM_DP])
+ * на проскок; на время всплытия и ухода оно вытягивается вниз на глубину
+ * всплытия и потом ужимается, не двигая верх: окно, которое и едет, и
+ * растёт, система догоняет рывком.
  */
 class DictationPill(
     private val service: PravkaAccessibilityService,
@@ -102,10 +110,12 @@ class DictationPill(
         /** Меньше этого пилюля за клавиатурой не переезжает, dp. */
         private const val MOVE_DP = 3
 
-        // Клавиатура и навигация — общие на все пилюли: последнее, что
-        // узнали. Новая пилюля встаёт по ним сразу, пока не пришёл свежий ответ.
+        // Отступы экрана — общие на все пилюли: последнее, что узнали.
+        // Новая пилюля встаёт по ним сразу, пока не пришёл свежий ответ.
         @Volatile private var lastIme = 0
         @Volatile private var lastNav = 0
+        @Volatile private var lastStatus = 0
+        @Volatile private var lastCutout = 0
         /** Что последним записали в журнал: пишем только перемену, а не каждый тейк. */
         private var loggedIme = -1
     }
@@ -137,8 +147,10 @@ class DictationPill(
     private var lastText = ""
     private var lastAt = 0L
     private var level = 0f
-    /** Где стоит этот показ: снизу или у кнопки — решено на показе. */
-    private var atBottom = true
+    /** Где стоит этот показ — решено на показе, настройка действует со следующего. */
+    private var place = PillGeometry.Place.TOP
+    /** Экран, под который считаны отступы: сложили или повернули — перечитать. */
+    private var shownScreen: Pair<Int, Int>? = null
 
     val windowCount: Int get() = if (root != null) 1 else 0
 
@@ -162,17 +174,17 @@ class DictationPill(
             body?.translationY = 0f
             body?.alpha = 1f
             rest()
-            place()
+            relayout()
             startPolling()
             return
         }
-        // Окна ещё нет, но оно уже в пути — ждёт ответа про клавиатуру.
+        // Окна ещё нет, но оно уже в пути — ждёт ответа про отступы экрана.
         if (already) return
         level = 0f
-        atBottom = service.cachedTickerBottom
-        if (!atBottom) {
+        place = service.cachedTickerPlace
+        if (place == PillGeometry.Place.BESIDE) {
             create()
-            place()
+            relayout()
             fadeIn()
             return
         }
@@ -180,7 +192,7 @@ class DictationPill(
         scope.launch {
             val changed = refreshInsets()
             if (g != gen || !visible || root != null) return@launch
-            if (changed) logInsets()
+            if (changed && place == PillGeometry.Place.BOTTOM) logInsets()
             create()
             enter()
             startPolling()
@@ -221,7 +233,14 @@ class DictationPill(
     fun reposition() {
         if (!visible || root == null) return
         skin?.setDensity(service.cachedTickerDensity)
-        place()
+        val now = screen()
+        if (now != shownScreen && place != PillGeometry.Place.BESIDE) {
+            // Сложили или повернули посреди записи: строка состояния и вырез
+            // другие — перечитать отступы и встать заново.
+            shownScreen = now
+            scope.launch { if (refreshInsets() && visible) relayout() }
+        }
+        relayout()
     }
 
     fun hide() {
@@ -233,14 +252,26 @@ class DictationPill(
         val b = body
         if (root == null || b == null) return
         stopTravel()
-        if (!atBottom) {
-            travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f -> b.alpha = 1f - f }
-            return
+        val from = b.translationY
+        when (place) {
+            PillGeometry.Place.BESIDE -> {
+                travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f -> b.alpha = 1f - f }
+                return
+            }
+            PillGeometry.Place.TOP -> {
+                // Обратно под строку состояния — тем же путём, каким выехала.
+                val to = -dp(PillLook.topTravelDp()).toFloat()
+                travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f ->
+                    b.translationY = from + (to - from) * f
+                    b.alpha = 1f - 0.5f * f
+                }
+                return
+            }
+            PillGeometry.Place.BOTTOM -> Unit
         }
         // Уход вниз — по вытянутому окну: иначе низ пилюли срезался бы краем.
         travelling = true
-        place()
-        val from = b.translationY
+        relayout()
         val to = dp(PillLook.RISE_DP) * 0.7f
         travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f ->
             b.translationY = from + (to - from) * f
@@ -296,7 +327,7 @@ class DictationPill(
         if (!touchable) flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         // Снизу окно на время всплытия вытянуто за край экрана — без этого
         // флага WindowManager прижал бы его обратно, и пилюля подпрыгнула бы.
-        if (atBottom) flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        if (place == PillGeometry.Place.BOTTOM) flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         val p = WindowManager.LayoutParams(
             1, 1,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -311,39 +342,57 @@ class DictationPill(
         params = p
         pendingText?.let { tv.setTickerText(it) }
         pendingText = null
+        shownScreen = screen()
         spotFor()?.let { layout(p, it) }
         runCatching { windowManager.addView(frame, p) }
     }
 
-    private fun room(): Int = if (atBottom) dp(PillLook.ROOM_DP) else 0
+    /**
+     * Прозрачное над пилюлей внутри окна: снизу — запас на проскок вверх,
+     * сверху — зазор до строки состояния (из-за его верхнего края пилюля и
+     * выезжает).
+     */
+    private fun room(): Int = when (place) {
+        PillGeometry.Place.BOTTOM -> dp(PillLook.ROOM_DP)
+        PillGeometry.Place.TOP -> dp(PillLook.GAP_DP)
+        PillGeometry.Place.BESIDE -> 0
+    }
+
+    /** Прозрачное под пилюлей: сверху — запас на проскок вниз. */
+    private fun below(): Int = if (place == PillGeometry.Place.TOP) dp(PillLook.TOP_ROOM_DP) else 0
 
     /** Место на экране по нынешним кнопкам, клавиатуре и настройкам. */
     private fun spotFor(): PillGeometry.Spot? {
         val (w, h) = screen()
         val pillH = dp(PillLook.HEIGHT_DP)
         val want = dp(service.cachedTickerWidthDp)
-        if (!atBottom) {
-            val b = owner() ?: return null
-            return PillGeometry.beside(w, h, b, want, pillH, gap = dp(8), margin = dp(24))
+        val side = dp(PillLook.SIDE_DP)
+        val gap = dp(PillLook.GAP_DP)
+        val minW = dp(PillLook.MIN_WIDTH_DP)
+        return when (place) {
+            PillGeometry.Place.BESIDE -> {
+                val b = owner() ?: return null
+                PillGeometry.beside(w, h, b, want, pillH, gap = dp(8), margin = dp(24))
+            }
+            PillGeometry.Place.TOP -> PillGeometry.top(
+                w, PillGeometry.ceiling(lastStatus, lastCutout, gap), want, pillH,
+                side, gap, minW, service.pillObstacles() + ownObstacles(),
+            )
+            PillGeometry.Place.BOTTOM -> PillGeometry.bottom(
+                w, PillGeometry.floor(h, lastIme, lastNav, gap), want, pillH,
+                side, gap, minW, service.pillObstacles() + ownObstacles(),
+            )
         }
-        val floor = PillGeometry.floor(h, lastIme, lastNav, dp(PillLook.GAP_DP))
-        return PillGeometry.bottom(
-            w, floor, want, pillH,
-            side = dp(PillLook.SIDE_DP),
-            gap = dp(PillLook.GAP_DP),
-            minW = dp(PillLook.MIN_WIDTH_DP),
-            obstacles = service.pillObstacles() + ownObstacles(),
-        )
     }
 
     /** Параметры окна под место: запас сверху, пилюля, и на ходу — глубина всплытия снизу. */
     private fun layout(p: WindowManager.LayoutParams, spot: PillGeometry.Spot): Boolean {
         val room = room()
-        val rise = if (atBottom && travelling) dp(PillLook.RISE_DP) else 0
+        val rise = if (place == PillGeometry.Place.BOTTOM && travelling) dp(PillLook.RISE_DP) else 0
         val x = spot.x
         val y = spot.y - room
         val width = spot.width
-        val height = room + dp(PillLook.HEIGHT_DP) + rise
+        val height = room + dp(PillLook.HEIGHT_DP) + below() + rise
         if (p.x == x && p.y == y && p.width == width && p.height == height) return false
         p.x = x
         p.y = y
@@ -352,7 +401,7 @@ class DictationPill(
         return true
     }
 
-    private fun place() {
+    private fun relayout() {
         val r = root ?: return
         val p = params ?: return
         val spot = spotFor() ?: return
@@ -361,16 +410,24 @@ class DictationPill(
 
     // ---- Движение ----
 
-    /** Всплытие снизу: пружина с одним проскоком вверх («оп — назад»). */
+    /**
+     * Появление на пружине с одним проскоком («оп — назад»): сверху — из-под
+     * строки состояния вниз, окно не меняется; снизу — из глубины вверх, по
+     * вытянутому на время окну.
+     */
     private fun enter() {
         val b = body ?: return
-        val rise = dp(PillLook.RISE_DP).toFloat()
-        b.translationY = rise
+        val start = if (place == PillGeometry.Place.TOP) {
+            -dp(PillLook.topTravelDp()).toFloat()
+        } else {
+            travelling = true
+            dp(PillLook.RISE_DP).toFloat()
+        }
+        b.translationY = start
         b.alpha = 0f
-        travelling = true
-        place()
+        relayout()
         travel(PillLook.ENTER_MS, LinearInterpolator()) { t ->
-            b.translationY = rise * (1f - PillLook.spring(t))
+            b.translationY = start * (1f - PillLook.spring(t))
             b.alpha = PillLook.enterAlpha(t)
         }
     }
@@ -403,7 +460,7 @@ class DictationPill(
                 if (visible) {
                     body?.translationY = 0f
                     body?.alpha = 1f
-                    place()  // ужать окно обратно — только низ, верх на месте
+                    relayout()  // снизу — ужать окно обратно: только низ, верх на месте
                 } else {
                     drop()
                 }
@@ -433,11 +490,11 @@ class DictationPill(
         lastAt = 0L
     }
 
-    // ---- Клавиатура ----
+    // ---- Отступы экрана: строка состояния сверху, клавиатура снизу ----
 
     /**
-     * Спросить отступы экрана: клавиатура и навигация снизу. Не на главном
-     * потоке — это вызов в WindowManager, а главный поток службы занят
+     * Спросить отступы экрана: строка состояния и вырез сверху, клавиатура и
+     * навигация снизу. Не на главном потоке — это вызов в WindowManager, а главный поток службы занят
      * кнопками. true — что-то поменялось.
      */
     private suspend fun refreshInsets(): Boolean = withContext(Dispatchers.Default) {
@@ -446,9 +503,13 @@ class DictationPill(
             val insets = windowManager.currentWindowMetrics.windowInsets
             val ime = insets.getInsets(WindowInsets.Type.ime()).bottom
             val nav = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
-            val changed = ime != lastIme || nav != lastNav
+            val status = insets.getInsets(WindowInsets.Type.statusBars()).top
+            val cutout = insets.getInsets(WindowInsets.Type.displayCutout()).top
+            val changed = ime != lastIme || nav != lastNav || status != lastStatus || cutout != lastCutout
             lastIme = ime
             lastNav = nav
+            lastStatus = status
+            lastCutout = cutout
             changed
         }.getOrDefault(false)
     }
@@ -464,7 +525,10 @@ class DictationPill(
 
     private fun startPolling() {
         stopPolling()
-        if (!atBottom) return
+        // Спрашивать на ходу есть смысл только снизу — там клавиатура. Сверху
+        // строка состояния посреди записи не меняется, а поворот и
+        // складывание ловит [reposition].
+        if (place != PillGeometry.Place.BOTTOM) return
         pollJob = scope.launch {
             while (isActive && visible) {
                 delay(POLL_MS)
@@ -476,7 +540,7 @@ class DictationPill(
                 val now = before ?: continue
                 // Клавиатура открылась или закрылась посреди тейка: пилюля
                 // всплывает заново уже на новом полу — тем же движением.
-                if (abs(spot.y - room() - now) >= dp(MOVE_DP) && animator == null) enter() else place()
+                if (abs(spot.y - room() - now) >= dp(MOVE_DP) && animator == null) enter() else relayout()
             }
         }
     }
