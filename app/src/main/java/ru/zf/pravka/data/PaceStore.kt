@@ -250,7 +250,8 @@ class PaceStore(private val context: Context) {
         now: Long = System.currentTimeMillis(),
     ): Long {
         load()
-        return Pace.expect(roads[key(route, kind, photo, model, effort)], PaceSeed.prior(model, effort), chars, now)
+        val k = key(route, kind, photo, model, effort)
+        return Pace.expect(roads[k], priorOf(k), chars, now)
     }
 
     /**
@@ -264,10 +265,7 @@ class PaceStore(private val context: Context) {
         val last = roads.entries
             .filter { it.key.substringBefore('|') == route }
             .maxByOrNull { it.value.lastAt }
-        if (last != null) {
-            val parts = last.key.split('|')
-            return Pace.expect(last.value, PaceSeed.prior(parts.getOrElse(1) { "" }, parts.getOrElse(2) { "" }), chars, now)
-        }
+        if (last != null) return Pace.expect(last.value, priorOf(last.key), chars, now)
         val def = ModelRoute.entries.firstOrNull { it.key == route }?.let { ModelChoice.defaultOf(it) }
             ?: return 0L
         return expect(route, "", false, def.model, def.effort, chars, now)
@@ -291,7 +289,7 @@ class PaceStore(private val context: Context) {
     ) {
         load()
         val k = key(route, kind, photo, model, effort)
-        val prior = PaceSeed.prior(model, effort)
+        val prior = priorOf(k)
         val before = roads[k]
         val startedAt = now - ms
         val promised = Pace.expect(before, prior, chars, startedAt)
@@ -371,11 +369,10 @@ class PaceStore(private val context: Context) {
             byKey.getOrPut(k) { ArrayList() } += PaceTune.Sample(r.at, r.chars, r.ms, r.cache)
             fromHistory++
         }
+        val priors = synchronized(this) { byKey.keys.associateWith { priorOf(it) } }
         val results = HashMap<String, PaceTune.Result>()
         for ((k, samples) in byKey) {
-            val parts = k.split('|')
-            val prior = PaceSeed.prior(parts.getOrElse(1) { "" }, parts.getOrElse(2) { "" })
-            runCatching { PaceTune.tune(samples, prior) }.getOrNull()?.let { results[k] = it }
+            runCatching { PaceTune.tune(samples, priors.getValue(k)) }.getOrNull()?.let { results[k] = it }
         }
         val took = System.currentTimeMillis() - started
         val total = byKey.values.sumOf { it.size }
@@ -432,12 +429,9 @@ class PaceStore(private val context: Context) {
         val lines = recent
             .sortedByDescending { it.value.acc.n }
             .map { (key, road) ->
-                val parts = key.split('|')
-                val modelId = parts.getOrElse(1) { "" }
-                val effort = parts.getOrElse(2) { "" }
                 // Показываем ту самую прямую, по которой считает кнопка, —
                 // со всем, что в неё сейчас подмешано.
-                val l = Pace.line(Pace.mix(road.acc, PaceSeed.prior(modelId, effort)))
+                val l = Pace.line(Pace.mix(road.acc, priorOf(key)))
                 val body = when {
                     l == null -> "замеров нет"
                     l.straight -> "%.1f с + %.1f мс на знак".format(Locale.US, l.baseMs / 1000.0, l.msPerChar)
@@ -456,7 +450,11 @@ class PaceStore(private val context: Context) {
                 }.orEmpty()
                 val tuned = if (road.tune.factory) "" else " · калибровка: " + PaceTune.describe(road.tune)
                 val n = road.acc.n.roundToInt()
-                val tail = if (road.acc.n < Pace.PRIOR_FADE_AT) " + прикидка" else ""
+                val tail = when {
+                    road.acc.n >= Pace.PRIOR_FADE_AT -> ""
+                    sibling(key) != null -> " + прямая соседки через коэффициенты моделей"
+                    else -> " + прикидка"
+                }
                 "${label(key)}: $body$cold$miss$tuned · замеров $n$tail"
             }
         val oldLine = if (old.isEmpty()) emptyList()
@@ -505,6 +503,34 @@ class PaceStore(private val context: Context) {
     }
 
     // ---- Внутреннее ----
+
+    /**
+     * С чего дорога начинает, пока своих замеров мало. Есть у этой же дороги
+     * (того же вида, со снимком или без) обученная соседка на ДРУГОЙ модели
+     * или усилии — её прямая, пересчитанная взаимными коэффициентами моделей
+     * (`PaceSeed.transfer`): форма дороги своя, модель — новая. Нет —
+     * заводская прикидка. Владелец (26.09.2026) менял и модели, и усилие;
+     * после каждой смены дорога, по которой ходят раз-два в день, неделю
+     * жила бы заводским, хотя сама же всё знала на прошлой модели.
+     * Под замком.
+     */
+    private fun priorOf(key: String): Pace.Acc {
+        val parts = key.split('|')
+        val model = parts.getOrElse(1) { "" }
+        val effort = parts.getOrElse(2) { "" }
+        val sib = sibling(key) ?: return PaceSeed.prior(model, effort)
+        val sp = sib.key.split('|')
+        val known = Pace.line(sib.value.acc) ?: return PaceSeed.prior(model, effort)
+        return PaceSeed.transfer(known, sp.getOrElse(1) { "" }, sp.getOrElse(2) { "" }, model, effort)
+    }
+
+    /** Самая свежая обученная соседка ключа: та же дорога·вид·фото, другая модель или усилие. */
+    private fun sibling(key: String): Map.Entry<String, Pace.Road>? {
+        val head = key.substringBefore('|')
+        return roads.entries
+            .filter { it.key != key && it.key.substringBefore('|') == head && it.value.acc.n >= Pace.PRIOR_FADE_AT }
+            .maxByOrNull { it.value.lastAt }
+    }
 
     /** «pravka · opus-5-5 medium», «body·вопрос · sonnet-5 high». */
     private fun label(key: String): String {
