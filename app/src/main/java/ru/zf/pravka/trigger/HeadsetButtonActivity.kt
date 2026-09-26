@@ -93,6 +93,50 @@ class HeadsetButtonActivity : Activity() {
             )
         }.isSuccess
 
+        /**
+         * Чем гарнитура связана с телефоном. Команда помощника (AT+BVRA) ходит
+         * ТОЛЬКО по профилю звонков (HFP): гарнитура, подключённая одной
+         * музыкой, или отдавшая звонки адаптеру Loop120 у компьютера, жмёт
+         * кнопку в пустоту. 26.09.2026 назначение до Правки дошло, а ни одно
+         * нажатие — нет: рвётся раньше Правки, и это первое, что видно здесь.
+         *
+         * [calls] / [music]: true — подключена, false — нет, null — не узнать
+         * (нет разрешения «Устройства поблизости»).
+         */
+        data class Link(val calls: Boolean?, val music: Boolean?, val callNames: List<String>)
+
+        @android.annotation.SuppressLint("MissingPermission") // проверяем разрешение сами
+        fun link(context: Context): Link {
+            val allowed = android.os.Build.VERSION.SDK_INT < 31 ||
+                context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) ==
+                PackageManager.PERMISSION_GRANTED
+            val adapter = runCatching {
+                context.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
+            }.getOrNull()
+            fun state(profile: Int): Boolean? = if (!allowed || adapter == null) null else runCatching {
+                adapter.getProfileConnectionState(profile) == android.bluetooth.BluetoothProfile.STATE_CONNECTED
+            }.getOrNull()
+            // Имя — у системы звука: устройство связи Bluetooth есть ровно тогда,
+            // когда гарнитура подключена по звонкам. Разрешения не требует.
+            val names = runCatching {
+                val am = context.getSystemService(android.media.AudioManager::class.java)
+                if (android.os.Build.VERSION.SDK_INT >= 31) {
+                    am.availableCommunicationDevices
+                        .filter { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+                        .map { it.productName.toString() }
+                } else {
+                    am.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS)
+                        .filter { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+                        .map { it.productName.toString() }
+                }
+            }.getOrDefault(emptyList()).distinct()
+            return Link(
+                calls = state(android.bluetooth.BluetoothProfile.HEADSET) ?: if (names.isNotEmpty()) true else null,
+                music = state(android.bluetooth.BluetoothProfile.A2DP),
+                callNames = names,
+            )
+        }
+
         /** Приложение, объявившее команду голоса, и его приоритет у системы. */
         data class Handler(val packageName: String, val label: String, val priority: Int)
 

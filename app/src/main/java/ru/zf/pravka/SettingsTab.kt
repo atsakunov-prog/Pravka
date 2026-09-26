@@ -1019,11 +1019,13 @@ private fun HeadsetButtonCard() {
     val context = LocalContext.current
     var answer by remember { mutableStateOf(HeadsetButtonActivity.whoAnswers(context)) }
     var handlers by remember { mutableStateOf(HeadsetButtonActivity.handlers(context)) }
+    var link by remember { mutableStateOf(HeadsetButtonActivity.link(context)) }
     // Вернулся из системного выбора или из карточки чужого приложения —
     // строка перечитывается сама: «спросит» после «Всегда» врало бы.
     androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
         answer = HeadsetButtonActivity.whoAnswers(context)
         handlers = HeadsetButtonActivity.handlers(context)
+        link = HeadsetButtonActivity.link(context)
         onPauseOrDispose { }
     }
     PaperCard(
@@ -1058,7 +1060,31 @@ private fun HeadsetButtonCard() {
             onClick = {
                 answer = HeadsetButtonActivity.whoAnswers(context)
                 handlers = HeadsetButtonActivity.handlers(context)
+                link = HeadsetButtonActivity.link(context)
             },
+        )
+        // Связь гарнитуры с телефоном: команда помощника ездит только по
+        // звонкам (HFP). Нет их — Правке нечего получать, как ни назначай.
+        val l = link
+        val calls = when (l.calls) {
+            true -> "звонки — подключена" +
+                (if (l.callNames.isNotEmpty()) " («${l.callNames.joinToString(", ")}»)" else "")
+            false -> "звонки — НЕ подключена"
+            null -> "звонки — не узнать без разрешения «Устройства поблизости»"
+        }
+        val music = when (l.music) {
+            true -> "музыка — подключена"
+            false -> "музыка — нет"
+            null -> ""
+        }
+        Text(
+            "Гарнитура у телефона: " + listOf(calls, music).filter { it.isNotBlank() }.joinToString(" · ") +
+                if (l.calls == false) {
+                    ". Кнопке помощника ехать не по чему: включи «Звонки» у гарнитуры в настройках " +
+                        "Bluetooth или отключи её от адаптера Loop120 у компьютера."
+                } else ".",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (l.calls == false) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
         )
         // Кто вообще принимает команду голоса и кто из них главнее у системы:
         // когда кнопка молчит, это первый вопрос, и отвечать на него надо
