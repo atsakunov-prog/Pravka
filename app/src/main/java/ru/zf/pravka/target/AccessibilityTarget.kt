@@ -171,13 +171,23 @@ class AccessibilityTarget(
 
         // Never write into a field the user has already left. A pinned node is
         // its own authority - it was valid at insert time and just re-validated.
-        if (pinnedNode == null) {
+        //
+        // КРОМЕ поля, где уже лежит наш стрим (26.09.2026, владелец: «в конце,
+        // если я ухожу из текстбокса, он пишет, что не может вставить в буфер
+        // обмена»). Чистка льётся в поле по ходу ответа, владелец видит текст
+        // почти целиком и уходит из поля — а финал (последние слова, которые
+        // стрим не успел донести из-за паузы в 150 мс между кусками) упирался
+        // в «фокус ушёл»: тост «не смог вставить» при тексте, который стоит в
+        // поле. Если в поле ровно наш стрим и владелец в нём ничего не менял,
+        // финал дописывается в то же поле; до первого куска стрима правило
+        // прежнее — в оставленное поле не пишем.
+        val focusMoved = pinnedNode == null && run {
             val currentFocus = service.focusedEditableNode()
-            if (currentFocus == null || currentFocus != n) {
-                service.logEvent("write: focus moved (focus=${currentFocus != null})")
-                return false
+            (currentFocus == null || currentFocus != n).also { moved ->
+                if (moved) service.logEvent("write: focus moved (focus=${currentFocus != null}, previews=${previewed.size})")
             }
         }
+        if (focusMoved && previewed.isEmpty()) return false
 
         // Never write over text that changed during the API round trip: the
         // reply below is a rewrite of the OLD field content, and SET_TEXT
@@ -187,6 +197,13 @@ class AccessibilityTarget(
         // legally flatten "\n" to a space, which is not the user typing.
         // Our own live preview is not the user typing either.
         val current = n.effectiveText()
+        // В оставленном поле — только наш стрим, не исходный текст: пустое
+        // поле после «отправить» совпало бы с пустым исходным, и финал
+        // вернулся бы в поле уже отправленного сообщения.
+        if (focusMoved && previewed.none { normalizedWs(it) == normalizedWs(current) }) {
+            service.logEvent("write: left field holds no stream of ours (len=${current.length})")
+            return false
+        }
         if (!isOurs(current)) {
             service.logEvent(
                 "write: field changed mid-flight (now=${current.length} was=${fullText.length} " +
@@ -210,6 +227,15 @@ class AccessibilityTarget(
             newFull = text
             cursor = text.length
         }
+
+        // Стрим уже донёс финал целиком — это и есть доставка, писать нечего.
+        if (normalizedWs(current) == normalizedWs(newFull)) {
+            fullBefore = fullText
+            fullAfter = newFull
+            if (focusMoved) service.logEvent("write: final already in the field via stream")
+            return true
+        }
+        if (focusMoved) service.logEvent("write: finishing our stream in the left field")
 
         val args = Bundle().apply {
             putCharSequence(
