@@ -1018,10 +1018,12 @@ private fun VoiceSettings(app: PravkaApp) {
 private fun HeadsetButtonCard() {
     val context = LocalContext.current
     var answer by remember { mutableStateOf(HeadsetButtonActivity.whoAnswers(context)) }
+    var handlers by remember { mutableStateOf(HeadsetButtonActivity.handlers(context)) }
     // Вернулся из системного выбора или из карточки чужого приложения —
     // строка перечитывается сама: «спросит» после «Всегда» врало бы.
     androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
         answer = HeadsetButtonActivity.whoAnswers(context)
+        handlers = HeadsetButtonActivity.handlers(context)
         onPauseOrDispose { }
     }
     PaperCard(
@@ -1053,8 +1055,30 @@ private fun HeadsetButtonCard() {
             icon = Glyphs.Mic,
             hint = hint,
             status = status,
-            onClick = { answer = HeadsetButtonActivity.whoAnswers(context) },
+            onClick = {
+                answer = HeadsetButtonActivity.whoAnswers(context)
+                handlers = HeadsetButtonActivity.handlers(context)
+            },
         )
+        // Кто вообще принимает команду голоса и кто из них главнее у системы:
+        // когда кнопка молчит, это первый вопрос, и отвечать на него надо
+        // экраном, а не догадкой.
+        if (handlers.isNotEmpty()) {
+            val mine = handlers.firstOrNull { it.packageName == context.packageName }
+            val top = handlers.first()
+            Text(
+                "Команду голоса принимают: " + handlers.joinToString(", ") { h ->
+                    h.label + (if (h.priority != 0) " (приоритет ${h.priority})" else "")
+                } + when {
+                    mine == null -> ". Правки среди них нет — сборка без кнопки гарнитуры?"
+                    top.packageName != mine.packageName && top.priority > mine.priority ->
+                        ". У «${top.label}» приоритет системы выше — «Всегда» его не перебьёт."
+                    else -> "."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         when (val a = answer) {
             HeadsetButtonActivity.Answer.Pravka, HeadsetButtonActivity.Answer.Nobody -> Unit
             HeadsetButtonActivity.Answer.Ask -> {

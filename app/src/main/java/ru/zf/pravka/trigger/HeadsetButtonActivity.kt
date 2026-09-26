@@ -93,6 +93,26 @@ class HeadsetButtonActivity : Activity() {
             )
         }.isSuccess
 
+        /** Приложение, объявившее команду голоса, и его приоритет у системы. */
+        data class Handler(val packageName: String, val label: String, val priority: Int)
+
+        /**
+         * Все, кто принимает команду голоса, — для диагностики на экране
+         * (26.09.2026: назначили Правку, а кнопка всё равно молчит). Приоритет
+         * фильтра честно учитывается только у системных приложений, и если у
+         * Google он выше, выбор «Всегда» его не перебьёт: система отдаст
+         * команду ему, не спрашивая. Это видно здесь, а не гадается.
+         */
+        fun handlers(context: Context): List<Handler> = runCatching {
+            val pm = context.packageManager
+            pm.queryIntentActivities(Intent(Intent.ACTION_VOICE_COMMAND), PackageManager.MATCH_DEFAULT_ONLY)
+                .map {
+                    val pkg = it.activityInfo?.packageName.orEmpty()
+                    Handler(pkg, it.loadLabel(pm)?.toString().orEmpty().ifBlank { pkg }, it.priority)
+                }
+                .sortedByDescending { it.priority }
+        }.getOrDefault(emptyList())
+
         /**
          * Молчаливая механика читается как поломка (правило 6): если «всегда»
          * когда-то выбрали за Google, Правка кнопку гарнитуры не получит
