@@ -4,15 +4,15 @@ import java.time.LocalDate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import ru.zf.pravka.data.DriveBackup.Policy.Do
+import ru.zf.pravka.data.CloudBackup.Policy.Do
 
 // Ночная копия базы — ещё и в семейный Drive (25.09.2026): едет последний
 // снятый архив один раз, по Wi-Fi (трое суток без него — по мобильной), в
 // Drive неделя каждый день и по копии на месяц, каждый телефон чистит свои.
-class DriveBackupTest {
+class CloudBackupTest {
 
     private val day = 86_400_000L
-    private val p = DriveBackup.Policy
+    private val p = CloudBackup.Policy
     private val now = 1_790_000_000_000L
 
     @Test fun `новый архив по Wi-Fi едет сразу`() {

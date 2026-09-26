@@ -13,29 +13,36 @@ import org.json.JSONObject
 import ru.zf.pravka.BuildConfig
 import ru.zf.pravka.core.MoneySync
 import ru.zf.pravka.core.SyncFlat
-import ru.zf.pravka.provider.GoogleAuth
-import ru.zf.pravka.provider.GoogleDrive
+import ru.zf.pravka.provider.FamilyCloud
 
 /**
- * Обмен Деньгами через семейный Google Drive (25.09.2026). Логика слияния —
- * `core/MoneySync.kt`; здесь файлы, Drive и порядок шагов.
+ * Обмен Деньгами через облако семьи (25.09.2026 — семейный Google Drive,
+ * с 26.09 — и домашний сервер по WebDAV, `provider/FamilyCloud.kt`). Логика
+ * слияния — `core/MoneySync.kt`; здесь файлы, облако и порядок шагов.
  *
  * Раскладка:
  *  - в папке базы `money-sync/` — журналы ВСЕХ телефонов кусками
  *    (`<устройство>.000001.jsonl`): свой пишется здесь, чужие — копии из
- *    Drive. Едут вместе с базой, в копии и при переезде;
- *  - в Drive `Правка/Деньги/` — те же куски и паспорта устройств
+ *    облака. Едут вместе с базой, в копии и при переезде;
+ *  - в облаке `Правка/Деньги/` — те же куски и паспорта устройств
  *    (`<устройство>.device.json`: чей телефон). Телефон пишет только свои
  *    файлы — у одного файла никогда не бывает двух писателей;
+ *  - сменили облако (Drive → домашний сервер) — ничего не теряется: каждый
+ *    телефон выложит в новое свои журналы целиком, чужие у него уже есть;
  *  - имя устройства — в закрытой памяти (`DataRoot.secrets`), не в базе:
  *    базу копируют на другой телефон, и два телефона под одним именем писали
  *    бы в один журнал.
  *
+ * Изменился ли кусок: у Drive — md5, у домашнего сервера — размер (журнал
+ * только дописывается, а на сервере заменяется целиком и разом). Паспорт
+ * переписывается целиком, размер его не выдаёт — без md5 он выкладывается и
+ * скачивается раз за запуск.
+ *
  * Шаги одного обмена (под замком, по одному за раз):
  *  1. снимок базы → чем она отличается от сложенных журналов → свои события
  *     дописываются в свой кусок (writer-поток, ждём записи);
- *  2. свои изменившиеся куски — в Drive;
- *  3. чужие изменившиеся куски — из Drive, складываются в память;
+ *  2. свои изменившиеся куски — в облако;
+ *  3. чужие изменившиеся куски — из облака, складываются в память;
  *  4. база приводится к сложенному (записи только добавляются и меняются);
  *  5. скачанные куски ложатся на диск ПОСЛЕ записи базы — той же очередью.
  *     Умер процесс между 4 и 5 — следующий обмен скачает их снова, и
@@ -43,11 +50,10 @@ import ru.zf.pravka.provider.GoogleDrive
  *     старые поля базы ушли бы как «свежие правки» и перекрыли чужие;
  *  6. сверка — у каждого телефона своя, по общим данным.
  */
-internal class MoneyDriveSync(
+internal class MoneyCloudSync(
     private val context: Context,
     private val store: MoneyStore,
-    private val auth: GoogleAuth,
-    private val drive: GoogleDrive,
+    private val cloud: () -> FamilyCloud?,
     private val profile: () -> Profile?,
     private val reconcile: suspend () -> Unit,
     private val log: (String) -> Unit,
@@ -95,9 +101,12 @@ internal class MoneyDriveSync(
                 .also { StoreFiles.writeAtomic(f, it) }
     }
 
-    /** Можно ли меняться: вход есть, база читается, Деньги включены в профиле. */
+    /** Паспорта, выложенные (облако|имя|md5) и скачанные (облако|имя|размер) в этом запуске. */
+    private val passports = HashSet<String>()
+
+    /** Можно ли меняться: облако задано, база читается, Деньги включены в профиле. */
     fun ready(): Boolean =
-        auth.account.value != null &&
+        cloud() != null &&
             DataRoot.where.value != DataRoot.Where.FOLDER_NO_ACCESS &&
             profile()?.has(Profile.Mode.MONEY) == true
 
@@ -107,16 +116,17 @@ internal class MoneyDriveSync(
      */
     suspend fun sync(reason: String): Status? {
         if (!ready()) return null
+        val c = cloud() ?: return null
         if (!mutex.tryLock()) return null
         _status.value = _status.value.copy(running = true)
         try {
-            val s = withContext(Dispatchers.IO) { exchange() }
+            val s = withContext(Dispatchers.IO) { exchange(c) }
             _status.value = s
             val got = s.from.values.sum()
             if (s.sent > 0 || got > 0 || s.added + s.changed > 0) {
                 val names = s.from.filterValues { it > 0 }.entries.joinToString { (d, n) -> "${s.devices[d] ?: d} $n" }
                 log(
-                    "деньги·drive ($reason): отправлено событий ${s.sent}" +
+                    "деньги·${c.title} ($reason): отправлено событий ${s.sent}" +
                         (if (names.isNotEmpty()) ", получено: $names" else "") +
                         (if (s.added + s.changed > 0) " — записей добавлено ${s.added}, поправлено ${s.changed}" else "")
                 )
@@ -129,16 +139,11 @@ internal class MoneyDriveSync(
             // то, что уже легло в базу.
             merged = null
             if (e is kotlinx.coroutines.CancellationException) throw e
-            val why = when (e) {
-                is GoogleAuth.AuthException, is GoogleDrive.DriveException -> e.message.orEmpty()
-                is java.net.UnknownHostException -> "нет сети (${e.message})"
-                is java.net.SocketTimeoutException -> "Google не ответил вовремя (${e.message})"
-                else -> "${e.javaClass.simpleName}: ${e.message}"
-            }
+            val why = FamilyCloud.why(e, c.title)
             _status.value = _status.value.copy(running = false, error = why)
             // Ошибка раз в пять минут одна и та же — в журнал один раз.
             if (why != lastLoggedError) {
-                log("деньги·drive ($reason): не вышло — $why")
+                log("деньги·${c.title} ($reason): не вышло — $why")
                 lastLoggedError = why
             }
             return _status.value
@@ -148,7 +153,7 @@ internal class MoneyDriveSync(
         }
     }
 
-    private suspend fun exchange(): Status {
+    private suspend fun exchange(c: FamilyCloud): Status {
         val me = device
         dir.mkdirs()
         // Через ту же очередь записи: скачанные куски прошлого обмена могли
@@ -163,24 +168,26 @@ internal class MoneyDriveSync(
             DiskWriter.call(60_000) { append(me, mine); true }
                 ?: throw java.io.IOException("журнал обмена не записался за минуту")
             m.fold(mine)
-            if (m.cells.size == mine.size) log("деньги·drive: первый обмен — в журнал ушло ${mine.size} записей и правил")
+            if (m.cells.size == mine.size) log("деньги·${c.title}: первый обмен — в журнал ушло ${mine.size} записей и правил")
         }
 
-        // 2. В Drive — свои изменившиеся куски и паспорт.
-        val folder = drive.folder(PATH)
-        val remote = drive.list(folder)
+        // 2. В облако — свои изменившиеся куски и паспорт.
+        val remote = c.list(PATH)
         val byName = remote.associateBy { it.name }
         for (f in chunks().filter { MoneySync.parseChunk(it.name)?.device == me }) {
             val r = byName[f.name]
-            if (r != null && r.md5 == md5(f)) continue
-            val bytes = f.readBytes()
-            if (r == null) drive.create(folder, f.name, bytes, MIME) else drive.update(r.id, bytes, MIME)
+            if (r != null && same(f, r)) continue
+            c.write(PATH, f.name, f.readBytes(), MIME)
         }
         val passport = passport(me).toByteArray()
         val pName = MoneySync.deviceFileName(me)
+        val pKey = c.id + "|" + pName + "|" + md5(passport)
         byName[pName].let { r ->
-            if (r == null) drive.create(folder, pName, passport, MIME)
-            else if (r.md5 != md5(passport)) drive.update(r.id, passport, MIME)
+            val upToDate = r != null && (if (r.md5.isNotEmpty()) r.md5 == md5(passport) else r.size == passport.size.toLong() && pKey in passports)
+            if (!upToDate) {
+                c.write(PATH, pName, passport, MIME)
+                passports.add(pKey)
+            }
         }
 
         // 3. Чужое — только изменившееся. Складывается, когда скачано ВСЁ:
@@ -188,12 +195,18 @@ internal class MoneyDriveSync(
         // несложенным в базу (иначе следующий обмен отправил бы старые поля
         // базы как свежие правки и откатил чужое).
         val fresh = ArrayList<Pair<File, ByteArray>>()
+        val seen = ArrayList<String>()
         for (r in remote) {
             val dev = MoneySync.parseChunk(r.name)?.device ?: MoneySync.parseDeviceFile(r.name) ?: continue
             if (dev == me) continue
             val copy = File(dir, r.name)
-            if (copy.isFile && md5(copy) == r.md5) continue
-            fresh.add(copy to drive.download(r.id))
+            if (copy.isFile && same(copy, r)) {
+                // Паспорт без md5 сверяется по размеру и раз за запуск скачивается.
+                if (MoneySync.parseChunk(r.name) != null || r.md5.isNotEmpty()) continue
+                if (c.id + "|" + r.name + "|" + r.size in passports) continue
+            }
+            fresh.add(copy to c.read(PATH, r.name))
+            if (MoneySync.parseDeviceFile(r.name) != null) seen.add(c.id + "|" + r.name + "|" + r.size)
         }
         val from = HashMap<String, Int>()
         for ((f, bytes) in fresh) {
@@ -217,6 +230,7 @@ internal class MoneyDriveSync(
 
         // 5. Скачанное — на диск после базы, той же очередью.
         for ((f, bytes) in fresh) DiskWriter.post { writeAtomic(f, bytes) }
+        passports.addAll(seen)
 
         // 6. Сверка по общему.
         if (applied.any) runCatching { reconcile() }
@@ -278,6 +292,10 @@ internal class MoneyDriveSync(
             tmp.delete()
         }
     }
+
+    /** Тот же ли файл в облаке: md5, если облако его знает, иначе размер (журналы только растут). */
+    private fun same(f: File, r: FamilyCloud.Item): Boolean =
+        if (r.md5.isNotEmpty()) md5(f) == r.md5 else f.length() == r.size
 
     private fun md5(f: File): String {
         val key = Pair(f.length(), f.lastModified())

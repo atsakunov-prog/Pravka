@@ -2786,7 +2786,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             if (food) scope.launch { runCatching { app.foodEngine.syncPending() } }
             // Общие Деньги: обмен с семейным Drive — свои правки туда, чужие
             // сюда. Без входа молчит; второй обмен поверх идущего не встаёт.
-            if (money) scope.launch { runCatching { app.moneyDriveSync.sync("тик") } }
+            if (money) scope.launch { runCatching { app.moneyCloudSync.sync("тик") } }
             // Дневник в Notion: галочки, feel, колено и вес уезжают сами.
             // Свой дроссель на полчаса и свой «ничего не изменилось» внутри.
             // В нём и спорт, и итог еды — живёт, пока жив хоть один из них.
@@ -2827,7 +2827,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
             // Та же копия — в семейный Google Drive, как только снята (по Wi-Fi).
             // Без входа в Google молчит; решение — чтение двух маленьких файлов.
-            scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.driveBackup.tick() } }
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.cloudBackup.tick() } }
             // Обновления: сам решает, прошли ли сутки, сам тянет и сам говорит.
             scope.launch { runCatching { app.updates.tick() } }
             zasechkaReminderCheck()

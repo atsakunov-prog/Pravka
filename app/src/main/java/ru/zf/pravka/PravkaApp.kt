@@ -90,13 +90,13 @@ class PravkaApp : Application() {
         if (profileStore.owner && profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) {
             appScope.launch { runCatching { moneyEngine.seedManual() } }
         }
-        // Общие Деньги через семейный Drive (data/MoneyDriveSync.kt): правка
+        // Общие Деньги через облако семьи (data/MoneyCloudSync.kt): правка
         // уходит через полминуты тишины, а не с каждым нажатием; дальше —
         // тик службы раз в пять минут. Нет входа или Деньги выключены — молчит.
         appScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             @OptIn(kotlinx.coroutines.FlowPreview::class)
             moneyStore.stateFlow.drop(1).debounce(30_000L)
-                .collect { runCatching { moneyDriveSync.sync("правка") } }
+                .collect { runCatching { moneyCloudSync.sync("правка") } }
         }
         // Почерк значков (версия 3) — один на процесс: приложение перерисуется
         // само (`Glyphs.gemini` — состояние Compose), кнопки перечитывает служба.
@@ -346,8 +346,10 @@ class PravkaApp : Application() {
      * публичном репозитории»). Читается один раз; не прочитался — пусто, и
      * работают правила владельца и безличные.
      */
-    // Семейный Google Drive: вход через браузер, ключ — в закрытой памяти
-    // (provider/GoogleAuth.kt); обмен Деньгами — data/MoneyDriveSync.kt.
+    // Облако семьи (provider/FamilyCloud.kt): домашний сервер по WebDAV
+    // (data/HomeServer.kt) или семейный Google Drive — вход через браузер,
+    // ключ в закрытой памяти (provider/GoogleAuth.kt). Обмен Деньгами —
+    // data/MoneyCloudSync.kt, копии базы — data/CloudBackup.kt.
     // Свой клиент: выгрузка первого журнала — мегабайты по мобильной сети.
     private val googleHttp by lazy {
         httpClient.newBuilder()
@@ -358,24 +360,42 @@ class PravkaApp : Application() {
     }
     val googleAuth by lazy { ru.zf.pravka.provider.GoogleAuth(this, googleHttp) }
     val googleDrive by lazy { ru.zf.pravka.provider.GoogleDrive(googleAuth, googleHttp) }
-    internal val moneyDriveSync by lazy {
-        ru.zf.pravka.data.MoneyDriveSync(
+    val driveCloud by lazy { ru.zf.pravka.provider.DriveCloud(googleDrive) { googleAuth.account.value?.email.orEmpty() } }
+    // Диск сервера засыпает через 20 минут простоя: первый ответ после сна —
+    // секунды раскрутки, отсюда запас по чтению.
+    private val webdavHttp by lazy {
+        httpClient.newBuilder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
+            .writeTimeout(90, TimeUnit.SECONDS)
+            .build()
+    }
+    internal val homeServer by lazy { ru.zf.pravka.data.HomeServer(this, ru.zf.pravka.provider.WebDav(webdavHttp)) }
+
+    /** Какое облако сейчас: задан домашний сервер — он, иначе Drive, если вошли; нет ни того, ни другого — null. */
+    fun familyCloud(): ru.zf.pravka.provider.FamilyCloud? = when {
+        homeServer.saved.value != null -> homeServer.cloud
+        googleAuth.account.value != null -> driveCloud
+        else -> null
+    }
+
+    internal val moneyCloudSync by lazy {
+        ru.zf.pravka.data.MoneyCloudSync(
             context = this,
             store = moneyStore,
-            auth = googleAuth,
-            drive = googleDrive,
+            cloud = { familyCloud() },
             profile = { profileStore.current },
             reconcile = { moneyEngine.reconcile() },
             log = { eventLog.add(it) },
         )
     }
 
-    /** Ночная копия базы — ещё и в семейный Drive, `Правка/Копии базы` (data/DriveBackup.kt). */
-    internal val driveBackup by lazy {
-        ru.zf.pravka.data.DriveBackup(
+    /** Ночная копия базы — ещё и в облако семьи, `Правка/Копии базы` (data/CloudBackup.kt). */
+    internal val cloudBackup by lazy {
+        ru.zf.pravka.data.CloudBackup(
             context = this,
-            auth = googleAuth,
-            drive = googleDrive,
+            cloud = { familyCloud() },
+            connectedAt = { homeServer.saved.value?.at ?: googleAuth.account.value?.at ?: 0L },
             user = { profileStore.current?.id ?: "user" },
             log = { eventLog.add(it) },
         )

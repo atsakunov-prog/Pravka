@@ -110,7 +110,7 @@ internal enum class SettingsGroup(
     NOTION("Notion", "план, Дневник, «Вся жизнь»", SettingsShelf.LINKS, { Glyphs.Scroll }),
     INTERVALS("intervals.icu", "тренировки, сон, вес", SettingsShelf.LINKS, { Glyphs.Activity }, ModeDecor.SPORT),
     SHEETS("Google Sheets", "таймшит из ленты", SettingsShelf.LINKS, { Glyphs.ListLines }, ModeDecor.ZASECHKA),
-    GOOGLE("Google Drive", "семейный аккаунт: общие Деньги, копии базы", SettingsShelf.LINKS, { Glyphs.Cloud }),
+    CLOUD("Облако семьи", "домашний сервер или Google Drive: общие Деньги, копии базы", SettingsShelf.LINKS, { Glyphs.Cloud }),
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, { Glyphs.Disk }),
     DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, { Glyphs.Palette }),
     CARDS("Плашки приложения", "значки, свечение режима, темнее, фаска, свет, зерно", SettingsShelf.LOOK, { Glyphs.Layers }),
@@ -251,14 +251,16 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
             val key by s.icuKeyFlow.collectAsState(initial = "")
             keyStatus(athlete.isNotBlank() && key.isNotBlank())
         }
-        SettingsGroup.GOOGLE -> {
+        SettingsGroup.CLOUD -> {
+            val home by app.homeServer.saved.collectAsState()
             val acc by app.googleAuth.account.collectAsState()
-            val sync by app.moneyDriveSync.status.collectAsState()
-            val copy by app.driveBackup.status.collectAsState()
+            val sync by app.moneyCloudSync.status.collectAsState()
+            val copy by app.cloudBackup.status.collectAsState()
             when {
-                acc == null -> GroupStatus("нет входа", ok = null, dot = true)
+                home == null && acc == null -> GroupStatus("не задано", ok = null, dot = true)
                 sync.error.isNotBlank() || copy.error.isNotBlank() -> GroupStatus("ошибка", ok = false, dot = true)
-                else -> GroupStatus("подключён", ok = true, dot = true)
+                home != null -> GroupStatus("сервер", ok = true, dot = true)
+                else -> GroupStatus("Drive", ok = true, dot = true)
             }
         }
         SettingsGroup.SHEETS -> {
@@ -362,7 +364,7 @@ private fun GroupContent(
         SettingsGroup.NOTION -> NotionSettings(app)
         SettingsGroup.INTERVALS -> IntervalsSettings(app)
         SettingsGroup.SHEETS -> ZasechkaSheetsSettings(app)
-        SettingsGroup.GOOGLE -> GoogleDriveSettings(app)
+        SettingsGroup.CLOUD -> FamilyCloudSettings(app)
         SettingsGroup.BUTTONS -> ButtonsSettings(app)
         SettingsGroup.DISK -> DiskSettings(app)
         SettingsGroup.CARDS -> CardsSettings(app)

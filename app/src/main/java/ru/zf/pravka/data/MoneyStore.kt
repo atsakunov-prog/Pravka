@@ -204,7 +204,7 @@ class MoneyStore(private val context: Context, private val log: (String) -> Unit
         }
 
     /**
-     * Обмен с другими телефонами (`data/MoneyDriveSync.kt`): снимок и
+     * Обмен с другими телефонами (`data/MoneyCloudSync.kt`): снимок и
      * применение — под тем же замком, что правки и сверка. [block] получает
      * состояние и возвращает новое (или null — писать нечего) и свой итог.
      * Записей не может стать меньше (`write`).
