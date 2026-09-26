@@ -17,6 +17,7 @@ import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
+import ru.zf.pravka.core.AutoConfirm
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.PillGeometry
 import ru.zf.pravka.data.Settings
@@ -196,9 +197,9 @@ class BodyButtonController(
             applyStash()
         } else {
             hideTicker()
-            hidePlate()
             hideMenu()
             hideInput()
+            settlePlate()
             hideCancelBubble()
             follower.stop()
             button?.let { runCatching { windowManager.removeView(it) } }
@@ -598,7 +599,34 @@ class BodyButtonController(
     private var plate: LinearLayout? = null
     private val plateDismiss = Runnable { hidePlate() }
 
+    // Молчание плашки с «ОК» — это «да» (`PlateClock`, 26.09.2026).
+    private val silence = PlateClock { settlePlate(quiet = false) }
+
+    /** Снять плашку: ответ дан или спрашивать не о чем — «да» не исполняется. */
     fun hidePlate() {
+        silence.clear()
+        dropPlateWindow()
+    }
+
+    /**
+     * Снять плашку так, будто владелец промолчал: ждущее «ОК» исполняется.
+     * Новая запись, «спрятать всё», выключенная кнопка — это не «нет».
+     * [quiet] — без спиннера и итога в пилюле: кнопке уже не до них.
+     */
+    fun settlePlate(quiet: Boolean = true) {
+        val answer = silence.take()
+        dropPlateWindow()
+        answer?.invoke(quiet)
+    }
+
+    /** «Да» плашки без исполнения: складывание исполнит его, когда уляжется. */
+    fun releasePlate(): (() -> Unit)? {
+        val answer = silence.take()
+        dropPlateWindow()
+        return answer?.let { a -> { a(true) } }
+    }
+
+    private fun dropPlateWindow() {
         val v = plate ?: return
         v.removeCallbacks(plateDismiss)
         runCatching { windowManager.removeView(v) }
@@ -617,7 +645,11 @@ class BodyButtonController(
      *
      * [onConfirm] = null — подтверждать нечего: подходы записаны в тот же
      * миг, как разобрались (терять их нельзя), и плашка просто показывает,
-     * что легло. У еды наоборот: до «ОК» приём в сумму дня не идёт.
+     * что легло. У еды наоборот: до «ОК» приём в сумму дня не идёт — но
+     * молчание и есть «ОК» (`PlateClock`): отсчёт внизу плашки, «нет» —
+     * это «✕». Другая плашка на месте ждущей (иной [key]) — для той тоже
+     * молчание. [autoConfirm] = false — плашка после «Отменить»: там
+     * молчание значит «я передумал», и она по-старому уходит сама без записи.
      *
      * [footer] — итог строкой. [note] — замечание модели. [chips] — короткие
      * действия одним тапом, обычно отдых 60/90/120.
@@ -630,14 +662,23 @@ class BodyButtonController(
         onEditItem: (Int) -> Unit,
         onDropItem: (Int) -> Unit,
         onOpen: () -> Unit,
-        onConfirm: (() -> Unit)?,
+        onConfirm: ((quiet: Boolean) -> Unit)?,
         confirmLabel: String = "ОК",
         chips: List<Chip> = emptyList(),
         holdMs: Long = 45_000,
+        key: String = "",
+        silentVerb: String = "Запишу сам",
+        autoConfirm: Boolean = true,
     ) {
-        hidePlate()
+        if (silence.pending && silence.key != key) settlePlate(quiet = true) else hidePlate()
         val shown = rows.take(PLATE_ROWS)
-        val sheet = LinearLayout(service).apply {
+        val sheet = object : LinearLayout(service) {
+            // Любое касание плашки — он читает или правит: отсчёт с начала.
+            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+                if (ev.actionMasked == MotionEvent.ACTION_DOWN) silence.touch()
+                return false
+            }
+        }.apply {
             orientation = LinearLayout.VERTICAL
             background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
@@ -718,7 +759,15 @@ class BodyButtonController(
                     setTextColor(PAPER)
                     textSize = 17f
                     setPadding(dp(10), dp(6), dp(6), dp(6))
-                    setOnClickListener { onEditItem(row.index) }
+                    setOnClickListener {
+                        // Правка — ещё не ответ: плашка уходит на время ввода,
+                        // «да» ждёт, пока ввод не закроют.
+                        if (silence.pending) {
+                            silence.suspend()
+                            dropPlateWindow()
+                        }
+                        onEditItem(row.index)
+                    }
                 }
             )
             line.addView(
@@ -843,7 +892,7 @@ class BodyButtonController(
                     setPadding(dp(22), dp(7), dp(22), dp(7))
                     setOnClickListener {
                         hidePlate()
-                        onConfirm()
+                        onConfirm(false)
                     }
                 }
             )
@@ -855,6 +904,23 @@ class BodyButtonController(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
+        // Сколько осталось до «сам» — словами под кнопками: молчание здесь
+        // значит «да», и это должно быть видно, а не угадываться.
+        val clock = if (onConfirm == null || !autoConfirm) null else TextView(service).apply {
+            setTextColor(PAPER_DIM)
+            textSize = 11f
+            gravity = Gravity.END
+            setPadding(0, dp(4), dp(4), 0)
+        }
+        if (clock != null) {
+            sheet.addView(
+                clock,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
         val p = WindowManager.LayoutParams(
             tickerWidthPx(),
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -867,13 +933,18 @@ class BodyButtonController(
         val estimate = dp(34 + 44) +
             shown.sumOf { dp(46 + (if (it.meta.isBlank()) 0 else 16) + (if (it.delta.isBlank()) 0 else 16)) } +
             (if (note.isBlank()) 0 else dp(24)) +
-            (if (chips.isEmpty()) 0 else dp(36))
+            (if (chips.isEmpty()) 0 else dp(36)) +
+            (if (clock == null) 0 else dp(18))
         positionPlate(p, estimate)
         plate = sheet
         runCatching { windowManager.addView(sheet, p) }
         sheet.alpha = 0f
         sheet.animate().alpha(0.96f).setDuration(180).start()
-        sheet.postDelayed(plateDismiss, holdMs)
+        if (onConfirm != null && clock != null) {
+            silence.arm(key, AutoConfirm.holdMs(shown.size), silentVerb, clock) { quiet -> onConfirm(quiet) }
+        } else {
+            sheet.postDelayed(plateDismiss, holdMs)
+        }
     }
 
     // Рядом с кнопкой, на той стороне, где есть место - то же правило, что у
@@ -933,7 +1004,20 @@ class BodyButtonController(
         hint: String,
         onCancel: (() -> Unit)? = null,
         onSubmit: (String) -> Unit,
-    ) = pill.edit(prefill, hint, onSubmit, onCancel)
+    ) = pill.edit(
+        prefill,
+        hint,
+        // Ответил на «✎» — плашка вернётся заново и спросит сама; прежнее
+        // «да» за правку не исполняется.
+        onSubmit = { typed ->
+            if (silence.suspended) silence.clear()
+            onSubmit(typed)
+        },
+        onCancel = {
+            if (silence.suspended) silence.clear()
+            onCancel?.invoke()
+        },
+    )
 
     fun hideInput() = pill.dropEdit()
 

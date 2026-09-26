@@ -99,7 +99,8 @@ internal fun PravkaAccessibilityService.endMoneyTab() {
 
 internal fun PravkaAccessibilityService.startMoneyCapture() {
     mButton?.hideInput()
-    mButton?.hidePlate()
+    // Новая запись поверх ждущей плашки — это не «нет»: отмеченное записывается.
+    mButton?.settlePlate()
     mDiscard = false
     if (cachedEngine.startsWith("whisper")) {
         mWhisperRecording = true
@@ -373,7 +374,9 @@ internal fun moneyMeta(e: MoneyEntry): String {
 /**
  * Плашка разбора: кружок — отметка (всё отмечено), «✎» — поправить сумму
  * на месте, тап по строке — вкладка «Деньги», «ОК» — в журнал. Сомнение в
- * сумме — песочной строкой под тратой: его видно ДО «ОК».
+ * сумме — песочной строкой под тратой: его видно ДО «ОК». Молчание — тоже
+ * «ОК» (владелец, 26.09.2026: «не нажал ничего = подтвердил»): отсчёт внизу
+ * плашки, «нет» — это «✕».
  */
 internal fun PravkaAccessibilityService.showMoneyPlate(takeId: Long) {
     val drafts = app.moneyEngine.draftsOf(takeId)
@@ -393,13 +396,18 @@ internal fun PravkaAccessibilityService.showMoneyPlate(takeId: Long) {
         rows = rows,
         onEdit = { row -> byRow[row]?.let { editMoneyDraft(takeId, it) } },
         onOpen = { openMoneyTab() },
-        onSend = { chosen -> confirmMoney(takeId, chosen.mapNotNull { byRow[it] }) },
+        onSend = { chosen, quiet -> confirmMoney(takeId, chosen.mapNotNull { byRow[it] }, quiet) },
+        key = "money:$takeId",
+        silentVerb = "Запишу сам",
     )
 }
 
-/** «ОК»: отмеченные — в журнал; снятые — вычеркнуты, но не удалены. */
-internal fun PravkaAccessibilityService.confirmMoney(takeId: Long, ids: List<String>) {
-    mButton?.setBusy(true)
+/**
+ * «ОК»: отмеченные — в журнал; снятые — вычеркнуты, но не удалены. [quiet] —
+ * плашку сняли снаружи (новая запись, складывание): без спиннера на кнопке.
+ */
+internal fun PravkaAccessibilityService.confirmMoney(takeId: Long, ids: List<String>, quiet: Boolean = false) {
+    if (!quiet) mButton?.setBusy(true)
     scope.launch {
         val kept = app.moneyEngine.draftsOf(takeId).filter { it.id in ids }
         runCatching { app.moneyEngine.confirm(takeId, ids) }
@@ -415,7 +423,7 @@ internal fun PravkaAccessibilityService.confirmMoney(takeId: Long, ids: List<Str
                 Haptics.error(this@confirmMoney)
                 Feedback.toast(this@confirmMoney, "Не записалось: ${e.message}. Траты ждут во вкладке «Деньги».", long = true)
             }
-        mButton?.setBusy(false)
+        if (!quiet) mButton?.setBusy(false)
     }
 }
 
@@ -425,7 +433,7 @@ internal fun PravkaAccessibilityService.confirmMoney(takeId: Long, ids: List<Str
  */
 internal fun PravkaAccessibilityService.editMoneyDraft(takeId: Long, entryId: String) {
     val e = app.moneyStore.byId(entryId) ?: return
-    mButton?.hidePlate()
+    // Плашку на время ввода снимает сама кнопка: «да» при этом ждёт ответа.
     val whole = kotlin.math.abs(e.rubKop) / 100
     mButton?.showInput(
         prefill = "$whole ${e.what}",

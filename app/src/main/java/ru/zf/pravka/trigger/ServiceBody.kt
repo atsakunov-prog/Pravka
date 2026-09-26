@@ -152,7 +152,8 @@ internal fun PravkaAccessibilityService.bodyTickerPrompt(): String = listenHint(
 
 internal fun PravkaAccessibilityService.startFoodCapture() {
     eButton?.hideInput()
-    eButton?.hidePlate()
+    // Новая запись поверх ждущей плашки — это не «нет»: прежнее уходит в дневник.
+    eButton?.settlePlate()
     eDiscard = false
     if (cachedEngine.startsWith("whisper")) {
         eWhisperRecording = true
@@ -667,8 +668,10 @@ internal suspend fun PravkaAccessibilityService.foodDayLine(meal: ru.zf.pravka.d
  * Тарелка на плашке: позиции с граммами и КБЖУ, «✎» правит вес на месте,
  * «✕» убирает позицию, «✓ В дневник» записывает приём. До подтверждения
  * приём в сумму дня не идёт и наружу не уезжает — но на диске он уже есть.
+ * Молчание — тоже «В дневник» (владелец, 26.09.2026: «не нажал ничего =
+ * подтвердил»): отсчёт внизу плашки, «нет» — это «✕» справа внизу.
  */
-internal fun PravkaAccessibilityService.showFoodPlate(mealId: Long) {
+internal fun PravkaAccessibilityService.showFoodPlate(mealId: Long, autoConfirm: Boolean = true) {
     val meal = app.foodStore.byId(mealId) ?: return
     if (meal.items.isEmpty()) return
     val rows = meal.items.mapIndexed { index, item ->
@@ -687,8 +690,10 @@ internal fun PravkaAccessibilityService.showFoodPlate(mealId: Long) {
         onEditItem = { index -> editFoodItem(mealId, index) },
         onDropItem = { index -> dropFoodItem(mealId, index) },
         onOpen = { openFoodTab() },
-        onConfirm = { confirmFood(mealId) },
+        onConfirm = { quiet -> confirmFood(mealId, quiet) },
         confirmLabel = "✓ В дневник",
+        key = "meal:$mealId",
+        autoConfirm = autoConfirm,
     )
 }
 
@@ -729,16 +734,20 @@ internal fun PravkaAccessibilityService.dropFoodItem(mealId: Long, index: Int) {
     }
 }
 
-/** «✓ В дневник»: приём в день, а оттуда в ленту и в intervals.icu. */
-internal fun PravkaAccessibilityService.confirmFood(mealId: Long) {
-    eButton?.setBusy(true)
+/**
+ * «✓ В дневник»: приём в день, а оттуда в ленту и в intervals.icu.
+ * [quiet] — плашку сняли снаружи (новая запись, складывание): без спиннера
+ * и пилюли на кнопке, которой сейчас не до них, итог — тостом.
+ */
+internal fun PravkaAccessibilityService.confirmFood(mealId: Long, quiet: Boolean = false) {
+    if (!quiet) eButton?.setBusy(true)
     scope.launch {
         val outcome = runCatching { app.foodEngine.confirm(mealId) }
             .getOrElse { e ->
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 ru.zf.pravka.core.FoodEngine.ConfirmOutcome(null, "", e.message ?: "не вышло")
             }
-        eButton?.setBusy(false)
+        if (!quiet) eButton?.setBusy(false)
         val meal = outcome.meal
         if (meal == null) {
             Haptics.error(this@confirmFood)
@@ -747,16 +756,17 @@ internal fun PravkaAccessibilityService.confirmFood(mealId: Long) {
         }
         Haptics.success(this@confirmFood)
         val tail = foodDayLine(meal)
-        eButton?.showNote(
-            // Горсть таблеток в калориях не измеряется: «✓ 0 ккал» читалось бы
-            // как «ничего не записал».
-            if (meal.supplement) {
-                "✓ " + ru.zf.pravka.core.Micronutrients.short(meal.micro, limit = 4)
-                    .ifBlank { "добавки записаны" }
-            } else "✓ ${meal.kcal} ккал · $tail",
-            "↩︎",
-            onAction = { undoFood(mealId) },
-        )
+        // Горсть таблеток в калориях не измеряется: «✓ 0 ккал» читалось бы
+        // как «ничего не записал».
+        val said = if (meal.supplement) {
+            "✓ " + ru.zf.pravka.core.Micronutrients.short(meal.micro, limit = 4)
+                .ifBlank { "добавки записаны" }
+        } else "✓ ${meal.kcal} ккал · $tail"
+        if (quiet) {
+            Feedback.toast(this@confirmFood, "Записал в дневник: " + said.removePrefix("✓ "))
+        } else {
+            eButton?.showNote(said, "↩︎", onAction = { undoFood(mealId) })
+        }
         if (outcome.icuError.isNotBlank()) {
             app.eventLog.add("еда: в intervals.icu не уехало — ${outcome.icuError}")
         }
@@ -766,7 +776,9 @@ internal fun PravkaAccessibilityService.confirmFood(mealId: Long) {
 /**
  * «↩︎» на записке: приём выходит из дня, а разбор остаётся ждать — плашка
  * возвращается, чтобы поправить и записать заново. Совсем убрать приём
- * можно во вкладке «Еда».
+ * можно во вкладке «Еда». Эта плашка молчанием НЕ соглашается: после
+ * «Отменить» тишина значит «передумал», и через 15 секунд вернуть приём в
+ * день было бы издевательством над кнопкой.
  */
 internal fun PravkaAccessibilityService.undoFood(mealId: Long) {
     scope.launch {
@@ -777,7 +789,7 @@ internal fun PravkaAccessibilityService.undoFood(mealId: Long) {
             return@launch
         }
         Feedback.toast(this@undoFood, "↩︎ Из дня убран, разбор ждёт")
-        showFoodPlate(mealId)
+        showFoodPlate(mealId, autoConfirm = false)
     }
 }
 

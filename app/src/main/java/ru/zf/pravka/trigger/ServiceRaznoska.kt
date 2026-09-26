@@ -66,7 +66,8 @@ internal fun PravkaAccessibilityService.raznoskaTickerPrompt(): String = listenH
 
 internal fun PravkaAccessibilityService.startRaznoskaCapture() {
     rButton?.hideInput()
-    rButton?.hidePlate()
+    // Новая запись поверх ждущей плашки — это не «нет»: отмеченное уезжает.
+    rButton?.settlePlate()
     rDiscard = false
     if (cachedEngine.startsWith("whisper")) {
         rWhisperRecording = true
@@ -341,9 +342,11 @@ internal fun PravkaAccessibilityService.raznMeta(task: ru.zf.pravka.core.ParsedT
 /**
  * Плашка разбора: кружок у дела - отметка (по умолчанию отмечено всё),
  * «✎» - правка формулировки на месте, тап по строке - дело целиком в
- * «Делах», «ОК» - добавить отмеченные. Ничего не уезжает до «ОК».
+ * «Делах», «ОК» - добавить отмеченные. Ничего не уезжает до «ОК», но
+ * молчание и есть «ОК» (владелец, 26.09.2026: «не нажал ничего =
+ * подтвердил»): отсчёт внизу плашки, «нет» — это «✕».
  */
-internal fun PravkaAccessibilityService.showRaznoskaPlate(draftId: Long) {
+internal fun PravkaAccessibilityService.showRaznoskaPlate(draftId: Long, autoConfirm: Boolean = true) {
     val draft = app.raznoskaStore.byId(draftId) ?: return
     val tasks = draft.live
     val waiting = tasks.count { !it.sent }
@@ -362,14 +365,19 @@ internal fun PravkaAccessibilityService.showRaznoskaPlate(draftId: Long) {
         rows = rows,
         onEdit = { id -> editRaznoskaTask(draftId, id) },
         onOpen = { openTodoistTab() },
-        onSend = { ids -> sendRaznoskaTasks(draftId, ids) },
+        onSend = { ids, quiet -> sendRaznoskaTasks(draftId, ids, quiet) },
+        key = "razn:$draftId",
+        autoConfirm = autoConfirm,
     )
 }
 
-/** «ОК» на плашке: одной отправкой уезжают все отмеченные дела. */
-internal fun PravkaAccessibilityService.sendRaznoskaTasks(draftId: Long, taskIds: List<Long>) {
+/**
+ * «ОК» на плашке: одной отправкой уезжают все отмеченные дела. [quiet] —
+ * плашку сняли снаружи (новая запись, складывание): без спиннера на кнопке.
+ */
+internal fun PravkaAccessibilityService.sendRaznoskaTasks(draftId: Long, taskIds: List<Long>, quiet: Boolean = false) {
     if (taskIds.isEmpty()) return
-    rButton?.setBusy(true)
+    if (!quiet) rButton?.setBusy(true)
     scope.launch {
         val outcome = runCatching { app.raznoskaEngine.sendOnly(draftId, taskIds) }
             .getOrElse { e ->
@@ -378,7 +386,7 @@ internal fun PravkaAccessibilityService.sendRaznoskaTasks(draftId: Long, taskIds
                     0, taskIds.size, e.message ?: "не отправилось",
                 )
             }
-        rButton?.setBusy(false)
+        if (!quiet) rButton?.setBusy(false)
         reportRaznoskaSend(outcome.created, outcome.failed, outcome.error)
     }
 }
@@ -386,7 +394,7 @@ internal fun PravkaAccessibilityService.sendRaznoskaTasks(draftId: Long, taskIds
 /** ✎ на плашке: правка формулировки на месте. Пусто = вычеркнуть дело. */
 internal fun PravkaAccessibilityService.editRaznoskaTask(draftId: Long, taskId: Long) {
     val task = app.raznoskaStore.byId(draftId)?.tasks?.firstOrNull { it.id == taskId } ?: return
-    rButton?.hidePlate()
+    // Плашку на время ввода снимает сама кнопка: «да» при этом ждёт ответа.
     rButton?.showInput(
         prefill = task.content,
         hint = "Кто: что сделать",
@@ -563,8 +571,9 @@ internal fun PravkaAccessibilityService.undoRaznoska() {
                     "↩︎ " + raznCount(outcome.deleted) + " убрано из Todoist",
                 )
                 // Дела снова ждут - показываем разбор, чтобы поправить и
-                // отправить заново.
-                if (outcome.draftId != 0L) showRaznoskaPlate(outcome.draftId)
+                // отправить заново. Без «сам»: после «Отменить» тишина
+                // значит «передумал», а не «отправь обратно».
+                if (outcome.draftId != 0L) showRaznoskaPlate(outcome.draftId, autoConfirm = false)
             }
             else -> {
                 Haptics.error(this@undoRaznoska)

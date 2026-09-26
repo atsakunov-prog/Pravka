@@ -54,6 +54,11 @@ class PravkaAccessibilityService : AccessibilityService() {
          */
         val MONEY_INK = 0xFF5B4A8C.toInt()
 
+        /**
+         * Через сколько после складывания исполняется «да» снятых им плашек:
+         * позже `configSettled` (600 мс) — окна уже вернулись, переход прошёл.
+         */
+        internal const val SILENT_AFTER_FOLD_MS = 1_500L
 
         /** Окно двойного тапа по «З» на локскрине. */
         internal const val LOCK_DOUBLE_TAP_MS = 1_500L
@@ -2464,14 +2469,16 @@ class PravkaAccessibilityService : AccessibilityService() {
             floatingButton?.hideCancelBubble()
             zButton?.hideTicker()
             zButton?.hideCancelBubble()
+            // Ждущая «ОК» плашка уходит вместе со всем — а молчание на ней
+            // значит «да» (26.09.2026): её разбор записывается, не теряется.
             rButton?.hideTicker()
-            rButton?.hidePlate()
+            rButton?.settlePlate()
             rButton?.hideCancelBubble()
             mButton?.hideTicker()
-            mButton?.hidePlate()
+            mButton?.settlePlate()
             mButton?.hideCancelBubble()
             eButton?.hideTicker()
-            eButton?.hidePlate()
+            eButton?.settlePlate()
             eButton?.hideCancelBubble()
             stacked = !cachedDiskMode
             disk?.setAllHidden(true)
@@ -2852,11 +2859,13 @@ class PravkaAccessibilityService : AccessibilityService() {
         // This one is immediate: removing a window helps the transition.
         zButton?.hideInput()
         rButton?.hideInput()
-        rButton?.hidePlate()
         mButton?.hideInput()
-        mButton?.hidePlate()
         eButton?.hideInput()
-        eButton?.hidePlate()
+        // Плашки с «ОК» — туда же, но складывание — не ответ «нет»: молчание
+        // на них значит «да» (26.09.2026). Записываем, когда переход уляжется:
+        // посреди складывания не нужны ни запросы, ни тосты.
+        val silent = listOfNotNull(rButton?.releasePlate(), mButton?.releasePlate(), eButton?.releasePlate())
+        if (silent.isNotEmpty()) configHandler.postDelayed({ silent.forEach { it() } }, SILENT_AFTER_FOLD_MS)
         // И обе серые ручки — с ними же. Это два лишних оверлейных окна, а
         // складывание пересчитывает и ЖДЁТ каждое наше окно: ровно из-за
         // лишних окон чернота на пять секунд приходила все три прошлых раза.

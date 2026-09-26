@@ -17,6 +17,7 @@ import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
+import ru.zf.pravka.core.AutoConfirm
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.PillGeometry
 import ru.zf.pravka.data.Settings
@@ -60,6 +61,8 @@ class RaznoskaButtonController(
         // настройка владельца, Settings.tickerWidthFlow.
         // Сколько дел показывать в плашке: остальное — в приложении.
         private const val PLATE_ROWS = 6
+        /** Плашка без «сам» (после «Отменить») уходит, как раньше, молча. */
+        private const val PLAIN_HOLD_MS = 45_000L
 
         // Синие чернила: третий цвет к оранжевому «П» и янтарному «З».
         val INK = 0xFF2A5D82.toInt()
@@ -196,9 +199,9 @@ class RaznoskaButtonController(
             applyStash()
         } else {
             hideTicker()
-            hidePlate()
             hideMenu()
             hideInput()
+            settlePlate()
             hideCancelBubble()
             follower.stop()
             button?.let { runCatching { windowManager.removeView(it) } }
@@ -551,7 +554,34 @@ class RaznoskaButtonController(
     private var plate: LinearLayout? = null
     private val plateDismiss = Runnable { hidePlate() }
 
+    // Молчание плашки с «ОК» — это «да» (`PlateClock`, 26.09.2026).
+    private val silence = PlateClock { settlePlate(quiet = false) }
+
+    /** Снять плашку: ответ дан или спрашивать не о чем — «да» не исполняется. */
     fun hidePlate() {
+        silence.clear()
+        dropPlateWindow()
+    }
+
+    /**
+     * Снять плашку так, будто владелец промолчал: отмеченное уезжает.
+     * Новая запись, «спрятать всё», выключенная кнопка — это не «нет».
+     * [quiet] — без спиннера на кнопке: ей уже не до него.
+     */
+    fun settlePlate(quiet: Boolean = true) {
+        val answer = silence.take()
+        dropPlateWindow()
+        answer?.invoke(quiet)
+    }
+
+    /** «Да» плашки без исполнения: складывание исполнит его, когда уляжется. */
+    fun releasePlate(): (() -> Unit)? {
+        val answer = silence.take()
+        dropPlateWindow()
+        return answer?.let { a -> { a(true) } }
+    }
+
+    private fun dropPlateWindow() {
         val v = plate ?: return
         v.removeCallbacks(plateDismiss)
         runCatching { windowManager.removeView(v) }
@@ -570,20 +600,35 @@ class RaznoskaButtonController(
      * решение принимается глазами по всему списку, а не по одному делу с
      * кручением после каждого. «✎» правит формулировку на месте, тап по
      * строке открывает дело целиком в «Делах».
+     *
+     * Молчание — тоже «ОК» (`PlateClock`, владелец 26.09.2026: «не нажал
+     * ничего = подтвердил»): отсчёт внизу плашки, уедет отмеченное; «нет» —
+     * это «✕» или снять все отметки. Другая плашка на месте ждущей (иной
+     * [key]) — для той тоже молчание. [silentVerb] — что скажет отсчёт.
+     * [autoConfirm] = false — плашка после «Отменить»: там молчание значит
+     * «я передумал», и она по-старому уходит сама, ничего не отправив.
      */
     fun showTasks(
         header: String,
         rows: List<PlateRow>,
         onEdit: (Long) -> Unit,
         onOpen: (Long) -> Unit,
-        onSend: (List<Long>) -> Unit,
-        holdMs: Long = 45_000,
+        onSend: (ids: List<Long>, quiet: Boolean) -> Unit,
+        key: String = "",
+        silentVerb: String = "Отправлю сам",
+        autoConfirm: Boolean = true,
     ) {
-        hidePlate()
+        if (silence.pending && silence.key != key) settlePlate(quiet = true) else hidePlate()
         val shown = rows.take(PLATE_ROWS)
         // По умолчанию отмечено всё, что ещё не уехало: обычно нужны все.
         val chosen = shown.filter { !it.sent }.map { it.id }.toMutableSet()
-        val sheet = LinearLayout(service).apply {
+        val sheet = object : LinearLayout(service) {
+            // Любое касание плашки — он читает или снимает отметки: отсчёт с начала.
+            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+                if (ev.actionMasked == MotionEvent.ACTION_DOWN) silence.touch()
+                return false
+            }
+        }.apply {
             orientation = LinearLayout.VERTICAL
             background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
@@ -620,15 +665,17 @@ class RaznoskaButtonController(
             }
             setPadding(dp(22), dp(7), dp(22), dp(7))
         }
+        fun silentWord() = if (chosen.isEmpty()) "Закрою" else silentVerb
         fun refreshOk() {
             okButton.text = if (chosen.size > 1) "ОК · " + chosen.size else "ОК"
             okButton.alpha = if (chosen.isEmpty()) 0.45f else 1f
+            if (silence.pending) silence.verb = silentWord()
         }
         refreshOk()
         okButton.setOnClickListener {
             val ids = chosen.toList()
             hidePlate()
-            if (ids.isNotEmpty()) onSend(ids)
+            if (ids.isNotEmpty()) onSend(ids, false)
         }
 
         for (row in shown) {
@@ -709,7 +756,14 @@ class RaznoskaButtonController(
                         setTextColor(PAPER)
                         textSize = 17f
                         setPadding(dp(12), dp(6), dp(6), dp(6))
-                        setOnClickListener { onEdit(row.id) }
+                        setOnClickListener {
+                            // Правка — ещё не ответ: плашка уходит на время
+                            // ввода (и без «сам» — тоже, как всегда), «да»
+                            // ждёт, пока ввод не закроют.
+                            silence.suspend()
+                            dropPlateWindow()
+                            onEdit(row.id)
+                        }
                     }
                 )
             }
@@ -754,6 +808,23 @@ class RaznoskaButtonController(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
+        // Сколько осталось до «сам» — словами под кнопками: молчание здесь
+        // значит «да», и это должно быть видно, а не угадываться.
+        val clock = if (!autoConfirm) null else TextView(service).apply {
+            setTextColor(PAPER_DIM)
+            textSize = 11f
+            gravity = Gravity.END
+            setPadding(0, dp(4), dp(4), 0)
+        }
+        if (clock != null) {
+            sheet.addView(
+                clock,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
         val p = WindowManager.LayoutParams(
             tickerWidthPx(),
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -763,13 +834,23 @@ class RaznoskaButtonController(
         ).apply { gravity = Gravity.TOP or Gravity.START }
         // Высоту WRAP_CONTENT заранее не знает никто: оцениваем по строкам,
         // чтобы плашка встала посередине кнопки и не свесилась за экран.
-        val estimate = dp(34 + 44) + shown.sumOf { dp(if (it.warn.isBlank()) 46 else 64) }
+        val estimate = dp(34 + 44 + (if (clock == null) 0 else 18)) +
+            shown.sumOf { dp(if (it.warn.isBlank()) 46 else 64) }
         positionPlate(p, estimate)
         plate = sheet
         runCatching { windowManager.addView(sheet, p) }
         sheet.alpha = 0f
         sheet.animate().alpha(0.96f).setDuration(180).start()
-        sheet.postDelayed(plateDismiss, holdMs)
+        // Отметки читаются в миг ответа, а не в миг показа: снятое пальцем
+        // за секунду до конца не уедет.
+        if (clock != null) {
+            silence.arm(key, AutoConfirm.holdMs(shown.size), silentWord(), clock) { quiet ->
+                val ids = chosen.toList()
+                if (ids.isNotEmpty()) onSend(ids, quiet)
+            }
+        } else {
+            sheet.postDelayed(plateDismiss, PLAIN_HOLD_MS)
+        }
     }
 
     /** Отмеченный кружок - залитый бумагой, снятый - только обводка. */
@@ -843,7 +924,20 @@ class RaznoskaButtonController(
         hint: String,
         onCancel: (() -> Unit)? = null,
         onSubmit: (String) -> Unit,
-    ) = pill.edit(prefill, hint, onSubmit, onCancel)
+    ) = pill.edit(
+        prefill,
+        hint,
+        // Ответил на «✎» — плашка вернётся заново и спросит сама; прежнее
+        // «да» за правку не исполняется.
+        onSubmit = { typed ->
+            if (silence.suspended) silence.clear()
+            onSubmit(typed)
+        },
+        onCancel = {
+            if (silence.suspended) silence.clear()
+            onCancel?.invoke()
+        },
+    )
 
     fun hideInput() = pill.dropEdit()
 
