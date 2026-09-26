@@ -10,7 +10,7 @@ import ru.zf.pravka.provider.WebDav
 
 /**
  * Домашний сервер владельца — адрес, логин и пароль WebDAV (26.09.2026).
- * Лежат в закрытой памяти установки (`DataRoot.secrets`), как ключ Google:
+ * Лежат в закрытой памяти установки (`DataRoot.secrets`), не в базе:
  * базу копируют и переносят, пароль с ней ехать не должен. У каждого телефона
  * свой вход (sasha, marianna): потерялся телефон — на сервере убирается одна
  * строка, остальные работают.
@@ -22,6 +22,12 @@ internal class HomeServer(private val context: Context, private val dav: WebDav)
     }
 
     private val file: File get() = File(DataRoot.secrets(context), FILE)
+
+    init {
+        // Вход в Google Drive снят 26.09 («Только с личным облаком»): его ключ
+        // в закрытой памяти больше ничему не нужен.
+        runCatching { File(DataRoot.secrets(context), "google-auth.json").delete() }
+    }
 
     private val _saved = MutableStateFlow(read())
     val saved: StateFlow<Saved?> = _saved

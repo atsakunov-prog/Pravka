@@ -1,7 +1,5 @@
 package ru.zf.pravka
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -40,21 +38,18 @@ import ru.zf.pravka.ui.PaperTextButton
 import ru.zf.pravka.ui.SheetAction
 import ru.zf.pravka.ui.StatusDot
 
-// Облако семьи (26.09.2026): домашний сервер владельца по WebDAV — главное,
-// семейный Google Drive — запасное (его клиент Google однажды просто
-// выключил: «ужасно глючная штука»). Задан сервер — Деньги и копии едут
-// туда (`PravkaApp.familyCloud()`).
+// Облако семьи (26.09.2026) — домашний сервер владельца по WebDAV. Google
+// Drive был первым и снят: Google выключил клиент Правки, владелец: «Не надо
+// с drive. Только с личным облаком».
 
 /** Группа «Облако семьи» в Подключениях. */
 @Composable
 internal fun FamilyCloudSettings(app: PravkaApp) {
     val home by app.homeServer.saved.collectAsState()
-    val acc by app.googleAuth.account.collectAsState()
     HomeServerCard(app)
     val profile by app.profileStore.flow.collectAsState()
     if (profile?.has(ru.zf.pravka.data.Profile.Mode.MONEY) == true) MoneySyncCard(app)
-    if (home != null || acc != null) CloudBackupCard(app)
-    GoogleDriveCard(app)
+    if (home != null) CloudBackupCard(app)
 }
 
 /** Домашний сервер: адрес, свой вход телефона, проверка. */
@@ -77,8 +72,7 @@ private fun HomeServerCard(app: PravkaApp) {
             "пускает роутер (KeenDNS, HTTPS делает роутер). Сюда ездят общие Деньги (папка " +
             "«Правка/Деньги») и ночные копии базы («Правка/Копии базы»), рядом — книги Слушалки. " +
             "У каждого телефона свой вход (sasha, marianna): потерялся телефон — на сервере убирают " +
-            "одну строку. Пароль хранится в закрытой памяти приложения и не уезжает с копией базы. " +
-            "Пока сервер задан, Google Drive не используется.",
+            "одну строку. Пароль хранится в закрытой памяти приложения и не уезжает с копией базы.",
     ) {
         val s = saved
         if (s == null) {
@@ -173,113 +167,7 @@ private fun HomeServerCard(app: PravkaApp) {
         ) {
             PaperHint(
                 "Телефон забудет адрес и пароль. Всё, что уже есть на телефоне и на сервере, останется; " +
-                    "подключишься снова — обмен продолжится с того же места. Если вошли в Google Drive — " +
-                    "обмен пойдёт туда."
-            )
-        }
-    }
-}
-
-/** Семейный Google Drive — запасное облако. */
-@Composable
-private fun GoogleDriveCard(app: PravkaApp) {
-    val context = LocalContext.current
-    val acc by app.googleAuth.account.collectAsState()
-    val home by app.homeServer.saved.collectAsState()
-    val waiting by app.googleAuth.waiting.collectAsState()
-    var error by remember { mutableStateOf("") }
-    var askOut by remember { mutableStateOf(false) }
-
-    PaperCard(
-        label = "семейный google drive",
-        info = "Запасное облако: работает, пока не задан домашний сервер. Входить нужно под семейным " +
-            "аккаунтом — тем же на всех телефонах: браузер сначала предложит аккаунт телефона — выбери " +
-            "«другой аккаунт». Аккаунт в сам телефон добавлять не нужно: вход идёт через браузер. " +
-            "Правка видит в Drive только свои файлы (папка «Правка»), чужие документы ей не видны. " +
-            "Ключ входа хранится в закрытой памяти приложения и не уезжает с копией базы.",
-    ) {
-        if (home != null) {
-            PaperHint("Сейчас Деньги и копии ездят через домашний сервер — Drive не используется.")
-            Spacer(Modifier.height(6.dp))
-        }
-        val a = acc
-        if (a == null) {
-            PaperRow(
-                title = "Не подключено",
-                hint = "вход через браузер под семейным аккаунтом",
-                icon = Glyphs.Cloud,
-                trailing = { StatusDot(null) },
-                onClick = null,
-            )
-            Spacer(Modifier.height(6.dp))
-            if (waiting) {
-                PaperHint("Жду ответа из браузера: войди под СЕМЕЙНЫМ аккаунтом (не своим личным) и нажми «Разрешить»…")
-                Spacer(Modifier.height(4.dp))
-                PaperTextButton("Отменить вход", onClick = { app.googleAuth.cancel() })
-            } else {
-                PaperButton(
-                    "Подключить Google Drive",
-                    icon = Glyphs.Link,
-                    primary = home == null,
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = {
-                        error = ""
-                        app.appScope.launch {
-                            app.googleAuth.signIn { url ->
-                                runCatching {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                                }.onFailure { e -> error = "Не открылся браузер: ${e.message}" }
-                            }.onSuccess { acc ->
-                                app.driveCloud.forget()
-                                Feedback.toast(context, "Подключено: ${acc.email.ifBlank { "аккаунт Google" }}", long = true)
-                                // Назад в Правку: браузер остался сверху.
-                                runCatching {
-                                    context.startActivity(
-                                        Intent(context, MainActivity::class.java)
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                                    )
-                                }
-                                app.appScope.launch { app.moneyCloudSync.sync("вход") }
-                            }.onFailure { e -> error = e.message ?: e.javaClass.simpleName }
-                        }
-                    },
-                )
-            }
-        } else {
-            PaperRow(
-                title = a.email.ifBlank { "аккаунт Google" },
-                hint = "подключено " + SimpleDateFormat("d MMMM, HH:mm", Locale("ru")).format(Date(a.at)),
-                icon = Glyphs.Cloud,
-                trailing = { StatusDot(true) },
-                onClick = null,
-            )
-            Spacer(Modifier.height(4.dp))
-            PaperTextButton("Отключить", onClick = { askOut = true })
-        }
-        if (error.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            PaperHint(error, MaterialTheme.colorScheme.error)
-        }
-    }
-
-    if (askOut) {
-        PaperAlert(
-            onDismiss = { askOut = false },
-            title = "Отключить Google Drive?",
-            icon = Glyphs.Cloud,
-            dismiss = SheetAction("Оставить") { askOut = false },
-            destructive = SheetAction("Отключить") {
-                askOut = false
-                app.appScope.launch {
-                    app.googleAuth.signOut()
-                    app.driveCloud.forget()
-                    Feedback.toast(context, "Google Drive отключён")
-                }
-            },
-        ) {
-            PaperHint(
-                "Если домашний сервер не задан, общие Деньги перестанут меняться с другими телефонами. " +
-                    "Всё, что уже есть на этом телефоне, останется; журналы в Drive тоже."
+                    "подключишься снова — обмен продолжится с того же места."
             )
         }
     }
@@ -289,7 +177,6 @@ private fun GoogleDriveCard(app: PravkaApp) {
 @Composable
 internal fun MoneySyncCard(app: PravkaApp) {
     val home by app.homeServer.saved.collectAsState()
-    val acc by app.googleAuth.account.collectAsState()
     val st by app.moneyCloudSync.status.collectAsState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -305,8 +192,8 @@ internal fun MoneySyncCard(app: PravkaApp) {
             "решения — по последней правке, но категорию, поставленную человеком, справочник и модель " +
             "не перебивают. Записи не удаляются никогда. Черновики до «ОК» остаются на своём телефоне.",
     ) {
-        if (home == null && acc == null) {
-            PaperHint("Облако семьи не подключено: задай домашний сервер выше (или войди в Google Drive ниже).")
+        if (home == null) {
+            PaperHint("Облако семьи не подключено: задай домашний сервер выше.")
             return@PaperCard
         }
         PaperRow(
@@ -346,7 +233,7 @@ private fun CloudBackupCard(app: PravkaApp) {
             "семьи. Копии каждого человека — со своим именем в названии, телефон чистит только свои: " +
             "там остаётся неделя каждый день и по копии на месяц за год. Нет Wi-Fi трое суток — " +
             "едет и по мобильной сети. Внутри архива — и ключи (Anthropic, Todoist, Notion, " +
-            "intervals): доступ к серверу и к семейному аккаунту стоит беречь.",
+            "intervals): пароли входа на сервер стоит беречь.",
     ) {
         PaperRow(
             title = if (st.sentAt > 0) "Последняя: " + SimpleDateFormat("d MMMM, HH:mm", Locale("ru")).format(Date(st.sentAt))
@@ -354,7 +241,7 @@ private fun CloudBackupCard(app: PravkaApp) {
             hint = when {
                 st.running -> "выгружаю…"
                 st.waiting -> "свежая копия ждёт Wi-Fi"
-                st.sentAt > 0 -> "${st.sent} · ${mb(st.bytes)} · своих копий (${st.toTitle.ifBlank { "Google Drive" }}) ${st.copies}, ${mb(st.copiesBytes)}"
+                st.sentAt > 0 -> "${st.sent} · ${mb(st.bytes)} · своих копий на сервере ${st.copies}, ${mb(st.copiesBytes)}"
                 else -> "уедет после ближайшей ночной копии"
             },
             icon = Glyphs.Archive,
@@ -384,8 +271,7 @@ private fun mb(bytes: Long): String =
 @Composable
 internal fun MoneySyncLine(app: PravkaApp) {
     val home by app.homeServer.saved.collectAsState()
-    val acc by app.googleAuth.account.collectAsState()
-    if (home == null && acc == null) return
+    if (home == null) return
     val st by app.moneyCloudSync.status.collectAsState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -399,7 +285,7 @@ internal fun MoneySyncLine(app: PravkaApp) {
         }
     }
     val text = when {
-        st.running -> "общие деньги · меняюсь с ${if (home != null) "сервером" else "Drive"}…"
+        st.running -> "общие деньги · меняюсь с сервером…"
         st.error.isNotBlank() -> "общие деньги · не вышло: ${st.error}"
         else -> "общие деньги · " + syncTitle(st, now) + syncHint(st).takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
     }

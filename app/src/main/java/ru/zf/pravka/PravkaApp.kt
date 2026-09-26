@@ -346,23 +346,12 @@ class PravkaApp : Application() {
      * публичном репозитории»). Читается один раз; не прочитался — пусто, и
      * работают правила владельца и безличные.
      */
-    // Облако семьи (provider/FamilyCloud.kt): домашний сервер по WebDAV
-    // (data/HomeServer.kt) или семейный Google Drive — вход через браузер,
-    // ключ в закрытой памяти (provider/GoogleAuth.kt). Обмен Деньгами —
-    // data/MoneyCloudSync.kt, копии базы — data/CloudBackup.kt.
-    // Свой клиент: выгрузка первого журнала — мегабайты по мобильной сети.
-    private val googleHttp by lazy {
-        httpClient.newBuilder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(60, TimeUnit.SECONDS)
-            .build()
-    }
-    val googleAuth by lazy { ru.zf.pravka.provider.GoogleAuth(this, googleHttp) }
-    val googleDrive by lazy { ru.zf.pravka.provider.GoogleDrive(googleAuth, googleHttp) }
-    val driveCloud by lazy { ru.zf.pravka.provider.DriveCloud(googleDrive) { googleAuth.account.value?.email.orEmpty() } }
-    // Диск сервера засыпает через 20 минут простоя: первый ответ после сна —
-    // секунды раскрутки, отсюда запас по чтению.
+    // Облако семьи (provider/FamilyCloud.kt) — домашний сервер по WebDAV
+    // (data/HomeServer.kt); Google Drive снят 26.09 («Не надо с drive.
+    // Только с личным облаком»). Обмен Деньгами — data/MoneyCloudSync.kt,
+    // копии базы — data/CloudBackup.kt. Свой клиент: выгрузка первого журнала
+    // — мегабайты по мобильной сети, а диск сервера засыпает через 20 минут
+    // простоя — первый ответ после сна ждёт раскрутки, отсюда запас по чтению.
     private val webdavHttp by lazy {
         httpClient.newBuilder()
             .connectTimeout(20, TimeUnit.SECONDS)
@@ -372,12 +361,8 @@ class PravkaApp : Application() {
     }
     internal val homeServer by lazy { ru.zf.pravka.data.HomeServer(this, ru.zf.pravka.provider.WebDav(webdavHttp)) }
 
-    /** Какое облако сейчас: задан домашний сервер — он, иначе Drive, если вошли; нет ни того, ни другого — null. */
-    fun familyCloud(): ru.zf.pravka.provider.FamilyCloud? = when {
-        homeServer.saved.value != null -> homeServer.cloud
-        googleAuth.account.value != null -> driveCloud
-        else -> null
-    }
+    /** Облако семьи: домашний сервер, если задан; нет — null, обмен и копии молчат. */
+    fun familyCloud(): ru.zf.pravka.provider.FamilyCloud? = homeServer.saved.value?.let { homeServer.cloud }
 
     internal val moneyCloudSync by lazy {
         ru.zf.pravka.data.MoneyCloudSync(
@@ -395,7 +380,7 @@ class PravkaApp : Application() {
         ru.zf.pravka.data.CloudBackup(
             context = this,
             cloud = { familyCloud() },
-            connectedAt = { homeServer.saved.value?.at ?: googleAuth.account.value?.at ?: 0L },
+            connectedAt = { homeServer.saved.value?.at ?: 0L },
             user = { profileStore.current?.id ?: "user" },
             log = { eventLog.add(it) },
         )

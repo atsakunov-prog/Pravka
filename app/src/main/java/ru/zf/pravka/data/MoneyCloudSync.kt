@@ -16,9 +16,10 @@ import ru.zf.pravka.core.SyncFlat
 import ru.zf.pravka.provider.FamilyCloud
 
 /**
- * Обмен Деньгами через облако семьи (25.09.2026 — семейный Google Drive,
- * с 26.09 — и домашний сервер по WebDAV, `provider/FamilyCloud.kt`). Логика
- * слияния — `core/MoneySync.kt`; здесь файлы, облако и порядок шагов.
+ * Обмен Деньгами через облако семьи — домашний сервер по WebDAV
+ * (`provider/FamilyCloud.kt`; 25.09.2026 начинали с Google Drive, 26.09 он
+ * снят). Логика слияния — `core/MoneySync.kt`; здесь файлы, облако и порядок
+ * шагов.
  *
  * Раскладка:
  *  - в папке базы `money-sync/` — журналы ВСЕХ телефонов кусками
@@ -27,15 +28,15 @@ import ru.zf.pravka.provider.FamilyCloud
  *  - в облаке `Правка/Деньги/` — те же куски и паспорта устройств
  *    (`<устройство>.device.json`: чей телефон). Телефон пишет только свои
  *    файлы — у одного файла никогда не бывает двух писателей;
- *  - сменили облако (Drive → домашний сервер) — ничего не теряется: каждый
- *    телефон выложит в новое свои журналы целиком, чужие у него уже есть;
+ *  - сменили сервер — ничего не теряется: каждый телефон выложит на новый
+ *    свои журналы целиком, чужие у него уже есть;
  *  - имя устройства — в закрытой памяти (`DataRoot.secrets`), не в базе:
  *    базу копируют на другой телефон, и два телефона под одним именем писали
  *    бы в один журнал.
  *
- * Изменился ли кусок: у Drive — md5, у домашнего сервера — размер (журнал
- * только дописывается, а на сервере заменяется целиком и разом). Паспорт
- * переписывается целиком, размер его не выдаёт — без md5 он выкладывается и
+ * Изменился ли кусок — по размеру: md5 сервер не считает, а журнал только
+ * дописывается и на сервере заменяется целиком и разом. Паспорт
+ * переписывается целиком, размер его не выдаёт — он выкладывается и
  * скачивается раз за запуск.
  *
  * Шаги одного обмена (под замком, по одному за раз):
@@ -86,8 +87,6 @@ internal class MoneyCloudSync(
 
     private val mutex = Mutex()
     private var merged: MoneySync.Merged? = null
-    /** md5 локальных копий по (имя, размер, время): куски не перечитываются каждый обмен. */
-    private val md5s = HashMap<String, Triple<Long, Long, String>>()
     private var lastLoggedError = ""
 
     private val dir: File get() = File(DataRoot.dir(context), DIR)
@@ -183,7 +182,7 @@ internal class MoneyCloudSync(
         val pName = MoneySync.deviceFileName(me)
         val pKey = c.id + "|" + pName + "|" + md5(passport)
         byName[pName].let { r ->
-            val upToDate = r != null && (if (r.md5.isNotEmpty()) r.md5 == md5(passport) else r.size == passport.size.toLong() && pKey in passports)
+            val upToDate = r != null && r.size == passport.size.toLong() && pKey in passports
             if (!upToDate) {
                 c.write(PATH, pName, passport, MIME)
                 passports.add(pKey)
@@ -201,8 +200,8 @@ internal class MoneyCloudSync(
             if (dev == me) continue
             val copy = File(dir, r.name)
             if (copy.isFile && same(copy, r)) {
-                // Паспорт без md5 сверяется по размеру и раз за запуск скачивается.
-                if (MoneySync.parseChunk(r.name) != null || r.md5.isNotEmpty()) continue
+                // Паспорт сверяется по размеру и раз за запуск скачивается.
+                if (MoneySync.parseChunk(r.name) != null) continue
                 if (c.id + "|" + r.name + "|" + r.size in passports) continue
             }
             fresh.add(copy to c.read(PATH, r.name))
@@ -293,17 +292,8 @@ internal class MoneyCloudSync(
         }
     }
 
-    /** Тот же ли файл в облаке: md5, если облако его знает, иначе размер (журналы только растут). */
-    private fun same(f: File, r: FamilyCloud.Item): Boolean =
-        if (r.md5.isNotEmpty()) md5(f) == r.md5 else f.length() == r.size
-
-    private fun md5(f: File): String {
-        val key = Pair(f.length(), f.lastModified())
-        md5s[f.name]?.let { (len, mod, sum) -> if (len == key.first && mod == key.second) return sum }
-        val sum = md5(f.readBytes())
-        md5s[f.name] = Triple(key.first, key.second, sum)
-        return sum
-    }
+    /** Тот же ли файл в облаке: по размеру — журналы только растут и заменяются разом. */
+    private fun same(f: File, r: FamilyCloud.Item): Boolean = f.length() == r.size
 
     private fun md5(bytes: ByteArray): String =
         MessageDigest.getInstance("MD5").digest(bytes).joinToString("") { "%02x".format(it) }
