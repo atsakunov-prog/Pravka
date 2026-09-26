@@ -41,6 +41,8 @@ class Settings(private val context: Context) {
         private val KEY_FAB_SIZE = intPreferencesKey("fab_size_dp")
         private val KEY_FAB_ALPHA = floatPreferencesKey("fab_alpha")
         private val KEY_TICKER_WIDTH = intPreferencesKey("ticker_width_dp")
+        private val KEY_TICKER_BOTTOM = booleanPreferencesKey("ticker_bottom")
+        private val KEY_TICKER_DENSITY = floatPreferencesKey("ticker_density")
         private val KEY_SPEECH_ENGINE = stringPreferencesKey("speech_engine")
         private val KEY_SPEECH_SEGMENTED = booleanPreferencesKey("speech_segmented")
         private val KEY_SPEECH_FORMATTING = booleanPreferencesKey("speech_formatting")
@@ -1203,6 +1205,23 @@ class Settings(private val context: Context) {
     val tickerWidthFlow = context.dataStore.data.map { it[KEY_TICKER_WIDTH] ?: TICKER_WIDTH_DEFAULT }
     suspend fun setTickerWidth(dp: Int) {
         context.dataStore.edit { it[KEY_TICKER_WIDTH] = dp.coerceIn(TICKER_WIDTH_MIN, TICKER_WIDTH_MAX) }
+    }
+
+    // Где всплывает пилюля диктовки (владелец, 26.09.2026, по образцу Gemini):
+    // снизу посередине над клавиатурой — с завода; «У кнопки» — прежнее место,
+    // откат одним движением.
+    val tickerBottomFlow = context.dataStore.data.map { it[KEY_TICKER_BOTTOM] ?: true }
+    suspend fun setTickerBottom(value: Boolean) {
+        context.dataStore.edit { it[KEY_TICKER_BOTTOM] = value }
+    }
+
+    // Плотность стекла пилюли: «прозрачнее… просто прозрачность очень сильно
+    // повысить». Текст и кружок голоса ею не гаснут — только стекло.
+    val tickerDensityFlow = context.dataStore.data.map { it[KEY_TICKER_DENSITY] ?: ru.zf.pravka.core.PillLook.DENSITY_DEFAULT }
+    suspend fun setTickerDensity(value: Float) {
+        context.dataStore.edit {
+            it[KEY_TICKER_DENSITY] = value.coerceIn(ru.zf.pravka.core.PillLook.DENSITY_MIN, ru.zf.pravka.core.PillLook.DENSITY_MAX)
+        }
     }
 
     // Floating button position - free placement, stored as x/y fractions of

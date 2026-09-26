@@ -4,7 +4,8 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Shader
 import android.text.TextPaint
 import android.view.View
@@ -24,15 +25,17 @@ import kotlin.math.abs
  * кадр скорость сглаживается к целевой (целевая пропорциональна отставанию), и
  * уже скорость двигает сдвиг: два уровня инерции вместо одного — вот откуда
  * мягкие разгон и торможение без рывков на каждом новом слове. Фейды слева и
- * справа — градиенты цвета плашки, рисуются внутри овального клипа, чтобы
- * повторять форму пилюли, а не её прямоугольник.
+ * справа — МАСКА: строка рисуется в свой слой, и края этого слоя стираются
+ * градиентом (DST_OUT). Прежние фейды красили края цветом плашки и держались,
+ * пока плашка была сплошной; пилюля диктовки (26.09.2026) — стекло с
+ * градиентом и свечением, и полоса одного цвета легла бы на неё заплаткой.
+ * Маска гасит сами буквы, под ними остаётся то стекло, какое есть.
  *
  * Текст держится хвостом (MAX_CHARS): при обрезке головы сдвиг уменьшается на
  * её ширину, и картинка не прыгает. Всё рисование — один drawText на кадр.
  */
 class MarqueeTickerView(
     context: Context,
-    private val plateColor: Int,
     textColor: Int,
     textSizeSp: Float,
 ) : View(context) {
@@ -57,7 +60,11 @@ class MarqueeTickerView(
     private val maxSpeed = 1100f * density     // px/s — потолок, чтобы не мельтешило
     private var fadeLeft: Paint? = null
     private var fadeRight: Paint? = null
-    private val clip = Path()
+
+    init {
+        // Свой слой — чтобы маска стирала только строку, а не стекло под ней.
+        setLayerType(LAYER_TYPE_HARDWARE, null)
+    }
 
     private var full = ""        // весь текст, как пришёл
     private var dropped = 0      // сколько знаков головы отрезано от full
@@ -146,16 +153,17 @@ class MarqueeTickerView(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        val transparent = plateColor and 0x00FFFFFF
+        // Маска: непрозрачное стирает букву целиком, прозрачное не трогает.
+        val erase = 0xFF000000.toInt()
+        val keep = 0x00000000
         fadeLeft = Paint().apply {
-            shader = LinearGradient(0f, 0f, padL + fadeL, 0f, plateColor, transparent, Shader.TileMode.CLAMP)
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+            shader = LinearGradient(0f, 0f, padL + fadeL, 0f, erase, keep, Shader.TileMode.CLAMP)
         }
         fadeRight = Paint().apply {
-            shader = LinearGradient(w - fadeR, 0f, w.toFloat(), 0f, transparent, plateColor, Shader.TileMode.CLAMP)
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+            shader = LinearGradient(w - fadeR, 0f, w.toFloat(), 0f, keep, erase, Shader.TileMode.CLAMP)
         }
-        clip.reset()
-        val r = h / 2f
-        clip.addRoundRect(0f, 0f, w.toFloat(), h.toFloat(), r, r, Path.Direction.CW)
         if (!offsetReady) {
             offset = -visibleWidth()
             offsetReady = true
@@ -166,9 +174,7 @@ class MarqueeTickerView(
     override fun onDraw(canvas: Canvas) {
         if (shown.isEmpty()) return
         val baseline = height / 2f - (paint.descent() + paint.ascent()) / 2f
-        canvas.save()
-        // Всё — внутри овала плашки: и текст, и фейды повторяют её форму.
-        canvas.clipPath(clip)
+        // Форму держит пилюля (её контур режет детей), здесь — только строка и маска.
         canvas.drawText(shown, padL - offset, baseline, paint)
         // Слева гаснет то, что уплыло за край, — только когда оно есть.
         if (offset > 0.5f) {
@@ -176,7 +182,6 @@ class MarqueeTickerView(
         }
         // Справа — ворота, через которые въезжают новые слова.
         fadeRight?.let { canvas.drawRect(width - fadeR, 0f, width.toFloat(), height.toFloat(), it) }
-        canvas.restore()
     }
 
     override fun onDetachedFromWindow() {

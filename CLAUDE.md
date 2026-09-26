@@ -35,7 +35,11 @@
   `data/LiveDraft.kt`, `trigger/DictationService.kt`, `core/VoiceCommands.kt`.
   Пока микрофон наш, экран не гаснет: `DictationService` зовёт
   `PravkaAccessibilityService.keepScreenOn` (окно 1×1 с `FLAG_KEEP_SCREEN_ON`).
-  Тикер диктовки — бегущая строка `trigger/MarqueeTickerView.kt`.
+  Тикер диктовки — бегущая строка `trigger/MarqueeTickerView.kt` в пилюле
+  диктовки `trigger/DictationPill.kt` (одна на все кнопки: снизу посередине
+  над клавиатурой, как у Gemini; место — `core/PillGeometry.kt`, вид и
+  пружина — `core/PillLook.kt`; клавиатуру отдаёт метрика своего окна, не
+  чужие окна).
   Кто слушает — телефон или Bluetooth-гарнитура — выбирает владелец кружком
   в веере шестерёнки над «П» (`trigger/StackSettingsController.kt`,
   состояние — `settings.phoneMicOnlyFlow`); маршрутом звука (канал гарнитуры,
@@ -188,10 +192,12 @@ CI (`.github/workflows/build-apk.yml`) собирает APK на каждый п
    «Круг · Стопка» в «Кнопках на экране». Стекло с завода **светлое** (бумага) — тумблер
    «Стекло диска: Светлее · Темнее» там же, числа обеих шкурок и плотности
    слоёв — `core/DiskLook.kt` под тестами; кнопки, кружки веера И ПЛАШКИ
-   (бегущие строки, меню, записки, «отмена», ручка) в одном материале —
+   (меню, записки, «отмена», ручка) в одном материале —
    `trigger/BubbleSkin.kt`, наследник `GradientDrawable` на том же поле и в
    том же `.apply`, форму берёт у себя (`shape`, заводская — прямоугольник,
-   кружки просят `OVAL`), нажатие гасит блик (`BubbleMotion.press`). На диске кнопка
+   кружки просят `OVAL`), нажатие гасит блик (`BubbleMotion.press`); у пилюли диктовки своё стекло
+   (`DictationPill.PillSkin`: градиент цвета режима в чернилах, свечение от
+   кружка голоса). На диске кнопка
    ПЛОТНЕЕ настройки прозрачности (`DiskLook.faceAlpha`; `idleAlpha` в
    контроллерах — вычисляемый из `fabAlpha` и `ringMode`), под кнопками стекло
    рисует их тени (`PlateView.setSockets`), а шестерёнка в центре — без

@@ -276,6 +276,10 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var cachedNetwork: Boolean = false
     /** Ширина бегущей строки, dp — общая для «П», «З», «Д» и «Т» (Settings.tickerWidthFlow). */
     @Volatile internal var cachedTickerWidthDp: Int = Settings.TICKER_WIDTH_DEFAULT
+    /** Пилюля диктовки снизу посередине (true) или у кнопки — Settings.tickerBottomFlow. */
+    @Volatile internal var cachedTickerBottom: Boolean = true
+    /** Плотность стекла пилюли — Settings.tickerDensityFlow. */
+    @Volatile internal var cachedTickerDensity: Float = ru.zf.pravka.core.PillLook.DENSITY_DEFAULT
 
     internal val app: PravkaApp by lazy { application as PravkaApp }
 
@@ -380,11 +384,18 @@ class PravkaAccessibilityService : AccessibilityService() {
             app.settings.tickerWidthFlow.collect {
                 cachedTickerWidthDp = it
                 // Открытая строка перестраивается сразу — настройку крутят, глядя на неё.
-                floatingButton?.repositionTickerIfVisible()
-                zButton?.repositionTickerIfVisible()
-                rButton?.repositionTickerIfVisible()
-                mButton?.repositionTickerIfVisible()
-                eButton?.repositionTickerIfVisible()
+                repositionTickers()
+            }
+        }
+        // Место пилюли решается на показе: переключатель «Снизу · У кнопки»
+        // подействует со следующего тейка, а плотность — сразу, на открытой.
+        scope.launch {
+            app.settings.tickerBottomFlow.collect { cachedTickerBottom = it }
+        }
+        scope.launch {
+            app.settings.tickerDensityFlow.collect {
+                cachedTickerDensity = it
+                repositionTickers()
             }
         }
         scope.launch {
@@ -432,6 +443,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             onLongPress = ::showMoneyMenu,
             ink = MONEY_INK,
             glyphRes = { ModeGlyphs.money() },
+            pillGlyph = R.drawable.ic_mode_money,
             loadPosition = { key -> app.settings.mFabPosition(key) },
             persistPosition = { key, x, y -> app.settings.setMFabPosition(key, x, y) },
         )
@@ -2532,6 +2544,22 @@ class PravkaAccessibilityService : AccessibilityService() {
     /** Все кнопки связки по порядку: П · З · Д · ₽ · Е — включённые и нет. */
     internal fun chainButtons(): List<RingButton> =
         listOfNotNull(floatingButton, zButton, rButton, mButton, eButton)
+
+    private fun repositionTickers() {
+        floatingButton?.repositionTickerIfVisible()
+        zButton?.repositionTickerIfVisible()
+        rButton?.repositionTickerIfVisible()
+        mButton?.repositionTickerIfVisible()
+        eButton?.repositionTickerIfVisible()
+    }
+
+    /**
+     * Что пилюле диктовки снизу накрывать нельзя: кнопки, чьи окна висят на
+     * экране. Пишущую — чтобы «стоп» попадал всегда; остальные — чтобы окно
+     * пилюли, лёгшее поверх, не прятало их (`core/PillGeometry.kt`).
+     */
+    internal fun pillObstacles(): List<ru.zf.pravka.core.PillGeometry.Box> =
+        chainButtons().mapNotNull { it.shownBox() }
 
     /** Включённые кнопки связки по порядку — то, что реально стоит на экране. */
     internal fun chain(): List<RingButton> = listOfNotNull(

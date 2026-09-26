@@ -14,6 +14,20 @@ interface RingButton {
     /** Левый верхний угол окна кнопки, или null, пока кнопки нет. */
     fun currentPosition(): Pair<Int, Int>?
 
+    /** Окно кнопки висит в WindowManager — кнопку видно (спрятанная и убранная — нет). */
+    fun onScreen(): Boolean
+
+    /**
+     * Где кнопка на экране, если её видно, — препятствие для пилюли
+     * диктовки снизу (`DictationPill`): накрывать кнопки ей нельзя.
+     */
+    fun shownBox(): ru.zf.pravka.core.PillGeometry.Box? {
+        if (!onScreen()) return null
+        val (x, y) = currentPosition() ?: return null
+        val s = buttonSizePx()
+        return ru.zf.pravka.core.PillGeometry.Box(x, y, x + s, y + s)
+    }
+
     /**
      * Ехать к ([x], [y]). В стопке — на пружине звеном [link]; с [snap] —
      * встать сразу, без пружины: диск ведёт свою анимацию сам, кадр в кадр,

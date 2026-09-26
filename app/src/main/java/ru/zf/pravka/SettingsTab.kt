@@ -743,18 +743,51 @@ private fun ButtonsSettings(app: PravkaApp) {
             onCheckedChange = { on -> scope.launch { settings.setModeIcons(on) } },
             hint = "перо, часы, галочка, рубль, вилка",
         )
-        // Бегущая строка у всех кнопок — одна ширина (владелец, 15.09:
-        // «поставим в общих настройках размер плашки по горизонтали»).
+    }
+
+    // Пилюля диктовки (владелец, 26.09.2026, по образцу Gemini): «она будет
+    // вылезать не рядом с кнопкой… над клавиатурой, если клавиатура включена,
+    // или внизу экрана». «У кнопки» — прежнее место, откат одним движением.
+    val tickerBottom by settings.tickerBottomFlow.collectAsState(initial = true)
+    PaperCard(
+        label = "бегущая строка",
+        info = "Пока идёт запись, живые слова бегут по пилюле цвета кнопки: слева знак режима, " +
+            "справа кружок, который дышит голосом. Снизу — всплывает посередине над клавиатурой, " +
+            "а без неё — над полосой навигации, и кнопки на экране не накрывает: не хватает места " +
+            "вбок — встаёт над ними. Клавиатура открылась посреди записи — пилюля переплывает " +
+            "на неё за полсекунды. У кнопки — прежнее место сбоку. Место меняется со следующей записи.",
+    ) {
+        ChipRow {
+            PaperChip("Снизу", selected = tickerBottom, onClick = { scope.launch { settings.setTickerBottom(true) } })
+            PaperChip("У кнопки", selected = !tickerBottom, onClick = { scope.launch { settings.setTickerBottom(false) } })
+        }
+        Spacer(Modifier.height(6.dp))
+        // Одна ширина на все кнопки (владелец, 15.09: «поставим в общих
+        // настройках размер плашки по горизонтали»).
         val tickerWidth by settings.tickerWidthFlow.collectAsState(initial = Settings.TICKER_WIDTH_DEFAULT)
         var tickerSlider by remember(tickerWidth) { mutableStateOf(tickerWidth.toFloat()) }
         PaperSlider(
-            title = "Бегущая строка",
+            title = "Ширина",
             valueText = "${tickerSlider.toInt()} dp",
             value = tickerSlider,
             onValueChange = { tickerSlider = it },
             onValueChangeFinished = { scope.launch { settings.setTickerWidth(tickerSlider.toInt()) } },
             valueRange = Settings.TICKER_WIDTH_MIN.toFloat()..Settings.TICKER_WIDTH_MAX.toFloat(),
-            info = "Одна ширина на все кнопки; шире экрана не станет — кнопка рядом остаётся видна.",
+            info = "Одна ширина на все кнопки; шире экрана не станет — поля по краям остаются.",
+        )
+        // «Прозрачнее… просто прозрачность очень сильно повысить»: гаснет
+        // стекло, а текст, знак и кружок остаются читаемыми.
+        val density by settings.tickerDensityFlow.collectAsState(initial = ru.zf.pravka.core.PillLook.DENSITY_DEFAULT)
+        var densitySlider by remember(density) { mutableStateOf(density) }
+        PaperSlider(
+            title = "Плотность стекла",
+            valueText = "${(densitySlider * 100).toInt()} %",
+            value = densitySlider,
+            onValueChange = { densitySlider = it },
+            onValueChangeFinished = { scope.launch { settings.setTickerDensity(densitySlider) } },
+            valueRange = ru.zf.pravka.core.PillLook.DENSITY_MIN..ru.zf.pravka.core.PillLook.DENSITY_MAX,
+            info = "Меньше — пилюля прозрачнее, приложение под ней видно. Слова, знак режима и " +
+                "кружок голоса не гаснут: прозрачным становится только стекло.",
         )
     }
 }

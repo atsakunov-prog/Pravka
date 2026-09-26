@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.MicLevel
+import ru.zf.pravka.core.PillGeometry
 import ru.zf.pravka.data.Settings
 
 // The Засечка (timesheet) button: Правка's little sibling, drawn from the
@@ -42,8 +43,7 @@ class ZasechkaButtonController(
 
     companion object {
         private const val LONG_PRESS_MS = 450L
-        private const val TICKER_ALPHA = 0.86f
-        // Тикер — та же бегущая строка, что у «П» (MarqueeTickerView); ширина —
+        // Тикер — та же пилюля диктовки, что у «П» (`DictationPill`); ширина —
         // настройка владельца, Settings.tickerWidthFlow.
 
         // Warm pair with the "П": red-orange pen there, a marker halfway
@@ -124,6 +124,7 @@ class ZasechkaButtonController(
      */
     override fun setLevel(level: Float) {
         if (!recording) return
+        pill.setLevel(level)
         val v = button ?: return
         micPulse = MicLevel.smooth(micPulse, level)
         val s = MicLevel.scale(micPulse)
@@ -138,6 +139,7 @@ class ZasechkaButtonController(
     /** Запись кончилась — кнопка распрямляется из пульса в свой размер. */
     private fun restPulse() {
         micPulse = 0f
+        pill.rest()
         button?.let { v ->
             v.animate().cancel()
             v.scaleX = 1f
@@ -158,10 +160,19 @@ class ZasechkaButtonController(
     private var enabled = false
     private var pulse: ValueAnimator? = null
 
-    private var ticker: FrameLayout? = null
-    private var tickerText: MarqueeTickerView? = null
-    private var tickerParams: WindowManager.LayoutParams? = null
-    private var tickerVisible = false
+    // Пилюля диктовки (`DictationPill`): живые слова, пока идёт наговор, —
+    // снизу посередине, в одежде Gemini. Тап — микрофон молчит,
+    // дальше набором (конфиденциальное не говорят вслух).
+    private val pill = DictationPill(
+        service, scope,
+        accent = AMBER,
+        glyph = R.drawable.ic_mode_zasechka,
+        touchable = true,
+        textSizeSp = 17f,
+        screen = { screenSize() },
+        owner = { params?.let { PillGeometry.Box(it.x, it.y, it.x + buttonSize, it.y + buttonSize) } },
+        ownObstacles = { listOfNotNull(cancelBubble.box()) },
+    ).also { it.onTap = { onTickerTap?.invoke() } }
 
     private fun dp(value: Int): Int = (value * density).toInt()
 
@@ -389,6 +400,8 @@ class ZasechkaButtonController(
 
     override fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
+    override fun onScreen(): Boolean = attached
+
     /** Диск: окно целиком за краем — снять; показался край — вернуть. Своё поле, не `stashed`. */
     override fun setOffscreen(value: Boolean) {
         if (offscreen == value) return
@@ -468,67 +481,16 @@ class ZasechkaButtonController(
         follower.follow(p.x, p.y, targetX, targetY, link, settle)
     }
 
-    // ---- Mini-ticker: live words while an entry is being dictated ----
+    // ---- Пилюля диктовки: живые слова, пока надиктовывается запись ----
 
-    fun showTicker() {
-        if (ticker == null) createTicker()
-        positionTicker()
-        val t = ticker ?: return
-        tickerText?.reset()
-        lastTickerText = ""
-        lastTickerAt = 0L
-        runCatching { windowManager.updateViewLayout(t, tickerParams) }
-        if (!tickerVisible) {
-            tickerVisible = true
-            t.visibility = View.VISIBLE
-            t.alpha = 0f
-            t.animate().alpha(TICKER_ALPHA).setDuration(180).start()
-        }
-    }
+    fun showTicker() = pill.show()
 
-    // Одна строка высотой с кнопку, вровень с ней.
-    private fun tickerHeightPx(): Int = maxOf(buttonSize, dp(40))
+    fun updateTicker(text: String, force: Boolean = false) = pill.update(text, force)
 
-    private var lastTickerText = ""
-    private var lastTickerAt = 0L
+    /** Кнопку тащат, экран повернули, настройку крутят — пилюля следом. */
+    fun repositionTickerIfVisible() = pill.reposition()
 
-    fun updateTicker(text: String, force: Boolean = false) {
-        val tv = tickerText ?: return
-        if (text == lastTickerText) return
-        val now = android.os.SystemClock.uptimeMillis()
-        // [force] — для подсказки службы («секунду…» и приглашение говорить):
-        // она приходит ровно одна за тейк, и проглотить её потолком частоты
-        // значит соврать о том, слышит движок или ещё нет.
-        if (!force && now - lastTickerAt < 60) return
-        lastTickerAt = now
-        lastTickerText = text
-        tv.setTickerText(text)
-    }
-
-    fun repositionTickerIfVisible() {
-        if (!tickerVisible) return
-        positionTicker()
-        ticker?.let { runCatching { windowManager.updateViewLayout(it, tickerParams) } }
-    }
-
-    fun hideTicker() {
-        val t = ticker ?: return
-        if (!tickerVisible) return
-        tickerVisible = false
-        t.animate().alpha(0f).setDuration(220).withEndAction {
-            // Same rule as the "П" plate: a hidden overlay window still
-            // costs a relayout in every display transition, so it leaves
-            // WindowManager and is rebuilt on the next show.
-            if (!tickerVisible) {
-                ticker?.let { runCatching { windowManager.removeView(it) } }
-                ticker = null
-                tickerText = null
-                tickerParams = null
-                lastTickerText = ""
-                lastTickerAt = 0L
-            }
-        }.start()
-    }
+    fun hideTicker() = pill.hide()
 
     // ---- Записка: что именно записалось, на две секунды ----
     //
@@ -776,7 +738,7 @@ class ZasechkaButtonController(
         // Именно attached, а не «button != null»: спрятанная кнопка держит
         // свой View, но окна в WindowManager у неё нет — и в перепись,
         // которой меряют цену складывания, она входить не должна.
-        (if (attached) 1 else 0) + (if (ticker != null) 1 else 0) +
+        (if (attached) 1 else 0) + pill.windowCount +
             (if (cancelBubble.shown) 1 else 0) +
             (if (input != null) 1 else 0) + (if (menu != null) 1 else 0)
 
@@ -791,8 +753,7 @@ class ZasechkaButtonController(
         button?.let { runCatching { windowManager.removeView(it) } }
         attached = false
         button = null
-        ticker?.let { runCatching { windowManager.removeView(it) } }
-        ticker = null
+        pill.destroy()
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -893,63 +854,10 @@ class ZasechkaButtonController(
         p.y = ((h - buttonSize) * yFraction.coerceIn(0f, 1f)).toInt()
     }
 
-    @SuppressLint("ClickableViewAccessibility")
-    private fun createTicker() {
-        val pill = FrameLayout(service)
-        pill.background = BubbleSkin().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = buttonSize / 2f
-            setColor(AMBER)
-        }
-        pill.elevation = dp(4).toFloat()
-        // Дети режутся по овалу плашки: фейды бегущей строки повторяют её форму.
-        pill.clipToOutline = true
-        val tv = MarqueeTickerView(service, plateColor = AMBER, textColor = PAPER, textSizeSp = 17f)
-        tickerText = tv
-        pill.addView(
-            tv,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            ),
-        )
-        // Unlike the "П" plate this one is TOUCHABLE: a tap mid-dictation
-        // kills the mic and swaps the plate for a type-in box (confidential
-        // takes are typed, not said out loud).
-        pill.setOnClickListener { onTickerTap?.invoke() }
-        val p = WindowManager.LayoutParams(
-            tickerWidthPx(),
-            tickerHeightPx(),
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-        tickerParams = p
-        ticker = pill
-        runCatching { windowManager.addView(pill, p) }
-        pill.visibility = View.GONE
-    }
-
     // Ширина — настройка владельца (одна на все кнопки), кнопка рядом остаётся видна.
     private fun tickerWidthPx(): Int {
         val (w, _) = screenSize()
         return minOf(dp(service.cachedTickerWidthDp), (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
-    }
-
-    private fun positionTicker() {
-        val bp = params ?: return
-        val tp = tickerParams ?: return
-        val (w, h) = screenSize()
-        val tickerW = tickerWidthPx()
-        val tickerH = tickerHeightPx()
-        val gap = dp(8)
-        tp.width = tickerW
-        tp.height = tickerH
-        tp.y = (bp.y - (tickerH - buttonSize) / 2).coerceIn(0, (h - tickerH).coerceAtLeast(0))
-        val buttonCenterX = bp.x + buttonSize / 2
-        tp.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap
-        else bp.x - tickerW - gap
-        tp.x = tp.x.coerceIn(0, (w - tickerW).coerceAtLeast(0))
     }
 
     // ---- Type-in plate: the mic died, the keyboard talks instead ----

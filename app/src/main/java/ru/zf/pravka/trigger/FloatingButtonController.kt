@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.MicLevel
+import ru.zf.pravka.core.PillGeometry
 import ru.zf.pravka.data.Settings
 
 // Floating button drawn from the accessibility service as a
@@ -37,9 +38,8 @@ class FloatingButtonController(
 
     companion object {
         private const val LONG_PRESS_MS = 450L
-        private const val TICKER_ALPHA = 0.82f  // near-opaque, owner found 0.6 too see-through
-        // Тикер — бегущая строка в одну линию (владелец, 15.09.2026); ширина —
-        // настройка владельца, Settings.tickerWidthFlow.
+        // Тикер — бегущая строка в одну линию (владелец, 15.09.2026) в пилюле
+        // диктовки (`DictationPill`, 26.09.2026); ширина — Settings.tickerWidthFlow.
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
         // orange circle, paper-white geometric "П"; deep red while recording.
@@ -111,6 +111,7 @@ class FloatingButtonController(
      */
     override fun setLevel(level: Float) {
         if (!recording) return
+        pill.setLevel(level)
         val v = button ?: return
         micPulse = MicLevel.smooth(micPulse, level)
         val s = MicLevel.scale(micPulse)
@@ -125,6 +126,7 @@ class FloatingButtonController(
     /** Запись кончилась — кнопка распрямляется из пульса в свой размер. */
     private fun restPulse() {
         micPulse = 0f
+        pill.rest()
         button?.let { v ->
             v.animate().cancel()
             v.scaleX = 1f
@@ -143,18 +145,25 @@ class FloatingButtonController(
     private var recording = false
     private var visible = false
 
-    // Live-dictation "telegraph": a translucent pill next to the button where
-    // recognized words crawl by (marquee) while the Google engine listens.
     // Long-press menu: a vertical stack of pills beside the button.
     private var menu: android.widget.LinearLayout? = null
     private var menuParams: WindowManager.LayoutParams? = null
     private var menuVisible = false
     private val menuDismiss = Runnable { hideMenu() }
 
-    private var ticker: FrameLayout? = null
-    private var tickerText: MarqueeTickerView? = null
-    private var tickerParams: WindowManager.LayoutParams? = null
-    private var tickerVisible = false
+    // Пилюля диктовки (`DictationPill`): живые слова, пока слушает движок, —
+    // снизу посередине, в одежде Gemini. У «П» касаний не ловит: поле, в
+    // которое пойдёт текст, под ней остаётся живым.
+    private val pill = DictationPill(
+        service, scope,
+        accent = ACCENT,
+        glyph = R.drawable.ic_mode_pravka,
+        touchable = false,
+        textSizeSp = 17f,
+        screen = { screenSize() },
+        owner = { params?.let { PillGeometry.Box(it.x, it.y, it.x + buttonSize, it.y + buttonSize) } },
+        ownObstacles = { listOfNotNull(cancelBubble.box()) },
+    )
 
     private fun dp(value: Int): Int = (value * density).toInt()
 
@@ -308,6 +317,8 @@ class FloatingButtonController(
 
     override fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
+    override fun onScreen(): Boolean = attached
+
     /** Диск: окно целиком за краем — снять; показался край — вернуть. Своё поле, не `stashed`. */
     override fun setOffscreen(value: Boolean) {
         if (offscreen == value) return
@@ -440,78 +451,16 @@ class FloatingButtonController(
         }
     }
 
-    // ---- Live-dictation ticker (telegraph) ----
+    // ---- Пилюля диктовки: живые слова, пока слушает движок ----
 
-    fun showTicker() {
-        if (ticker == null) createTicker()
-        positionTicker()
-        val t = ticker ?: return
-        tickerText?.reset()
-        lastTickerText = ""
-        lastTickerAt = 0L
-        runCatching { windowManager.updateViewLayout(t, tickerParams) }
-        if (!tickerVisible) {
-            tickerVisible = true
-            t.visibility = View.VISIBLE
-            t.alpha = 0f
-            t.animate().alpha(TICKER_ALPHA).setDuration(180).start()
-        }
-    }
+    fun showTicker() = pill.show()
 
-    // Одна строка: высотой с кнопку, чтобы стоять с ней вровень.
-    private fun tickerHeightPx(): Int = maxOf(buttonSize, dp(40))
+    fun updateTicker(text: String, force: Boolean = false) = pill.update(text, force)
 
-    private var lastTickerText = ""
-    private var lastTickerAt = 0L
+    /** Кнопку тащат, экран повернули, настройку крутят — пилюля следом. */
+    fun repositionTickerIfVisible() = pill.reposition()
 
-    fun updateTicker(text: String, force: Boolean = false) {
-        val tv = tickerText ?: return
-        // Partials arrive several times a second; the marquee measures the text
-        // on each set, so skip identical text and cap the rate lightly - the
-        // motion itself is smoothed per frame inside the view.
-        if (text == lastTickerText) return
-        val now = android.os.SystemClock.uptimeMillis()
-        // [force] — для коротких подсказок службы («говори»): их ровно одна за
-        // тейк, и проглотить её потолком частоты значит соврать владельцу о
-        // том, слышит его движок или ещё нет.
-        if (!force && now - lastTickerAt < 60) return
-        lastTickerAt = now
-        lastTickerText = text
-        tv.setTickerText(text)
-    }
-
-    /** Keep the pill glued to the button while it's dragged / on rotate. */
-    fun repositionTickerIfVisible() {
-        if (!tickerVisible) return
-        positionTicker()
-        ticker?.let { runCatching { windowManager.updateViewLayout(it, tickerParams) } }
-    }
-
-    fun hideTicker() {
-        val t = ticker ?: return
-        if (!tickerVisible) return
-        tickerVisible = false
-        t.animate().alpha(0f).setDuration(220).withEndAction {
-            // hide -> immediate re-show (dictation ends, CLEAN streaming starts)
-            // cancels this fade; the end action can still run and must not hide
-            // the ticker that showTicker() just brought back.
-            if (!tickerVisible) dropTicker()
-        }.start()
-    }
-
-    // An invisible overlay is NOT free: its window stays in WindowManager, and
-    // every display transition (fold!) relayouts it and waits for it to draw.
-    // A long-lived service held five windows, three of them invisible - the
-    // owner's "fresh install flies, after a day it black-screens for 4-5 s".
-    // So a hidden plate leaves the window manager and is rebuilt on next show.
-    private fun dropTicker() {
-        ticker?.let { runCatching { windowManager.removeView(it) } }
-        ticker = null
-        tickerText = null
-        tickerParams = null
-        lastTickerText = ""
-        lastTickerAt = 0L
-    }
+    fun hideTicker() = pill.hide()
 
     // ---- Long-press menu: colored columns side by side ----
 
@@ -619,69 +568,6 @@ class FloatingButtonController(
         column.postDelayed(menuDismiss, 6000)
     }
 
-    @SuppressLint("ClickableViewAccessibility")
-    private fun createTicker() {
-        val pill = FrameLayout(service)
-        pill.background = BubbleSkin().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = buttonSize / 2f
-            setColor(ACCENT)
-        }
-        pill.elevation = dp(4).toFloat()
-        // Дети режутся по овалу плашки: иначе фейд бегущей строки ложится
-        // квадратом поверх круглых концов пилюли.
-        pill.clipToOutline = true
-        // Бегущая строка: рисует сама, без TextView и его перекладки на
-        // каждый частичный результат (см. MarqueeTickerView).
-        val tv = MarqueeTickerView(service, plateColor = ACCENT, textColor = PAPER, textSizeSp = 17f)
-        tickerText = tv
-        pill.addView(
-            tv,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            ),
-        )
-        val p = WindowManager.LayoutParams(
-            tickerWidthPx(),
-            tickerHeightPx(),
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-        tickerParams = p
-        ticker = pill
-        runCatching { windowManager.addView(pill, p) }
-        pill.visibility = View.GONE
-    }
-
-    // Ширина — настройка владельца (Настройки → Общее, одна на все кнопки),
-    // но кнопка и поле рядом с ней остаются видны.
-    private fun tickerWidthPx(): Int {
-        val (w, _) = screenSize()
-        return minOf(dp(service.cachedTickerWidthDp), (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
-    }
-
-    // Sit the pill beside the button, on the side that has room: button near
-    // the left edge -> ticker to its right, and vice versa.
-    private fun positionTicker() {
-        val bp = params ?: return
-        val tp = tickerParams ?: return
-        val (w, h) = screenSize()
-        val tickerW = tickerWidthPx()
-        val tickerH = tickerHeightPx()
-        val gap = dp(8)
-        tp.width = tickerW
-        tp.height = tickerH
-        // Vertically centre the (taller) pill on the button.
-        tp.y = (bp.y - (tickerH - buttonSize) / 2).coerceIn(0, (h - tickerH).coerceAtLeast(0))
-        val buttonCenterX = bp.x + buttonSize / 2
-        tp.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap
-        else bp.x - tickerW - gap
-        tp.x = tp.x.coerceIn(0, (w - tickerW).coerceAtLeast(0))
-    }
-
     // ---- Learn badge: 💡 (есть предложения) / ⭐ (новое правило) above the
     // button - "у неё идея возникла". Tap opens the learning section. ----
 
@@ -758,7 +644,7 @@ class FloatingButtonController(
         // Именно attached, а не «button != null»: спрятанная кнопка держит
         // свой View, но окна в WindowManager у неё нет — и в перепись,
         // которой меряют цену складывания, она входить не должна.
-        (if (attached) 1 else 0) + (if (ticker != null) 1 else 0) +
+        (if (attached) 1 else 0) + pill.windowCount +
             (if (learnBadge != null) 1 else 0) + (if (cancelBubble.shown) 1 else 0) +
             (if (menu != null) 1 else 0)
 
@@ -771,8 +657,7 @@ class FloatingButtonController(
         button?.let { runCatching { windowManager.removeView(it) } }
         attached = false
         button = null
-        ticker?.let { runCatching { windowManager.removeView(it) } }
-        ticker = null
+        pill.destroy()
     }
 
     @SuppressLint("ClickableViewAccessibility")
