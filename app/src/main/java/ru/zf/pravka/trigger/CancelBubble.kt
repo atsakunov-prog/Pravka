@@ -83,14 +83,6 @@ class CancelBubble(private val context: Context, private val windowManager: Wind
         }
     }
 
-    /** Где «отмена» стоит сейчас — пилюле диктовки её накрывать нельзя. */
-    fun box(): ru.zf.pravka.core.PillGeometry.Box? {
-        val v = pill ?: return null
-        val p = params ?: return null
-        if (v.parent == null) return null
-        return ru.zf.pravka.core.PillGeometry.Box(p.x, p.y, p.x + v.measuredWidth, p.y + v.measuredHeight)
-    }
-
     fun setAlpha(alpha: Float) {
         pill?.alpha = alpha
     }

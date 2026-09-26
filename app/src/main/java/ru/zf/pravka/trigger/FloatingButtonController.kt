@@ -151,19 +151,17 @@ class FloatingButtonController(
     private var menuVisible = false
     private val menuDismiss = Runnable { hideMenu() }
 
-    // Пилюля диктовки (`DictationPill`): живые слова, пока слушает движок, —
-    // снизу посередине, в одежде Gemini. У «П» касаний не ловит: поле, в
-    // которое пойдёт текст, под ней остаётся живым.
+    // Пилюля диктовки (`DictationPill`): живые слова, пока слушает движок, в
+    // одежде Gemini. Слева ✕ — отмена, кружок справа — «отправить» (тот же
+    // тап, что по кнопке), долгое нажатие — переставить.
     private val pill = DictationPill(
         service, scope,
         accent = ACCENT,
         glyph = R.drawable.ic_mode_pravka,
-        touchable = false,
         textSizeSp = 17f,
         screen = { screenSize() },
         owner = { params?.let { PillGeometry.Box(it.x, it.y, it.x + buttonSize, it.y + buttonSize) } },
-        ownObstacles = { listOfNotNull(cancelBubble.box()) },
-    )
+    ).also { it.onSend = { if (!busy) onShortTap() } }
 
     private fun dp(value: Int): Int = (value * density).toInt()
 
@@ -423,6 +421,7 @@ class FloatingButtonController(
     /** Recording on: red stop dot, full opacity, pinned visible everywhere. */
     fun setRecording(value: Boolean) {
         recording = value
+        pill.canSend = value
         if (!value) restPulse()
         background?.setColor(if (value) REC_RED else ACCENT)
         recDot?.visibility = if (value) View.VISIBLE else View.GONE
@@ -456,6 +455,9 @@ class FloatingButtonController(
     fun showTicker() = pill.show()
 
     fun updateTicker(text: String, force: Boolean = false) = pill.update(text, force)
+
+    /** Надпись посередине, пока слов нет: «Саша, секунду…», «Саша, слушаю» (`core/PillHint.kt`). */
+    fun hintTicker(text: String) = pill.hint(text)
 
     /** Кнопку тащат, экран повернули, настройку крутят — пилюля следом. */
     fun repositionTickerIfVisible() = pill.reposition()
@@ -625,6 +627,10 @@ class FloatingButtonController(
     private val cancelBubble = CancelBubble(service, windowManager)
 
     fun showCancelBubble(onCancel: () -> Unit) {
+        pill.onCancel = onCancel
+        // В пилюле свой ✕ — серая «отмена» рядом была бы второй на ту же
+        // запись. Она остаётся там, где пилюли нет (запись Whisper у «П»).
+        if (pill.showing) return
         cancelBubble.show(idleAlpha, onCancel)
         repositionCancelBubble()
     }
@@ -637,7 +643,10 @@ class FloatingButtonController(
         cancelBubble.place(bp.x, bp.y, buttonSize, w, h)
     }
 
-    fun hideCancelBubble() = cancelBubble.hide()
+    fun hideCancelBubble() {
+        pill.onCancel = null
+        cancelBubble.hide()
+    }
 
     /** How many overlay windows this controller currently holds. */
     override fun windowCount(): Int =

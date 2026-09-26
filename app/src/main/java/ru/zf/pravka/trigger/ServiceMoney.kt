@@ -47,7 +47,7 @@ fun PravkaAccessibilityService.onMoneyTap() {
 
 /** Приглашение говорить в бегущей строке «₽». */
 internal fun PravkaAccessibilityService.moneyTickerPrompt(): String =
-    if (mTabSink != null) "🎙 $mTabPrompt" else "🎙 наговори траты… (тап сюда — набрать текстом)"
+    if (mTabSink != null) mTabPrompt.replaceFirstChar { it.uppercase() } else listenHint()
 
 /**
  * Наговор для вкладки «Деньги»: тот же движок и та же бегущая строка, что у
@@ -105,7 +105,7 @@ internal fun PravkaAccessibilityService.startMoneyCapture() {
         mWhisperRecording = true
         mButton?.setRecording(true)
         mButton?.showTicker()
-        mButton?.updateTicker(moneyTickerPrompt())
+        mButton?.hintTicker(moneyTickerPrompt())
         mButton?.showCancelBubble { cancelMoneyTake() }
         Haptics.start(this)
         startDictation()
@@ -149,7 +149,7 @@ internal fun PravkaAccessibilityService.startMoneyGoogle() {
     session.start(
         onReady = {
             speechReady = true
-            mButton?.updateTicker(moneyTickerPrompt(), force = true)
+            mButton?.hintTicker(moneyTickerPrompt())
             Haptics.success(this)
         },
         onPartial = { live ->
@@ -163,7 +163,7 @@ internal fun PravkaAccessibilityService.startMoneyGoogle() {
     )
     mButton?.setRecording(true)
     mButton?.showTicker()
-    if (!speechReady) mButton?.updateTicker(PravkaAccessibilityService.HINT_WAIT)
+    if (!speechReady) mButton?.hintTicker(waitHint())
     mButton?.showCancelBubble { cancelMoneyTake() }
     Haptics.start(this)
     runCatching { startMicHold() }

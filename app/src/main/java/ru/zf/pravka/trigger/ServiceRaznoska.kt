@@ -61,7 +61,8 @@ fun PravkaAccessibilityService.onRaznoskaTap() {
 }
 
 /** Приглашение говорить в бегущей строке «Д» — одно на оба движка. */
-internal fun raznoskaTickerPrompt(): String = "🎙 наговори дела… (тап сюда — набрать текстом)"
+/** Надпись в пилюле «Д», пока слов нет. Тап посередине — по-прежнему набор. */
+internal fun PravkaAccessibilityService.raznoskaTickerPrompt(): String = listenHint()
 
 internal fun PravkaAccessibilityService.startRaznoskaCapture() {
     rButton?.hideInput()
@@ -73,7 +74,7 @@ internal fun PravkaAccessibilityService.startRaznoskaCapture() {
         // У Whisper живых слов нет, но плашка нужна: это ещё и цель тапа
         // «набрать текстом».
         rButton?.showTicker()
-        rButton?.updateTicker(raznoskaTickerPrompt())
+        rButton?.hintTicker(raznoskaTickerPrompt())
         rButton?.showCancelBubble { cancelRaznoskaTake() }
         Haptics.start(this)
         startDictation()
@@ -112,7 +113,7 @@ internal fun PravkaAccessibilityService.startRaznoskaGoogle() {
         onReady = {
             // Движок услышал — только теперь приглашение говорить правда.
             speechReady = true
-            rButton?.updateTicker(raznoskaTickerPrompt(), force = true)
+            rButton?.hintTicker(raznoskaTickerPrompt())
             Haptics.success(this)
         },
         onPartial = { live -> rButton?.updateTicker(live) },
@@ -126,7 +127,7 @@ internal fun PravkaAccessibilityService.startRaznoskaGoogle() {
     rButton?.setRecording(true)
     rButton?.showTicker()
     // Пока движок глух, строка говорит об этом, а не зовёт говорить в пустоту.
-    if (!speechReady) rButton?.updateTicker(PravkaAccessibilityService.HINT_WAIT)
+    if (!speechReady) rButton?.hintTicker(waitHint())
     rButton?.showCancelBubble { cancelRaznoskaTake() }
     Haptics.start(this)
     runCatching { startMicHold() }

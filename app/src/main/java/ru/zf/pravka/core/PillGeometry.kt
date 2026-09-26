@@ -53,10 +53,12 @@ object PillGeometry {
      * Пол — нижний край пилюли: над клавиатурой, если она открыта, иначе над
      * полосой навигации. [imeBottom] и [navBottom] — сколько снизу занимает
      * каждая (0 — нет); клавиатура своей высотой уже включает навигацию под
-     * собой, поэтому берётся большая из двух, а не сумма.
+     * собой, поэтому берётся большая из двух, а не сумма. [minBottom] — ниже
+     * этого над краем не опускаться: у жестов полоса навигации бывает
+     * нулевой, и пилюля ложилась в самый край экрана, под его круглые углы.
      */
-    fun floor(screenH: Int, imeBottom: Int, navBottom: Int, gap: Int): Int =
-        screenH - maxOf(imeBottom, navBottom, 0) - gap
+    fun floor(screenH: Int, imeBottom: Int, navBottom: Int, gap: Int, minBottom: Int = 0): Int =
+        screenH - maxOf(imeBottom, navBottom, minBottom, 0) - gap
 
     /**
      * Потолок — верхний край пилюли: под строкой состояния и вырезом камеры.

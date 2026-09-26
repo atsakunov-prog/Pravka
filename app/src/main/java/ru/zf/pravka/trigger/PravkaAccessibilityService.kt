@@ -48,22 +48,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         internal const val CONVO_GAP_MS = 10L * 60 * 1000
 
         /**
-         * Бегущая строка, пока движок ещё не слышит, и когда уже слышит.
-         * Владелец (22.09.2026): «сделай эти «подожди» и «говори» на всех
-         * кнопках». У «З», «Д» и «Т» роль второй подсказки играет их
-         * собственное приглашение («🎙 говори…», «🎙 наговори дела…»): оно и
-         * зовёт говорить, и напоминает, что именно. Врало оно ровно так же —
-         * висело с первого мига, когда движок ещё глух.
-         */
-        /**
          * Чернила «₽»: фиолетовые — пятый цвет рядом с оранжевым «П»,
          * янтарным «З», синим «Д» и зелёным «Е». Красный был бы ближе к деньгам,
          * но красным кнопка горит на записи — спутать нельзя.
          */
         val MONEY_INK = 0xFF5B4A8C.toInt()
 
-        internal const val HINT_WAIT = "секунду…"
-        internal const val HINT_SPEAK = "🎙 говори"
 
         /** Окно двойного тапа по «З» на локскрине. */
         internal const val LOCK_DOUBLE_TAP_MS = 1_500L
@@ -939,7 +929,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             // so the owner knows when to start and stops clipping first words.
             onReady = {
                 speechReady = true
-                floatingButton?.updateTicker(HINT_SPEAK, force = true)
+                floatingButton?.hintTicker(listenHint())
                 Haptics.success(this)
             },
             // Live text feeds the on-screen ticker; a throttled copy goes to disk
@@ -970,7 +960,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Строка открывается пустой, и эта пустота врёт: слышать движок
         // начинает позже. Пишем в неё, чего ждём, — если он уже успел
         // отозваться, там к этому мигу стоит «говори».
-        if (!speechReady) floatingButton?.updateTicker(HINT_WAIT)
+        if (!speechReady) floatingButton?.hintTicker(waitHint())
         floatingButton?.showCancelBubble { cancelLiveDictation() }
         Haptics.start(this)
         // Foreground-mic holder so the recognizer survives app switches. If it
@@ -2112,7 +2102,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 return@launch
             }
             floatingButton?.showTicker()
-            floatingButton?.updateTicker("…")
+            floatingButton?.hintTicker("…")
             val onDelta: (String) -> Unit = { partial ->
                 scope.launch { floatingButton?.updateTicker(partial) }
             }
@@ -2206,7 +2196,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Show a pulse so the wait doesn't read as a hang.
             if (strongModel) {
                 floatingButton?.showTicker()
-                floatingButton?.updateTicker("…")
+                floatingButton?.hintTicker("…")
             }
             var previewAlive = true
             var lastPreviewAt = 0L
@@ -2544,6 +2534,17 @@ class PravkaAccessibilityService : AccessibilityService() {
     /** Все кнопки связки по порядку: П · З · Д · ₽ · Е — включённые и нет. */
     internal fun chainButtons(): List<RingButton> =
         listOfNotNull(floatingButton, zButton, rButton, mButton, eButton)
+
+    /**
+     * Надпись в пилюле, пока слов нет, — по имени из профиля (владелец,
+     * 26.09.2026: «„Саша, слушаю“ или „Марианна, слушаю“… посередине, как Ask
+     * Gemini»). Две фазы, как было с 22.09 («сделай эти „подожди“ и
+     * „говори“ на всех кнопках»): движок ещё глух — «секунду», услышал —
+     * «слушаю»; приглашение с первого мига врало бы, пока движок не проснулся.
+     * Профиль — в памяти, чтение ничего не стоит.
+     */
+    internal fun listenHint(): String = ru.zf.pravka.core.PillHint.listening(app.profileStore.current?.name)
+    internal fun waitHint(): String = ru.zf.pravka.core.PillHint.waiting(app.profileStore.current?.name)
 
     private fun repositionTickers() {
         floatingButton?.repositionTickerIfVisible()

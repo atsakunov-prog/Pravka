@@ -33,6 +33,11 @@ import kotlin.math.abs
  *
  * Текст держится хвостом (MAX_CHARS): при обрезке головы сдвиг уменьшается на
  * её ширину, и картинка не прыгает. Всё рисование — один drawText на кадр.
+ *
+ * Подсказка ([setHint]) — не бегущий текст, а надпись посередине, как «Ask
+ * Gemini» (владелец, 26.09.2026: «надо ставить его посередине, а не
+ * выезжающим»). Стоит, пока слов нет, чуть тусклее слов; первое слово её
+ * гасит за [HINT_FADE_S], а само въезжает справа, как всегда.
  */
 class MarqueeTickerView(
     context: Context,
@@ -46,6 +51,10 @@ class MarqueeTickerView(
         const val GAIN_PER_SEC = 2.0f
         /** Постоянная времени сглаживания скорости, с: разгон и торможение без рывков. */
         const val VELOCITY_TAU = 0.45f
+        /** За сколько гаснет подсказка, когда пришло первое слово, с. */
+        const val HINT_FADE_S = 0.16f
+        /** Подсказка тусклее слов: это приглашение, а не сказанное. */
+        const val HINT_ALPHA = 0.72f
     }
 
     private val density = resources.displayMetrics.density
@@ -76,6 +85,13 @@ class MarqueeTickerView(
     private var lastFrameNs = 0L
     private var running = false
 
+    private val hintPaint = TextPaint(paint)
+    private var hint = ""
+    private var hintWidth = 0f
+    /** Видимость подсказки 0..1 и куда она идёт: слов нет — к единице, есть — к нулю. */
+    private var hintAlpha = 0f
+    private var hintTarget = 0f
+
     private fun visibleWidth(): Float = (width - padL - padR).coerceAtLeast(1f)
 
     /** Куда стремится сдвиг: конец текста у правого края; короткий текст — прижат вправо. */
@@ -83,6 +99,7 @@ class MarqueeTickerView(
 
     fun reset() {
         full = ""; dropped = 0; shown = ""; shownWidth = 0f
+        hint = ""; hintWidth = 0f; hintAlpha = 0f; hintTarget = 0f
         velocity = 0f
         // Пустая строка «стоит» за правым краем: первые слова въедут оттуда.
         offset = -visibleWidth()
@@ -92,8 +109,28 @@ class MarqueeTickerView(
         invalidate()
     }
 
+    /**
+     * Надпись посередине, пока слов нет. Смена подсказки («секунду…» →
+     * «слушаю») — сразу, без мигания: это одна надпись, у неё поменялось
+     * слово. Пришли слова — подсказка не нужна, новую не показываем.
+     */
+    fun setHint(text: String) {
+        if (text == hint) return
+        hint = text
+        hintWidth = hintPaint.measureText(text)
+        if (full.isEmpty()) {
+            hintTarget = if (text.isEmpty()) 0f else 1f
+            // Первая подсказка показа — сразу: пилюля и так проявляется целиком.
+            if (hintAlpha == 0f) hintAlpha = hintTarget
+        }
+        ensureRunning()
+        invalidate()
+    }
+
     fun setTickerText(text: String) {
         if (text == full) return
+        // Пошли слова — подсказка уступает место, гаснет в кадрах.
+        hintTarget = if (text.isEmpty() && hint.isNotEmpty()) 1f else 0f
         val append = full.isNotEmpty() && text.startsWith(full)
         val newDropped = (text.length - MAX_CHARS).coerceAtLeast(0)
         if (append) {
@@ -126,6 +163,11 @@ class MarqueeTickerView(
             val now = System.nanoTime()
             val dt = if (lastFrameNs == 0L) 1f / 60f else ((now - lastFrameNs) / 1e9f).coerceIn(0.001f, 0.05f)
             lastFrameNs = now
+            if (hintAlpha != hintTarget) {
+                val step = dt / HINT_FADE_S
+                hintAlpha = if (hintAlpha < hintTarget) minOf(hintTarget, hintAlpha + step)
+                else maxOf(hintTarget, hintAlpha - step)
+            }
             val goal = target()
             val gap = goal - offset
             // Целевая скорость ~ отставанию; настоящая скорость догоняет её с
@@ -138,7 +180,7 @@ class MarqueeTickerView(
                 offset = goal
                 velocity = 0f
             }
-            if (abs(goal - offset) < 0.5f && abs(velocity) < 2f) {
+            if (abs(goal - offset) < 0.5f && abs(velocity) < 2f && hintAlpha == hintTarget) {
                 offset = goal
                 velocity = 0f
                 running = false
@@ -172,10 +214,16 @@ class MarqueeTickerView(
     }
 
     override fun onDraw(canvas: Canvas) {
-        if (shown.isEmpty()) return
+        if (shown.isEmpty() && hintAlpha <= 0f) return
         val baseline = height / 2f - (paint.descent() + paint.ascent()) / 2f
+        if (hintAlpha > 0f && hint.isNotEmpty()) {
+            // Посередине; длиннее места — от левого края, хвост гаснет в правом фейде.
+            val x = ((width - hintWidth) / 2f).coerceAtLeast(padL)
+            hintPaint.alpha = (255 * HINT_ALPHA * hintAlpha).toInt()
+            canvas.drawText(hint, x, baseline, hintPaint)
+        }
         // Форму держит пилюля (её контур режет детей), здесь — только строка и маска.
-        canvas.drawText(shown, padL - offset, baseline, paint)
+        if (shown.isNotEmpty()) canvas.drawText(shown, padL - offset, baseline, paint)
         // Слева гаснет то, что уплыло за край, — только когда оно есть.
         if (offset > 0.5f) {
             fadeLeft?.let { canvas.drawRect(0f, 0f, padL + fadeL, height.toFloat(), it) }

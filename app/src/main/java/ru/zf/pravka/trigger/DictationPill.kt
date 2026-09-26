@@ -18,13 +18,14 @@ import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.AccelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import androidx.annotation.DrawableRes
 import kotlin.math.abs
@@ -39,6 +40,7 @@ import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.MicLevel
 import ru.zf.pravka.core.PillGeometry
 import ru.zf.pravka.core.PillLook
+import ru.zf.pravka.ui.Haptics
 
 /**
  * Пилюля диктовки — бегущая строка в одежде Gemini, одна на пять кнопок.
@@ -55,26 +57,47 @@ import ru.zf.pravka.core.PillLook
  * СВЕРХУ: под строкой состояния посередине. Клавиатура всегда внизу, делить
  * ей с пилюлей нечего, и поле ввода мессенджера тоже остаётся открытым.
  *
- * Поведение прежнее, до вызова: `showTicker` / `updateTicker` /
- * `hideTicker` у каждой кнопки теперь просто зовут сюда, у «З», «Д», «₽» и
- * «Е» тап по пилюле по-прежнему глушит микрофон и открывает набор, у «П» она
- * по-прежнему не ловит касаний. Новое — место, вид и движение:
+ * Вечером того же дня пилюля стала пультом записи, как строка Gemini:
  *
- *  - **место** (`core/PillGeometry.kt`) — три на выбор в «Кнопках на
- *    экране»: сверху (с завода), снизу над клавиатурой или над навигацией, у
- *    кнопки (прежнее, откат). Кнопки на экране и «отмену» пилюля не
- *    накрывает;
- *  - **вид** — стекло цвета режима, уведённого в чернила, с градиентом к
- *    кружку голоса справа и свечением от него; слева знак режима — там, где у
- *    Gemini плюс (`core/PillLook.kt`);
- *  - **движение** — пружина с одним проскоком: сверху пилюля выезжает
- *    из-под строки состояния, чуть проскакивает вниз и возвращается; снизу —
- *    всплывает с «оп» вверх.
+ *  - **слева ✕ — отмена** («иногда хочется отменить»): та же отмена, что
+ *    серая пилюля у кнопки, и пока пилюля на экране, серой нет — две отмены на
+ *    одну запись были бы грязью. Нечего отменять (стрим чистки) — слева знак
+ *    режима;
+ *  - **кружок справа — «отправить»** («на неё ты нажимал, и это являлось
+ *    Send'ом»): тот же тап, что по пишущей кнопке, — стоп и дальше как
+ *    обычно. Работает, только пока идёт запись: иначе тап по кружку начал
+ *    бы новую;
+ *  - **долгое нажатие — переставить** («нажимаю на плашку и держу — её можно
+ *    двигать… в заход она появится там же, в своём дефолтном месте»): пилюля
+ *    едет за пальцем и остаётся там до конца показа; следующий показ — снова
+ *    на своём месте. Запоминать не нужно: «там же» — это место, а не
+ *    последнее касание;
+ *  - **посередине — подсказка** «Саша, слушаю» (`core/PillHint.kt`), не
+ *    бегущая, а стоящая по центру, как «Ask Gemini»; первое слово её гасит.
+ *    У «З», «Д», «₽», «Е» тап посередине — по-прежнему набор вместо голоса.
+ *
+ * Место (`core/PillGeometry.kt`) — три на выбор в «Кнопках на экране»:
+ * сверху (с завода), снизу над клавиатурой или над навигацией, у кнопки
+ * (прежнее, откат). Кнопки на экране пилюля не накрывает. Вид — стекло цвета
+ * режима, уведённого в чернила, с градиентом к кружку голоса и свечением от
+ * него (`core/PillLook.kt`).
+ *
+ * **Где окно на самом деле — меряем, а не верим.** По AOSP окна доступности
+ * лежат от верха экрана, и пилюля считала по нему. На телефоне владельца
+ * снизу без клавиатуры она «появляется очень низко и выходит за границу
+ * экрана вниз» — значит, система ставит окно не туда, куда просили. Поэтому
+ * после первой компоновки пилюля сверяет, где её окно оказалось на экране
+ * (`getLocationOnScreen`), с тем, куда его ставили; разница — сдвиг системы,
+ * он запоминается на все пилюли и вычитается, одна строка в журнал. Окно
+ * сверху и снизу — без пределов (`FLAG_LAYOUT_NO_LIMITS`), иначе
+ * WindowManager подрезал бы его к краю, и замер мерил бы подрезку, а не
+ * сдвиг. Снизу без клавиатуры пилюля к тому же не опускается ниже
+ * [PillLook.MIN_FLOOR_DP]: у жестов Samsung полоса навигации бывает нулевой.
  *
  * Сверху окно не меняется вовсе: его верх стоит ровно по нижнему краю строки
  * состояния, пилюля выезжает из-за этого края (как уведомление), а под ней
  * запас на проскок ([PillLook.TOP_ROOM_DP]). Над строкой состояния окно не
- * заходит — там у «З» и «Д» оно ловило бы касания и мешало стянуть шторку.
+ * заходит — там оно ловило бы касания и мешало стянуть шторку.
  *
  * Снизу нужна клавиатура, а служба её не подсматривает: правило Fold — «за
  * чужими окнами не подглядывать, на оконные события не подписываться».
@@ -92,15 +115,11 @@ class DictationPill(
     private val scope: CoroutineScope,
     private val accent: Int,
     @param:DrawableRes private val glyph: Int,
-    /** «З», «Д», «₽», «Е» — да (тап — набор вместо голоса); «П» — нет. */
-    private val touchable: Boolean,
     private val textSizeSp: Float,
     /** Размер экрана у кнопки-хозяйки: у неё он уже закэширован. */
     private val screen: () -> Pair<Int, Int>,
     /** Кнопка-хозяйка на экране — для места «У кнопки». */
     private val owner: () -> PillGeometry.Box?,
-    /** Своё, что накрывать нельзя, помимо кнопок: «отмена» этой записи. */
-    private val ownObstacles: () -> List<PillGeometry.Box> = { emptyList() },
 ) {
 
     companion object {
@@ -109,6 +128,10 @@ class DictationPill(
         private const val POLL_MS = 400L
         /** Меньше этого пилюля за клавиатурой не переезжает, dp. */
         private const val MOVE_DP = 3
+        /** Долгое нажатие — как у кнопок на стекле. */
+        private const val LONG_PRESS_MS = 450L
+        /** Пилюля под пальцем чуть поджата — как кнопка, только мягче: она широкая. */
+        private const val HELD_SCALE = 0.97f
 
         // Отступы экрана — общие на все пилюли: последнее, что узнали.
         // Новая пилюля встаёт по ним сразу, пока не пришёл свежий ответ.
@@ -116,34 +139,60 @@ class DictationPill(
         @Volatile private var lastNav = 0
         @Volatile private var lastStatus = 0
         @Volatile private var lastCutout = 0
+        /** Сдвиг, который система добавляет к окну, — замер, общий на все пилюли. */
+        private var frameDx = 0
+        private var frameDy = 0
         /** Что последним записали в журнал: пишем только перемену, а не каждый тейк. */
         private var loggedIme = -1
     }
 
-    /** Тап по пилюле — только у [touchable]. */
+    /** Тап посередине. У «З», «Д», «₽», «Е» — набор вместо голоса; у «П» — ничего. */
     var onTap: (() -> Unit)? = null
+
+    /** Тап по кружку — «отправить»: тот же тап, что по пишущей кнопке. */
+    var onSend: (() -> Unit)? = null
+
+    /** Идёт запись — кружку есть что отправлять. Иначе его тап начал бы новую. */
+    var canSend: Boolean = false
+        set(value) {
+            field = value
+            orb?.isClickable = value
+        }
+
+    /** Отмена этой записи — ✕ слева. Нет её — слева знак режима. */
+    var onCancel: (() -> Unit)? = null
+        set(value) {
+            field = value
+            lead?.cancel = value != null
+        }
+
+    /** Пилюля на экране или уже в пути туда — серой «отмене» у кнопки тогда не место. */
+    val showing: Boolean get() = visible
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val density = service.resources.displayMetrics.density
+    private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
     private fun dp(value: Int): Int = (value * density).toInt()
 
     private var root: FrameLayout? = null
     private var body: LinearLayout? = null
+    private var lead: LeadMark? = null
     private var ticker: MarqueeTickerView? = null
     private var orb: VoiceOrb? = null
     private var skin: PillSkin? = null
     private var params: WindowManager.LayoutParams? = null
 
-    /** Пилюля должна быть на экране (окна может ещё не быть — ждём клавиатуру). */
+    /** Пилюля должна быть на экране (окна может ещё не быть — ждём отступы экрана). */
     private var visible = false
-    /** Номер показа: ответ про клавиатуру для старого показа — выбросить. */
+    /** Номер показа: ответ про отступы для старого показа — выбросить. */
     private var gen = 0
     private var animator: ValueAnimator? = null
     /** Идёт всплытие или уход: окну нужен запас снизу. */
     private var travelling = false
     private var pollJob: Job? = null
-    /** Текст, пришедший раньше окна: окно ждёт ответа про клавиатуру. */
+    /** Текст и подсказка, пришедшие раньше окна: окно ждёт ответа про отступы. */
     private var pendingText: String? = null
+    private var pendingHint: String? = null
     private var lastText = ""
     private var lastAt = 0L
     private var level = 0f
@@ -151,6 +200,8 @@ class DictationPill(
     private var place = PillGeometry.Place.TOP
     /** Экран, под который считаны отступы: сложили или повернули — перечитать. */
     private var shownScreen: Pair<Int, Int>? = null
+    /** Владелец переставил пилюлю пальцем: до конца показа она стоит, где бросили. */
+    private var manual = false
 
     val windowCount: Int get() = if (root != null) 1 else 0
 
@@ -162,6 +213,7 @@ class DictationPill(
         lastText = ""
         lastAt = 0L
         pendingText = null
+        pendingHint = null
         if (root != null) {
             // Каждый показ — с чистой строки, как было у прежней плашки.
             ticker?.reset()
@@ -170,6 +222,7 @@ class DictationPill(
             // Окно ещё висит, но уходит после hide(). Конец тейка и начало
             // стрима чистки идут вплотную (hide → show): вернуть на место без
             // второго всплытия, иначе пилюля подпрыгивала бы между ними.
+            // Переставленная пальцем остаётся, где была: это тот же показ.
             stopTravel()
             body?.translationY = 0f
             body?.alpha = 1f
@@ -181,6 +234,7 @@ class DictationPill(
         // Окна ещё нет, но оно уже в пути — ждёт ответа про отступы экрана.
         if (already) return
         level = 0f
+        manual = false
         place = service.cachedTickerPlace
         if (place == PillGeometry.Place.BESIDE) {
             create()
@@ -202,10 +256,10 @@ class DictationPill(
     fun update(text: String, force: Boolean = false) {
         if (text == lastText) return
         val now = SystemClock.uptimeMillis()
-        // [force] — для подсказки службы («секунду…», «говори»): она одна за
-        // тейк, и проглотить её потолком частоты значит соврать о том, слышит
-        // движок или ещё нет. Остальное — не чаще раза в 60 мс: строка всё
-        // равно сглаживает движение сама.
+        // [force] — для коротких надписей службы: их одна за тейк, и
+        // проглотить её потолком частоты значит соврать о том, слышит движок
+        // или ещё нет. Остальное — не чаще раза в 60 мс: строка всё равно
+        // сглаживает движение сама.
         if (!force && now - lastAt < 60) return
         lastAt = now
         lastText = text
@@ -215,6 +269,16 @@ class DictationPill(
             return
         }
         tv.setTickerText(text)
+    }
+
+    /** Подсказка посередине, пока слов нет: «Саша, секунду…», «Саша, слушаю». */
+    fun hint(text: String) {
+        val tv = ticker
+        if (tv == null) {
+            if (visible) pendingHint = text
+            return
+        }
+        tv.setHint(text)
     }
 
     /** Громкость 0..1 — волна в кружке. Сглаживание то же, что у пульса кнопки. */
@@ -236,8 +300,10 @@ class DictationPill(
         val now = screen()
         if (now != shownScreen && place != PillGeometry.Place.BESIDE) {
             // Сложили или повернули посреди записи: строка состояния и вырез
-            // другие — перечитать отступы и встать заново.
+            // другие — перечитать отступы и встать заново, и переставленной
+            // пальцем тоже: прежнего места на новом экране нет.
             shownScreen = now
+            manual = false
             scope.launch { if (refreshInsets() && visible) relayout() }
         }
         relayout()
@@ -249,25 +315,24 @@ class DictationPill(
         gen++
         stopPolling()
         pendingText = null
+        pendingHint = null
         val b = body
         if (root == null || b == null) return
         stopTravel()
         val from = b.translationY
-        when (place) {
-            PillGeometry.Place.BESIDE -> {
-                travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f -> b.alpha = 1f - f }
-                return
+        // Переставленная пальцем гаснет на месте: её окно уже не вытянешь к краю.
+        if (place == PillGeometry.Place.BESIDE || manual) {
+            travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f -> b.alpha = 1f - f }
+            return
+        }
+        if (place == PillGeometry.Place.TOP) {
+            // Обратно под строку состояния — тем же путём, каким выехала.
+            val to = -dp(PillLook.topTravelDp()).toFloat()
+            travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f ->
+                b.translationY = from + (to - from) * f
+                b.alpha = 1f - 0.5f * f
             }
-            PillGeometry.Place.TOP -> {
-                // Обратно под строку состояния — тем же путём, каким выехала.
-                val to = -dp(PillLook.topTravelDp()).toFloat()
-                travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f ->
-                    b.translationY = from + (to - from) * f
-                    b.alpha = 1f - 0.5f * f
-                }
-                return
-            }
-            PillGeometry.Place.BOTTOM -> Unit
+            return
         }
         // Уход вниз — по вытянутому окну: иначе низ пилюли срезался бы краем.
         travelling = true
@@ -295,39 +360,49 @@ class DictationPill(
         val s = PillSkin(accent, orbCentreFromRight = orbEnd + orbSize / 2f).apply {
             setDensity(service.cachedTickerDensity)
         }
-        val row = LinearLayout(service).apply {
+        val row = PillRow(service).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = s
             // Дети режутся по контуру пилюли: и текст, и свечение, и кружок.
             clipToOutline = true
+            // Кликабельна всегда: иначе ряд не взял бы касание, и ни долгого
+            // нажатия, ни переноса не было бы там, где нет кнопки.
+            setOnClickListener { onTap?.invoke() }
         }
-        val mark = ImageView(service).apply {
-            setImageResource(glyph)
-            setColorFilter(PAPER)
-            alpha = 0.82f
+        // mutate: свой экземпляр знака — тинт и альфа не должны уйти в знак на кнопке.
+        val l = LeadMark(service, service.getDrawable(glyph)?.mutate()).apply {
+            // Слушатель — ДО флага: setOnClickListener сам делает вид
+            // кликабельным, и знак режима глотал бы тап, положенный ряду.
+            setOnClickListener { onCancel?.invoke() }
+            cancel = onCancel != null
         }
-        row.addView(mark, LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginStart = dp(18) })
-        val tv = MarqueeTickerView(service, textColor = PAPER, textSizeSp = textSizeSp)
-        row.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
-            marginStart = dp(4)
+        // Мишень ✕ — во всю высоту и 48 dp в ширину: крестик маленький, палец нет.
+        row.addView(l, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.MATCH_PARENT).apply {
+            marginStart = dp(6)
         })
-        val o = VoiceOrb(service, PillLook.orb(accent)).apply { setLevel(level) }
+        val tv = MarqueeTickerView(service, textColor = PAPER, textSizeSp = textSizeSp)
+        row.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        val o = VoiceOrb(service, PillLook.orb(accent)).apply {
+            setLevel(level)
+            contentDescription = "Отправить"
+            setOnClickListener { if (canSend) onSend?.invoke() }
+            isClickable = canSend
+        }
         row.addView(o, LinearLayout.LayoutParams(orbSize, orbSize).apply {
             marginStart = dp(4)
             marginEnd = orbEnd
         })
-        if (touchable) row.setOnClickListener { onTap?.invoke() }
         val frame = FrameLayout(service)
         frame.addView(row, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, pillH).apply {
             gravity = Gravity.TOP
             topMargin = room()
         })
         var flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-        if (!touchable) flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        // Снизу окно на время всплытия вытянуто за край экрана — без этого
-        // флага WindowManager прижал бы его обратно, и пилюля подпрыгнула бы.
-        if (place == PillGeometry.Place.BOTTOM) flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        // Сверху и снизу — без пределов: снизу окно на время всплытия вытянуто
+        // за край, а замер сдвига (calibrate) должен мерить сдвиг, а не
+        // подрезку к краю.
+        if (place != PillGeometry.Place.BESIDE) flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         val p = WindowManager.LayoutParams(
             1, 1,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -336,15 +411,46 @@ class DictationPill(
         ).apply { gravity = Gravity.TOP or Gravity.START }
         root = frame
         body = row
+        lead = l
         ticker = tv
         orb = o
         skin = s
         params = p
+        pendingHint?.let { tv.setHint(it) }
         pendingText?.let { tv.setTickerText(it) }
+        pendingHint = null
         pendingText = null
         shownScreen = screen()
         spotFor()?.let { layout(p, it) }
+        frame.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
+            override fun onLayoutChange(
+                v: View, l: Int, t: Int, r: Int, b: Int, ol: Int, ot: Int, or: Int, ob: Int,
+            ) {
+                v.removeOnLayoutChangeListener(this)
+                calibrate()
+            }
+        })
         runCatching { windowManager.addView(frame, p) }
+    }
+
+    /**
+     * Сверить, где окно оказалось на экране, с тем, куда его ставили. Разница
+     * — сдвиг системы; запоминаем на все пилюли и встаём заново. Пилюля в эти
+     * кадры ещё прозрачна и за краем своего окна — поправка не видна.
+     */
+    private fun calibrate() {
+        if (place == PillGeometry.Place.BESIDE) return
+        val r = root ?: return
+        val p = params ?: return
+        val loc = IntArray(2)
+        r.getLocationOnScreen(loc)
+        val dx = loc[0] - p.x
+        val dy = loc[1] - p.y
+        if (dx == frameDx && dy == frameDy) return
+        frameDx = dx
+        frameDy = dy
+        service.logEvent("пилюля: система сдвигает окно на ${(dx / density).toInt()}×${(dy / density).toInt()} dp — ставлю с поправкой")
+        relayout()
     }
 
     /**
@@ -361,7 +467,11 @@ class DictationPill(
     /** Прозрачное под пилюлей: сверху — запас на проскок вниз. */
     private fun below(): Int = if (place == PillGeometry.Place.TOP) dp(PillLook.TOP_ROOM_DP) else 0
 
-    /** Место на экране по нынешним кнопкам, клавиатуре и настройкам. */
+    /** Сдвиг системы по осям — у места «у кнопки» его нет: там всё в координатах кнопки. */
+    private fun offX(): Int = if (place == PillGeometry.Place.BESIDE) 0 else frameDx
+    private fun offY(): Int = if (place == PillGeometry.Place.BESIDE) 0 else frameDy
+
+    /** Место на экране по нынешним кнопкам, клавиатуре и настройкам — в координатах экрана. */
     private fun spotFor(): PillGeometry.Spot? {
         val (w, h) = screen()
         val pillH = dp(PillLook.HEIGHT_DP)
@@ -369,19 +479,19 @@ class DictationPill(
         val side = dp(PillLook.SIDE_DP)
         val gap = dp(PillLook.GAP_DP)
         val minW = dp(PillLook.MIN_WIDTH_DP)
-        return when (place) {
-            PillGeometry.Place.BESIDE -> {
-                val b = owner() ?: return null
-                PillGeometry.beside(w, h, b, want, pillH, gap = dp(8), margin = dp(24))
-            }
-            PillGeometry.Place.TOP -> PillGeometry.top(
-                w, PillGeometry.ceiling(lastStatus, lastCutout, gap), want, pillH,
-                side, gap, minW, service.pillObstacles() + ownObstacles(),
-            )
-            PillGeometry.Place.BOTTOM -> PillGeometry.bottom(
-                w, PillGeometry.floor(h, lastIme, lastNav, gap), want, pillH,
-                side, gap, minW, service.pillObstacles() + ownObstacles(),
-            )
+        if (place == PillGeometry.Place.BESIDE) {
+            val b = owner() ?: return null
+            return PillGeometry.beside(w, h, b, want, pillH, gap = dp(8), margin = dp(24))
+        }
+        // Кнопки стоят в координатах окон — на экран их переводит тот же сдвиг.
+        val obstacles = service.pillObstacles().map {
+            PillGeometry.Box(it.left + frameDx, it.top + frameDy, it.right + frameDx, it.bottom + frameDy)
+        }
+        return if (place == PillGeometry.Place.TOP) {
+            PillGeometry.top(w, PillGeometry.ceiling(lastStatus, lastCutout, gap), want, pillH, side, gap, minW, obstacles)
+        } else {
+            val floor = PillGeometry.floor(h, lastIme, lastNav, gap, minBottom = dp(PillLook.MIN_FLOOR_DP))
+            PillGeometry.bottom(w, floor, want, pillH, side, gap, minW, obstacles)
         }
     }
 
@@ -389,8 +499,8 @@ class DictationPill(
     private fun layout(p: WindowManager.LayoutParams, spot: PillGeometry.Spot): Boolean {
         val room = room()
         val rise = if (place == PillGeometry.Place.BOTTOM && travelling) dp(PillLook.RISE_DP) else 0
-        val x = spot.x
-        val y = spot.y - room
+        val x = spot.x - offX()
+        val y = spot.y - room - offY()
         val width = spot.width
         val height = room + dp(PillLook.HEIGHT_DP) + below() + rise
         if (p.x == x && p.y == y && p.width == width && p.height == height) return false
@@ -404,8 +514,94 @@ class DictationPill(
     private fun relayout() {
         val r = root ?: return
         val p = params ?: return
+        // Переставленная пальцем стоит, где бросили, до конца показа.
+        if (manual) return
         val spot = spotFor() ?: return
         if (layout(p, spot)) runCatching { windowManager.updateViewLayout(r, p) }
+    }
+
+    // ---- Перенос пальцем ----
+
+    /**
+     * Ряд пилюли: долгое нажатие где угодно — даже на ✕ или кружке —
+     * берёт пилюлю в палец. Смотрим на касание до детей (dispatchTouchEvent):
+     * взяли — детям уходит отмена, чтобы ни ✕, ни «отправить» не сработали
+     * от того же пальца, и дальше касание целиком наше.
+     */
+    private inner class PillRow(context: Context) : LinearLayout(context) {
+        private var downX = 0f
+        private var downY = 0f
+        private var startX = 0
+        private var startY = 0
+        private var armed = false
+        private var dragging = false
+        private val grab = Runnable { if (armed) startDrag() }
+
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = ev.rawX
+                    downY = ev.rawY
+                    armed = true
+                    dragging = false
+                    postDelayed(grab, LONG_PRESS_MS)
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (dragging) {
+                        moveTo(ev.rawX - downX, ev.rawY - downY)
+                        return true
+                    }
+                    if (armed && (abs(ev.rawX - downX) > touchSlop || abs(ev.rawY - downY) > touchSlop)) {
+                        armed = false
+                        removeCallbacks(grab)
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    armed = false
+                    removeCallbacks(grab)
+                    if (dragging) {
+                        dragging = false
+                        scaleX = 1f
+                        scaleY = 1f
+                        return true
+                    }
+                }
+            }
+            if (dragging) return true
+            return super.dispatchTouchEvent(ev)
+        }
+
+        private fun startDrag() {
+            val p = params ?: return
+            armed = false
+            // Детям — отмена: палец больше не их, клик не сработает.
+            val now = SystemClock.uptimeMillis()
+            val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+            super.dispatchTouchEvent(cancel)
+            cancel.recycle()
+            // Всплытие не доиграло — поставить на место сейчас, окно — в свой размер.
+            stopTravel()
+            translationY = 0f
+            alpha = 1f
+            relayout()
+            manual = true
+            dragging = true
+            startX = p.x
+            startY = p.y
+            scaleX = HELD_SCALE
+            scaleY = HELD_SCALE
+            Haptics.start(service)
+        }
+
+        private fun moveTo(dx: Float, dy: Float) {
+            val r = root ?: return
+            val p = params ?: return
+            val (w, h) = screen()
+            // На экране целиком: в координатах окна экран начинается со сдвига системы.
+            p.x = (startX + dx.toInt()).coerceIn(-offX(), (w - p.width - offX()).coerceAtLeast(-offX()))
+            p.y = (startY + dy.toInt()).coerceIn(-offY(), (h - p.height - offY()).coerceAtLeast(-offY()))
+            runCatching { windowManager.updateViewLayout(r, p) }
+        }
     }
 
     // ---- Движение ----
@@ -482,20 +678,22 @@ class DictationPill(
         root?.let { runCatching { windowManager.removeView(it) } }
         root = null
         body = null
+        lead = null
         ticker = null
         orb = null
         skin = null
         params = null
         lastText = ""
         lastAt = 0L
+        manual = false
     }
 
     // ---- Отступы экрана: строка состояния сверху, клавиатура снизу ----
 
     /**
      * Спросить отступы экрана: строка состояния и вырез сверху, клавиатура и
-     * навигация снизу. Не на главном потоке — это вызов в WindowManager, а главный поток службы занят
-     * кнопками. true — что-то поменялось.
+     * навигация снизу. Не на главном потоке — это вызов в WindowManager, а
+     * главный поток службы занят кнопками. true — что-то поменялось.
      */
     private suspend fun refreshInsets(): Boolean = withContext(Dispatchers.Default) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return@withContext false
@@ -519,7 +717,8 @@ class DictationPill(
         if (ime == loggedIme) return
         loggedIme = ime
         service.logEvent(
-            if (ime > 0) "пилюля: над клавиатурой ${ime} dp" else "пилюля: клавиатуры нет, над навигацией"
+            if (ime > 0) "пилюля: над клавиатурой $ime dp"
+            else "пилюля: клавиатуры нет, над навигацией ${(lastNav / density).toInt()} dp"
         )
     }
 
@@ -532,15 +731,15 @@ class DictationPill(
         pollJob = scope.launch {
             while (isActive && visible) {
                 delay(POLL_MS)
-                if (service.folding || !visible) continue
+                if (service.folding || !visible || manual) continue
                 val before = params?.y
-                if (!refreshInsets() || !visible) continue
+                if (!refreshInsets() || !visible || manual) continue
                 logInsets()
                 val spot = spotFor() ?: continue
                 val now = before ?: continue
                 // Клавиатура открылась или закрылась посреди тейка: пилюля
                 // всплывает заново уже на новом полу — тем же движением.
-                if (abs(spot.y - room() - now) >= dp(MOVE_DP) && animator == null) enter() else relayout()
+                if (abs(spot.y - room() - offY() - now) >= dp(MOVE_DP) && animator == null) enter() else relayout()
             }
         }
     }
@@ -548,6 +747,56 @@ class DictationPill(
     private fun stopPolling() {
         pollJob?.cancel()
         pollJob = null
+    }
+
+    // ---- Слева: ✕ отмены или знак режима ----
+
+    /**
+     * Левый край пилюли. Есть что отменять — ✕ на еле заметном кружке (кружок
+     * говорит «это кнопка», у Gemini плюс так же стоит в своей мишени);
+     * нечего — знак режима, как было.
+     */
+    private class LeadMark(context: Context, private val glyph: Drawable?) : View(context) {
+        private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = PAPER
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+        }
+        private val disc = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val density = resources.displayMetrics.density
+
+        var cancel = false
+            set(value) {
+                field = value
+                isClickable = value
+                contentDescription = if (value) "Отмена" else null
+                invalidate()
+            }
+
+        override fun drawableStateChanged() {
+            super.drawableStateChanged()
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val cx = width / 2f
+            val cy = height / 2f
+            if (!cancel) {
+                val g = glyph ?: return
+                val half = (11 * density).toInt()
+                g.setBounds((cx - half).toInt(), (cy - half).toInt(), (cx + half).toInt(), (cy + half).toInt())
+                g.setTint(PAPER)
+                g.alpha = (255 * 0.82f).toInt()
+                g.draw(canvas)
+                return
+            }
+            disc.color = DiskLook.white(if (isPressed) 0.22f else 0.10f)
+            canvas.drawCircle(cx, cy, 16 * density, disc)
+            stroke.strokeWidth = 2 * density
+            val arm = 6 * density
+            canvas.drawLine(cx - arm, cy - arm, cx + arm, cy + arm, stroke)
+            canvas.drawLine(cx - arm, cy + arm, cx + arm, cy - arm, stroke)
+        }
     }
 
     // ---- Кружок голоса: круг цвета режима и волна из трёх полосок ----
@@ -565,6 +814,14 @@ class DictationPill(
         fun setLevel(value: Float) {
             if (abs(value - level) < 0.01f) return
             level = value
+            invalidate()
+        }
+
+        /** Нажали «отправить» — кружок темнеет под пальцем, как клавиша. */
+        private val pressedShade = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = DiskLook.black(0.22f) }
+
+        override fun drawableStateChanged() {
+            super.drawableStateChanged()
             invalidate()
         }
 
@@ -587,6 +844,7 @@ class DictationPill(
             val cy = height / 2f
             canvas.drawCircle(cx, cy, r, fill)
             canvas.drawCircle(cx, cy, r, sheen)
+            if (isPressed) canvas.drawCircle(cx, cy, r, pressedShade)
             val bars = PillLook.bars(level)
             val maxH = r * 0.9f
             val step = r * 0.36f

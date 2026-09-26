@@ -32,6 +32,15 @@ class PillGeometryTest {
     }
 
     @Test
+    fun `без клавиатуры и без полосы навигации - не в самом краю`() {
+        // Случай владельца 26.09: жесты, навигация нулевая — пилюля уходила за край.
+        val floor = PillGeometry.floor(h, imeBottom = 0, navBottom = 0, gap = gap, minBottom = 60)
+        assertEquals(h - 60 - gap, floor)
+        // Клавиатура выше порога — порог ни при чём.
+        assertEquals(h - 900 - gap, PillGeometry.floor(h, 900, 0, gap, minBottom = 60))
+    }
+
+    @Test
     fun `без препятствий - посередине, нижним краем на полу`() {
         val floor = PillGeometry.floor(h, 0, 60, gap)
         val s = PillGeometry.bottom(w, floor, wantW = 850, h = pillH, side, gap, minW, emptyList())

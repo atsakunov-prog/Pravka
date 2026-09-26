@@ -147,7 +147,8 @@ fun PravkaAccessibilityService.onFoodTap() {
 }
 
 /** Приглашение говорить в бегущей строке «Т» — одно на оба движка. */
-internal fun bodyTickerPrompt(): String = "🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)"
+/** Надпись в пилюле «Е», пока слов нет. Тап посередине — по-прежнему набор. */
+internal fun PravkaAccessibilityService.bodyTickerPrompt(): String = listenHint()
 
 internal fun PravkaAccessibilityService.startFoodCapture() {
     eButton?.hideInput()
@@ -157,7 +158,7 @@ internal fun PravkaAccessibilityService.startFoodCapture() {
         eWhisperRecording = true
         eButton?.setRecording(true)
         eButton?.showTicker()
-        eButton?.updateTicker(bodyTickerPrompt())
+        eButton?.hintTicker(bodyTickerPrompt())
         eButton?.showCancelBubble { cancelFoodTake() }
         Haptics.start(this)
         startDictation()
@@ -196,7 +197,7 @@ internal fun PravkaAccessibilityService.startFoodGoogle() {
         onReady = {
             // Движок услышал — только теперь приглашение говорить правда.
             speechReady = true
-            eButton?.updateTicker(bodyTickerPrompt(), force = true)
+            eButton?.hintTicker(bodyTickerPrompt())
             Haptics.success(this)
         },
         onPartial = { live -> eButton?.updateTicker(live) },
@@ -210,7 +211,7 @@ internal fun PravkaAccessibilityService.startFoodGoogle() {
     eButton?.setRecording(true)
     eButton?.showTicker()
     // Пока движок глух, строка говорит об этом, а не зовёт говорить в пустоту.
-    if (!speechReady) eButton?.updateTicker(PravkaAccessibilityService.HINT_WAIT)
+    if (!speechReady) eButton?.hintTicker(waitHint())
     eButton?.showCancelBubble { cancelFoodTake() }
     Haptics.start(this)
     runCatching { startMicHold() }

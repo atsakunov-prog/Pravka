@@ -167,12 +167,13 @@ class ZasechkaButtonController(
         service, scope,
         accent = AMBER,
         glyph = R.drawable.ic_mode_zasechka,
-        touchable = true,
         textSizeSp = 17f,
         screen = { screenSize() },
         owner = { params?.let { PillGeometry.Box(it.x, it.y, it.x + buttonSize, it.y + buttonSize) } },
-        ownObstacles = { listOfNotNull(cancelBubble.box()) },
-    ).also { it.onTap = { onTickerTap?.invoke() } }
+    ).also {
+        it.onTap = { onTickerTap?.invoke() }
+        it.onSend = { if (!busy) onShortTap() }
+    }
 
     private fun dp(value: Int): Int = (value * density).toInt()
 
@@ -208,6 +209,7 @@ class ZasechkaButtonController(
     /** Recording: red stop glyph at full opacity, like the big button. */
     fun setRecording(value: Boolean) {
         recording = value
+        pill.canSend = value
         if (!value) restPulse()
         recDot?.visibility = if (value) View.VISIBLE else View.GONE
         applyFaceAndLook()
@@ -487,6 +489,9 @@ class ZasechkaButtonController(
 
     fun updateTicker(text: String, force: Boolean = false) = pill.update(text, force)
 
+    /** Надпись посередине, пока слов нет: «Саша, секунду…», «Саша, слушаю» (`core/PillHint.kt`). */
+    fun hintTicker(text: String) = pill.hint(text)
+
     /** Кнопку тащат, экран повернули, настройку крутят — пилюля следом. */
     fun repositionTickerIfVisible() = pill.reposition()
 
@@ -719,6 +724,10 @@ class ZasechkaButtonController(
     private val cancelBubble = CancelBubble(service, windowManager)
 
     fun showCancelBubble(onCancel: () -> Unit) {
+        pill.onCancel = onCancel
+        // В пилюле свой ✕ — серая «отмена» рядом была бы второй на ту же
+        // запись. Она остаётся там, где пилюли нет (запись Whisper у «П»).
+        if (pill.showing) return
         cancelBubble.show(idleAlpha, onCancel)
         repositionCancelBubble()
     }
@@ -731,7 +740,10 @@ class ZasechkaButtonController(
         cancelBubble.place(bp.x, bp.y, buttonSize, w, h)
     }
 
-    fun hideCancelBubble() = cancelBubble.hide()
+    fun hideCancelBubble() {
+        pill.onCancel = null
+        cancelBubble.hide()
+    }
 
     /** How many overlay windows this controller currently holds. */
     override fun windowCount(): Int =

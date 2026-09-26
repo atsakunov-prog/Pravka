@@ -158,8 +158,8 @@ internal fun PravkaAccessibilityService.startZasechkaComment(entryId: Long) {
 
 /** Подпись плашки на старте: мысль должна быть узнаваема с первого взгляда. */
 internal fun PravkaAccessibilityService.zTickerPrompt(): String =
-    if (zCommentFor > 0L) "💭 мысль к делу… (тап сюда — набрать текстом)"
-    else "🎙 говори… (тап сюда — набрать текстом)"
+    if (zCommentFor > 0L) ru.zf.pravka.core.PillHint.thought(app.profileStore.current?.name)
+    else listenHint()
 
 internal fun PravkaAccessibilityService.startZasechkaCapture() {
     zButton?.hideInput()
@@ -173,7 +173,7 @@ internal fun PravkaAccessibilityService.startZasechkaCapture() {
         // Whisper has no live words - the plate still shows, because it
         // is also the "type instead" tap target (confidential takes).
         zButton?.showTicker()
-        zButton?.updateTicker(zTickerPrompt())
+        zButton?.hintTicker(zTickerPrompt())
         zButton?.showCancelBubble { cancelZasechkaTake() }
         Haptics.start(this)
         startDictation()
@@ -207,7 +207,7 @@ internal fun PravkaAccessibilityService.startZasechkaGoogle() {
         onReady = {
             // Движок услышал — только теперь приглашение говорить правда.
             speechReady = true
-            zButton?.updateTicker(zTickerPrompt(), force = true)
+            zButton?.hintTicker(zTickerPrompt())
             Haptics.success(this)
         },
         onPartial = { live -> zButton?.updateTicker(live) },
@@ -221,7 +221,7 @@ internal fun PravkaAccessibilityService.startZasechkaGoogle() {
     zButton?.setRecording(true)
     zButton?.showTicker()
     // Пока движок глух, строка говорит об этом, а не зовёт говорить в пустоту.
-    if (!speechReady) zButton?.updateTicker(PravkaAccessibilityService.HINT_WAIT)
+    if (!speechReady) zButton?.hintTicker(waitHint())
     zButton?.showCancelBubble { cancelZasechkaTake() }
     Haptics.start(this)
     runCatching { startMicHold() }
