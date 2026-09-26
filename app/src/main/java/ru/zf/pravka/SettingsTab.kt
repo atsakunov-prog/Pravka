@@ -1018,6 +1018,12 @@ private fun VoiceSettings(app: PravkaApp) {
 private fun HeadsetButtonCard() {
     val context = LocalContext.current
     var answer by remember { mutableStateOf(HeadsetButtonActivity.whoAnswers(context)) }
+    // Вернулся из системного выбора или из карточки чужого приложения —
+    // строка перечитывается сама: «спросит» после «Всегда» врало бы.
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+        answer = HeadsetButtonActivity.whoAnswers(context)
+        onPauseOrDispose { }
+    }
     PaperCard(
         label = "кнопка гарнитуры",
         info = "Долгое нажатие «помощника» на гарнитуре (у Shokz OpenComm2 2025 — Mute две " +
@@ -1025,17 +1031,20 @@ private fun HeadsetButtonCard() {
             "или экран заблокирован — Засечка. Слушает гарнитура, какой бы кружок микрофона " +
             "ни стоял: чем нажал, тем и слушаем. Нажатие посреди тейка его заканчивает, как " +
             "второй тап; закрыла распознавание сама гарнитура — тоже. Лимит как у Правки: " +
-            "десять минут без единого слова, и на замке тоже. Кнопка голоса на руле машины шлёт ту же команду. В первый " +
-            "раз система спросит, чем открыть, — «Правка», «Всегда»; спрашивает она только " +
-            "на разблокированном экране.",
+            "десять минут без единого слова, и на замке тоже. Кнопка голоса на руле машины " +
+            "шлёт ту же команду. Кнопку надо один раз отдать Правке: «Назначить Правку» — " +
+            "система спросит, чем открывать команду голоса, — «Правка», «Всегда». С гарнитуры " +
+            "на заблокированном экране система спросить не может, и нажатие тогда " +
+            "пропадает молча — поэтому назначать отсюда. Каждое нажатие, дошедшее до " +
+            "Правки, пишется в журнал строкой «гарнитура: команда голоса пришла».",
     ) {
         val (status, hint) = when (val a = answer) {
             HeadsetButtonActivity.Answer.Pravka ->
                 "Правка" to "нажатие гарнитуры — диктовка"
             HeadsetButtonActivity.Answer.Ask ->
-                "спросит" to "при первом нажатии: «Правка» → «Всегда»"
+                "не назначена" to "система спрашивает, чем открыть, — с замка молчит"
             is HeadsetButtonActivity.Answer.Other ->
-                a.label to "отвечает не Правка — тап: сбросить «открывать по умолчанию»"
+                a.label to "кнопку забрал он — сбрось «открывать по умолчанию»"
             HeadsetButtonActivity.Answer.Nobody ->
                 "никто" to "команду гарнитуры не принимает ни одно приложение"
         }
@@ -1044,24 +1053,42 @@ private fun HeadsetButtonCard() {
             icon = Glyphs.Mic,
             hint = hint,
             status = status,
-            onClick = {
-                val a = answer
-                if (a is HeadsetButtonActivity.Answer.Other) {
-                    // Выбор «всегда» снимается только в карточке того
-                    // приложения: «Открывать по умолчанию» → «Сбросить».
-                    runCatching {
-                        context.startActivity(
-                            android.content.Intent(
-                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                android.net.Uri.fromParts("package", a.packageName, null),
-                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    }
-                }
-                // Вернулся из системных настроек — тап по строке перечитает.
-                answer = HeadsetButtonActivity.whoAnswers(context)
-            },
+            onClick = { answer = HeadsetButtonActivity.whoAnswers(context) },
         )
+        when (val a = answer) {
+            HeadsetButtonActivity.Answer.Pravka, HeadsetButtonActivity.Answer.Nobody -> Unit
+            HeadsetButtonActivity.Answer.Ask -> {
+                Spacer(Modifier.height(8.dp))
+                // Выбор «чем открыть» система показывает только на
+                // разблокированном экране — здесь он есть всегда.
+                PaperButton(
+                    "Назначить Правку",
+                    icon = Glyphs.Mic,
+                    primary = true,
+                    onClick = { HeadsetButtonActivity.askAssign(context) },
+                )
+            }
+            is HeadsetButtonActivity.Answer.Other -> {
+                Spacer(Modifier.height(8.dp))
+                // Чужое «всегда» снимается только в карточке того приложения:
+                // «Открывать по умолчанию» → «Сбросить». Дальше — «Назначить».
+                PaperButton(
+                    "Сбросить у «${a.label}»",
+                    icon = Glyphs.Mic,
+                    primary = true,
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    android.net.Uri.fromParts("package", a.packageName, null),
+                                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    },
+                )
+            }
+        }
     }
 }
 

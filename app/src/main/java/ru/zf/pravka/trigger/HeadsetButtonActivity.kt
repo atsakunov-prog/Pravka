@@ -23,6 +23,15 @@ import ru.zf.pravka.ui.Feedback
  * Решение — в службе и сразу, в onCreate: пока окно трамплина не встало,
  * фокус ещё у поля, где стоял курсор, и «с полем или без» решается
  * по-настоящему (`ServiceHeadset.kt`).
+ *
+ * Назначение (26.09.2026; владелец после первой сборки: «ничего не работает.
+ * Не реагирует телефон на кнопку. Хотя раньше запускал gemini»). Как только
+ * Правка объявила себя приложением голосовых команд, Android сбросил прежнее
+ * «всегда Gemini» и на нажатие гарнитуры должен спросить, чем открыть, — а на
+ * заблокированном экране спросить не может, и снаружи это «ничего». Поэтому
+ * спросить можно заранее и в руках: «Назначить Правку» в настройках шлёт ту же
+ * команду с [EXTRA_SETUP], система показывает выбор, и трамплин на такой
+ * вызов тейк не заводит — только подтверждает.
  */
 class HeadsetButtonActivity : Activity() {
 
@@ -40,6 +49,15 @@ class HeadsetButtonActivity : Activity() {
     }
 
     private fun handle() {
+        val app = application as? ru.zf.pravka.PravkaApp
+        val setup = intent?.getBooleanExtra(EXTRA_SETUP, false) == true
+        // Первой строкой и до службы: «дошло ли нажатие до Правки вообще» —
+        // главный вопрос, когда кнопка «не реагирует».
+        app?.eventLog?.add(if (setup) "гарнитура: назначение — команда голоса дошла до Правки" else "гарнитура: команда голоса пришла")
+        if (setup) {
+            Feedback.toast(this, "Готово: кнопка гарнитуры — за Правкой")
+            return
+        }
         val service = PravkaAccessibilityService.instance
         if (service == null) {
             Feedback.toast(this, getString(R.string.toast_no_service))
@@ -58,6 +76,22 @@ class HeadsetButtonActivity : Activity() {
     }
 
     companion object {
+
+        /** Вызов из настроек «Назначить Правку»: тейк не заводить, только подтвердить. */
+        const val EXTRA_SETUP = "ru.zf.pravka.HEADSET_SETUP"
+
+        /**
+         * Показать системный выбор «чем открыть» для команды голоса — в руках и
+         * на разблокированном экране, где система его показать может. Правка —
+         * «Всегда», и дальше нажатие гарнитуры идёт к ней и с замка.
+         */
+        fun askAssign(context: Context): Boolean = runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VOICE_COMMAND)
+                    .putExtra(EXTRA_SETUP, true)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.isSuccess
 
         /**
          * Молчаливая механика читается как поломка (правило 6): если «всегда»
