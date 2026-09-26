@@ -197,20 +197,6 @@ class PravkaAccessibilityService : AccessibilityService() {
      * ручкой. Пока настройка не прочитана — стопка.
      */
     internal var disk: DiskController? = null
-
-    /**
-     * Каким цветом идёт дуга: цветом той кнопки, чья работа сейчас. Дорога
-     * без своей кнопки (ночные разборы, эвалы) берёт цвет Правки — это её
-     * хозяйство.
-     */
-    private fun workColour(route: String): Int = when {
-        route.startsWith("zasechka") -> ZasechkaButtonController.AMBER
-        route.startsWith("raznoska") || route.startsWith("dela") -> RaznoskaButtonController.INK
-        route.startsWith("money") -> MONEY_INK
-        route.startsWith("body") || route.startsWith("sport") ||
-            route.startsWith("food") || route.startsWith("eda") -> BodyButtonController.INK
-        else -> FloatingButtonController.ACCENT
-    }
     @Volatile internal var cachedDiskMode = false
     private var diskModeApplied = false
     /** Автоуборка диска: полминуты без касаний — к ближайшему краю и домой. */
@@ -532,23 +518,21 @@ class PravkaAccessibilityService : AccessibilityService() {
                 b.onRingDrag = { rx, ry, lx, ly, action -> d.onRingDrag(b, rx, ry, lx, ly, action) }
             }
         }
-        // Кнопка слышит: громкость микрофона раздаём всем кнопкам, пульсирует
-        // та, что пишет (владелец, 20.09.2026). Поле у сессии общее — микрофон
-        // один, живая сессия в любой миг одна.
+        // Громкость микрофона раздаём всем кнопкам: волна идёт в пилюле той,
+        // что пишет (сама кнопка с 26.09 не пульсирует — «дрожание отвлекает»).
+        // Поле у сессии общее — микрофон один, живая сессия в любой миг одна.
         GoogleSpeechSession.levelSink = { level ->
             chainButtons().forEach { it.setLevel(level) }
         }
-        // Дуга прогресса по кромке стекла (владелец, 20.09.2026): запрос к
-        // модели пошёл — по кромке побежала полоса, ожидание считает
-        // `core/Pace.kt` по своей истории. Приходит это с потока запроса,
-        // поэтому на главный кладём руками.
-        app.workWatcher = { route, expect, done, ok ->
-            chromeHandler.post {
-                // Диск читаем уже на главном: между запросом и кадром его
-                // могли выключить тумблером «Круг · Стопка».
-                disk?.let { d ->
-                    if (done) d.finishWork(ok) else d.startWork(expect, workColour(route))
-                }
+        // Сколько ждать ответа — секундами на занятой кнопке (владелец,
+        // 26.09.2026: «на самой кнопке, где просто крутится… обратный отсчёт в
+        // виде секунд… и до нуля»). До этого была дуга по кромке стекла, но у
+        // убранного диска она шла за краем. Ожидание считает `core/Pace.kt` по
+        // своей истории; приходит с потока запроса — на главный кладём руками.
+        // Раздаём всем кнопкам: считает та, что занята (`ButtonCountdown`).
+        app.workWatcher = { route, expect, done, _ ->
+            if (ru.zf.pravka.core.Countdown.onButton(route)) chromeHandler.post {
+                chainButtons().forEach { if (done) it.stopCountdown() else it.startCountdown(expect) }
             }
         }
         // The "П" lives on screen permanently (owner: "пусть будет всегда") -

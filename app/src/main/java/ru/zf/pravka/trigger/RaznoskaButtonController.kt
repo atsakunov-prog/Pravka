@@ -18,7 +18,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.core.DiskLook
-import ru.zf.pravka.core.MicLevel
 import ru.zf.pravka.core.PillGeometry
 import ru.zf.pravka.data.Settings
 
@@ -96,6 +95,8 @@ class RaznoskaButtonController(
     private var glyph: ImageView? = null
     private var recDot: View? = null
     private var progress: ProgressBar? = null
+    /** Секунды до ответа вместо колеса (`core/Countdown.kt`), пока кнопка занята. */
+    private val replyClock = ButtonCountdown(service)
     private var params: WindowManager.LayoutParams? = null
     /** Убрана в ручку: сильнее любых других причин показать кнопку. */
     private var stashed = false
@@ -127,27 +128,17 @@ class RaznoskaButtonController(
         }
 
     /**
-     * Пульс по громкости: на записи кнопка поджата (`MicLevel.QUIET`) и
-     * распрямляется от голоса. Наружу расти нельзя — окно ровно с кружок и
-     * срезало бы его по краям, — поэтому растём «из поджатого».
+     * Громкость голоса — волна в кружке пилюли. Сама кнопка от голоса больше
+     * не пульсирует: владелец (26.09.2026): «уберём дрожание кнопки на диске,
+     * оно немножко отвлекает». Голос виден в одном месте, а не в двух, и
+     * глаз не дёргается к краю экрана на каждом слове.
      */
     override fun setLevel(level: Float) {
-        if (!recording) return
-        pill.setLevel(level)
-        val v = button ?: return
-        micPulse = MicLevel.smooth(micPulse, level)
-        val s = MicLevel.scale(micPulse)
-        v.animate().cancel()
-        v.scaleX = s
-        v.scaleY = s
+        if (recording) pill.setLevel(level)
     }
 
-    /** Сглаженная громкость: замеры приходят рывками, кнопка не должна дрожать. */
-    private var micPulse = 0f
-
-    /** Запись кончилась — кнопка распрямляется из пульса в свой размер. */
+    /** Запись кончилась — волна в пилюле снова значок, кнопка в своём размере. */
     private fun restPulse() {
-        micPulse = 0f
         pill.rest()
         button?.let { v ->
             v.animate().cancel()
@@ -219,7 +210,7 @@ class RaznoskaButtonController(
 
     fun setBusy(value: Boolean) {
         busy = value
-        progress?.visibility = if (value) View.VISIBLE else View.GONE
+        replyClock.setBusy(value)
         applyFace()
     }
 
@@ -375,6 +366,10 @@ class RaznoskaButtonController(
     override fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
     override fun onScreen(): Boolean = attached
+
+    override fun startCountdown(expectMs: Long) = replyClock.start(expectMs)
+
+    override fun stopCountdown() = replyClock.stop()
 
     /** Диск: окно целиком за краем — снять; показался край — вернуть. Своё поле, не `stashed`. */
     override fun setOffscreen(value: Boolean) {
@@ -1070,6 +1065,8 @@ class RaznoskaButtonController(
             progress,
             FrameLayout.LayoutParams(progressSize, progressSize, Gravity.CENTER),
         )
+        // Секунды до ответа на месте колеса (`ButtonCountdown`), пока кнопка занята.
+        progress?.let { replyClock.attach(container, it) }
 
         val p = WindowManager.LayoutParams(
             buttonSize,

@@ -600,14 +600,14 @@ internal fun PravkaAccessibilityService.zasechkaReminderCheck() {
         val cal = java.util.Calendar.getInstance()
         cal.timeInMillis = now
         val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-        // Running LOSSES are not "busy": the amber pulse keeps nagging,
+        // Running LOSSES are not "busy": the deep amber keeps nagging,
         // the evening nudge and the hourly wink stay for real дела only.
         val open = app.zasechkaStore.openEntry()?.takeIf { it.source != "gap" }
         val internal = getSharedPreferences(PravkaAccessibilityService.PREFS_INTERNAL, android.content.Context.MODE_PRIVATE)
         val todayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US)
             .format(java.util.Date(now))
 
-        // Outside the active day the button never pulses; the one evening
+        // Outside the active day the button never turns deep amber; the one evening
         // nudge asks to close a still-running entry.
         if (hour >= cachedZDayEnd || hour < cachedZDayStart) {
             zButton?.setRemind(false)
@@ -630,15 +630,15 @@ internal fun PravkaAccessibilityService.zasechkaReminderCheck() {
         if (open != null) {
             zButton?.setRemind(false)
             checkInOnOpenEntry(open, now, internal)
-            // Hourly heartbeat (owner's request): the button winks once an
-            // hour and says out loud what is being counted right now -
-            // trust in the robot comes from glanceability, not silence.
+            // Hourly heartbeat (owner's request): once an hour the toast says
+            // out loud what is being counted right now - trust in the robot
+            // comes from glanceability, not silence. The button used to wink
+            // along; the wink is gone (26.09.2026: «уберём эту пульсацию»).
             // A freshly started дело (<10 мин) doesn't need it: he just
             // dictated it himself.
             if (now - internal.getLong(PravkaAccessibilityService.KEY_Z_BEAT_AT, 0L) >= 60 * 60_000L) {
                 internal.edit().putLong(PravkaAccessibilityService.KEY_Z_BEAT_AT, now).apply()
                 if (now - open.start >= 10 * 60_000L) {
-                    zButton?.blinkOnce()
                     Feedback.toast(
                         this@zasechkaReminderCheck,
                         "⏱ «${open.title.ifBlank { "без названия" }}» — идёт ${zDur(now - open.start)} (с ${zTime(open.start)})",
@@ -663,7 +663,7 @@ internal fun PravkaAccessibilityService.zasechkaReminderCheck() {
         val gapMs = now - lastEnd
         if (gapMs >= gapMin * 60_000L) {
             zButton?.setRemind(true)
-            // One notification per distinct gap; the pulse keeps nagging.
+            // One notification per distinct gap; the deep amber keeps nagging.
             if (internal.getLong(PravkaAccessibilityService.KEY_Z_GAP_NOTIFIED, 0L) != lastEnd) {
                 internal.edit().putLong(PravkaAccessibilityService.KEY_Z_GAP_NOTIFIED, lastEnd).apply()
                 zNotify(

@@ -131,41 +131,6 @@ class DiskLookTest {
     }
 
     @Test
-    fun `полоса прогресса выпуклая, а не цветная нитка с белой`() {
-        // Профиль поперёк: у внешнего края скат, сразу за ним блик, к
-        // середине чистый цвет, у внутреннего края тень и слабый отсвет.
-        val edge = DiskLook.bandTone(0f)
-        val gloss = DiskLook.bandTone(0.22f)
-        val middle = DiskLook.bandTone(0.55f)
-        val deep = DiskLook.bandTone(0.85f)
-        val inner = DiskLook.bandTone(1f)
-        assertTrue("блик — самое светлое место полосы", gloss > edge && gloss > middle)
-        assertTrue("сам край чуть темнее блика, он скатывается", edge > 0f && edge < gloss)
-        assertEquals("в середине — чистый цвет полосы", 0f, middle, 0.001f)
-        assertTrue("у внутреннего края тень", deep < 0f)
-        assertTrue("и слабый отсвет у самой кромки", inner > deep && inner < 0f)
-    }
-
-    @Test
-    fun `профиль полосы идёт плавно и не выходит за края`() {
-        var prev = DiskLook.bandTone(0f)
-        var step = 0f
-        for (i in 1..100) {
-            val t = i / 100f
-            val v = DiskLook.bandTone(t)
-            step = maxOf(step, Math.abs(v - prev))
-            assertTrue("тон в пределах разумного: $v", v > -0.5f && v < 0.6f)
-            prev = v
-        }
-        // Ни одной ступеньки: иначе полоса распадается на кольца.
-        assertTrue("шаг профиля $step слишком крупный", step < 0.05f)
-        // За краями профиль не продолжается, а упирается.
-        assertEquals(DiskLook.bandTone(0f), DiskLook.bandTone(-1f), 0f)
-        assertEquals(DiskLook.bandTone(1f), DiskLook.bandTone(2f), 0f)
-        assertTrue("колец должно хватать на плавность", DiskLook.BAND_SLICES >= 7)
-    }
-
-    @Test
     fun `прозрачность кладётся в старший байт, цвет не трогается`() {
         assertEquals(0xFF3A342B.toInt(), DiskLook.withAlpha(DiskLook.GLASS_DARK, 1f))
         assertEquals(0x003A342B, DiskLook.withAlpha(DiskLook.GLASS_DARK, 0f))

@@ -9,7 +9,6 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RadialGradient
-import android.graphics.RectF
 import android.graphics.Shader
 import android.os.Build
 import android.os.SystemClock
@@ -102,15 +101,6 @@ class DiskController(
         private const val SOCKET_STEP_DEG = 0.25f
         /** То же для выдавливания: полпикселя глазу не видно, а перерисовка стоит. */
         private const val SOCKET_STEP_PX = 0.5f
-        /** Сколько замкнувшаяся дуга висит, прежде чем погаснуть. */
-        private const val WORK_FADE_MS = 700L
-        /**
-         * Толщина дуги прогресса — доля радиуса тарелки. Было 0,035, и
-         * владелец (20.09.2026): «может, сделать чуть пошире? А то такое
-         * ощущение, что они состоят из двух тонких полосок». На тонкой полосе
-         * поперечный профиль не читается — выпуклости нужна ширина.
-         */
-        private const val WORK_WIDTH_FACTOR = 0.055f
         /**
          * Стрелка на кромке: насколько она вдвинута внутрь и какого размера —
          * доли радиуса. Владелец (20.09.2026): «стрелку на краю диска
@@ -211,12 +201,6 @@ class DiskController(
     private var tucked = false
     /** На сколько кнопки сейчас выдавлены из стекла, вдоль лица; своя пружина. */
     private var extrude = 0f
-
-    // Дуга прогресса: что идёт, когда началось и сколько обещано.
-    private var workAt = 0L
-    private var workExpect = 0L
-    private var workColour = 0
-    private var workFading = false
 
     // Тарелка.
     private var plate: PlateView? = null
@@ -355,46 +339,6 @@ class DiskController(
         }
         scope.launch { settings.diskInertiaFlow.collect { inertia = it } }
         scope.launch { settings.diskRollFlow.collect { rollK = it } }
-    }
-
-    /**
-     * Запрос к модели пошёл: дуга по кромке стекла на [expectMs] — столько
-     * ждёт `core/Pace.kt` по своей истории. Цвет — дороги, которая работает.
-     *
-     * Второй запрос поверх первого просто переписывает дугу: одна полоса на
-     * стекле честнее двух, а одновременных запросов у владельца не бывает —
-     * кнопка на время разбора занята.
-     */
-    fun startWork(expectMs: Long, colour: Int) {
-        workAt = SystemClock.uptimeMillis()
-        workExpect = expectMs
-        workColour = colour
-        workFading = false
-        plate?.setWork(1f, colour, 0f)
-        tickWork()
-    }
-
-    /** Ответ пришёл (или сорвался): дуга замыкается и гаснет. */
-    fun finishWork(ok: Boolean) {
-        if (workAt == 0L) return
-        workAt = 0L
-        workFading = true
-        // Удачный ответ дугу ЗАМЫКАЕТ, сорвавшийся — гасит там, где стоял:
-        // полный круг это «сделано», и врать им нельзя.
-        plate?.setWork(1f, workColour, if (ok) 1f else -1f)
-        plate?.postDelayed({ if (workFading) { workFading = false; plate?.setWork(0f, workColour, 0f) } }, WORK_FADE_MS)
-    }
-
-    /**
-     * Кадр дуги. Идёт своим циклом, а не общим: тот крутится только пока
-     * пружины живые, а запрос идёт и на стоящем диске.
-     */
-    private fun tickWork() {
-        val v = plate ?: return
-        if (workAt == 0L) return
-        val elapsed = SystemClock.uptimeMillis() - workAt
-        v.setWork(1f, workColour, ru.zf.pravka.core.Pace.progress(elapsed, workExpect))
-        v.postOnAnimation { tickWork() }
     }
 
     /** Краски стекла поменялись — перерисовать, не трогая геометрию. */
@@ -618,8 +562,8 @@ class DiskController(
         }
         placeHead()
         placePlate(d)
-        // Дуге нужно знать, видна ли тарелка целиком: у края она идёт по
-        // видимому полукругу, сверху и до низу (владелец, 20.09.2026).
+        // Стрелке нужно знать, видна ли тарелка целиком: стрелка живёт только
+        // у края.
         plate?.let {
             it.allHiddenView = allHidden
             it.setFacing(f, cx - d.plate < 0f || cx + d.plate > w, tucked)
@@ -643,8 +587,8 @@ class DiskController(
     /**
      * Центр, ВОКРУГ КОТОРОГО стоят кнопки. Обычно это центр тарелки; у
      * убранного диска он сдвинут вдоль лица (внутрь экрана) на выдавливание:
-     * стекло за краем, а «П» и «З» на экране целиком. Тарелка, шестерёнка и
-     * дуга живут по-прежнему вокруг `cx, cy` — сдвинуто только кольцо.
+     * стекло за краем, а «П» и «З» на экране целиком. Тарелка и шестерёнка
+     * живут по-прежнему вокруг `cx, cy` — сдвинуто только кольцо.
      */
     private fun ringCentre(f: Float): Pair<Float, Float> {
         if (extrude <= 0f) return cx to cy
@@ -1600,17 +1544,9 @@ class DiskController(
         private var grain: Bitmap? = null
         private val clip = Path()
 
-        // Дуга прогресса: сколько её видно (0 — нет), цвет дороги и докуда
-        // дошла. Плюс лицо диска и «виден ли он целиком» — от них зависит,
-        // по какой дуге идти.
-        private val arc = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-        }
-        private val arcBox = RectF()
-        private var workOn = 0f
-        private var workColour = 0
-        private var workProgress = 0f
+        // Лицо диска и «виден ли он целиком» — от них зависит, куда смотрит
+        // стрелка на кромке. (Дуга прогресса по кромке снята 26.09.2026 —
+        // ожидание теперь отсчётом секунд на самой кнопке, `ButtonCountdown`.)
         private var facing = 180f
         private var atEdge = false
         /** Диск убран за край: стрелка смотрит внутрь — «тапни, и выеду». */
@@ -1660,20 +1596,8 @@ class DiskController(
         }
 
         /**
-         * Дуга прогресса: [on] — видна ли (0 гасит), [progress] — докуда
-         * дошла, −1 — «сорвалось, оставить где было».
-         */
-        fun setWork(on: Float, colour: Int, progress: Float) {
-            workOn = on
-            workColour = colour
-            if (progress >= 0f) workProgress = progress
-            invalidate()
-        }
-
-        /**
          * Куда смотрит диск, торчит ли он за край и убран ли (тогда стрелка
-         * зовёт достать). От этого зависит и дуга прогресса, и стрелка на
-         * кромке.
+         * зовёт достать). От этого зависит стрелка на кромке.
          */
         fun setFacing(facing: Float, atEdge: Boolean, retracted: Boolean) {
             if (this.facing == facing && this.atEdge == atEdge && this.retracted == retracted) return
@@ -1940,7 +1864,6 @@ class DiskController(
             canvas.restoreToCount(body)
             if (blobbed) canvas.drawPath(shape(cx, cy), rim)
             else canvas.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
-            if (workOn > 0f && workProgress > 0f) drawWork(canvas, cx, cy, r)
             if (arrowShown()) drawArrow(canvas, cx, cy, r)
             canvas.restoreToCount(moved)
         }
@@ -2017,92 +1940,6 @@ class DiskController(
             canvas.restore()
             arrow.color = DiskLook.withAlpha(DiskLook.gearInk(light), ARROW_ALPHA)
             canvas.drawPath(arrowPath, arrow)
-        }
-
-        /**
-         * Дуга по кромке стекла. Диск виден целиком — полный круг от верха по
-         * часовой. Диск у края — только по ВИДИМОМУ полукругу, сверху и до
-         * низу (владелец, 20.09.2026): за краем дуги всё равно не видно, и
-         * полный круг там означал бы, что половина прогресса ушла в стену.
-         *
-         * Лицо диска смотрит внутрь экрана, поэтому видимая половина — та,
-         * что со стороны лица: у правого края идём от верха ПРОТИВ часовой.
-         */
-        private fun drawWork(canvas: Canvas, cx: Float, cy: Float, r: Float) {
-            val width = (r * WORK_WIDTH_FACTOR).coerceAtLeast(3f)
-            if (r - width <= 0f) return
-            // Ноль градусов у Android — вправо, дуга нужна от верха: −90°.
-            val full = if (atEdge) 180f else 360f
-            val sense = if (atEdge && facing >= 90f && facing <= 270f) -1f else 1f
-            val alpha = (255 * workOn).toInt().coerceIn(0, 255)
-            val swept = sense * full * workProgress
-
-            // Канавка на весь путь: полоса едет ПО ЖЕЛОБУ, а не висит в
-            // воздухе. Без неё видно только сколько прошло и не видно,
-            // сколько осталось.
-            val mid = r - width / 2f
-            arc.shader = null
-            arc.strokeCap = Paint.Cap.ROUND
-            arc.strokeWidth = width
-            arc.color = DiskLook.black(0.16f)
-            arc.alpha = (alpha * 0.16f).toInt().coerceIn(0, 255)
-            arcBox.set(cx - mid, cy - mid, cx + mid, cy + mid)
-            canvas.drawArc(arcBox, -90f, sense * full, false, arc)
-
-            // Сама полоса — кольцами от внешнего края к внутреннему, каждое
-            // своего тона (`DiskLook.bandTone`): получается ОДНА выпуклая
-            // полоса, а не цветная дуга с белой ниткой поверх.
-            //
-            // Пока дуга гаснет, она полупрозрачна, и кольца на нахлёстах
-            // складывались бы в полосатость. Поэтому на время затухания вся
-            // полоса собирается в слое и гасится целиком; на полной яркости
-            // слой не нужен — лишний буфер каждый кадр.
-            val layer = if (alpha < 250) canvas.saveLayerAlpha(null, alpha) else -1
-            val slices = DiskLook.BAND_SLICES
-            arc.strokeWidth = width / slices * 1.7f
-            for (i in 0 until slices) {
-                val t = (i + 0.5f) / slices
-                val rad = r - width * t
-                if (rad <= 0f) continue
-                val tone = DiskLook.bandTone(t)
-                arc.color = if (tone >= 0f) lighten(workColour, tone) else darken(workColour, -tone)
-                arc.alpha = 255
-                arcBox.set(cx - rad, cy - rad, cx + rad, cy + rad)
-                canvas.drawArc(arcBox, -90f, swept, false, arc)
-            }
-
-            // Продольный свет на всю полосу разом: верх дуги светлее, низ
-            // глубже — та же сцена, что у фаски стекла и у кнопок.
-            arc.color = -0x1
-            arc.alpha = 255
-            arc.strokeWidth = width
-            arc.shader = LinearGradient(
-                cx, cy - mid, cx, cy + mid,
-                intArrayOf(
-                    DiskLook.white(DiskLook.BAND_SHEEN),
-                    DiskLook.white(0f),
-                    DiskLook.black(DiskLook.BAND_FOOT),
-                ),
-                floatArrayOf(0f, 0.5f, 1f),
-                Shader.TileMode.CLAMP,
-            )
-            arcBox.set(cx - mid, cy - mid, cx + mid, cy + mid)
-            canvas.drawArc(arcBox, -90f, swept, false, arc)
-            arc.shader = null
-            if (layer >= 0) canvas.restoreToCount(layer)
-        }
-
-        private fun lighten(colour: Int, k: Float): Int = mix(colour, 0xFFFFFF, k)
-        private fun darken(colour: Int, k: Float): Int = mix(colour, 0x000000, k)
-
-        private fun mix(colour: Int, towards: Int, k: Float): Int {
-            val t = k.coerceIn(0f, 1f)
-            fun ch(shift: Int): Int {
-                val a = (colour shr shift) and 0xFF
-                val b = (towards shr shift) and 0xFF
-                return (a + (b - a) * t).toInt().coerceIn(0, 255)
-            }
-            return ((colour ushr 24) shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
         }
 
         /**

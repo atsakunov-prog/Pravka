@@ -1,6 +1,5 @@
 package ru.zf.pravka.trigger
 
-import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -18,7 +17,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
 import ru.zf.pravka.core.DiskLook
-import ru.zf.pravka.core.MicLevel
 import ru.zf.pravka.core.PillGeometry
 import ru.zf.pravka.data.Settings
 
@@ -31,7 +29,7 @@ import ru.zf.pravka.data.Settings
 //   long press -> menu: «Записать мысль», what is running now, open the tab
 //   drag       -> move; the "П" trails behind on a rubber band (owner's
 //                 design: the two buttons travel as a linked pair)
-// States: idle amber "З" / recording red stop / busy spinner / remind pulse
+// States: idle amber "З" / recording red stop / busy spinner / remind (steady deep amber)
 // (a time gap is waiting).
 class ZasechkaButtonController(
     private val service: PravkaAccessibilityService,
@@ -51,7 +49,7 @@ class ZasechkaButtonController(
         // midpoint) - same paper-white glyph on both.
         /** Цвет кнопки «З» — им же идёт дуга прогресса по кромке стекла. */
         val AMBER = 0xFFF78810.toInt()
-        private val AMBER_DEEP = 0xFFEA580C.toInt()   // remind pulse
+        private val AMBER_DEEP = 0xFFEA580C.toInt()   // remind: steady, no pulse
         private val REC_RED = FloatingButtonController.REC_RED
         private val PAPER = 0xFFF7F3EA.toInt()
         // Записка «не смог»: тот же красный, что у записи, — цвет уже значит
@@ -87,6 +85,8 @@ class ZasechkaButtonController(
     private var glyph: ImageView? = null
     private var recDot: View? = null
     private var progress: ProgressBar? = null
+    /** Секунды до ответа вместо колеса (`core/Countdown.kt`), пока кнопка занята. */
+    private val replyClock = ButtonCountdown(service)
     private var params: WindowManager.LayoutParams? = null
     /** Убрана в ручку: сильнее любых других причин показать кнопку. */
     private var stashed = false
@@ -118,27 +118,17 @@ class ZasechkaButtonController(
         }
 
     /**
-     * Пульс по громкости: на записи кнопка поджата (`MicLevel.QUIET`) и
-     * распрямляется от голоса. Наружу расти нельзя — окно ровно с кружок и
-     * срезало бы его по краям, — поэтому растём «из поджатого».
+     * Громкость голоса — волна в кружке пилюли. Сама кнопка от голоса больше
+     * не пульсирует: владелец (26.09.2026): «уберём дрожание кнопки на диске,
+     * оно немножко отвлекает». Голос виден в одном месте, а не в двух, и
+     * глаз не дёргается к краю экрана на каждом слове.
      */
     override fun setLevel(level: Float) {
-        if (!recording) return
-        pill.setLevel(level)
-        val v = button ?: return
-        micPulse = MicLevel.smooth(micPulse, level)
-        val s = MicLevel.scale(micPulse)
-        v.animate().cancel()
-        v.scaleX = s
-        v.scaleY = s
+        if (recording) pill.setLevel(level)
     }
 
-    /** Сглаженная громкость: замеры приходят рывками, кнопка не должна дрожать. */
-    private var micPulse = 0f
-
-    /** Запись кончилась — кнопка распрямляется из пульса в свой размер. */
+    /** Запись кончилась — волна в пилюле снова значок, кнопка в своём размере. */
     private fun restPulse() {
-        micPulse = 0f
         pill.rest()
         button?.let { v ->
             v.animate().cancel()
@@ -158,7 +148,6 @@ class ZasechkaButtonController(
     private var recording = false
     private var reminding = false
     private var enabled = false
-    private var pulse: ValueAnimator? = null
 
     // Пилюля диктовки (`DictationPill`): живые слова, пока идёт наговор, —
     // снизу посередине, в одежде Gemini. Тап — микрофон молчит,
@@ -202,7 +191,7 @@ class ZasechkaButtonController(
 
     fun setBusy(value: Boolean) {
         busy = value
-        progress?.visibility = if (value) View.VISIBLE else View.GONE
+        replyClock.setBusy(value)
         applyFaceAndLook()
     }
 
@@ -215,30 +204,17 @@ class ZasechkaButtonController(
         applyFaceAndLook()
     }
 
-    /** A gap in the timesheet is waiting: amber pulse until an entry lands. */
+    /**
+     * В ленте дыра — кнопка стоит глубоким янтарём, пока не ляжет запись.
+     * Раньше она мерцала (0,45↔1 без конца), и раз в час ещё и «подмигивала»;
+     * владелец (26.09.2026): «Засечка иногда пульсирует. Давай её тоже уберём,
+     * эту пульсацию». Сигнал остался цветом, движения нет: мерцание на краю
+     * экрана тянет глаз, даже когда смотреть незачем.
+     */
     fun setRemind(value: Boolean) {
         if (reminding == value) return
         reminding = value
         applyFaceAndLook()
-    }
-
-    /**
-     * The hourly wink (owner's request): three soft dips of alpha, then back
-     * to the steady look - "я всё ещё считаю вот это". No-op while any louder
-     * state (busy/recording/gap-remind) owns the button.
-     */
-    fun blinkOnce() {
-        val b = button ?: return
-        if (busy || recording || reminding) return
-        pulse?.cancel()
-        pulse = ValueAnimator.ofFloat(1f, 0.35f).apply {
-            duration = 450
-            repeatCount = 5
-            repeatMode = ValueAnimator.REVERSE
-            addUpdateListener { b.alpha = it.animatedValue as Float }
-            start()
-        }
-        b.postDelayed({ applyFaceAndLook() }, 3_000)
     }
 
     /** Перечитать глиф после переключения «иконки вместо букв». */
@@ -251,8 +227,6 @@ class ZasechkaButtonController(
     private fun applyFaceAndLook() {
         val b = button ?: return
         glyph?.visibility = if (!busy && !recording) View.VISIBLE else View.GONE
-        pulse?.cancel()
-        pulse = null
         when {
             recording -> {
                 background?.setColor(REC_RED)
@@ -264,13 +238,7 @@ class ZasechkaButtonController(
             }
             reminding -> {
                 background?.setColor(AMBER_DEEP)
-                pulse = ValueAnimator.ofFloat(0.45f, 1f).apply {
-                    duration = 900
-                    repeatCount = ValueAnimator.INFINITE
-                    repeatMode = ValueAnimator.REVERSE
-                    addUpdateListener { b.alpha = it.animatedValue as Float }
-                    start()
-                }
+                b.alpha = 1f
             }
             else -> {
                 background?.setColor(AMBER)
@@ -403,6 +371,10 @@ class ZasechkaButtonController(
     override fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
     override fun onScreen(): Boolean = attached
+
+    override fun startCountdown(expectMs: Long) = replyClock.start(expectMs)
+
+    override fun stopCountdown() = replyClock.stop()
 
     /** Диск: окно целиком за краем — снять; показался край — вернуть. Своё поле, не `stashed`. */
     override fun setOffscreen(value: Boolean) {
@@ -713,7 +685,6 @@ class ZasechkaButtonController(
         ask = column
         runCatching { windowManager.addView(column, p) }
         column.postDelayed(askDismiss, 30_000)
-        blinkOnce()
     }
 
     // ---- Серая «отмена» у идущей записи: как на «П» (владелец, 18.09.2026) ----
@@ -756,8 +727,6 @@ class ZasechkaButtonController(
 
     override fun destroy() {
         hideAsk()
-        pulse?.cancel()
-        pulse = null
         hideMenu()
         hideInput()
         hideCancelBubble()
@@ -808,6 +777,8 @@ class ZasechkaButtonController(
             progress,
             FrameLayout.LayoutParams(progressSize, progressSize, Gravity.CENTER),
         )
+        // Секунды до ответа на месте колеса (`ButtonCountdown`), пока кнопка занята.
+        progress?.let { replyClock.attach(container, it) }
 
         val p = WindowManager.LayoutParams(
             buttonSize,
@@ -1039,7 +1010,6 @@ class ZasechkaButtonController(
                     longPressFired = false
                     swallowed = false
                     pressed = view
-                    pulse?.cancel()
                     view.alpha = 1f
                     // Сжалась под пальцем (`BubbleMotion`): кнопка отвечает на касание телом.
                     BubbleMotion.press(view)
