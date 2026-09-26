@@ -98,6 +98,11 @@ class PravkaApp : Application() {
             moneyStore.stateFlow.drop(1).debounce(30_000L)
                 .collect { runCatching { moneyDriveSync.sync("правка") } }
         }
+        // Почерк значков (версия 3) — один на процесс: приложение перерисуется
+        // само (`Glyphs.gemini` — состояние Compose), кнопки перечитывает служба.
+        appScope.launch {
+            settings.iconsGeminiFlow.collect { ru.zf.pravka.ui.Glyphs.gemini = it }
+        }
         // Режим отладки: транспорт пишет каждый запрос к Claude целиком в
         // свой лог, пока тумблер включён (Настройки → Общее).
         appScope.launch {

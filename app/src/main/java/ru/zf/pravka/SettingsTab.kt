@@ -92,29 +92,33 @@ internal enum class SettingsGroup(
     val title: String,
     val hint: String,
     val shelf: SettingsShelf,
-    val glyph: ImageVector,
+    /** Значок — лямбдой: он берётся в текущем почерке (`Glyphs.gemini`), а не на загрузке класса. */
+    private val glyphOf: () -> ImageVector,
     val decor: ModeDecor = ModeDecor.SERVICE,
 ) {
-    PROFILE("Кто пользуется", "имя, род, какие режимы включены", SettingsShelf.MODES, Glyphs.Tune),
-    PRAVKA("Правка", "проза, контекст, правила в промпте", SettingsShelf.MODES, Glyphs.Pravka, ModeDecor.PRAVKA),
-    ZASECHKA("Засечка", "напоминания, категории, автопилот, NFC", SettingsShelf.MODES, Glyphs.Zasechka, ModeDecor.ZASECHKA),
-    DELA("Дела", "кнопка «Д», Todoist", SettingsShelf.MODES, Glyphs.Delo, ModeDecor.DELA),
-    SPORT("Спорт", "отдых, выгрузка, цель веса, справочник", SettingsShelf.MODES, Glyphs.Sport, ModeDecor.SPORT),
-    FOOD("Еда", "цели КБЖУ, лента, intervals", SettingsShelf.MODES, Glyphs.Food, ModeDecor.FOOD),
-    MONEY("Деньги", "пуши банка", SettingsShelf.MODES, Glyphs.Money, ModeDecor.MONEY),
-    VOICE("Микрофон и распознавание", "телефон или гарнитура, движок", SettingsShelf.VOICE, Glyphs.Mic),
-    MODELS("Модели", "какая модель и с каким усилием", SettingsShelf.VOICE, Glyphs.Spark),
-    ANTHROPIC("Anthropic", "ключ API", SettingsShelf.LINKS, Glyphs.Key),
-    TODOIST("Todoist", "дела и разноска", SettingsShelf.LINKS, Glyphs.Delo, ModeDecor.DELA),
-    NOTION("Notion", "план, Дневник, «Вся жизнь»", SettingsShelf.LINKS, Glyphs.Scroll),
-    INTERVALS("intervals.icu", "тренировки, сон, вес", SettingsShelf.LINKS, Glyphs.Activity, ModeDecor.SPORT),
-    SHEETS("Google Sheets", "таймшит из ленты", SettingsShelf.LINKS, Glyphs.ListLines, ModeDecor.ZASECHKA),
-    GOOGLE("Google Drive", "семейный аккаунт: общие Деньги, копии базы", SettingsShelf.LINKS, Glyphs.Cloud),
-    BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, Glyphs.Disk),
-    DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, Glyphs.Palette),
-    CARDS("Плашки приложения", "свечение режима, темнее, фаска, свет, зерно", SettingsShelf.LOOK, Glyphs.Layers),
-    DATA("База данных", "где лежит, переезд в папку, как копировать", SettingsShelf.APP, Glyphs.Archive),
-    APP("Обновления и служба", "служба, обновления, копии ленты, отладка", SettingsShelf.APP, Glyphs.Phone),
+    PROFILE("Кто пользуется", "имя, род, какие режимы включены", SettingsShelf.MODES, { Glyphs.Tune }),
+    PRAVKA("Правка", "проза, контекст, правила в промпте", SettingsShelf.MODES, { Glyphs.Pravka }, ModeDecor.PRAVKA),
+    ZASECHKA("Засечка", "напоминания, категории, автопилот, NFC", SettingsShelf.MODES, { Glyphs.Zasechka }, ModeDecor.ZASECHKA),
+    DELA("Дела", "кнопка «Д», Todoist", SettingsShelf.MODES, { Glyphs.Delo }, ModeDecor.DELA),
+    SPORT("Спорт", "отдых, выгрузка, цель веса, справочник", SettingsShelf.MODES, { Glyphs.Sport }, ModeDecor.SPORT),
+    FOOD("Еда", "цели КБЖУ, лента, intervals", SettingsShelf.MODES, { Glyphs.Food }, ModeDecor.FOOD),
+    MONEY("Деньги", "пуши банка", SettingsShelf.MODES, { Glyphs.Money }, ModeDecor.MONEY),
+    VOICE("Микрофон и распознавание", "телефон или гарнитура, движок", SettingsShelf.VOICE, { Glyphs.Mic }),
+    MODELS("Модели", "какая модель и с каким усилием", SettingsShelf.VOICE, { Glyphs.Spark }),
+    ANTHROPIC("Anthropic", "ключ API", SettingsShelf.LINKS, { Glyphs.Key }),
+    TODOIST("Todoist", "дела и разноска", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
+    NOTION("Notion", "план, Дневник, «Вся жизнь»", SettingsShelf.LINKS, { Glyphs.Scroll }),
+    INTERVALS("intervals.icu", "тренировки, сон, вес", SettingsShelf.LINKS, { Glyphs.Activity }, ModeDecor.SPORT),
+    SHEETS("Google Sheets", "таймшит из ленты", SettingsShelf.LINKS, { Glyphs.ListLines }, ModeDecor.ZASECHKA),
+    GOOGLE("Google Drive", "семейный аккаунт: общие Деньги, копии базы", SettingsShelf.LINKS, { Glyphs.Cloud }),
+    BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, { Glyphs.Disk }),
+    DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, { Glyphs.Palette }),
+    CARDS("Плашки приложения", "значки, свечение режима, темнее, фаска, свет, зерно", SettingsShelf.LOOK, { Glyphs.Layers }),
+    DATA("База данных", "где лежит, переезд в папку, как копировать", SettingsShelf.APP, { Glyphs.Archive }),
+    APP("Обновления и служба", "служба, обновления, копии ленты, отладка", SettingsShelf.APP, { Glyphs.Phone }),
+    ;
+
+    val glyph: ImageVector get() = glyphOf()
 }
 
 @Composable
@@ -970,6 +974,21 @@ private fun CardsSettings(app: PravkaApp) {
         PaperToggle("Свет сверху", cardLight, { on -> scope.launch { settings.setCardLight(on) } })
         val cardGrain by settings.cardGrainFlow.collectAsState(initial = true)
         PaperToggle("Зерно", cardGrain, { on -> scope.launch { settings.setCardGrain(on) } })
+    }
+    // Почерк значков (версия 3, владелец: «может, попробуем иконки ещё в стиле
+    // Gemini?»): Material Symbols Rounded или наш штрих — сразу везде.
+    PaperCard(
+        label = "значки",
+        info = "«Как у Gemini» — тонкий скруглённый почерк Google (Material Symbols Rounded): " +
+            "в приложении, на кнопках диска, если на них значки вместо букв, и знак режима в " +
+            "пилюле. «Наши» — прежний штрих, как на кнопках с первого дня. Переключается " +
+            "сразу, без перезапуска; в пилюле — со следующей записи.",
+    ) {
+        val gemini by settings.iconsGeminiFlow.collectAsState(initial = Settings.ICONS_GEMINI_DEFAULT)
+        ChipRow {
+            PaperChip("Как у Gemini", selected = gemini, onClick = { scope.launch { settings.setIconsGemini(true) } })
+            PaperChip("Наши", selected = !gemini, onClick = { scope.launch { settings.setIconsGemini(false) } })
+        }
     }
     // Версия 3 (26.09.2026): свет режима сверху вкладки — в цвете её кнопки и
     // только в нём. Ноль — выключено: свет — это фон, а фон владелец однажды

@@ -170,7 +170,7 @@ class BodyButtonController(
     private val pill = DictationPill(
         service, scope,
         accent = INK,
-        glyph = R.drawable.ic_mode_food,
+        glyph = { ModeGlyphs.pillFood() },
         textSizeSp = 16f,
         screen = { screenSize() },
         owner = { params?.let { PillGeometry.Box(it.x, it.y, it.x + buttonSize, it.y + buttonSize) } },

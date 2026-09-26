@@ -90,6 +90,7 @@ class Settings(private val context: Context) {
         private val KEY_CARD_LIGHT = booleanPreferencesKey("card_light")
         private val KEY_CARD_GRAIN = booleanPreferencesKey("card_grain")
         private val KEY_APP_GLOW = floatPreferencesKey("app_glow")
+        private val KEY_ICONS_GEMINI = booleanPreferencesKey("icons_gemini")
         private val KEY_Z_GAP_MIN = intPreferencesKey("z_gap_min")
         private val KEY_Z_DAY_START = intPreferencesKey("z_day_start")
         private val KEY_Z_DAY_END = intPreferencesKey("z_day_end")
@@ -201,6 +202,13 @@ class Settings(private val context: Context) {
          * записан, заводское его не трогает.
          */
         const val DISK_LIGHT_DEFAULT = false
+
+        /**
+         * Почерк значков с завода — «как у Gemini» (Material Symbols Rounded;
+         * владелец, 26.09.2026: «может, попробуем иконки ещё в стиле Gemini?»).
+         * Попробовать — значит увидеть сразу; наш штрих — второе положение.
+         */
+        const val ICONS_GEMINI_DEFAULT = true
 
         // Заводские цели КБЖУ: посчитаны по Миффлину-Сан-Жеору для владельца
         // (86 кг, 180 см, 1982) при умеренной активности, белок 1,8 г/кг.
@@ -643,6 +651,16 @@ class Settings(private val context: Context) {
     val appGlowFlow = context.dataStore.data.map { it[KEY_APP_GLOW] ?: ru.zf.pravka.core.ModeGlow.DEFAULT }
     suspend fun setAppGlow(value: Float) {
         context.dataStore.edit { it[KEY_APP_GLOW] = value.coerceIn(0f, 1f) }
+    }
+
+    /**
+     * Почерк значков (версия 3): true — как у Gemini, false — наш штрих.
+     * Один на всё: приложение (`ui/Glyphs.kt`), кнопки на стекле со значками
+     * вместо букв и знак режима в пилюле (`trigger/ModeGlyphs.kt`).
+     */
+    val iconsGeminiFlow = context.dataStore.data.map { it[KEY_ICONS_GEMINI] ?: ICONS_GEMINI_DEFAULT }
+    suspend fun setIconsGemini(value: Boolean) {
+        context.dataStore.edit { it[KEY_ICONS_GEMINI] = value }
     }
 
     /** Вернуть вид диска в счёт: размеры — к заводским, плотности — к формулам. */

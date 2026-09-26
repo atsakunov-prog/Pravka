@@ -132,7 +132,8 @@ class DictationPill(
     private val service: PravkaAccessibilityService,
     private val scope: CoroutineScope,
     private val accent: Int,
-    @param:DrawableRes private val glyph: Int,
+    /** Знак режима слева — спрашивается на каждом показе: почерк значков переключают вживую. */
+    private val glyph: () -> Int,
     private val textSizeSp: Float,
     /** Размер экрана у кнопки-хозяйки: у неё он уже закэширован. */
     private val screen: () -> Pair<Int, Int>,
@@ -484,7 +485,7 @@ class DictationPill(
             setOnClickListener { if (resultReq != null) resultTap() else onTap?.invoke() }
         }
         // mutate: свой экземпляр знака — тинт и альфа не должны уйти в знак на кнопке.
-        val l = LeadMark(service, service.getDrawable(glyph)?.mutate()).apply {
+        val l = LeadMark(service, service.getDrawable(glyph())?.mutate()).apply {
             // Слушатель — ДО флага: setOnClickListener сам делает вид
             // кликабельным, и знак режима глотал бы тап, положенный ряду.
             setOnClickListener { if (editing) cancelTyped() else onCancel?.invoke() }

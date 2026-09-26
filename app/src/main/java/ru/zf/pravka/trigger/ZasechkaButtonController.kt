@@ -159,7 +159,7 @@ class ZasechkaButtonController(
     private val pill = DictationPill(
         service, scope,
         accent = AMBER,
-        glyph = R.drawable.ic_mode_zasechka,
+        glyph = { ModeGlyphs.pillZasechka() },
         textSizeSp = 17f,
         screen = { screenSize() },
         owner = { params?.let { PillGeometry.Box(it.x, it.y, it.x + buttonSize, it.y + buttonSize) } },

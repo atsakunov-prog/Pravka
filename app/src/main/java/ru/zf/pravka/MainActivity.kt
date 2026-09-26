@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.core.DictEntry
@@ -257,6 +258,13 @@ class MainActivity : ComponentActivity() {
         // каждый день, всё остальное — служебное.
         val initialTab = tabOf(intent) ?: Tab.ZASECHKA
         groupOf(intent)?.let { groupRequest.value = it }
+        // Почерк значков — до первого кадра (версия 3): иначе на холодном
+        // старте первый кадр рисовался бы заводским почерком и значки
+        // перескакивали бы на глазах. Хранилище к этому моменту уже прогрето
+        // подписками приложения — чтение занимает миллисекунды.
+        runCatching {
+            ru.zf.pravka.ui.Glyphs.gemini = kotlinx.coroutines.runBlocking { app.settings.iconsGeminiFlow.first() }
+        }
         setContent {
             PravkaTheme {
                 // Вид плашек — из настроек, один раз на всё приложение
@@ -362,8 +370,11 @@ private val SERVICE_TABS = listOf(
     Tab.SETTINGS,
 )
 
-/** Нижние кнопки и их значки. */
-private val BOTTOM_TABS: List<Pair<Tab, androidx.compose.ui.graphics.vector.ImageVector>> = listOf(
+/**
+ * Нижние кнопки и их значки. Геттер, а не готовый список: значок берётся в
+ * текущем почерке (`Glyphs.gemini`), и переключение в настройках доходит сюда.
+ */
+private val BOTTOM_TABS: List<Pair<Tab, androidx.compose.ui.graphics.vector.ImageVector>> get() = listOf(
     Tab.PRAVKA to Glyphs.Pravka,
     Tab.ZASECHKA to Glyphs.Zasechka,
     Tab.TODOIST to Glyphs.Delo,
@@ -780,7 +791,7 @@ private fun MainScreen(
                                     val clean by cleanFlow.collectAsState(initial = null)
                                     TabHeader(
                                         title = stringResource(R.string.tab_pravka),
-                                        icon = painterResource(R.drawable.ic_mode_pravka),
+                                        glyph = Glyphs.Pravka,
                                         titleExtra = clean?.let { c ->
                                             ru.zf.pravka.data.Models.label(c.model).substringBefore(' ') + " · " +
                                                 ru.zf.pravka.data.Models.effectiveEffort(c.model, c.effort)
@@ -797,7 +808,7 @@ private fun MainScreen(
                                 Tab.ZASECHKA -> {
                                     TabHeader(
                                         title = stringResource(R.string.tab_zasechka),
-                                        icon = painterResource(R.drawable.ic_mode_zasechka),
+                                        glyph = Glyphs.Zasechka,
                                         actions = {
                                             StatsAction(openReport)
                                             CostAction(openCost)
@@ -809,7 +820,7 @@ private fun MainScreen(
                                 Tab.TODOIST -> {
                                     TabHeader(
                                         title = "Дела",
-                                        icon = painterResource(R.drawable.ic_mode_delo),
+                                        glyph = Glyphs.Delo,
                                         actions = {
                                             StatsAction(openReport)
                                             CostAction(openCost)
@@ -821,7 +832,7 @@ private fun MainScreen(
                                 Tab.SPORT -> {
                                     TabHeader(
                                         title = stringResource(R.string.tab_sport),
-                                        icon = painterResource(R.drawable.ic_mode_sport),
+                                        glyph = Glyphs.Sport,
                                         actions = {
                                             StatsAction(openReport)
                                             CostAction(openCost)
@@ -838,7 +849,7 @@ private fun MainScreen(
                                     var scopeSheet by remember { mutableStateOf(false) }
                                     TabHeader(
                                         title = stringResource(R.string.tab_money),
-                                        icon = painterResource(R.drawable.ic_mode_money),
+                                        glyph = Glyphs.Money,
                                         titleExtra = when {
                                             pOn && zOn -> "Всё"
                                             zOn -> "ЗФ"
@@ -862,7 +873,7 @@ private fun MainScreen(
                                 else -> {
                                     TabHeader(
                                         title = stringResource(R.string.tab_food),
-                                        icon = painterResource(R.drawable.ic_mode_food),
+                                        glyph = Glyphs.Food,
                                         actions = {
                                             StatsAction(openReport)
                                             CostAction(openCost)
