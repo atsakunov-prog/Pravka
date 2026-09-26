@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.zf.pravka.core.MealItem
+import ru.zf.pravka.core.Micronutrients
 
 // Еда: дневник приёмов пищи с разобранным КБЖУ (`food.json`).
 //
@@ -53,7 +54,7 @@ class FoodStore(private val context: Context) {
         val items: List<MealItem>,
         val note: String = "",         // замечание модели: чего не хватило
         val source: String = "voice",  // voice | text | photo | barcode
-        val photo: String = "",        // имя файла в filesDir/food
+        val photo: String = "",        // имя файла в <база>/food
         val confirmed: Boolean = false,
         val icuSynced: Boolean = false,
         val ribbonSynced: Boolean = false,
@@ -66,6 +67,17 @@ class FoodStore(private val context: Context) {
         val carbs: Int get() = items.sumOf { it.carbs }
         val fiber: Int get() = items.sumOf { it.fiber }
         val grams: Int get() = items.sumOf { it.grams }
+
+        /** Витамины и элементы приёма: разреженная сумма по позициям. */
+        val micro: Map<String, Double> get() = Micronutrients.sum(items.map { it.micro })
+
+        /**
+         * Горсть таблеток, а не еда. Считается веществами, но не калориями, и
+         * в ленту Засечки не приписывается: записи «Еда» под неё не бывает.
+         */
+        val supplement: Boolean
+            get() = kind.trim().equals(MealItem.SUPPLEMENT, ignoreCase = true) ||
+                (items.isNotEmpty() && items.all { it.pill })
 
         /** «Омлет, тост, кофе» - строка для плашки и для ленты. */
         val shortList: String get() = items.joinToString(", ") { it.name }
@@ -80,12 +92,20 @@ class FoodStore(private val context: Context) {
         val carbs: Int,
         val fiber: Int,
         val meals: Int,
+        /** Витамины и элементы за сутки: еда и таблетки вместе. */
+        val micro: Map<String, Double> = emptyMap(),
+        /** Только из еды — чтобы было видно, что закрыто тарелкой, а что банкой. */
+        val microFood: Map<String, Double> = emptyMap(),
+        /** Только из таблеток. */
+        val microPills: Map<String, Double> = emptyMap(),
+        /** Что именно выпито: «Витамин D 50 мкг · Магний 300 мг». */
+        val pills: String = "",
     ) {
         val empty: Boolean get() = meals == 0
     }
 
     private val mutex = Mutex()
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
     private var loaded = false
 
     private val _mealsFlow = MutableStateFlow<List<Meal>>(emptyList())
@@ -94,7 +114,7 @@ class FoodStore(private val context: Context) {
     var logger: ((String) -> Unit)? = null
 
     /** Куда складываем снимки тарелок. */
-    fun photoDir(): File = File(context.filesDir, "food").also { it.mkdirs() }
+    fun photoDir(): File = File(DataRoot.dir(context), "food").also { it.mkdirs() }
 
     fun photoFile(name: String): File? =
         if (name.isBlank()) null else File(photoDir(), name).takeIf { it.exists() }
@@ -214,6 +234,10 @@ class FoodStore(private val context: Context) {
     /** Итог дня по подтверждённым приёмам. */
     fun dayTotal(date: String): DayTotal {
         val meals = mealsOn(date)
+        // Делим ПОЗИЦИЯМИ, а не приёмами: в одном завтраке бывает и творог,
+        // и капсула витамина D, и приписать капсулу еде значило бы соврать.
+        val items = meals.flatMap { it.items }
+        val fromPills = items.filter { it.pill }
         return DayTotal(
             date = date,
             kcal = meals.sumOf { it.kcal },
@@ -222,6 +246,10 @@ class FoodStore(private val context: Context) {
             carbs = meals.sumOf { it.carbs },
             fiber = meals.sumOf { it.fiber },
             meals = meals.size,
+            micro = Micronutrients.sum(meals.map { it.micro }),
+            microFood = Micronutrients.sum(items.filterNot { it.pill }.map { it.micro }),
+            microPills = Micronutrients.sum(fromPills.map { it.micro }),
+            pills = fromPills.joinToString(" · ") { it.name }.take(400),
         )
     }
 
@@ -303,12 +331,30 @@ class FoodStore(private val context: Context) {
                                 put("c", it.carbs)
                                 put("fiber", it.fiber)
                                 put("sure", it.sureness)
+                                // Разреженная карта: нечего писать - нет и ключа.
+                                if (it.micro.isNotEmpty()) put("micro", microJson(it.micro))
+                                if (it.pill) put("pill", true)
                             }
                         )
                     }
                 )
             }
         )
+    }
+
+    private fun microJson(map: Map<String, Double>): JSONObject = JSONObject().apply {
+        // Округление до сотой: дневник не аптека, а лишние знаки раздувают файл.
+        for ((id, v) in map) put(id, Math.round(v * 100.0) / 100.0)
+    }
+
+    private fun microOf(o: JSONObject?): Map<String, Double> {
+        if (o == null) return emptyMap()
+        val out = LinkedHashMap<String, Double>()
+        for (key in o.keys()) {
+            val v = o.optDouble(key, 0.0)
+            if (v > 0) out[key] = v
+        }
+        return out
     }
 
     private fun parse(array: JSONArray): List<Meal> {
@@ -329,6 +375,8 @@ class FoodStore(private val context: Context) {
                             carbs = it.optInt("c"),
                             fiber = it.optInt("fiber"),
                             sureness = it.optString("sure"),
+                            micro = microOf(it.optJSONObject("micro")),
+                            pill = it.optBoolean("pill", false),
                         )
                     )
                 }
@@ -354,32 +402,6 @@ class FoodStore(private val context: Context) {
             )
         }
         return out.sortedByDescending { it.ts }
-    }
-
-    /** Выгрузка дневника: тот же путь наружу, что у CSV Засечки. */
-    suspend fun shareCsvIntent(): android.content.Intent = withContext(Dispatchers.IO) {
-        val sb = StringBuilder("date,time,kind,item,grams,kcal,protein,fat,carbs,fiber,source,raw\n")
-        fun cell(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
-        val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
-        for (m in _mealsFlow.value.filter { it.confirmed }.sortedBy { it.ts }) {
-            for (item in m.items) {
-                sb.append(dayKey(m.ts)).append(',')
-                    .append(timeFormat.format(Date(m.ts))).append(',')
-                    .append(cell(m.kind)).append(',')
-                    .append(cell(item.name)).append(',')
-                    .append(item.grams).append(',')
-                    .append(item.kcal).append(',')
-                    .append(item.protein).append(',')
-                    .append(item.fat).append(',')
-                    .append(item.carbs).append(',')
-                    .append(item.fiber).append(',')
-                    .append(cell(m.source)).append(',')
-                    .append(cell(m.raw)).append('\n')
-            }
-        }
-        val out = File(context.cacheDir, "pravka-eda.csv")
-        out.writeText(sb.toString())
-        shareFileIntent(context, out, "text/csv")
     }
 }
 

@@ -131,7 +131,8 @@ fun PravkaAccessibilityService.onFoodTap() {
     }
     // Один микрофон на все четыре кнопки: чужую запись эта не перехватывает.
     if (googleSession != null || zSession != null || zWhisperRecording ||
-        rSession != null || rWhisperRecording || DictationService.recording
+        rSession != null || rWhisperRecording || mSession != null || mWhisperRecording ||
+        DictationService.recording
     ) {
         Haptics.error(this)
         Feedback.toast(this, getString(R.string.e_busy))
@@ -145,14 +146,21 @@ fun PravkaAccessibilityService.onFoodTap() {
     startFoodCapture()
 }
 
+/** Приглашение говорить в бегущей строке «Т» — одно на оба движка. */
+/** Надпись в пилюле «Е», пока слов нет. Тап посередине — по-прежнему набор. */
+internal fun PravkaAccessibilityService.bodyTickerPrompt(): String = listenHint()
+
 internal fun PravkaAccessibilityService.startFoodCapture() {
     eButton?.hideInput()
-    eButton?.hidePlate()
+    // Новая запись поверх ждущей плашки — это не «нет»: прежнее уходит в дневник.
+    eButton?.settlePlate()
+    eDiscard = false
     if (cachedEngine.startsWith("whisper")) {
         eWhisperRecording = true
         eButton?.setRecording(true)
         eButton?.showTicker()
-        eButton?.updateTicker("🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)")
+        eButton?.hintTicker(bodyTickerPrompt())
+        eButton?.showCancelBubble { cancelFoodTake() }
         Haptics.start(this)
         startDictation()
     } else {
@@ -182,10 +190,17 @@ internal fun PravkaAccessibilityService.startFoodGoogle() {
         biasing = (cachedBiasing + bodyBiasing()).distinct(),
         formatting = cachedFormatting,
         segmentedSession = cachedSegmented,
+        network = cachedNetwork,
     )
     eSession = session
+    speechReady = false
     session.start(
-        onReady = { Haptics.success(this) },
+        onReady = {
+            // Движок услышал — только теперь приглашение говорить правда.
+            speechReady = true
+            eButton?.hintTicker(bodyTickerPrompt())
+            Haptics.success(this)
+        },
         onPartial = { live -> eButton?.updateTicker(live) },
         // Приём пищи — две фразы: черновик на диск не пишем, повторить
         // дешевле, чем чинить (то же решение, что у Разноски).
@@ -196,9 +211,28 @@ internal fun PravkaAccessibilityService.startFoodGoogle() {
     )
     eButton?.setRecording(true)
     eButton?.showTicker()
-    eButton?.updateTicker("🎙 подходы, еда, зарядка… (тап сюда — набрать текстом)")
+    // Пока движок глух, строка говорит об этом, а не зовёт говорить в пустоту.
+    if (!speechReady) eButton?.hintTicker(waitHint())
+    eButton?.showCancelBubble { cancelFoodTake() }
     Haptics.start(this)
     runCatching { startMicHold() }
+}
+
+/** Серая «отмена» у «Т»: наговор выбрасывается — ни в дневник, ни в подходы, ни в ленту. */
+internal fun PravkaAccessibilityService.cancelFoodTake() {
+    when {
+        eSession != null -> {
+            eDiscard = true
+            app.eventLog.add("еда: отмена наговора")
+            stopFoodLive()
+        }
+        eWhisperRecording && DictationService.recording -> {
+            eDiscard = true
+            eButton?.setBusy(true)
+            app.eventLog.add("еда: отмена наговора")
+            stopDictation()
+        }
+    }
 }
 
 internal fun PravkaAccessibilityService.stopFoodLive() {
@@ -234,7 +268,16 @@ internal fun PravkaAccessibilityService.onFoodLiveDone(text: String) {
     eSession = null
     runCatching { stopMicHold() }
     runCatching { eButton?.hideTicker() }
+    runCatching { eButton?.hideCancelBubble() }
     eButton?.setRecording(false)
+    if (eDiscard) {
+        eDiscard = false
+        eTypeInstead = false
+        eButton?.setBusy(false)
+        app.eventLog.add("еда: наговор отменён (${text.length} зн.)")
+        Feedback.toast(this, "Отменено")
+        return
+    }
     if (eTypeInstead) {
         eTypeInstead = false
         eButton?.setBusy(false)
@@ -246,8 +289,10 @@ internal fun PravkaAccessibilityService.onFoodLiveDone(text: String) {
 
 internal fun PravkaAccessibilityService.onFoodLiveError(msg: String) {
     eSession = null
+    eDiscard = false
     runCatching { stopMicHold() }
     eButton?.hideTicker()
+    eButton?.hideCancelBubble()
     eButton?.setRecording(false)
     eButton?.setBusy(false)
     Haptics.error(this)
@@ -307,8 +352,8 @@ internal fun PravkaAccessibilityService.onFoodText(raw: String) {
         eButton?.setBusy(false)
         result.fold(
             onSuccess = { parsed ->
-                Haptics.success(this@onFoodText)
-                showFoodPlate(parsed.meal.id)
+                // Сразу в дневник, а пилюля показывает, что записано (26.09.2026).
+                recordFood(parsed.meal.id)
             },
             onFailure = { e ->
                 // Слова не теряем: неразобранное ждёт во вкладке Спорта.
@@ -516,36 +561,139 @@ internal fun PravkaAccessibilityService.bodyBiasing(): List<String> =
     runCatching { app.bodyEngine.biasing() }.getOrDefault(emptyList())
 
 /**
+ * Наговорил еду — она сразу в дневнике, а пилюля показывает, что записано.
+ * Владелец (26.09.2026): «наговорил, что я съел с утра геркулес, ещё что-то,
+ * и вот он уже подумал, а дальше он просто показывает мне, что он записал. И
+ * это плашка, которая сама пропадает через секунд 5… у каждой еды такой
+ * маленький карандашик, чтобы я мог нажать и отредактировать эту еду, но не
+ * прямо в плашке, где уже там можно будет и редактировать, и всё делать».
+ *
+ * До этого приём ждал «✓ В дневник» на плашке у кнопки, и не нажатый —
+ * так и не считался. Теперь подтверждение — сам наговор: разобралось —
+ * записано (как у «запиши еду» с «З»). Карандаш открывает приём в «Еде» —
+ * там правится всё, от граммов до времени; «Отменить» убирает приём целиком.
+ */
+internal fun PravkaAccessibilityService.recordFood(mealId: Long) {
+    eButton?.setBusy(true)
+    scope.launch {
+        val outcome = runCatching { app.foodEngine.confirm(mealId) }
+            .getOrElse { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                app.eventLog.add("еда: confirm бросил ${e.javaClass.simpleName}: ${e.message}")
+                ru.zf.pravka.core.FoodEngine.ConfirmOutcome(null, "", e.message ?: "не вышло")
+            }
+        eButton?.setBusy(false)
+        val meal = outcome.meal
+        if (meal == null) {
+            Haptics.error(this@recordFood)
+            eButton?.showResult(
+                "Разобрал, а в дневник не записал — приём ждёт во вкладке «Еда»",
+                ok = false,
+                onOpen = { openFoodTab() },
+            )
+            return@launch
+        }
+        Haptics.success(this@recordFood)
+        val kind = meal.kind.replaceFirstChar { it.uppercase() }
+        eButton?.showResult(
+            summary = if (meal.supplement) "$kind: ${meal.shortList}"
+            else "$kind: ${meal.shortList} · ${meal.kcal} ккал",
+            rows = meal.items.map { item ->
+                DictationPill.ResultRow(
+                    title = item.name,
+                    meta = foodItemMeta(item),
+                    onEdit = { openFoodTab("edit:$mealId") },
+                )
+            },
+            footer = foodDayLine(meal) + (if (outcome.ribbon.isNotBlank()) " · к «${outcome.ribbon}»" else ""),
+            action = DictationPill.ResultAction("Отменить") { forgetFood(mealId) },
+            onOpen = { openFoodTab() },
+        )
+        if (outcome.icuError.isNotBlank()) {
+            app.eventLog.add("еда: в intervals.icu не уехало — ${outcome.icuError}")
+        }
+    }
+}
+
+/**
+ * «Отменить» на итоге: приём уходит целиком — из дня, из ленты, из
+ * intervals.icu. Раз записью был сам наговор, отмена — это «не было», а не
+ * «вернуть на плашку» (плашки подтверждения больше нет).
+ */
+internal fun PravkaAccessibilityService.forgetFood(mealId: Long) {
+    scope.launch {
+        runCatching { app.foodEngine.unconfirm(mealId) }
+        runCatching { app.foodEngine.delete(mealId) }
+        Haptics.success(this@forgetFood)
+        Feedback.toast(this@forgetFood, "Приём убран")
+    }
+}
+
+/** Граммы, калории, БЖУ и дозы одной позиции — строкой под названием. */
+internal fun foodItemMeta(item: ru.zf.pravka.core.MealItem): String = listOfNotNull(
+    if (item.pill) "таблетка" else null,
+    if (item.grams > 0) "${item.grams} г" else null,
+    // У таблетки калорий нет: «0 ккал · Б0 Ж0 У0» занимало бы всю
+    // строку и не говорило бы ничего. Вместо них — дозы.
+    if (item.pill) null else "${item.kcal} ккал",
+    if (item.pill) null else "Б${item.protein} Ж${item.fat} У${item.carbs}",
+    item.micro.takeIf { it.isNotEmpty() }
+        ?.let { ru.zf.pravka.core.Micronutrients.short(it, limit = 3) },
+    item.sureness.takeIf { it.isNotBlank() && it != "точно" && !item.pill },
+).joinToString(" · ")
+
+/** Где день после этого приёма: калории к цели и сколько белка ещё добрать. */
+internal suspend fun PravkaAccessibilityService.foodDayLine(meal: ru.zf.pravka.data.FoodStore.Meal): String {
+    val day = app.foodStore.dayTotal(ru.zf.pravka.data.dayKey(meal.ts))
+    val targets = runCatching { app.settings.foodTargets() }.getOrNull()
+    val target = targets?.kcal ?: 0
+    return buildString {
+        append(
+            when {
+                target > 0 && day.kcal <= target -> "за день ${day.kcal} из $target ккал"
+                target > 0 -> "за день ${day.kcal} ккал, цель $target"
+                else -> "за день ${day.kcal} ккал"
+            }
+        )
+        // Белок — его настоящий рычаг («накачаться впервые в жизни»),
+        // и добирают его сознательно: остаток полезнее суммы.
+        val proteinTarget = targets?.protein ?: 0
+        if (proteinTarget > 0 && day.protein < proteinTarget) {
+            append(" · Б ещё ").append(proteinTarget - day.protein)
+        }
+    }
+}
+
+/**
  * Тарелка на плашке: позиции с граммами и КБЖУ, «✎» правит вес на месте,
  * «✕» убирает позицию, «✓ В дневник» записывает приём. До подтверждения
  * приём в сумму дня не идёт и наружу не уезжает — но на диске он уже есть.
+ * Молчание — тоже «В дневник» (владелец, 26.09.2026: «не нажал ничего =
+ * подтвердил»): отсчёт внизу плашки, «нет» — это «✕» справа внизу.
  */
-internal fun PravkaAccessibilityService.showFoodPlate(mealId: Long) {
+internal fun PravkaAccessibilityService.showFoodPlate(mealId: Long, autoConfirm: Boolean = true) {
     val meal = app.foodStore.byId(mealId) ?: return
     if (meal.items.isEmpty()) return
     val rows = meal.items.mapIndexed { index, item ->
-        BodyButtonController.PlateRow(
-            index = index,
-            title = item.name,
-            meta = listOfNotNull(
-                if (item.grams > 0) "${item.grams} г" else null,
-                "${item.kcal} ккал",
-                "Б${item.protein} Ж${item.fat} У${item.carbs}",
-                item.sureness.takeIf { it.isNotBlank() && it != "точно" },
-            ).joinToString(" · "),
-        )
+        BodyButtonController.PlateRow(index = index, title = item.name, meta = foodItemMeta(item))
     }
     eButton?.showBody(
         header = meal.kind.uppercase(java.util.Locale("ru")) +
             (if (meal.source == "barcode") " · ШТРИХКОД" else ""),
         rows = rows,
-        footer = "${meal.kcal} ккал · Б${meal.protein} Ж${meal.fat} У${meal.carbs}",
+        footer = if (meal.supplement) {
+            ru.zf.pravka.core.Micronutrients.short(meal.micro, limit = 5).ifBlank { "без дозировок" }
+        } else {
+            "${meal.kcal} ккал · Б${meal.protein} Ж${meal.fat} У${meal.carbs}"
+        },
         note = meal.note,
         onEditItem = { index -> editFoodItem(mealId, index) },
         onDropItem = { index -> dropFoodItem(mealId, index) },
         onOpen = { openFoodTab() },
-        onConfirm = { confirmFood(mealId) },
+        onConfirm = { quiet -> confirmFood(mealId, quiet) },
         confirmLabel = "✓ В дневник",
+        key = "meal:$mealId",
+        autoConfirm = autoConfirm,
     )
 }
 
@@ -586,16 +734,20 @@ internal fun PravkaAccessibilityService.dropFoodItem(mealId: Long, index: Int) {
     }
 }
 
-/** «✓ В дневник»: приём в день, а оттуда в ленту и в intervals.icu. */
-internal fun PravkaAccessibilityService.confirmFood(mealId: Long) {
-    eButton?.setBusy(true)
+/**
+ * «✓ В дневник»: приём в день, а оттуда в ленту и в intervals.icu.
+ * [quiet] — плашку сняли снаружи (новая запись, складывание): без спиннера
+ * и пилюли на кнопке, которой сейчас не до них, итог — тостом.
+ */
+internal fun PravkaAccessibilityService.confirmFood(mealId: Long, quiet: Boolean = false) {
+    if (!quiet) eButton?.setBusy(true)
     scope.launch {
         val outcome = runCatching { app.foodEngine.confirm(mealId) }
             .getOrElse { e ->
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 ru.zf.pravka.core.FoodEngine.ConfirmOutcome(null, "", e.message ?: "не вышло")
             }
-        eButton?.setBusy(false)
+        if (!quiet) eButton?.setBusy(false)
         val meal = outcome.meal
         if (meal == null) {
             Haptics.error(this@confirmFood)
@@ -603,29 +755,18 @@ internal fun PravkaAccessibilityService.confirmFood(mealId: Long) {
             return@launch
         }
         Haptics.success(this@confirmFood)
-        val day = app.foodStore.dayTotal(ru.zf.pravka.data.dayKey(meal.ts))
-        val targets = runCatching { app.settings.foodTargets() }.getOrNull()
-        val target = targets?.kcal ?: 0
-        val tail = buildString {
-            append(
-                when {
-                    target > 0 && day.kcal <= target -> "за день ${day.kcal} из $target ккал"
-                    target > 0 -> "за день ${day.kcal} ккал, цель $target"
-                    else -> "за день ${day.kcal} ккал"
-                }
-            )
-            // Белок — его настоящий рычаг («накачаться впервые в жизни»),
-            // и добирают его сознательно: остаток полезнее суммы.
-            val proteinTarget = targets?.protein ?: 0
-            if (proteinTarget > 0 && day.protein < proteinTarget) {
-                append(" · Б ещё ").append(proteinTarget - day.protein)
-            }
+        val tail = foodDayLine(meal)
+        // Горсть таблеток в калориях не измеряется: «✓ 0 ккал» читалось бы
+        // как «ничего не записал».
+        val said = if (meal.supplement) {
+            "✓ " + ru.zf.pravka.core.Micronutrients.short(meal.micro, limit = 4)
+                .ifBlank { "добавки записаны" }
+        } else "✓ ${meal.kcal} ккал · $tail"
+        if (quiet) {
+            Feedback.toast(this@confirmFood, "Записал в дневник: " + said.removePrefix("✓ "))
+        } else {
+            eButton?.showNote(said, "↩︎", onAction = { undoFood(mealId) })
         }
-        eButton?.showNote(
-            "✓ ${meal.kcal} ккал · $tail",
-            "↩︎",
-            onAction = { undoFood(mealId) },
-        )
         if (outcome.icuError.isNotBlank()) {
             app.eventLog.add("еда: в intervals.icu не уехало — ${outcome.icuError}")
         }
@@ -635,7 +776,9 @@ internal fun PravkaAccessibilityService.confirmFood(mealId: Long) {
 /**
  * «↩︎» на записке: приём выходит из дня, а разбор остаётся ждать — плашка
  * возвращается, чтобы поправить и записать заново. Совсем убрать приём
- * можно во вкладке «Еда».
+ * можно во вкладке «Еда». Эта плашка молчанием НЕ соглашается: после
+ * «Отменить» тишина значит «передумал», и через 15 секунд вернуть приём в
+ * день было бы издевательством над кнопкой.
  */
 internal fun PravkaAccessibilityService.undoFood(mealId: Long) {
     scope.launch {
@@ -646,7 +789,7 @@ internal fun PravkaAccessibilityService.undoFood(mealId: Long) {
             return@launch
         }
         Feedback.toast(this@undoFood, "↩︎ Из дня убран, разбор ждёт")
-        showFoodPlate(mealId)
+        showFoodPlate(mealId, autoConfirm = false)
     }
 }
 
@@ -696,6 +839,7 @@ internal fun PravkaAccessibilityService.showFoodMenu() {
             listOf(
                 BodyButtonController.MenuItem(head) { openFoodTab() },
                 BodyButtonController.MenuItem("Записать еду") { onFoodTap() },
+                BodyButtonController.MenuItem("Настройки") { openSettingsTab("FOOD") },
                 BodyButtonController.MenuItem("Закрыть") { eButton?.hideMenu() },
             )
         )

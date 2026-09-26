@@ -11,9 +11,11 @@ import java.util.Locale
  *
  * The owner lost a day of timesheet to a single file going empty, and a
  * timesheet built by voice over months has no source to rebuild it from. So
- * every irreplaceable store gets a copy per clock hour, in the app's own
- * private storage (no permissions, no network, survives an APK update because
- * the signature never changes).
+ * every irreplaceable store gets a copy per clock hour, next to the stores
+ * themselves — in the database folder (`DataRoot`: private storage, or
+ * `Documents/Pravka` once the owner moved it there), so copying the folder
+ * copies the snapshots too. No network, survives an APK update because the
+ * signature never changes.
  *
  * The file NAME is the throttle: a snapshot is `zasechka-2026-08-22-20.json`,
  * so a service restart, five ticks an hour or a phone that was off simply
@@ -54,7 +56,7 @@ internal object Backups {
 
     private val NAME_RE = Regex("""^(.+)-(\d{4}-\d{2}-\d{2})-(\d{2})\.([A-Za-z0-9]+)$""")
 
-    fun dir(context: Context): File = File(context.filesDir, DIR)
+    fun dir(context: Context): File = File(DataRoot.dir(context), DIR)
 
     /** Копии одного стора, свежие сверху. */
     fun snapshotsOf(context: Context, storeName: String): List<File> {
@@ -83,7 +85,7 @@ internal object Backups {
         var made = 0
         var bytes = 0L
         for (name in STORES) {
-            val src = File(context.filesDir, name)
+            val src = File(DataRoot.dir(context), name)
             if (!src.exists() || src.length() == 0L) continue
             val dst = File(dir, name.substringBeforeLast('.') + "-" + stamp + "." + name.substringAfterLast('.', "json"))
             if (dst.exists()) continue  // этот час уже снят

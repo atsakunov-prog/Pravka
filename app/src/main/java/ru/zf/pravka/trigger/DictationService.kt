@@ -17,8 +17,10 @@ import android.os.IBinder
 import java.io.File
 import kotlin.concurrent.thread
 import ru.zf.pravka.R
+import ru.zf.pravka.core.HeadsetPress
 import ru.zf.pravka.data.Recordings
 import ru.zf.pravka.data.WavFile
+import ru.zf.pravka.provider.MicRouting
 
 // Records the microphone to a WAV file while the owner moves between apps
 // (Wispr-style). A foreground service with type "microphone" is the only way
@@ -44,6 +46,22 @@ class DictationService : Service() {
         @Volatile var recording: Boolean = false
             private set
 
+        /**
+         * Пустое удержание микрофона под живую диктовку Google (см. HOLD_*).
+         * Наружу — чтобы «перезагрузить микрофон» знала, есть ли что снимать:
+         * дёргать службу вслепую из фона нельзя, а залипшее удержание — ровно
+         * тот случай, когда владелец жмёт перезагрузку.
+         */
+        @Volatile var holding: Boolean = false
+            private set
+
+        /**
+         * Запись заведена кнопкой гарнитуры и слушает гарнитуру
+         * (`ServiceHeadset.kt`). Срок, а не флаг: служба поднимается
+         * асинхронно, а метка, которую никто не забрал, не должна дожить до
+         * следующего тапа пальцем. Время — `SystemClock.elapsedRealtime`.
+         */
+        @Volatile var headsetUntil: Long = 0L
     }
 
     private var record: AudioRecord? = null
@@ -52,6 +70,8 @@ class DictationService : Service() {
     @Volatile private var active = false
     private lateinit var currentFile: File
     private var wakeLock: android.os.PowerManager.WakeLock? = null
+    /** Канал гарнитуры (SCO) подняли мы — значит, нам же его и опускать на стопе. */
+    private var scoRaised = false
 
     // A partial wake lock keeps the CPU running so dictation keeps recognizing
     // even if the screen turns off / the device tries to doze. Timeout is a
@@ -72,8 +92,6 @@ class DictationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private var holding = false
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> start()
@@ -91,16 +109,25 @@ class DictationService : Service() {
         return START_NOT_STICKY
     }
 
+    // Экран не гаснет, пока микрофон наш: окно-хранитель держит служба
+    // доступности (у неё есть окна), а здесь — единственная точка, через
+    // которую проходит каждый тейк любого режима и обоих движков.
+    private fun keepScreen(on: Boolean) {
+        runCatching { PravkaAccessibilityService.instance?.keepScreenOn(on) }
+    }
+
     private fun holdStart() {
         if (holding) return
         holding = true
         startForegroundWithType(holdStop = true)
         acquireWakeLock()
+        keepScreen(true)
     }
 
     private fun holdStop() {
         holding = false
         releaseWakeLock()
+        keepScreen(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -110,6 +137,7 @@ class DictationService : Service() {
         if (active) return
         startForegroundWithType()
         acquireWakeLock()
+        keepScreen(true)
 
         val recordings = Recordings(this)
         // Cheap directory sweep at the start of a take, never in its hot path.
@@ -132,16 +160,34 @@ class DictationService : Service() {
             stopSelf()
             return
         }
-        // «Когда еду в машине, Правка меня не слышит»: VOICE_RECOGNITION
-        // уходит в Bluetooth-микрофон машины или наушников, а тот далеко и
-        // глухо. Прибиваем запись к встроенному микрофону телефона — всегда,
-        // пока включён тумблер в Общих настройках.
-        if ((application as? ru.zf.pravka.PravkaApp)?.phoneMicOnly != false) {
-            runCatching {
-                val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
-                am.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS)
-                    .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC }
-                    ?.let { recorder.setPreferredDevice(it) }
+        // Куда смотрит микрофон, решает владелец значком между «П» и «З» (тот
+        // же тумблер в Общих). Телефон: «когда еду в машине, Правка меня не
+        // слышит» — VOICE_RECOGNITION сам уходит в Bluetooth машины или
+        // наушников, а тот далеко и глухо, поэтому запись прибита к
+        // встроенному микрофону. Гарнитура: поднимаем канал SCO и прибиваем
+        // запись к ней; гарнитуры среди входов нет — слушаем телефон и пишем
+        // об этом в журнал, а не молчим.
+        val app = application as? ru.zf.pravka.PravkaApp
+        val log = { line: String -> app?.eventLog?.add("диктовка: $line") }
+        // Кнопка гарнитуры — гарнитура, какой бы кружок ни стоял.
+        val fromHeadset = android.os.SystemClock.elapsedRealtime() < headsetUntil
+        headsetUntil = 0L
+        val phoneOnly = HeadsetPress.phoneMic(ownerChosePhone = app?.phoneMicOnly != false, fromHeadset = fromHeadset)
+        if (fromHeadset) log("запись с кнопки гарнитуры — слушаем гарнитуру")
+        runCatching {
+            val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            val headset = if (!phoneOnly) MicRouting.headsetMic(am) else null
+            when {
+                phoneOnly ->
+                    MicRouting.builtinMic(am)?.let { recorder.setPreferredDevice(it) }
+                headset != null -> {
+                    scoRaised = MicRouting.raise(am) { log(it) }
+                    recorder.setPreferredDevice(headset)
+                }
+                else -> {
+                    log("выбрана гарнитура, но её нет среди входов — слушаем телефон")
+                    MicRouting.builtinMic(am)?.let { recorder.setPreferredDevice(it) }
+                }
             }
         }
         val out = WavFile.Writer(currentFile)
@@ -168,6 +214,7 @@ class DictationService : Service() {
 
     private fun stop() {
         releaseWakeLock()
+        keepScreen(false)
         if (active) {
             active = false
             recording = false
@@ -177,6 +224,13 @@ class DictationService : Service() {
             writer?.close()
             record = null
             writer = null
+            if (scoRaised) {
+                scoRaised = false
+                runCatching {
+                    val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                    MicRouting.drop(am) { (application as? ru.zf.pravka.PravkaApp)?.eventLog?.add("диктовка: $it") }
+                }
+            }
             val saved = currentFile.takeIf { it.exists() && it.length() > 44 }
             // Hand the file to the accessibility service (same process) for
             // transcription + insertion. The file is the source of truth: if
@@ -192,6 +246,7 @@ class DictationService : Service() {
     override fun onDestroy() {
         if (active) stop()
         releaseWakeLock()
+        keepScreen(false)
         super.onDestroy()
     }
 

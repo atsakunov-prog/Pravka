@@ -32,7 +32,7 @@ class LearnStore(private val context: Context) {
     private var loaded = false
     private val items = mutableListOf<Suggestion>()
 
-    private fun file() = File(context.filesDir, "pravka-learn-pending.json")
+    private fun file() = File(DataRoot.dir(context), "pravka-learn-pending.json")
 
     private fun ensureLoaded() {
         if (loaded) return

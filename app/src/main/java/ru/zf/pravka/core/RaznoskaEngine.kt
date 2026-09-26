@@ -91,7 +91,7 @@ class RaznoskaEngine(
         }
         runCatching { dictionaryStore.incrementHits(prepared.firedIds) }
         // Опус считается в те же счётчики, что и всё остальное.
-        runCatching { stats.recordAux(split.costUsd, split.tokensIn, split.tokensOut) }
+        runCatching { stats.recordAux(split.costUsd, split.tokensIn, split.tokensOut, route = ru.zf.pravka.data.ModelRoute.RAZNOSKA.key) }
         val open = todoistStore.tasksFlow.value.map { it.content to it.projectId }
         val tasks = split.tasks.map { task ->
             val dup = TaskMatcher.findDuplicate(task, open)

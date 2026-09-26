@@ -8,6 +8,10 @@ import java.io.File
 // (owner's request, Wispr-style): if transcription fails - no network to the
 // transcription stumbled or the app was killed - the .wav stays here and
 // the app can retry it later from the "Записи" screen.
+//
+// В приватной памяти, а не в папке базы (DataRoot): WAV пишется в реальном
+// времени во время тейка, и запись звука не должна ждать FUSE общей памяти.
+// Это очередь на повтор (две недели, 200 МБ), а не база.
 class Recordings(private val context: Context) {
 
     private val dir: File get() = File(context.filesDir, "recordings").apply { mkdirs() }

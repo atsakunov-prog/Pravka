@@ -141,7 +141,7 @@ class PhoneStore(private val context: Context) {
     private val _labelsFlow = MutableStateFlow<Map<String, String>>(emptyMap())
     val labelsFlow: StateFlow<Map<String, String>> = _labelsFlow
 
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
 
     suspend fun sweepState(): SweepState = mutex.withLock {
         ensureLoaded()

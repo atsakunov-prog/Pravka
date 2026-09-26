@@ -160,7 +160,7 @@ class ExerciseBook(private val context: Context?) {
     val fromNotion: Boolean get() = fetchedAt > 0L
 
     /** Кэш живого справочника; null без Android-контекста (JVM-тесты). */
-    private val liveFile: File? get() = context?.let { File(it.filesDir, LIVE_FILE) }
+    private val liveFile: File? get() = context?.let { File(DataRoot.dir(it), LIVE_FILE) }
 
     /**
      * Справочник из готового JSON (формат `exercises.json`) — без Android и

@@ -1,0 +1,37 @@
+<!-- Микрофон: капсула на ножке. Один штриховой стиль с пиктограммами режимов
+     (2dp, круглые концы) — вместо эмодзи 🎙, который выпадал из языка
+     приложения. Цвет задаёт tint. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M12,15a3.5,3.5 0 0,0 3.5,-3.5V6.5a3.5,3.5 0 0,0 -7,0v5A3.5,3.5 0 0,0 12,15z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"/>
+    <path
+        android:pathData="M5.5,11.5a6.5,6.5 0 0,0 13,0"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"/>
+    <path
+        android:pathData="M12,18L12,21"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"/>
+    <path
+        android:pathData="M8.5,21L15.5,21"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000"/>
+</vector>

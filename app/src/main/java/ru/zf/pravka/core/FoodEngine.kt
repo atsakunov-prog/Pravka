@@ -72,7 +72,7 @@ class FoodEngine(
     /**
      * Сказанное (или набранное) → приём пищи на диске, ещё не подтверждённый.
      *
-     * [photo] - снимок тарелки: он копируется в своё место в filesDir и уезжает
+     * [photo] - снимок тарелки: он копируется в своё место в папке базы и уезжает
      * модели вместе со словами. Слова при этом можно не говорить вовсе.
      */
     suspend fun parse(
@@ -105,7 +105,7 @@ class FoodEngine(
             return Result.failure(e)
         }
         runCatching { dictionaryStore.incrementHits(prepared.firedIds) }
-        runCatching { stats.recordAux(parse.costUsd, parse.tokensIn, parse.tokensOut) }
+        runCatching { stats.recordAux(parse.costUsd, parse.tokensIn, parse.tokensOut, route = ru.zf.pravka.data.ModelRoute.FOOD.key) }
         if (parse.items.isEmpty()) {
             eventLog.add("еда: в сказанном еды не нашлось" + noteTail(parse.note))
             return Result.failure(
@@ -163,6 +163,7 @@ class FoodEngine(
         )
         eventLog.add(
             "еда: «${raw.take(60)}» → позиций ${meal.items.size}, ${meal.kcal} ккал, " +
+                (if (meal.micro.isNotEmpty()) Micronutrients.short(meal.micro, limit = 4) + ", " else "") +
                 String.format(java.util.Locale.US, "%.3f", costUsd) + " USD"
         )
         return Parsed(meal, note)
@@ -341,6 +342,10 @@ class FoodEngine(
      */
     private suspend fun annotateRibbon(meal: FoodStore.Meal): String {
         if (!settings.foodToRibbon()) return ""
+        // Горсть таблеток — не приём пищи: записи «Еда» под неё в ленте нет и
+        // быть не должно, а приписка «КБЖУ: 0 ккал» к чужому обеду только
+        // портила бы его строку.
+        if (meal.supplement) return ""
         val from = meal.ts - RIBBON_WINDOW_MS
         val to = meal.ts + RIBBON_WINDOW_MS
         val candidates = zasechkaStore.forRange(from, to)
@@ -457,7 +462,7 @@ class FoodEngine(
 
     private fun noteTail(note: String) = if (note.isBlank()) "" else " ($note)"
 
-    /** Снимок переезжает в filesDir/food под именем по времени приёма. */
+    /** Снимок переезжает в папку базы (food/) под именем по времени приёма. */
     private fun savePhoto(source: File): String {
         val name = "eda-" + System.currentTimeMillis() + ".jpg"
         val target = File(store.photoDir(), name)

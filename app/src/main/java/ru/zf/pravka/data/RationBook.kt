@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import ru.zf.pravka.core.MealItem
+import ru.zf.pravka.core.Micronutrients
 
 // Справочник продуктов: 24 позиции штатного рациона владельца с КБЖУ на 100 г,
 // снятыми с настоящих этикеток (база Notion «Рацион»).
@@ -49,6 +50,15 @@ class RationBook(private val context: Context) {
         val fat100: Double,
         val carbs100: Double,
         val note: String,
+        /**
+         * Витамины и элементы на 100 г, ключами `Micronutrients`. В Notion их
+         * нет: КБЖУ рациона сняты с этикеток, а витаминов на этикетках почти
+         * не пишут. Числа справочные (таблицы состава продуктов) — порядок
+         * величины, и только заметное. Нужны затем, что половина еды
+         * записывается ТАПОМ, без модели, и без них полоски витаминов после
+         * «весь завтрак» стояли бы пустыми.
+         */
+        val micro100: Map<String, Double> = emptyMap(),
     ) {
         /** Позиция дневника на [grams] граммов. */
         fun item(grams: Int): MealItem {
@@ -62,6 +72,7 @@ class RationBook(private val context: Context) {
                 fat = Math.round(fat100 * k).toInt(),
                 carbs = Math.round(carbs100 * k).toInt(),
                 sureness = "точно",
+                micro = Micronutrients.scaleBy(micro100, k),
             )
         }
 
@@ -102,8 +113,20 @@ class RationBook(private val context: Context) {
                     fat100 = p.optDouble("f100", 0.0),
                     carbs100 = p.optDouble("c100", 0.0),
                     note = p.optString("note"),
+                    micro100 = microOf(p.optJSONObject("micro")),
                 )
             )
+        }
+        return out
+    }
+
+    private fun microOf(o: JSONObject?): Map<String, Double> {
+        if (o == null) return emptyMap()
+        val out = LinkedHashMap<String, Double>()
+        for (key in o.keys()) {
+            val n = Micronutrients.byId(key) ?: continue
+            val v = o.optDouble(key, 0.0)
+            if (v > 0) out[n.id] = v
         }
         return out
     }

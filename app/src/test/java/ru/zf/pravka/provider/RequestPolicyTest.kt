@@ -28,8 +28,28 @@ class RequestPolicyTest {
     fun `xhigh и max включают размышления Сонету`() {
         for (e in listOf("xhigh", "max")) {
             assertFalse(e, RequestPolicy.thinkingOff(Settings.MODEL_SONNET, e))
-            assertEquals(8000, RequestPolicy.thinkingHeadroom(Settings.MODEL_SONNET, e))
+            assertEquals(16_000, RequestPolicy.thinkingHeadroom(Settings.MODEL_SONNET, e))
         }
+    }
+
+    @Test
+    fun `бюджет ответа — по длине переменной части, с полом и потолком`() {
+        // 1000 знаков → ~500 токенов, +30 % и 300 — ниже пола 1024.
+        assertEquals(1024, RequestPolicy.maxTokens(Settings.MODEL_SONNET, "", 1000))
+        // 10 000 знаков → 5001 токен → 6501 + 300 = 6801; Опусу плюс 8000 на мысли.
+        assertEquals(6801, RequestPolicy.maxTokens(Settings.MODEL_SONNET, "", 10_000))
+        assertEquals(14_801, RequestPolicy.maxTokens(Settings.MODEL_OPUS, "", 10_000))
+        // Картинка — ещё 1600 токенов на оценку входа.
+        assertEquals(6801 + 1600 * 13 / 10, RequestPolicy.maxTokens(Settings.MODEL_SONNET, "", 10_000, images = 1))
+        assertEquals(16_384, RequestPolicy.maxTokens(Settings.MODEL_OPUS, "", 100_000))
+        // xhigh (засечка, еда): вдвое больше места под мысли, потолок растёт с ним.
+        assertEquals(22_801, RequestPolicy.maxTokens(Settings.MODEL_OPUS, "xhigh", 10_000))
+        assertEquals(24_384, RequestPolicy.maxTokens(Settings.MODEL_OPUS, "xhigh", 100_000))
+        // В батче запас под мысли шире; Сонету без мыслей запаса нет и там.
+        assertEquals(32_000, RequestPolicy.batchThinkingHeadroom(Settings.MODEL_FABLE, "high"))
+        // Разборы на max — 64 тысячи.
+        assertEquals(64_000, RequestPolicy.batchThinkingHeadroom(Settings.MODEL_OPUS, "max"))
+        assertEquals(0, RequestPolicy.batchThinkingHeadroom(Settings.MODEL_SONNET, ""))
     }
 
     @Test
@@ -37,7 +57,7 @@ class RequestPolicyTest {
         for (m in listOf(Settings.MODEL_OPUS, Settings.MODEL_FABLE)) {
             for (e in listOf("", "low", "medium", "high", "xhigh", "max")) {
                 assertFalse("$m/$e", RequestPolicy.thinkingOff(m, e))
-                assertEquals(8000, RequestPolicy.thinkingHeadroom(m, e))
+                assertEquals(if (e == "xhigh" || e == "max") 16_000 else 8000, RequestPolicy.thinkingHeadroom(m, e))
             }
         }
     }

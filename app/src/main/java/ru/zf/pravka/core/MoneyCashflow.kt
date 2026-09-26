@@ -1,0 +1,538 @@
+package ru.zf.pravka.core
+
+import java.time.YearMonth
+
+// ДДС по месяцам и баланс (владелец, 23.09.2026: «давай сделаем cashflow по
+// месяцу классический и баланс»). Всё кодом из журнала, модель не участвует.
+//
+// ДДС — классический, в три раздела, со знаком (приток +, отток −):
+//  - операционный: доходы и траты семьи по группам и категориям (ЗФ — по
+//    тумблеру «+ ЗФ», как во всей вкладке), неразложенное — отдельной строкой;
+//  - финансовый: займы получены и возвращены;
+//  - перемещения — не трата, но деньги двигаются: между своими счетами, между
+//    супругами, пополнение «Плати по миру», снятые наличные. Их нетто должно
+//    быть около нуля; не ноль — значит, часть денег ушла на счёт, выписки
+//    которого в журнале нет. Это показывается, а не прячется.
+//
+// Баланс. Остатков нет НИ В ОДНОЙ выписке (Тиньков, Альфа, МКБ дают только
+// движения — проверено 23.09.2026), поэтому остаток счёта — от ЯКОРЯ:
+// «Доступно …» из пуша Т-Банка, остаток бота «Плати по миру» или число,
+// вписанное владельцем. От якоря остаток на любой день считается движениями
+// журнала вперёд и назад. Счёт без якоря — «остаток неизвестен», а не ноль.
+//
+// Файл без Android: проверяют JVM-тесты.
+object MoneyCashflow {
+
+    enum class Kind { SECTION, GROUP, LINE, TOTAL, NOTE }
+
+    /** Строка таблицы ДДС: значения по месяцам (копейки, со знаком). */
+    /**
+     * Строка таблицы ДДС: значения по месяцам (копейки, со знаком). [pick] —
+     * какие вклады записей её составляют: по нему тап по ячейке показывает,
+     * из чего цифра сложилась в этом месяце (владелец, 23.09.2026).
+     */
+    data class Row(
+        val title: String,
+        val kind: Kind,
+        val values: List<Long>,
+        val key: String = "",
+        val pick: ((String, Long) -> Boolean)? = null,
+    )
+
+    /** Одна операция в разбивке ячейки: запись и её вклад в эту строку (со знаком). */
+    data class Item(val entry: MoneyEntry, val kop: Long, val key: String)
+
+    private fun inMonth(e: MoneyEntry, ym: YearMonth): Boolean {
+        val p = MoneyStats.of(MoneyStats.Kind.MONTH, ym.atDay(1))
+        return e.ts >= p.from && e.ts < p.to
+    }
+
+    /** Прежний вызов: «+ ЗФ» выключен — личное, включён — всё. */
+    fun build(entries: List<MoneyEntry>, months: List<YearMonth>, withZf: Boolean): List<Row> =
+        build(entries, months, MoneyScope.of(withZf))
+
+    /** Вклад записи в ячейку ДДС: категория или строка ВГО («vgo:…»). */
+    private data class Part(val e: MoneyEntry, val key: String, val kop: Long)
+
+    private val VGO_TITLES = linkedMapOf(
+        "vgo:paid_for_zf" to "За ЗФ со своих карт",
+        "vgo:zf_paid_for_me" to "Личное, оплаченное с бизнес-карты",
+        "vgo:owner_paid" to "Оплачено владельцем со своих карт",
+        "vgo:owner_personal" to "Личное владельца с бизнес-карты",
+        "vgo:payout" to "Выплаты владельцу",
+    )
+
+    /**
+     * Во что превращается запись при кнопках [scope]. Сторона — чьи деньги,
+     * назначение — на что; где они расходятся, появляется ВГО. При обеих
+     * кнопках ВГО нет: трата — по назначению, выплата владельцу при книгах
+     * ЗФ исключается с обеих сторон.
+     */
+    private fun partsOf(e: MoneyEntry, scope: MoneyScope): List<Part> {
+        val ez = scope.entityZf(e)
+        val pz = scope.purposeZf(e)
+        val k = e.category
+        val v = e.rubKop
+        return when {
+            scope.both -> when {
+                // Пара «ЗФ заплатила — владелец получил» — внутри, исключается целиком.
+                (k == "inc_zf" || k == "zf_owner" || k == "zf_loan") && e.matchId.isNotBlank() -> emptyList()
+                // Выплата без пары: деньги ушли из ЗФ туда, чего в журнале нет.
+                k == "zf_owner" -> listOf(Part(e, "vgo:payout", v))
+                else -> listOf(Part(e, k, v))
+            }
+            scope.personal -> when {
+                !ez && pz == true -> listOf(Part(e, "vgo:paid_for_zf", v))
+                !ez -> listOf(Part(e, k, v))
+                pz == false -> listOf(Part(e, k, v), Part(e, "vgo:zf_paid_for_me", -v))
+                else -> emptyList()
+            }
+            else -> when {
+                ez && pz == false -> listOf(Part(e, "vgo:owner_personal", v))
+                ez && k == "zf_owner" -> listOf(Part(e, "vgo:payout", v))
+                ez -> listOf(Part(e, k, v))
+                pz == true -> listOf(Part(e, k, v), Part(e, "vgo:owner_paid", -v))
+                // Без книг ЗФ её выплату владельцу видно только с его стороны.
+                k == "inc_zf" && !scope.zfBooks -> listOf(Part(e, "vgo:payout", -v))
+                else -> emptyList()
+            }
+        }
+    }
+
+    fun build(entries: List<MoneyEntry>, months: List<YearMonth>, scope: MoneyScope): List<Row> {
+        val parts = entries.filter { it.live() }.flatMap { partsOf(it, scope) }
+        val byMonth = months.map { ym -> parts.filter { inMonth(it.e, ym) } }
+        fun sum(pick: (String, Long) -> Boolean) = byMonth.map { l -> l.filter { pick(it.key, it.kop) }.sumOf { it.kop } }
+        val rows = mutableListOf<Row>()
+        fun nonZero(v: List<Long>) = v.any { it != 0L }
+        fun add(title: String, kind: Kind, key: String = "", pick: (String, Long) -> Boolean): List<Long> {
+            val v = sum(pick)
+            rows += Row(title, kind, v, key, pick)
+            return v
+        }
+        fun section(title: String) { rows += Row(title, Kind.SECTION, emptyList()) }
+
+        // ---- Операционный ----
+        section("Операционная деятельность")
+        val incomeKeys = MoneyCategories.ALL.filter { it.income }
+        val income = incomeKeys.filter { c -> nonZero(sum { k, _ -> k == c.key }) }
+        val unknownInPick = { k: String, v: Long -> k.isBlank() && v > 0 }
+        val incomeSet = income.map { it.key }.toSet()
+        val inPick = { k: String, v: Long -> k in incomeSet || unknownInPick(k, v) }
+        val inTotal = add("Поступления", Kind.GROUP, pick = inPick)
+        income.forEach { c -> add(c.title, Kind.LINE, c.key) { k, _ -> k == c.key } }
+        if (nonZero(sum(unknownInPick))) add("без категории", Kind.LINE, pick = unknownInPick)
+
+        val groups = listOf(MoneyCategories.G_HOME, MoneyCategories.G_KIDS, MoneyCategories.G_HEALTH, MoneyCategories.G_LIFE, MoneyCategories.G_ZF)
+        val expenseKeys = mutableSetOf<String>()
+        val unknownOutPick = { k: String, v: Long -> k.isBlank() && v < 0 }
+        val groupBlocks = mutableListOf<Pair<String, List<MoneyCategories.Category>>>()
+        for (g in groups) {
+            val cats = MoneyCategories.ALL.filter { it.group == g && !it.income }.filter { c -> nonZero(sum { k, _ -> k == c.key }) }
+            if (cats.isEmpty()) continue
+            expenseKeys += cats.map { it.key }
+            groupBlocks += g to cats
+        }
+        val outPick = { k: String, v: Long -> k in expenseKeys || unknownOutPick(k, v) }
+        val outTotal = add("Выплаты", Kind.GROUP, pick = outPick)
+        for ((g, cats) in groupBlocks) {
+            val keys = cats.map { it.key }.toSet()
+            add(g, Kind.GROUP) { k, _ -> k in keys }
+            // Крупные категории выше: так читают, где деньги.
+            cats.sortedBy { c -> sum { k, _ -> k == c.key }.sum() }.forEach { c -> add(c.title, Kind.LINE, c.key) { k, _ -> k == c.key } }
+        }
+        if (nonZero(sum(unknownOutPick))) add("Без категории", Kind.GROUP, pick = unknownOutPick)
+        val opPick = { k: String, v: Long -> inPick(k, v) || outPick(k, v) }
+        val op = add("Операционный поток", Kind.TOTAL, pick = opPick)
+
+        // ---- Финансовый ----
+        val finPick = { k: String, _: Long -> k == "loan" || k == "zf_loan" }
+        val fin = sum(finPick)
+        // Займ, взятый и отданный в одном месяце, в сумме ноль — но раздел всё равно показываем.
+        if (byMonth.any { l -> l.any { finPick(it.key, it.kop) } }) {
+            section("Финансовая деятельность")
+            if (nonZero(sum { k, v -> k == "loan" && v > 0 })) add("Займы получены", Kind.LINE) { k, v -> k == "loan" && v > 0 }
+            if (nonZero(sum { k, v -> k == "loan" && v < 0 })) add("Займы возвращены", Kind.LINE) { k, v -> k == "loan" && v < 0 }
+            // Займ ЗФ ↔ владелец: у владельца — получен и возвращён, у ЗФ — выдан и погашен.
+            val zfView = !scope.personal
+            if (nonZero(sum { k, v -> k == "zf_loan" && v > 0 })) add(if (zfView) "Займ владельцу погашен" else "Займ от ЗФ получен", Kind.LINE, "zf_loan") { k, v -> k == "zf_loan" && v > 0 }
+            if (nonZero(sum { k, v -> k == "zf_loan" && v < 0 })) add(if (zfView) "Займ владельцу выдан" else "Займ ЗФ возвращён", Kind.LINE, "zf_loan") { k, v -> k == "zf_loan" && v < 0 }
+            add("Финансовый поток", Kind.TOTAL, pick = finPick)
+        }
+
+        // ---- ВГО: между ЗФ и владельцем (только когда включена одна кнопка) ----
+        val vgoPick = { k: String, _: Long -> k.startsWith("vgo:") }
+        val vgoNet = sum(vgoPick)
+        val vgo = VGO_TITLES.filter { (k, _) -> nonZero(sum { kk, _ -> kk == k }) }
+        if (vgo.isNotEmpty()) {
+            section("ВГО: между ЗФ и владельцем")
+            vgo.forEach { (k, t) -> add(t, Kind.LINE, k) { kk, _ -> kk == k } }
+            add("ВГО, нетто", Kind.TOTAL, "vgo", vgoPick)
+        }
+        add("Чистый денежный поток", Kind.TOTAL, "net") { k, v -> opPick(k, v) || finPick(k, v) || vgoPick(k, v) }
+
+        // ---- Перемещения ----
+        // Банкомат и «Плати по миру» — внутри семьи: вторая сторона —
+        // кошелёк и карта Плати, оба в журнале. Нетто «мимо журнала» — только
+        // между своими счетами и супругами: там вторая сторона бывает в банке
+        // без выписки.
+        val moves = listOf("own", "spouse", "plati", "cash").filter { k -> nonZero(sum { kk, _ -> kk == k }) }
+        if (moves.isNotEmpty()) {
+            section("Перемещения (не трата)")
+            moves.forEach { k ->
+                val title = when (k) { "cash" -> "Банкомат (банк ↔ кошелёк)"; "plati" -> "Пополнение Плати по миру"; else -> MoneyCategories.title(k) }
+                add(title, Kind.LINE, k) { kk, _ -> kk == k }
+            }
+            if ("own" in moves || "spouse" in moves) add("Мимо журнала, нетто", Kind.TOTAL, "moves") { k, _ -> k == "own" || k == "spouse" }
+        }
+        return rows
+    }
+
+    /**
+     * Из чего сложилась ячейка [row] в месяце [month]: операции с их вкладом,
+     * крупные первыми. Тот же расчёт, что у таблицы, — цифры сходятся.
+     */
+    fun cellItems(entries: List<MoneyEntry>, month: YearMonth, scope: MoneyScope, row: Row): List<Item> {
+        val pick = row.pick ?: return emptyList()
+        return entries.filter { it.live() && inMonth(it, month) }
+            .flatMap { partsOf(it, scope) }
+            .filter { pick(it.key, it.kop) }
+            .map { Item(it.e, it.kop, it.key) }
+            .sortedByDescending { kotlin.math.abs(it.kop) }
+    }
+
+    // ---- Баланс ----
+
+    /** Якорь остатка: на [ts] на счёте [account] было [kop]. [covers] — записи, уже вошедшие в это число. */
+    data class Anchor(
+        val account: String,
+        val ts: Long,
+        val kop: Long,
+        val source: String,
+        val covers: Set<String> = emptySet(),
+    )
+
+    /**
+     * Счёт записи для баланса: «Т-Банк · Black Premium», «Альфа · …», «МКБ».
+     * У Т-Банка карта — не счёт: *1519 и *0292 (карта Марианны) — один Black
+     * Premium, поэтому пуш с картой находит свой счёт по строкам выписки.
+     */
+    fun accountOf(e: MoneyEntry, cardToAccount: Map<String, String>): String? = when (e.source) {
+        MoneyEntry.Source.TINKOFF -> "Т-Банк · " + stripCard(e.account).ifBlank { "счёт" }
+        MoneyEntry.Source.PUSH -> cardToAccount[BankPush.cardOf(e.account)] ?: "Т-Банк · счёт"
+        MoneyEntry.Source.ALFA -> "Альфа · " + stripCard(e.account).ifBlank { "счёт" }
+        MoneyEntry.Source.MKB -> "МКБ"
+        MoneyEntry.Source.TBIZ -> TBIZ_NAME
+        // Записи со слов владельца на именованный счёт (касса ЗФ) — этот счёт.
+        MoneyEntry.Source.MANUAL -> e.account.takeIf { it.isNotBlank() && it != MoneyEntry.CASH && it != NATASHA_DEBT }
+        else -> null // голос и наличные — не счёт банка; «Плати по миру» — в валюте, отдельно
+    }
+
+    /** Счета ЗФ из файла остатков: строки «счёт ЗФ | Т-Банк · Счет для бизнеса». */
+    fun parseZfAccounts(text: String): Set<String> = text.lines()
+        .map { it.split('|').map { p -> p.trim() } }
+        .filter { it.size >= 2 && it[0].equals("счёт ЗФ", ignoreCase = true) }
+        .map { it[1] }
+        .toSet()
+
+    /** Кошелёк наличных — отдельный счёт баланса. */
+    const val WALLET = "Наличные"
+
+    /**
+     * Движения кошелька: траты и доходы «наличными» (голос, записи со слов
+     * владельца) плюс строки банка «наличные» с обратным знаком — снял в
+     * банкомате 50 000: банк −50 000, кошелёк +50 000; внёс 480 000: наоборот.
+     */
+    fun walletMoves(entries: List<MoneyEntry>): List<MoneyEntry> =
+        entries.filter { !it.draft && !it.dropped && it.replacedBy.isEmpty() }.mapNotNull { e ->
+            when {
+                e.account == MoneyEntry.CASH && !(e.source == MoneyEntry.Source.VOICE && e.matchId.isNotBlank()) -> e
+                e.fromBank && e.category == "cash" -> e.copy(id = e.id + "~кошелёк", rubKop = -e.rubKop)
+                else -> null
+            }
+        }
+
+    /**
+     * Записи со слов владельца (`assets/money_manual.txt`): «дата | сумма |
+     * категория | что | счёт | для кого». Номер — из самой строки: файл,
+     * прочитанный дважды, записи не удваивает.
+     */
+    fun parseManual(text: String, owner: String): List<MoneyEntry> = text.lines()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+        .mapNotNull { line ->
+            val p = line.split('|').map { it.trim() }
+            if (p.size < 4) return@mapNotNull null
+            val day = runCatching {
+                java.time.LocalDate.parse(p[0], java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+            }.getOrNull() ?: return@mapNotNull null
+            val kop = MoneyFormat.parseKop(p[1]) ?: return@mapNotNull null
+            val cat = MoneyCategories.find(p[2])?.key ?: return@mapNotNull null
+            val account = p.getOrNull(4).orEmpty().let { if (it.equals("наличные", true)) MoneyEntry.CASH else it }
+            MoneyEntry(
+                id = "manual-" + BankPush.key(p[0] + "|" + p[1] + "|" + p[3], owner),
+                owner = owner,
+                source = MoneyEntry.Source.MANUAL,
+                ts = day.atTime(12, 0).atZone(BankStatements.MSK).toInstant().toEpochMilli(),
+                timeKnown = false,
+                rubKop = kop,
+                what = p[3],
+                account = account,
+                category = cat,
+                who = MoneyCategories.findWho(p.getOrNull(5).orEmpty()),
+                categoryBy = MoneyEntry.CategoryBy.OWNER,
+            )
+        }
+
+    /**
+     * Записи со слов владельца — версия файла: что добавить и что вычеркнуть.
+     * Номер записи — из её строки, поэтому ПРАВКА строки в файле (3 750 000 →
+     * 3 880 000) давала новый номер, а старая запись оставалась рядом — и
+     * сентябрь задвоился до 8 млн (владелец, 23.09.2026: «какие 8? Не
+     * мудри»). Теперь запись из файла, которой в файле больше нет,
+     * вычёркивается (не удаляется — журнал только растёт).
+     */
+    fun syncManual(existing: List<MoneyEntry>, fresh: List<MoneyEntry>): Pair<List<MoneyEntry>, Set<String>> {
+        val known = existing.map { it.id }.toHashSet()
+        val want = fresh.map { it.id }.toHashSet()
+        val add = fresh.filter { it.id !in known }
+        val stale = existing.filter { it.source == MoneyEntry.Source.MANUAL && it.id.startsWith("manual-") && it.id !in want && !it.dropped }
+            .map { it.id }.toSet()
+        return add to stale
+    }
+
+    private val CARD_SUFFIX = Regex("""\s*\*\d{4}\b""")
+
+    private fun stripCard(account: String) = account.replace(CARD_SUFFIX, "").trim()
+
+    /**
+     * Память последнего расчёта по САМОМУ списку (по ссылке, не по
+     * содержимому): вкладка за одно открытие зовёт раскладку по счетам
+     * восемь-девять раз — для начала и конца трёх месяцев ДДС, баланса и
+     * «Счетов», — а журнал между ними тот же. Владелец, 24.09.2026: «секунды
+     * 3–4 она открывается».
+     */
+    private class Memo<T>(val of: List<MoneyEntry>, val value: T)
+    @Volatile private var cardsMemo: Memo<Map<String, String>>? = null
+    @Volatile private var movesMemo: Memo<Map<String, List<MoneyEntry>>>? = null
+
+    /** Карта Т-Банка → счёт, по строкам выписки: «1519» → «Т-Банк · Black Premium». */
+    fun cardMap(entries: List<MoneyEntry>): Map<String, String> {
+        cardsMemo?.takeIf { it.of === entries }?.let { return it.value }
+        return computeCardMap(entries).also { cardsMemo = Memo(entries, it) }
+    }
+
+    private fun computeCardMap(entries: List<MoneyEntry>): Map<String, String> =
+        entries.filter { it.source == MoneyEntry.Source.TINKOFF || it.source == MoneyEntry.Source.TBIZ }
+            .mapNotNull { e ->
+                BankPush.cardOf(e.account).takeIf { it.isNotEmpty() }?.let {
+                    it to if (e.source == MoneyEntry.Source.TBIZ) TBIZ_NAME else "Т-Банк · " + stripCard(e.account)
+                }
+            }
+            .toMap()
+
+    /** Расчётный счёт ЗФ в Т-Бизнесе — в балансе, «Счетах» и списке счетов ЗФ. */
+    const val TBIZ_NAME = "Т-Бизнес · ЗФ"
+
+    data class Account(
+        val name: String,
+        /** Остаток на [at], копейки; null — якоря нет. */
+        val kop: Long?,
+        val anchor: Anchor?,
+        /** Движение за период ДДС — видно и без якоря. */
+        val flowKop: Long,
+    )
+
+    /**
+     * Остатки всех счетов на момент [at]. Счета — все, где были движения за
+     * [recentFrom]…[at] или есть якорь; движение по счёту — любые записи
+     * (и «не трата» тоже: перевод жене уменьшает остаток так же, как кофе).
+     */
+    /** Займ ЗФ владельцу: у Саши — долг, у ЗФ — требование; вместе — ноль. */
+    const val LOAN_DEBT = "Займ от ЗФ (долг)"
+    const val LOAN_ASSET = "Займ владельцу (у ЗФ)"
+
+    /** Долг Наташе — её доля из выплат ЗФ: переводы «Доля Наташи» его гасят. */
+    const val NATASHA_DEBT = "Долг Наташе (доля ЗФ)"
+
+    /**
+     * Все движения по счетам: банковские строки — своим счетам, наличные и
+     * банкомат — кошельку, выплаты доли Наташи — ещё и долгу ей (с обратным
+     * знаком: заплатил 400 000 — долг меньше на 400 000).
+     */
+    fun movesByAccount(entries: List<MoneyEntry>): Map<String, List<MoneyEntry>> {
+        movesMemo?.takeIf { it.of === entries }?.let { return it.value }
+        return computeMoves(entries).also { movesMemo = Memo(entries, it) }
+    }
+
+    private fun computeMoves(entries: List<MoneyEntry>): Map<String, List<MoneyEntry>> {
+        val cards = cardMap(entries)
+        val usable = entries.filter { !it.draft && !it.dropped && it.replacedBy.isEmpty() }
+        val bank = usable.mapNotNull { e -> accountOf(e, cards)?.let { it to e } }.groupBy({ it.first }, { it.second })
+        val wallet = walletMoves(entries)
+        // Долг Наташе: начисления доли (записи «Долг: начислено» на этот счёт)
+        // минус переводы ей — с нуля, а не от якоря: так он верен в любой месяц.
+        val share = usable.filter { it.category == "zf_share" && !(it.source == MoneyEntry.Source.VOICE && it.matchId.isNotBlank()) }
+            .map { it.copy(id = it.id + "~долг", rubKop = -it.rubKop) } +
+            usable.filter { it.account == NATASHA_DEBT }
+        // Займ — со стороны ЗФ (там он весь): выдала 200 000 — у Саши долг −200 000, у ЗФ требование +200 000.
+        val loan = usable.filter { it.category == "zf_loan" && MoneyMatch.zfSide(it) }
+        // Округления: копилка получила — счёт покупки отдал ту же сумму в ту же
+        // секунду (строки на нём нет). Чей счёт — по покупке рядом по времени.
+        // Покупки — по времени и со своим счётом, посчитанным один раз; округление
+        // ищет свою покупку двоичным поиском, а не перебором всех записей
+        // (1 662 округления × 4 600 строк — это и были секунды открытия).
+        val buys = usable.filter { it.source == MoneyEntry.Source.TINKOFF && it.category != "roundup" && it.rubKop < 0 }
+            .sortedBy { it.ts }
+        val buyTs = LongArray(buys.size) { buys[it].ts }
+        val buyAcc = Array(buys.size) { accountOf(buys[it], cards) }
+        val fallback = buyAcc.filterNotNull().groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+        val rounds = usable.filter { it.category == "roundup" && it.source == MoneyEntry.Source.TINKOFF }.mapNotNull { r ->
+            val own = accountOf(r, cards)
+            var i = java.util.Arrays.binarySearch(buyTs, r.ts).let { if (it >= 0) { var j = it; while (j + 1 < buyTs.size && buyTs[j + 1] == r.ts) j++; j } else -it - 2 }
+            var acc: String? = null
+            while (i >= 0 && buyTs[i] >= r.ts - 10_000) {
+                if (buyAcc[i] != own) { acc = buyAcc[i]; break }
+                i--
+            }
+            (acc ?: fallback ?: return@mapNotNull null) to r.copy(id = r.id + "~округление", rubKop = -r.rubKop)
+        }.groupBy({ it.first }, { it.second })
+        val withRounds = bank.toMutableMap()
+        rounds.forEach { (acc, list) -> withRounds[acc] = withRounds[acc].orEmpty() + list }
+        // Записи со слов владельца на именованный счёт (касса ЗФ) уже здесь: их счёт даёт `accountOf`.
+        return withRounds +
+            (if (wallet.isNotEmpty()) mapOf(WALLET to wallet) else emptyMap()) +
+            (if (share.isNotEmpty()) mapOf(NATASHA_DEBT to share) else emptyMap()) +
+            (if (loan.isNotEmpty()) mapOf(
+                LOAN_DEBT to loan.map { it.copy(id = it.id + "~долг") },
+                LOAN_ASSET to loan.map { it.copy(id = it.id + "~требование", rubKop = -it.rubKop) },
+            ) else emptyMap())
+    }
+
+    /** Остаток счёта на [at] от якоря [anchor] по его движениям [list]; null — якоря нет. */
+    private fun balanceAt(list: List<MoneyEntry>, anchor: Anchor?, at: Long, entries: List<MoneyEntry>): Long? = anchor?.let { a ->
+        // Пуш-якорь и строка выписки, его заменившая, — одна операция, уже в числе.
+        val covered = a.covers + entries.filter { it.id in a.covers }.map { it.replacedBy }.filter { it.isNotEmpty() }
+        val after = list.filter { it.id !in covered && it.ts > a.ts && it.ts <= at }.sumOf { it.rubKop }
+        val before = list.filter { it.id !in covered && it.ts > at && it.ts <= a.ts }.sumOf { it.rubKop }
+        // Операции, вошедшие в якорь, но случившиеся позже [at], вычитаются тоже.
+        val coveredLater = list.filter { it.id in covered && it.ts > at }.sumOf { it.rubKop }
+        a.kop + after - before - coveredLater
+    }
+
+    private fun latestAnchors(anchors: List<Anchor>) = anchors.groupBy { it.account }.mapValues { (_, v) -> v.maxBy { it.ts } }
+
+    fun balances(entries: List<MoneyEntry>, anchors: List<Anchor>, at: Long, recentFrom: Long): List<Account> {
+        val moves = movesByAccount(entries)
+        val latest = latestAnchors(anchors)
+        val names = (moves.filter { (_, l) -> l.any { it.ts in recentFrom..at } }.keys + latest.keys).toSortedSet()
+        return names.map { name ->
+            val list = moves[name].orEmpty()
+            Account(name, balanceAt(list, latest[name], at, entries), latest[name], list.filter { it.ts in recentFrom..at }.sumOf { it.rubKop })
+        }
+    }
+
+    /** Движения счёта [name] за [from]…[to) — для окна «из чего сложилось». Крупные первыми. */
+    fun accountItems(entries: List<MoneyEntry>, name: String, from: Long, to: Long): List<Item> =
+        movesByAccount(entries)[name].orEmpty().filter { it.ts in from until to }
+            .map { Item(it, it.rubKop, it.category) }
+            .sortedByDescending { kotlin.math.abs(it.kop) }
+
+    /** Движение по одному счёту за период: откуда пришло и куда ушло, по категориям. */
+    data class AccountFlow(
+        val name: String,
+        val startKop: Long?,
+        val endKop: Long?,
+        val inKop: Long,
+        val outKop: Long,
+        /** Категория (название) → сумма со знаком, крупные первыми. */
+        val byCategory: List<Pair<String, Long>>,
+    )
+
+    /**
+     * Счета за период [from]…[to): начало, пришло, ушло, конец. Кошелёк и
+     * долг Наташе — такие же счета. Порядок: наличные, Т-Банк, Альфа, МКБ,
+     * долги — как владелец их держит в голове.
+     */
+    fun accountFlows(entries: List<MoneyEntry>, anchors: List<Anchor>, from: Long, to: Long, now: Long): List<AccountFlow> {
+        val moves = movesByAccount(entries)
+        val latest = latestAnchors(anchors)
+        val end = minOf(to - 1, now)
+        val names = (moves.filter { (_, l) -> l.any { it.ts in from until to } }.keys + latest.keys).distinct()
+        fun order(n: String) = when {
+            n == WALLET -> 0
+            n.startsWith("Т-Банк") -> 1
+            n.startsWith("Альфа") -> 2
+            n == "МКБ" -> 3
+            else -> 4
+        }
+        return names.sortedWith(compareBy({ order(it) }, { it })).map { name ->
+            val list = moves[name].orEmpty()
+            val span = list.filter { it.ts in from until to }
+            AccountFlow(
+                name = name,
+                startKop = balanceAt(list, latest[name], from - 1, entries),
+                endKop = balanceAt(list, latest[name], end, entries),
+                inKop = span.filter { it.rubKop > 0 }.sumOf { it.rubKop },
+                outKop = span.filter { it.rubKop < 0 }.sumOf { it.rubKop },
+                byCategory = span.groupBy { MoneyCategories.title(it.category) }
+                    .map { (k, v) -> k to v.sumOf { it.rubKop } }
+                    .sortedByDescending { kotlin.math.abs(it.second) },
+            )
+        }
+    }
+
+    /**
+     * Файл якорей («дата время | счёт | остаток | пояснение») — заводские
+     * остатки из `assets/money_balances.txt`. Строки с ошибкой пропускаются.
+     */
+    fun parseAnchors(text: String): List<Anchor> = text.lines()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("#") }
+        .mapNotNull { line ->
+            val p = line.split('|').map { it.trim() }
+            if (p.size < 3) return@mapNotNull null
+            // С секундами — когда якорь ставится ровно на строку выписки.
+            val ts = listOf("dd.MM.yyyy H:mm:ss", "dd.MM.yyyy H:mm").firstNotNullOfOrNull { f ->
+                runCatching {
+                    java.time.LocalDateTime.parse(p[0], java.time.format.DateTimeFormatter.ofPattern(f))
+                        .atZone(BankStatements.MSK).toInstant().toEpochMilli()
+                }.getOrNull()
+            } ?: return@mapNotNull null
+            val kop = MoneyFormat.parseKop(p[2]) ?: return@mapNotNull null
+            Anchor(p[1], ts, kop, p.getOrNull(3)?.ifBlank { null } ?: "файл остатков")
+        }
+
+    /**
+     * Долг по займам по журналу: получено минус возвращено. «По журналу» —
+     * значит, с первой строки выписки: заём, взятый до неё, здесь не виден,
+     * и экран это говорит.
+     */
+    fun loanDebt(entries: List<MoneyEntry>, at: Long): Long =
+        loansByLender(entries, at).filter { it.second > 0 }.sumOf { it.second }
+
+    /**
+     * Один человек — одна строка займа, как бы его ни писали банки: у Альфы
+     * «Марианна Б.» уходит, а «Белоусова Марианна Евгеньевна» приходит; папа —
+     * «Сергей Ц.» переводом и «Папе» наличными.
+     */
+    private val LENDERS = listOf(
+        Regex("белоусова|марианна б\\.", RegexOption.IGNORE_CASE) to "Марианна Белоусова",
+        Regex("сергей ц\\.|папе|папа", RegexOption.IGNORE_CASE) to "Папа",
+    )
+
+    fun lenderOf(what: String): String = LENDERS.firstOrNull { it.first.containsMatchIn(what) }?.second ?: what.trim()
+
+    /** Займы у людей по заимодавцу: получено минус возвращено; ненулевые, крупные первыми. */
+    fun loansByLender(entries: List<MoneyEntry>, at: Long): List<Pair<String, Long>> =
+        entries.filter { it.live() && it.category == "loan" && it.ts <= at }
+            .groupBy { lenderOf(it.what) }
+            .map { (k, v) -> k to v.sumOf { it.rubKop } }
+            .filter { it.second != 0L }
+            .sortedByDescending { kotlin.math.abs(it.second) }
+
+    /** Счета, которые по природе долг: и с нулём стоят в обязательствах, не в активах. */
+    fun isDebtAccount(name: String): Boolean =
+        name == LOAN_DEBT || name == NATASHA_DEBT || name.contains("кредит", true) || name.contains("Долями") || name.contains("Платинум")
+
+}

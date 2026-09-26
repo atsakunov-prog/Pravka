@@ -25,6 +25,21 @@ object Haptics {
         )
     }
 
+    /**
+     * Щелчок — диск кнопок прошёл очередную четверть под пальцем. Системный
+     * EFFECT_TICK там, где он есть: он короче и суше любого одиночного
+     * импульса; иначе десять миллисекунд.
+     */
+    fun tick(context: Context) {
+        val v = vibrator(context)
+        val effect = if (android.os.Build.VERSION.SDK_INT >= 29) {
+            VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK)
+        } else {
+            VibrationEffect.createOneShot(10, VibrationEffect.DEFAULT_AMPLITUDE)
+        }
+        runCatching { v.vibrate(effect) }
+    }
+
     /** One long buzz - error or refusal. */
     fun error(context: Context) {
         vibrator(context).vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE))

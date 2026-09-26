@@ -15,6 +15,8 @@ import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
+import ru.zf.pravka.core.DiskLook
+import ru.zf.pravka.core.PillGeometry
 import ru.zf.pravka.data.Settings
 
 // Floating button drawn from the accessibility service as a
@@ -31,20 +33,20 @@ class FloatingButtonController(
     private val settings: Settings,
     private val onShortTap: () -> Unit,
     private val onLongPress: () -> Unit,
-) {
+) : RingButton {
 
     companion object {
         private const val LONG_PRESS_MS = 450L
-        private const val TICKER_ALPHA = 0.82f  // near-opaque, owner found 0.6 too see-through
-        private const val TICKER_W_MULT = 6     // width in button-diameters
-        private const val TICKER_LINES = 4      // teleprompter: up to four lines tall
+        // Тикер — бегущая строка в одну линию (владелец, 15.09.2026) в пилюле
+        // диктовки (`DictationPill`, 26.09.2026); ширина — Settings.tickerWidthFlow.
 
         // Editorial palette shared with ui/Theme.kt and the launcher icon:
         // orange circle, paper-white geometric "П"; deep red while recording.
         val ACCENT = 0xFFEA580C.toInt()
         val REC_RED = 0xFFD8342A.toInt()
+        /** Невыбранная кнопка переключателя в меню: серая, чтобы выбранная читалась сразу. */
+        val MUTED = 0xFF6B6660.toInt()
         private val PAPER = 0xFFF7F3EA.toInt()
-        private val GRAY = 0xFF6E6659.toInt()  // ink-soft: the cancel bubble
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -52,13 +54,31 @@ class FloatingButtonController(
     private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
 
     private var buttonSize = dp(Settings.FAB_SIZE_DEFAULT)
-    private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
+    /** Прозрачность кнопок — настройка владельца (слайдер в Общих). */
+    private var fabAlpha = Settings.FAB_ALPHA_DEFAULT
+
+    /**
+     * Лицо кнопки: на диске плотнее настройки. Светлое стекло просвечивало
+     * сквозь полупрозрачную кнопку, и владелец читал это как «диск над
+     * кнопками, а не наоборот» (19.09.2026). Порядок окон тут ни при чём —
+     * дело в плотности; «не мешать приложению» на диске держит тарелка.
+     */
+    private val idleAlpha: Float get() = DiskLook.faceAlpha(fabAlpha, ringMode, faceOverride)
+
+    /** Ползунок «плотность кнопок» из настроек; null — считать по формуле. */
+    private var faceOverride: Float? = null
 
     private var button: FrameLayout? = null
     private var background: GradientDrawable? = null
     private var label: ImageView? = null
     private var recDot: View? = null
     private var progress: ProgressBar? = null
+    /** Секунды до ответа вместо колеса (`core/Countdown.kt`), пока кнопка занята. */
+    // Секунды до ответа — и на кнопке, и в её пилюле: искры и число (версия 3).
+    // Пилюлю лямбда берёт при вызове: отсчёт заговорит, когда кнопка уже собрана.
+    private val replyClock = ButtonCountdown(service).also { c ->
+        c.onLabel = { waiting, label -> pill.countdown(waiting, label) }
+    }
     private var params: WindowManager.LayoutParams? = null
     /** Убрана в ручку: сильнее любых других причин показать кнопку. */
     private var stashed = false
@@ -66,22 +86,77 @@ class FloatingButtonController(
     private var attached = false
     /** Идёт складывание: окно снято на время перехода. */
     private var folded = false
+    /** Диск: окно кнопки целиком за краем экрана — снято из WindowManager (см. `DiskController`). */
+    private var offscreen = false
+
+    /**
+     * Кнопка на диске (`DiskController`): сама себя не ставит и не тащит —
+     * палец крутит диск ([onRingDrag]); цели [followTo] не режутся краем
+     * экрана, а окну разрешено выезжать за край (FLAG_LAYOUT_NO_LIMITS). В
+     * стопке флага нет: там за край кнопка не заходит, и прижимать её к
+     * экрану должен WindowManager, как и раньше.
+     */
+    override var ringMode: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            // Режим сменился — сменилась и плотность лица (DiskLook.faceAlpha);
+            // ставим её ДО ранних возвратов ниже: те про окно, а не про цвет.
+            applyFaceAlpha()
+            val p = params ?: return
+            val noLimits = WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            p.flags = if (value) p.flags or noLimits else p.flags and noLimits.inv()
+            if (attached) button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
+        }
+
+    /**
+     * Громкость голоса — волна в кружке пилюли. Сама кнопка от голоса больше
+     * не пульсирует: владелец (26.09.2026): «уберём дрожание кнопки на диске,
+     * оно немножко отвлекает». Голос виден в одном месте, а не в двух, и
+     * глаз не дёргается к краю экрана на каждом слове.
+     */
+    override fun setLevel(level: Float) {
+        if (recording) pill.setLevel(level)
+    }
+
+    /** Запись кончилась — волна в пилюле снова значок, кнопка в своём размере. */
+    private fun restPulse() {
+        pill.rest()
+        button?.let { v ->
+            v.animate().cancel()
+            v.scaleX = 1f
+            v.scaleY = 1f
+        }
+    }
+
+    /** Поставить лицу текущую плотность — пока кнопка не занята и не пишет. */
+    private fun applyFaceAlpha() {
+        cancelBubble.setAlpha(idleAlpha)
+        if (!busy && !recording) button?.alpha = idleAlpha
+    }
+
+    override var onRingDrag: ((Float, Float, Float, Float, Int) -> Unit)? = null
     private var busy = false
     private var recording = false
     private var visible = false
 
-    // Live-dictation "telegraph": a translucent pill next to the button where
-    // recognized words crawl by (marquee) while the Google engine listens.
     // Long-press menu: a vertical stack of pills beside the button.
     private var menu: android.widget.LinearLayout? = null
     private var menuParams: WindowManager.LayoutParams? = null
     private var menuVisible = false
     private val menuDismiss = Runnable { hideMenu() }
 
-    private var ticker: FrameLayout? = null
-    private var tickerText: android.widget.TextView? = null
-    private var tickerParams: WindowManager.LayoutParams? = null
-    private var tickerVisible = false
+    // Пилюля диктовки (`DictationPill`): живые слова, пока слушает движок, в
+    // одежде Gemini. Слева ✕ — отмена, кружок справа — «отправить» (тот же
+    // тап, что по кнопке), долгое нажатие — переставить.
+    private val pill = DictationPill(
+        service, scope,
+        accent = ACCENT,
+        glyph = R.drawable.ic_mode_pravka,
+        textSizeSp = 17f,
+        screen = { screenSize() },
+        owner = { params?.let { PillGeometry.Box(it.x, it.y, it.x + buttonSize, it.y + buttonSize) } },
+    ).also { it.onSend = { if (!busy) onShortTap() } }
 
     private fun dp(value: Int): Int = (value * density).toInt()
 
@@ -131,7 +206,7 @@ class FloatingButtonController(
     // ---- Elastic pair: trail the "З" button on a rubber band ----
 
     /** Fired while the owner drags THIS button (and once more on drop). */
-    var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
+    override var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
 
     /** Where this button should appear when it shows up (docked over "З"). */
     var pairAnchor: (() -> Pair<Int, Int>?)? = null
@@ -149,7 +224,7 @@ class FloatingButtonController(
      * [applyStash]. Пока несколько мест пишут одно поле, побеждает
      * последнее, и это всегда не то, которого ждёшь.
      */
-    fun setStacked(value: Boolean) {
+    override fun setStacked(value: Boolean) {
         stashed = value
         val v = button ?: return
         if (value) {
@@ -185,7 +260,7 @@ class FloatingButtonController(
      * Исключение — идущая запись: кнопку «стоп» отнимать нельзя даже на
      * полсекунды, иначе останавливать наговор будет нечем.
      */
-    fun setFolded(value: Boolean) {
+    override fun setFolded(value: Boolean) {
         folded = value && !recording
         applyStash()
     }
@@ -203,7 +278,7 @@ class FloatingButtonController(
     private fun applyStash() {
         val v = button ?: return
         val p = params ?: return
-        val want = !stashed && !folded && visible
+        val want = !stashed && !folded && visible && !offscreen
         // Кнопка должна быть видна, а её не видно — чиним вид целиком:
         // видимость, масштаб, альфу. Проверка идёт ДО выхода «нечего
         // менять», и это не перестраховка, а разбор двух подряд промахов.
@@ -233,57 +308,70 @@ class FloatingButtonController(
         }
     }
 
-    fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
+    override fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
-    fun buttonSizePx(): Int = buttonSize
+    override fun onScreen(): Boolean = attached
 
-    private var followTargetX = 0
-    private var followTargetY = 0
-    private var followSettle = false
-    private var following = false
-    private val followStep = object : Runnable {
-        override fun run() {
-            val p = params ?: return
-            val view = button ?: return
-            val dx = followTargetX - p.x
-            val dy = followTargetY - p.y
-            if (abs(dx) <= 2 && abs(dy) <= 2) {
-                p.x = followTargetX
-                p.y = followTargetY
-                runCatching { windowManager.updateViewLayout(view, p) }
-                repositionTickerIfVisible()
-                repositionLearnBadge()
-                following = false
-                if (followSettle) savePosition(view, p)
-                return
-            }
-            p.x += followInc(dx)
-            p.y += followInc(dy)
+    override fun startCountdown(expectMs: Long) = replyClock.start(expectMs)
+
+    override fun stopCountdown() = replyClock.stop()
+
+    /** Диск: окно целиком за краем — снять; показался край — вернуть. Своё поле, не `stashed`. */
+    override fun setOffscreen(value: Boolean) {
+        if (offscreen == value) return
+        offscreen = value
+        applyStash()
+    }
+
+    /** Снять и повесить заново — поверх окон, добавленных позже (тарелка диска). */
+    override fun reattach() {
+        val v = button ?: return
+        val p = params ?: return
+        if (!attached) return
+        runCatching { windowManager.removeView(v) }
+        runCatching { windowManager.addView(v, p) }
+    }
+
+    override fun buttonSizePx(): Int = buttonSize
+
+    /** Каждый кадр догонялки: ручка и шестерёнка едут за бусами (служба ставит refreshHandles). */
+    override var onFrame: (() -> Unit)? = null
+
+    // Пружина вместо «30 % пути за кадр»: у бусины есть скорость, она
+    // догоняет, чуть проскакивает и успокаивается; звено дальше от пальца —
+    // мягче (`core/ChainPhysics.kt`, под тестами).
+    private val follower = ChainFollower(
+        apply = frame@{ x, y ->
+            val p = params ?: return@frame
+            val view = button ?: return@frame
+            p.x = x
+            p.y = y
             runCatching { windowManager.updateViewLayout(view, p) }
             repositionTickerIfVisible()
             repositionLearnBadge()
-            view.postDelayed(this, 16)
-        }
-    }
-
-    // ~30% of the remaining distance per frame - the rubber-band feel.
-    private fun followInc(d: Int): Int {
-        val step = (d * 0.30f).toInt()
-        return if (step != 0) step else if (d > 0) 1 else -1
-    }
+            repositionCancelBubble()
+            onFrame?.invoke()
+        },
+        onSettled = settled@{ settle ->
+            val p = params ?: return@settled
+            val view = button ?: return@settled
+            if (settle) savePosition(view, p)
+        },
+    )
 
     /**
      * Hidden "П" (no text field focused - most of the time) still keeps
      * formation: it snaps to the target silently, so the next time it
      * appears it is already docked where the "З" dropped it. Visible "П"
-     * chases on the rubber band.
+     * chases on the spring; [link] — how many beads away the dragged one is.
      */
-    fun followTo(x: Int, y: Int, settle: Boolean) {
+    override fun followTo(x: Int, y: Int, settle: Boolean, link: Int, snap: Boolean) {
         val view = button ?: return
         val p = params ?: return
         val (w, h) = screenSize()
-        followTargetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
-        followTargetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
+        // На диске цель не режется краем: кнопке положено выезжать за него.
+        val targetX = if (ringMode) x else x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
+        val targetY = if (ringMode) y else y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
         // ОТКРЕПЛЁННОЕ окно догонять нечем: view.post у view без окна не
         // выполняется вовсе — он ждёт следующего прикрепления. Владелец
         // увидел это так: убрал всё в три точки, оттащил их, и через пару
@@ -293,21 +381,23 @@ class FloatingButtonController(
         //
         // Поэтому спрятанная кнопка встаёт на место сразу, без резинки:
         // догонять всё равно некому, а координаты обязаны быть настоящими.
-        if (!attached) {
-            following = false
-            view.removeCallbacks(followStep)
-            p.x = followTargetX
-            p.y = followTargetY
+        //
+        // С [snap] — то же самое для видимой кнопки: диск ведёт свою анимацию
+        // сам и ставит кнопки кадр в кадр, пружина здесь только мешала бы.
+        if (!attached || snap) {
+            follower.stop()
+            p.x = targetX
+            p.y = targetY
             runCatching { windowManager.updateViewLayout(view, p) }
+            if (attached) {
+                repositionTickerIfVisible()
+                repositionLearnBadge()
+                repositionCancelBubble()
+            }
             if (settle) savePosition(view, p)
             return
         }
-        followSettle = settle
-        if (!following) {
-            following = true
-            view.removeCallbacks(followStep)
-            view.post(followStep)
-        }
+        follower.follow(p.x, p.y, targetX, targetY, link, settle)
     }
 
     fun hide() {
@@ -323,13 +413,15 @@ class FloatingButtonController(
     fun setBusy(value: Boolean) {
         busy = value
         label?.visibility = if (value || recording) View.GONE else View.VISIBLE
-        progress?.visibility = if (value) View.VISIBLE else View.GONE
+        replyClock.setBusy(value)
         button?.alpha = if (value) 1f else idleAlpha
     }
 
     /** Recording on: red stop dot, full opacity, pinned visible everywhere. */
     fun setRecording(value: Boolean) {
         recording = value
+        pill.canSend = value
+        if (!value) restPulse()
         background?.setColor(if (value) REC_RED else ACCENT)
         recDot?.visibility = if (value) View.VISIBLE else View.GONE
         label?.visibility = if (value || busy) View.GONE else View.VISIBLE
@@ -337,112 +429,51 @@ class FloatingButtonController(
         if (value) show()
     }
 
-    fun onConfigurationChanged() {
+    override fun onConfigurationChanged() {
         cachedScreen = null  // fold/rotate: re-measure once
         val p = params ?: return
+        if (ringMode) {
+            // На диске место кнопки — дело диска: он перечитает свою позицию
+            // под новый экран и расставит всех. Своё сохранённое место — для стопки.
+            repositionTickerIfVisible()
+            repositionCancelBubble()
+            return
+        }
         scope.launch {
             val (xFraction, yFraction) = settings.fabPosition(positionKey())
             applyPosition(p, xFraction, yFraction)
             button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
             repositionTickerIfVisible()
             repositionLearnBadge()
+            repositionCancelBubble()
         }
     }
 
-    // ---- Live-dictation ticker (telegraph) ----
+    // ---- Пилюля диктовки: живые слова, пока слушает движок ----
 
-    fun showTicker() {
-        if (ticker == null) createTicker()
-        positionTicker()
-        val t = ticker ?: return
-        tickerText?.text = ""
-        lastTickerText = ""
-        lastTickerAt = 0L
-        runCatching { windowManager.updateViewLayout(t, tickerParams) }
-        if (!tickerVisible) {
-            tickerVisible = true
-            t.visibility = View.VISIBLE
-            t.alpha = 0f
-            t.animate().alpha(TICKER_ALPHA).setDuration(180).start()
-        }
-    }
+    fun showTicker() = pill.show()
 
-    // Height that fits TICKER_LINES lines of the ticker text plus padding.
-    private fun tickerHeightPx(): Int = dp(TICKER_LINES * 24 + 16)
+    fun updateTicker(text: String, force: Boolean = false) = pill.update(text, force)
 
-    private var lastTickerText = ""
-    private var lastTickerAt = 0L
+    /** Надпись посередине, пока слов нет: «Саша, секунду…», «Саша, слушаю» (`core/PillHint.kt`). */
+    fun hintTicker(text: String) = pill.hint(text)
 
-    fun updateTicker(text: String) {
-        val tv = tickerText ?: return
-        // Partials arrive several times a second, and each assignment forces a
-        // full measure/layout/draw of a 4-line START-ellipsized TextView. Cap the
-        // refresh rate and skip identical text (the recognizer re-emits the same
-        // partial often), so the overlay stops competing with recognition for the
-        // main thread.
-        val tail = text.takeLast(400)
-        if (tail == lastTickerText) return
-        val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTickerAt < 120) return
-        lastTickerAt = now
-        lastTickerText = tail
-        // Steady, bottom-anchored tail (teleprompter): newest words sit on the
-        // bottom line, older lines ride up and off the top. No per-update
-        // animation (the earlier "settle" nudge read as a jump-down).
-        tv.text = tail
-        // ellipsize=START is silently ignored on a multi-line TextView, so once
-        // the text exceeded 4 lines the view showed the FIRST 4 lines forever -
-        // the newest words never appeared (read as huge recognition lag). Trim
-        // leading lines after layout so the tail is what stays visible.
-        tv.post {
-            val layout = tv.layout ?: return@post
-            if (layout.lineCount > TICKER_LINES) {
-                val cut = layout.getLineStart(layout.lineCount - TICKER_LINES)
-                val current = tv.text?.toString() ?: return@post
-                if (cut in 1 until current.length) tv.text = current.substring(cut)
-            }
-        }
-    }
+    /** Кнопку тащат, экран повернули, настройку крутят — пилюля следом. */
+    fun repositionTickerIfVisible() = pill.reposition()
 
-    /** Keep the pill glued to the button while it's dragged / on rotate. */
-    fun repositionTickerIfVisible() {
-        if (!tickerVisible) return
-        positionTicker()
-        ticker?.let { runCatching { windowManager.updateViewLayout(it, tickerParams) } }
-    }
-
-    fun hideTicker() {
-        val t = ticker ?: return
-        if (!tickerVisible) return
-        tickerVisible = false
-        t.animate().alpha(0f).setDuration(220).withEndAction {
-            // hide -> immediate re-show (dictation ends, CLEAN streaming starts)
-            // cancels this fade; the end action can still run and must not hide
-            // the ticker that showTicker() just brought back.
-            if (!tickerVisible) dropTicker()
-        }.start()
-    }
-
-    // An invisible overlay is NOT free: its window stays in WindowManager, and
-    // every display transition (fold!) relayouts it and waits for it to draw.
-    // A long-lived service held five windows, three of them invisible - the
-    // owner's "fresh install flies, after a day it black-screens for 4-5 s".
-    // So a hidden plate leaves the window manager and is rebuilt on next show.
-    private fun dropTicker() {
-        ticker?.let { runCatching { windowManager.removeView(it) } }
-        ticker = null
-        tickerText = null
-        tickerParams = null
-        lastTickerText = ""
-        lastTickerAt = 0L
-    }
+    fun hideTicker() = pill.hide()
 
     // ---- Long-press menu: colored columns side by side ----
 
     class MenuItem(val label: String, val color: Int, val onClick: () -> Unit)
 
-    fun toggleMenu(groups: List<List<MenuItem>>) {
-        if (menuVisible) hideMenu() else showMenu(groups)
+    /**
+     * [topRow] — ряд кнопок поперёк над колонками (усилие чистки у «П»,
+     * 22.09.2026): три пилюли в строку читаются как один переключатель, а
+     * не как ещё три пункта списка.
+     */
+    fun toggleMenu(groups: List<List<MenuItem>>, topRow: List<MenuItem> = emptyList()) {
+        if (menuVisible) hideMenu() else showMenu(groups, topRow)
     }
 
     fun hideMenu() {
@@ -453,35 +484,34 @@ class FloatingButtonController(
         menu = null
     }
 
-    private fun showMenu(groups: List<List<MenuItem>>) {
+    private fun showMenu(groups: List<List<MenuItem>>, topRow: List<MenuItem> = emptyList()) {
         hideMenu()
         // Editing actions in red, AI actions in orange - two columns side by
         // side (owner's design).
         val row = android.widget.LinearLayout(service).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
         }
+        fun pill(item: MenuItem, padH: Int = dp(16)) = android.widget.TextView(service).apply {
+            text = item.label
+            setTextColor(PAPER)
+            textSize = 15f
+            background = BubbleSkin().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(item.color)
+            }
+            alpha = 0.92f
+            setPadding(padH, dp(9), padH, dp(9))
+            setOnClickListener {
+                hideMenu()
+                item.onClick()
+            }
+        }
         for (group in groups) {
             val column = android.widget.LinearLayout(service).apply {
                 orientation = android.widget.LinearLayout.VERTICAL
             }
             for (item in group) {
-                val pill = android.widget.TextView(service).apply {
-                    text = item.label
-                    setTextColor(PAPER)
-                    textSize = 15f
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(18).toFloat()
-                        setColor(item.color)
-                    }
-                    alpha = 0.92f
-                    val padH = dp(16)
-                    val padV = dp(9)
-                    setPadding(padH, padV, padH, padV)
-                    setOnClickListener {
-                        hideMenu()
-                        item.onClick()
-                    }
-                }
+                val pill = pill(item)
                 val lp = android.widget.LinearLayout.LayoutParams(
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -494,7 +524,26 @@ class FloatingButtonController(
             ).apply { marginEnd = dp(8) }
             row.addView(column, clp)
         }
-        val column = row
+        val column: android.widget.LinearLayout = if (topRow.isEmpty()) row else {
+            android.widget.LinearLayout(service).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                val strip = android.widget.LinearLayout(service).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                }
+                for ((i, item) in topRow.withIndex()) {
+                    strip.addView(pill(item, padH = dp(12)), android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = dp(6); if (i > 0) marginStart = dp(6) })
+                }
+                addView(strip)
+                addView(row)
+            }
+        }
+        // Ширина по факту, а не прикидкой: ряд усилия шире колонки, и меню
+        // слева от кнопки легло бы на неё саму.
+        column.measure(android.view.View.MeasureSpec.UNSPECIFIED, android.view.View.MeasureSpec.UNSPECIFIED)
+        val menuW = column.measuredWidth.coerceAtLeast(dp(180))
         val p = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -509,8 +558,8 @@ class FloatingButtonController(
         if (bp != null) {
             val buttonCenterX = bp.x + buttonSize / 2
             p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + dp(8)
-            else (bp.x - dp(180)).coerceAtLeast(0)
-            p.y = bp.y.coerceIn(0, (h - dp(48) * (groups.maxOfOrNull { it.size } ?: 1)).coerceAtLeast(0))
+            else (bp.x - menuW - dp(8)).coerceAtLeast(0)
+            p.y = bp.y.coerceIn(0, (h - column.measuredHeight).coerceAtLeast(0))
         }
         menuParams = p
         menu = column
@@ -518,76 +567,6 @@ class FloatingButtonController(
         runCatching { windowManager.addView(column, p) }
         // Not modal (the overlay can't see outside taps) - fade away on its own.
         column.postDelayed(menuDismiss, 6000)
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun createTicker() {
-        val pill = FrameLayout(service)
-        pill.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = buttonSize / 2f
-            setColor(ACCENT)
-        }
-        pill.elevation = dp(4).toFloat()
-        val tv = android.widget.TextView(service).apply {
-            setTextColor(PAPER)
-            textSize = 17f
-            maxLines = TICKER_LINES
-            // NOTE: TruncateAt.START is ignored on multi-line TextViews - the
-            // tail-trimming in updateTicker() is what keeps new words visible.
-            gravity = Gravity.BOTTOM or Gravity.START
-            val padH = dp(16)
-            val padV = dp(8)
-            setPadding(padH, padV, padH, padV)
-            setLineSpacing(0f, 1.05f)
-        }
-        tickerText = tv
-        pill.addView(
-            tv,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            ),
-        )
-        val p = WindowManager.LayoutParams(
-            tickerWidthPx(),
-            tickerHeightPx(),
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-        tickerParams = p
-        ticker = pill
-        runCatching { windowManager.addView(pill, p) }
-        pill.visibility = View.GONE
-    }
-
-    // Narrower than the button row (owner: on the cover screen the old 6x
-    // plate ate the whole width): 4.5 diameters, capped so the button and a
-    // margin always stay visible beside it.
-    private fun tickerWidthPx(): Int {
-        val (w, _) = screenSize()
-        return minOf(buttonSize * 9 / 2, (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
-    }
-
-    // Sit the pill beside the button, on the side that has room: button near
-    // the left edge -> ticker to its right, and vice versa.
-    private fun positionTicker() {
-        val bp = params ?: return
-        val tp = tickerParams ?: return
-        val (w, h) = screenSize()
-        val tickerW = tickerWidthPx()
-        val tickerH = tickerHeightPx()
-        val gap = dp(8)
-        tp.width = tickerW
-        tp.height = tickerH
-        // Vertically centre the (taller) pill on the button.
-        tp.y = (bp.y - (tickerH - buttonSize) / 2).coerceIn(0, (h - tickerH).coerceAtLeast(0))
-        val buttonCenterX = bp.x + buttonSize / 2
-        tp.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap
-        else bp.x - tickerW - gap
-        tp.x = tp.x.coerceIn(0, (w - tickerW).coerceAtLeast(0))
     }
 
     // ---- Learn badge: 💡 (есть предложения) / ⭐ (новое правило) above the
@@ -640,74 +619,61 @@ class FloatingButtonController(
     }
 
     // ---- The gray "отмена" bubble, shown only while recording ----
+    // Общая на четыре кнопки (`CancelBubble.kt`): под ближним концом бегущей
+    // строки, а не под кнопкой — под кнопкой стоит «З»; прозрачность — как у
+    // кнопок.
 
-    private var cancelBubble: android.widget.TextView? = null
+    private val cancelBubble = CancelBubble(service, windowManager)
 
     fun showCancelBubble(onCancel: () -> Unit) {
-        hideCancelBubble()
+        pill.onCancel = onCancel
+        // В пилюле свой ✕ — серая «отмена» рядом была бы второй на ту же
+        // запись. Она остаётся там, где пилюли нет (запись Whisper у «П»).
+        if (pill.showing) return
+        cancelBubble.show(idleAlpha, onCancel)
+        repositionCancelBubble()
+    }
+
+    /** Пилюля едет за кнопкой: тащат, догоняет, повернули экран. */
+    fun repositionCancelBubble() {
+        if (!cancelBubble.shown) return
         val bp = params ?: return
-        val pill = android.widget.TextView(service).apply {
-            text = "отмена"
-            setTextColor(PAPER)
-            textSize = 13f
-            background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
-                setColor(GRAY)
-            }
-            alpha = 0.9f
-            setPadding(dp(14), dp(7), dp(14), dp(7))
-            setOnClickListener { onCancel() }
-        }
-        val p = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            val (w, h) = screenSize()
-            // Right under the button, clamped on screen.
-            x = bp.x.coerceIn(0, (w - dp(90)).coerceAtLeast(0))
-            y = (bp.y + buttonSize + dp(8)).coerceAtMost(h - dp(44))
-        }
-        cancelBubble = pill
-        runCatching { windowManager.addView(pill, p) }
+        val (w, h) = screenSize()
+        cancelBubble.place(bp.x, bp.y, buttonSize, w, h)
     }
 
     fun hideCancelBubble() {
-        cancelBubble?.let { runCatching { windowManager.removeView(it) } }
-        cancelBubble = null
+        pill.onCancel = null
+        cancelBubble.hide()
     }
 
     /** How many overlay windows this controller currently holds. */
-    fun windowCount(): Int =
+    override fun windowCount(): Int =
         // Именно attached, а не «button != null»: спрятанная кнопка держит
         // свой View, но окна в WindowManager у неё нет — и в перепись,
         // которой меряют цену складывания, она входить не должна.
-        (if (attached) 1 else 0) + (if (ticker != null) 1 else 0) +
-            (if (learnBadge != null) 1 else 0) + (if (cancelBubble != null) 1 else 0) +
+        (if (attached) 1 else 0) + pill.windowCount +
+            (if (learnBadge != null) 1 else 0) + (if (cancelBubble.shown) 1 else 0) +
             (if (menu != null) 1 else 0)
 
-    fun destroy() {
+    override fun destroy() {
         learnBadge?.let { runCatching { windowManager.removeView(it) } }
         learnBadge = null
         hideCancelBubble()
         hideMenu()
+        follower.stop()
         button?.let { runCatching { windowManager.removeView(it) } }
         attached = false
         button = null
-        ticker?.let { runCatching { windowManager.removeView(it) } }
-        ticker = null
+        pill.destroy()
     }
 
     @SuppressLint("ClickableViewAccessibility")
     private fun create() {
         val container = FrameLayout(service)
-        val bg = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(ACCENT)
-        }
+        // Не плоский кружок: выпуклая клавиша со светом сверху (`BubbleSkin`).
+        // Наследник GradientDrawable — поле и все setColor по состояниям те же.
+        val bg = BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(ACCENT) }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()
@@ -743,6 +709,8 @@ class FloatingButtonController(
             progress,
             FrameLayout.LayoutParams(progressSize, progressSize, Gravity.CENTER),
         )
+        // Секунды до ответа на месте колеса (`ButtonCountdown`), пока кнопка занята.
+        progress?.let { replyClock.attach(container, it) }
 
         val p = WindowManager.LayoutParams(
             buttonSize,
@@ -752,6 +720,7 @@ class FloatingButtonController(
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            if (ringMode) flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             val (w, h) = screenSize()
             x = w - buttonSize
             y = h / 2
@@ -764,8 +733,10 @@ class FloatingButtonController(
 
         scope.launch {
             val (xFraction, yFraction) = settings.fabPosition(positionKey())
-            applyPosition(p, xFraction, yFraction)
-            runCatching { windowManager.updateViewLayout(container, p) }
+            if (!ringMode) {
+                applyPosition(p, xFraction, yFraction)
+                runCatching { windowManager.updateViewLayout(container, p) }
+            }
         }
         scope.launch {
             settings.fabSizeFlow.collect { sizeDp ->
@@ -777,18 +748,30 @@ class FloatingButtonController(
         }
         scope.launch {
             settings.fabAlphaFlow.collect { alpha ->
-                idleAlpha = alpha
-                if (!busy && !recording) container.alpha = idleAlpha
+                fabAlpha = alpha
+                applyFaceAlpha()
+            }
+        }
+        scope.launch {
+            settings.diskFaceAlphaFlow.collect { value ->
+                faceOverride = value
+                applyFaceAlpha()
             }
         }
 
-        container.setOnTouchListener(DragTouchListener())
+        container.setOnTouchListener(DragTouchListener().also { touch = it })
     }
 
     private fun applyPosition(p: WindowManager.LayoutParams, xFraction: Float, yFraction: Float) {
         val (w, h) = screenSize()
         p.x = ((w - buttonSize) * xFraction.coerceIn(0f, 1f)).toInt()
         p.y = ((h - buttonSize) * yFraction.coerceIn(0f, 1f)).toInt()
+    }
+
+    private var touch: DragTouchListener? = null
+
+    override fun cancelGesture() {
+        touch?.swallow()
     }
 
     private inner class DragTouchListener : View.OnTouchListener {
@@ -798,8 +781,21 @@ class FloatingButtonController(
         private var startY = 0
         private var dragging = false
         private var longPressFired = false
+        private var pressed: View? = null
+        /** Диск взяли двумя пальцами — этот жест кнопке больше не принадлежит. */
+        private var swallowed = false
+
+        fun swallow() {
+            if (swallowed) return
+            swallowed = true
+            pressed?.let { v ->
+                v.removeCallbacks(longPressRunnable)
+                BubbleMotion.release(v)
+            }
+        }
         private val longPressRunnable = Runnable {
             longPressFired = true
+            pressed?.let { BubbleMotion.nod(it) }
             // Long press = fix the field; not available while recording.
             if (!busy && !recording) onLongPress()
         }
@@ -818,29 +814,56 @@ class FloatingButtonController(
                     startY = p.y
                     dragging = false
                     longPressFired = false
+                    swallowed = false
+                    pressed = view
                     view.alpha = 1f
+                    // Сжалась под пальцем (`BubbleMotion`): кнопка отвечает на касание телом.
+                    BubbleMotion.press(view)
+                    // Палец лёг — будим движок распознавания, не дожидаясь, чем
+                    // кончится касание: между тапом и «слышу» движок глух, и
+                    // самое дорогое в этом окне можно оплатить прямо сейчас.
+                    service.warmSpeech()
                     view.postDelayed(longPressRunnable, LONG_PRESS_MS)
+                    if (ringMode) onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_DOWN)
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    // Диск слышит каждый сдвиг, и до порога тоже: второй палец
+                    // на стекле делает из касания щипок, и этот палец везёт
+                    // диск. Порог для поворота диск держит свой. Кнопка сама
+                    // на диске не едет — палец крутит диск, диск ставит кнопку.
+                    if (ringMode && !longPressFired) {
+                        onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_MOVE)
+                    }
+                    if (swallowed) return true
                     val dx = event.rawX - startRawX
                     val dy = event.rawY - startRawY
                     if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
                         dragging = true
                         view.removeCallbacks(longPressRunnable)
+                        BubbleMotion.lift(view)
                     }
-                    if (dragging && !longPressFired) {
+                    if (dragging && !longPressFired && !ringMode) {
                         p.x = startX + dx.toInt()
                         p.y = startY + dy.toInt()
                         runCatching { windowManager.updateViewLayout(view, p) }
                         repositionTickerIfVisible()  // the pill rides along
                         repositionLearnBadge()
+                        repositionCancelBubble()
                         onDragged?.invoke(p.x, p.y, false)
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     view.removeCallbacks(longPressRunnable)
+                    pressed = null
+                    BubbleMotion.release(view)
                     if (!busy && !recording) view.alpha = idleAlpha
-                    if (dragging) {
+                    if (ringMode) {
+                        // Диск: отпустили — щёлкнуть по ближайшей четверти; тап остаётся тапом.
+                        onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_UP)
+                        if (!swallowed && !dragging && !longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
+                            if (!busy) onShortTap()
+                        }
+                    } else if (dragging) {
                         savePosition(view, p)
                         onDragged?.invoke(p.x, p.y, true)
                     } else if (!longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {

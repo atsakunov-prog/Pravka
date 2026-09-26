@@ -324,7 +324,7 @@ class SportCoach(
             runCatching { store.addTalk(question, "", 0.0, text) }
             return Answer("", 0.0, text)
         }
-        runCatching { stats.recordAux(answer.costUsd, answer.tokensIn, answer.tokensOut) }
+        runCatching { stats.recordAux(answer.costUsd, answer.tokensIn, answer.tokensOut, route = ru.zf.pravka.data.ModelRoute.BODY.key) }
         runCatching { store.addTalk(question, answer.text, answer.costUsd) }
         eventLog.add(
             "спорт: вопрос «${question.take(50)}» — ответ ${answer.text.length} зн., " +
@@ -353,7 +353,7 @@ class SportCoach(
             eventLog.add("тренер: вопрос не вышел — ${e.message}")
             return Answer("", 0.0, e.message ?: "Не получилось спросить")
         }
-        runCatching { stats.recordAux(answer.costUsd, answer.tokensIn, answer.tokensOut) }
+        runCatching { stats.recordAux(answer.costUsd, answer.tokensIn, answer.tokensOut, route = ru.zf.pravka.data.ModelRoute.BODY_LIGHT.key) }
         runCatching { store.addTalk("[тренер] " + question, answer.text, answer.costUsd) }
         eventLog.add(
             "тренер: «${question.take(50)}» — ${answer.text.length} зн., " +

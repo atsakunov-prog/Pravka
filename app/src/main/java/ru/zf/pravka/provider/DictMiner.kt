@@ -48,8 +48,14 @@ class DictMiner(
 неправильно. Одноразовые ошибки не предлагай.
 
 Ответ — СТРОГО JSON-массив без пояснений и разметки, каждый элемент:
-{"mode": "HARD" | "PROTECT", "from": "...", "to": "...", "note": "..."}
+{"mode": "HARD" | "HINT" | "PROTECT", "from": "...", "to": "...", "note": "..."}
 HARD: from — неправильная форма, to — правильная (автозамена).
+  HARD слепой: он заменит from везде, в любом тексте. Поэтому HARD
+  допустим только для ослышки, которая ни в каком контексте не бывает
+  живым русским словом или именем ("ебитда", "телепромутр"). Если from —
+  существующее слово ("поле", "губ", "провод", "морковь") или реальное
+  имя — HARD не предлагай: такое — только HINT с условием, когда
+  применять ({"mode": "HINT", "from": ..., "to": ..., "note": "когда"}).
 PROTECT: from — правильное редкое слово, to — пустая строка
 (защита от "исправления"). note — краткое обоснование по-русски.
 Не больше 12 предложений. Если ничего повторяющегося нет — верни [].
@@ -95,7 +101,7 @@ $samples
                     root.optJSONObject("usage")?.let { u ->
                         val tIn = u.optInt("input_tokens")
                         val tOut = u.optInt("output_tokens")
-                        stats.recordAux(Pricing.costUsd(choice.model, tIn, tOut), tIn, tOut)
+                        stats.recordAux(Pricing.costUsd(choice.model, tIn, tOut), tIn, tOut, route = ModelRoute.PRAVKA_LEARN.key)
                     }
                     val content = root.getJSONArray("content")
                     val sb = StringBuilder()
@@ -122,7 +128,8 @@ $samples
         for (i in 0 until array.length()) {
             val o = array.optJSONObject(i) ?: continue
             val mode = runCatching { DictMode.valueOf(o.optString("mode")) }.getOrNull() ?: continue
-            if (mode == DictMode.HINT) continue  // miner only proposes HARD/PROTECT
+            // HINT раньше отбрасывался («miner only proposes HARD/PROTECT»); с 16.09
+            // это единственный законный вид для живого слова в from — пропускаем.
             val from = o.optString("from").trim()
             if (from.isEmpty()) continue
             out.add(

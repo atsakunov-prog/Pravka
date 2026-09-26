@@ -26,6 +26,7 @@ import ru.zf.pravka.provider.ClaudeProvider.DictProposal
 import ru.zf.pravka.provider.ClaudeProvider.RuleProposal
 import ru.zf.pravka.provider.ClaudeProvider.OptimizedRules
 import ru.zf.pravka.provider.ClaudeProvider.ZasechkaParse
+import ru.zf.pravka.provider.ClaudeProvider.ZasechkaForkReply
 import ru.zf.pravka.provider.ClaudeProvider.SplitResult
 import ru.zf.pravka.provider.ClaudeProvider.FoodParse
 import ru.zf.pravka.provider.ClaudeProvider.BodyParse
@@ -72,6 +73,9 @@ suspend fun ClaudeProvider.zasechka(
     // Одобренные владельцем правила Засечки: как он говорит о своём
     // времени. Едут в переменный хвост, а не под кэш: список живой.
     ownerRules: String = "",
+    // Микрофон в редакторе записи: какую строку владелец правит. Пусто —
+    // обычный тап по «З».
+    editTargetLine: String = "",
 ): Result<ZasechkaParse> = withContext(Dispatchers.IO) {
     runCatchingApi {
         val apiKey = settings.apiKey()
@@ -239,12 +243,13 @@ delete: {"action": "delete", "entry": 7}
 stop:   {"action": "stop", "end_time": "", "start_offset_min": 0}
 none:   {"action": "none", "say": "..."}
 """.trimIndent() + "\n\n"
+        val editBlock = if (editTargetLine.isBlank()) "" else "\n$editTargetLine\n"
         val varTail = """
 Сейчас: $nowLocal.
 $previousBlock
-Записи сегодня (№ · время · категория · название):
+Записи дня (№ · время · категория · название):
 $todayBlock
-$recentBlock
+$editBlock$recentBlock
 Категории (после тире — пояснение, что сюда относится):
 $categoriesBlock
 
@@ -265,9 +270,10 @@ $raw
         // относится к ним соответственно. И меняются они раз в несколько
         // дней, а фраза приходит десятки раз в день: под кэшем они почти
         // всегда бесплатны, в хвосте платились бы каждый раз.
-        val stableWithOwner =
-            if (ownerRules.isBlank()) stableRules
-            else stableRules + ownerRules + "\n\n"
+        // Не владелец (профиль): кто диктует — первой строкой свода. Свод
+        // написан про Сашу, а лента — того, кто говорит.
+        val stableWithOwner = Prompts.speakerNote(author()) +
+            (if (ownerRules.isBlank()) stableRules else stableRules + ownerRules + "\n\n")
         val parts = Prompts.PromptParts(
             stablePrefix = stableWithOwner,
             cacheStableAlways = true,
@@ -278,6 +284,8 @@ $raw
         val reply = requestWithOneRetry(
             apiKey, choice.model, parts, "", null,
             effortOverride = choice.effort,
+            routeKey = ModelRoute.ZASECHKA.key,
+            paceChars = raw.length,
         )
         parseZasechka(reply.text).copy(
             costUsd = costUsd(choice.model, reply),
@@ -288,149 +296,54 @@ $raw
 }
 
 /**
- * Разбор поправок Засечки в правила — то же самое, что «Обучить» в
- * Правке, только предмет другой: не как владелец пишет, а что у него
- * значат слова про время. «Созвон» — это «Работа: звонки», а не «Звонки».
- * «Разбор почты» он кладёт в «Операционку».
- *
- * Опус, а не Сонет: обобщать поправки в правило — суждение, а не
- * механика. Возвращает предложения; в промпт они попадут только после
- * «да» владельца.
+ * Развилка Засечки (26.09.2026): лента, мысль к текущему делу, еда или дела —
+ * до разбора Опусом. Сонет на low без размышлений: ответ — одно слово в JSON,
+ * и секунда здесь дороже глубины. Ответ читает `ZasechkaIntent.fromModel`;
+ * сырой текст уходит наверх, чтобы непрочитанный ответ был виден в журнале
+ * целиком, а не общей фразой. [context] — «Сейчас: … Идёт: …», хвост после
+ * {NOW}: правила над ним стабильны и стоят под кэшем.
  */
-/**
- * Свод правил для разбора поправок — стабильная часть, одна на все заходы.
- */
-private fun ClaudeProvider.zasechkaRulesSystem(categories: List<String>, existingRules: List<String>): String {
-    val existingBlock =
-        if (existingRules.isEmpty()) "(правил пока нет)"
-        else existingRules.joinToString("\n") { "- $it" }
-    return """
-Ты разбираешь, где секретарь тайм-трекера расходится с владельцем, и
-превращаешь расхождения в правила.
-
-Категории владельца:
-${categories.joinToString("\n") { "- $it" }}
-
-Уже действующие правила (не повторяй их и не противоречь им):
-$existingBlock
-
-Твоя работа — найти ЗАКОНОМЕРНОСТИ. Смотри на всё сразу:
-- ВРЕМЯ. Сказал «с 18:30 до 18:50», а записалось только начало и дело
-  тянется дальше? Назвал длительность («минут двадцать»), а её нет в
-  записи? Это самый частый и самый дорогой промах: он растягивает дело на
-  полдня, и владелец его почти не правит — привыкает.
-- КАТЕГОРИЯ. Одни и те же слова раз за разом уезжают не туда.
-- НАЗВАНИЕ. Он говорит одно, а записывается обобщённое или наоборот.
-- КЛИЕНТ. Имя названо во фразе, а колонка пуста.
-
-Как писать правило:
-- Оно имеет смысл, только если сработает СНОВА: за ним привычка речи или
-  устойчивый выбор, а не один случай. Один случай — не закономерность,
-  два-три похожих — уже да.
-- Повелительно, коротко, одной фразой: «Если названы и начало, и конец —
-  ставь обе границы, не только начало», «Созвон и планёрку клади в
-  «Работа: звонки», а не в «Звонки»».
-- Ничего не выдумывай: только то, что видно в материале.
-- Закономерностей не нашлось — верни пустой список. Это нормальный ответ,
-  он лучше, чем правило из ничего.
-
-Ответ — СТРОГО JSON: {"rules": ["...", "..."]}
-Не больше пяти правил за раз.
-""".trimIndent()
-}
-
-/** Сам материал: что говорил и что из этого вышло. */
-private fun ClaudeProvider.zasechkaRulesUser(spoken: List<String>, corrections: List<String>): String {
-    val spokenBlock =
-        if (spoken.isEmpty()) "(новых надиктовок нет)" else spoken.joinToString("\n")
-    val fixesBlock =
-        if (corrections.isEmpty()) "(руками ничего не правил)"
-        else corrections.joinToString("\n")
-    return """
-ЧТО ВЛАДЕЛЕЦ ГОВОРИЛ И ЧТО ИЗ ЭТОГО ПОЛУЧИЛОСЬ.
-Это главный материал. Читай пару целиком: во фразе может быть сказано
-больше, чем попало в запись, — и вот это и есть промах.
-$spokenBlock
-
-ГДЕ ОН ВМЕШАЛСЯ РУКАМИ (сигнал сильнее: тут он сказал прямо):
-$fixesBlock
-""".trimIndent()
-}
-
-private fun ClaudeProvider.parseRulesJson(raw: String): List<String> {
-    var text = raw.trim()
-    if (text.startsWith("```")) {
-        text = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-    }
-    val start = text.indexOf('{')
-    val end = text.lastIndexOf('}')
-    if (start < 0 || end <= start) return emptyList()
-    val o = runCatching { JSONObject(text.substring(start, end + 1)) }.getOrNull()
-        ?: return emptyList()
-    val array = o.optJSONArray("rules") ?: return emptyList()
-    return (0 until array.length())
-        .mapNotNull { array.optString(it).trim().takeIf { r -> r.isNotEmpty() } }
-        .take(5)
-}
-
-/**
- * Разбор поправок Засечки в правила — синхронно, по кнопке: владелец
- * стоит над экраном и ждёт ответа. Ночью то же самое уходит батчем
- * (вдвое дешевле, см. [zasechkaRulesSubmit]).
- *
- * Опус, а не Сонет: обобщать поправки в правило — суждение, а не
- * механика. Возвращает предложения; в промпт они попадут только после
- * «да» владельца.
- */
-suspend fun ClaudeProvider.zasechkaRules(
-    spoken: List<String>,
-    corrections: List<String>,
-    categories: List<String>,
-    existingRules: List<String>,
-): Result<List<String>> = withContext(Dispatchers.IO) {
-    runCatchingApi {
-        val apiKey = settings.apiKey()
-        if (apiKey.isBlank()) throw ApiException("Не задан API-ключ.")
-        if (spoken.isEmpty() && corrections.isEmpty()) return@runCatchingApi emptyList()
-        val prompt = zasechkaRulesSystem(categories, existingRules) + "\n\n" +
-            zasechkaRulesUser(spoken, corrections)
-        val parts = Prompts.PromptParts(stablePrefix = "", dictPart = prompt, afterInput = "")
-        val choice = settings.modelChoice(ModelRoute.ZASECHKA_RULES)
-        val reply = requestWithOneRetry(
-            apiKey, choice.model, parts, "", null,
-            effortOverride = choice.effort,
-        )
-        parseRulesJson(reply.text)
-    }
-}
-
-/**
- * То же самое, но БАТЧЕМ: ночью никто не ждёт ответа, а батч стоит
- * половину. Возвращает id заявки — ответ забирается позже
- * [zasechkaRulesCollect].
- */
-suspend fun ClaudeProvider.zasechkaRulesSubmit(
-    spoken: List<String>,
-    corrections: List<String>,
-    categories: List<String>,
-    existingRules: List<String>,
-): Result<String> {
-    val choice = settings.modelChoice(ModelRoute.ZASECHKA_RULES)
-    return submitBatch(
-        system = zasechkaRulesSystem(categories, existingRules),
-        user = zasechkaRulesUser(spoken, corrections),
-        model = choice.model,
-        maxTokens = 2000,
-        effort = choice.effort,
-    )
-}
-
-/** Ответ ночного батча; null — ещё считается, спросим на следующем тике. */
-suspend fun ClaudeProvider.zasechkaRulesCollect(batchId: String): Result<Pair<List<String>, BatchAnswer>?> =
-    // Модель здесь нужна только для цены. Заявка ушла ночью, а к утру
-    // владелец мог переставить настройку — тогда цена посчитается по новой.
-    batchAnswer(batchId, settings.modelChoice(ModelRoute.ZASECHKA_RULES).model).map { answer ->
-        if (answer == null) null else parseRulesJson(answer.text) to answer
+suspend fun ClaudeProvider.zasechkaFork(raw: String, context: String): Result<ZasechkaForkReply> =
+    withContext(Dispatchers.IO) {
+        runCatchingApi {
+            val apiKey = settings.apiKey()
+            if (apiKey.isBlank()) {
+                throw ApiException("Не задан API-ключ. Открой Правку и вставь ключ в настройках.")
+            }
+            require(raw.isNotBlank()) { "Пустая фраза — развилке нечего решать." }
+            val template = Prompts.speakerNote(author()) + promptStore.effective(PromptStore.PromptId.ZASECHKA_FORK)
+            val cut = template.indexOf("{NOW}")
+            val head = if (cut > 0) template.substring(0, cut) else ""
+            var tail = (if (cut > 0) template.substring(cut) else template).replace("{NOW}", context)
+            tail = if (tail.contains(Prompts.PLACEHOLDER_INPUT)) {
+                tail.replace(Prompts.PLACEHOLDER_INPUT, raw)
+            } else {
+                // Владелец потерял {INPUT} в «Промптах»: фраза дописывается в
+                // конец, а не теряется — то же правило, что у Разноски.
+                tail.trimEnd() + "\n\nФраза:\n" + raw
+            }
+            val parts = Prompts.PromptParts(
+                stablePrefix = head,
+                dictPart = tail,
+                afterInput = "",
+                cacheStableAlways = head.isNotBlank(),
+            )
+            val started = System.currentTimeMillis()
+            val choice = settings.modelChoice(ModelRoute.ZASECHKA_FORK)
+            val reply = requestWithOneRetry(
+                apiKey, choice.model, parts, "", null,
+                effortOverride = choice.effort,
+                routeKey = ModelRoute.ZASECHKA_FORK.key,
+                paceChars = raw.length,
+            )
+            ZasechkaForkReply(
+                raw = reply.text,
+                costUsd = costUsd(choice.model, reply),
+                tokensIn = reply.inputTokens + reply.cacheWriteTokens + reply.cacheReadTokens,
+                tokensOut = reply.outputTokens,
+                latencyMs = System.currentTimeMillis() - started,
+            )
+        }
     }
 
 private fun ClaudeProvider.parseZasechka(raw: String): ZasechkaParse {

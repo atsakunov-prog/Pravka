@@ -12,6 +12,10 @@ import java.io.File
 //
 // Saves are queued on DiskWriter: they used to run on the main thread, ~50 write
 // +rename pairs a minute, in the same callbacks that carry recognized audio.
+//
+// Лежит в приватной памяти, а не в папке базы (DataRoot): это не данные, а
+// страховка текущего тейка, и пятьдесят записей в минуту через FUSE общей
+// памяти — лишняя работа ровно там, где ловятся слова.
 class LiveDraft(private val context: Context) {
 
     private val file: File by lazy { File(context.filesDir, "live_draft.txt") }

@@ -18,4 +18,7 @@ object ModeGlyphs {
     // Зелёная кнопка теперь ЕДА (владелец: «кнопка спорта не нужна, спорт
     // наговариваю во вкладке») — буква «Е», в режиме иконок — тарелка.
     fun body() = if (icons) R.drawable.ic_mode_food_btn else R.drawable.ic_efab_glyph
+
+    // Деньги (23.09.2026): брусковый «₽», в режиме иконок — тот же рубль штрихом.
+    fun money() = if (icons) R.drawable.ic_mode_money_btn else R.drawable.ic_money_glyph
 }

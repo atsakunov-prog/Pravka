@@ -17,6 +17,9 @@ import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import ru.zf.pravka.R
+import ru.zf.pravka.core.AutoConfirm
+import ru.zf.pravka.core.DiskLook
+import ru.zf.pravka.core.PillGeometry
 import ru.zf.pravka.data.Settings
 
 // Тело: четвёртая кнопка, «Т». Тот же TYPE_ACCESSIBILITY_OVERLAY, что у «П»,
@@ -44,13 +47,12 @@ class BodyButtonController(
     private val settings: Settings,
     private val onShortTap: () -> Unit,
     private val onLongPress: () -> Unit,
-) {
+) : RingButton {
 
     companion object {
         private const val LONG_PRESS_MS = 450L
-        private const val TICKER_ALPHA = 0.86f
-        private const val TICKER_W_MULT = 6
-        private const val TICKER_LINES = 3
+        // Тикер — та же пилюля диктовки, что у «П» (`DictationPill`); ширина —
+        // настройка владельца, Settings.tickerWidthFlow.
         // Сколько позиций показывать в плашке: остальное — в приложении.
         private const val PLATE_ROWS = 6
 
@@ -74,7 +76,19 @@ class BodyButtonController(
     private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
 
     private var buttonSize = dp(Settings.FAB_SIZE_DEFAULT)
-    private var idleAlpha = Settings.FAB_ALPHA_DEFAULT
+    /** Прозрачность кнопок — настройка владельца (слайдер в Общих). */
+    private var fabAlpha = Settings.FAB_ALPHA_DEFAULT
+
+    /**
+     * Лицо кнопки: на диске плотнее настройки. Светлое стекло просвечивало
+     * сквозь полупрозрачную кнопку, и владелец читал это как «диск над
+     * кнопками, а не наоборот» (19.09.2026). Порядок окон тут ни при чём —
+     * дело в плотности; «не мешать приложению» на диске держит тарелка.
+     */
+    private val idleAlpha: Float get() = DiskLook.faceAlpha(fabAlpha, ringMode, faceOverride)
+
+    /** Ползунок «плотность кнопок» из настроек; null — считать по формуле. */
+    private var faceOverride: Float? = null
 
     private var button: FrameLayout? = null
     private var background: GradientDrawable? = null
@@ -82,6 +96,12 @@ class BodyButtonController(
     private var recDot: View? = null
     private var countdown: TextView? = null
     private var progress: ProgressBar? = null
+    /** Секунды до ответа вместо колеса (`core/Countdown.kt`), пока кнопка занята. */
+    // Секунды до ответа — и на кнопке, и в её пилюле: искры и число (версия 3).
+    // Пилюлю лямбда берёт при вызове: отсчёт заговорит, когда кнопка уже собрана.
+    private val replyClock = ButtonCountdown(service).also { c ->
+        c.onLabel = { waiting, label -> pill.countdown(waiting, label) }
+    }
     private var params: WindowManager.LayoutParams? = null
     /** Убрана в ручку: сильнее любых других причин показать кнопку. */
     private var stashed = false
@@ -89,15 +109,75 @@ class BodyButtonController(
     private var attached = false
     /** Идёт складывание: окно снято на время перехода. */
     private var folded = false
+    /** Диск: окно кнопки целиком за краем экрана — снято из WindowManager (см. `DiskController`). */
+    private var offscreen = false
+
+    /**
+     * Кнопка на диске (`DiskController`): сама себя не ставит и не тащит —
+     * палец крутит диск ([onRingDrag]); цели [followTo] не режутся краем
+     * экрана, а окну разрешено выезжать за край (FLAG_LAYOUT_NO_LIMITS). В
+     * стопке флага нет: там за край кнопка не заходит, и прижимать её к
+     * экрану должен WindowManager, как и раньше.
+     */
+    override var ringMode: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            // Режим сменился — сменилась и плотность лица (DiskLook.faceAlpha);
+            // ставим её ДО ранних возвратов ниже: те про окно, а не про цвет.
+            applyFaceAlpha()
+            val p = params ?: return
+            val noLimits = WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            p.flags = if (value) p.flags or noLimits else p.flags and noLimits.inv()
+            if (attached) button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
+        }
+
+    /**
+     * Громкость голоса — волна в кружке пилюли. Сама кнопка от голоса больше
+     * не пульсирует: владелец (26.09.2026): «уберём дрожание кнопки на диске,
+     * оно немножко отвлекает». Голос виден в одном месте, а не в двух, и
+     * глаз не дёргается к краю экрана на каждом слове.
+     */
+    override fun setLevel(level: Float) {
+        if (recording) pill.setLevel(level)
+    }
+
+    /** Запись кончилась — волна в пилюле снова значок, кнопка в своём размере. */
+    private fun restPulse() {
+        pill.rest()
+        button?.let { v ->
+            v.animate().cancel()
+            v.scaleX = 1f
+            v.scaleY = 1f
+        }
+    }
+
+    /** Поставить лицу текущую плотность — пока кнопка не занята и не пишет. */
+    private fun applyFaceAlpha() {
+        cancelBubble.setAlpha(idleAlpha)
+        if (!busy && !recording) button?.alpha = idleAlpha
+    }
+
+    override var onRingDrag: ((Float, Float, Float, Float, Int) -> Unit)? = null
     private var busy = false
     private var recording = false
     private var enabled = false
     private var collectorsStarted = false
 
-    private var ticker: FrameLayout? = null
-    private var tickerText: TextView? = null
-    private var tickerParams: WindowManager.LayoutParams? = null
-    private var tickerVisible = false
+    // Пилюля диктовки (`DictationPill`): живые слова, пока идёт наговор, —
+    // снизу посередине, в одежде Gemini. Тап — микрофон молчит,
+    // дальше набором.
+    private val pill = DictationPill(
+        service, scope,
+        accent = INK,
+        glyph = R.drawable.ic_mode_food,
+        textSizeSp = 16f,
+        screen = { screenSize() },
+        owner = { params?.let { PillGeometry.Box(it.x, it.y, it.x + buttonSize, it.y + buttonSize) } },
+    ).also {
+        it.onTap = { onTickerTap?.invoke() }
+        it.onSend = { if (!busy) onShortTap() }
+    }
 
     private fun dp(value: Int): Int = (value * density).toInt()
 
@@ -121,9 +201,11 @@ class BodyButtonController(
             applyStash()
         } else {
             hideTicker()
-            hidePlate()
             hideMenu()
             hideInput()
+            settlePlate()
+            hideCancelBubble()
+            follower.stop()
             button?.let { runCatching { windowManager.removeView(it) } }
             attached = false
             button = null
@@ -133,12 +215,14 @@ class BodyButtonController(
 
     fun setBusy(value: Boolean) {
         busy = value
-        progress?.visibility = if (value) View.VISIBLE else View.GONE
+        replyClock.setBusy(value)
         applyFace()
     }
 
     fun setRecording(value: Boolean) {
         recording = value
+        pill.canSend = value
+        if (!value) restPulse()
         recDot?.visibility = if (value) View.VISIBLE else View.GONE
         applyFace()
     }
@@ -200,20 +284,28 @@ class BodyButtonController(
         }
     }
 
-    fun onConfigurationChanged() {
+    override fun onConfigurationChanged() {
         cachedScreen = null
         val p = params ?: return
+        if (ringMode) {
+            // На диске место кнопки — дело диска: он перечитает свою позицию
+            // под новый экран и расставит всех. Своё сохранённое место — для стопки.
+            repositionTickerIfVisible()
+            repositionCancelBubble()
+            return
+        }
         scope.launch {
             val (xFraction, yFraction) = settings.eFabPosition(positionKey())
             applyPosition(p, xFraction, yFraction)
             button?.let { runCatching { windowManager.updateViewLayout(it, p) } }
             repositionTickerIfVisible()
+            repositionCancelBubble()
         }
     }
 
     // ---- Связка трёх кнопок: эта может ехать за другой на резинке ----
 
-    var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
+    override var onDragged: ((x: Int, y: Int, dropped: Boolean) -> Unit)? = null
 
 
     /**
@@ -228,7 +320,7 @@ class BodyButtonController(
      * [applyStash]. Пока несколько мест пишут одно поле, побеждает
      * последнее, и это всегда не то, которого ждёшь.
      */
-    fun setStacked(value: Boolean) {
+    override fun setStacked(value: Boolean) {
         stashed = value
         val v = button ?: return
         if (value) {
@@ -264,7 +356,7 @@ class BodyButtonController(
      * Исключение — идущая запись: кнопку «стоп» отнимать нельзя даже на
      * полсекунды, иначе останавливать наговор будет нечем.
      */
-    fun setFolded(value: Boolean) {
+    override fun setFolded(value: Boolean) {
         folded = value && !recording
         applyStash()
     }
@@ -282,7 +374,7 @@ class BodyButtonController(
     private fun applyStash() {
         val v = button ?: return
         val p = params ?: return
-        val want = !stashed && !folded && enabled
+        val want = !stashed && !folded && enabled && !offscreen
         // Кнопка должна быть видна, а её не видно — чиним вид целиком:
         // видимость, масштаб, альфу. Проверка идёт ДО выхода «нечего
         // менять», и это не перестраховка, а разбор двух подряд промахов.
@@ -312,50 +404,66 @@ class BodyButtonController(
         }
     }
 
-    fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
+    override fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }
 
-    fun buttonSizePx(): Int = buttonSize
+    override fun onScreen(): Boolean = attached
 
-    private var followTargetX = 0
-    private var followTargetY = 0
-    private var followSettle = false
-    private var following = false
-    private val followStep = object : Runnable {
-        override fun run() {
-            val p = params ?: return
-            val view = button ?: return
-            val dx = followTargetX - p.x
-            val dy = followTargetY - p.y
-            if (abs(dx) <= 2 && abs(dy) <= 2) {
-                p.x = followTargetX
-                p.y = followTargetY
-                runCatching { windowManager.updateViewLayout(view, p) }
-                repositionTickerIfVisible()
-                following = false
-                if (followSettle) savePosition(view, p)
-                return
-            }
-            p.x += followInc(dx)
-            p.y += followInc(dy)
+    override fun startCountdown(expectMs: Long) = replyClock.start(expectMs)
+
+    override fun stopCountdown() = replyClock.stop()
+
+    /** Диск: окно целиком за краем — снять; показался край — вернуть. Своё поле, не `stashed`. */
+    override fun setOffscreen(value: Boolean) {
+        if (offscreen == value) return
+        offscreen = value
+        applyStash()
+    }
+
+    /** Снять и повесить заново — поверх окон, добавленных позже (тарелка диска). */
+    override fun reattach() {
+        val v = button ?: return
+        val p = params ?: return
+        if (!attached) return
+        runCatching { windowManager.removeView(v) }
+        runCatching { windowManager.addView(v, p) }
+    }
+
+    override fun buttonSizePx(): Int = buttonSize
+
+    /** Каждый кадр догонялки: ручка и шестерёнка едут за бусами (служба ставит refreshHandles). */
+    override var onFrame: (() -> Unit)? = null
+
+    // Пружина вместо «30 % пути за кадр»: у бусины есть скорость, она
+    // догоняет, чуть проскакивает и успокаивается; звено дальше от пальца —
+    // мягче (`core/ChainPhysics.kt`, под тестами). Цикл общий на четыре
+    // кнопки — `ChainFollower` в `BubbleMotion.kt`.
+    private val follower = ChainFollower(
+        apply = frame@{ x, y ->
+            val p = params ?: return@frame
+            val view = button ?: return@frame
+            p.x = x
+            p.y = y
             runCatching { windowManager.updateViewLayout(view, p) }
             repositionTickerIfVisible()
-            view.postDelayed(this, 16)
-        }
-    }
+            repositionCancelBubble()
+            onFrame?.invoke()
+        },
+        onSettled = settled@{ settle ->
+            val p = params ?: return@settled
+            val view = button ?: return@settled
+            if (settle) savePosition(view, p)
+        },
+    )
 
-    private fun followInc(d: Int): Int {
-        val step = (d * 0.30f).toInt()
-        return if (step != 0) step else if (d > 0) 1 else -1
-    }
-
-    fun followTo(x: Int, y: Int, settle: Boolean) {
+    /** Ехать к ([x], [y]); [link] — через сколько бусин от той, что тянут. */
+    override fun followTo(x: Int, y: Int, settle: Boolean, link: Int, snap: Boolean) {
         if (!enabled) return
         val view = button ?: return
         val p = params ?: return
         val (w, h) = screenSize()
-        followTargetX = x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
-        followTargetY = y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
-        followSettle = settle
+        // На диске цель не режется краем: кнопке положено выезжать за него.
+        val targetX = if (ringMode) x else x.coerceIn(0, (w - buttonSize).coerceAtLeast(0))
+        val targetY = if (ringMode) y else y.coerceIn(0, (h - buttonSize).coerceAtLeast(0))
         // ОТКРЕПЛЁННОЕ окно догонять нечем: view.post у view без окна не
         // выполняется вовсе — он ждёт следующего прикрепления. Владелец
         // увидел это так: убрал всё в три точки, оттащил их, и через пару
@@ -365,20 +473,22 @@ class BodyButtonController(
         //
         // Поэтому спрятанная кнопка встаёт на место сразу, без резинки:
         // догонять всё равно некому, а координаты обязаны быть настоящими.
-        if (!attached) {
-            following = false
-            view.removeCallbacks(followStep)
-            p.x = followTargetX
-            p.y = followTargetY
+        //
+        // С [snap] — то же самое для видимой кнопки: диск ведёт свою анимацию
+        // сам и ставит кнопки кадр в кадр, пружина здесь только мешала бы.
+        if (!attached || snap) {
+            follower.stop()
+            p.x = targetX
+            p.y = targetY
             runCatching { windowManager.updateViewLayout(view, p) }
+            if (attached) {
+                repositionTickerIfVisible()
+                repositionCancelBubble()
+            }
             if (settle) savePosition(view, p)
             return
         }
-        if (!following) {
-            following = true
-            view.removeCallbacks(followStep)
-            view.post(followStep)
-        }
+        follower.follow(p.x, p.y, targetX, targetY, link, settle)
     }
 
     // ---- Тикер: живые слова, пока владелец говорит, что съел ----
@@ -386,125 +496,22 @@ class BodyButtonController(
     /** Тап по тикеру: микрофон замолчал, дальше набираем текстом. */
     var onTickerTap: (() -> Unit)? = null
 
-    fun showTicker() {
-        if (ticker == null) createTicker()
-        positionTicker()
-        val t = ticker ?: return
-        tickerText?.text = ""
-        lastTickerText = ""
-        lastTickerAt = 0L
-        runCatching { windowManager.updateViewLayout(t, tickerParams) }
-        if (!tickerVisible) {
-            tickerVisible = true
-            t.visibility = View.VISIBLE
-            t.alpha = 0f
-            t.animate().alpha(TICKER_ALPHA).setDuration(180).start()
-        }
-    }
+    fun showTicker() = pill.show()
 
-    private fun tickerHeightPx(): Int = dp(TICKER_LINES * 24 + 16)
+    fun updateTicker(text: String, force: Boolean = false) = pill.update(text, force)
 
-    private var lastTickerText = ""
-    private var lastTickerAt = 0L
+    /** Надпись посередине, пока слов нет: «Саша, секунду…», «Саша, слушаю» (`core/PillHint.kt`). */
+    fun hintTicker(text: String) = pill.hint(text)
 
-    fun updateTicker(text: String) {
-        val tv = tickerText ?: return
-        val tail = text.takeLast(300)
-        if (tail == lastTickerText) return
-        val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTickerAt < 120) return
-        lastTickerAt = now
-        lastTickerText = tail
-        tv.text = tail
-        tv.post {
-            val layout = tv.layout ?: return@post
-            if (layout.lineCount > TICKER_LINES) {
-                val cut = layout.getLineStart(layout.lineCount - TICKER_LINES)
-                val current = tv.text?.toString() ?: return@post
-                if (cut in 1 until current.length) tv.text = current.substring(cut)
-            }
-        }
-    }
+    /** Кнопку тащат, экран повернули, настройку крутят — пилюля следом. */
+    fun repositionTickerIfVisible() = pill.reposition()
 
-    fun repositionTickerIfVisible() {
-        if (!tickerVisible) return
-        positionTicker()
-        ticker?.let { runCatching { windowManager.updateViewLayout(it, tickerParams) } }
-    }
+    fun hideTicker() = pill.hide()
 
-    fun hideTicker() {
-        val t = ticker ?: return
-        if (!tickerVisible) return
-        tickerVisible = false
-        t.animate().alpha(0f).setDuration(220).withEndAction {
-            if (!tickerVisible) {
-                ticker?.let { runCatching { windowManager.removeView(it) } }
-                ticker = null
-                tickerText = null
-                tickerParams = null
-                lastTickerText = ""
-                lastTickerAt = 0L
-            }
-        }.start()
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun createTicker() {
-        val pill = FrameLayout(service)
-        pill.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = buttonSize / 2f
-            setColor(INK)
-        }
-        pill.elevation = dp(4).toFloat()
-        pill.setOnClickListener { onTickerTap?.invoke() }
-        val tv = TextView(service).apply {
-            setTextColor(PAPER)
-            textSize = 16f
-            maxLines = TICKER_LINES
-            gravity = Gravity.BOTTOM or Gravity.START
-            setPadding(dp(14), dp(8), dp(14), dp(8))
-            setLineSpacing(0f, 1.05f)
-        }
-        tickerText = tv
-        pill.addView(
-            tv,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            ),
-        )
-        val p = WindowManager.LayoutParams(
-            tickerWidthPx(),
-            tickerHeightPx(),
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-        tickerParams = p
-        ticker = pill
-        runCatching { windowManager.addView(pill, p) }
-        pill.visibility = View.GONE
-    }
-
+    // Ширина — настройка владельца (одна на все кнопки), кнопка рядом остаётся видна.
     private fun tickerWidthPx(): Int {
         val (w, _) = screenSize()
-        return (buttonSize * TICKER_W_MULT).coerceAtMost(w - dp(24))
-    }
-
-    private fun positionTicker() {
-        val bp = params ?: return
-        val tp = tickerParams ?: return
-        val (w, h) = screenSize()
-        val tickerW = tickerWidthPx()
-        val tickerH = tickerHeightPx()
-        val gap = dp(8)
-        tp.width = tickerW
-        tp.height = tickerH
-        tp.y = (bp.y - (tickerH - buttonSize) / 2).coerceIn(0, (h - tickerH).coerceAtLeast(0))
-        val buttonCenterX = bp.x + buttonSize / 2
-        tp.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap else bp.x - tickerW - gap
-        tp.x = tp.x.coerceIn(0, (w - tickerW).coerceAtLeast(0))
+        return minOf(dp(service.cachedTickerWidthDp), (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
     }
 
     // ---- Меню долгого нажатия: столбик синих пилюль ----
@@ -534,7 +541,7 @@ class BodyButtonController(
                 text = item.label
                 setTextColor(PAPER)
                 textSize = 15f
-                background = GradientDrawable().apply {
+                background = BubbleSkin().apply {
                     cornerRadius = dp(18).toFloat()
                     setColor(INK)
                 }
@@ -596,7 +603,34 @@ class BodyButtonController(
     private var plate: LinearLayout? = null
     private val plateDismiss = Runnable { hidePlate() }
 
+    // Молчание плашки с «ОК» — это «да» (`PlateClock`, 26.09.2026).
+    private val silence = PlateClock { settlePlate(quiet = false) }
+
+    /** Снять плашку: ответ дан или спрашивать не о чем — «да» не исполняется. */
     fun hidePlate() {
+        silence.clear()
+        dropPlateWindow()
+    }
+
+    /**
+     * Снять плашку так, будто владелец промолчал: ждущее «ОК» исполняется.
+     * Новая запись, «спрятать всё», выключенная кнопка — это не «нет».
+     * [quiet] — без спиннера и итога в пилюле: кнопке уже не до них.
+     */
+    fun settlePlate(quiet: Boolean = true) {
+        val answer = silence.take()
+        dropPlateWindow()
+        answer?.invoke(quiet)
+    }
+
+    /** «Да» плашки без исполнения: складывание исполнит его, когда уляжется. */
+    fun releasePlate(): (() -> Unit)? {
+        val answer = silence.take()
+        dropPlateWindow()
+        return answer?.let { a -> { a(true) } }
+    }
+
+    private fun dropPlateWindow() {
         val v = plate ?: return
         v.removeCallbacks(plateDismiss)
         runCatching { windowManager.removeView(v) }
@@ -615,7 +649,11 @@ class BodyButtonController(
      *
      * [onConfirm] = null — подтверждать нечего: подходы записаны в тот же
      * миг, как разобрались (терять их нельзя), и плашка просто показывает,
-     * что легло. У еды наоборот: до «ОК» приём в сумму дня не идёт.
+     * что легло. У еды наоборот: до «ОК» приём в сумму дня не идёт — но
+     * молчание и есть «ОК» (`PlateClock`): отсчёт внизу плашки, «нет» —
+     * это «✕». Другая плашка на месте ждущей (иной [key]) — для той тоже
+     * молчание. [autoConfirm] = false — плашка после «Отменить»: там
+     * молчание значит «я передумал», и она по-старому уходит сама без записи.
      *
      * [footer] — итог строкой. [note] — замечание модели. [chips] — короткие
      * действия одним тапом, обычно отдых 60/90/120.
@@ -628,16 +666,25 @@ class BodyButtonController(
         onEditItem: (Int) -> Unit,
         onDropItem: (Int) -> Unit,
         onOpen: () -> Unit,
-        onConfirm: (() -> Unit)?,
+        onConfirm: ((quiet: Boolean) -> Unit)?,
         confirmLabel: String = "ОК",
         chips: List<Chip> = emptyList(),
         holdMs: Long = 45_000,
+        key: String = "",
+        silentVerb: String = "Запишу сам",
+        autoConfirm: Boolean = true,
     ) {
-        hidePlate()
+        if (silence.pending && silence.key != key) settlePlate(quiet = true) else hidePlate()
         val shown = rows.take(PLATE_ROWS)
-        val sheet = LinearLayout(service).apply {
+        val sheet = object : LinearLayout(service) {
+            // Любое касание плашки — он читает или правит: отсчёт с начала.
+            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+                if (ev.actionMasked == MotionEvent.ACTION_DOWN) silence.touch()
+                return false
+            }
+        }.apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
+            background = BubbleSkin().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = buttonSize / 2f
                 setColor(INK)
@@ -716,7 +763,15 @@ class BodyButtonController(
                     setTextColor(PAPER)
                     textSize = 17f
                     setPadding(dp(10), dp(6), dp(6), dp(6))
-                    setOnClickListener { onEditItem(row.index) }
+                    setOnClickListener {
+                        // Правка — ещё не ответ: плашка уходит на время ввода,
+                        // «да» ждёт, пока ввод не закроют.
+                        if (silence.pending) {
+                            silence.suspend()
+                            dropPlateWindow()
+                        }
+                        onEditItem(row.index)
+                    }
                 }
             )
             line.addView(
@@ -834,14 +889,14 @@ class BodyButtonController(
                         android.graphics.Typeface.SANS_SERIF,
                         android.graphics.Typeface.BOLD,
                     )
-                    background = GradientDrawable().apply {
+                    background = BubbleSkin().apply {
                         cornerRadius = dp(16).toFloat()
                         setColor(PAPER)
                     }
                     setPadding(dp(22), dp(7), dp(22), dp(7))
                     setOnClickListener {
                         hidePlate()
-                        onConfirm()
+                        onConfirm(false)
                     }
                 }
             )
@@ -853,6 +908,23 @@ class BodyButtonController(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
+        // Сколько осталось до «сам» — словами под кнопками: молчание здесь
+        // значит «да», и это должно быть видно, а не угадываться.
+        val clock = if (onConfirm == null || !autoConfirm) null else TextView(service).apply {
+            setTextColor(PAPER_DIM)
+            textSize = 11f
+            gravity = Gravity.END
+            setPadding(0, dp(4), dp(4), 0)
+        }
+        if (clock != null) {
+            sheet.addView(
+                clock,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
         val p = WindowManager.LayoutParams(
             tickerWidthPx(),
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -865,13 +937,18 @@ class BodyButtonController(
         val estimate = dp(34 + 44) +
             shown.sumOf { dp(46 + (if (it.meta.isBlank()) 0 else 16) + (if (it.delta.isBlank()) 0 else 16)) } +
             (if (note.isBlank()) 0 else dp(24)) +
-            (if (chips.isEmpty()) 0 else dp(36))
+            (if (chips.isEmpty()) 0 else dp(36)) +
+            (if (clock == null) 0 else dp(18))
         positionPlate(p, estimate)
         plate = sheet
         runCatching { windowManager.addView(sheet, p) }
         sheet.alpha = 0f
         sheet.animate().alpha(0.96f).setDuration(180).start()
-        sheet.postDelayed(plateDismiss, holdMs)
+        if (onConfirm != null && clock != null) {
+            silence.arm(key, AutoConfirm.holdMs(shown.size), silentVerb, clock) { quiet -> onConfirm(quiet) }
+        } else {
+            sheet.postDelayed(plateDismiss, holdMs)
+        }
     }
 
     // Рядом с кнопкой, на той стороне, где есть место - то же правило, что у
@@ -888,211 +965,122 @@ class BodyButtonController(
             .coerceIn(0, (h - estimatedHeight).coerceAtLeast(0))
     }
 
-    // ---- Записка: короткий итог с одной ручкой («↩︎ отменить») ----
+    // ---- Записка: короткий итог с одной ручкой — итогом в пилюле ----
 
     /**
-     * Пилюля на пару строк рядом с кнопкой: что произошло и единственное
-     * действие поверх. Живёт [holdMs] и уходит сама - это не диалог, а
-     * реплика: «✓ 620 ккал · за день 1840 из 2500 ккал · ↩︎».
+     * Что произошло и единственное действие поверх — в пилюле диктовки
+     * (26.09.2026, «под этот стиль Gemini»). Живёт [holdMs] и уходит сама —
+     * это не диалог, а реплика. «↩︎» прежних записок — словом «Отменить».
      */
-    fun showNote(text: String, actionLabel: String?, holdMs: Long = 12_000, onAction: (() -> Unit)?) {
-        hidePlate()
-        val row = LinearLayout(service).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = buttonSize / 2f
-                setColor(INK)
-            }
-            alpha = 0.96f
-            elevation = dp(4).toFloat()
-            setPadding(dp(16), dp(8), dp(10), dp(8))
-        }
-        row.addView(
-            TextView(service).apply {
-                this.text = text
-                setTextColor(PAPER)
-                textSize = 14f
-                maxLines = 2
-                ellipsize = android.text.TextUtils.TruncateAt.END
-            },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
-        )
-        if (actionLabel != null && onAction != null) {
-            row.addView(
-                TextView(service).apply {
-                    this.text = actionLabel
-                    setTextColor(INK)
-                    textSize = 14f
-                    typeface = android.graphics.Typeface.create(
-                        android.graphics.Typeface.SANS_SERIF,
-                        android.graphics.Typeface.BOLD,
-                    )
-                    background = GradientDrawable().apply {
-                        cornerRadius = dp(14).toFloat()
-                        setColor(PAPER)
-                    }
-                    setPadding(dp(14), dp(5), dp(14), dp(5))
-                    setOnClickListener {
-                        hidePlate()
-                        onAction()
-                    }
+    fun showNote(text: String, actionLabel: String?, holdMs: Long = 12_000, onAction: (() -> Unit)?) =
+        pill.result(
+            text,
+            action = actionLabel?.let { label ->
+                DictationPill.ResultAction(if (label.trim() == "↩︎" || label.trim() == "↩") "Отменить" else label) {
+                    onAction?.invoke()
                 }
-            )
-        }
-        val p = WindowManager.LayoutParams(
-            tickerWidthPx(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-        positionPlate(p, dp(64))
-        // Записка живёт в том же окне, что плашка: их никогда не нужно два.
-        plate = row
-        runCatching { windowManager.addView(row, p) }
-        row.alpha = 0f
-        row.animate().alpha(0.96f).setDuration(160).start()
-        row.postDelayed(plateDismiss, holdMs)
-    }
+            },
+            holdMs = holdMs,
+        )
 
-    // ---- Набрать текстом: тот же ввод, что у Засечки ----
+    /**
+     * Итог разбора — что записано — в пилюле, на её месте (`DictationPill.result`):
+     * сама уходит через пять секунд, тап раскрывает список с карандашами.
+     */
+    fun showResult(
+        summary: String,
+        rows: List<DictationPill.ResultRow> = emptyList(),
+        footer: String = "",
+        action: DictationPill.ResultAction? = null,
+        onOpen: (() -> Unit)? = null,
+        ok: Boolean = true,
+        holdMs: Long = ru.zf.pravka.core.PillLook.RESULT_HOLD_MS,
+    ) = pill.result(summary, ok, rows, footer, action, onOpen, holdMs)
 
-    private var input: LinearLayout? = null
+    // ---- Набрать текстом — в пилюле диктовки, на её месте (`DictationPill.edit`) ----
+    //
+    // Владелец (26.09.2026): «прямо там, в этой прекрасной нашей плашке, можно
+    // было писать». Отдельное окошко у кнопки снято: и набор вместо голоса, и
+    // правка дела или траты идут в одно поле — пилюлю.
 
     fun showInput(
         prefill: String,
         hint: String,
         onCancel: (() -> Unit)? = null,
         onSubmit: (String) -> Unit,
-    ) {
-        hideInput()
-        hideTicker()
-        val row = LinearLayout(service).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = buttonSize / 2f
-                setColor(INK)
-            }
-            elevation = dp(4).toFloat()
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(2), dp(4), dp(2))
-        }
-        val edit = android.widget.EditText(service).apply {
-            setText(prefill)
-            setSelection(prefill.length)
-            setTextColor(PAPER)
-            setHintTextColor(0xB0F7F3EA.toInt())
-            this.hint = hint
-            textSize = 16f
-            background = null
-            isSingleLine = true
-            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
-            setOnEditorActionListener { _, actionId, _ ->
-                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
-                    val t = text?.toString().orEmpty()
-                    hideInput()
-                    onSubmit(t)
-                    true
-                } else false
-            }
-        }
-        row.addView(
-            edit,
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
-        )
-        row.addView(
-            TextView(service).apply {
-                text = "➤"
-                textSize = 18f
-                setTextColor(PAPER)
-                setPadding(dp(8), dp(6), dp(8), dp(6))
-                setOnClickListener {
-                    val t = edit.text?.toString().orEmpty()
-                    hideInput()
-                    onSubmit(t)
-                }
-            }
-        )
-        row.addView(
-            TextView(service).apply {
-                text = "✕"
-                textSize = 16f
-                setTextColor(PAPER)
-                alpha = 0.8f
-                setPadding(dp(6), dp(6), dp(10), dp(6))
-                setOnClickListener {
-                    hideInput()
-                    onCancel?.invoke()
-                }
-            }
-        )
-        val p = WindowManager.LayoutParams(
-            tickerWidthPx(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            // Фокусируемое окно: без этого клавиатура не привяжется.
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
-        }
-        positionInput(p)
-        input = row
-        runCatching { windowManager.addView(row, p) }
-        // Не один showSoftInput, а до победного: окно оверлея получает фокус
-        // уже после addView, и первый вызов молча возвращает false.
-        ImeKick.raise(service, edit)
+    ) = pill.edit(
+        prefill,
+        hint,
+        // Ответил на «✎» — плашка вернётся заново и спросит сама; прежнее
+        // «да» за правку не исполняется.
+        onSubmit = { typed ->
+            if (silence.suspended) silence.clear()
+            onSubmit(typed)
+        },
+        onCancel = {
+            if (silence.suspended) silence.clear()
+            onCancel?.invoke()
+        },
+    )
+
+    fun hideInput() = pill.dropEdit()
+
+    // ---- Серая «отмена» у идущей записи: как на «П» (владелец, 18.09.2026) ----
+    // Общая на четыре кнопки (`CancelBubble.kt`): под ближним концом бегущей
+    // строки, а не под кнопкой — под кнопкой стоит следующая кнопка стопки;
+    // прозрачность — как у кнопок.
+
+    private val cancelBubble = CancelBubble(service, windowManager)
+
+    fun showCancelBubble(onCancel: () -> Unit) {
+        pill.onCancel = onCancel
+        // В пилюле свой ✕ — серая «отмена» рядом была бы второй на ту же
+        // запись. Она остаётся там, где пилюли нет (запись Whisper у «П»).
+        if (pill.showing) return
+        cancelBubble.show(idleAlpha, onCancel)
+        repositionCancelBubble()
     }
 
-    fun hideInput() {
-        input?.let { runCatching { windowManager.removeView(it) } }
-        input = null
-    }
-
-    private fun positionInput(p: WindowManager.LayoutParams) {
+    /** Пилюля едет за кнопкой: тащат, догоняет, повернули экран. */
+    fun repositionCancelBubble() {
+        if (!cancelBubble.shown) return
         val bp = params ?: return
         val (w, h) = screenSize()
-        val plateW = tickerWidthPx()
-        val plateH = dp(52)
-        val gap = dp(8)
-        p.y = (bp.y - (plateH - buttonSize) / 2).coerceIn(0, (h - plateH).coerceAtLeast(0))
-        val buttonCenterX = bp.x + buttonSize / 2
-        p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap else bp.x - plateW - gap
-        p.x = p.x.coerceIn(0, (w - plateW).coerceAtLeast(0))
+        cancelBubble.place(bp.x, bp.y, buttonSize, w, h)
+    }
+
+    fun hideCancelBubble() {
+        pill.onCancel = null
+        cancelBubble.hide()
     }
 
     /** Диагностика: сколько окон эта кнопка держит прямо сейчас. */
-    fun windowCount(): Int =
+    override fun windowCount(): Int =
         // Именно attached, а не «button != null»: спрятанная кнопка держит
         // свой View, но окна в WindowManager у неё нет — и в перепись,
         // которой меряют цену складывания, она входить не должна.
-        (if (attached) 1 else 0) + (if (ticker != null) 1 else 0) +
-            (if (menu != null) 1 else 0) + (if (plate != null) 1 else 0) +
-            (if (input != null) 1 else 0)
+        (if (attached) 1 else 0) + pill.windowCount +
+            (if (cancelBubble.shown) 1 else 0) +
+            (if (menu != null) 1 else 0) + (if (plate != null) 1 else 0)
 
-    fun destroy() {
+    override fun destroy() {
         restSecondsLeft = 0
         hideMenu()
         hidePlate()
         hideInput()
+        hideCancelBubble()
+        follower.stop()
         button?.let { runCatching { windowManager.removeView(it) } }
         attached = false
         button = null
-        ticker?.let { runCatching { windowManager.removeView(it) } }
-        ticker = null
+        pill.destroy()
     }
 
     @SuppressLint("ClickableViewAccessibility")
     private fun create() {
         val container = FrameLayout(service)
-        val bg = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(INK)
-        }
+        // Не плоский кружок: выпуклая клавиша со светом сверху (`BubbleSkin`).
+        val bg = BubbleSkin().apply { shape = GradientDrawable.OVAL; setColor(INK) }
         background = bg
         container.background = bg
         container.elevation = dp(4).toFloat()
@@ -1143,6 +1131,8 @@ class BodyButtonController(
             progress,
             FrameLayout.LayoutParams(progressSize, progressSize, Gravity.CENTER),
         )
+        // Секунды до ответа на месте колеса (`ButtonCountdown`), пока кнопка занята.
+        progress?.let { replyClock.attach(container, it) }
 
         val p = WindowManager.LayoutParams(
             buttonSize,
@@ -1152,6 +1142,7 @@ class BodyButtonController(
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            if (ringMode) flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             val (w, h) = screenSize()
             x = w - buttonSize
             y = (h * 0.88f).toInt()
@@ -1164,8 +1155,10 @@ class BodyButtonController(
 
         scope.launch {
             val (xFraction, yFraction) = settings.eFabPosition(positionKey())
-            applyPosition(p, xFraction, yFraction)
-            runCatching { windowManager.updateViewLayout(container, p) }
+            if (!ringMode) {
+                applyPosition(p, xFraction, yFraction)
+                runCatching { windowManager.updateViewLayout(container, p) }
+            }
         }
         // Размер и прозрачность — общие ручки на все три кнопки. Подписка
         // ставится один раз за жизнь службы: тумблер «Т» убирает окно и может
@@ -1184,21 +1177,31 @@ class BodyButtonController(
             }
             scope.launch {
                 settings.fabAlphaFlow.collect { alpha ->
-                    idleAlpha = alpha
-                    if (!busy && !recording) {
-                        button?.alpha = idleAlpha
-                    }
+                    fabAlpha = alpha
+                    applyFaceAlpha()
+                }
+            }
+            scope.launch {
+                settings.diskFaceAlphaFlow.collect { value ->
+                    faceOverride = value
+                    applyFaceAlpha()
                 }
             }
         }
 
-        container.setOnTouchListener(DragTouchListener())
+        container.setOnTouchListener(DragTouchListener().also { touch = it })
     }
 
     private fun applyPosition(p: WindowManager.LayoutParams, xFraction: Float, yFraction: Float) {
         val (w, h) = screenSize()
         p.x = ((w - buttonSize) * xFraction.coerceIn(0f, 1f)).toInt()
         p.y = ((h - buttonSize) * yFraction.coerceIn(0f, 1f)).toInt()
+    }
+
+    private var touch: DragTouchListener? = null
+
+    override fun cancelGesture() {
+        touch?.swallow()
     }
 
     private inner class DragTouchListener : View.OnTouchListener {
@@ -1208,8 +1211,21 @@ class BodyButtonController(
         private var startY = 0
         private var dragging = false
         private var longPressFired = false
+        private var pressed: View? = null
+        /** Диск взяли двумя пальцами — этот жест кнопке больше не принадлежит. */
+        private var swallowed = false
+
+        fun swallow() {
+            if (swallowed) return
+            swallowed = true
+            pressed?.let { v ->
+                v.removeCallbacks(longPressRunnable)
+                BubbleMotion.release(v)
+            }
+        }
         private val longPressRunnable = Runnable {
             longPressFired = true
+            pressed?.let { BubbleMotion.nod(it) }
             if (!busy && !recording) onLongPress()
         }
 
@@ -1226,28 +1242,55 @@ class BodyButtonController(
                     startY = p.y
                     dragging = false
                     longPressFired = false
+                    swallowed = false
+                    pressed = view
                     view.alpha = 1f
+                    // Сжалась под пальцем (`BubbleMotion`): кнопка отвечает на касание телом.
+                    BubbleMotion.press(view)
+                    // Палец лёг — будим движок распознавания, не дожидаясь, чем
+                    // кончится касание: между тапом и «слышу» движок глух, и
+                    // самое дорогое в этом окне можно оплатить прямо сейчас.
+                    service.warmSpeech()
                     view.postDelayed(longPressRunnable, LONG_PRESS_MS)
+                    if (ringMode) onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_DOWN)
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    // Диск слышит каждый сдвиг, и до порога тоже: второй палец
+                    // на стекле делает из касания щипок, и этот палец везёт
+                    // диск. Порог для поворота диск держит свой. Кнопка сама
+                    // на диске не едет — палец крутит диск, диск ставит кнопку.
+                    if (ringMode && !longPressFired) {
+                        onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_MOVE)
+                    }
+                    if (swallowed) return true
                     val dx = event.rawX - startRawX
                     val dy = event.rawY - startRawY
                     if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
                         dragging = true
                         view.removeCallbacks(longPressRunnable)
+                        BubbleMotion.lift(view)
                     }
-                    if (dragging && !longPressFired) {
+                    if (dragging && !longPressFired && !ringMode) {
                         p.x = startX + dx.toInt()
                         p.y = startY + dy.toInt()
                         runCatching { windowManager.updateViewLayout(view, p) }
                         repositionTickerIfVisible()
+                        repositionCancelBubble()
                         onDragged?.invoke(p.x, p.y, false)
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     view.removeCallbacks(longPressRunnable)
+                    pressed = null
+                    BubbleMotion.release(view)
                     applyFace()
-                    if (dragging) {
+                    if (ringMode) {
+                        // Диск: отпустили — щёлкнуть по ближайшей четверти; тап остаётся тапом.
+                        onRingDrag?.invoke(event.rawX, event.rawY, event.x, event.y, MotionEvent.ACTION_UP)
+                        if (!swallowed && !dragging && !longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {
+                            if (!busy) onShortTap()
+                        }
+                    } else if (dragging) {
                         savePosition(view, p)
                         onDragged?.invoke(p.x, p.y, true)
                     } else if (!longPressFired && event.actionMasked == MotionEvent.ACTION_UP) {

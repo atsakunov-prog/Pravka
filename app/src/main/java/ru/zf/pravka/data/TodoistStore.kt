@@ -50,7 +50,7 @@ class TodoistStore(private val context: Context) {
     data class Link(val entryId: Long, val taskId: String, val title: String, val startedAt: Long)
 
     private val mutex = Mutex()
-    private val file: File get() = File(context.filesDir, FILE_NAME)
+    private val file: File get() = File(DataRoot.dir(context), FILE_NAME)
     private var loaded = false
 
     private var tasks = listOf<Task>()
