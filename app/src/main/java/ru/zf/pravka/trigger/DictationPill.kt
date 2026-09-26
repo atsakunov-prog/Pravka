@@ -25,6 +25,9 @@ import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.AccelerateInterpolator
 import android.view.animation.LinearInterpolator
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.annotation.DrawableRes
@@ -75,7 +78,14 @@ import ru.zf.pravka.ui.Haptics
  *    не нужно: «там же» — это место, а не последнее касание;
  *  - **посередине — подсказка** «Саша, слушаю» (`core/PillHint.kt`), не
  *    бегущая, а стоящая по центру, как «Ask Gemini»; первое слово её гасит.
- *    У «З», «Д», «₽», «Е» тап посередине — по-прежнему набор вместо голоса.
+ *  - **набор текстом — в ней же** ([edit]). У «З», «Д», «₽», «Е» тап
+ *    посередине глушит микрофон, и пилюля на своём месте становится полем:
+ *    сказанное — уже в нём, клавиатура поднимается, кружок — стрелка
+ *    «отправить», ✕ — отмена. Раньше набор был отдельным окошком у кнопки, и
+ *    владелец (26.09.2026): «если я просто кликаю на плашку, она возвращается
+ *    к предыдущему виду и притягивается к кнопке. А надо, чтобы прямо там, в
+ *    этой прекрасной нашей плашке, можно было писать». Туда же уходит всякий
+ *    набор кнопок: правка дела, траты, граммов — одно поле на всё.
  *
  * Место (`core/PillGeometry.kt`) — три на выбор в «Кнопках на экране»:
  * сверху (с завода), снизу над клавиатурой или над навигацией, у кнопки
@@ -157,14 +167,14 @@ class DictationPill(
     var canSend: Boolean = false
         set(value) {
             field = value
-            orb?.isClickable = value
+            orb?.isClickable = value || editing
         }
 
     /** Отмена этой записи — ✕ слева. Нет её — слева знак режима. */
     var onCancel: (() -> Unit)? = null
         set(value) {
             field = value
-            lead?.cancel = value != null
+            lead?.cancel = value != null || editing
         }
 
     /** Пилюля на экране или уже в пути туда — серой «отмене» у кнопки тогда не место. */
@@ -204,11 +214,31 @@ class DictationPill(
     /** Владелец переставил пилюлю пальцем: до конца показа она стоит, где бросили. */
     private var manual = false
 
+    /** Что набираем: исходный текст, подсказка, куда отдать и что делать на отмене. */
+    private class EditRequest(
+        val prefill: String,
+        val hint: String,
+        val onSubmit: (String) -> Unit,
+        val onCancel: (() -> Unit)?,
+    )
+
+    /** Просьба набрать текстом — ждёт окна, если его ещё нет. */
+    private var editReq: EditRequest? = null
+    /** Пилюля сейчас поле ввода: окно фокусное, клавиатура поднята. */
+    private var editing = false
+    private var editor: EditText? = null
+
+    /** Пилюля — поле ввода (а не бегущая строка). */
+    val isEditing: Boolean get() = editing || editReq != null
+
     val windowCount: Int get() = if (root != null) 1 else 0
 
     // ---- Показ, текст, уход ----
 
     fun show() {
+        // Новая запись поверх набора: поле закрывается, пилюля снова строка.
+        if (editing) endEdit()
+        editReq = null
         val already = visible
         visible = true
         lastText = ""
@@ -375,7 +405,7 @@ class DictationPill(
         val l = LeadMark(service, service.getDrawable(glyph)?.mutate()).apply {
             // Слушатель — ДО флага: setOnClickListener сам делает вид
             // кликабельным, и знак режима глотал бы тап, положенный ряду.
-            setOnClickListener { onCancel?.invoke() }
+            setOnClickListener { if (editing) cancelTyped() else onCancel?.invoke() }
             cancel = onCancel != null
         }
         // Мишень ✕ — во всю высоту и 48 dp в ширину: крестик маленький, палец нет.
@@ -387,7 +417,7 @@ class DictationPill(
         val o = VoiceOrb(service, PillLook.orb(accent)).apply {
             setLevel(level)
             contentDescription = "Отправить"
-            setOnClickListener { if (canSend) onSend?.invoke() }
+            setOnClickListener { if (editing) submitTyped() else if (canSend) onSend?.invoke() }
             isClickable = canSend
         }
         row.addView(o, LinearLayout.LayoutParams(orbSize, orbSize).apply {
@@ -432,6 +462,111 @@ class DictationPill(
             }
         })
         runCatching { windowManager.addView(frame, p) }
+        if (editReq != null) applyEdit()
+    }
+
+    // ---- Набор текстом в самой пилюле ----
+
+    /**
+     * Стать полем ввода на своём месте: [prefill] — уже сказанное (или то, что
+     * правим), [hint] — подсказка пустого поля. Кружок — «отправить» ([onSubmit]
+     * с набранным), ✕ — отмена ([onCancel]). Пилюли нет — всплывает, как на
+     * запись; есть — превращается, не уезжая.
+     */
+    fun edit(prefill: String, hint: String, onSubmit: (String) -> Unit, onCancel: (() -> Unit)?) {
+        show()
+        editReq = EditRequest(prefill, hint, onSubmit, onCancel)
+        if (root != null) applyEdit()
+    }
+
+    /** Закрыть поле без ответа никому: кнопку выключили, экран сложили, началась запись. */
+    fun dropEdit() {
+        if (!isEditing) return
+        endEdit()
+        hide()
+    }
+
+    private fun applyEdit() {
+        val req = editReq ?: return
+        val row = body ?: return
+        val r = root ?: return
+        val p = params ?: return
+        val tv = ticker ?: return
+        val e = editor ?: EditText(service).apply {
+            setTextColor(PAPER)
+            setHintTextColor(DiskLook.withAlpha(PAPER, 0.62f))
+            textSize = textSizeSp
+            background = null
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_SEND
+            setPadding(dp(8), 0, dp(4), 0)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_SEND) { submitTyped(); true } else false
+            }
+        }.also { made ->
+            // Поле встаёт на место строки: те же поля, та же доля ряда.
+            row.addView(made, row.indexOfChild(tv), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            editor = made
+        }
+        editing = true
+        tv.visibility = View.GONE
+        e.visibility = View.VISIBLE
+        e.setText(req.prefill)
+        e.setSelection(req.prefill.length)
+        e.hint = req.hint
+        lead?.cancel = true
+        orb?.arrow = true
+        orb?.isClickable = true
+        // Окно — фокусное: без этого клавиатура к полю не привяжется. Касания
+        // мимо пилюли по-прежнему уходят приложению (NOT_TOUCH_MODAL).
+        p.flags = (p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()) or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+        p.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+        runCatching { windowManager.updateViewLayout(r, p) }
+        // Не один showSoftInput, а до победного: фокус окно получает уже после
+        // смены флагов, и первый вызов молча возвращает false.
+        ImeKick.raise(service, e)
+    }
+
+    private fun submitTyped() {
+        val req = editReq ?: return
+        val typed = editor?.text?.toString().orEmpty()
+        endEdit()
+        hide()
+        req.onSubmit(typed)
+    }
+
+    private fun cancelTyped() {
+        val req = editReq
+        endEdit()
+        hide()
+        req?.onCancel?.invoke()
+    }
+
+    /** Поле обратно в строку, окно — снова не фокусное, клавиатура — вниз. */
+    private fun endEdit() {
+        val e = editor
+        if (e != null && editing) {
+            runCatching {
+                service.getSystemService(InputMethodManager::class.java)
+                    ?.hideSoftInputFromWindow(e.windowToken, 0)
+            }
+        }
+        editing = false
+        editReq = null
+        e?.visibility = View.GONE
+        ticker?.visibility = View.VISIBLE
+        lead?.cancel = onCancel != null
+        orb?.arrow = false
+        orb?.isClickable = canSend
+        val r = root ?: return
+        val p = params ?: return
+        p.flags = (p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) and
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL.inv()
+        p.softInputMode = 0
+        runCatching { windowManager.updateViewLayout(r, p) }
     }
 
     /**
@@ -541,7 +676,9 @@ class DictationPill(
         private var startY = 0
         private var armed = false
         private var dragging = false
-        private val grab = Runnable { if (armed) startDrag(buzz = true) }
+        // В поле ввода долгое нажатие — выделение текста, а не «взять пилюлю»:
+        // переносить её там можно только движением.
+        private val grab = Runnable { if (armed && !editing) startDrag(buzz = true) }
 
         override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
             when (ev.actionMasked) {
@@ -690,6 +827,8 @@ class DictationPill(
         root = null
         body = null
         lead = null
+        editor = null
+        editing = false
         ticker = null
         orb = null
         skin = null
@@ -822,6 +961,14 @@ class DictationPill(
         }
         private var level = 0f
 
+        /** Поле ввода: вместо волны — стрелка «отправить», как у Gemini при наборе. */
+        var arrow = false
+            set(value) {
+                if (field == value) return
+                field = value
+                invalidate()
+            }
+
         fun setLevel(value: Float) {
             if (abs(value - level) < 0.01f) return
             level = value
@@ -856,6 +1003,15 @@ class DictationPill(
             canvas.drawCircle(cx, cy, r, fill)
             canvas.drawCircle(cx, cy, r, sheen)
             if (isPressed) canvas.drawCircle(cx, cy, r, pressedShade)
+            if (arrow) {
+                // Стрелка вверх: древко и два пера, тем же штрихом, что волна.
+                val len = r * 0.42f
+                val wing = r * 0.26f
+                canvas.drawLine(cx, cy + len, cx, cy - len, bar)
+                canvas.drawLine(cx, cy - len, cx - wing, cy - len + wing, bar)
+                canvas.drawLine(cx, cy - len, cx + wing, cy - len + wing, bar)
+                return
+            }
             val bars = PillLook.bars(level)
             val maxH = r * 0.9f
             val step = r * 0.36f

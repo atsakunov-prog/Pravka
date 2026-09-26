@@ -959,113 +959,20 @@ class BodyButtonController(
         row.postDelayed(plateDismiss, holdMs)
     }
 
-    // ---- Набрать текстом: тот же ввод, что у Засечки ----
-
-    private var input: LinearLayout? = null
+    // ---- Набрать текстом — в пилюле диктовки, на её месте (`DictationPill.edit`) ----
+    //
+    // Владелец (26.09.2026): «прямо там, в этой прекрасной нашей плашке, можно
+    // было писать». Отдельное окошко у кнопки снято: и набор вместо голоса, и
+    // правка дела или траты идут в одно поле — пилюлю.
 
     fun showInput(
         prefill: String,
         hint: String,
         onCancel: (() -> Unit)? = null,
         onSubmit: (String) -> Unit,
-    ) {
-        hideInput()
-        hideTicker()
-        val row = LinearLayout(service).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = BubbleSkin().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = buttonSize / 2f
-                setColor(INK)
-            }
-            elevation = dp(4).toFloat()
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(2), dp(4), dp(2))
-        }
-        val edit = android.widget.EditText(service).apply {
-            setText(prefill)
-            setSelection(prefill.length)
-            setTextColor(PAPER)
-            setHintTextColor(0xB0F7F3EA.toInt())
-            this.hint = hint
-            textSize = 16f
-            background = null
-            isSingleLine = true
-            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
-            setOnEditorActionListener { _, actionId, _ ->
-                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
-                    val t = text?.toString().orEmpty()
-                    hideInput()
-                    onSubmit(t)
-                    true
-                } else false
-            }
-        }
-        row.addView(
-            edit,
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
-        )
-        row.addView(
-            TextView(service).apply {
-                text = "➤"
-                textSize = 18f
-                setTextColor(PAPER)
-                setPadding(dp(8), dp(6), dp(8), dp(6))
-                setOnClickListener {
-                    val t = edit.text?.toString().orEmpty()
-                    hideInput()
-                    onSubmit(t)
-                }
-            }
-        )
-        row.addView(
-            TextView(service).apply {
-                text = "✕"
-                textSize = 16f
-                setTextColor(PAPER)
-                alpha = 0.8f
-                setPadding(dp(6), dp(6), dp(10), dp(6))
-                setOnClickListener {
-                    hideInput()
-                    onCancel?.invoke()
-                }
-            }
-        )
-        val p = WindowManager.LayoutParams(
-            tickerWidthPx(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            // Фокусируемое окно: без этого клавиатура не привяжется.
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
-        }
-        positionInput(p)
-        input = row
-        runCatching { windowManager.addView(row, p) }
-        // Не один showSoftInput, а до победного: окно оверлея получает фокус
-        // уже после addView, и первый вызов молча возвращает false.
-        ImeKick.raise(service, edit)
-    }
+    ) = pill.edit(prefill, hint, onSubmit, onCancel)
 
-    fun hideInput() {
-        input?.let { runCatching { windowManager.removeView(it) } }
-        input = null
-    }
-
-    private fun positionInput(p: WindowManager.LayoutParams) {
-        val bp = params ?: return
-        val (w, h) = screenSize()
-        val plateW = tickerWidthPx()
-        val plateH = dp(52)
-        val gap = dp(8)
-        p.y = (bp.y - (plateH - buttonSize) / 2).coerceIn(0, (h - plateH).coerceAtLeast(0))
-        val buttonCenterX = bp.x + buttonSize / 2
-        p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap else bp.x - plateW - gap
-        p.x = p.x.coerceIn(0, (w - plateW).coerceAtLeast(0))
-    }
+    fun hideInput() = pill.dropEdit()
 
     // ---- Серая «отмена» у идущей записи: как на «П» (владелец, 18.09.2026) ----
     // Общая на четыре кнопки (`CancelBubble.kt`): под ближним концом бегущей
@@ -1103,8 +1010,7 @@ class BodyButtonController(
         // которой меряют цену складывания, она входить не должна.
         (if (attached) 1 else 0) + pill.windowCount +
             (if (cancelBubble.shown) 1 else 0) +
-            (if (menu != null) 1 else 0) + (if (plate != null) 1 else 0) +
-            (if (input != null) 1 else 0)
+            (if (menu != null) 1 else 0) + (if (plate != null) 1 else 0)
 
     override fun destroy() {
         restSecondsLeft = 0

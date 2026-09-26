@@ -723,7 +723,7 @@ class ZasechkaButtonController(
         // которой меряют цену складывания, она входить не должна.
         (if (attached) 1 else 0) + pill.windowCount +
             (if (cancelBubble.shown) 1 else 0) +
-            (if (input != null) 1 else 0) + (if (menu != null) 1 else 0)
+            (if (menu != null) 1 else 0)
 
     override fun destroy() {
         hideAsk()
@@ -843,114 +843,21 @@ class ZasechkaButtonController(
         return minOf(dp(service.cachedTickerWidthDp), (w - buttonSize - dp(24)).coerceAtLeast(dp(120)))
     }
 
-    // ---- Type-in plate: the mic died, the keyboard talks instead ----
+    // ---- Type-in: the mic died, the keyboard talks instead — in the pill ----
 
     /** Fired when the owner taps the live ticker plate mid-dictation. */
     var onTickerTap: (() -> Unit)? = null
 
-    private var input: android.widget.LinearLayout? = null
-    private var inputEdit: android.widget.EditText? = null
+    /**
+     * Набор вместо голоса — в пилюле, на её месте (`DictationPill.edit`):
+     * сказанное уже в поле, кружок — «отправить», ✕ — отмена. Владелец
+     * (26.09.2026): «прямо там, в этой прекрасной нашей плашке, можно было
+     * писать» — прежнее окошко у кнопки снято.
+     */
+    fun showInput(prefill: String, onSubmit: (String) -> Unit) =
+        pill.edit(prefill, "Чем занят?", onSubmit, onCancel = null)
 
-    fun showInput(prefill: String, onSubmit: (String) -> Unit) {
-        hideInput()
-        hideTicker()
-        val row = android.widget.LinearLayout(service).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            background = BubbleSkin().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = buttonSize / 2f
-                setColor(AMBER)
-            }
-            elevation = dp(4).toFloat()
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(2), dp(4), dp(2))
-        }
-        val edit = android.widget.EditText(service).apply {
-            setText(prefill)
-            setSelection(prefill.length)
-            setTextColor(PAPER)
-            setHintTextColor(0xB0F7F3EA.toInt())
-            hint = "Чем занят?"
-            textSize = 16f
-            background = null
-            isSingleLine = true
-            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
-            setOnEditorActionListener { _, actionId, _ ->
-                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
-                    val t = text?.toString().orEmpty()
-                    hideInput()
-                    onSubmit(t)
-                    true
-                } else false
-            }
-        }
-        inputEdit = edit
-        row.addView(
-            edit,
-            android.widget.LinearLayout.LayoutParams(
-                0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
-            ),
-        )
-        row.addView(
-            TextView(service).apply {
-                text = "➤"
-                textSize = 18f
-                setTextColor(PAPER)
-                setPadding(dp(8), dp(6), dp(8), dp(6))
-                setOnClickListener {
-                    val t = edit.text?.toString().orEmpty()
-                    hideInput()
-                    onSubmit(t)
-                }
-            }
-        )
-        row.addView(
-            TextView(service).apply {
-                text = "✕"
-                textSize = 16f
-                setTextColor(PAPER)
-                alpha = 0.8f
-                setPadding(dp(6), dp(6), dp(10), dp(6))
-                setOnClickListener { hideInput() }
-            }
-        )
-        val p = WindowManager.LayoutParams(
-            tickerWidthPx(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            // Focusable (no NOT_FOCUSABLE): the IME must attach to the box.
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
-        }
-        positionInput(p)
-        input = row
-        runCatching { windowManager.addView(row, p) }
-        // Не один showSoftInput, а до победного: окно оверлея получает фокус
-        // уже после addView, и первый вызов молча возвращает false.
-        ImeKick.raise(service, edit)
-    }
-
-    fun hideInput() {
-        input?.let { runCatching { windowManager.removeView(it) } }
-        input = null
-        inputEdit = null
-    }
-
-    private fun positionInput(p: WindowManager.LayoutParams) {
-        val bp = params ?: return
-        val (w, h) = screenSize()
-        val plateW = tickerWidthPx()
-        val plateH = dp(52)
-        val gap = dp(8)
-        p.y = (bp.y - (plateH - buttonSize) / 2).coerceIn(0, (h - plateH).coerceAtLeast(0))
-        val buttonCenterX = bp.x + buttonSize / 2
-        p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + gap
-        else bp.x - plateW - gap
-        p.x = p.x.coerceIn(0, (w - plateW).coerceAtLeast(0))
-    }
+    fun hideInput() = pill.dropEdit()
 
     private var touch: DragTouchListener? = null
 
