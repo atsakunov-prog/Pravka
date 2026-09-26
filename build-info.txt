@@ -1,0 +1,7 @@
+pravka=3.0.653
+versionName=3.0.653
+apk=pravka-debug.apk
+versionCode=653
+commit=21a39edbaba4aa7f2bd9ea36f7e38f37982b3646
+branch=pravka
+builtAt=2026-09-26T15:08Z
