@@ -35,6 +35,7 @@ import ru.zf.pravka.ui.PaperCard
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.SignedColumns
+import ru.zf.pravka.ui.fadingScroll
 
 // Стоимость обращений к API — экран за долларом в шапке любой вкладки.
 // Владелец (15.09.2026): «у меня подозрение, что это стоимость только правки —
@@ -59,7 +60,7 @@ internal fun CostScreen(app: PravkaApp) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {

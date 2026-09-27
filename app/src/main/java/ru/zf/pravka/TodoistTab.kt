@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +47,7 @@ import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.RowRule
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.VoiceInput
+import ru.zf.pravka.ui.scrollFade
 import ru.zf.pravka.trigger.onRaznoskaTap
 import ru.zf.pravka.trigger.onRaznoskaText
 
@@ -121,8 +123,10 @@ fun TodoistTab(app: PravkaApp) {
         }
     }
 
+    val listState = rememberLazyListState()
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().scrollFade(listState),
+        state = listState,
         contentPadding = ScreenPad.Padding,
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {

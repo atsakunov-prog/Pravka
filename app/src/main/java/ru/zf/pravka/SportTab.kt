@@ -75,6 +75,7 @@ import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.Segments
 import ru.zf.pravka.ui.SheetAction
 import ru.zf.pravka.ui.VoiceInput
+import ru.zf.pravka.ui.scrollFade
 import ru.zf.pravka.trigger.startRestFromTab
 
 // Вкладка «Спорт»: сегодня, светофор, подходы, форма, разбор.
@@ -309,7 +310,7 @@ internal fun SportTab(app: PravkaApp) {
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp),
         )
         LazyColumn(
-            Modifier.fillMaxWidth(),
+            Modifier.fillMaxWidth().scrollFade(listState),
             state = listState,
             contentPadding = ScreenPad.Padding,
             verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),

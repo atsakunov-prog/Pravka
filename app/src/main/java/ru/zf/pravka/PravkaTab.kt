@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -71,6 +72,8 @@ import ru.zf.pravka.ui.PaperLabel
 import ru.zf.pravka.ui.PaperTextButton
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.SheetAction
+import ru.zf.pravka.ui.fadingScroll
+import ru.zf.pravka.ui.scrollFade
 
 // Вкладка «Правка»: текстбокс для чужого текста, нерасшифрованные записи,
 // восстановленный черновик, последние расшифровки. Владелец (15.09.2026):
@@ -110,8 +113,10 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
         Feedback.toast(context, context.getString(R.string.transcript_copied))
     }
 
+    val listState = rememberLazyListState()
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().scrollFade(listState),
+        state = listState,
         contentPadding = ScreenPad.Padding,
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
@@ -500,7 +505,7 @@ internal fun DictationStatsTab(app: PravkaApp, exportRequested: Boolean, onExpor
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {

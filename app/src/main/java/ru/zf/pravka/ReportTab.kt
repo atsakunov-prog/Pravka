@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -68,6 +69,7 @@ import ru.zf.pravka.ui.SignedColumns
 import ru.zf.pravka.ui.StackedColumn
 import ru.zf.pravka.ui.StackedColumns
 import ru.zf.pravka.ui.StripSegment
+import ru.zf.pravka.ui.scrollFade
 
 // Вкладка «Отчёт»: день в графиках.
 //
@@ -341,8 +343,10 @@ internal fun ReportTab(app: PravkaApp) {
     val todayHealth = healthByDate[dateKey]
     val refHealth = healthByDate[refKey]
 
+    val listState = rememberLazyListState()
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().scrollFade(listState),
+        state = listState,
         contentPadding = ScreenPad.Padding,
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {

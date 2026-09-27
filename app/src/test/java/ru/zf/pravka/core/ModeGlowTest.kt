@@ -6,9 +6,10 @@ import org.junit.Test
 import kotlin.math.abs
 import kotlin.math.min
 
-// Свечение режима (docs/agreements.md, «Третье издание»): владелец — «сохраним
-// цветность каждого направления… и там не примешивались бы другие цвета».
-// Все тона свечения — того же оттенка, что кнопка режима на стекле.
+// Свечение режима (docs/agreements.md, «Третье издание»). Владелец, 27.09.2026:
+// «главные цвета как на кнопках, они там прямо классные», «переливы
+// динамические с чуть соседними цветами», «поярче… грустно как-то».
+// Главный тон — ровно кнопка; соседи — полшага по кругу, не чужие цвета.
 class ModeGlowTest {
 
     // Цвета кнопок на стекле: «П», «З», «Д», «Т/Е», «₽» — и олива вкладки Еды.
@@ -17,41 +18,54 @@ class ModeGlowTest {
         0xFF2F6B4F.toInt(), 0xFF5B4A8C.toInt(), 0xFF5E7A1F.toInt(),
     )
 
-    private fun hueGap(a: Float, b: Float): Float {
-        val d = abs(a - b) % 360f
-        return min(d, 360f - d)
+    /** Расстояние по кругу оттенков со знаком: куда повернули [b] от [a]. */
+    private fun hueTurn(a: Float, b: Float): Float {
+        var d = (b - a) % 360f
+        if (d > 180f) d -= 360f
+        if (d < -180f) d += 360f
+        return d
+    }
+
+    private fun hueGap(a: Float, b: Float): Float = abs(hueTurn(a, b))
+
+    @Test
+    fun `главный тон - ровно цвет кнопки`() {
+        for (a in accents) assertEquals(a, ModeGlow.tone(a))
     }
 
     @Test
-    fun `оттенок не уходит ни в одном тоне свечения`() {
+    fun `соседи - полшага по кругу в разные стороны, не чужой цвет`() {
         for (a in accents) {
             val h = ModeGlow.hsv(a).h
-            for (t in listOf(ModeGlow.tone(a), ModeGlow.light(a), ModeGlow.deep(a), ModeGlow.card(a))) {
-                // Восьмибитный канал округляет — градус-полтора, не больше.
-                assertTrue(
-                    "тон ${Integer.toHexString(t)} ушёл от оттенка ${Integer.toHexString(a)}",
-                    hueGap(h, ModeGlow.hsv(t).h) < 2f,
-                )
-            }
+            val w = hueTurn(h, ModeGlow.hsv(ModeGlow.warm(a)).h)
+            val c = hueTurn(h, ModeGlow.hsv(ModeGlow.cool(a)).h)
+            // Восьмибитный канал округляет — пара градусов туда-сюда.
+            assertTrue("тёплый сосед ${Integer.toHexString(a)}: $w", w in 8f..20f)
+            assertTrue("холодный сосед ${Integer.toHexString(a)}: $c", c in -20f..-8f)
         }
     }
 
     @Test
-    fun `тёмные чернила кнопок зажигаются, яркие остаются собой`() {
-        // «Д» — тёмно-синие чернила: без подъёма яркости свет на ночи не виден.
-        assertTrue(ModeGlow.hsv(ModeGlow.tone(0xFF2A5D82.toInt())).v >= ModeGlow.MIN_VALUE - 0.01f)
-        // «П» и так яркая — тон почти совпадает с кнопкой.
-        val p = ModeGlow.hsv(0xFFEA580C.toInt())
-        val t = ModeGlow.hsv(ModeGlow.tone(0xFFEA580C.toInt()))
-        assertTrue(abs(p.v - t.v) < 0.02f && abs(p.s - t.s) < 0.02f)
+    fun `блик - тот же оттенок, светлее кнопки`() {
+        for (a in accents) {
+            val k = ModeGlow.hsv(a)
+            val l = ModeGlow.hsv(ModeGlow.lit(a))
+            assertTrue(hueGap(k.h, l.h) < 2f)
+            assertTrue(l.v > k.v || k.v >= 0.99f)
+        }
     }
 
     @Test
-    fun `перелив - светлее справа, глубже посередине`() {
+    fun `ярче - соседи не выцветают`() {
+        // «Грустно»: бледный тон на ночи — серая дымка. Соседи не бледнее кнопки,
+        // тёплый ещё и светлее её — он и держит яркость перелива.
         for (a in accents) {
-            val tone = ModeGlow.hsv(ModeGlow.tone(a))
-            assertTrue(ModeGlow.hsv(ModeGlow.deep(a)).v < tone.v)
-            assertTrue(ModeGlow.hsv(ModeGlow.light(a)).s < tone.s)
+            val k = ModeGlow.hsv(a)
+            val w = ModeGlow.hsv(ModeGlow.warm(a))
+            val c = ModeGlow.hsv(ModeGlow.cool(a))
+            assertTrue(w.s >= k.s - 0.01f && c.s >= k.s - 0.01f)
+            assertTrue(w.v > k.v || k.v >= 0.99f)
+            assertTrue(ModeGlow.hsv(ModeGlow.lit(a)).s >= k.s * 0.85f)
         }
     }
 
@@ -65,19 +79,14 @@ class ModeGlowTest {
     }
 
     @Test
-    fun `плашка - тёмный тон своей краски, не серый`() {
+    fun `плашка - чернила с цветом кнопки, тёмная под белым текстом и не серая`() {
         for (a in accents) {
-            val c = ModeGlow.hsv(ModeGlow.card(a))
-            assertTrue("плашка должна быть тёмной", c.v <= 0.3f)
-            assertTrue("плашка не должна быть серой", c.s >= 0.4f)
-        }
-    }
-
-    @Test
-    fun `свет ярче прежнего - блёклого синего и изумрудного больше нет`() {
-        for (a in listOf(0xFF2A5D82.toInt(), 0xFF2F6B4F.toInt())) {
-            val t = ModeGlow.hsv(ModeGlow.tone(a))
-            assertTrue(t.s >= ModeGlow.MIN_SAT - 0.01f && t.v >= ModeGlow.MIN_VALUE - 0.01f)
+            val top = ModeGlow.hsv(ModeGlow.cardTop(a))
+            val bottom = ModeGlow.hsv(ModeGlow.cardBottom(a))
+            assertTrue("плашка должна быть тёмной", top.v <= 0.32f && bottom.v <= top.v + 0.01f)
+            assertTrue("плашка не должна быть серой", top.s >= 0.2f)
+            // Чернила тёплые и чуть тянут оттенок к себе — но цвет узнаётся.
+            assertTrue(hueGap(ModeGlow.hsv(a).h, top.h) < 20f)
         }
     }
 

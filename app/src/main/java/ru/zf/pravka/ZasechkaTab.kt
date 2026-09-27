@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
@@ -84,6 +85,7 @@ import ru.zf.pravka.ui.RowRule
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.SheetAction
 import ru.zf.pravka.ui.VoiceInput
+import ru.zf.pravka.ui.scrollFade
 import ru.zf.pravka.trigger.onZasechkaTap
 
 // Вкладка «Засечка»: the owner's day as a ribbon of entries, the numbers he
@@ -400,8 +402,10 @@ internal fun ZasechkaTab(app: PravkaApp) {
 
     // Поля и шаг — общие для всех вкладок (ScreenPad): раньше у Засечки сверху
     // было 16 вместо 8, а между разделами — свои распорки 10–14.
+    val listState = rememberLazyListState()
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().scrollFade(listState),
+        state = listState,
         contentPadding = ScreenPad.Padding,
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {

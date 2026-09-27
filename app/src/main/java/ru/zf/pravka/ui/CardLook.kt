@@ -76,13 +76,29 @@ data class CardLook(
         const val GRAIN = 0.03f
 
         /**
-         * Плашка — матовое стекло над свечением режима (версия 3): сквозь
-         * неё просвечивает свет вкладки, поэтому у верхних плашек тон сам
-         * берёт цвет режима, а нижние, куда свет не достаёт, остаются
-         * прежними. Цвет не подмешивается нарочно — его приносит свет, и
-         * ровно там, где он есть. Ниже — текст на плашке начинает плыть.
+         * Плашка во вкладке режима — стекло над свечением (`modeGlass`):
+         * сквозь неё просвечивает свет вкладки. Сверху прозрачнее, книзу
+         * плотнее — там, где света больше, его и видно; ниже 0,6 текст на
+         * ярком верху начинает плыть.
          */
-        const val GLASS = 0.76f
+        const val GLASS_TOP = 0.66f
+        const val GLASS_BOTTOM = 0.74f
+
+        /**
+         * Скругление плашки режима, dp: круглее прежних 12 — в пару пилюле
+         * (28) и кнопкам на стекле; прямой угол рядом с ними читался чужим.
+         */
+        const val MODE_RADIUS_DP = 20
+
+        /** Цвет кнопки в верхнем левом углу плашки — как свет от кружка по пилюле. */
+        const val MODE_GLOW = 0.24f
+
+        /** Кромка в свете режима: сверху — блик краски, снизу — тень. */
+        const val MODE_RIM_LIGHT = 0.5f
+        const val MODE_RIM_SHADE = 0.4f
+
+        /** Во сколько раз ползунок «темнее» трогает стекло режима: его чернила и так тёмные. */
+        const val MODE_DARKEN = 0.55f
 
         /**
          * Главная кнопка и выбранный чип — клавиши, как кнопки на стекле
@@ -180,5 +196,78 @@ fun Modifier.keyFace(color: Color, shape: Shape, lit: Boolean = true): Modifier 
                 1f to Color.Black.copy(alpha = CardLook.KEY_RIM_SHADE),
             ),
             shape,
+        )
+}
+
+/**
+ * Стекло плашки во вкладке режима (третий заход, 27.09.2026). Владелец, со
+ * снимками: «что-то с плашками внутри приложения надо сделать», а про кнопки
+ * на стекле и пилюлю — «они там прямо классные». Прежняя плашка — ровный
+ * тёмный тон краски — читалась бурой коробкой; теперь она сшита из того же,
+ * из чего пилюля и кнопки:
+ *
+ * - заливка — чернила пилюли с цветом кнопки (`ModeGlow.cardTop` →
+ *   `cardBottom`, сверху слева цвета больше), на просвет ([CardLook.GLASS_TOP]);
+ * - в верхнем левом углу — цвет кнопки пятном, как свечение от кружка голоса
+ *   по пилюле ([CardLook.MODE_GLOW]);
+ * - блик полосой по верхней трети и мягкая тень снизу — как у кнопок;
+ * - кромка в свете режима: верх — блик краски (`ModeGlow.lit`), низ — тень.
+ *   Белая фаска на цветном стекле читалась рамкой, цветная — ребром.
+ *
+ * Тумблеры «Плашек» работают и тут: «фаска» снимает кромку, «свет» — блик и
+ * пятно, «темнее» — затемняет чернила (слабее, [CardLook.MODE_DARKEN]).
+ */
+fun Modifier.modeGlass(accent: Int, shape: Shape, look: CardLook): Modifier {
+    val glass = look.glow > 0f
+    val dark = look.darken * CardLook.MODE_DARKEN
+    val top = darkened(Color(ru.zf.pravka.core.ModeGlow.cardTop(accent)), dark)
+        .copy(alpha = if (glass) CardLook.GLASS_TOP else 1f)
+    val bottom = darkened(Color(ru.zf.pravka.core.ModeGlow.cardBottom(accent)), dark)
+        .copy(alpha = if (glass) CardLook.GLASS_BOTTOM else 1f)
+    val tone = Color(accent)
+    val lit = Color(ru.zf.pravka.core.ModeGlow.lit(accent))
+    return this
+        .clip(shape)
+        .background(Brush.linearGradient(listOf(top, bottom)))
+        .then(
+            if (look.light) Modifier
+                .drawBehind {
+                    drawRect(
+                        Brush.radialGradient(
+                            0f to tone.copy(alpha = CardLook.MODE_GLOW),
+                            0.72f to tone.copy(alpha = 0f),
+                            center = androidx.compose.ui.geometry.Offset.Zero,
+                            // От ширины, не от высоты: у длинной плашки пятно
+                            // иначе разлилось бы на всю её, а не на угол.
+                            radius = size.width * 1.1f,
+                        )
+                    )
+                }
+                .background(
+                    Brush.verticalGradient(
+                        0f to Color.White.copy(alpha = CardLook.SHEEN),
+                        CardLook.SHEEN_SPAN * 0.55f to Color.White.copy(alpha = CardLook.SHEEN * 0.3f),
+                        CardLook.SHEEN_SPAN to Color.Transparent,
+                    )
+                )
+                .background(
+                    Brush.verticalGradient(
+                        1f - CardLook.FOOT_SPAN to Color.Transparent,
+                        1f to Color.Black.copy(alpha = CardLook.FOOT),
+                    )
+                )
+            else Modifier
+        )
+        .then(
+            if (look.bevel) Modifier.border(
+                1.dp,
+                Brush.verticalGradient(
+                    0f to lit.copy(alpha = CardLook.MODE_RIM_LIGHT),
+                    0.2f to lit.copy(alpha = CardLook.MODE_RIM_LIGHT * 0.24f),
+                    0.5f to Color.Transparent,
+                    1f to Color.Black.copy(alpha = CardLook.MODE_RIM_SHADE),
+                ),
+                shape,
+            ) else Modifier
         )
 }

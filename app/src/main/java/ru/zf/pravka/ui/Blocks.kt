@@ -18,7 +18,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -104,24 +106,31 @@ fun PaperCard(
         // цвет с ребром, светом и зерном — предметом. Каждый слой со своим
         // тумблером: `ui/CardLook.kt`.
         val look = LocalCardLook.current
-        // Версия 3: плашка — матовое стекло над светом режима (`ui/Glow.kt`).
-        // Цвет режима на неё не подмешивается — его приносит свет вкладки,
-        // который просвечивает сквозь плашку ровно там, где он есть: верхние
-        // плашки берут тон режима, нижние остаются прежними. Там, где света
-        // нет (служебные экраны, выключенный ползунок), плашка — прежний тон:
-        // фон под ней чуть темнее её самой, и сквозь неё видно только его.
-        // Второй заход (26.09.2026, вечер): «серые плашки на этом фоне выглядят
-        // не очень… сделать их не серыми, а тёмными, но того же цвета». Во
-        // вкладке режима плашка — тёмный тон его краски (`ModeGlow.card`), на
-        // служебных экранах — прежний нейтральный.
+        // Во вкладке режима плашка — стекло в чернилах пилюли с цветом кнопки
+        // (`Modifier.modeGlass`, третий заход 27.09.2026: «что-то с плашками
+        // надо сделать»); на служебных экранах — прежний нейтральный тон с
+        // фаской, светом и зерном.
         val accent = decor?.glowAccent
-        val base = if (accent != null) Color(ru.zf.pravka.core.ModeGlow.card(accent))
-        else MaterialTheme.colorScheme.surfaceContainerLow
+        if (decor != null && accent != null) {
+            val shape = RoundedCornerShape(CardLook.MODE_RADIUS_DP.dp)
+            Box(Modifier.fillMaxWidth().modeGlass(accent, shape, look)) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .then(if (look.grain) Modifier.grain(CardLook.GRAIN) else Modifier)
+                        .glyphPattern(decor),
+                ) {
+                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), content = content)
+                    }
+                }
+            }
+            return@Column
+        }
         Card(
             modifier = Modifier.fillMaxWidth().then(if (look.bevel) Modifier.bevel() else Modifier),
             colors = CardDefaults.cardColors(
-                containerColor = darkened(base, look.darken)
-                    .copy(alpha = if (look.glow > 0f) CardLook.GLASS else 1f),
+                containerColor = darkened(MaterialTheme.colorScheme.surfaceContainerLow, look.darken),
             ),
         ) {
             Box(

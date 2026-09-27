@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -71,6 +72,7 @@ import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.SheetAction
 import ru.zf.pravka.ui.SummaryLine
 import ru.zf.pravka.ui.VoiceInput
+import ru.zf.pravka.ui.scrollFade
 import ru.zf.pravka.trigger.onFoodTap
 
 // Вкладка «Еда»: дневник приёмов с КБЖУ.
@@ -232,8 +234,10 @@ internal fun FoodTab(
         }
     }
 
+    val listState = rememberLazyListState()
     LazyColumn(
-        Modifier.fillMaxWidth(),
+        Modifier.fillMaxWidth().scrollFade(listState),
+        state = listState,
         contentPadding = ScreenPad.Padding,
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {

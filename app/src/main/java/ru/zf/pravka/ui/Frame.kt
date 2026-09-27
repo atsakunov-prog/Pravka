@@ -31,6 +31,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.TextStyle
@@ -322,3 +331,65 @@ fun StatsAction(onClick: () -> Unit) = HeaderAction(Glyphs.Stats, "статис�
 /** Выгрузка: стрелка из лотка. */
 @Composable
 fun ExportAction(onClick: () -> Unit) = HeaderAction(Glyphs.Export, "выгрузка", onClick)
+
+// ---------------------------------------------------------------------------
+// Край ленты под шапкой
+// ---------------------------------------------------------------------------
+
+/**
+ * Сколько ленты растворяется у верхнего края, когда её листают, dp. Владелец
+ * (27.09.2026): «когда я листаю вниз приложение, то там наверху тогда резкая
+ * полоса». Лента обрезается ровно по своему краю под шапкой, и плашка,
+ * уходящая вверх, срезалась ножом поверх света. Теперь край — не нож, а
+ * туман: верхние [SCROLL_FADE_DP] ленты сходят в прозрачность, и плашка
+ * уходит под шапку в свет, как у Gemini.
+ */
+const val SCROLL_FADE_DP = 24
+
+/**
+ * Растворение верха ленты по её состоянию. Пока лента стоит в начале, края нет
+ * вовсе: пилюля первой строкой не должна тонуть в тумане. Туман набирается
+ * вместе с первыми [SCROLL_FADE_DP] прокрутки — без щелчка.
+ */
+fun Modifier.scrollFade(state: LazyListState): Modifier = scrollFade {
+    if (state.firstVisibleItemIndex > 0) Float.MAX_VALUE else state.firstVisibleItemScrollOffset.toFloat()
+}
+
+fun Modifier.scrollFade(state: ScrollState): Modifier = scrollFade { state.value.toFloat() }
+
+/**
+ * Прокрутка колонки с растворением верха — замена `verticalScroll(rememberScrollState())`
+ * на экранах вкладок: одна строка вместо двух в каждом.
+ */
+@Composable
+fun Modifier.fadingScroll(): Modifier {
+    val state = rememberScrollState()
+    return this.scrollFade(state).verticalScroll(state)
+}
+
+/**
+ * Туман рисуется маской поверх ленты (`DstIn`) — ей нужен свой буфер
+ * (`Offscreen`), иначе маска вырезала бы и свет с фоном под лентой. Буфер
+ * заводится только пока лента сдвинута: в покое слой рисуется прямо.
+ * Состояние читается в фазах слоя и рисования — прокрутка не пересобирает экран.
+ */
+private fun Modifier.scrollFade(scrolled: () -> Float): Modifier = this
+    .graphicsLayer {
+        compositingStrategy = if (scrolled() > 0f) CompositingStrategy.Offscreen else CompositingStrategy.Auto
+    }
+    .drawWithContent {
+        drawContent()
+        val fade = SCROLL_FADE_DP.dp.toPx()
+        val k = (scrolled() / fade).coerceIn(0f, 1f)
+        if (k <= 0f) return@drawWithContent
+        drawRect(
+            Brush.verticalGradient(
+                0f to Color.Black.copy(alpha = 1f - k),
+                1f to Color.Black,
+                startY = 0f,
+                endY = fade,
+            ),
+            size = Size(size.width, fade),
+            blendMode = BlendMode.DstIn,
+        )
+    }

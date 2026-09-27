@@ -62,6 +62,7 @@ import ru.zf.pravka.ui.PaperField
 import ru.zf.pravka.ui.PaperTextButton
 import ru.zf.pravka.ui.PaperToggle
 import ru.zf.pravka.ui.ScreenPad
+import ru.zf.pravka.ui.fadingScroll
 
 // «Ещё → Разборы» (16–18.09.2026): ночной разбор диктовок, правка промпта и
 // ручное сравнение моделей (CompareCard); ночная тень снята 18.09, её старые
@@ -99,7 +100,7 @@ internal fun ReviewsTab(app: PravkaApp) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {

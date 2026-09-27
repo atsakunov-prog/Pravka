@@ -10,7 +10,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -27,13 +27,13 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -45,9 +45,10 @@ import ru.zf.pravka.core.ModeGlow
 // очень нравится дизайн… у нас же даже цвета для них есть свои, можно всё это
 // сделать очень красивым»; и, увидев макет: «сохраним цветность каждого
 // направления и сделаем вот это свечение». Свет сверху вкладки — в цвете её
-// кнопки на стекле и ТОЛЬКО в нём (оттенок сторожит `ModeGlowTest`); пока
-// Claude работает в этой вкладке — ярче, одним плавным переходом, без
-// пульса: пульсацию кнопки владелец снял в тот же день («дрожание отвлекает»).
+// кнопки на стекле; с 27.09 к нему — два соседних оттенка на полшага по кругу
+// («переливы с чуть соседними цветами»), чужих цветов нет (сторожит
+// `ModeGlowTest`). Пока Claude работает в этой вкладке — ярче, одним плавным
+// переходом, без пульса: пульсацию кнопки владелец снял («дрожание отвлекает»).
 
 /**
  * Цвет кнопки режима на стекле — отсюда свет вкладки и одежда строки ввода.
@@ -96,17 +97,23 @@ fun GlowBusy(active: Boolean) {
 }
 
 /**
- * Свет вкладки — слой под содержимым: три КРУГЛЫХ пятна одной краски (второй
- * заход, 26.09.2026: «наверху свечение какое-то круглое», «должно как-то
- * двигаться», «переливы… в рамках одного цвета»). Сам цвет — большое пятно
- * слева, светлый тон — справа, глубокий — ниже посередине; каждое медленно
- * обходит свою петлю, светлое и глубокое дышат силой навстречу друг другу —
- * это и есть перелив, оттенок не трогается.
+ * Свет вкладки — под содержимым: круглые пятна краски режима (второй заход,
+ * 26.09.2026: «наверху свечение какое-то круглое», «должно как-то
+ * двигаться»). Сам цвет кнопки — большое пятно слева сверху, тёплый сосед —
+ * справа, холодный — ниже посередине, блик — у самого верха. Каждое медленно
+ * обходит свою петлю, а соседи дышат силой навстречу друг другу — это и есть
+ * перелив: цвет верха поворачивается на полшага туда и обратно.
  *
- * Дёшево нарочно: каждое пятно рисуется один раз на размер (`drawWithCache`)
- * в своём слое, а движение и дыхание — свойства слоя (сдвиг и прозрачность),
- * их меняет рендер без перерисовки. Прокрутка ленты слой не трогает. Пока
- * вкладка не на экране, часы кадров стоят — и перелив тоже.
+ * Рисуется ОДНИМ проходом, без слоёв (третий заход, 27.09.2026: «с края едет
+ * тёмная резкая полоса»). Прежде каждое пятно было своим слоем со сдвигом и
+ * прозрачностью, а слой с прозрачностью рисуется в свой буфер размером с
+ * себя — сдвинутый, он показывал обрезанный край, и край ехал по экрану.
+ * Теперь кисти строятся один раз на размер (`drawWithCache`), движение —
+ * сдвиг холста перед кругом, сила — альфа самого круга. Ни буфера, ни края;
+ * и свет без буфера рисуется выше себя — под строкой состояния, с самого
+ * верха экрана, как у Gemini, без прежней ровной границы по строке. Сбоку
+ * свет обрезан своей колонкой: на развороте он не ложится на колонку слева.
+ * Пока вкладка не на экране, часы кадров стоят — и перелив тоже.
  */
 @Composable
 fun ModeGlowLayer(decor: ModeDecor) {
@@ -114,28 +121,98 @@ fun ModeGlowLayer(decor: ModeDecor) {
     val look = LocalCardLook.current
     val busy = (LocalGlowState.current?.busy ?: 0) > 0
     val target = ModeGlow.alpha(look.glow, busy)
-    val alpha by animateFloatAsState(target, tween(ModeGlow.FADE_MS), label = "modeGlow")
-    if (target <= 0f && alpha <= 0.001f) return
-    // Свет начинается с самого верха экрана, под строкой состояния, как у
-    // Gemini: слой стоит под шапкой, а рисует выше себя на высоту строки.
+    val strength = animateFloatAsState(target, tween(ModeGlow.FADE_MS), label = "modeGlow")
+    if (target <= 0f && strength.value <= 0.001f) return
     val top = WindowInsets.statusBars.getTop(LocalDensity.current).toFloat()
-    val tone = remember(accent) { Color(ModeGlow.tone(accent)) }
-    val light = remember(accent) { Color(ModeGlow.light(accent)) }
-    val deep = remember(accent) { Color(ModeGlow.deep(accent)) }
-    val moving = look.glowMotion
+    val blobs = remember(accent) { glowBlobs(accent) }
+    // Часы перелива заводятся, только когда он включён: выключенный тумблер
+    // «Переливы» — это стоящий свет и ни одного лишнего кадра.
+    val drift: Drift? = if (look.glowMotion) rememberDrift() else null
+    Spacer(
+        Modifier
+            .fillMaxSize()
+            .drawWithCache {
+                val w = size.width
+                // Мерка — ширина, но не шире [MAX_HEIGHT_DP]: на развороте Fold
+                // круги от ширины заливали бы весь экран, а свет — это верх.
+                val u = minOf(w, ModeGlow.MAX_HEIGHT_DP.dp.toPx())
+                val brushes = blobs.map { b ->
+                    Brush.radialGradient(
+                        0f to b.color,
+                        0.3f to b.color.copy(alpha = 0.78f),
+                        0.6f to b.color.copy(alpha = 0.36f),
+                        0.85f to b.color.copy(alpha = 0.09f),
+                        1f to b.color.copy(alpha = 0f),
+                        center = Offset.Zero,
+                        radius = u * b.r,
+                    )
+                }
+                onDrawBehind {
+                    val s = strength.value
+                    if (s <= 0.001f) return@onDrawBehind
+                    val wave = drift?.let { (sin(it.breath.value) + 1f) / 2f } ?: 0.5f
+                    clipRect(left = 0f, top = -top, right = w, bottom = size.height) {
+                        blobs.forEachIndexed { i, b ->
+                            val p = drift?.phases?.get(i)?.value
+                            val x = w * b.cx + (p?.let { cos(it) * ModeGlow.DRIFT * u * b.dx } ?: 0f)
+                            val y = u * b.cy - top + (p?.let { sin(it) * ModeGlow.DRIFT * u * b.dy } ?: 0f)
+                            val k = when (b.breath) {
+                                Breath.NONE -> 1f
+                                Breath.WITH -> 1f - ModeGlow.SHIMMER * (1f - wave)
+                                Breath.AGAINST -> 1f - ModeGlow.SHIMMER * wave
+                            }
+                            translate(x, y) {
+                                drawCircle(brushes[i], radius = u * b.r, center = Offset.Zero, alpha = s * b.alpha * k)
+                            }
+                        }
+                    }
+                }
+            },
+    )
+}
+
+/** Как пятно дышит силой: не дышит, в такт переливу или навстречу ему. */
+private enum class Breath { NONE, WITH, AGAINST }
+
+/**
+ * Одно пятно: цвет, центр в долях мерки ([cx] — от ширины, [cy] — от верха
+ * экрана, под строкой состояния), радиус [r] в долях мерки, сила [alpha],
+ * размах петли по осям ([dx], [dy]) и как дышит.
+ */
+private class GlowBlob(
+    val color: Color,
+    val cx: Float,
+    val cy: Float,
+    val r: Float,
+    val alpha: Float,
+    val dx: Float,
+    val dy: Float,
+    val breath: Breath,
+)
+
+/** Пятна в порядке рисования: нижнее — первым. */
+private fun glowBlobs(accent: Int): List<GlowBlob> = listOf(
+    // Холодный сосед — ниже и шире: тело света, дышит навстречу тёплому.
+    GlowBlob(Color(ModeGlow.cool(accent)), 0.5f, 0.46f, 0.78f, 0.85f, 0.7f, 0.5f, Breath.AGAINST),
+    // Сам цвет кнопки — главное пятно у левого верхнего угла, не дышит.
+    GlowBlob(Color(ModeGlow.tone(accent)), 0.2f, 0f, 1f, 1f, 1f, 0.6f, Breath.NONE),
+    // Тёплый сосед — справа сверху.
+    GlowBlob(Color(ModeGlow.warm(accent)), 0.88f, 0.1f, 0.78f, 0.8f, 0.8f, 0.7f, Breath.WITH),
+    // Блик — у самого верха, над шапкой: светлая верхушка, как у кнопки.
+    GlowBlob(Color(ModeGlow.lit(accent)), 0.56f, -0.04f, 0.5f, 0.7f, 0.9f, 0.4f, Breath.WITH),
+)
+
+/** Часы перелива: по петле на пятно (периоды не кратные) и одно дыхание соседей. */
+private class Drift(val phases: List<State<Float>>, val breath: State<Float>)
+
+@Composable
+private fun rememberDrift(): Drift {
     val t = rememberInfiniteTransition(label = "modeGlowDrift")
-    val a = t.loop(ModeGlow.DRIFT_MS, "a").takeIf { moving }
-    val b = t.loop((ModeGlow.DRIFT_MS * 1.37f).toInt(), "b").takeIf { moving }
-    val c = t.loop((ModeGlow.DRIFT_MS * 1.71f).toInt(), "c").takeIf { moving }
-    val breath = t.loop(ModeGlow.SHIMMER_MS, "breath").takeIf { moving }
-    Box(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }) {
-        // Глубокое — ниже и шире: тело света; дышит навстречу светлому.
-        GlowBlob(deep, cx = 0.52f, cy = 0.5f, r = 0.66f, top = top, phase = c, dx = 0.7f, dy = 0.5f, breath = breath, inverse = true)
-        // Сам цвет — главное пятно у левого верхнего угла.
-        GlowBlob(tone, cx = 0.18f, cy = 0.04f, r = 0.9f, top = top, phase = a, dx = 1f, dy = 0.6f, breath = null, inverse = false)
-        // Светлый тон — справа сверху: блик, который переливается.
-        GlowBlob(light, cx = 0.86f, cy = 0.08f, r = 0.7f, top = top, phase = b, dx = 0.8f, dy = 0.7f, breath = breath, inverse = false)
+    val phases = listOf(1.71f, 1f, 1.37f, 2.13f).mapIndexed { i, k ->
+        t.loop((ModeGlow.DRIFT_MS * k).toInt(), "drift$i")
     }
+    val breath = t.loop(ModeGlow.SHIMMER_MS, "breath")
+    return remember(phases, breath) { Drift(phases, breath) }
 }
 
 /** Угол петли: от нуля до полного круга за [periodMs], ровно, по кругу. */
@@ -147,62 +224,6 @@ private fun androidx.compose.animation.core.InfiniteTransition.loop(periodMs: In
         animationSpec = infiniteRepeatable(tween(periodMs, easing = LinearEasing), RepeatMode.Restart),
         label = label,
     )
-
-/**
- * Одно круглое пятно света: круговой градиент с центром в долях ширины
- * ([cx], [cy] — от верха экрана, под строкой состояния; [r] — радиус в
- * долях ширины). [phase] — угол его петли, [breath] — фаза дыхания силы;
- * null — стоит на месте и не дышит (тумблер «Переливы» выключен).
- */
-@Composable
-private fun GlowBlob(
-    color: Color,
-    cx: Float,
-    cy: Float,
-    r: Float,
-    top: Float,
-    phase: State<Float>?,
-    dx: Float,
-    dy: Float,
-    breath: State<Float>?,
-    inverse: Boolean,
-) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .graphicsLayer {
-                val u = minOf(size.width, ModeGlow.MAX_HEIGHT_DP.dp.toPx())
-                phase?.value?.let { p ->
-                    translationX = cos(p) * ModeGlow.DRIFT * u * dx
-                    translationY = sin(p) * ModeGlow.DRIFT * u * dy
-                }
-                breath?.value?.let { q ->
-                    val wave = (sin(q) + 1f) / 2f
-                    val k = if (inverse) 1f - wave else wave
-                    this.alpha = 1f - ModeGlow.SHIMMER * k
-                }
-            }
-            .drawWithCache {
-                // Меркой — ширина, но не шире [MAX_HEIGHT_DP]: на развороте Fold
-                // круги от ширины заливали бы весь экран, а свет — это верх.
-                val w = size.width
-                val u = minOf(w, ModeGlow.MAX_HEIGHT_DP.dp.toPx())
-                val center = Offset(w * cx, u * cy - top)
-                val radius = u * r
-                val brush = Brush.radialGradient(
-                    0f to color,
-                    0.35f to color.copy(alpha = 0.55f),
-                    0.7f to color.copy(alpha = 0.14f),
-                    1f to color.copy(alpha = 0f),
-                    center = center,
-                    radius = radius,
-                )
-                onDrawBehind {
-                    drawCircle(brush, radius = radius, center = center)
-                }
-            },
-    )
-}
 
 // ---------------------------------------------------------------------------
 // Секунды до ответа — в приложении

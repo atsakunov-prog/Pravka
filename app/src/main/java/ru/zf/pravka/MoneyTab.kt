@@ -72,6 +72,7 @@ import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.Segments
 import ru.zf.pravka.ui.SheetAction
 import ru.zf.pravka.ui.SummaryLine
+import ru.zf.pravka.ui.fadingScroll
 
 // Вкладка «Деньги» (23.09.2026). Сверху — «Личное · ЗФ»: от них зависит вся
 // вкладка. Под ними три части чипами (24.09.2026, второе издание): вкладка
@@ -219,7 +220,7 @@ internal fun MoneyTab(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {

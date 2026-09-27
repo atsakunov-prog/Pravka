@@ -54,6 +54,7 @@ import ru.zf.pravka.ui.RowRule
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.StatusDot
 import ru.zf.pravka.ui.tint
+import ru.zf.pravka.ui.fadingScroll
 
 // Настройки — пять полок (24.09.2026, «второе издание»).
 //
@@ -131,7 +132,7 @@ internal fun SettingsTab(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
@@ -387,7 +388,7 @@ internal fun ModeSettingsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {

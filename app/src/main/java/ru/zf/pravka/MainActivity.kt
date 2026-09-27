@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -106,6 +107,8 @@ import ru.zf.pravka.ui.PaperRow
 import ru.zf.pravka.ui.RowRule
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.tint
+import ru.zf.pravka.ui.fadingScroll
+import ru.zf.pravka.ui.scrollFade
 
 // Tabs: Засечка (the daily surface), then the Правка service tabs.
 // Editorial "proofreader" design: paper, ink, red pen (ui/Theme.kt).
@@ -448,7 +451,7 @@ private fun MoreList(onOpen: (Tab) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
@@ -1226,7 +1229,7 @@ private fun LearningTab(app: PravkaApp) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
@@ -1572,7 +1575,7 @@ private fun LogsTab(app: PravkaApp) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
@@ -1873,8 +1876,10 @@ private fun DictionaryTab(
         .filter { query.isEmpty() || it.from.lowercase().contains(query) || it.to.lowercase().contains(query) }
         .sortedByDescending { it.hits }
 
+    val listState = rememberLazyListState()
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().scrollFade(listState),
+        state = listState,
         contentPadding = ScreenPad.Padding,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -2265,7 +2270,7 @@ private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
@@ -2402,7 +2407,7 @@ private fun PromptEditor(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

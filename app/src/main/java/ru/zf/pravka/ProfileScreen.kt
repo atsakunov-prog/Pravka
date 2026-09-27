@@ -32,6 +32,7 @@ import ru.zf.pravka.ui.PaperToggle
 import ru.zf.pravka.ui.RowRule
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.Segments
+import ru.zf.pravka.ui.fadingScroll
 
 // Кто пользуется установкой и какие режимы ему нужны (25.09.2026). Владелец:
 // «сначала Правка должна спрашивать, кто юзер: Саша, Марианна, Серёжа или
@@ -104,7 +105,7 @@ internal fun ProfileOnboarding(app: PravkaApp) {
     Column(
         Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fadingScroll()
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
