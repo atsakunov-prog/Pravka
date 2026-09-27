@@ -336,9 +336,10 @@ fun Modifier.curlDrag(
     var baseDy = 0f
     var from = 0
     var forward = true
-    // Лёгкий взмах тоже переворачивает: порог низкий, иначе короткие
-    // смахивания возвращали страницу на место - владелец на живой сборке.
-    val flick = 220f * density
+    // Лёгкий взмах тоже переворачивает: порог совсем низкий, иначе
+    // короткие смахивания возвращали страницу на место - владелец на живой
+    // сборке просил 50-75.
+    val flick = 60f * density
     detectDragGestures(
         onDragStart = {
             state.settling?.cancel()
@@ -376,23 +377,13 @@ fun Modifier.curlDrag(
                 decided = true
                 if (leafTurn(from, forward)) {
                     state.forward = forward
-                    if (forward) {
-                        state.slot = from
-                        // Взялись левее листа (за левую страницу, за поле) -
-                        // значит, за его ближний край.
-                        state.grab = Offset(
-                            start.x.coerceIn(s.left + 0.35f * s.width, s.right - 2f),
-                            start.y.coerceIn(s.top, s.bottom),
-                        )
-                    } else {
-                        // Назад: лист лежит перевёрнутым слева, и под пальцем -
-                        // его точка, отражённая через корешок.
-                        state.slot = from - 1
-                        state.grab = Offset(
-                            (2f * s.left - start.x).coerceIn(s.left + 0.05f * s.width, s.right - 2f),
-                            start.y.coerceIn(s.top, s.bottom),
-                        )
-                    }
+                    // Лист всегда берётся за наружный край на высоте пальца,
+                    // где бы палец ни коснулся. Захват посреди страницы давал
+                    // геометрию, у которой валик не опадал к нулю: отпущенный
+                    // лист замирал горбом и потом исчезал скачком. С захватом
+                    // за край и валик, и сгиб сходят на нет вместе с ходом.
+                    state.slot = if (forward) from else from - 1
+                    state.grab = Offset(s.right - 2f, start.y.coerceIn(s.top, s.bottom))
                     state.dy = 0f
                     state.tilt = 0f
                     state.travel = state.travelFor(s)
@@ -435,7 +426,7 @@ private fun finish(
     val target = when {
         onward -> to
         backOff -> from
-        progress > 0.22f -> to
+        progress > 0.15f -> to
         else -> from
     }
     state.settling = scope.launch {

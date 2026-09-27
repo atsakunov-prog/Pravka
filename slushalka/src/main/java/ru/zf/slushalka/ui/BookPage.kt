@@ -236,6 +236,8 @@ data class PageLook(
      * стопка страниц, ныряющих в сгиб у корешка.
      */
     val tilt: Boolean = false,
+    /** Ляссе: ленточка-закладка из корешка, лежит на торце и свисает с книги. */
+    val ribbon: Boolean = false,
 ) {
     val volume: Boolean get() = style == Settings.PAGE_VOLUME
     val flat: Boolean get() = style == Settings.PAGE_FLAT
@@ -520,6 +522,13 @@ fun Modifier.pageUnder(
     shape: BookShape,
     /** Края обложки книги для загибки переплёта; null - картон одним цветом. */
     edges: CoverEdges? = null,
+    /**
+     * Насколько книга заходит под системные панели сверху и снизу: на столько
+     * выше и ниже страниц тянутся торцы блока. Владелец: «чтобы книжка
+     * занимала верхнюю и нижнюю кусочки экрана».
+     */
+    insetTop: Dp = 0.dp,
+    insetBottom: Dp = 0.dp,
 ): Modifier {
     if (look.flat || look.style == Settings.PAGE_SOFT) return this
     val m = cardMetrics(look, shape)
@@ -566,7 +575,7 @@ fun Modifier.pageUnder(
                 val blur = 9f * dp * depth
                 layer.renderEffect = BlurEffect(blur, blur, TileMode.Decal)
             } else null
-            onDrawBehind { drawVolume(tones, m, shape, depth, fine, fibers, cloth, band, edges, soft, grow) }
+            onDrawBehind { drawVolume(tones, m, shape, depth, fine, fibers, cloth, band, edges, soft, grow, look.ribbon, insetTop.toPx(), insetBottom.toPx()) }
         }
     else this
         .shadow(lift, corner, clip = false, ambientColor = tones.cast, spotColor = tones.cast)
@@ -597,13 +606,17 @@ private fun DrawScope.drawVolume(
     soft: GraphicsLayer?,
     /** На сколько слой тени шире книги с каждой стороны. */
     softGrow: Float,
+    ribbon: Boolean,
+    insetTop: Float,
+    insetBottom: Float,
 ) {
     val w = size.width
     val h = size.height
     val cover = m.cover.toPx()
     val cut = m.cut.toPx()
-    val reveal = m.reveal.toPx()
-    val foot = m.foot.toPx()
+    // Торцы блока: под системными панелями страниц нет, там видна стопка.
+    val reveal = m.reveal.toPx() + insetTop
+    val foot = m.foot.toPx() + insetBottom
     val spine = m.spine.toPx()
     val hair = 1.dp.toPx().coerceAtLeast(1f)
     val dp = 1.dp.toPx()
@@ -761,6 +774,7 @@ private fun DrawScope.drawVolume(
         )
         drawRect(tones.cast(0.72f), topLeft = Offset(at - hair / 2f, by), size = Size(hair, bh))
         headbands(tones, headband, w / 2f, by, bh, reveal, 22f * dp)
+        if (ribbon) drawRibbon(tones, w / 2f, by + bh - foot, h)
         return
     }
 
@@ -801,6 +815,46 @@ private fun DrawScope.drawVolume(
     }
     // Каптал у корешка: ровно в его ширину, иначе тесьма торчит из книги.
     headbands(tones, headband, sx + spine / 2f, by, bh, reveal, spine)
+    if (ribbon) drawRibbon(tones, sx + spine, by + bh - foot, h)
+}
+
+/**
+ * Ляссе: ленточка-закладка. Выходит из сгиба у корешка там, где кончаются
+ * страницы, ложится наискось на торец блока и свисает с книги на стол.
+ * Атлас: тёмный край, светлая полоса посередине, тень под лентой.
+ * [x] - корешок, [top] - верх торца, [bottom] - нижний край книги.
+ */
+private fun DrawScope.drawRibbon(tones: PaperTones, x: Float, top: Float, bottom: Float) {
+    val dp = 1.dp.toPx()
+    val width = 5f * dp
+    val tail = 9f * dp
+    // Наискось вправо: лента лежит не по линейке, её кладут рукой.
+    val lean = 0.22f
+    val end = bottom + tail
+    fun strip(dx: Float, dy: Float): Path = Path().apply {
+        val x0 = x - width / 2f + dx
+        val x1 = x0 + (end - top) * lean
+        moveTo(x0, top + dy)
+        lineTo(x0 + width, top + dy)
+        lineTo(x1 + width, end + dy)
+        // Конец срезан наискось, как режут ленту.
+        lineTo(x1 - 1.5f * dp, end + dy - 2.5f * dp)
+        close()
+    }
+    drawPath(strip(1.5f * dp, 2f * dp), tones.cast(0.28f))
+    val base = lerp(tones.headband, Color.Black, 0.18f)
+    drawPath(strip(0f, 0f), base)
+    drawPath(
+        strip(0f, 0f),
+        Brush.horizontalGradient(
+            0f to tones.cast(0.30f),
+            0.35f to tones.light(0.28f),
+            0.6f to Color.Transparent,
+            1f to tones.cast(0.34f),
+            startX = x - width / 2f,
+            endX = x + width / 2f + (end - top) * lean,
+        ),
+    )
 }
 
 /**
@@ -888,14 +942,24 @@ private fun DrawScope.blockEnds(
     if (width <= 0f) return
     val dp = 1.dp.toPx()
     val hair = dp.coerceAtLeast(1f)
-    // Сверху - тонкий зазор, как и был.
-    if (reveal > 0f) {
+    // Сверху - тонкий зазор, а под панелью часов - дальний торец блока:
+    // стопка страниц строем, сжатая, как и положено дальнему краю.
+    if (reveal > 0f) clipRect(x0, y, x0 + width, y + reveal) {
         drawRect(tones.block, topLeft = Offset(x0, y), size = Size(width, reveal))
         drawRect(
-            Brush.verticalGradient(listOf(tones.cast(0.26f), tones.cast(0.06f)), startY = y + reveal, endY = y),
+            Brush.verticalGradient(listOf(tones.cast(0.30f), tones.cast(0.06f)), startY = y, endY = y + reveal),
             topLeft = Offset(x0, y),
             size = Size(width, reveal),
         )
+        if (reveal > 5f * dp) {
+            var yl = y + reveal - 2.6f * dp
+            var i = 0
+            while (yl > y) {
+                drawRect(tones.cast(0.10f + 0.08f * jitter(i, 12)), topLeft = Offset(x0, yl), size = Size(width, hair))
+                yl -= 1.2f * dp
+                i++
+            }
+        }
         drawRect(tones.cast(0.12f), topLeft = Offset(x0, y + reveal - 2f * dp), size = Size(width, hair))
     }
     if (foot <= 0f) return
@@ -915,7 +979,9 @@ private fun DrawScope.blockEnds(
             for (i in 0 until n) {
                 val depth = (i + 0.5f) / n
                 val yl = yy + step * (i + 0.5f)
-                val dipMax = foot * 0.6f * (1f - depth)
+                // Глубина ныряния ограничена: под панелью навигации торец
+                // высокий, а сгиб у корешка от этого глубже не становится.
+                val dipMax = minOf(foot * 0.6f, 14f * dp) * (1f - depth)
                 path.reset()
                 var x = x0
                 var first = true
@@ -1320,18 +1386,22 @@ fun Modifier.halfPan(
      * страница следующего разворота.
      */
     hideTurned: Boolean = false,
+    /**
+     * Докуда ставить страницы на место в книге. Дальние должны уехать за
+     * экран, как их и увёз пейджер: иначе все страницы книги складываются в
+     * одну стопку на двух местах, и поверх читаемой ложится давно
+     * прочитанная - владелец на живой сборке увидел ровно это, «левая
+     * страница просто как обложка». При загибе нужна и правая страница
+     * следующего разворота: она под тем листом, что гнётся.
+     */
+    reach: Float = 1.05f,
 ): Modifier = this.graphicsLayer {
     val off = offset()
     if (hideTurned && off > 1f) {
         translationX = -10f * size.width
         return@graphicsLayer
     }
-    // На место в книге ставятся только страницы этого разворота и соседнего.
-    // Дальние должны уехать за экран, как их и увёз пейджер: иначе все
-    // страницы книги складываются в одну стопку на двух местах, и поверх
-    // читаемой ложится давно прочитанная - владелец на живой сборке увидел
-    // ровно это, «левая страница просто как обложка».
-    if (off < -1.05f || off > 2.05f) return@graphicsLayer
+    if (off < -reach || off > 2.05f) return@graphicsLayer
     val w = size.width
     val peekPx = peek.toPx()
     val pan = bookPan(bookPhase(position()), w, peekPx)

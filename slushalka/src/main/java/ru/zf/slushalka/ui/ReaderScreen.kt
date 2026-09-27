@@ -242,6 +242,7 @@ fun ReaderScreen(
         bleed = if (prefs.readerBleed) prefs.readerBleedLevel else 0f,
         curl = prefs.readerBookTurn == Settings.BOOK_TURN_CURL,
         tilt = prefs.readerBookTilt,
+        ribbon = prefs.readerBookRibbon,
     )
 
     val view = LocalView.current

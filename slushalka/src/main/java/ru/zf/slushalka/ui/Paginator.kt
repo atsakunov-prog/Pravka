@@ -153,15 +153,19 @@ object Paginator {
                 // строку. На живой сборке она и срезалась нижним краем.
                 var cut = last
                 var end = wordEnd(text, layout.getLineEnd(cut, visibleEnd = true))
-                while (cut > 0) {
-                    val fit = measurer.measure(
+                var fit = measurer.measure(
+                    annotate(text.substring(0, end), opens),
+                    st,
+                    constraints = Constraints(maxWidth = widthPx),
+                )
+                while (cut > 0 && fit.size.height > remaining) {
+                    cut--
+                    end = wordEnd(text, layout.getLineEnd(cut, visibleEnd = true))
+                    fit = measurer.measure(
                         annotate(text.substring(0, end), opens),
                         st,
                         constraints = Constraints(maxWidth = widthPx),
                     )
-                    if (fit.size.height <= remaining) break
-                    cut--
-                    end = wordEnd(text, layout.getLineEnd(cut, visibleEnd = true))
                 }
                 if (pageStart < 0) pageStart = base
                 pieces.add(PagePiece(text.substring(0, end), null, base, head, heading))
@@ -169,8 +173,12 @@ object Paginator {
                 // уносит с собой остаток (slack) и раздаёт его воздуху у
                 // заголовка. Без этой строки остаток выходил больше
                 // настоящего на целый кусок текста, страницу раздувало, и
-                // нижние строки срезало краем полосы.
-                used += layout.getLineBottom(cut).toInt()
+                // нижние строки срезало краем полосы. Считается по перемеру
+                // куска, а не по раскладке целого абзаца: кусок, выросший на
+                // строку, но влезший в остаток, иначе занимал больше, чем
+                // записано, страница думала, что у неё есть запас, раздавала
+                // его отбивкам - и нижняя строка ложилась на колонтитул.
+                used += fit.size.height
                 flush()
                 val rest = text.substring(end)
                 val trimmed = rest.trimStart()

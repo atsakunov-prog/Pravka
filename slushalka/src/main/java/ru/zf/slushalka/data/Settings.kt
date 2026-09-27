@@ -97,6 +97,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
          * торец блока - стопка страниц, ныряющих в сгиб у корешка.
          */
         val readerBookTilt: Boolean = true,
+        /** Ляссе: ленточка-закладка из корешка, лежит на торце и свисает с книги. */
+        val readerBookRibbon: Boolean = true,
         /** Колонтитул в нижнем углу страницы: номер, процент, оба или ничего. */
         val readerFooter: String = FOOTER_BOOK,
         /** Переносы: без них выключка по ширине рвёт строку дырами. */
@@ -217,6 +219,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerBleedLevel = p[KEY_R_BLEED_LEVEL]?.takeIf { it in BLEED_LEVELS } ?: BLEED_MID,
                 readerBookTurn = p[KEY_R_BOOK_TURN]?.takeIf { it in BOOK_TURNS } ?: BOOK_TURN_CURL,
                 readerBookTilt = p[KEY_R_BOOK_TILT] ?: true,
+                readerBookRibbon = p[KEY_R_BOOK_RIBBON] ?: true,
                 readerFooter = p[KEY_R_FOOTER]?.takeIf { it in FOOTERS } ?: FOOTER_BOOK,
                 readerHyphens = p[KEY_R_HYPHENS] ?: true,
                 readerCanon = p[KEY_R_CANON] ?: true,
@@ -305,6 +308,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderBleedLevel(v: Float) = edit { if (v in BLEED_LEVELS) it[KEY_R_BLEED_LEVEL] = v }
     suspend fun setReaderBookTurn(v: String) = edit { if (v in BOOK_TURNS) it[KEY_R_BOOK_TURN] = v }
     suspend fun setReaderBookTilt(v: Boolean) = edit { it[KEY_R_BOOK_TILT] = v }
+    suspend fun setReaderBookRibbon(v: Boolean) = edit { it[KEY_R_BOOK_RIBBON] = v }
     suspend fun setReaderFooter(v: String) = edit { if (v in FOOTERS) it[KEY_R_FOOTER] = v }
     suspend fun setReaderHyphens(v: Boolean) = edit { it[KEY_R_HYPHENS] = v }
     suspend fun setReaderCanon(v: Boolean) = edit { it[KEY_R_CANON] = v }
@@ -612,6 +616,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_BLEED_LEVEL = floatPreferencesKey("reader_bleed_level")
         private val KEY_R_BOOK_TURN = stringPreferencesKey("reader_book_turn")
         private val KEY_R_BOOK_TILT = booleanPreferencesKey("reader_book_tilt")
+        private val KEY_R_BOOK_RIBBON = booleanPreferencesKey("reader_book_ribbon")
         private val KEY_R_FOOTER = stringPreferencesKey("reader_footer")
         private val KEY_R_HYPHENS = booleanPreferencesKey("reader_hyphens")
         private val KEY_R_CANON = booleanPreferencesKey("reader_canon")

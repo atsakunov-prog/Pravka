@@ -378,9 +378,12 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
         )
 
         PaperToggle("Обрез снизу", prefs.readerBookTilt) { scope.launch { s.setReaderBookTilt(it) } }
+        PaperToggle("Ляссе", prefs.readerBookRibbon) { scope.launch { s.setReaderBookRibbon(it) } }
         PaperNote(
             "Книга чуть наклонена от себя: под страницами виден торец блока - стопка " +
-                "страниц, которые у корешка ныряют в сгиб. Выключено - книга строго сверху.",
+                "страниц, которые у корешка ныряют в сгиб; книга при этом уходит под часы и " +
+                "под панель навигации - там её торцы. Ляссе - ленточка-закладка из корешка, " +
+                "лежит на торце и свисает с книги.",
             Modifier.padding(top = 8.dp),
         )
 

@@ -86,6 +86,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -352,19 +353,43 @@ internal fun PagedBody(
         // слота - его правая страница; на её обороте напечатана следующая,
         // и это ровно тот просвет, что у неё нарисован под текстом.
         val backLayers = remember { HashMap<Int, GraphicsLayer>() }
+        // Снимки заранее, по соседним листам, пока книга лежит: снимок
+        // делается не мгновенно, а при обороте назад валик встаёт у корешка с
+        // первого кадра - и без снимка он выходил пустым, «посередине лист
+        // становится пустым». Кэш живёт, пока не сменилась разбивка.
+        val backCache = remember(pages) { HashMap<Int, ImageBitmap>() }
         fun leafOf(slot: Int) = if (shape.spread) slot * 2 + 1 else slot
         fun snapshotBack(slot: Int) {
-            val layer = backLayers[leafOf(slot)] ?: return
+            val leaf = leafOf(slot)
+            backCache[leaf]?.let { curl.setBack(it) }
+            val layer = backLayers[leaf] ?: return
             scope.launch {
                 val bmp = runCatching { layer.toImageBitmap() }.getOrNull() ?: return@launch
+                backCache[leaf] = bmp
                 if (curl.slot == slot) curl.setBack(bmp)
             }
         }
-        // Куда доводить лист после пальца: та же пружина, что у пейджера.
+        LaunchedEffect(pages, pagerState.currentPage, curlOn) {
+            if (!curlOn || pages.isEmpty()) return@LaunchedEffect
+            // Дать слоям нарисоваться, потом снять изнанки у соседей.
+            kotlinx.coroutines.delay(120)
+            val around = (pagerState.currentPage - 1)..(pagerState.currentPage + 1)
+            for (slot in around) {
+                val leaf = leafOf(slot)
+                val layer = backLayers[leaf] ?: continue
+                if (backCache.containsKey(leaf)) continue
+                runCatching { layer.toImageBitmap() }.getOrNull()?.let { backCache[leaf] = it }
+            }
+            backCache.keys.retainAll(around.map { leafOf(it) }.toSet())
+        }
+        // Куда доводить лист после пальца: ровный ход с замедлением, длиной
+        // по остатку пути. Пружина замирала у самого конца - лист висел
+        // горбом, а потом исчезал скачком.
         val settle: suspend (Int) -> Unit = { target ->
+            val left = kotlin.math.abs(target - (pagerState.currentPage + pagerState.currentPageOffsetFraction))
             pagerState.animateScrollToPage(
                 target,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+                animationSpec = tween((200 + 420 * left.coerceIn(0f, 1f)).toInt(), easing = FastOutSlowInEasing),
             )
         }
         /** Оборот без пальца - тап или кнопка: лист берётся за край на этой высоте. */
@@ -443,6 +468,10 @@ internal fun PagedBody(
             // разворота, уезжавшая за край, владельцу на живой сборке
             // читалась поломкой - «левый край книги вылезает».
             val screenWidth = this@BoxWithConstraints.maxWidth
+            // В книжном виде подложка заходит под системные панели: там торцы
+            // блока, а страницы остаются в безопасной области.
+            val underTop = if (look.volume) 0.dp else topInset
+            val underBottom = if (look.volume) 0.dp else bottomInset
             if (shape.half) Box(
                 // Разворот шире экрана на две полоски подглядывания, и камера
                 // ездит по нему: читаешь левую страницу - смахнул - книга
@@ -465,13 +494,13 @@ internal fun PagedBody(
                             BOOK_PEEK.toPx(),
                         )
                     }
-                    .padding(underPadding(card, topInset, bottomInset))
-                    .pageUnder(tones, look, shape, edges)
+                    .padding(underPadding(card, underTop, underBottom))
+                    .pageUnder(tones, look, shape, edges, topInset - underTop, bottomInset - underBottom)
             ) else Box(
                 Modifier
                     .fillMaxSize()
-                    .padding(underPadding(card, topInset, bottomInset))
-                    .pageUnder(tones, look, shape, edges)
+                    .padding(underPadding(card, underTop, underBottom))
+                    .pageUnder(tones, look, shape, edges, topInset - underTop, bottomInset - underBottom)
             )
             if (pages.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -509,7 +538,10 @@ internal fun PagedBody(
                 // её надо держать в композиции и в покое, иначе в полоске
                 // подглядывания пусто. При загибе соседи тоже нужны: за
                 // валиком видна следующая, а назад гнётся предыдущая.
-                beyondViewportPageCount = if (shape.half || curlOn) 1 else 0,
+                // При загибе на половине разворота нужна ещё и правая
+                // страница следующего разворота: она лежит под тем листом,
+                // что гнётся, иначе из-под него глядела обложка.
+                beyondViewportPageCount = if (shape.half && curlOn) 2 else if (shape.half || curlOn) 1 else 0,
             ) { slot ->
                 val off = { pagerState.turnOffset(slot) }
                 val face: @Composable (Int, PageSide, Modifier) -> Unit = { index, side, modifier ->
@@ -570,7 +602,7 @@ internal fun PagedBody(
                     shape.half -> {
                         val side = if (slot % 2 == 0) PageSide.LEFT else PageSide.RIGHT
                         val position = { pagerState.currentPage + pagerState.currentPageOffsetFraction }
-                        val panned = z.halfPan(side, BOOK_PEEK, off, position, hideTurned = curlOn)
+                        val panned = z.halfPan(side, BOOK_PEEK, off, position, hideTurned = curlOn, reach = if (curlOn) 2.05f else 1.05f)
                         face(
                             slot, side,
                             when {
