@@ -174,6 +174,55 @@ object AutoPilotRules {
         }
     }
 
+    // ---- Отбой и подъём (владелец, 27.09.2026: «дело по подъёму в будни — сборы
+    // детей с пн по пт; зарядку телефона, бездвижение и выключенный экран —
+    // как отбой») ----
+
+    /**
+     * Отбой узнаётся по трём вещам сразу: телефон поставлен на зарядку
+     * ВЕЧЕРОМ (сам факт подключения после этого часа — на тумбочке, а не на
+     * столе с семи вечера), экран погашен и [BEDTIME_STILL_MS] без единого
+     * толчка датчика значимого движения. Отбой — момент последнего из двух
+     * действий: подключения или гашения экрана; что было позже, то он и
+     * делал последним, бодрствуя.
+     */
+    const val BEDTIME_FROM_HOUR = 22
+    const val BEDTIME_TO_HOUR = 4
+    const val BEDTIME_STILL_MS = 20 * 60_000L
+
+    /** Час подключения к зарядке, который считается вечерним: с 22:00 до 04:00. */
+    fun bedtimeHour(hour: Int): Boolean = hour >= BEDTIME_FROM_HOUR || hour < BEDTIME_TO_HOUR
+
+    /**
+     * Есть ли кандидат в отбой: [chargingSince] — когда подключили зарядку
+     * (0 — не на зарядке), [screenOffSince] — когда погас экран (0 — горит),
+     * [chargeHour] — час подключения. Возвращает момент отбоя (позднее из
+     * двух) или 0, если не отбой. Тишину в двадцать минут отсчитывает
+     * автопилот от этого момента; толчок — отсчёт заново.
+     */
+    fun bedtimeCandidate(chargingSince: Long, screenOffSince: Long, chargeHour: Int): Long {
+        if (chargingSince <= 0L || screenOffSince <= 0L) return 0L
+        if (!bedtimeHour(chargeHour)) return 0L
+        return maxOf(chargingSince, screenOffSince)
+    }
+
+    /** Подъём в будни считается в эти часы: раньше пяти — не подъём, после десяти — не сборы. */
+    const val WAKE_DEAL_FROM_HOUR = 5
+    const val WAKE_DEAL_TO_HOUR = 10
+
+    /**
+     * Начинать ли дело по подъёму. [dayOfWeek] — как в `Calendar` (1 —
+     * воскресенье, 2 — понедельник … 7 — суббота): только пн–пт. [wakeHour] —
+     * час подъёма. [latestOwnerStart] — начало последней записи владельца:
+     * сказал что-то с подъёма — он в курсе, робот молчит.
+     */
+    fun wakeDealDue(dayOfWeek: Int, wakeHour: Int, wakeAt: Long, latestOwnerStart: Long): Boolean {
+        if (dayOfWeek !in 2..6) return false
+        if (wakeHour !in WAKE_DEAL_FROM_HOUR until WAKE_DEAL_TO_HOUR) return false
+        if (latestOwnerStart >= wakeAt) return false
+        return true
+    }
+
     /** Тренировка на улице — та, что может начаться от двери: не станок и не зал. */
     fun outdoor(type: String): Boolean = type in setOf(
         "Ride", "GravelRide", "MountainBikeRide", "Run", "TrailRun", "Walk", "Hike",
@@ -300,4 +349,6 @@ interface AutoWitness {
     fun lastArrival(): Leave?
     /** Дорога началась другим сигналом ([by] — каким) — вопрос «уехал?» снят. */
     fun leaveAnswered(by: String)
+    /** Телефон нашёл ночь [sleptFrom]–[wakeAt] и записал её: автопилот решает про дело по подъёму. */
+    fun woke(sleptFrom: Long, wakeAt: Long)
 }

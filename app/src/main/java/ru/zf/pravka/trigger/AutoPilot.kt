@@ -23,8 +23,10 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
+import android.os.PowerManager
 import android.os.Looper
 import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
@@ -36,6 +38,7 @@ import ru.zf.pravka.core.AutoPilotRules
 import ru.zf.pravka.core.AutoWitness
 import ru.zf.pravka.core.Leave
 import ru.zf.pravka.core.PlaceDeal
+import ru.zf.pravka.data.PhoneSweeper
 import ru.zf.pravka.data.ZasechkaStore
 import ru.zf.pravka.ui.Feedback
 
@@ -133,6 +136,16 @@ import ru.zf.pravka.ui.Feedback
 // 17. Календарь — `trigger/CalendarPilot.kt`, правила `core/CalendarRules.kt`:
 //    встреча начинается сама с начала события и закрывает текущее дело, по
 //    концу события возвращает его; кнопки «Отменить» / «Ещё идёт» / «Сказать».
+// 18. Отбой и подъём (владелец: «дело по подъёму в будни — сборы детей с пн
+//    по пт; зарядку телефона, бездвижение и выключенный экран — как отбой»).
+//    Поставил телефон на зарядку вечером (само подключение после 22:00 —
+//    тумбочка, а не стол с семи вечера), экран погас, двадцать минут без
+//    единого толчка — отбой: вечернее дело закрывается этим моментом, момент
+//    запоминается для детектора ночи (`SleepGuess`, начало сна не раньше
+//    отбоя), пуша нет — зажечь экран на тумбочке значит разбудить. Утром
+//    телефон нашёл ночь (`PhoneSweeper` → `AutoWitness.woke`) — в будни между
+//    пятью и десятью начинается дело по подъёму («Сборы детей» [Семья], в
+//    настройках) с момента подъёма, если владелец сам ничего не сказал.
 //
 // И ещё одно, из жизни: к сети в Летово владелец не подключается — пароля
 // нет и не надо. Но она появляется в эфире ровно тогда, когда он приехал.
@@ -350,6 +363,9 @@ class AutoPilot(
     @Volatile private var autoCarStart = true
     @Volatile private var askStill = true
     @Volatile private var autoWalkStart = true
+    /** Дело по подъёму в будни (см. `Settings.autoWakeDealFlow`); null — нет. */
+    @Volatile private var wakeDeal: PlaceDeal? = null
+    @Volatile private var autoBedtime = true
     /** Дела мест по приезду: имя места → что начать (см. `Settings.autoPlaceDealsFlow`). */
     @Volatile private var placeDeals: Map<String, PlaceDeal> = emptyMap()
 
@@ -385,6 +401,16 @@ class AutoPilot(
     private var stillOpenId = 0L
     private val unknownAsked = HashMap<String, Long>()
     private var motionArmed = false
+    /**
+     * Отбой: когда подключили зарядку (0 — не на зарядке), когда погас экран
+     * (0 — горит), отложенная проверка тишины и ночь, за которую отбой уже
+     * записан (второй раз за ту же ночь — нет: встал попить в два часа).
+     */
+    private var chargingSince = 0L
+    private var screenOffSince = 0L
+    private var pendingBedtime: Runnable? = null
+    private var bedtimeNight = ""
+    private var powerReceiver: BroadcastReceiver? = null
     /** Сети «по видимости», которые слышно прямо сейчас. */
     private val around = HashSet<String>()
     /** Когда каждую сеть «по видимости» слышали последний раз (свежим сканом). */
@@ -429,10 +455,13 @@ class AutoPilot(
         jobs += scope.launch { app.settings.autoCarStartFlow.collect { autoCarStart = it } }
         jobs += scope.launch { app.settings.autoStillAskFlow.collect { askStill = it } }
         jobs += scope.launch { app.settings.autoWalkStartFlow.collect { autoWalkStart = it } }
+        jobs += scope.launch { app.settings.autoWakeDealFlow.collect { wakeDeal = it } }
+        jobs += scope.launch { app.settings.autoBedtimeFlow.collect { autoBedtime = it } }
         jobs += scope.launch { app.settings.autoPlaceDealsFlow.collect { placeDeals = it } }
         startWifiWatch()
         startScanWatch()
         startBtWatch()
+        startPowerWatch()
         // Сеть могла подключиться до старта службы — колбэка по ней не будет.
         handler.postDelayed({ pollWifi() }, 3_000)
     }
@@ -448,12 +477,16 @@ class AutoPilot(
         pendingWalk = null
         pendingStill?.let { handler.removeCallbacks(it) }
         pendingStill = null
+        pendingBedtime?.let { handler.removeCallbacks(it) }
+        pendingBedtime = null
         runCatching { netCallback?.let { connectivity?.unregisterNetworkCallback(it) } }
         runCatching { btReceiver?.let { service.unregisterReceiver(it) } }
         runCatching { scanReceiver?.let { service.unregisterReceiver(it) } }
+        runCatching { powerReceiver?.let { service.unregisterReceiver(it) } }
         netCallback = null
         btReceiver = null
         scanReceiver = null
+        powerReceiver = null
     }
 
     // ---- Wi-Fi: приезд и отъезд ----
@@ -1157,6 +1190,162 @@ class AutoPilot(
         carOffNotifId = 0
     }
 
+    // ---- Отбой: зарядка, погашенный экран, тишина ----
+
+    /**
+     * Зарядка и экран — системные широковещания, живут, пока жива служба.
+     * Начальное состояние берётся у системы: зарядку могли подключить до
+     * старта службы (тогда «подключили» = сейчас: перезапуск на тумбочке в
+     * 23:30 отбоем быть может, на столе в 19:00 — нет, час не тот).
+     */
+    private fun startPowerWatch() {
+        val rec = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val now = System.currentTimeMillis()
+                when (intent.action) {
+                    Intent.ACTION_POWER_CONNECTED -> chargingSince = now
+                    Intent.ACTION_POWER_DISCONNECTED -> chargingSince = 0L
+                    Intent.ACTION_SCREEN_OFF -> screenOffSince = now
+                    Intent.ACTION_SCREEN_ON -> screenOffSince = 0L
+                    else -> return
+                }
+                evalBedtime()
+            }
+        }
+        powerReceiver = rec
+        runCatching {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_POWER_CONNECTED)
+                addAction(Intent.ACTION_POWER_DISCONNECTED)
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                service.registerReceiver(rec, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                service.registerReceiver(rec, filter)
+            }
+        }
+        val now = System.currentTimeMillis()
+        runCatching {
+            // Липкое широковещание батареи — состояние без ожидания события.
+            val batt = service.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            if ((batt?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0) chargingSince = now
+            val pm = service.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            if (pm != null && !pm.isInteractive) screenOffSince = now
+        }
+        evalBedtime()
+    }
+
+    /**
+     * Есть кандидат в отбой (зарядка подключена вечером, экран погас) —
+     * ждём двадцать минут тишины; толчок ([onSignificantMotion]) отсчитывает
+     * их заново, зажёгшийся экран или снятая зарядка снимают кандидата.
+     */
+    private fun evalBedtime() {
+        pendingBedtime?.let { handler.removeCallbacks(it) }
+        pendingBedtime = null
+        if (!autoBedtime) return
+        val at = AutoPilotRules.bedtimeCandidate(chargingSince, screenOffSince, hourOf(chargingSince))
+        if (at <= 0L || bedtimeNight == nightKey(at)) return
+        val check = Runnable {
+            pendingBedtime = null
+            scope.launch { onBedtime(at) }
+        }
+        pendingBedtime = check
+        handler.postDelayed(check, AutoPilotRules.BEDTIME_STILL_MS)
+        armMotion()
+    }
+
+    /**
+     * Отбой. Вечернее дело закрывается моментом отбоя — это и есть «закрыть
+     * день», только без вечернего вопроса; момент уходит детектору ночи
+     * (`PhoneSweeper.KEY_BEDTIME`): сон начнётся не раньше него. Без пуша.
+     */
+    private suspend fun onBedtime(at: Long) {
+        bedtimeNight = nightKey(at)
+        runCatching {
+            service.getSharedPreferences("pravka_internal", Context.MODE_PRIVATE)
+                .edit().putLong(PhoneSweeper.KEY_BEDTIME, at).apply()
+        }
+        val open = app.zasechkaStore.openEntry()
+        val closed = if (open != null && open.start < at) app.zasechkaStore.closeOpen(at) else null
+        if (closed != null) app.zasechkaSync.kickSoon(scope)
+        lastFire = "отбой ${timeHm(at)}"
+        app.eventLog.add(
+            "автопилот: отбой в ${timeHm(at)} — зарядка с ${timeHm(chargingSince)}, экран погас в " +
+                "${timeHm(screenOffSince)}, 20 мин без движения" +
+                (closed?.let { "; «${it.title}» закрыто, ${it.durationMin()} мин" } ?: "")
+        )
+    }
+
+    /** Ключ ночи: 23:30 и 02:00 — одна ночь, та, что кончается днём +12 часов. */
+    private fun nightKey(at: Long): String = ru.zf.pravka.data.phoneDayKey(at + 12 * 3_600_000L)
+
+    private fun hourOf(ms: Long): Int {
+        if (ms <= 0L) return -1
+        val c = java.util.Calendar.getInstance()
+        c.timeInMillis = ms
+        return c.get(java.util.Calendar.HOUR_OF_DAY)
+    }
+
+    // ---- Подъём: дело по подъёму в будни ----
+
+    /**
+     * Телефон нашёл ночь и записал её. В будни между пятью и десятью утра с
+     * момента подъёма начинается дело по подъёму («Сборы детей» [Семья]) —
+     * как дело места по приезду: владельческим источником, ошибку чинит
+     * «Сказать» с якорем подъёма или «Отменить». Владелец после подъёма уже
+     * что-то сказал — молчим (`AutoPilotRules.wakeDealDue`).
+     */
+    override fun woke(sleptFrom: Long, wakeAt: Long) {
+        scope.launch {
+            val deal = wakeDeal ?: return@launch
+            val c = java.util.Calendar.getInstance()
+            c.timeInMillis = wakeAt
+            val dow = c.get(java.util.Calendar.DAY_OF_WEEK)
+            val hour = c.get(java.util.Calendar.HOUR_OF_DAY)
+            val latest = app.zasechkaStore.all()
+                .filter { it.source != "auto" && it.source != "gap" }
+                .maxOfOrNull { it.start } ?: 0L
+            val slept = (wakeAt - sleptFrom) / 60_000L
+            if (!AutoPilotRules.wakeDealDue(dow, hour, wakeAt, latest)) {
+                app.eventLog.add(
+                    "автопилот: подъём ${timeHm(wakeAt)} (сон ${slept / 60} ч ${slept % 60} мин) — дела по подъёму нет: " +
+                        when {
+                            dow !in 2..6 -> "выходной"
+                            latest >= wakeAt -> "ты уже сказал, что делаешь"
+                            else -> "не утро"
+                        }
+                )
+                return@launch
+            }
+            val now = System.currentTimeMillis()
+            val entry = app.zasechkaStore.startEntry(
+                start = wakeAt,
+                raw = "",
+                title = deal.title,
+                category = deal.category,
+                client = "",
+                useful = 0,
+                source = "voice",
+            )
+            app.zasechkaSync.kickSoon(scope)
+            lastFire = "подъём ${timeHm(wakeAt)}, начато «${entry.title}»"
+            notify(
+                "☀ Подъём ${timeHm(wakeAt)} — ${entry.title}",
+                "Сон ${timeHm(sleptFrom)}–${timeHm(wakeAt)}, ${slept / 60} ч ${slept % 60} мин. С ${timeHm(wakeAt)} " +
+                    "идёт «${entry.title}» [${entry.category}]. Не то — скажи, запишу с ${timeHm(wakeAt)}; " +
+                    "не сегодня — «Отменить».",
+                listOf(
+                    action("Отменить", WHAT_UNDO, now, "", id = entry.id, prevId = 0L),
+                    sayAction(wakeAt),
+                ),
+            )
+            app.eventLog.add("автопилот: подъём ${timeHm(wakeAt)} — начато «${entry.title}» [${entry.category}]")
+        }
+    }
+
     // ---- «Точно ещё …?» по датчику значимого движения ----
 
     private val motionListener = object : TriggerEventListener() {
@@ -1201,6 +1390,10 @@ class AutoPilot(
      */
     private fun onSignificantMotion() {
         val now = System.currentTimeMillis()
+        if (pendingBedtime != null) {
+            // Ещё не спит: двадцать минут тишины — с этого толчка заново.
+            handler.post { evalBedtime() }
+        }
         if (leaveFresh(now)) {
             walkMotions++
             armMotion()

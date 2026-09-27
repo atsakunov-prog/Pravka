@@ -136,6 +136,33 @@ class SleepGuessTest {
     }
 
     @Test
+    fun `отбой по зарядке - ночь начинается не раньше него`() {
+        // Телефон лежал тихо с 22:00, в 23:10 его поставили на зарядку и
+        // погасили: до 23:10 владелец не спал.
+        val on = listOf(
+            Span(at(0, 21), at(0, 22)),
+            Span(at(1, 7, 10), at(1, 7, 20)),
+        )
+        val n = SleepGuess.guess(on, windowStart, at(1, 7, 30), zone, bedtime = at(0, 23, 10)).night
+        assertNotNull(n)
+        assertEquals(at(0, 23, 10), n!!.start)
+        assertEquals(at(1, 7, 10), n.end)
+    }
+
+    @Test
+    fun `отбой не попал ни в один разрыв - подсказка не мешает`() {
+        // Отбой в 21:30 (ложный: телефон заряжался на столе), настоящая ночь позже.
+        val on = listOf(
+            Span(at(0, 21), at(0, 21, 30)),
+            Span(at(0, 22), at(0, 23, 30)),
+            Span(at(1, 7, 10), at(1, 7, 20)),
+        )
+        val n = SleepGuess.guess(on, windowStart, at(1, 7, 30), zone, bedtime = at(0, 21, 45)).night
+        assertNotNull(n)
+        assertEquals(at(0, 23, 30), n!!.start)
+    }
+
+    @Test
     fun `подсказка подъёма - последнее утреннее включение после долгой тишины`() {
         val on = listOf(
             Span(at(0, 21), at(0, 23, 30)),

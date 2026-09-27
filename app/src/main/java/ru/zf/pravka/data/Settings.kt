@@ -164,6 +164,10 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_CAL_ON = booleanPreferencesKey("auto_cal_on")
         private val KEY_AUTO_CAL_CATEGORY = stringPreferencesKey("auto_cal_category")
         private val KEY_AUTO_CALENDARS = stringPreferencesKey("auto_calendars")
+        private val KEY_AUTO_WAKE_DEAL = stringPreferencesKey("auto_wake_deal")
+        private val KEY_AUTO_BEDTIME = booleanPreferencesKey("auto_bedtime_close")
+        /** Заводское дело по подъёму в будни — см. [autoWakeDealFlow]. */
+        private val FACTORY_WAKE_DEAL = PlaceDeal("Сборы детей", "Семья")
         private val KEY_NOTION_DIARY = booleanPreferencesKey("notion_diary_push")
         private val KEY_NOTION_LIFE = booleanPreferencesKey("notion_life_push")
         private val KEY_NOTION_LIFE_HUB = stringPreferencesKey("notion_life_hub")
@@ -1168,6 +1172,42 @@ class Settings(private val context: Context) {
             val a = org.json.JSONArray(raw)
             (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }.toSet()
         }.getOrDefault(emptySet())
+    }
+
+    /**
+     * Дело по подъёму в будни (владелец, 27.09.2026: «дело по подъёму в будни
+     * — сборы детей с пн по пт»): телефон нашёл ночь, подъём в будний день
+     * между пятью и десятью утра — с момента подъёма начинается это дело.
+     * Заводское — «Сборы детей» [Семья]; null — владелец убрал, заводское
+     * не возвращается (пустая строка в хранилище).
+     */
+    val autoWakeDealFlow: kotlinx.coroutines.flow.Flow<PlaceDeal?> = context.dataStore.data.map { prefs ->
+        val raw = prefs[KEY_AUTO_WAKE_DEAL]
+        if (raw == null) FACTORY_WAKE_DEAL
+        else runCatching {
+            val o = org.json.JSONObject(raw)
+            PlaceDeal(o.optString("title"), o.optString("category"))
+        }.getOrNull()?.takeIf { it.title.isNotBlank() }
+    }
+
+    /** Пустое [title] — дела по подъёму больше нет. */
+    suspend fun setAutoWakeDeal(title: String, category: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_AUTO_WAKE_DEAL] = if (title.isBlank()) "" else {
+                org.json.JSONObject().put("title", title.trim()).put("category", category.trim()).toString()
+            }
+        }
+    }
+
+    /**
+     * Отбой по телефону (владелец, 27.09.2026: «зарядку телефона, бездвижение
+     * и выключенный экран — как отбой»): поставил на зарядку вечером, экран
+     * погас, двадцать минут без движения — вечернее дело закрывается моментом
+     * отбоя, а утренний сон начинается не раньше него.
+     */
+    val autoBedtimeFlow = context.dataStore.data.map { it[KEY_AUTO_BEDTIME] ?: true }
+    suspend fun setAutoBedtime(value: Boolean) {
+        context.dataStore.edit { it[KEY_AUTO_BEDTIME] = value }
     }
 
     /** [current] — что смотрится сейчас (с заводским «только основной» уже раскрытым). */

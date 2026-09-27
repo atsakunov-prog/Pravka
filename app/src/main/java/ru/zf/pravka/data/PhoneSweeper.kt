@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import ru.zf.pravka.core.AutoWitness
 import ru.zf.pravka.core.SleepGuess
 
 // Reads the phone's own memory of the day - UsageStatsManager events and the
@@ -41,6 +42,8 @@ class PhoneSweeper(
     private val eventLog: EventLog,
     private val sync: ZasechkaSync,
     private val scope: CoroutineScope,
+    /** Автопилот службы: узнаёт о найденной ночи и начинает дело по подъёму. */
+    private val witness: () -> AutoWitness? = { null },
 ) {
 
     companion object {
@@ -62,6 +65,8 @@ class PhoneSweeper(
         private const val AUDIO_GAP_MS = 5 * 60_000L
         /** Когда встал по экрану (ms) — в `pravka_internal`; читает `IcuSweeper` для сна от Garmin. */
         const val KEY_WAKE_HINT = "z_wake_hint"
+        /** Отбой по зарядке и тишине (ms) — пишет автопилот, читает детектор ночи. */
+        const val KEY_BEDTIME = "z_bedtime"
 
         /** The special "Доступ к статистике использования" toggle. */
         fun hasUsageAccess(context: Context): Boolean {
@@ -347,7 +352,9 @@ class PhoneSweeper(
         SleepGuess.wakeHint(spans, from).takeIf { it > 0L }?.let {
             prefs.edit().putLong(KEY_WAKE_HINT, it).apply()
         }
-        val verdict = SleepGuess.guess(spans, from, now)
+        // Отбой, если автопилот его видел вчера вечером: ночь не раньше него.
+        val bedtime = prefs.getLong(KEY_BEDTIME, 0L).takeIf { it in from..now } ?: 0L
+        val verdict = SleepGuess.guess(spans, from, now, bedtime = bedtime)
         val night = verdict.night
         if (night == null) {
             if (hour >= SleepGuess.WAKE_TO_HOUR) {
@@ -378,10 +385,13 @@ class PhoneSweeper(
         if (entry != null) {
             eventLog.add(
                 "телефон: сон ${night.ms / 60_000} мин → в ленту" +
-                    if (night.pieces > 1) {
+                    (if (night.pieces > 1) {
                         " (сшито из ${night.pieces}: ${night.stitchedMs / 60_000} мин экрана ночью — взгляды, не подъём)"
-                    } else ""
+                    } else "") +
+                    (if (bedtime > 0L && night.start == bedtime) " (начало — отбой по зарядке)" else "")
             )
+            // Подъём известен — дело по подъёму решает автопилот.
+            runCatching { witness()?.woke(night.start, night.end) }
         }
         return entry != null
     }

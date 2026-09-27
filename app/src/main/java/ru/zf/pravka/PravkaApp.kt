@@ -564,7 +564,11 @@ class PravkaApp : Application() {
     // day; only сон crosses into the ribbon via the sweeper.
     val phoneStore by lazy { ru.zf.pravka.data.PhoneStore(this) }
     val phoneSweeper by lazy {
-        ru.zf.pravka.data.PhoneSweeper(this, phoneStore, zasechkaStore, settings, eventLog, zasechkaSync, appScope)
+        ru.zf.pravka.data.PhoneSweeper(
+            this, phoneStore, zasechkaStore, settings, eventLog, zasechkaSync, appScope,
+            // Нашёл ночь — автопилот решает про дело по подъёму (сборы детей в будни).
+            witness = { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoWitness() },
+        )
     }
 
     // Самообновление: раз в сутки смотрит ветку apk-builds, тянет APK и

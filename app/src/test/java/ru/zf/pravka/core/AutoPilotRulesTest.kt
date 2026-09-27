@@ -321,3 +321,54 @@ class AutoPilotShortExitTest {
         assertTrue(AutoPilotRules.stillAsk(motions = 1, leftAfterMotion = true, leaveAsked = false))
     }
 }
+
+// ---- отбой и подъём (27.09.2026) ----
+
+class AutoPilotBedtimeTest {
+
+    private val h = 3_600_000L
+    private val m = 60_000L
+    private val now = 100 * h
+
+    @Test
+    fun `зарядка вечером, экран погас - отбой позднее из двух`() {
+        val charged = now - 5 * m
+        val off = now - 2 * m
+        assertEquals(off, AutoPilotRules.bedtimeCandidate(charged, off, chargeHour = 23))
+        assertEquals(charged, AutoPilotRules.bedtimeCandidate(charged, now - 30 * m, chargeHour = 0))
+    }
+
+    @Test
+    fun `зарядка с семи вечера на столе - не отбой`() {
+        assertEquals(0L, AutoPilotRules.bedtimeCandidate(now - 4 * h, now - 2 * m, chargeHour = 19))
+    }
+
+    @Test
+    fun `экран горит или нет зарядки - не отбой`() {
+        assertEquals(0L, AutoPilotRules.bedtimeCandidate(now - 5 * m, 0L, chargeHour = 23))
+        assertEquals(0L, AutoPilotRules.bedtimeCandidate(0L, now - 5 * m, chargeHour = 23))
+    }
+
+    @Test
+    fun `подъём в будни в семь - сборы детей`() {
+        assertTrue(AutoPilotRules.wakeDealDue(dayOfWeek = 2, wakeHour = 7, wakeAt = now, latestOwnerStart = now - 9 * h))
+        assertTrue(AutoPilotRules.wakeDealDue(dayOfWeek = 6, wakeHour = 6, wakeAt = now, latestOwnerStart = 0L))
+    }
+
+    @Test
+    fun `суббота и воскресенье - без сборов`() {
+        assertFalse(AutoPilotRules.wakeDealDue(dayOfWeek = 7, wakeHour = 7, wakeAt = now, latestOwnerStart = 0L))
+        assertFalse(AutoPilotRules.wakeDealDue(dayOfWeek = 1, wakeHour = 7, wakeAt = now, latestOwnerStart = 0L))
+    }
+
+    @Test
+    fun `проснулся в одиннадцать или в четыре - не сборы`() {
+        assertFalse(AutoPilotRules.wakeDealDue(2, 11, now, 0L))
+        assertFalse(AutoPilotRules.wakeDealDue(2, 4, now, 0L))
+    }
+
+    @Test
+    fun `владелец уже сказал зарядка после подъёма - молчим`() {
+        assertFalse(AutoPilotRules.wakeDealDue(3, 7, now, latestOwnerStart = now + 3 * m))
+    }
+}

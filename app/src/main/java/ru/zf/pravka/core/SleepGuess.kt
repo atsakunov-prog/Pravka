@@ -67,11 +67,19 @@ object SleepGuess {
      * последнего гашения ещё идёт (владелец, может быть, спит) и ночью быть
      * не может.
      */
+    /**
+     * Отбой, если автопилот его видел ([bedtime] — момент, когда телефон лёг
+     * на зарядку с погашенным экраном и затих; 0 — не видел): ночь — та, что
+     * его накрывает, и начинается она не раньше него. Телефон мог лежать
+     * тихо с десяти вечера, но в 23:10 его поставили на зарядку — значит, в
+     * 23:10 владелец ещё не спал.
+     */
     fun guess(
         screenOn: List<Span>,
         windowStart: Long,
         now: Long,
         zone: TimeZone = TimeZone.getDefault(),
+        bedtime: Long = 0L,
     ): Verdict {
         val on = screenOn.filter { it.end > it.start && it.start <= now }.sortedBy { it.start }
         // Закрытые разрывы: от конца одного включения до начала следующего.
@@ -109,9 +117,14 @@ object SleepGuess {
         runs.add(Night(runStart, runEnd, pieces, stitched))
 
         val longest = runs.maxOf { it.ms }
-        val night = runs
-            .filter { it.ms >= MIN_SLEEP_MS && wakeHour(hourOf(it.end, zone)) }
-            .maxByOrNull { it.ms }
+        val valid = runs.filter { it.ms >= MIN_SLEEP_MS && wakeHour(hourOf(it.end, zone)) }
+        // Отбой известен — ночь та, что его накрывает, с началом не раньше него.
+        val anchored = if (bedtime > 0L) {
+            valid.firstOrNull { it.start <= bedtime && bedtime < it.end }
+                ?.let { it.copy(start = maxOf(it.start, bedtime)) }
+                ?.takeIf { it.ms >= MIN_SLEEP_MS }
+        } else null
+        val night = anchored ?: valid.maxByOrNull { it.ms }
         return Verdict(night, longest, gaps.size)
     }
 

@@ -2003,7 +2003,69 @@ private fun AutoPilotSection(app: PravkaApp) {
             if (calLine.isNotBlank()) PaperHint("Последнее: $calLine")
         }
     }
+
+    // ---- Подъём и отбой ----
+    SubHead("Подъём и отбой", info = WAKE_INFO)
+    val wakeDeal by settings.autoWakeDealFlow.collectAsState(initial = null)
+    var wakeEdit by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("По подъёму в будни, пн–пт", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                wakeDeal?.let { d ->
+                    "«${d.title}»" + (if (d.category.isNotBlank()) " [${d.category}]" else "") +
+                        " — с момента подъёма, между пятью и десятью утра"
+                } ?: "дела нет — только сон в ленту",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        GlyphButton(
+            Glyphs.Edit,
+            if (wakeDeal != null) "изменить дело по подъёму" else "задать дело по подъёму",
+            onClick = { wakeEdit = true },
+            size = 36.dp,
+        )
+    }
+    if (wakeEdit) {
+        PlaceDealDialog(
+            place = "будни",
+            current = wakeDeal,
+            categories = dealCategories.map { it.name },
+            onDismiss = { wakeEdit = false },
+            onSave = { title, category ->
+                wakeEdit = false
+                scope.launch { settings.setAutoWakeDeal(title, category) }
+            },
+            heading = "Проснулся в будни — что начать?",
+            hint = "Телефон нашёл ночь, подъём в будний день между пятью и десятью утра — " +
+                "это дело начнётся с момента подъёма. Уже сказал, что делаешь, — не начнётся. " +
+                "Не то — «Сказать» в пуше заменит, «Отменить» уберёт.",
+            placeholder = "Сборы детей",
+            removeLabel = "убрать дело по подъёму",
+            icon = Glyphs.Moon,
+        )
+    }
+    val bedtimeOn by settings.autoBedtimeFlow.collectAsState(initial = true)
+    PaperToggle(
+        title = "Отбой: зарядка вечером, погашенный экран и тишина закрывают день",
+        checked = bedtimeOn,
+        onCheckedChange = { on -> scope.launch { settings.setAutoBedtime(on) } },
+        info = "Поставил телефон на зарядку после 22:00, экран погас, двадцать минут без " +
+            "единого толчка — отбой: вечернее дело закрывается этим моментом без вопроса " +
+            "«закрыть день?», а утренний сон начинается не раньше него. Зарядка с семи вечера " +
+            "на столе отбоем не считается: важен час подключения. Пуша нет — зажечь экран " +
+            "на тумбочке значит разбудить.",
+    )
 }
+
+/** Подъём и отбой — за «i» у заголовка. */
+private const val WAKE_INFO =
+    "Утро: телефон нашёл ночь по экрану и в будни с момента подъёма сам начинает " +
+        "дело по подъёму — сборы детей. Вечер: зарядка после 22:00, погашенный экран и " +
+        "двадцать минут тишины — отбой, вечернее дело закрыто, сон утром начнётся " +
+        "не раньше этого момента. Оба — без вопросов: ошибку чинят кнопки пуша утром " +
+        "и лента вечером."
 
 /** Встречи из календаря — за «i» у заголовка «Календарь». */
 private const val CALENDAR_INFO =
@@ -2027,25 +2089,29 @@ private fun PlaceDealDialog(
     categories: List<String>,
     onDismiss: () -> Unit,
     onSave: (title: String, category: String) -> Unit,
+    // Тот же лист служит делу по подъёму — слова свои, механика одна.
+    heading: String = "Приехал в «$place» — что начать?",
+    hint: String = "Дорога закроется приездом, и это дело начнётся с того же момента. " +
+        "Ошибся автопилот — «Сказать» в пуше заменит его.",
+    placeholder: String = "Забираю Серёжу",
+    removeLabel: String = "убрать дело по приезду",
+    icon: androidx.compose.ui.graphics.vector.ImageVector = Glyphs.Place,
 ) {
     var title by remember { mutableStateOf(current?.title.orEmpty()) }
     var category by remember { mutableStateOf(current?.category.orEmpty()) }
     PaperAlert(
         onDismiss = onDismiss,
-        title = "Приехал в «$place» — что начать?",
-        icon = Glyphs.Place,
+        title = heading,
+        icon = icon,
         confirm = SheetAction("Готово") { onSave(title.trim(), category) },
-        destructive = if (current != null) SheetAction("убрать дело по приезду") { onSave("", "") } else null,
+        destructive = if (current != null) SheetAction(removeLabel) { onSave("", "") } else null,
     ) {
-        PaperHint(
-            "Дорога закроется приездом, и это дело начнётся с того же момента. " +
-                "Ошибся автопилот — «Сказать» в пуше заменит его."
-        )
+        PaperHint(hint)
         PaperField(
             value = title,
             onValueChange = { title = it },
             label = "Дело",
-            placeholder = "Забираю Серёжу",
+            placeholder = placeholder,
         )
         CategoryPicker(selected = category, options = categories, onSelect = { category = it })
     }
