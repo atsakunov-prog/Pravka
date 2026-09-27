@@ -74,11 +74,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -87,8 +89,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -320,16 +326,21 @@ internal fun PagedBody(
         }
 
         var origin by remember { mutableStateOf(Offset.Zero) }
-        // Загиб под пальцем: в книжном виде, целиком лежащем в экране (одна
-        // страница или разворот), где есть шейдер и где экран не электронная
-        // бумага. На половине разворота книга ездит камерой - там растворение.
+        // Загиб под пальцем: в книжном виде, где есть шейдер и где экран не
+        // электронная бумага. На половине разворота лист гнётся только там,
+        // где он и в самом деле переворачивается - с правой страницы на
+        // следующую левую; с левой на правую книга просто едет камерой.
         val curlShader = rememberCurlShader()
-        val curlOn = look.volume && look.curl && curlShader != null && !shape.half && !instant
+        val curlOn = look.volume && look.curl && curlShader != null && !instant
         val curl = remember { CurlState() }
+        /** Оборот листа или просто переезд камеры на соседнюю страницу. */
+        val leafTurn: (from: Int, forward: Boolean) -> Boolean = { from, forward ->
+            !shape.half || (if (forward) from % 2 == 1 else from % 2 == 0)
+        }
         // Лист, который гнётся, в координатах слота: правая страница
-        // разворота или единственная; у карточных видов не нужен.
+        // разворота (и половины разворота) или единственная.
         val sheetOf: Density.(Size) -> Rect = { size ->
-            val pad = pagePadding(look, card, if (shape.spread) PageSide.RIGHT else PageSide.SINGLE, topInset, bottomInset)
+            val pad = pagePadding(look, card, if (shape.opened) PageSide.RIGHT else PageSide.SINGLE, topInset, bottomInset, shape.half)
             val left = (if (shape.spread) size.width / 2f else 0f) + pad.calculateStartPadding(LayoutDirection.Ltr).toPx()
             Rect(
                 left = left,
@@ -337,6 +348,18 @@ internal fun PagedBody(
                 right = size.width - pad.calculateEndPadding(LayoutDirection.Ltr).toPx(),
                 bottom = size.height - pad.calculateBottomPadding().toPx(),
             )
+        }
+        // Слои просвета по страницам: с них снимается изнанка листа. Лист
+        // слота - его правая страница; на её обороте напечатана следующая,
+        // и это ровно тот просвет, что у неё нарисован под текстом.
+        val backLayers = remember { HashMap<Int, GraphicsLayer>() }
+        fun leafOf(slot: Int) = if (shape.spread) slot * 2 + 1 else slot
+        fun snapshotBack(slot: Int) {
+            val layer = backLayers[leafOf(slot)] ?: return
+            scope.launch {
+                val bmp = runCatching { layer.toImageBitmap() }.getOrNull() ?: return@launch
+                if (curl.slot == slot) curl.setBack(bmp)
+            }
         }
         // Куда доводить лист после пальца: та же пружина, что у пейджера.
         val settle: suspend (Int) -> Unit = { target ->
@@ -351,23 +374,25 @@ internal fun PagedBody(
             if (to !in 0 until pagerState.pageCount || to == slot) return
             scope.launch {
                 if (instant) return@launch pagerState.scrollToPage(to)
-                if (curlOn) {
+                val forward = to > slot
+                if (curlOn && leafTurn(slot, forward)) {
                     curl.settling?.cancel()
                     val size = Size(
                         with(density) { this@BoxWithConstraints.maxWidth.toPx() },
                         with(density) { this@BoxWithConstraints.maxHeight.toPx() },
                     )
                     val sheet = sheetOf(density, size)
-                    val forward = to > slot
                     curl.grabEdge(if (forward) slot else to, sheet, y ?: sheet.center.y, forward)
+                    snapshotBack(curl.slot)
                     // Лист под рукой переворачивают за полсекунды с
                     // небольшим; быстрее - и валик не успевает прочитаться.
                     curl.settling = launch {
                         pagerState.animateScrollToPage(to, animationSpec = tween(560, easing = FastOutSlowInEasing))
-                        curl.slot = -1
+                        curl.done()
                     }
                     return@launch
                 }
+                if (curlOn) curl.done()
                 // Полсекунды с замедлением в конце: рукой страницу
                 // переворачивают примерно так.
                 pagerState.animateScrollToPage(
@@ -384,7 +409,11 @@ internal fun PagedBody(
             Modifier
                 .fillMaxSize()
                 .onGloballyPositioned { origin = it.positionInRoot() }
-                .curlDrag(curl, pagerState, scope, curlOn, sheetOf, settle)
+                .curlDrag(
+                    state = curl, pager = pagerState, scope = scope, enabled = curlOn,
+                    pan = shape.half, leafTurn = leafTurn, sheet = sheetOf,
+                    onCurlStart = ::snapshotBack, settle = settle,
+                )
                 .pointerInput(pages, shape.spread) {
                     detectReaderTaps(
                         onTap = { pos ->
@@ -487,8 +516,9 @@ internal fun PagedBody(
                 val face: @Composable (Int, PageSide, Modifier) -> Unit = { index, side, modifier ->
                     val page = pages.getOrNull(index)
                     // Просвет с оборота: у левой страницы на обороте предыдущая,
-                    // у правой и единственной - следующая.
-                    val ghost = if (look.volume && look.bleed > 0f) {
+                    // у правой и единственной - следующая. Загибу оборот нужен
+                    // и без просвета - как изнанка листа.
+                    val ghost = if (look.volume && (look.bleed > 0f || curlOn)) {
                         pages.getOrNull(if (side == PageSide.LEFT) index - 1 else index + 1)
                     } else null
                     PageFace(
@@ -500,6 +530,10 @@ internal fun PagedBody(
                         marks = page?.let { marksAt(it.startChar, numberOf(it.startChar)) } ?: PageMarks(),
                         ghost = ghost,
                         ghostMarks = ghost?.let { marksAt(it.startChar, numberOf(it.startChar)) },
+                        onBackLayer = if (!curlOn || side == PageSide.LEFT) null else { layer, alive ->
+                            if (alive) backLayers[index] = layer
+                            else if (backLayers[index] === layer) backLayers.remove(index)
+                        },
                         ink = ink,
                         onPicture = onPicture, noIndent = noIndent, headingAir = headingAir,
                         smallCaps = smallCaps, imperfect = imperfect,
@@ -531,14 +565,23 @@ internal fun PagedBody(
                 }
                 when {
                     // Половина разворота: чётная страница левая, нечётная
-                    // правая; книга ездит камерой, страницы растворяются.
+                    // правая; книга ездит камерой. С загибом гнётся правая
+                    // страница (лист), левая только едет с книгой и прячется,
+                    // когда её лист перевёрнут; без загиба страницы растворяются.
                     shape.half -> {
                         val side = if (slot % 2 == 0) PageSide.LEFT else PageSide.RIGHT
                         val position = { pagerState.currentPage + pagerState.currentPageOffsetFraction }
+                        val panned = z.halfPan(side, BOOK_PEEK, off, position, hideTurned = curlOn)
                         face(
                             slot, side,
-                            z.halfPan(side, BOOK_PEEK, off, position)
-                                .graphicsLayer { alpha = 1f - off().coerceIn(0f, 1f) },
+                            when {
+                                !curlOn || curlShader == null -> panned.graphicsLayer { alpha = 1f - off().coerceIn(0f, 1f) }
+                                side == PageSide.RIGHT -> panned.pageCurl(
+                                    shader = curlShader, state = curl, slot = slot, paper = tones.paper,
+                                    sheet = sheetOf, landLeft = { null }, offset = off, translate = false,
+                                )
+                                else -> panned
+                            },
                         )
                     }
 
@@ -611,9 +654,14 @@ internal fun PageFace(
     headingStyle: TextStyle,
     gap: Dp,
     marks: PageMarks,
-    /** Страница на обороте этого листа - для просвета; null - без просвета. */
+    /** Страница на обороте этого листа - для просвета и изнанки; null - нет. */
     ghost: Page?,
     ghostMarks: PageMarks?,
+    /**
+     * Кому отдать слой с оборотом (и забрать, когда страница уходит): с него
+     * загиб снимает изнанку листа. null - изнанка не нужна.
+     */
+    onBackLayer: ((GraphicsLayer, alive: Boolean) -> Unit)?,
     onChapters: () -> Unit,
     ink: TextInk,
     onPicture: (ShownPicture) -> Unit,
@@ -630,25 +678,44 @@ internal fun PageFace(
             .pageSheet(tones, look, shape, side)
     ) {
         if (page == null) return@Box
-        if (ghost != null && look.bleed > 0f) {
+        if (ghost != null && (look.bleed > 0f || onBackLayer != null)) {
             // Оборот набран полями противоположной стороны и отражён по
             // горизонтали вокруг середины листа: единственная страница - лицо
             // листа, на обороте у неё страница с корешком справа.
             val back = if (side == PageSide.LEFT) PageSide.RIGHT else PageSide.LEFT
+            val bleed = look.bleed > 0f
             val bleedAlpha = tones.bleedAlpha(look.bleed)
+            // Оборот пишется в свой слой, неотражённый: он же изнанка листа
+            // для загиба. Без просвета слой только пишется, на экран не идёт.
+            val backLayer = if (onBackLayer != null) rememberGraphicsLayer() else null
+            if (backLayer != null && onBackLayer != null) {
+                val register by rememberUpdatedState(onBackLayer)
+                DisposableEffect(backLayer) {
+                    register(backLayer, true)
+                    onDispose { register(backLayer, false) }
+                }
+            }
             Box(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer {
                         scaleX = -1f
-                        alpha = bleedAlpha
+                        alpha = if (bleed) bleedAlpha else 1f
                         // Бумага рассеивает: буквы с оборота не резкие, а
                         // расплывшиеся, тем сильнее, чем плотнее просвет.
-                        renderEffect = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        renderEffect = if (bleed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                             val blur = (0.7f + 1.1f * look.bleed).dp.toPx()
                             BlurEffect(blur, blur, TileMode.Decal)
                         } else null
-                    },
+                    }
+                    .then(
+                        if (backLayer == null) Modifier else Modifier.drawWithContent {
+                            backLayer.record(this, layoutDirection, IntSize(size.width.toInt(), size.height.toInt())) {
+                                this@drawWithContent.drawContent()
+                            }
+                            if (bleed) drawLayer(backLayer)
+                        }
+                    ),
             ) {
                 if (ghostMarks != null) PageMarksLayer(ghostMarks, back, palette, margins, contStyle, null)
                 PageColumn(
