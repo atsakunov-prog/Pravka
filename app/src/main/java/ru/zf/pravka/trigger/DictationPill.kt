@@ -288,10 +288,17 @@ class DictationPill(
         val ok: Boolean,
         val rows: List<ResultRow>,
         val footer: String,
-        val action: ResultAction?,
+        /** Действия внизу карточки; одно — и в самой пилюле словом. Вопрос «всё ещё …?» несёт два. */
+        val actions: List<ResultAction>,
         val onOpen: (() -> Unit)?,
         val holdMs: Long,
-    )
+        /** Показать сразу раскрытым: вопрос с двумя ответами не прячет их за галочкой. */
+        val open: Boolean,
+    ) {
+        val action: ResultAction? get() = actions.singleOrNull()
+        val expandable: Boolean
+            get() = rows.isNotEmpty() || actions.size > 1 || (actions.size == 1 && summary.length > 60)
+    }
 
     /** Что показывает итог сейчас; null — пилюля в своём обычном деле (запись, поле). */
     private var resultReq: ResultRequest? = null
@@ -684,25 +691,30 @@ class DictationPill(
         action: ResultAction? = null,
         onOpen: (() -> Unit)? = null,
         holdMs: Long = PillLook.RESULT_HOLD_MS,
-    ) {
+        /** Несколько действий — вопрос («Да» · «Наговорить»); [action] — то же одним. */
+        actions: List<ResultAction> = listOfNotNull(action),
+        /** Сразу раскрытой карточкой — ответы на виду, а не за галочкой. */
+        open: Boolean = false,
+    ): Boolean {
         val text = ru.zf.pravka.core.PillText.plain(summary)
         if (visible && resultReq == null) {
             ru.zf.pravka.ui.Feedback.toast(service, text.replace('\n', ' '))
-            return
+            return false
         }
-        val req = ResultRequest(text, ok, rows, footer, action, onOpen, holdMs)
+        val req = ResultRequest(text, ok, rows, footer, actions, onOpen, holdMs, open)
         if (visible && root != null) {
             // Итог поверх итога — меняется на месте, без второго всплытия.
             collapseCard()
             resultReq = req
             applyWait()
             applyResult()
-            return
+            return true
         }
         show()
         resultReq = req
         applyWait()
         if (root != null) applyResult()
+        return true
     }
 
     /** Убрать итог, если он на экране: кнопку выключили, экран сложили. */
@@ -738,7 +750,7 @@ class DictationPill(
         val o = orb
         // Справа: есть что раскрыть — галочка вниз; нечего, но есть одно
         // действие — оно само, словом; иначе — «записано» или «!».
-        val expandable = req.rows.isNotEmpty() || (req.action != null && req.summary.length > 60)
+        val expandable = req.expandable
         if (o != null) {
             o.setColor(PillLook.orb(colour))
             o.mark = when {
@@ -779,6 +791,8 @@ class DictationPill(
         }
         r.removeCallbacks(resultDismiss)
         r.postDelayed(resultDismiss, PillLook.resultHold(req.holdMs))
+        // Вопрос — сразу с ответами: окно уже есть, размеры известны.
+        if (req.open && expandable && card == null) expand()
     }
 
     /** Тап по итогу: есть список — раскрыть (второй тап — убрать), нет — в приложение. */
@@ -788,7 +802,7 @@ class DictationPill(
             hide()
             return
         }
-        val expandable = req.rows.isNotEmpty() || (req.action != null && req.summary.length > 60)
+        val expandable = req.expandable
         if (expandable) {
             expand()
         } else {
@@ -960,8 +974,7 @@ class DictationPill(
                 }
             })
         }
-        val a = req.action
-        if (req.footer.isNotBlank() || a != null) {
+        if (req.footer.isNotBlank() || req.actions.isNotEmpty()) {
             val bottom = LinearLayout(service).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -973,7 +986,9 @@ class DictationPill(
                 textSize = 12.5f
                 maxLines = 2
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            if (a != null) {
+            // Действия — таблетками справа; у вопроса их две, первая («Да») —
+            // ближе к тексту, вторая — с краю, как «главная» у плашек.
+            for ((i, a) in req.actions.withIndex()) {
                 bottom.addView(TextView(service).apply {
                     text = a.label
                     setTextColor(PAPER)
@@ -981,13 +996,15 @@ class DictationPill(
                     typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
                     background = android.graphics.drawable.GradientDrawable().apply {
                         cornerRadius = dp(16).toFloat()
-                        setColor(DiskLook.white(0.16f))
+                        setColor(DiskLook.white(if (i == req.actions.lastIndex) 0.22f else 0.12f))
                     }
                     setPadding(dp(14), dp(7), dp(14), dp(7))
                     setOnClickListener {
                         hide()
                         a.onClick()
                     }
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    marginStart = dp(8)
                 })
             }
             c.addView(bottom, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
