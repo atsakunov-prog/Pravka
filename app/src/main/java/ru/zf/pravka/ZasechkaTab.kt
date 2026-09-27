@@ -1590,6 +1590,7 @@ private fun AutoPilotSection(app: PravkaApp) {
     val places by settings.autoPlacesFlow.collectAsState(initial = emptyMap<String, String>())
     val visibleSsids by settings.autoVisibleFlow.collectAsState(initial = emptySet<String>())
     val carBt by settings.autoCarBtFlow.collectAsState(initial = "")
+    val calOn by settings.autoCalOnFlow.collectAsState(initial = true)
 
     // Что автопилот видит ПРЯМО СЕЙЧАС. Первая версия молчала, и понять это
     // было нельзя ниоткуда — теперь состояние на виду.
@@ -1603,8 +1604,8 @@ private fun AutoPilotSection(app: PravkaApp) {
     // Почему молчит — словами и с кнопкой. Раньше на это место приходила
     // одна кнопка «дать доступ», и она врала: доступ был выдан «только при
     // использовании», а служба всё равно не видела ни одной сети.
-    val blockers = remember(permTick, carBt) {
-        ru.zf.pravka.trigger.AutoPilot.blockers(context, carBt)
+    val blockers = remember(permTick, carBt, calOn) {
+        ru.zf.pravka.trigger.AutoPilot.blockers(context, carBt, calOn)
     }
     // Разрешение на уведомления просим один раз; если система его уже не
     // покажет (отказано дважды) — вторая кнопка ведёт в настройки Правки.
@@ -1625,6 +1626,7 @@ private fun AutoPilotSection(app: PravkaApp) {
                 ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF -> "Разрешить уведомления"
                 ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF_CHANNEL -> "Открыть канал уведомлений"
                 ru.zf.pravka.trigger.AutoPilot.FIX_BT -> "Дать доступ к Bluetooth-устройствам"
+                ru.zf.pravka.trigger.AutoPilot.FIX_CALENDAR -> "Дать доступ к календарю"
                 else -> "Включить Wi-Fi"
             },
             icon = when (b.fix) {
@@ -1634,6 +1636,7 @@ private fun AutoPilotSection(app: PravkaApp) {
                 ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF,
                 ru.zf.pravka.trigger.AutoPilot.FIX_NOTIF_CHANNEL -> Glyphs.Bell
                 ru.zf.pravka.trigger.AutoPilot.FIX_BT -> Glyphs.Car
+                ru.zf.pravka.trigger.AutoPilot.FIX_CALENDAR -> Glyphs.Calendar
                 else -> Glyphs.Wifi
             },
             onClick = {
@@ -1690,6 +1693,8 @@ private fun AutoPilotSection(app: PravkaApp) {
                         )
                     ru.zf.pravka.trigger.AutoPilot.FIX_BT ->
                         askPermission.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+                    ru.zf.pravka.trigger.AutoPilot.FIX_CALENDAR ->
+                        askPermission.launch(android.Manifest.permission.READ_CALENDAR)
                     else -> context.startActivity(
                         android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
                             .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1828,10 +1833,22 @@ private fun AutoPilotSection(app: PravkaApp) {
         checked = autoArrive,
         onCheckedChange = { on -> scope.launch { settings.setAutoArrive(on) } },
     )
+    val walkStart by settings.autoWalkStartFlow.collectAsState(initial = true)
     PaperToggle(
         title = "Спрашивать при отъезде из места",
         checked = leaveAsk,
         onCheckedChange = { on -> scope.launch { settings.setAutoLeaveAsk(on) } },
+        info = "Вопрос приходит через десять минут после потери сети: вышел вынести мусор и " +
+            "вернулся раньше — ни вопроса, ни разрыва в деле. Машина и вело с часов в эти " +
+            "двадцать минут склеиваются с выходом: дорога начинается у двери.",
+    )
+    PaperToggle(
+        title = "Двадцать минут в движении после отъезда — пешком",
+        checked = walkStart,
+        onCheckedChange = { on -> scope.launch { settings.setAutoWalkStart(on) } },
+        info = "Сеть места пропала, машина не подключилась, нового места не видно, а телефон " +
+            "двадцать минут толкается — «Дорога пешком» начинается с момента отъезда сама. " +
+            "Такси и метро толкают так же: в пуше кнопка «Транспорт».",
     )
 
     // ---- Машина по Bluetooth ----
@@ -1921,10 +1938,82 @@ private fun AutoPilotSection(app: PravkaApp) {
         checked = stillAsk,
         onCheckedChange = { on -> scope.launch { settings.setAutoStillAsk(on) } },
         info = "Датчик значимого движения после получаса сидячего дела (работа, " +
-            "систематизация, чтение) спрашивает, идёт ли оно ещё, — не чаще раза в " +
-            "двадцать минут.",
+            "систематизация, чтение). Первый толчок — не вопрос: десять минут считаются " +
+            "остальные, и спрашивает, только если ты так и не сел; отъезд после толчка " +
+            "спросит вопрос «уехал?». Не чаще раза в двадцать минут.",
     )
+
+    // ---- Календарь ----
+    SubHead("Календарь", info = CALENDAR_INFO)
+    PaperToggle(
+        title = "Встречи из календаря — в ленту сами",
+        checked = calOn,
+        onCheckedChange = { on -> scope.launch { settings.setAutoCalOn(on) } },
+    )
+    if (calOn) {
+        val calPerm = remember(permTick) { ru.zf.pravka.trigger.CalendarPilot.hasPermission(context) }
+        if (!calPerm) {
+            PaperButton(
+                "Дать доступ к календарю",
+                icon = Glyphs.Calendar,
+                onClick = { askPermission.launch(android.Manifest.permission.READ_CALENDAR) },
+            )
+        } else {
+            val calCategory by settings.autoCalCategoryFlow
+                .collectAsState(initial = ru.zf.pravka.core.CalendarRules.DEFAULT_CATEGORY)
+            Text(
+                "Категория встреч",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            ChipRow(Modifier.padding(top = 4.dp, bottom = 4.dp)) {
+                val work = dealCategories.filter { it.name.startsWith("Работа", ignoreCase = true) }
+                    .ifEmpty { dealCategories }
+                for (c in work) {
+                    PaperChip(
+                        c.name,
+                        selected = c.name == calCategory,
+                        onClick = { scope.launch { settings.setAutoCalCategory(c.name) } },
+                    )
+                }
+            }
+            // null — не выбирали: только основной календарь аккаунта.
+            val chosen by settings.autoCalendarsFlow.collectAsState(initial = null)
+            val cals = remember(permTick) { ru.zf.pravka.trigger.CalendarPilot.calendars(context) }
+            if (cals.isEmpty()) {
+                PaperHint("Календарей на телефоне не видно.")
+            } else {
+                Text(
+                    "Какие календари",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                val effective = chosen ?: cals.filter { it.primary }.map { it.name }.toSet()
+                for (c in cals) {
+                    PaperToggle(
+                        title = c.name + if (c.primary) " · основной" else "",
+                        checked = c.name in effective,
+                        onCheckedChange = { on ->
+                            scope.launch { settings.setAutoCalendar(c.name, on, effective) }
+                        },
+                    )
+                }
+            }
+            val calLine = ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.calendarPilot?.lastFire.orEmpty()
+            if (calLine.isNotBlank()) PaperHint("Последнее: $calLine")
+        }
+    }
 }
+
+/** Встречи из календаря — за «i» у заголовка «Календарь». */
+private const val CALENDAR_INFO =
+    "Встреча из календаря телефона начинается в ленте сама с начала события и " +
+        "закрывает текущее дело; по концу события закрывается и возвращает то, что " +
+        "шло до неё, — как перерыв по метке NFC. Не встреча — «Отменить» в пуше; " +
+        "затянулась — «Ещё идёт». Смотрятся только выбранные календари (с завода — " +
+        "основной), без событий на весь день, отклонённых и «свободен». Если ты сам " +
+        "сказал, что делаешь, за десять минут до начала или позже, — встреча не " +
+        "дублируется."
 
 /**
  * Дело места по приезду: название и категория; пустое название — дела нет.

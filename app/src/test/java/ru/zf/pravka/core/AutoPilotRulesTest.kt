@@ -225,3 +225,99 @@ class AutoPilotRulesTest {
         assertFalse(AutoPilotRules.travelish("Работа: ЗФ", "Работа"))
     }
 }
+
+// ---- короткий выход, ходьба, «всё ещё …?» и тренировка от двери (27.09.2026) ----
+
+class AutoPilotShortExitTest {
+
+    private val h = 3_600_000L
+    private val m = 60_000L
+    private val now = 100 * h
+
+    @Test
+    fun `вопрос уехал - через десять минут после потери сети, не раньше`() {
+        assertEquals(10 * m, AutoPilotRules.leaveAskDelay(now, now))
+        // Отъезд «по видимости» заметили с опозданием в пять минут — ждём ещё пять.
+        assertEquals(5 * m, AutoPilotRules.leaveAskDelay(now - 5 * m, now))
+        assertEquals(0L, AutoPilotRules.leaveAskDelay(now - 15 * m, now))
+    }
+
+    @Test
+    fun `вело с часов через четыре минуты после отъезда - от двери`() {
+        val left = now - 4 * m
+        assertEquals(left, AutoPilotRules.stitchedStart(now, "дом", left, now - 2 * h))
+    }
+
+    @Test
+    fun `вело кончилось в другом месте - передвижение, круг от дома - тренировка`() {
+        assertEquals("Передвижение: вело", AutoPilotRules.activityCategory("Спорт: вело", "Ride", true))
+        assertEquals("Спорт: вело", AutoPilotRules.activityCategory("Спорт: вело", "Ride", false))
+        assertEquals("Спорт: бег", AutoPilotRules.activityCategory("Спорт: бег", "Run", true))
+    }
+
+    @Test
+    fun `станок и зал - не от двери`() {
+        assertTrue(AutoPilotRules.outdoor("Ride"))
+        assertFalse(AutoPilotRules.outdoor("VirtualRide"))
+        assertFalse(AutoPilotRules.outdoor("WeightTraining"))
+    }
+
+    // ---- ходьба ----
+
+    @Test
+    fun `двадцать минут движения без машины - пешком с момента отъезда`() {
+        val v = AutoPilotRules.walkVerdict(
+            motions = 6, leftAtMs = now - 21 * m, now = now,
+            openTitle = "Работа: ЗФ", openCategory = "Работа: текущая", latestOwnerStart = now - 3 * h,
+        )
+        assertEquals(AutoPilotRules.Walk.START, v)
+    }
+
+    @Test
+    fun `рано - ждём`() {
+        val v = AutoPilotRules.walkVerdict(6, now - 12 * m, now, null, null, 0L)
+        assertEquals(AutoPilotRules.Walk.WAIT, v)
+    }
+
+    @Test
+    fun `телефон лежал - не ходьба`() {
+        val v = AutoPilotRules.walkVerdict(1, now - 21 * m, now, "Работа: ЗФ", "Работа: текущая", now - 3 * h)
+        assertEquals(AutoPilotRules.Walk.NONE, v)
+    }
+
+    @Test
+    fun `дорога уже идёт или владелец сказал своё - молчим`() {
+        assertEquals(
+            AutoPilotRules.Walk.NONE,
+            AutoPilotRules.walkVerdict(6, now - 21 * m, now, "Поездка из «дом»", "Передвижение: транспорт", now - 21 * m),
+        )
+        assertEquals(
+            AutoPilotRules.Walk.NONE,
+            AutoPilotRules.walkVerdict(6, now - 21 * m, now, "Кофе с Ильёй", "Социальное: внешнее", now - 5 * m),
+        )
+    }
+
+    @Test
+    fun `окно прошло - решение устарело`() {
+        assertEquals(AutoPilotRules.Walk.NONE, AutoPilotRules.walkVerdict(6, now - h, now, null, null, 0L))
+    }
+
+    // ---- «всё ещё …?» ----
+
+    @Test
+    fun `вынес мусор - один толчок, сеть на месте - не спрашиваем`() {
+        assertFalse(AutoPilotRules.stillAsk(motions = 1, leftAfterMotion = false, leaveAsked = true))
+    }
+
+    @Test
+    fun `встал и не сел - спрашиваем`() {
+        assertTrue(AutoPilotRules.stillAsk(motions = 3, leftAfterMotion = false, leaveAsked = true))
+    }
+
+    @Test
+    fun `сеть пропала после движения - спросит вопрос уехал, здесь молчим`() {
+        assertFalse(AutoPilotRules.stillAsk(motions = 1, leftAfterMotion = true, leaveAsked = true))
+        // Вопрос «уехал?» выключен — тогда спрашиваем здесь.
+        assertTrue(AutoPilotRules.stillAsk(motions = 1, leftAfterMotion = true, leaveAsked = false))
+    }
+}

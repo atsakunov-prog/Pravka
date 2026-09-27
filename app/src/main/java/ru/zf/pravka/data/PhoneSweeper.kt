@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import ru.zf.pravka.core.SleepGuess
 
 // Reads the phone's own memory of the day - UsageStatsManager events and the
 // call log - and turns it into day aggregates in PhoneStore: screen time,
@@ -59,6 +60,8 @@ class PhoneSweeper(
         private const val AUDIO_CARRY_CAP_MS = 24L * 3600 * 1000
         // Пауза короче этого - тот же сеанс слушания.
         private const val AUDIO_GAP_MS = 5 * 60_000L
+        /** Когда встал по экрану (ms) — в `pravka_internal`; читает `IcuSweeper` для сна от Garmin. */
+        const val KEY_WAKE_HINT = "z_wake_hint"
 
         /** The special "Доступ к статистике использования" toggle. */
         fun hasUsageAccess(context: Context): Boolean {
@@ -297,12 +300,15 @@ class PhoneSweeper(
     }
 
     /**
-     * The night's sleep, read off the screen: the longest lights-out gap
-     * between 18:00 yesterday and now. The phone knows when the owner really
-     * fell asleep and woke up better than any API - intervals.icu only has
-     * the duration (IcuSweeper annotates it onto this entry later). Runs once
-     * per day after 05:00; closing the evening's open entry at lights-out is
-     * the automatic "закрыть день".
+     * Ночь по экрану: самый длинный ночной разрыв «погас — включился» между
+     * 18:00 вчера и сейчас, СШИТЫЙ через ночные взгляды на телефон
+     * (`core/SleepGuess.kt` — там, почему первый детектор ночь терял). Телефон
+     * знает, когда владелец лёг и встал, лучше любого API: intervals.icu отдаёт
+     * только длительность — её `IcuSweeper` приписывает к записи, а если ночь
+     * по экрану не нашлась, записывает сон от подъёма по ней. Раз в сутки после
+     * 05:00; закрыть вечернее дело моментом отбоя — это и есть автоматическое
+     * «закрыть день». Не нашлась к 14:00 — сдаёмся до завтра и пишем в журнал,
+     * чего не хватило: молчание читалось как поломка.
      */
     private suspend fun detectSleep(now: Long, usm: UsageStatsManager): Boolean {
         val cal = java.util.Calendar.getInstance()
@@ -315,41 +321,73 @@ class PhoneSweeper(
         val from = dayStartMs(now) - 6 * 3600_000L
         val events = usm.queryEvents(from, now)
         val event = UsageEvents.Event()
-        var lastOff = 0L
-        var bestStart = 0L
-        var bestEnd = 0L
+        val spans = ArrayList<SleepGuess.Span>()
+        var onAt = -1L
+        var screenEvents = 0
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             when (event.eventType) {
-                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> lastOff = event.timeStamp
                 UsageEvents.Event.SCREEN_INTERACTIVE -> {
-                    if (lastOff > 0 && event.timeStamp - lastOff > bestEnd - bestStart) {
-                        bestStart = lastOff
-                        bestEnd = event.timeStamp
-                    }
-                    lastOff = 0
+                    screenEvents++
+                    if (onAt < 0) onAt = event.timeStamp
+                }
+                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
+                    screenEvents++
+                    // Первым пришёл «погас» — значит, с начала окна экран горел.
+                    val s = if (onAt < 0) from else onAt
+                    if (event.timeStamp > s) spans.add(SleepGuess.Span(s, event.timeStamp))
+                    onAt = -1L
                 }
             }
         }
-        if (bestEnd - bestStart < 3 * 3600_000L) {
-            // No convincing night gap; stop looking for today after noon.
-            if (hour >= 12) prefs.edit().putString("z_sleep_day", todayKey).apply()
+        // Экран горит прямо сейчас — последний отрезок до [now]: разрыв перед
+        // ним закрыт включением. Погашен — тишина ещё идёт, она не ночь.
+        if (onAt >= 0) spans.add(SleepGuess.Span(onAt, now))
+        // Подсказка «когда встал» — для сна от Garmin, если ночь не найдётся.
+        SleepGuess.wakeHint(spans, from).takeIf { it > 0L }?.let {
+            prefs.edit().putLong(KEY_WAKE_HINT, it).apply()
+        }
+        val verdict = SleepGuess.guess(spans, from, now)
+        val night = verdict.night
+        if (night == null) {
+            if (hour >= SleepGuess.WAKE_TO_HOUR) {
+                prefs.edit().putString("z_sleep_day", todayKey).apply()
+                eventLog.add(
+                    if (screenEvents == 0) {
+                        "телефон: событий экрана за ночь нет — Android их не отдал; сон возьмёт Garmin"
+                    } else {
+                        "телефон: ночь по экрану не нашлась (самый длинный разрыв " +
+                            "${verdict.longestMs / 60_000} мин из ${verdict.gaps}); сон возьмёт Garmin"
+                    }
+                )
+            }
             return false
         }
         prefs.edit().putString("z_sleep_day", todayKey).apply()
-        if (zasechkaStore.coveredByOwner(bestStart, bestEnd)) return false
+        if (zasechkaStore.coveredByOwner(night.start, night.end)) {
+            eventLog.add("телефон: сон ${hm(night.start)}–${hm(night.end)} не записан — время занято твоими записями")
+            return false
+        }
         val entry = zasechkaStore.insertInterruption(
-            start = bestStart,
-            end = bestEnd,
+            start = night.start,
+            end = night.end,
             title = "сон",
             category = "Сон",
             resumePrevious = false,
         )
         if (entry != null) {
-            eventLog.add("телефон: сон ${(bestEnd - bestStart) / 60_000} мин → в ленту")
+            eventLog.add(
+                "телефон: сон ${night.ms / 60_000} мин → в ленту" +
+                    if (night.pieces > 1) {
+                        " (сшито из ${night.pieces}: ${night.stitchedMs / 60_000} мин экрана ночью — взгляды, не подъём)"
+                    } else ""
+            )
         }
         return entry != null
     }
+
+    private fun hm(ms: Long): String =
+        java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))
 
     /**
      * Звонки ≥ минуты из журнала - в суточные счётчики: минуты, число,

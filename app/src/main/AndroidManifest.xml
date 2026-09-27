@@ -41,6 +41,10 @@
          скан эфира на Android 13+ требует «Устройства поблизости». -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Встречи из календаря телефона — в ленту как работа (автопилот
+         Засечки, 27.09.2026). Только чтение, только своими руками выбранные
+         календари. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <!-- Android 11+ package visibility hides other apps' names from us; the
          phone-time list needs real labels ("Telegram", not "messenger.web").

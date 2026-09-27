@@ -573,9 +573,18 @@ class PravkaApp : Application() {
         ru.zf.pravka.data.Updates(this, httpClient, settings, eventLog)
     }
 
-    // intervals.icu: workouts land in the ribbon, Garmin sleep annotates it.
+    // intervals.icu: workouts land in the ribbon, Garmin sleep annotates it
+    // (или пишет сон сам, если телефон ночи не увидел). Свидетель швов —
+    // автопилот службы: тренировка от двери начинается с потери сети места.
     val icuSweeper by lazy {
-        ru.zf.pravka.data.IcuSweeper(settings, zasechkaStore, httpClient, eventLog, zasechkaSync, appScope)
+        ru.zf.pravka.data.IcuSweeper(
+            settings, zasechkaStore, httpClient, eventLog, zasechkaSync, appScope,
+            witness = { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoWitness() },
+            wakeHint = {
+                getSharedPreferences("pravka_internal", MODE_PRIVATE)
+                    .getLong(ru.zf.pravka.data.PhoneSweeper.KEY_WAKE_HINT, 0L)
+            },
+        )
     }
 
     // The connection pool keeps sockets ~5 min; after a longer gap the CLEAN

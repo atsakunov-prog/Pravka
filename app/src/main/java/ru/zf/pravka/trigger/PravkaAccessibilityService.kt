@@ -293,6 +293,10 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     /** Автопилот Засечки: Wi-Fi-места, BT машины, «точно ещё …?». */
     val autoPilot by lazy { AutoPilot(this, app, scope) }
+    /** Встречи из календаря — рядом с автопилотом, живёт и гаснет вместе с ним. */
+    val calendarPilot by lazy { CalendarPilot(this, app, scope, autoPilot) }
+    /** Что автопилот знает о швах дня — тренировкам с часов; выключен — null. */
+    fun autoWitness(): ru.zf.pravka.core.AutoWitness? = if (autoPilotOn) autoPilot else null
 
     /**
      * Кнопка стоит на стекле, только если включены и её тумблер («Кнопки на
@@ -316,9 +320,12 @@ class PravkaAccessibilityService : AccessibilityService() {
                 .collect { on ->
                     if (on && !autoPilotOn) {
                         runCatching { autoPilot.start() }
+                        runCatching { calendarPilot.start() }
                         autoPilotOn = true
                     } else if (!on && autoPilotOn) {
                         runCatching { autoPilot.stop() }
+        runCatching { calendarPilot.stop() }
+                        runCatching { calendarPilot.stop() }
                         autoPilotOn = false
                     }
                 }
@@ -2782,7 +2789,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                 runCatching { notifyArrivedWorkouts() }
             }
             // Автопилот — Засечки, а не Спорта: раньше жил в той же корутине.
-            if (zasechka && autoPilotOn) scope.launch { runCatching { autoPilot.tick() } }
+            if (zasechka && autoPilotOn) scope.launch {
+                runCatching { autoPilot.tick() }
+                // Встречи из календаря — тем же тиком: сам себя не накладывает.
+                runCatching { calendarPilot.tick() }
+            }
             if (food) scope.launch { runCatching { app.foodEngine.syncPending() } }
             // Общие Деньги: обмен с семейным Drive — свои правки туда, чужие
             // сюда. Без входа молчит; второй обмен поверх идущего не встаёт.

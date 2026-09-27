@@ -1021,6 +1021,24 @@ class ZasechkaStore(private val context: Context) {
     }
 
     /**
+     * Открыть закрытую запись обратно — кнопка «Ещё идёт» у встречи из
+     * календаря, когда возвращать после неё было нечего. Только если ничего
+     * не идёт: владелец мог уже начать следующее, и его слово сильнее. Та же
+     * механика, что вторая половина [revertAutoStart], одним шагом под замком.
+     */
+    suspend fun reopen(id: Long): Entry? = mutex.withLock {
+        ensureLoaded()
+        val i = entries.indexOfFirst { it.id == id }
+        if (i < 0 || entries.any { it.open }) return@withLock null
+        snapshotLocked("возврат «${entries[i].title.ifBlank { "без названия" }}»")
+        val reopened = entries[i].copy(end = 0L, synced = false, notionSynced = false)
+        entries[i] = reopened
+        normalizeLocked()
+        persist()
+        reopened
+    }
+
+    /**
      * Дописать примечание к записи, не двигая её во времени.
      *
      * Отдельно от [update] нарочно, и по двум причинам. Во-первых, `raw` не

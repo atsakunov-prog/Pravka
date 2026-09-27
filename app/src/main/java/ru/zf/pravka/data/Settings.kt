@@ -160,6 +160,10 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_LEAVE_ASK = booleanPreferencesKey("auto_leave_ask")
         private val KEY_AUTO_CAR_ASK = booleanPreferencesKey("auto_car_ask")
         private val KEY_AUTO_STILL_ASK = booleanPreferencesKey("auto_still_ask")
+        private val KEY_AUTO_WALK_START = booleanPreferencesKey("auto_walk_start")
+        private val KEY_AUTO_CAL_ON = booleanPreferencesKey("auto_cal_on")
+        private val KEY_AUTO_CAL_CATEGORY = stringPreferencesKey("auto_cal_category")
+        private val KEY_AUTO_CALENDARS = stringPreferencesKey("auto_calendars")
         private val KEY_NOTION_DIARY = booleanPreferencesKey("notion_diary_push")
         private val KEY_NOTION_LIFE = booleanPreferencesKey("notion_life_push")
         private val KEY_NOTION_LIFE_HUB = stringPreferencesKey("notion_life_hub")
@@ -1124,6 +1128,57 @@ class Settings(private val context: Context) {
     val autoStillAskFlow = context.dataStore.data.map { it[KEY_AUTO_STILL_ASK] ?: true }
     suspend fun setAutoStillAsk(value: Boolean) {
         context.dataStore.edit { it[KEY_AUTO_STILL_ASK] = value }
+    }
+
+    /**
+     * Телефон двадцать минут в движении после отъезда, машины нет — начать
+     * «Дорогу пешком» с момента отъезда самому. Владелец (27.09.2026): «вышел
+     * из дома и телефон двигается минут двадцать — это передвижение пешком».
+     * Выключено — остаётся только вопрос «уехал?».
+     */
+    val autoWalkStartFlow = context.dataStore.data.map { it[KEY_AUTO_WALK_START] ?: true }
+    suspend fun setAutoWalkStart(value: Boolean) {
+        context.dataStore.edit { it[KEY_AUTO_WALK_START] = value }
+    }
+
+    /**
+     * Встречи из календаря телефона — в ленту как работа (владелец,
+     * 27.09.2026: «брать мой календарь и ставить встречи как „работу“»).
+     * Категория — выбор владельца, заводская — созвоны; календари — набор
+     * имён, пустой — только основной календарь аккаунта.
+     */
+    val autoCalOnFlow = context.dataStore.data.map { it[KEY_AUTO_CAL_ON] ?: true }
+    suspend fun setAutoCalOn(value: Boolean) {
+        context.dataStore.edit { it[KEY_AUTO_CAL_ON] = value }
+    }
+
+    val autoCalCategoryFlow = context.dataStore.data.map {
+        it[KEY_AUTO_CAL_CATEGORY]?.takeIf { c -> c.isNotBlank() }
+            ?: ru.zf.pravka.core.CalendarRules.DEFAULT_CATEGORY
+    }
+    suspend fun setAutoCalCategory(value: String) {
+        context.dataStore.edit { it[KEY_AUTO_CAL_CATEGORY] = value.trim() }
+    }
+
+    /** null — не выбирали (только основной календарь); пустой набор — ничего не смотреть. */
+    val autoCalendarsFlow: kotlinx.coroutines.flow.Flow<Set<String>?> = context.dataStore.data.map { prefs ->
+        val raw = prefs[KEY_AUTO_CALENDARS]
+        if (raw == null) null
+        else runCatching {
+            val a = org.json.JSONArray(raw)
+            (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }.toSet()
+        }.getOrDefault(emptySet())
+    }
+
+    /** [current] — что смотрится сейчас (с заводским «только основной» уже раскрытым). */
+    suspend fun setAutoCalendar(name: String, on: Boolean, current: Set<String>) {
+        if (name.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val cur = current.toMutableSet()
+            if (on) cur.add(name) else cur.remove(name)
+            // Пустой набор пишем явно: «[]» — ничего не смотреть, а не «с завода».
+            prefs[KEY_AUTO_CALENDARS] = org.json.JSONArray(cur.toList()).toString()
+        }
     }
 
     /**

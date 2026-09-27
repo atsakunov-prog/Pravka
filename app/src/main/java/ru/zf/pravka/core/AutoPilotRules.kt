@@ -39,6 +39,32 @@ object AutoPilotRules {
     const val CAR_AFTER_LEAVE_MS = 20 * 60_000L
 
     /**
+     * Короткий выход из дома — мусор, машина за вещью, курьер у подъезда — не
+     * отъезд. Владелец (27.09.2026): «вышел из дома и вернулся менее чем через
+     * десять минут — не надо прерывать текущее дело». Десять минут молчим
+     * целиком: ни вопроса «уехал?», ни «всё ещё …?» по датчику движения;
+     * вернулся раньше — вопросы снимаются, дело в ленте идёт как шло.
+     */
+    const val SHORT_EXIT_MS = 10 * 60_000L
+
+    /**
+     * Сколько ждать после короткого выхода, чтобы назвать движение ходьбой:
+     * двадцать минут телефона в движении без машины и без нового места.
+     * Владелец: «вышел из дома и телефон двигается минут двадцать — это
+     * передвижение пешком».
+     */
+    const val WALK_AFTER_MS = 20 * 60_000L
+
+    /** Сколько срабатываний датчика значимого движения — «телефон в движении». */
+    const val WALK_MIN_MOTIONS = 4
+
+    /**
+     * Сколько срабатываний датчика за [SHORT_EXIT_MS] после первого — не поход
+     * на кухню, а «встал и не сел»: тогда «всё ещё „Работа“?» имеет смысл.
+     */
+    const val STILL_MIN_MOTIONS = 3
+
+    /**
      * Сколько живёт якорь времени из пуша. «Вышел из машины в 14:02 — что
      * теперь?» нажатое вечером не должно резать ленту на шесть часов назад:
      * за это время владелец наверняка уже наговорил день сам.
@@ -55,13 +81,103 @@ object AutoPilotRules {
      * что делал между дверью и машиной, и резать это задним числом нельзя;
      * тогда поездка стартует с подключения.
      */
-    fun carTripStart(connectedAt: Long, leftPlace: String, leftAtMs: Long, openStart: Long?): Long {
-        if (leftPlace.isBlank() || leftAtMs <= 0L) return connectedAt
-        val since = connectedAt - leftAtMs
-        if (since < 0L || since > CAR_AFTER_LEAVE_MS) return connectedAt
-        if (openStart != null && openStart > leftAtMs) return connectedAt
+    fun carTripStart(connectedAt: Long, leftPlace: String, leftAtMs: Long, openStart: Long?): Long =
+        stitchedStart(connectedAt, leftPlace, leftAtMs, openStart)
+
+    /**
+     * То же правило для любого сигнала «дорога началась» в [signalAt]: машина
+     * подключилась, тренировка с часов стартовала (вело от двери — владелец,
+     * 27.09.2026: «вышел из дома, потом приехало Вело — это передвижение
+     * вело»), телефон двадцать минут в движении. Сеть места пропала не
+     * раньше [CAR_AFTER_LEAVE_MS] до сигнала — дорога с потери сети.
+     */
+    fun stitchedStart(signalAt: Long, leftPlace: String, leftAtMs: Long, openStart: Long?): Long {
+        if (leftPlace.isBlank() || leftAtMs <= 0L) return signalAt
+        val since = signalAt - leftAtMs
+        if (since < 0L || since > CAR_AFTER_LEAVE_MS) return signalAt
+        if (openStart != null && openStart > leftAtMs) return signalAt
         return leftAtMs
     }
+
+    /**
+     * Через сколько после потери сети в [lostAtMs] спрашивать «уехал?»,
+     * если смотреть на часы в [now]: ровно так, чтобы вопрос пришёл через
+     * [SHORT_EXIT_MS] после потери — и ни секундой раньше. Место «по
+     * видимости» узнаёт отъезд с опозданием (пять минут без свежих сканов),
+     * поэтому задержка считается от момента потери, а не от момента, когда
+     * её заметили.
+     */
+    fun leaveAskDelay(lostAtMs: Long, now: Long): Long =
+        (SHORT_EXIT_MS - (now - lostAtMs)).coerceAtLeast(0L)
+
+    /** Что автопилот делает, когда телефон двадцать минут в движении после отъезда. */
+    enum class Walk {
+        /** Начать «Дорогу пешком» с момента отъезда. */
+        START,
+        /** Ещё рано — окно двадцати минут не вышло. */
+        WAIT,
+        /** Не ходьба: дорога уже идёт, владелец сказал своё, телефон лежал, окно прошло. */
+        NONE,
+    }
+
+    /**
+     * Ходьба после отъезда. [motions] — срабатываний датчика значимого движения
+     * с момента отъезда [leftAtMs]; [openTitle]/[openCategory] — что открыто;
+     * [latestOwnerStart] — начало последней записи владельца (сказал что-то
+     * после отъезда — он в курсе, робот молчит). Машина и приезд в место
+     * снимают вопрос раньше, сюда не доходят.
+     */
+    fun walkVerdict(
+        motions: Int,
+        leftAtMs: Long,
+        now: Long,
+        openTitle: String?,
+        openCategory: String?,
+        latestOwnerStart: Long,
+    ): Walk {
+        if (leftAtMs <= 0L || now < leftAtMs) return Walk.NONE
+        if (now - leftAtMs < WALK_AFTER_MS) return Walk.WAIT
+        // Окно прошло — решение устарело: через час это уже другая история.
+        if (now - leftAtMs > WALK_AFTER_MS + SHORT_EXIT_MS) return Walk.NONE
+        if (openTitle != null && travelish(openTitle, openCategory.orEmpty())) return Walk.NONE
+        if (latestOwnerStart > leftAtMs) return Walk.NONE
+        if (motions < WALK_MIN_MOTIONS) return Walk.NONE
+        return Walk.START
+    }
+
+    /**
+     * Спрашивать ли «всё ещё „Работа“?» через [SHORT_EXIT_MS] после первого
+     * движения. Раньше вопрос летел в ту же секунду, когда владелец встал, —
+     * и вынести мусор значило получить пуш. Теперь: сеть места пропала после
+     * движения — это отъезд, и его спросит вопрос «уехал?» ([leaveAsked]);
+     * если тот выключен, спрашиваем здесь. Сеть на месте — спрашиваем, только
+     * если телефон продолжал двигаться ([motions] ≥ [STILL_MIN_MOTIONS]):
+     * сходил на кухню и сел обратно — один-два толчка, не вопрос.
+     */
+    fun stillAsk(motions: Int, leftAfterMotion: Boolean, leaveAsked: Boolean): Boolean {
+        if (leftAfterMotion) return !leaveAsked
+        return motions >= STILL_MIN_MOTIONS
+    }
+
+    /**
+     * Категория тренировки с часов, которая началась от двери. Вело, кончившееся
+     * НЕ там, где началось (уехал из дома — сеть Летово увиделась после
+     * финиша), — велосипед как транспорт, «Передвижение: вело»; круг от дома
+     * до дома — тренировка, как и была. Бег остаётся бегом всегда: бегом не
+     * ездят по делам.
+     */
+    fun activityCategory(default: String, type: String, arrivedElsewhere: Boolean): String {
+        if (!arrivedElsewhere) return default
+        return when (type) {
+            "Ride", "GravelRide", "MountainBikeRide" -> "Передвижение: вело"
+            else -> default
+        }
+    }
+
+    /** Тренировка на улице — та, что может начаться от двери: не станок и не зал. */
+    fun outdoor(type: String): Boolean = type in setOf(
+        "Ride", "GravelRide", "MountainBikeRide", "Run", "TrailRun", "Walk", "Hike",
+    )
 
     /**
      * Годится ли якорь времени [anchor] (момент, от которого пуш или дыра в
@@ -169,4 +285,19 @@ object AutoPilotRules {
         if (n.isBlank() || c.isBlank()) return false
         return n.equals(c, ignoreCase = true) || n.startsWith(c, ignoreCase = true)
     }
+}
+
+/** Шов дня: место и момент — отъезд («потерял дом в 10:02») или приезд. */
+data class Leave(val place: String, val atMs: Long)
+
+/**
+ * Что автопилот знает о последних швах — для тех, кто пишет дорогу другим
+ * сигналом. Тренировка с часов (`data/IcuSweeper.kt`) спрашивает здесь, не
+ * началась ли она от двери, и снимает вопрос «уехал?», раз дорога уже есть.
+ */
+interface AutoWitness {
+    fun lastLeave(): Leave?
+    fun lastArrival(): Leave?
+    /** Дорога началась другим сигналом ([by] — каким) — вопрос «уехал?» снят. */
+    fun leaveAnswered(by: String)
 }
