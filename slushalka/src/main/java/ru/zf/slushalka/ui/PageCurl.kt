@@ -83,8 +83,8 @@ class CurlState {
     var slot by mutableIntStateOf(-1)
     /**
      * Вперёд - лист текущего слота уходит налево; назад - лист предыдущего
-     * возвращается направо. Шейдеру это важно: у оборота назад «нетронутая»
-     * часть листа - это уже лёгшая страница, и красить её бумагой нельзя.
+     * возвращается направо. Геометрия у обоих одна, только ход в обратную
+     * сторону; направление нужно жесту, чтобы знать, куда доводить.
      */
     var forward by mutableStateOf(true)
     /** Точка листа, за которую взялись. */
@@ -269,7 +269,6 @@ fun Modifier.pageCurl(
             rt.setFloatUniform("radius", radius)
             rt.setFloatUniform("paper", paper.red, paper.green, paper.blue)
             rt.setFloatUniform("ghost", 0.16f)
-            rt.setFloatUniform("backward", if (mine && !state.forward) 1f else 0f)
             rt.setFloatUniform("hasBack", if (back != null) 1f else 0f)
             rt.setInputBuffer("back", back ?: shader.blank)
             rt.setFloatUniform("opacity", opacity)
@@ -438,15 +437,15 @@ private fun finish(
  * `theta = asin(d / radius)`, лицо на `theta`, изнанка на `pi - theta` от сгиба.
  *
  * Изнанка - снимок оборота, отражённый по ширине листа: оборот напечатан с
- * той же стороны корешка, и его точка под точкой лица - зеркальная. Пока
- * снимка нет - бумага с еле заметным просветом лица.
- *
- * Что показывать в лежащей плоско части листа, зависит от места. Над своей
- * страницей (правее корешка) это изнанка; при обороте назад та же часть -
- * уже лёгшая страница, и там просто содержимое слоя. Над левой страницей
- * (левее корешка) лист прозрачен: под ним в этом же месте лежит ровно та
- * страница, которая на нём напечатана с изнанки, - следующий разворот уже
- * подложен снизу, - и подставлять вместо неё снимок значило бы двоить текст.
+ * той же стороны корешка, и его точка под точкой лица - зеркальная. Поверх
+ * снимка еле заметный просвет лица (`ghost`): без него изнанка выглядела чище
+ * страниц, у которых просвет есть. Изнанка одна и та же и на валике, и на
+ * лежащей плоско части листа - там, где лист лёг, текст оборота едет вместе с
+ * ним и в конце хода ложится ровно на ту же страницу, что подложена снизу
+ * следующим разворотом. Владелец на живой сборке видел иначе: лежащая часть
+ * была прозрачной, и снизу проступала неподвижная страница - «как будто
+ * просветом показаны слова следующей». Пока снимка нет (первые кадры), над
+ * левой страницей лист прозрачен, над своей - бумага с просветом лица.
  * Левее `landLeft` (за корешком закрытой книги) листа нет.
  *
  * Свет сверху: лицо у сгиба светлое и темнеет к силуэту валика, изнанка от
@@ -465,7 +464,6 @@ uniform float2 dir;
 uniform float radius;
 uniform float3 paper;
 uniform float ghost;
-uniform float backward;
 uniform float hasBack;
 uniform float opacity;
 
@@ -485,13 +483,12 @@ float outside(float2 p) {
 
 half4 backFace(float2 src, float shade) {
     half3 rgb = half3(paper);
+    half4 c = content.eval(src);
     if (hasBack > 0.5) {
         half4 t = back.eval(float2(sheet.z - src.x, src.y - sheet.y));
         rgb = rgb * (1.0 - t.a) + t.rgb;
-    } else {
-        half4 c = content.eval(src);
-        rgb = mix(rgb, c.rgb, half(ghost));
     }
+    rgb = mix(rgb, c.rgb, half(ghost));
     return half4(rgb * half(shade), 1.0);
 }
 
@@ -503,18 +500,15 @@ half4 main(float2 p) {
         float2 src = base + dir * (PI * radius - d);
         float crease = 0.16 * exp(d / (0.4 * radius + 1.0));
         if (inSheet(src) > 0.5 && p.x >= landLeft) {
-            if (p.x < sheet.x) {
-                outc = half4(0.0, 0.0, 0.0, crease * inRows(p));
-            } else if (backward > 0.5) {
-                outc = content.eval(p);
-                outc.rgb *= half(1.0 - crease);
-            } else {
+            if (hasBack > 0.5 || p.x >= sheet.x) {
                 outc = backFace(src, 1.0 - crease);
+            } else {
+                outc = half4(0.0, 0.0, 0.0, crease * inRows(p));
             }
         } else {
             outc = content.eval(p);
             float gap = outside(src);
-            float s = (p.x >= landLeft) ? 0.20 * (1.0 - smoothstep(0.0, 0.8 * radius + 4.0, gap)) * inRows(p) : 0.0;
+            float s = (p.x >= landLeft) ? 0.24 * (1.0 - smoothstep(0.0, 1.1 * radius + 4.0, gap)) * inRows(p) : 0.0;
             outc.rgb *= half(1.0 - s);
         }
     } else if (d <= radius) {

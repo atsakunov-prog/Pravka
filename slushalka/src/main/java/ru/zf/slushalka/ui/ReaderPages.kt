@@ -94,7 +94,6 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -710,9 +709,11 @@ internal fun PageFace(
                     }
                     .then(
                         if (backLayer == null) Modifier else Modifier.drawWithContent {
-                            backLayer.record(this, layoutDirection, IntSize(size.width.toInt(), size.height.toInt())) {
-                                this@drawWithContent.drawContent()
-                            }
+                            // Именно record из DrawScope (расширение с двумя
+                            // параметрами): он подменяет холст, и drawContent()
+                            // пишет в слой. Четырёхаргументный record самого
+                            // слоя этого не делает - слой оставался пустым.
+                            backLayer.record { this@drawWithContent.drawContent() }
                             if (bleed) drawLayer(backLayer)
                         }
                     ),
