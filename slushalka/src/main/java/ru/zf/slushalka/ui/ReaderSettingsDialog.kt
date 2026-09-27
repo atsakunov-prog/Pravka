@@ -343,10 +343,11 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
     PaperNote(
         when (prefs.readerPageStyle) {
             Settings.PAGE_VOLUME ->
-                "Настоящий том: переплёт кантом по краю и цветом с обложки книги, плетёный " +
-                    "корешок, обрез из многих страниц, каптал, светлый стол и мягкая тень по " +
-                    "форме книги. Книга целиком в экране и остаётся на месте; страницы " +
-                    "сменяются так, как выбрано в «Перелистывании»."
+                "Настоящий том: переплёт кантом по краю, на канте - края обложки книги, " +
+                    "завёрнутые внутрь, как в настоящем переплёте; плетёный корешок, обрез " +
+                    "из многих страниц, каптал, светлый стол и размытая тень по форме книги. " +
+                    "Книга целиком в экране и остаётся на месте; лист загибается под пальцем " +
+                    "или растворяется - см. «Перелистывание в книге»."
             Settings.PAGE_BOOK ->
                 "Страница - верхняя карточка колоды: лежит на столе с мягкой тенью, по кромке " +
                     "тонкая фаска (светлая сверху, тёмная снизу), сверху блик, снизу затенение, " +
@@ -359,6 +360,50 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
         },
         Modifier.padding(top = 8.dp),
     )
+
+    if (prefs.readerPageStyle == Settings.PAGE_VOLUME) {
+        labels("Просвет с оборота")
+        PaperToggle("Печать с оборота проступает", prefs.readerBleed) { scope.launch { s.setReaderBleed(it) } }
+        if (prefs.readerBleed) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Settings.BLEED_LEVELS.forEach { v ->
+                PaperChip(Settings.bleedLabel(v), selected = kotlin.math.abs(prefs.readerBleedLevel - v) < 0.01f) { scope.launch { s.setReaderBleedLevel(v) } }
+            }
+        }
+        PaperNote(
+            "Сквозь тонкую бумагу видна печать с обратной стороны листа - зеркально и " +
+                "размыто: у левой страницы это предыдущая, у правой и единственной - " +
+                "следующая. Корешковое поле ложится на корешковое, строки на строки, как " +
+                "в печати, где оборот приводят к лицу. Сила - насколько плотно проступает.",
+            Modifier.padding(top = 8.dp),
+        )
+
+        labels("Перелистывание в книге")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Settings.BOOK_TURNS.forEach { id ->
+                PaperChip(Settings.bookTurnLabel(id), selected = prefs.readerBookTurn == id) { scope.launch { s.setReaderBookTurn(id) } }
+            }
+        }
+        PaperNote(
+            buildString {
+                append(
+                    if (prefs.readerBookTurn == Settings.BOOK_TURN_CURL)
+                        "Лист гнётся, а не крутится картоном: за что взялся - то и идёт за " +
+                            "пальцем, рядом бумага заворачивается валиком с тенью, за валиком " +
+                            "видна следующая страница, поверх ложится изнанка листа. Тянуть " +
+                            "можно за угол или за середину края, назад - от корешка. Тап по " +
+                            "краю переворачивает за угол сам."
+                    else "Страница растворяется на месте, книга не шевелится."
+                )
+                if (!curlSupported) append(" Загиб считает шейдер, ему нужен Android 13 - на этом устройстве будет растворение.")
+                else if (prefs.readerSpread != Settings.SPREAD_OFF) append(
+                    " На узком экране, где показана половина разворота и книга ездит камерой, " +
+                        "лист растворяется: гнуть его поверх этого хода некуда. Загиб - на " +
+                        "развороте и при «всегда одной» странице."
+                )
+            },
+            Modifier.padding(top = 8.dp),
+        )
+    }
 
     labels("Поле от края экрана: ${prefs.readerCardMargin}")
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -19,6 +19,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -34,13 +35,17 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import ru.zf.slushalka.data.Settings
 import java.util.Random
@@ -157,8 +162,24 @@ class PaperTones(
      */
     val paperFine: Float = if (oled) 0f else if (dark) 0.10f else 0.11f
     val paperFibers: Float = if (oled) 0f else if (dark) 0.035f else 0.04f
+    /**
+     * Облачность: бумага неровна не только зерном, но и пятнами в палец
+     * величиной - там, где волокна легли гуще, лист чуть темнее. На просвет
+     * это видно у любой книги; на экране - на грани заметности, иначе
+     * страница выглядит грязной.
+     */
+    val paperClouds: Float = if (oled) 0f else if (dark) 0.035f else 0.045f
     val coverFine: Float = 0.16f
     val coverFibers: Float = 0.06f
+
+    /**
+     * Просвет печати с оборота: прозрачность зеркальных букв соседней
+     * страницы по силе [level] 0..1. На тёмной бумаге вдвое слабее - там
+     * «печать» светлая, и её просвет читается засветкой; на чёрной OLED нет
+     * вовсе.
+     */
+    fun bleedAlpha(level: Float): Float =
+        if (oled) 0f else (0.05f + 0.19f * level.coerceIn(0f, 1f)) * (if (dark) 0.5f else 1f)
 
     fun shadow(alpha: Float): Color =
         if (dark) Color.Black.copy(alpha = alpha * 0.65f) else Color(0xFF2E2418).copy(alpha = alpha)
@@ -202,6 +223,14 @@ data class PageLook(
     val bevel: Boolean,
     val sheen: Boolean,
     val grain: Boolean,
+    /**
+     * Просвет с оборота, 0..1: печать соседней страницы проступает сквозь
+     * бумагу зеркально. Ноль - выключен. Только в книжном виде: у карточек
+     * стопки оборота нет.
+     */
+    val bleed: Float = 0f,
+    /** Лист в книге загибается под пальцем, а не растворяется. */
+    val curl: Boolean = false,
 ) {
     val volume: Boolean get() = style == Settings.PAGE_VOLUME
     val flat: Boolean get() = style == Settings.PAGE_FLAT
@@ -471,7 +500,13 @@ fun Modifier.readerBackdrop(tones: PaperTones, look: PageLook): Modifier =
  * У книги это переплёт, форзац, обрез и корешок; у стопки - кромки следующих
  * карточек.
  */
-fun Modifier.pageUnder(tones: PaperTones, look: PageLook, shape: BookShape): Modifier {
+fun Modifier.pageUnder(
+    tones: PaperTones,
+    look: PageLook,
+    shape: BookShape,
+    /** Края обложки книги для загибки переплёта; null - картон одним цветом. */
+    edges: CoverEdges? = null,
+): Modifier {
     if (look.flat || look.style == Settings.PAGE_SOFT) return this
     val m = cardMetrics(look, shape)
     val lift = when (look.shadow) {
@@ -495,7 +530,29 @@ fun Modifier.pageUnder(tones: PaperTones, look: PageLook, shape: BookShape): Mod
             val fibers = if (look.grain) matteBrush(tones.cover, FIBERS_SEED, COVER_FIBERS.toPx()) else null
             val cloth = clothBrush(tones.spine, CLOTH_THREAD.toPx())
             val band = headbandBrush(tones.headband, tones.paper, HEADBAND_THREAD.toPx())
-            onDrawBehind { drawVolume(tones, m, shape, depth, fine, fibers, cloth, band) }
+            // Тень на стол - настоящим размытием, где оно есть (Android 12+):
+            // слой с формой книги размывается по Гауссу, и у тени выходит
+            // ровная полутень без ступеней. Ниже двенадцатого - слоями.
+            val dp = 1.dp.toPx()
+            val grow = 30f * dp * depth
+            val soft = if (depth > 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) obtainGraphicsLayer().also { layer ->
+                val w = size.width
+                val h = size.height
+                val radii = wornRadii(dp)
+                layer.record(size = IntSize(ceil(w + grow * 2f).toInt(), ceil(h + grow * 2f).toInt())) {
+                    translate(grow, grow) {
+                        // Рассеянный свет со всех сторон: ровный ореол вокруг
+                        // книги, чуть шире её самой.
+                        drawPath(wornPath(-2f * dp, -dp, w + 4f * dp, h + 3f * dp, radii), tones.cast(0.16f * depth.coerceAtMost(1.2f)))
+                        // Ключевой свет слева сверху: тень плотнее и сдвинута
+                        // вправо-вниз, тем дальше, чем книга «выше» над столом.
+                        drawPath(wornPath(4f * dp * depth, 7f * dp * depth, w, h, radii), tones.cast(0.30f * depth.coerceAtMost(1.2f)))
+                    }
+                }
+                val blur = 9f * dp * depth
+                layer.renderEffect = BlurEffect(blur, blur, TileMode.Decal)
+            } else null
+            onDrawBehind { drawVolume(tones, m, shape, depth, fine, fibers, cloth, band, edges, soft, grow) }
         }
     else this
         .shadow(lift, corner, clip = false, ambientColor = tones.cast, spotColor = tones.cast)
@@ -521,6 +578,11 @@ private fun DrawScope.drawVolume(
     coverFibers: Brush?,
     cloth: Brush,
     headband: Brush,
+    edges: CoverEdges?,
+    /** Размытая тень готовым слоем; null - рисовать слоями. */
+    soft: GraphicsLayer?,
+    /** На сколько слой тени шире книги с каждой стороны. */
+    softGrow: Float,
 ) {
     val w = size.width
     val h = size.height
@@ -531,12 +593,15 @@ private fun DrawScope.drawVolume(
     val hair = 1.dp.toPx().coerceAtLeast(1f)
     val dp = 1.dp.toPx()
     // Углы картона побиты: у каждого свой радиус, идеально ровных нет.
-    val radii = floatArrayOf(4f, 6f, 3.5f, 5f).map { it * dp }.toFloatArray()
+    val radii = wornRadii(dp)
 
-    // 1. Тень на стол: слоями с убывающей плотностью вместо размытия, каждый
-    // следующий шире и ниже - выходит мягкий ореол по форме книги, гуще к
-    // нижнему ребру. Плюс плотная контактная полоса у самого ребра.
-    if (depth > 0f) {
+    // 1. Тень на стол. Готовым размытым слоем, а без него - слоями с
+    // убывающей плотностью вместо размытия, каждый следующий шире и ниже:
+    // выходит мягкий ореол по форме книги, гуще к нижнему ребру. Плюс плотная
+    // контактная полоса у самого ребра - там, где картон касается стола.
+    if (soft != null) {
+        translate(-softGrow, -softGrow) { drawLayer(soft) }
+    } else if (depth > 0f) {
         val layers = 16
         for (i in layers downTo 1) {
             val k = i / layers.toFloat()
@@ -549,24 +614,33 @@ private fun DrawScope.drawVolume(
                 tones.cast((0.04f * (1f - k) * (1f - k) + 0.004f) * depth.coerceAtMost(1.2f)),
             )
         }
+    }
+    if (depth > 0f) {
         drawPath(wornPath(2f * dp, h - dp, w - 4f * dp, 4f * dp, floatArrayOf(2f * dp, 2f * dp, 3f * dp, 3f * dp)), tones.cast(0.22f))
         drawPath(wornPath(dp, h - dp, w - 2f * dp, 9f * dp, floatArrayOf(3f * dp, 3f * dp, 5f * dp, 5f * dp)), tones.cast(0.08f))
     }
 
-    // 2. Переплёт: картон, свет сверху, кромка завёрнута, углы потёрты.
+    // 2. Переплёт: картон, свет слева сверху, кромка завёрнута, углы потёрты.
     val outline = wornPath(0f, 0f, w, h, radii)
     drawPath(outline, tones.cover)
+    // Загибка: края обложки, завёрнутые внутрь крышек. Поверх - зерно и
+    // свет, как и по картону: картинка должна лечь материалом, а не наклейкой.
+    if (edges != null) clipPath(outline) { drawTurnIns(edges, cover, w, h, shape.opened) }
     if (coverFine != null || coverFibers != null) clipPath(outline) {
         // Шероховатость картона под светом и тенью, не поверх них.
         coverFine?.let { drawRect(it, alpha = tones.coverFine) }
         coverFibers?.let { drawRect(it, alpha = tones.coverFibers) }
     }
+    // Свет из верхнего левого угла, как и на странице: ровно вертикальный
+    // градиент читался заливкой, косой - светом от окна.
     drawPath(
         outline,
-        Brush.verticalGradient(
-            0f to tones.light(0.10f),
+        Brush.linearGradient(
+            0f to tones.light(0.13f),
             0.5f to Color.Transparent,
-            1f to tones.cast(0.14f),
+            1f to tones.cast(0.15f),
+            start = Offset.Zero,
+            end = Offset(w, h),
         ),
     )
     clipPath(outline) {
@@ -574,6 +648,12 @@ private fun DrawScope.drawVolume(
         // кромке светлая нить - ловит свет.
         drawPath(outline, tones.cast(0.14f), style = Stroke(width = 3f * dp))
         drawPath(wornPath(dp, dp, w - 2f * dp, h - 2f * dp, radii), tones.light(0.22f), style = Stroke(width = hair))
+        // Толщина картона: смотрим на книгу чуть спереди, и нижний торец
+        // крышки виден тёмной полоской, правый - потоньше, верхний ловит
+        // свет. Без этого переплёт лежал на столе плоской наклейкой.
+        drawRect(tones.cast(0.20f), topLeft = Offset(0f, h - 2.5f * dp), size = Size(w, 2.5f * dp))
+        drawRect(tones.cast(0.12f), topLeft = Offset(w - 1.5f * dp, 0f), size = Size(1.5f * dp, h))
+        drawRect(tones.light(0.16f), topLeft = Offset(0f, 0f), size = Size(w, 1.2f * dp))
         // Потёртости: на углах картон стёрт до светлого, у каждого по-своему.
         listOf(Offset(0f, 0f), Offset(w, 0f), Offset(w, h), Offset(0f, h)).forEachIndexed { i, corner ->
             val rr = (9f + 4f * jitter(i, 1)) * dp
@@ -596,6 +676,42 @@ private fun DrawScope.drawVolume(
     val bh = h - cover * 2f
     if (bw <= 0f || bh <= 0f) return
     drawRect(tones.endpaper, topLeft = Offset(bx, by), size = Size(bw, bh))
+    clipRect(bx, by, bx + bw, by + bh) {
+        // Форзац - бумага, а не заливка: то же зерно, что у картона, слабее,
+        // и тот же косой свет. Загибка вокруг него чуть приподнята: по её
+        // внутренней кромке тень на форзац.
+        coverFine?.let { drawRect(it, alpha = tones.coverFine * 0.6f) }
+        coverFibers?.let { drawRect(it, alpha = tones.coverFibers * 0.6f) }
+        drawRect(
+            Brush.linearGradient(
+                0f to tones.light(0.08f),
+                0.5f to Color.Transparent,
+                1f to tones.cast(0.08f),
+                start = Offset(bx, by),
+                end = Offset(bx + bw, by + bh),
+            ),
+            topLeft = Offset(bx, by),
+            size = Size(bw, bh),
+        )
+        drawRect(tones.cast(0.10f), topLeft = Offset(bx, by), size = Size(bw, bh), style = Stroke(width = 2f * dp))
+    }
+    // Стыки загибки на углах: обложечная бумага на углах картона срезана и
+    // сходится наискось, швом от угла крышки к углу форзаца. У корешка
+    // углов нет - там обложка перегибается, а не срезается.
+    val mitres = if (shape.opened) listOf(
+        Offset(0f, 0f) to Offset(bx, by),
+        Offset(w, 0f) to Offset(bx + bw, by),
+        Offset(w, h) to Offset(bx + bw, by + bh),
+        Offset(0f, h) to Offset(bx, by + bh),
+    ) else listOf(
+        Offset(w, 0f) to Offset(bx + bw, by),
+        Offset(w, h) to Offset(bx + bw, by + bh),
+    )
+    for ((outer, inner) in mitres) {
+        drawLine(tones.cast(0.22f), outer, inner, strokeWidth = hair)
+        val lift = Offset(if (outer.x < inner.x) hair else -hair, 0f)
+        drawLine(tones.light(0.20f), outer + lift, inner + lift, strokeWidth = hair)
+    }
 
     val p = shape.progress.coerceIn(0f, 1f)
 
@@ -811,6 +927,39 @@ private fun DrawScope.headbands(
     }
 }
 
+/** Углы картона побиты: у каждого свой радиус, идеально ровных нет. */
+private fun wornRadii(dp: Float): FloatArray = floatArrayOf(4f * dp, 6f * dp, 3.5f * dp, 5f * dp)
+
+/**
+ * Загибка: полосы с краёв обложки по канту переплёта.
+ *
+ * Раскрытая книга: левая крышка - лицевая обложка наизнанку, её края
+ * отражены; правая - задняя, повторяет края лицевой как есть (своей картинки
+ * у неё нет). Закрытая с одной страницей: кант справа, сверху и снизу - края
+ * лицевой. Слева у обеих корешок, загибки там нет.
+ */
+private fun DrawScope.drawTurnIns(edges: CoverEdges, cover: Float, w: Float, h: Float, opened: Boolean) {
+    val c = cover.toInt().coerceAtLeast(1)
+    val wi = w.toInt()
+    val hi = h.toInt()
+    // Чуть прозрачнее картона под ней: обложечная бумага тонкая, и цвет
+    // переплёта сквозь неё слегка проступает.
+    val alpha = 0.92f
+    if (opened) {
+        val half = wi / 2
+        drawImage(edges.rightFlipped, dstOffset = IntOffset(0, 0), dstSize = IntSize(c, hi), alpha = alpha)
+        drawImage(edges.topFlipped, dstOffset = IntOffset(0, 0), dstSize = IntSize(half, c), alpha = alpha)
+        drawImage(edges.bottomFlipped, dstOffset = IntOffset(0, hi - c), dstSize = IntSize(half, c), alpha = alpha)
+        drawImage(edges.right, dstOffset = IntOffset(wi - c, 0), dstSize = IntSize(c, hi), alpha = alpha)
+        drawImage(edges.top, dstOffset = IntOffset(half, 0), dstSize = IntSize(wi - half, c), alpha = alpha)
+        drawImage(edges.bottom, dstOffset = IntOffset(half, hi - c), dstSize = IntSize(wi - half, c), alpha = alpha)
+    } else {
+        drawImage(edges.right, dstOffset = IntOffset(wi - c, 0), dstSize = IntSize(c, hi), alpha = alpha)
+        drawImage(edges.top, dstOffset = IntOffset(0, 0), dstSize = IntSize(wi, c), alpha = alpha)
+        drawImage(edges.bottom, dstOffset = IntOffset(0, hi - c), dstSize = IntSize(wi, c), alpha = alpha)
+    }
+}
+
 /** Прямоугольник с разными радиусами углов: побитые уголки картона. */
 private fun wornPath(x: Float, y: Float, w: Float, h: Float, r: FloatArray): Path = Path().apply {
     moveTo(x + r[0], y)
@@ -942,6 +1091,10 @@ fun Modifier.pageSheet(
                 )
                 val fine = if (look.grain) matteBrush(tones.paper, FINE_SEED, 1f) else null
                 val fibers = if (look.grain) matteBrush(tones.paper, FIBERS_SEED, PAPER_FIBERS.toPx()) else null
+                // Облачность: та же плитка, растянутая в палец, - пятна там,
+                // где волокна легли гуще. Семя своё, иначе пятна повторяют
+                // рисунок волокон и читаются его увеличением.
+                val clouds = if (look.grain) matteBrush(tones.paper, CLOUDS_SEED, PAPER_CLOUDS.toPx()) else null
                 // Внешний край листа резан ножом и оттого не идеально прям:
                 // зазубрины в полточки, детерминированные - иначе край кипел
                 // бы между кадрами.
@@ -950,6 +1103,7 @@ fun Modifier.pageSheet(
                     drawRect(castOut, topLeft = Offset(if (dir > 0) outerX else outerX - 3f * dp, 0f), size = Size(3f * dp, h))
                     fine?.let { drawRect(it, alpha = tones.paperFine) }
                     fibers?.let { drawRect(it, alpha = tones.paperFibers) }
+                    clouds?.let { drawRect(it, alpha = tones.paperClouds) }
                     drawRect(fall)
                     drawContent()
                     var y = 0f
@@ -1220,9 +1374,12 @@ private val headbandTiles = HashMap<Pair<Int, Int>, ImageBitmap>()
 
 private const val FINE_SEED = 20_260_920L
 private const val FIBERS_SEED = 7L
+private const val CLOUDS_SEED = 1_959L
 
 /** Волокно бумаги: мелкое, иначе на экране читается рябью, а не материалом. */
 private val PAPER_FIBERS = 1.6.dp
+/** Облачность бумаги: пятна в палец величиной. */
+private val PAPER_CLOUDS = 22.dp
 private val COVER_FIBERS = 3.dp
 /** Нить переплёта и каптала: у ткани корешка крупнее, у тесьмы мельче. */
 private val CLOTH_THREAD = 2.dp

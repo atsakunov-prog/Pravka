@@ -78,6 +78,20 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerGrain: Boolean = true,
         /** Насколько стол темнее бумаги. */
         val readerTable: Float = TABLE_MID,
+        /**
+         * Просвет с оборота: печать соседней страницы проступает сквозь бумагу
+         * зеркально, как в настоящей книге. Владелец увидел это случайно, на
+         * растворении страницы, и попросил сделать постоянным - с силой и
+         * выключателем.
+         */
+        val readerBleed: Boolean = true,
+        /** Сила просвета, 0..1. */
+        val readerBleedLevel: Float = BLEED_MID,
+        /**
+         * Как переворачивается лист в книжном виде: растворяется на месте или
+         * загибается под пальцем (шейдер, Android 13+; ниже - растворение).
+         */
+        val readerBookTurn: String = BOOK_TURN_CURL,
         /** Колонтитул в нижнем углу страницы: номер, процент, оба или ничего. */
         val readerFooter: String = FOOTER_BOOK,
         /** Переносы: без них выключка по ширине рвёт строку дырами. */
@@ -194,6 +208,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerSheen = p[KEY_R_SHEEN] ?: true,
                 readerGrain = p[KEY_R_GRAIN] ?: true,
                 readerTable = p[KEY_R_TABLE]?.takeIf { it in TABLES } ?: TABLE_MID,
+                readerBleed = p[KEY_R_BLEED] ?: true,
+                readerBleedLevel = p[KEY_R_BLEED_LEVEL]?.takeIf { it in BLEED_LEVELS } ?: BLEED_MID,
+                readerBookTurn = p[KEY_R_BOOK_TURN]?.takeIf { it in BOOK_TURNS } ?: BOOK_TURN_CURL,
                 readerFooter = p[KEY_R_FOOTER]?.takeIf { it in FOOTERS } ?: FOOTER_BOOK,
                 readerHyphens = p[KEY_R_HYPHENS] ?: true,
                 readerCanon = p[KEY_R_CANON] ?: true,
@@ -278,6 +295,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderSheen(v: Boolean) = edit { it[KEY_R_SHEEN] = v }
     suspend fun setReaderGrain(v: Boolean) = edit { it[KEY_R_GRAIN] = v }
     suspend fun setReaderTable(v: Float) = edit { if (v in TABLES) it[KEY_R_TABLE] = v }
+    suspend fun setReaderBleed(v: Boolean) = edit { it[KEY_R_BLEED] = v }
+    suspend fun setReaderBleedLevel(v: Float) = edit { if (v in BLEED_LEVELS) it[KEY_R_BLEED_LEVEL] = v }
+    suspend fun setReaderBookTurn(v: String) = edit { if (v in BOOK_TURNS) it[KEY_R_BOOK_TURN] = v }
     suspend fun setReaderFooter(v: String) = edit { if (v in FOOTERS) it[KEY_R_FOOTER] = v }
     suspend fun setReaderHyphens(v: Boolean) = edit { it[KEY_R_HYPHENS] = v }
     suspend fun setReaderCanon(v: Boolean) = edit { it[KEY_R_CANON] = v }
@@ -493,6 +513,33 @@ class Settings(private val context: Context, scope: CoroutineScope) {
             else -> "Темнее"
         }
 
+        /** Ступени просвета с оборота: от едва заметного до сильного. */
+        const val BLEED_FAINT = 0.25f
+        const val BLEED_MID = 0.5f
+        const val BLEED_STRONG = 0.75f
+        const val BLEED_FULL = 1f
+
+        val BLEED_LEVELS = listOf(BLEED_FAINT, BLEED_MID, BLEED_STRONG, BLEED_FULL)
+
+        fun bleedLabel(v: Float): String = when (v) {
+            BLEED_FAINT -> "Едва"
+            BLEED_MID -> "Слабый"
+            BLEED_STRONG -> "Заметный"
+            else -> "Сильный"
+        }
+
+        // Перелистывание книжного вида - отдельно от карточек: у тех страница
+        // едет вбок, у книги лист либо растворяется, либо загибается.
+        const val BOOK_TURN_FADE = "fade"
+        const val BOOK_TURN_CURL = "curl"
+
+        val BOOK_TURNS = listOf(BOOK_TURN_CURL, BOOK_TURN_FADE)
+
+        fun bookTurnLabel(v: String): String = when (v) {
+            BOOK_TURN_CURL -> "Загиб под пальцем"
+            else -> "Растворение"
+        }
+
         /** Поля карточки от края экрана: сколько стола видно вокруг страницы. */
         val CARD_MARGINS = listOf(0, 6, 10, 14, 20)
 
@@ -554,6 +601,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_SHEEN = booleanPreferencesKey("reader_sheen")
         private val KEY_R_GRAIN = booleanPreferencesKey("reader_grain")
         private val KEY_R_TABLE = floatPreferencesKey("reader_table")
+        private val KEY_R_BLEED = booleanPreferencesKey("reader_bleed")
+        private val KEY_R_BLEED_LEVEL = floatPreferencesKey("reader_bleed_level")
+        private val KEY_R_BOOK_TURN = stringPreferencesKey("reader_book_turn")
         private val KEY_R_FOOTER = stringPreferencesKey("reader_footer")
         private val KEY_R_HYPHENS = booleanPreferencesKey("reader_hyphens")
         private val KEY_R_CANON = booleanPreferencesKey("reader_canon")
@@ -607,6 +657,9 @@ fun Settings.Prefs.readerView(): Settings.Prefs = if (!readerEink) this else cop
     readerSheen = false,
     readerGrain = false,
     readerImperfect = false,
+    // Просвет на электронной бумаге - серая грязь, загиб - мерцание.
+    readerBleed = false,
+    readerBookTurn = Settings.BOOK_TURN_FADE,
     readerSize = readerSize + Settings.EINK_SIZE_BOOST,
     readerTheme = if (readerTheme == Settings.THEME_BLACK) Settings.THEME_EINK_NIGHT else Settings.THEME_EINK,
 )

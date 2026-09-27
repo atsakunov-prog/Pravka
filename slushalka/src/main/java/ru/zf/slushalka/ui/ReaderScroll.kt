@@ -130,6 +130,8 @@ internal fun ScrollBody(
     tones: PaperTones,
     look: PageLook,
     shape: BookShape,
+    /** Края обложки для загибки переплёта. */
+    edges: CoverEdges?,
     marks: PageMarks,
     margins: PageMargins,
     /** Тап по главе в нижнем колонтитуле открывает содержание. */
@@ -273,7 +275,7 @@ internal fun ScrollBody(
             Modifier
                 .fillMaxSize()
                 .padding(underPadding(card, safeTop, safeBottom))
-                .pageUnder(tones, look, shape)
+                .pageUnder(tones, look, shape, edges)
         )
         Box(
             Modifier

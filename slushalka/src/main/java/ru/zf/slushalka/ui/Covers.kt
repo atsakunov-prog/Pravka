@@ -3,9 +3,12 @@ package ru.zf.slushalka.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.LruCache
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ru.zf.slushalka.library.Book
@@ -126,3 +129,58 @@ fun coverTone(bitmap: Bitmap): Int? {
         (sumB[best] / w).toInt().coerceIn(0, 255),
     )
 }
+
+/**
+ * Края обложки, завёрнутые внутрь переплёта.
+ *
+ * В настоящем переплёте обложечная бумага загибается через край картона и
+ * видна изнутри полосой вокруг форзаца - «загибкой». Владелец: «обложка не
+ * должна быть однотонной - брать края от этой обложки и повторять их, как в
+ * настоящей книге, когда обложка немножко загибается». Отсюда четыре полосы
+ * с краёв картинки: у самого края картона лежит крайняя точка обложки, дальше
+ * внутрь - то, что было ближе к её середине.
+ *
+ * Левая крышка раскрытой книги - лицевая обложка, вывернутая наизнанку: её
+ * полосы отражены по горизонтали ([rightFlipped], [topFlipped],
+ * [bottomFlipped]). Правая крышка - задняя обложка; своей картинки у неё нет,
+ * и она повторяет края лицевой без отражения. Левая полоса не нужна: у
+ * корешка загибки нет.
+ */
+class CoverEdges(
+    val top: ImageBitmap,
+    val bottom: ImageBitmap,
+    val right: ImageBitmap,
+    val topFlipped: ImageBitmap,
+    val bottomFlipped: ImageBitmap,
+    val rightFlipped: ImageBitmap,
+)
+
+/**
+ * Полосы шириной в двадцатую часть обложки, уменьшенные до считанных точек:
+ * на экране загибка в восемь точек, и полного разрешения ей незачем.
+ */
+fun coverEdges(bitmap: Bitmap): CoverEdges? = runCatching {
+    val w = bitmap.width
+    val h = bitmap.height
+    if (w < 16 || h < 16) return null
+    val band = (minOf(w, h) / 20).coerceAtLeast(3)
+    val along = 192
+    val across = 12
+    fun strip(x: Int, y: Int, sw: Int, sh: Int, dw: Int, dh: Int): Bitmap =
+        Bitmap.createScaledBitmap(Bitmap.createBitmap(bitmap, x, y, sw, sh), dw, dh, true)
+    fun flipH(b: Bitmap): Bitmap = Bitmap.createBitmap(
+        b, 0, 0, b.width, b.height,
+        Matrix().apply { preScale(-1f, 1f) }, true,
+    )
+    val top = strip(0, 0, w, band, along, across)
+    val bottom = strip(0, h - band, w, band, along, across)
+    val right = strip(w - band, 0, band, h, across, along)
+    CoverEdges(
+        top = top.asImageBitmap(),
+        bottom = bottom.asImageBitmap(),
+        right = right.asImageBitmap(),
+        topFlipped = flipH(top).asImageBitmap(),
+        bottomFlipped = flipH(bottom).asImageBitmap(),
+        rightFlipped = flipH(right).asImageBitmap(),
+    )
+}.getOrNull()

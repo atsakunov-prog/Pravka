@@ -213,11 +213,20 @@ fun ReaderScreen(
     // (её показывает полка); если книга без обложки - остаётся крафт.
     val context = LocalContext.current
     var coverSeed by remember(book?.id) { mutableStateOf<Color?>(null) }
+    // Края обложки - загибкой на кант переплёта: обложка изнутри не
+    // однотонная, а той же бумагой, что снаружи, завёрнутой через край.
+    var coverEdges by remember(book?.id) { mutableStateOf<CoverEdges?>(null) }
     LaunchedEffect(book?.id) {
         val bk = book ?: return@LaunchedEffect
         val tree = app.state.treeOf(bk) ?: return@LaunchedEffect
-        val bmp = runCatching { Covers.load(context, tree, bk, app.texts) }.getOrNull()
-        coverSeed = bmp?.let { coverTone(it) }?.let { Color(it) }
+        val bmp = runCatching { Covers.load(context, tree, bk, app.texts) }.getOrNull() ?: return@LaunchedEffect
+        // Цвет и полосы считаются по картинке не на главном потоке: обложка
+        // бывает в несколько мегапикселей.
+        val (tone, edges) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            coverTone(bmp) to coverEdges(bmp)
+        }
+        coverSeed = tone?.let { Color(it) }
+        coverEdges = edges
     }
     val tones = remember(palette.bg, prefs.readerTable, coverSeed) {
         PaperTones(palette.bg, prefs.readerTable, coverSeed)
@@ -230,6 +239,8 @@ fun ReaderScreen(
         bevel = prefs.readerBevel,
         sheen = prefs.readerSheen,
         grain = prefs.readerGrain,
+        bleed = if (prefs.readerBleed) prefs.readerBleedLevel else 0f,
+        curl = prefs.readerBookTurn == Settings.BOOK_TURN_CURL,
     )
 
     val view = LocalView.current
@@ -497,16 +508,15 @@ fun ReaderScreen(
             Settings.FOOTER_BOTH -> PageMarks(
                 corner = "$page / $total · ${(share * 100).roundToInt()}%"
             )
-            // Как в типографской книге: автор и название на верхнем поле, номер
-            // страницы внизу по центру. Без тире вокруг: в книгах номер стоит
-            // голым, тире - это из машинописи.
+            // Как в типографской книге: автор и название на верхнем поле
+            // слева, глава справа (по ней открывается содержание), номер со
+            // всем объёмом внизу у наружного края. Без тире вокруг: в книгах
+            // номер стоит голым, тире - это из машинописи.
             else -> PageMarks(
                 author = t.author.ifBlank { bk.title },
                 title = t.title.ifBlank { bk.title },
-                // Внизу - глава и номер со всем объёмом: по главе открывается
-                // содержание, и из книги видно, где ты и сколько осталось.
                 chapter = t.chapterAt(at)?.title.orEmpty(),
-                center = "$page / $total",
+                number = "$page / $total",
             )
         }
     }
@@ -570,7 +580,7 @@ fun ReaderScreen(
             PagedBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
                 tones = tones, look = look, turn = prefs.readerPageTurn,
-                shape = shape, marksAt = marksAt,
+                shape = shape, edges = coverEdges, marksAt = marksAt,
                 margins = margins, onChapters = { showChapters = true }, gap = paragraphGap,
                 styleFor = ::styleFor, isHeading = isHeading,
                 noIndent = noIndent, smallCaps = prefs.readerSmallCaps,
@@ -589,7 +599,7 @@ fun ReaderScreen(
         } else {
             ScrollBody(
                 app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
-                tones = tones, look = look, shape = shape, marks = marks,
+                tones = tones, look = look, shape = shape, edges = coverEdges, marks = marks,
                 margins = margins, onChapters = { showChapters = true }, gap = paragraphGap,
                 styleFor = ::styleFor, isHeading = isHeading,
                 bars = bars, topBarPx = topBarPx, bottomBarPx = bottomBarPx,
