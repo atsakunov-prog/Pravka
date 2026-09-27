@@ -153,6 +153,8 @@ class CoverEdges(
     val topFlipped: ImageBitmap,
     val bottomFlipped: ImageBitmap,
     val rightFlipped: ImageBitmap,
+    /** Средняя светлота краёв, 0..1: у тёмной обложки загибка тёмная, и блики по ней надо гасить. */
+    val luma: Float,
 )
 
 /**
@@ -175,6 +177,16 @@ fun coverEdges(bitmap: Bitmap): CoverEdges? = runCatching {
     val top = strip(0, 0, w, band, along, across)
     val bottom = strip(0, h - band, w, band, along, across)
     val right = strip(w - band, 0, band, h, across, along)
+    var sum = 0f
+    var n = 0
+    for (b in listOf(top, bottom, right)) {
+        val px = IntArray(b.width * b.height)
+        b.getPixels(px, 0, b.width, 0, 0, b.width, b.height)
+        for (c in px) {
+            sum += (0.299f * ((c shr 16) and 0xFF) + 0.587f * ((c shr 8) and 0xFF) + 0.114f * (c and 0xFF)) / 255f
+            n++
+        }
+    }
     CoverEdges(
         top = top.asImageBitmap(),
         bottom = bottom.asImageBitmap(),
@@ -182,5 +194,6 @@ fun coverEdges(bitmap: Bitmap): CoverEdges? = runCatching {
         topFlipped = flipH(top).asImageBitmap(),
         bottomFlipped = flipH(bottom).asImageBitmap(),
         rightFlipped = flipH(right).asImageBitmap(),
+        luma = if (n > 0) sum / n else 0.5f,
     )
 }.getOrNull()

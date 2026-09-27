@@ -459,6 +459,10 @@ fun pagePadding(
     // камера доедет до своей стороны: у корешка плюс полоска подглядывания.
     val inner = card.spine / 2 + if (half) BOOK_PEEK else 0.dp
     val outer = card.side + card.cover + card.cut
+    // Лист книги заходит под системные панели: бумага под часами и под
+    // панелью навигации, а текст и колонтитулы остаются в безопасной области
+    // (её добавляют к полям полосы). Владелец: «чтобы книжка занимала верхнюю
+    // и нижнюю кусочки экрана».
     return PaddingValues(
         start = when (side) {
             PageSide.RIGHT -> inner
@@ -470,8 +474,8 @@ fun pagePadding(
             PageSide.LEFT -> inner
             else -> outer
         },
-        top = safeTop + card.top + card.cover + card.reveal,
-        bottom = safeBottom + card.bottom + card.cover + card.foot,
+        top = card.top + card.cover + card.reveal,
+        bottom = card.bottom + card.cover + card.foot,
     )
 }
 
@@ -527,13 +531,6 @@ fun Modifier.pageUnder(
     shape: BookShape,
     /** Края обложки книги для загибки переплёта; null - картон одним цветом. */
     edges: CoverEdges? = null,
-    /**
-     * Насколько книга заходит под системные панели сверху и снизу: на столько
-     * выше и ниже страниц тянутся торцы блока. Владелец: «чтобы книжка
-     * занимала верхнюю и нижнюю кусочки экрана».
-     */
-    insetTop: Dp = 0.dp,
-    insetBottom: Dp = 0.dp,
 ): Modifier {
     if (look.flat || look.style == Settings.PAGE_SOFT) return this
     val m = cardMetrics(look, shape)
@@ -580,7 +577,7 @@ fun Modifier.pageUnder(
                 val blur = 9f * dp * depth
                 layer.renderEffect = BlurEffect(blur, blur, TileMode.Decal)
             } else null
-            onDrawBehind { drawVolume(tones, m, shape, depth, fine, fibers, cloth, band, edges, soft, grow, look.ribbon, insetTop.toPx(), insetBottom.toPx()) }
+            onDrawBehind { drawVolume(tones, m, shape, depth, fine, fibers, cloth, band, edges, soft, grow, look.ribbon) }
         }
     else this
         .shadow(lift, corner, clip = false, ambientColor = tones.cast, spotColor = tones.cast)
@@ -612,16 +609,13 @@ private fun DrawScope.drawVolume(
     /** На сколько слой тени шире книги с каждой стороны. */
     softGrow: Float,
     ribbon: Boolean,
-    insetTop: Float,
-    insetBottom: Float,
 ) {
     val w = size.width
     val h = size.height
     val cover = m.cover.toPx()
     val cut = m.cut.toPx()
-    // Торцы блока: под системными панелями страниц нет, там видна стопка.
-    val reveal = m.reveal.toPx() + insetTop
-    val foot = m.foot.toPx() + insetBottom
+    val reveal = m.reveal.toPx()
+    val foot = m.foot.toPx()
     val spine = m.spine.toPx()
     val hair = 1.dp.toPx().coerceAtLeast(1f)
     val dp = 1.dp.toPx()
@@ -680,7 +674,10 @@ private fun DrawScope.drawVolume(
         // Ребро картона: внутри контура темнее - край завёрнут; по самой
         // кромке светлая нить - ловит свет.
         drawPath(outline, tones.cast(0.14f), style = Stroke(width = 3f * dp))
-        drawPath(wornPath(dp, dp, w - 2f * dp, h - 2f * dp, radii), tones.light(0.22f), style = Stroke(width = hair))
+        // На тёмной обложке светлая нить по кромке читалась металлом: у чёрного
+        // картона блик едва заметен.
+        val glint = if (edges != null && edges.luma < 0.3f) 0.07f else 0.22f
+        drawPath(wornPath(dp, dp, w - 2f * dp, h - 2f * dp, radii), tones.light(glint), style = Stroke(width = hair))
         // Толщина картона: смотрим на книгу чуть спереди, и нижний торец
         // крышки виден тёмной полоской, правый - потоньше, верхний ловит
         // свет. Без этого переплёт лежал на столе плоской наклейкой.
@@ -1044,7 +1041,9 @@ private fun DrawScope.headbands(
 ) {
     val dp = 1.dp.toPx()
     val hw = width
-    val hh = reveal + 4f * dp
+    // Тесьма своей высоты, от торца не зависит: с высоким торцом каптал
+    // вырастал в столб.
+    val hh = reveal.coerceAtMost(2.5f * dp) + 4f * dp
     val hx = centerX - hw / 2f
     for ((yy, top) in listOf(y - dp to true, y + height - hh + dp to false)) {
         clipRect(hx, yy, hx + hw, yy + hh) {
@@ -1090,9 +1089,10 @@ private fun DrawScope.drawTurnIns(edges: CoverEdges, cover: Float, w: Float, h: 
     val c = cover.toInt().coerceAtLeast(1)
     val wi = w.toInt()
     val hi = h.toInt()
-    // Чуть прозрачнее картона под ней: обложечная бумага тонкая, и цвет
-    // переплёта сквозь неё слегка проступает.
-    val alpha = 0.92f
+    // Заметно прозрачнее картона под ней: обложечная бумага тонкая, цвет
+    // переплёта сквозь неё проступает - и тёмная обложка не превращает кант
+    // в угольную рамку, картон её подсвечивает.
+    val alpha = 0.72f
     if (opened) {
         val half = wi / 2
         drawImage(edges.rightFlipped, dstOffset = IntOffset(0, 0), dstSize = IntSize(c, hi), alpha = alpha)

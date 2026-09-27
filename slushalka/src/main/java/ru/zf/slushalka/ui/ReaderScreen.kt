@@ -255,6 +255,26 @@ fun ReaderScreen(
         view.keepScreenOn = prefs.readerKeepAwake
         onDispose { view.keepScreenOn = false }
     }
+    // Под часами и панелью навигации в книге лежит бумага, в других видах -
+    // стол: значки панелей красятся под то, что под ними, иначе белые часы
+    // на светлой странице пропадают. При уходе - как было.
+    val underBars = if (look.volume || look.flat) tones.paper else tones.backdrop
+    DisposableEffect(underBars) {
+        val activity = generateSequence(view.context) { (it as? android.content.ContextWrapper)?.baseContext }
+            .filterIsInstance<android.app.Activity>().firstOrNull()
+        val controller = activity?.let { androidx.core.view.WindowCompat.getInsetsController(it.window, view) }
+        val wasStatus = controller?.isAppearanceLightStatusBars
+        val wasNav = controller?.isAppearanceLightNavigationBars
+        val light = underBars.luminance() > 0.5f
+        controller?.isAppearanceLightStatusBars = light
+        controller?.isAppearanceLightNavigationBars = light
+        onDispose {
+            if (controller != null && wasStatus != null && wasNav != null) {
+                controller.isAppearanceLightStatusBars = wasStatus
+                controller.isAppearanceLightNavigationBars = wasNav
+            }
+        }
+    }
 
     val t = text
     val bk = book

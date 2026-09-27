@@ -515,12 +515,12 @@ internal fun PagedBody(
                         )
                     }
                     .padding(underPadding(card, underTop, underBottom))
-                    .pageUnder(tones, look, shape, edges, topInset - underTop, bottomInset - underBottom)
+                    .pageUnder(tones, look, shape, edges)
             ) else Box(
                 Modifier
                     .fillMaxSize()
                     .padding(underPadding(card, underTop, underBottom))
-                    .pageUnder(tones, look, shape, edges, topInset - underTop, bottomInset - underBottom)
+                    .pageUnder(tones, look, shape, edges)
             )
             if (pages.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -576,6 +576,9 @@ internal fun PagedBody(
                         page = page, side = side, app = app, bookId = bookId, palette = palette,
                         hits = hits, tones = tones, look = look, shape = shape,
                         pad = pagePadding(look, card, side, topInset, bottomInset, shape.half),
+                        // В книге лист уходит под панели, текст - нет.
+                        safeTop = if (look.volume) topInset else 0.dp,
+                        safeBottom = if (look.volume) bottomInset else 0.dp,
                         margins = margins, style = style, contStyle = contStyle,
                         headingStyle = headingStyle, gap = gap,
                         marks = page?.let { marksAt(it.startChar, numberOf(it.startChar)) } ?: PageMarks(),
@@ -699,6 +702,9 @@ internal fun PageFace(
     look: PageLook,
     shape: BookShape,
     pad: PaddingValues,
+    /** Безопасная область внутри листа: под часами и панелью навигации бумага есть, текста нет. */
+    safeTop: Dp,
+    safeBottom: Dp,
     margins: PageMargins,
     style: TextStyle,
     contStyle: TextStyle,
@@ -770,18 +776,20 @@ internal fun PageFace(
                         }
                     ),
             ) {
-                if (ghostMarks != null) PageMarksLayer(ghostMarks, back, palette, margins, contStyle, null)
+                if (ghostMarks != null) PageMarksLayer(ghostMarks, back, palette, margins, contStyle, null, safeTop, safeBottom)
                 PageColumn(
                     page = ghost, side = back, app = app, bookId = bookId, palette = palette, hits = hits,
+                    safeTop = safeTop, safeBottom = safeBottom,
                     margins = margins, style = style, contStyle = contStyle, headingStyle = headingStyle,
                     gap = gap, ink = TextInk(), onPicture = onPicture, noIndent = noIndent,
                     headingAir = headingAir, smallCaps = smallCaps, imperfect = imperfect, ghost = true,
                 )
             }
         }
-        PageMarksLayer(marks, side, palette, margins, contStyle, onChapters)
+        PageMarksLayer(marks, side, palette, margins, contStyle, onChapters, safeTop, safeBottom)
         PageColumn(
             page = page, side = side, app = app, bookId = bookId, palette = palette, hits = hits,
+            safeTop = safeTop, safeBottom = safeBottom,
             margins = margins, style = style, contStyle = contStyle, headingStyle = headingStyle,
             gap = gap, ink = ink, onPicture = onPicture, noIndent = noIndent,
             headingAir = headingAir, smallCaps = smallCaps, imperfect = imperfect, ghost = false,
@@ -802,6 +810,8 @@ private fun PageColumn(
     bookId: String,
     palette: ReaderPalette,
     hits: TextHits,
+    safeTop: Dp,
+    safeBottom: Dp,
     margins: PageMargins,
     style: TextStyle,
     contStyle: TextStyle,
@@ -821,8 +831,8 @@ private fun PageColumn(
             .padding(
                 start = margins.start(side),
                 end = margins.end(side),
-                top = margins.top,
-                bottom = margins.bottom,
+                top = margins.top + safeTop,
+                bottom = margins.bottom + safeBottom,
             )
             // Неровности печати: полоса набора чуть перекошена, базовые
             // линии соседних страниц не совпадают. Угол и сдвиг - от места
@@ -919,6 +929,8 @@ internal fun BoxScope.PageMarksLayer(
     margins: PageMargins,
     style: TextStyle,
     onChapters: (() -> Unit)?,
+    safeTop: Dp = 0.dp,
+    safeBottom: Dp = 0.dp,
 ) {
     if (!marks.any) return
     // Кегль колонтитула - 60% основного, разрядка 0.08 em: так он читается
@@ -944,7 +956,7 @@ internal fun BoxScope.PageMarksLayer(
                     end = margins.end(side),
                     // Колонтитул сидит в верхнем поле: под текстом он читался
                     // бы первой строкой полосы.
-                    top = (margins.top - 24.dp).coerceAtLeast(4.dp),
+                    top = safeTop + (margins.top - 24.dp).coerceAtLeast(4.dp),
                 ),
         ) {
             // В развороте как в книге: на левой странице автор и название, на
@@ -988,7 +1000,7 @@ internal fun BoxScope.PageMarksLayer(
                 .padding(
                     start = margins.start(side),
                     end = margins.end(side),
-                    bottom = 8.dp,
+                    bottom = safeBottom + 8.dp,
                 ),
         ) {
             HorizontalDivider(
@@ -1009,7 +1021,7 @@ internal fun BoxScope.PageMarksLayer(
             style = small,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = margins.end(side), bottom = 12.dp),
+                .padding(end = margins.end(side), bottom = safeBottom + 12.dp),
         )
     }
 }
