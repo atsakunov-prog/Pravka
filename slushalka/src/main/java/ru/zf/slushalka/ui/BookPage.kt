@@ -231,6 +231,11 @@ data class PageLook(
     val bleed: Float = 0f,
     /** Лист в книге загибается под пальцем, а не растворяется. */
     val curl: Boolean = false,
+    /**
+     * Книга чуть наклонена от себя: под страницами виден торец блока -
+     * стопка страниц, ныряющих в сгиб у корешка.
+     */
+    val tilt: Boolean = false,
 ) {
     val volume: Boolean get() = style == Settings.PAGE_VOLUME
     val flat: Boolean get() = style == Settings.PAGE_FLAT
@@ -314,8 +319,13 @@ data class CardMetrics(
     val cover: Dp,
     /** Корешок: плетёная полоса слева у одной страницы, щель сгиба в развороте. */
     val spine: Dp,
-    /** Насколько страницы короче блока сверху и снизу: там виден каптал. */
+    /** Насколько страницы короче блока сверху: там виден каптал. */
     val reveal: Dp = 0.dp,
+    /**
+     * Насколько страницы короче блока снизу. С наклоном от себя это торец
+     * блока в стопку страниц, без наклона - такой же зазор, как сверху.
+     */
+    val foot: Dp = 0.dp,
     /**
      * Полоса под обрез с внешней стороны страницы. Постоянная: сам обрез
      * внутри неё то шире, то уже, а остаток полосы - форзац. Иначе ширина
@@ -354,6 +364,10 @@ fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.styl
         // половине - его полоса с плетением.
         spine = if (shape.opened) 3.dp else (7f + shape.thickness.value * 0.45f).coerceIn(9f, 16f).dp,
         reveal = 2.5.dp,
+        // Торец блока снизу: смотрим на книгу чуть спереди, и под страницами
+        // видна стопка. Мерка постоянная, как и всё здесь: разбивка на
+        // страницы меряется в этой высоте.
+        foot = if (look.tilt) 11.dp else 2.5.dp,
         // Обрез по толщине книги: у повести торец узкий, у тома широкий.
         // Мерка считается на книгу и при листании не меняется, поэтому
         // разбивку на страницы это не гоняет.
@@ -400,17 +414,17 @@ fun pageChrome(look: PageLook, card: CardMetrics, halves: Int, half: Boolean = f
     // полоска соседней страницы за ним.
     look.volume && half -> PageChrome(
         width = card.side + card.cover + card.cut + card.spine / 2 + BOOK_PEEK,
-        height = card.top + card.bottom + card.cover * 2 + card.reveal * 2,
+        height = card.top + card.bottom + card.cover * 2 + card.reveal + card.foot,
     )
     // В развороте у каждой страницы своя половина: поле, кант и половина щели.
     look.volume && halves > 1 -> PageChrome(
         width = card.side + card.cover + card.cut + card.spine / 2,
-        height = card.top + card.bottom + card.cover * 2 + card.reveal * 2,
+        height = card.top + card.bottom + card.cover * 2 + card.reveal + card.foot,
     )
     // Одна страница: слева корешок, справа обрез, кант с обеих сторон.
     look.volume -> PageChrome(
         width = card.side * 2 + card.cover * 2 + card.spine + card.cut,
-        height = card.top + card.bottom + card.cover * 2 + card.reveal * 2,
+        height = card.top + card.bottom + card.cover * 2 + card.reveal + card.foot,
     )
     else -> PageChrome(card.side * 2, card.top + card.bottom)
 }
@@ -450,7 +464,7 @@ fun pagePadding(
             else -> outer
         },
         top = safeTop + card.top + card.cover + card.reveal,
-        bottom = safeBottom + card.bottom + card.cover + card.reveal,
+        bottom = safeBottom + card.bottom + card.cover + card.foot,
     )
 }
 
@@ -589,6 +603,7 @@ private fun DrawScope.drawVolume(
     val cover = m.cover.toPx()
     val cut = m.cut.toPx()
     val reveal = m.reveal.toPx()
+    val foot = m.foot.toPx()
     val spine = m.spine.toPx()
     val hair = 1.dp.toPx().coerceAtLeast(1f)
     val dp = 1.dp.toPx()
@@ -725,7 +740,7 @@ private fun DrawScope.drawVolume(
         cutBand(tones, pxR, by, rw, bh, towardsRight = false)
         edgeShadow(tones, pxL - lw, by, bh, -1)
         edgeShadow(tones, pxR + rw, by, bh, +1)
-        blockEnds(tones, pxL - lw, (pxR + rw) - (pxL - lw), by, bh, reveal)
+        blockEnds(tones, pxL - lw, (pxR + rw) - (pxL - lw), by, bh, reveal, foot, w / 2f, bw * 0.22f)
         // Сгиб: щель в волос и тень по обе стороны от неё. Полоса в цвет
         // переплёта читалась чертой, проведённой по белому листу, - владелец
         // это и увидел: «корешок красится в цвет обложки, а он просто тень».
@@ -758,7 +773,7 @@ private fun DrawScope.drawVolume(
     val cutX = w - cover - rw
     cutBand(tones, cutX, by, rw, bh, towardsRight = false)
     edgeShadow(tones, cutX + rw, by, bh, +1)
-    blockEnds(tones, px, (cutX + rw) - px, by, bh, reveal)
+    blockEnds(tones, px, (cutX + rw) - px, by, bh, reveal, foot, px, bw * 0.3f)
 
     // Корешок: переплётная ткань. Не полоса одного цвета - плетение: владелец
     // о прежнем корешке сказал «очень компьютерно ровный, не бывает ровных, он
@@ -849,7 +864,16 @@ private fun DrawScope.edgeShadow(tones: PaperTones, x0: Float, y: Float, height:
     )
 }
 
-/** Верхний и нижний обрез: страницы стопкой под верхней, с её тенью. */
+/**
+ * Верхний и нижний обрез: страницы стопкой под верхней, с её тенью.
+ *
+ * Снизу, если торец глубокий ([foot]), - книга чуть от себя: виден торец
+ * блока, и страницы в нём лежат не строем, а ныряют в сгиб у корешка
+ * ([dipAt], на [dipHalf] в стороны): раскрытая книга горбится от сгиба, и с
+ * торца это читается веером, который сходится к переплёту. Верхние страницы
+ * выгнуты сильнее, нижние лежат на столе - оттого верхние линии ныряют
+ * глубже, и у корешка все сходятся.
+ */
 private fun DrawScope.blockEnds(
     tones: PaperTones,
     x0: Float,
@@ -857,26 +881,72 @@ private fun DrawScope.blockEnds(
     y: Float,
     height: Float,
     reveal: Float,
+    foot: Float,
+    dipAt: Float,
+    dipHalf: Float,
 ) {
-    if (width <= 0f || reveal <= 0f) return
+    if (width <= 0f) return
     val dp = 1.dp.toPx()
     val hair = dp.coerceAtLeast(1f)
-    for ((yy, down) in listOf(y + height - reveal to true, y to false)) {
-        drawRect(tones.block, topLeft = Offset(x0, yy), size = Size(width, reveal))
+    // Сверху - тонкий зазор, как и был.
+    if (reveal > 0f) {
+        drawRect(tones.block, topLeft = Offset(x0, y), size = Size(width, reveal))
         drawRect(
-            Brush.verticalGradient(
-                listOf(tones.cast(0.26f), tones.cast(0.06f)),
-                startY = if (down) yy else yy + reveal,
-                endY = if (down) yy + reveal else yy,
-            ),
-            topLeft = Offset(x0, yy),
+            Brush.verticalGradient(listOf(tones.cast(0.26f), tones.cast(0.06f)), startY = y + reveal, endY = y),
+            topLeft = Offset(x0, y),
             size = Size(width, reveal),
         )
+        drawRect(tones.cast(0.12f), topLeft = Offset(x0, y + reveal - 2f * dp), size = Size(width, hair))
+    }
+    if (foot <= 0f) return
+    val yy = y + height - foot
+    clipRect(x0, yy, x0 + width, yy + foot) {
+        drawRect(tones.block, topLeft = Offset(x0, yy), size = Size(width, foot))
+        // Свет сверху: у кромки верхней страницы торец светлее, к столу темнее.
         drawRect(
-            tones.cast(0.12f),
-            topLeft = Offset(x0, if (down) yy + 1.5f * dp else yy + reveal - 2f * dp),
-            size = Size(width, hair),
+            Brush.verticalGradient(listOf(tones.cast(0.05f), tones.cast(0.32f)), startY = yy, endY = yy + foot),
+            topLeft = Offset(x0, yy),
+            size = Size(width, foot),
         )
+        if (foot > 5f * dp) {
+            val step = 1.6f * dp
+            val n = (foot / step).toInt().coerceAtLeast(2)
+            val path = Path()
+            for (i in 0 until n) {
+                val depth = (i + 0.5f) / n
+                val yl = yy + step * (i + 0.5f)
+                val dipMax = foot * 0.6f * (1f - depth)
+                path.reset()
+                var x = x0
+                var first = true
+                while (x <= x0 + width) {
+                    val t = (abs(x - dipAt) / dipHalf.coerceAtLeast(1f)).coerceAtMost(1f)
+                    val dip = dipMax * (1f - t) * (1f - t)
+                    if (first) path.moveTo(x, yl + dip) else path.lineTo(x, yl + dip)
+                    first = false
+                    x += 6f * dp
+                }
+                path.lineTo(x0 + width, yl + dipMax * run {
+                    val t = (abs(x0 + width - dipAt) / dipHalf.coerceAtLeast(1f)).coerceAtMost(1f)
+                    (1f - t) * (1f - t)
+                })
+                drawPath(path, tones.cast(0.11f + 0.08f * jitter(i, 9)), style = Stroke(width = hair))
+            }
+            // Сгиб у корешка в тени: туда свет не доходит.
+            drawRect(
+                Brush.horizontalGradient(
+                    0f to Color.Transparent,
+                    0.5f to tones.cast(0.24f),
+                    1f to Color.Transparent,
+                    startX = dipAt - dipHalf,
+                    endX = dipAt + dipHalf,
+                ),
+                topLeft = Offset(dipAt - dipHalf, yy),
+                size = Size(dipHalf * 2f, foot),
+            )
+        }
+        // Верхняя страница бросает тень на торец под собой.
+        drawRect(tones.cast(0.14f), topLeft = Offset(x0, yy + 1.5f * dp), size = Size(width, hair))
     }
 }
 

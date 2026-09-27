@@ -895,22 +895,29 @@ internal fun BoxScope.PageMarksLayer(
                     top = (margins.top - 24.dp).coerceAtLeast(4.dp),
                 ),
         ) {
-            // Глава получает до половины строки, остальное - автору с
-            // названием; короткая глава не отнимает место у длинного названия.
-            HeadRow(
-                left = {
-                    Text(marks.headline, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                },
-                right = {
-                    if (marks.chapter.isNotEmpty()) Text(
-                        marks.chapter,
-                        style = small.copy(textAlign = TextAlign.End),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = if (onChapters == null) Modifier else Modifier.clickable(onClick = onChapters),
-                    )
-                },
-            )
+            // В развороте как в книге: на левой странице автор и название, на
+            // правой глава (без глав - название). На единственной странице
+            // обе надписи в одной строке: глава получает до половины строки,
+            // остальное автору с названием, чтобы короткая глава не отнимала
+            // место у длинного названия.
+            val chapterText: @Composable () -> Unit = {
+                val text = marks.chapter.ifEmpty { marks.title }
+                if (text.isNotEmpty()) Text(
+                    text,
+                    style = small.copy(textAlign = TextAlign.End),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (onChapters == null || marks.chapter.isEmpty()) Modifier else Modifier.clickable(onClick = onChapters),
+                )
+            }
+            when (side) {
+                PageSide.LEFT -> Text(marks.headline, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                PageSide.RIGHT -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { chapterText() }
+                PageSide.SINGLE -> HeadRow(
+                    left = { Text(marks.headline, style = small, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    right = chapterText,
+                )
+            }
             HorizontalDivider(
                 Modifier.fillMaxWidth().padding(top = 3.dp),
                 thickness = 0.8.dp,

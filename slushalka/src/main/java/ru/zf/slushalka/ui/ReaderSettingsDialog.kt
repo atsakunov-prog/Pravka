@@ -377,6 +377,13 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
             Modifier.padding(top = 8.dp),
         )
 
+        PaperToggle("Обрез снизу", prefs.readerBookTilt) { scope.launch { s.setReaderBookTilt(it) } }
+        PaperNote(
+            "Книга чуть наклонена от себя: под страницами виден торец блока - стопка " +
+                "страниц, которые у корешка ныряют в сгиб. Выключено - книга строго сверху.",
+            Modifier.padding(top = 8.dp),
+        )
+
         labels("Перелистывание в книге")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Settings.BOOK_TURNS.forEach { id ->

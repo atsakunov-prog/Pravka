@@ -197,12 +197,6 @@ fun Modifier.pageCurl(
             if (translate) translationX = off * size.width
             val s = sheet(this, size)
             val dp = 1.dp.toPx()
-            // Радиус валика растёт с ходом и к концу опадает: в начале лист
-            // только-только приподнят, к концу ложится плоско. Без этого в
-            // самом конце у корешка оставался бы стоячий валик. Сам валик
-            // невелик: бумага гнётся туго, толстый валик читался трубой.
-            val radiusMax = (s.width * 0.12f).coerceIn(14f * dp, 48f * dp)
-            val radius = radiusMax * minOf(1f, off * 5f, (1f - off) * 5f) + 0.5f
             val mine = state.slot == slot
             val grab = if (mine) state.grab else Offset(s.right - 2f, s.center.y)
             val travel = if (mine) state.travel else 2f * (grab.x - s.left)
@@ -210,6 +204,16 @@ fun Modifier.pageCurl(
                 grab.x - off * travel,
                 grab.y + (if (mine) state.dy + state.tilt * off * travel else 0f),
             )
+            val mid = Offset((grab.x + dest.x) / 2f, (grab.y + dest.y) / 2f)
+            // Радиус валика - по завёрнутой бумаге, а не по ходу: пока за
+            // сгибом всего ничего, вся она лежит на дуге мягким бугром, и
+            // только с ростом хода валик набирает полную величину. Прежде
+            // радиус шёл от хода, и на возврате лист складывался в острую
+            // складку - «как утюгом прогладили». К концу хода валик опадает:
+            // лист ложится плоско. Сам валик невелик: бумага гнётся туго,
+            // толстый валик читался трубой.
+            val radiusMax = (s.width * 0.12f).coerceIn(14f * dp, 48f * dp)
+            val radius = minOf(radiusMax, 0.5f * (s.right - mid.x), radiusMax * (1f - off) * 5f).coerceAtLeast(0f) + 0.5f
             // Сгиб перпендикулярен ходу руки: от пальца к месту захвата.
             var dx = grab.x - dest.x
             var dyv = grab.y - dest.y
@@ -232,7 +236,16 @@ fun Modifier.pageCurl(
                 dyv = 0f
             }
             val pi = Math.PI.toFloat()
-            val mid = Offset((grab.x + dest.x) / 2f, (grab.y + dest.y) / 2f)
+            // Последняя четверть хода - лист ложится: сгиб выпрямляется и
+            // сходится к корешку, где бы ни был палец. Так изнанка ложится
+            // ровно на подложенную снизу страницу, и никакого растворения с
+            // двоением строк в конце нет; заодно это правит захват у самого
+            // корешка, где путь пальца зажат снизу и сгиб иначе не доходил.
+            val landing = smoothstep(0.75f, 1f, off)
+            if (landing > 0f) {
+                dyv *= 1f - landing
+                dx = kotlin.math.sqrt(1f - dyv * dyv)
+            }
             // Линия сгиба: точка захвата, обёрнутая через валик, должна
             // оказаться под пальцем - отсюда середина между ними минус
             // половина полуокружности валика.
@@ -257,9 +270,13 @@ fun Modifier.pageCurl(
                 }
                 fold = foldFor(dx, dyv)
             }
-            // На самом излёте лист растворяется: валик уже опал, и остаток -
-            // тени по краям - уступает странице под ним.
-            val opacity = 1f - smoothstep(0.9f, 1f, off)
+            if (landing > 0f) {
+                fold = Offset(fold.x + (s.left - pi * radius / 2f - fold.x) * landing, fold.y)
+            }
+            // На самом излёте, когда изнанка уже лежит точно на подложенной
+            // странице, слой уступает ей за считанные кадры: разница только в
+            // зерне и просвете, растворения глазу не видно.
+            val opacity = 1f - smoothstep(0.965f, 1f, off)
             val back = if (mine) state.backShader else null
             val rt = shader.runtime
             rt.setFloatUniform("sheet", s.left, s.top, s.right, s.bottom)
@@ -319,7 +336,9 @@ fun Modifier.curlDrag(
     var baseDy = 0f
     var from = 0
     var forward = true
-    val flick = 700f * density
+    // Лёгкий взмах тоже переворачивает: порог низкий, иначе короткие
+    // смахивания возвращали страницу на место - владелец на живой сборке.
+    val flick = 220f * density
     detectDragGestures(
         onDragStart = {
             state.settling?.cancel()
@@ -409,14 +428,14 @@ private fun finish(
     val to = (if (forward) from + 1 else from - 1).coerceIn(0, pager.pageCount - 1)
     // Сколько хода пройдено: 0 - откуда начали, 1 - куда идём.
     val progress = abs(pos - from).coerceIn(0f, 1f)
-    // Начатый оборот доводится раньше половины: страницу, которую уже
-    // потянули, редко хотят вернуть, а вот отпустить на трети хода - сплошь.
+    // Начатый оборот доводится задолго до половины: страницу, которую уже
+    // потянули, редко хотят вернуть, а вот отпустить на четверти хода - сплошь.
     val onward = if (forward) velocity < -flick else velocity > flick
     val backOff = if (forward) velocity > flick else velocity < -flick
     val target = when {
         onward -> to
         backOff -> from
-        progress > 0.35f -> to
+        progress > 0.22f -> to
         else -> from
     }
     state.settling = scope.launch {
