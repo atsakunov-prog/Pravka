@@ -286,8 +286,9 @@ internal fun openingText(
     start: Int,
     ink: TextInk,
     palette: ReaderPalette,
+    press: Boolean = false,
 ): androidx.compose.ui.text.AnnotatedString {
-    val base = litText(text, start, ink, palette)
+    val base = litText(text, start, ink, palette, press)
     // Три слова или первое предложение - что короче: длинную капитель читать
     // тяжело, она сбивает с ритма.
     var end = 0
@@ -337,11 +338,20 @@ internal fun pageNoise(key: Int, salt: Int): Float {
     return (v - kotlin.math.floor(v)).toFloat()
 }
 
+/**
+ * [press] - набор как напечатанный: у каждого слова своя плотность краски
+ * (чуть темнее, чуть бледнее) и своя базовая линия на доли точки выше или
+ * ниже. Так ложится высокая печать: литеры стоят не идеально ровно, краска
+ * берётся неодинаково. Владелец: «сам шрифт в книге должен быть неравномерным
+ * слегка, как напечатанное». По слову, а не по букве: спанов на странице
+ * сотни, а не тысячи. Ширины строк это не меняет, разбивка на страницы верна.
+ */
 internal fun litText(
     text: String,
     start: Int,
     ink: TextInk,
     palette: ReaderPalette,
+    press: Boolean = false,
 ): androidx.compose.ui.text.AnnotatedString {
     val end = start + text.length
     // Диапазон книги - в пределы этого куска; пустой пересечение не рисуем.
@@ -354,9 +364,33 @@ internal fun litText(
     val lit = ink.highlight?.takeIf { ink.highlightAlpha > 0.01f }?.let(::span)
     val sel = ink.selection?.let(::span)
     val marks = ink.notes.mapNotNull(::span)
-    if (lit == null && sel == null && marks.isEmpty()) return androidx.compose.ui.text.AnnotatedString(text)
+    if (!press && lit == null && sel == null && marks.isEmpty()) return androidx.compose.ui.text.AnnotatedString(text)
     return androidx.compose.ui.text.buildAnnotatedString {
         append(text)
+        if (press) {
+            var a = 0
+            var word = 0
+            while (a < text.length) {
+                while (a < text.length && text[a] == ' ') a++
+                var b = a
+                while (b < text.length && text[b] != ' ') b++
+                if (b > a) {
+                    // Шум по месту в книге: одно и то же слово всегда одинаково.
+                    val key = start + a
+                    val density = 0.86f + 0.14f * pageNoise(key, 21)
+                    val lift = (pageNoise(key, 22) - 0.5f) * 0.024f
+                    addStyle(
+                        androidx.compose.ui.text.SpanStyle(
+                            color = palette.fg.copy(alpha = density),
+                            baselineShift = androidx.compose.ui.text.style.BaselineShift(lift),
+                        ),
+                        a, b,
+                    )
+                    word++
+                }
+                a = b
+            }
+        }
         // Порядок - снизу вверх: маркер пометки, поверх найденная фраза, поверх
         // всего выделение - оно то, что сейчас в руках.
         marks.forEach { (a, b) ->

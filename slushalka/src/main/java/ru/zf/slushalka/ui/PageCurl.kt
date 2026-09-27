@@ -273,6 +273,20 @@ fun Modifier.pageCurl(
             if (landing > 0f) {
                 fold = Offset(fold.x + (s.left - pi * radius / 2f - fold.x) * landing, fold.y)
             }
+            // Конус: у корешка лист пришит, и валик к нему сужается - там,
+            // где линия сгиба (продолженная) встречает корешок, радиус нулевой,
+            // у пальца полный. Вдоль сгиба - координата по перпендикуляру к ходу.
+            val perpX = -dyv
+            val perpY = dx
+            val coneAt: Float
+            val coneFull: Float
+            if (abs(dyv) < 0.02f) {
+                coneAt = 1e9f
+                coneFull = 0f
+            } else {
+                coneAt = (s.left - fold.x) / perpX
+                coneFull = (dest.x - fold.x) * perpX + (dest.y - fold.y) * perpY
+            }
             // На самом излёте, когда изнанка уже лежит точно на подложенной
             // странице, слой уступает ей за считанные кадры: разница только в
             // зерне и просвете, растворения глазу не видно.
@@ -284,6 +298,7 @@ fun Modifier.pageCurl(
             rt.setFloatUniform("fold", fold.x, fold.y)
             rt.setFloatUniform("dir", dx, dyv)
             rt.setFloatUniform("radius", radius)
+            rt.setFloatUniform("cone", coneAt, coneFull)
             rt.setFloatUniform("paper", paper.red, paper.green, paper.blue)
             rt.setFloatUniform("ghost", 0.16f)
             rt.setFloatUniform("hasBack", if (back != null) 1f else 0f)
@@ -472,6 +487,7 @@ uniform float landLeft;
 uniform float2 fold;
 uniform float2 dir;
 uniform float radius;
+uniform float2 cone;
 uniform float3 paper;
 uniform float ghost;
 uniform float hasBack;
@@ -505,10 +521,14 @@ half4 backFace(float2 src, float shade) {
 half4 main(float2 p) {
     float d = dot(p - fold, dir);
     float2 base = p - d * dir;
+    float along = dot(p - fold, float2(-dir.y, dir.x));
+    float span = cone.x - cone.y;
+    float k = (abs(span) < 1.0) ? 1.0 : (cone.x - along) / span;
+    float r = radius * clamp(k, 0.25, 1.0);
     half4 outc;
     if (d < 0.0) {
-        float2 src = base + dir * (PI * radius - d);
-        float crease = 0.16 * exp(d / (0.4 * radius + 1.0));
+        float2 src = base + dir * (PI * r - d);
+        float crease = 0.16 * exp(d / (0.4 * r + 1.0));
         if (inSheet(src) > 0.5 && p.x >= landLeft) {
             if (hasBack > 0.5 || p.x >= sheet.x) {
                 outc = backFace(src, 1.0 - crease);
@@ -518,16 +538,16 @@ half4 main(float2 p) {
         } else {
             outc = content.eval(p);
             float gap = outside(src);
-            float s = (p.x >= landLeft) ? 0.24 * (1.0 - smoothstep(0.0, 1.1 * radius + 4.0, gap)) * inRows(p) : 0.0;
+            float s = (p.x >= landLeft) ? 0.24 * (1.0 - smoothstep(0.0, 1.1 * r + 4.0, gap)) * inRows(p) : 0.0;
             outc.rgb *= half(1.0 - s);
         }
-    } else if (d <= radius) {
-        float theta = asin(clamp(d / radius, 0.0, 1.0));
-        float2 srcBack = base + dir * ((PI - theta) * radius);
-        float2 srcFront = base + dir * (theta * radius);
+    } else if (d <= r) {
+        float theta = asin(clamp(d / r, 0.0, 1.0));
+        float2 srcBack = base + dir * ((PI - theta) * r);
+        float2 srcFront = base + dir * (theta * r);
         if (inSheet(srcBack) > 0.5 && p.x >= landLeft) {
-            float k = d / radius;
-            float gloss = 0.10 * exp(-pow((k - 0.55) / 0.2, 2.0));
+            float kk = d / r;
+            float gloss = 0.10 * exp(-pow((kk - 0.55) / 0.2, 2.0));
             outc = backFace(srcBack, 0.84 - 0.30 * sin(theta) + gloss);
         } else if (inSheet(srcFront) > 0.5) {
             half4 c = content.eval(srcFront);
@@ -538,7 +558,7 @@ half4 main(float2 p) {
             outc = content.eval(p);
         }
     } else {
-        float s = 0.34 * (1.0 - smoothstep(radius, radius * 2.4 + 6.0, d)) * inRows(p);
+        float s = 0.34 * (1.0 - smoothstep(r, r * 2.4 + 6.0, d)) * inRows(p);
         if (inSheet(p) > 0.5) {
             outc = half4(0.0, 0.0, 0.0, s);
         } else {

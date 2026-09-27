@@ -159,7 +159,7 @@ private fun paperType(): Typography {
 fun PaperTheme(app: SlushalkaApp, content: @Composable () -> Unit) {
     val stored by app.state.prefs.collectAsState()
     val palette = readerPalette(stored.readerView().readerTheme, isSystemInDarkTheme())
-    val scheme = remember(palette, stored.readerEink) { paperScheme(palette, stored.readerEink) }
+    val scheme = remember(palette, stored.readerEinkLow) { paperScheme(palette, stored.readerEinkLow) }
     val type = remember { paperType() }
     MaterialTheme(colorScheme = scheme, typography = type, shapes = MaterialTheme.shapes) {
         CompositionLocalProvider(LocalEink provides stored.readerEink, LocalPaper provides palette) {

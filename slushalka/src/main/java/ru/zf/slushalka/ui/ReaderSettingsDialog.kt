@@ -159,19 +159,29 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onGallery: () -> Unit, onClose: () -
         PaperToggle("Не гасить экран", prefs.readerKeepAwake) { scope.launch { s.setReaderKeepAwake(it) } }
 
         // ------------------------------------------------ e-ink
-        // Режим для электронной книги меняет разом всё выше, поэтому - своей
-        // карточкой, а не ещё одним тумблером в ряду.
+        // Устройство меняет разом всё выше, поэтому - своей карточкой, а не
+        // ещё одним рядом чипов в общем потоке.
         Spacer(Modifier.height(12.dp))
         PaperCard(highlight = prefs.readerEink) {
-            PaperToggle(
-                "Для электронной книги",
-                prefs.readerEink,
-                hint = if (prefs.readerEink)
-                    "Чистый чёрный на белом, кегль на ${Settings.EINK_SIZE_BOOST} крупнее и на ступень жирнее, " +
-                        "страницами, без теней, зерна и анимаций. Выбранное здесь сохранено и вернётся, когда режим выключишь."
-                else "Onyx Boox, PocketBook, Kobo, Hisense: контраст, крупный плотный шрифт, листание без анимации." +
-                    if (ru.zf.slushalka.data.EinkDevice.likely) " Похоже, это как раз электронная книга." else "",
-            ) { scope.launch { s.setReaderEink(it) } }
+            PaperLabel("На чём читаем")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Settings.DEVICES.forEach { id ->
+                    PaperChip(Settings.deviceLabel(id), selected = prefs.readerDevice == id) { scope.launch { s.setReaderDevice(id) } }
+                }
+            }
+            PaperNote(
+                when (prefs.readerDevice) {
+                    Settings.DEVICE_EINK_HIGH ->
+                        "Цветная мощная читалка: книга остаётся книгой - переплёт, обрез, просвет с оборота, " +
+                            "тени, - убраны только анимации и зерно, шрифт на ступень плотнее, страницами."
+                    Settings.DEVICE_EINK_LOW ->
+                        "Чистый чёрный на белом, кегль на ${Settings.EINK_SIZE_BOOST} крупнее и на ступень жирнее, " +
+                            "страницами, без теней, зерна и анимаций. Выбранное здесь сохранено и вернётся на телефоне."
+                    else -> "Телефон или планшет: всё, как выбрано ниже, с загибом листа и анимациями." +
+                        if (ru.zf.slushalka.data.EinkDevice.likely) " Похоже, это как раз электронная книга." else ""
+                },
+                Modifier.padding(top = 8.dp),
+            )
         }
 
         PageLookSettings(app, labels = { Label(it) })
@@ -328,10 +338,15 @@ fun PageLookSettings(app: SlushalkaApp, labels: @Composable (String) -> Unit) {
     val s = app.state.settings
 
     labels("Вид страницы")
-    if (prefs.readerEink) {
+    if (prefs.readerEinkLow) {
         PaperNote(
-            "Сейчас включён режим e-ink: страница плоская, без теней и зерна. Выбранное здесь " +
-                "вернётся, когда режим выключишь.",
+            "Сейчас выбрана простая читалка: страница плоская, без теней и зерна. Выбранное здесь " +
+                "вернётся на телефоне и цветной читалке.",
+            Modifier.padding(top = 8.dp),
+        )
+    } else if (prefs.readerEink) {
+        PaperNote(
+            "Сейчас выбрана цветная читалка: книга как выбрано здесь, но без загиба, растворения и зерна.",
             Modifier.padding(top = 8.dp),
         )
     }

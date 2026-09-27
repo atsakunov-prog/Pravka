@@ -143,7 +143,10 @@ fun ReaderScreen(
     // Дальше читалка видит настройки через режим e-ink: он подменяет то, что
     // электронная бумага показывает плохо, а сохранённое не трогает.
     val prefs = stored.readerView()
+    // Любая электронная бумага: без анимаций, шрифт плотнее. Простая - ещё
+    // и маркер пометок подчёркиванием: цветной на ней бледно-серый.
     val eink = stored.readerEink
+    val einkLow = stored.readerEinkLow
     val busy by state.busy.collectAsState()
     val play by app.player.state.collectAsState()
     val speech by app.readAloud.state.collectAsState()
@@ -243,6 +246,7 @@ fun ReaderScreen(
         curl = prefs.readerBookTurn == Settings.BOOK_TURN_CURL,
         tilt = prefs.readerBookTilt,
         ribbon = prefs.readerBookRibbon,
+        press = prefs.readerImperfect,
     )
 
     val view = LocalView.current
@@ -527,7 +531,7 @@ fun ReaderScreen(
     // Пометки книги: маркером в тексте и списком за кнопкой «Пометки».
     val notesRev by app.notes.revision.collectAsState()
     val notes = remember(notesRev, bk.id) { app.notes.of(bk.id) }
-    val (selectionColor, noteColor) = inkColors(palette, eink)
+    val (selectionColor, noteColor) = inkColors(palette, einkLow)
     val ink = TextInk(
         highlight = speechRange ?: highlightRange,
         highlightAlpha = if (speechRange != null) SPEECH_ALPHA else highlight.value,
@@ -537,7 +541,7 @@ fun ReaderScreen(
         noteColor = noteColor,
         // Тёплый маркер на e-ink - бледно-серая плашка, её не видно:
         // пометка там ещё и подчёркнута.
-        underlineNotes = eink,
+        underlineNotes = einkLow,
     )
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 

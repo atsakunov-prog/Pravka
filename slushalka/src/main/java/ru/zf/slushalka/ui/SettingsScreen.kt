@@ -163,13 +163,27 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             Group("Чтение и звук")
 
             Section("Внешний вид")
-            Toggle("Для электронной книги (e-ink)", prefs.readerEink) {
-                scope.launch { state.settings.setReaderEink(it) }
+            Text("На чём читаем", style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Settings.DEVICES.forEach { id ->
+                    FilterChip(
+                        selected = prefs.readerDevice == id,
+                        onClick = { scope.launch { state.settings.setReaderDevice(id) } },
+                        label = { Text(Settings.deviceLabel(id)) },
+                    )
+                }
             }
             Note(
-                "Всё приложение - чёрным по белому, читалка - крупнее, жирнее, страницами, без теней и " +
-                    "анимаций. Листать можно кнопками громкости и кнопками самой книги." +
-                    if (ru.zf.slushalka.data.EinkDevice.likely) " Это устройство похоже на электронную книгу." else ""
+                when (prefs.readerDevice) {
+                    Settings.DEVICE_EINK_HIGH ->
+                        "Цветная мощная читалка (Boox Tab, Bigme, PocketBook Color): книга остаётся книгой - " +
+                            "переплёт, обрез, просвет с оборота, тени, - но без анимаций и зерна, шрифт плотнее, " +
+                            "страницами. Листать можно кнопками громкости и кнопками самой читалки."
+                    Settings.DEVICE_EINK_LOW ->
+                        "Простая электронная книга: всё приложение чёрным по белому, читалка крупнее, жирнее, " +
+                            "страницами, без теней и анимаций. Листать можно кнопками громкости и кнопками книги."
+                    else -> "Телефон или планшет: всё, как выбрано в виде страницы, с загибом листа и анимациями."
+                } + if (ru.zf.slushalka.data.EinkDevice.likely) " Это устройство похоже на электронную книгу." else ""
             )
             Toggle("Листать кнопками громкости", prefs.readerVolumeKeys) {
                 scope.launch { state.settings.setReaderVolumeKeys(it) }

@@ -39,11 +39,14 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     ввод `VoiceInput.kt`, ответ вслух `Speaker.kt`, распознавание куска аудио
     для карты «звук ↔ текст» `ChunkRecognizer.kt`. Вход озвучки — «Озвучить» в
     читалке, голос и темп — настройки, раздел «Озвучка».
-  - Режим e-ink — `Prefs.readerEink`: `Prefs.readerView()` подменяет вид
-    читалки (плоско, страницами, крупнее, чистые белый/чёрный, без анимаций),
-    сохранённое не трогает; `EinkDevice.likely` — заводское значение на
-    электронных книгах; тема приложения — `SlushalkaTheme(eink)`; плашки —
-    `LocalEink`; кнопки листания — `PageKeys` (ловит
+  - Устройство — `Prefs.readerDevice` (телефон / читалка цветная / читалка
+    простая; `readerEink` — любая электронная бумага, `readerEinkLow` —
+    простая): `Prefs.readerView()` подменяет вид читалки (простая: плоско,
+    страницами, крупнее, чистые белый/чёрный, без анимаций; цветная: книга
+    как есть, без загиба, растворения, зерна и прокрутки), сохранённое не
+    трогает; `EinkDevice.likely` — заводское «простая» на электронных книгах;
+    тема приложения — `SlushalkaTheme(eink = readerEinkLow)`; плашки —
+    `LocalEink` (любая); кнопки листания — `PageKeys` (ловит
     `MainActivity.dispatchKeyEvent`, громкость — только когда тихо).
   - `res/font/` — Literata, PT Serif, PT Sans, Lora, Merriweather, Bitter
     (все SIL OFL, `assets/fonts-OFL.txt`; урезать можно только Literata и
@@ -152,7 +155,10 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     `CardMetrics.foot`): торец блока под страницами веером к корешку;
     подложка книги заходит под системные панели (`pageUnder(insetTop,
     insetBottom)`), страницы нет; «Ляссе» (`Prefs.readerBookRibbon`,
-    `drawRibbon`). Изнанки для загиба снимаются заранее (`backCache`). **Просвет с
+    `drawRibbon`). Изнанки для загиба снимаются заранее (`backCache`); валик
+    — конус к корешку (uniform `cone`), посадка листа — `sway`; неровности
+    печати — ещё и по словам в `litText(press)` плюс зерно поверх букв
+    (`PageLook.press`). **Просвет с
     оборота** (`PageLook.bleed`, `Prefs.readerBleed/readerBleedLevel`):
     под текстом страницы зеркально и размыто набрана та, что на обороте
     листа (у левой предыдущая, у правой и единственной следующая), тем же

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.border
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -382,15 +383,25 @@ internal fun PagedBody(
             }
             backCache.keys.retainAll(around.map { leafOf(it) }.toSet())
         }
+        // Посадка листа: книга едва заметно вздрагивает - осела на столе от
+        // веса легшей страницы. Доли процента в масштабе и две точки вниз, с
+        // отскоком; читается не движением, а весом.
+        val sway = remember { Animatable(0f) }
+        suspend fun landed() {
+            sway.snapTo(1f)
+            sway.animateTo(0f, spring(dampingRatio = 0.42f, stiffness = Spring.StiffnessMedium))
+        }
         // Куда доводить лист после пальца: ровный ход с замедлением, длиной
         // по остатку пути. Пружина замирала у самого конца - лист висел
         // горбом, а потом исчезал скачком.
         val settle: suspend (Int) -> Unit = { target ->
             val left = kotlin.math.abs(target - (pagerState.currentPage + pagerState.currentPageOffsetFraction))
+            val turned = curl.slot >= 0 && target == (if (curl.forward) curl.slot + 1 else curl.slot)
             pagerState.animateScrollToPage(
                 target,
                 animationSpec = tween((200 + 420 * left.coerceIn(0f, 1f)).toInt(), easing = FastOutSlowInEasing),
             )
+            if (turned) landed()
         }
         /** Оборот без пальца - тап или кнопка: лист берётся за край на этой высоте. */
         fun turnTo(to: Int, y: Float?) {
@@ -413,6 +424,7 @@ internal fun PagedBody(
                     curl.settling = launch {
                         pagerState.animateScrollToPage(to, animationSpec = tween(560, easing = FastOutSlowInEasing))
                         curl.done()
+                        landed()
                     }
                     return@launch
                 }
@@ -432,6 +444,14 @@ internal fun PagedBody(
         Box(
             Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    val s = sway.value
+                    if (s != 0f) {
+                        scaleX = 1f - 0.004f * s
+                        scaleY = 1f - 0.004f * s
+                        translationY = 2.dp.toPx() * s
+                    }
+                }
                 .onGloballyPositioned { origin = it.positionInRoot() }
                 .curlDrag(
                     state = curl, pager = pagerState, scope = scope, enabled = curlOn,
@@ -848,8 +868,8 @@ private fun PageColumn(
                     if (ghost) { _ -> } else { r -> hits.layout(piece.start, r) }
                 Text(
                     if (opens && smallCaps) openingText(
-                        piece.text, piece.start, ink, palette,
-                    ) else litText(piece.text, piece.start, ink, palette),
+                        piece.text, piece.start, ink, palette, press = imperfect,
+                    ) else litText(piece.text, piece.start, ink, palette, press = imperfect),
                     // Тем же стилем, каким мерили: заголовок - заголовочным,
                     // первый абзац главы и продолжение абзаца - без отступа.
                     style = when {

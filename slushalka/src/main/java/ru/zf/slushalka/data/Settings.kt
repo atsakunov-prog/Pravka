@@ -119,12 +119,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         /** Абзацы отступом первой строки, как в книге, а не отбивкой между ними. */
         val readerIndent: Boolean = true,
         /**
-         * Режим для электронной книги (Onyx Boox, PocketBook, Kobo, Hisense):
-         * контрастнее, крупнее и жирнее, без теней, зерна и анимаций, только
-         * страницами. Сохранённые настройки не трогает - подменяет их на
-         * время чтения, см. [readerView].
+         * На чём читают: телефон, цветная мощная читалка или простая
+         * электронная книга. У читалок нет анимаций (каждый кадр - мерцание
+         * экрана), у простой ещё и ни теней, ни зерна, ни объёма книги -
+         * плоская контрастная страница крупнее и жирнее. Сохранённые
+         * настройки не трогает - подменяет их на время чтения, см.
+         * [readerView].
          */
-        val readerEink: Boolean = false,
+        val readerDevice: String = DEVICE_PHONE,
         /** Листать кнопками громкости, когда ничего не звучит. */
         val readerVolumeKeys: Boolean = false,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
@@ -175,6 +177,12 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         /** Облако настроено: есть куда и с чем ходить. */
         val cloudReady: Boolean
             get() = cloudUrl.isNotBlank() && cloudUser.isNotBlank() && cloudPass.isNotBlank()
+
+        /** Электронная бумага любая: без анимаций, шрифт плотнее, листать кнопками. */
+        val readerEink: Boolean get() = readerDevice != DEVICE_PHONE
+
+        /** Простая читалка: плоская страница чёрным по белому, всё приложение тоже. */
+        val readerEinkLow: Boolean get() = readerDevice == DEVICE_EINK_LOW
 
         /** Все папки библиотеки, главная первой. */
         val libraryUris: List<String>
@@ -228,8 +236,10 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerImperfect = p[KEY_R_IMPERFECT] ?: true,
                 readerIndent = p[KEY_R_INDENT] ?: true,
                 // На электронной книге режим включён сразу: зерно и тени там
-                // серая грязь, а анимация - мерцание экрана.
-                readerEink = p[KEY_R_EINK] ?: EinkDevice.likely,
+                // серая грязь, а анимация - мерцание экрана. Старый тумблер
+                // e-ink переезжает в «простую читалку».
+                readerDevice = p[KEY_R_DEVICE]?.takeIf { it in DEVICES }
+                    ?: if (p[KEY_R_EINK] ?: EinkDevice.likely) DEVICE_EINK_LOW else DEVICE_PHONE,
                 readerVolumeKeys = p[KEY_R_VOLKEYS] ?: EinkDevice.likely,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
@@ -335,7 +345,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         it[KEY_R_PAGE_STYLE] = PAGE_VOLUME
     }
     suspend fun setReaderIndent(v: Boolean) = edit { it[KEY_R_INDENT] = v }
-    suspend fun setReaderEink(v: Boolean) = edit { it[KEY_R_EINK] = v }
+    suspend fun setReaderDevice(v: String) = edit { if (v in DEVICES) it[KEY_R_DEVICE] = v }
     suspend fun setReaderVolumeKeys(v: Boolean) = edit { it[KEY_R_VOLKEYS] = v }
     suspend fun setUiScale(v: Float) = edit { if (v in UI_SCALES) it[KEY_UI_SCALE] = v }
     suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
@@ -440,6 +450,20 @@ class Settings(private val context: Context, scope: CoroutineScope) {
 
         /** На сколько пунктов крупнее кегль на электронной книге: экран там дальше от глаз и зернистее. */
         const val EINK_SIZE_BOOST = 3
+
+        // На чём читают. Владелец: «у меня везде мощные классные читалки, и
+        // цветные, там это должно зайти - не анимации, а сама книжка».
+        const val DEVICE_PHONE = "phone"
+        const val DEVICE_EINK_HIGH = "eink_high"
+        const val DEVICE_EINK_LOW = "eink_low"
+
+        val DEVICES = listOf(DEVICE_PHONE, DEVICE_EINK_HIGH, DEVICE_EINK_LOW)
+
+        fun deviceLabel(v: String): String = when (v) {
+            DEVICE_PHONE -> "Телефон"
+            DEVICE_EINK_HIGH -> "Читалка (цветная)"
+            else -> "Читалка (простая)"
+        }
 
         // Тема читалки живёт отдельно от темы приложения: читают и днём на
         // свету, и ночью в постели, и переключать это хочется одним тапом.
@@ -625,6 +649,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_IMPERFECT = booleanPreferencesKey("reader_imperfect")
         private val KEY_R_INDENT = booleanPreferencesKey("reader_indent")
         private val KEY_R_EINK = booleanPreferencesKey("reader_eink")
+        private val KEY_R_DEVICE = stringPreferencesKey("reader_device")
         private val KEY_R_VOLKEYS = booleanPreferencesKey("reader_volume_keys")
         private val KEY_UI_SCALE = floatPreferencesKey("ui_scale")
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
@@ -655,27 +680,39 @@ class Settings(private val context: Context, scope: CoroutineScope) {
 }
 
 /**
- * Настройки глазами читалки. В режиме e-ink поверх сохранённых подменяется
- * то, что электронная бумага показывает плохо: тени, зерно, фаска, блик и
- * стол - серая грязь; объём книги и растворение - лишнее мерцание; прокрутка
- * - шлейф на каждом кадре. Кегль крупнее, бумага - чистый белый (или чистый
- * чёрный, если выбран «белым по чёрному»), неровности печати выключены.
- * Выключил режим - всё, что было выбрано, на месте.
+ * Настройки глазами читалки. На электронной бумаге поверх сохранённых
+ * подменяется то, что она показывает плохо. У простой читалки это всё
+ * разом: тени, зерно, фаска, блик и стол - серая грязь; объём книги и
+ * растворение - лишнее мерцание; прокрутка - шлейф на каждом кадре. Кегль
+ * крупнее, бумага - чистый белый (или чистый чёрный, если выбран «белым по
+ * чёрному»), неровности печати выключены. У цветной мощной читалки книга
+ * остаётся книгой - переплёт, обрез, просвет с оборота, тени, - убираются
+ * только анимации (загиб, растворение), зерно (на дизеринге электронной
+ * бумаги оно шум) и прокрутка. Выключил режим - всё, что было выбрано, на
+ * месте.
  */
-fun Settings.Prefs.readerView(): Settings.Prefs = if (!readerEink) this else copy(
-    readerPaged = true,
-    readerPageStyle = Settings.PAGE_FLAT,
-    readerShadow = Settings.SHADOW_NONE,
-    readerBevel = false,
-    readerSheen = false,
-    readerGrain = false,
-    readerImperfect = false,
-    // Просвет на электронной бумаге - серая грязь, загиб - мерцание.
-    readerBleed = false,
-    readerBookTurn = Settings.BOOK_TURN_FADE,
-    readerSize = readerSize + Settings.EINK_SIZE_BOOST,
-    readerTheme = if (readerTheme == Settings.THEME_BLACK) Settings.THEME_EINK_NIGHT else Settings.THEME_EINK,
-)
+fun Settings.Prefs.readerView(): Settings.Prefs = when (readerDevice) {
+    Settings.DEVICE_EINK_LOW -> copy(
+        readerPaged = true,
+        readerPageStyle = Settings.PAGE_FLAT,
+        readerShadow = Settings.SHADOW_NONE,
+        readerBevel = false,
+        readerSheen = false,
+        readerGrain = false,
+        readerImperfect = false,
+        // Просвет на простой электронной бумаге - серая грязь, загиб - мерцание.
+        readerBleed = false,
+        readerBookTurn = Settings.BOOK_TURN_FADE,
+        readerSize = readerSize + Settings.EINK_SIZE_BOOST,
+        readerTheme = if (readerTheme == Settings.THEME_BLACK) Settings.THEME_EINK_NIGHT else Settings.THEME_EINK,
+    )
+    Settings.DEVICE_EINK_HIGH -> copy(
+        readerPaged = true,
+        readerGrain = false,
+        readerBookTurn = Settings.BOOK_TURN_FADE,
+    )
+    else -> this
+}
 
 /**
  * Похоже ли устройство на электронную книгу. По производителю и модели: у

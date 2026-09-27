@@ -238,6 +238,11 @@ data class PageLook(
     val tilt: Boolean = false,
     /** Ляссе: ленточка-закладка из корешка, лежит на торце и свисает с книги. */
     val ribbon: Boolean = false,
+    /**
+     * Печать неровная: поверх букв то же зерно бумаги, еле-еле, - краска
+     * берётся волокнами неодинаково, и литера не сплошь чёрная.
+     */
+    val press: Boolean = false,
 ) {
     val volume: Boolean get() = style == Settings.PAGE_VOLUME
     val flat: Boolean get() = style == Settings.PAGE_FLAT
@@ -749,7 +754,7 @@ private fun DrawScope.drawVolume(
         val rw = cut * (1f - p)
         val pxL = bx + cut
         val pxR = w - cover - cut
-        cutBand(tones, pxL - lw, by, lw, bh, towardsRight = true)
+        cutBand(tones, pxL - lw, by, lw, bh, towardsRight = true, read = true)
         cutBand(tones, pxR, by, rw, bh, towardsRight = false)
         edgeShadow(tones, pxL - lw, by, bh, -1)
         edgeShadow(tones, pxR + rw, by, bh, +1)
@@ -869,11 +874,18 @@ private fun DrawScope.cutBand(
     width: Float,
     height: Float,
     towardsRight: Boolean,
+    /**
+     * Прочитанная часть блока: её листали, страницы лежат вольнее и торец
+     * захватан - чуть теплее и темнее, линии расходятся сильнее. Нечитанная
+     * стоит строем и чистая.
+     */
+    read: Boolean = false,
 ) {
     val dp = 1.dp.toPx()
     val hair = dp.coerceAtLeast(1f)
     if (width < dp) return
-    drawRect(tones.block, topLeft = Offset(x0, y), size = Size(width, height))
+    val loose = if (read) 1.6f else 1f
+    drawRect(if (read) lerp(tones.block, Color(0xFF8A7658), 0.09f) else tones.block, topLeft = Offset(x0, y), size = Size(width, height))
     drawRect(
         Brush.horizontalGradient(
             0f to tones.cast(0.34f),
@@ -888,8 +900,8 @@ private fun DrawScope.cutBand(
     var x = x0 + 1.5f * dp
     var i = 0
     while (x < x0 + width) {
-        val j1 = jitter(i, 3) * 1.8f * dp
-        val j2 = jitter(i, 4) * 1.8f * dp
+        val j1 = jitter(i, 3) * 1.8f * dp * loose
+        val j2 = jitter(i, 4) * 1.8f * dp * loose
         // Веер: чем ближе к внешнему краю, тем сильнее лист отходит от
         // соседа - линии расходятся, а не стоят строем. Отсюда и наклон.
         val lean = (if (towardsRight) 1f else -1f) * (x - x0) / width.coerceAtLeast(1f) * 0.6f * dp
@@ -1242,6 +1254,9 @@ fun Modifier.pageSheet(
                     clouds?.let { drawRect(it, alpha = tones.paperClouds) }
                     drawRect(fall)
                     drawContent()
+                    // Зерно поверх букв: краска высокой печати ложится по
+                    // волокнам, и литера в лупу - не заливка, а сито.
+                    if (look.press) fine?.let { drawRect(it, alpha = tones.paperFine * 0.45f) }
                     var y = 0f
                     var i = 0
                     while (y < h) {
