@@ -49,7 +49,7 @@ internal fun PravkaAccessibilityService.checkNotificationsAfterUpdate() {
     scope.launch(kotlinx.coroutines.Dispatchers.IO) {
         runCatching {
             ru.zf.pravka.data.CrashLog.lastUnshown(this@checkNotificationsAfterUpdate)?.let { line ->
-                app.eventLog.add("служба: прошлый раз процесс УПАЛ — $line (стек целиком — crash.log рядом с базой)")
+                app.eventLog.add("служба: последняя ошибка в crash.log — $line (стек целиком там, рядом с базой)")
                 ru.zf.pravka.data.CrashLog.markShown(this@checkNotificationsAfterUpdate)
             }
         }

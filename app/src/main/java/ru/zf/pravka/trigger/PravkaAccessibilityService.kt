@@ -112,6 +112,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     internal val crashLogger = kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
         runCatching {
             app.eventLog.add("CRASH ${e.javaClass.simpleName}: ${e.message} @ ${e.stackTrace.firstOrNull()}")
+            // Стек целиком — в crash.log: первого кадра для разбора мало.
+            ru.zf.pravka.data.CrashLog.note(app, "служба", e, fatal = false)
         }
     }
     internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main + crashLogger)
