@@ -76,7 +76,7 @@ class Settings(private val context: Context) {
         private val KEY_STACK_IDLE = booleanPreferencesKey("buttons_stack_idle")
         private val KEY_DISK = booleanPreferencesKey("buttons_disk")
         private val KEY_DISK_TUCK = booleanPreferencesKey("disk_auto_tuck")
-        // Опыт 28.09.2026: не снимать окна на время складывания (см. keepOnFoldFlow).
+        // С 28.09.2026 окна на время складывания не снимаются (см. keepOnFoldFlow).
         private val KEY_KEEP_ON_FOLD = booleanPreferencesKey("keep_windows_on_fold")
         private val KEY_DISK_LIGHT = booleanPreferencesKey("disk_light_glass")
         private val KEY_DISK_GAP = intPreferencesKey("disk_gap_dp")
@@ -557,12 +557,15 @@ class Settings(private val context: Context) {
         context.dataStore.edit { it[KEY_DISK_TUCK] = value }
     }
 
-    // Не снимать кнопки на время складывания (владелец, 28.09.2026: «давай
-    // попробуем… если не блокируется экран, то диск спокойно перерисовывается»).
-    // С завода — снимать, как с лета: так ушла чернота на пять секунд. Опыт —
-    // для Android 17, где снятые и повешенные посреди складывания с блокировкой
-    // окна система больше не показывает (`OverlayWatch`).
-    val keepOnFoldFlow = context.dataStore.data.map { it[KEY_KEEP_ON_FOLD] ?: false }
+    // Не снимать кнопки на время складывания. Опыт того же дня (владелец,
+    // 28.09.2026: «давай попробуем… если не блокируется экран, то диск спокойно
+    // перерисовывается») — и итог: «Наконец-то всё сработало. Я включил
+    // тумблер, и всё работает как раньше». На Android 17 окна, снятые и
+    // повешенные посреди складывания с блокировкой, система больше не
+    // показывала до перезапуска службы; нетронутые переход проводит сам.
+    // Поэтому с завода — не снимать; «снимать, как с лета» (так уходила
+    // чернота на пять секунд) — откат одним тумблером, если чернота вернётся.
+    val keepOnFoldFlow = context.dataStore.data.map { it[KEY_KEEP_ON_FOLD] ?: true }
     suspend fun setKeepOnFold(value: Boolean) {
         context.dataStore.edit { it[KEY_KEEP_ON_FOLD] = value }
     }

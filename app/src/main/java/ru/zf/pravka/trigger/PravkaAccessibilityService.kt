@@ -220,8 +220,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     private var diskModeApplied = false
     /** Автоуборка диска: полминуты без касаний — к ближайшему краю и домой. */
     @Volatile internal var cachedDiskTuck = true
-    /** Опыт: на складывание окна кнопок не снимаются (`Settings.keepOnFoldFlow`). */
-    @Volatile internal var cachedKeepOnFold = false
+    /** На складывание окна кнопок не снимаются (`Settings.keepOnFoldFlow`, с завода — да). */
+    @Volatile internal var cachedKeepOnFold = true
     internal var eSession: GoogleSpeechSession? = null
     @Volatile internal var eWhisperRecording = false
     @Volatile internal var eTypeInstead = false
@@ -2952,11 +2952,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         overlayWatch?.onFoldStart()
         val keep = cachedKeepOnFold
         if (keep) {
-            // Опыт (владелец, 28.09.2026: «давай попробуем»): на Android 17
-            // окна, снятые и повешенные заново посреди складывания с
-            // блокировкой, система больше не показывает — до перезапуска
-            // службы. А если их не трогать, переход сам гасит их и сам же
-            // проявляет, как у любого другого оверлея. Проверяем: окна
+            // С 28.09.2026 с завода (владелец, после опыта: «Наконец-то всё
+            // сработало»): на Android 17 окна, снятые и повешенные заново
+            // посреди складывания с блокировкой, система больше не
+            // показывала — до перезапуска службы. Нетронутые переход сам
+            // гасит и сам же проявляет, как у любого другого оверлея. Окна
             // кнопок, стекла, шестерёнки и ручки висят как висели, только
             // движение стоит; веер и записка уходят — они на секунду.
             // Перекладка под новый экран — всё равно в configSettled.
@@ -2987,7 +2987,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             val n = chainButtons().sumOf { it.windowCount() } +
                 (tailHandle?.windowCount() ?: 0) + (stackSettings?.windowCount() ?: 0) +
                 (disk?.windowCount() ?: 0) + (if (screenKeeper != null) 1 else 0)
-            app.eventLog.add("смена конфигурации: наших окон $n" + if (keep) " (опыт: окна не снимаю)" else "")
+            app.eventLog.add("смена конфигурации: наших окон $n" + if (keep) " (окна не снимаю)" else " (снимаю окна — тумблер)")
         }
     }
 
