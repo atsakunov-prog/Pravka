@@ -231,6 +231,17 @@ class DictationPill(
     private var lead: LeadMark? = null
     private var ticker: MarqueeTickerView? = null
     private var orb: VoiceOrb? = null
+    /** Галочка вопроса «всё ещё …?» — второй кружок слева от главного, обычно спрятан. */
+    private var askOrb: VoiceOrb? = null
+
+    /** Тап по кружку в обычной жизни пилюли: отправить набранное, раскрыть итог, отправить запись. */
+    private val orbTap = View.OnClickListener {
+        when {
+            editing -> submitTyped()
+            resultReq != null -> resultTap()
+            canSend -> onSend?.invoke()
+        }
+    }
     private var skin: PillSkin? = null
     private var params: WindowManager.LayoutParams? = null
 
@@ -288,10 +299,17 @@ class DictationPill(
         val ok: Boolean,
         val rows: List<ResultRow>,
         val footer: String,
-        val action: ResultAction?,
+        /** Действия внизу карточки; одно — и в самой пилюле словом. Вопрос «всё ещё …?» несёт два. */
+        val actions: List<ResultAction>,
         val onOpen: (() -> Unit)?,
         val holdMs: Long,
-    )
+        /** Вопрос в одну строку: справа галочка («да», actions[0]) и микрофон («наговорить», actions[1]). */
+        val ask: Boolean,
+    ) {
+        val action: ResultAction? get() = actions.singleOrNull()
+        val expandable: Boolean
+            get() = !ask && (rows.isNotEmpty() || actions.size > 1 || (actions.size == 1 && summary.length > 60))
+    }
 
     /** Что показывает итог сейчас; null — пилюля в своём обычном деле (запись, поле). */
     private var resultReq: ResultRequest? = null
@@ -497,16 +515,18 @@ class DictationPill(
         })
         val tv = MarqueeTickerView(service, textColor = PAPER, textSizeSp = textSizeSp)
         row.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        // Галочка вопроса «всё ещё …?» — второй кружок, живёт спрятанным.
+        val ao = VoiceOrb(service, PillLook.orb(accent)).apply {
+            mark = VoiceOrb.Mark.CHECK
+            contentDescription = "Да"
+            visibility = View.GONE
+            isClickable = true
+        }
+        row.addView(ao, LinearLayout.LayoutParams(orbSize, orbSize).apply { marginStart = dp(4) })
         val o = VoiceOrb(service, PillLook.orb(accent)).apply {
             setLevel(level)
             contentDescription = "Отправить"
-            setOnClickListener {
-                when {
-                    editing -> submitTyped()
-                    resultReq != null -> resultTap()
-                    canSend -> onSend?.invoke()
-                }
-            }
+            setOnClickListener(orbTap)
             isClickable = canSend
             seconds = if (waiting && resultReq == null && !editing) waitLabel else null
         }
@@ -535,6 +555,7 @@ class DictationPill(
         lead = l
         ticker = tv
         orb = o
+        askOrb = ao
         skin = s
         params = p
         pendingHint?.let { tv.setHint(it) }
@@ -684,25 +705,51 @@ class DictationPill(
         action: ResultAction? = null,
         onOpen: (() -> Unit)? = null,
         holdMs: Long = PillLook.RESULT_HOLD_MS,
-    ) {
-        val text = ru.zf.pravka.core.PillText.plain(summary)
+        /** Несколько действий — таблетками внизу карточки; [action] — то же одним. */
+        actions: List<ResultAction> = listOfNotNull(action),
+    ): Boolean = place(
+        ResultRequest(ru.zf.pravka.core.PillText.plain(summary), ok, rows, footer, actions, onOpen, holdMs, ask = false)
+    )
+
+    /**
+     * Вопрос в одну строку пилюли (28.09.2026; владелец о раскрытой карточке:
+     * «классный, только большой, много места занимал… кнопки на нём: галочка —
+     * это „да“, микрофончик — наговорить»): слева [text] (две строки — вопрос
+     * и с какого времени), справа два кружка — галочка ([onYes]) и волна
+     * ([onSay]). Карточки нет, высота — как у обычного итога. Уходит сам через
+     * [holdMs]: молчание — «да». Пилюля занята словами — false, без тоста.
+     */
+    fun ask(
+        text: String,
+        onYes: () -> Unit,
+        onSay: () -> Unit,
+        holdMs: Long = PillLook.RESULT_OPEN_HOLD_MS,
+    ): Boolean = place(
+        ResultRequest(
+            text, true, emptyList(), "",
+            listOf(ResultAction("Да", onYes), ResultAction("Наговорить", onSay)),
+            null, holdMs, ask = true,
+        )
+    )
+
+    private fun place(req: ResultRequest): Boolean {
         if (visible && resultReq == null) {
-            ru.zf.pravka.ui.Feedback.toast(service, text.replace('\n', ' '))
-            return
+            if (!req.ask) ru.zf.pravka.ui.Feedback.toast(service, req.summary.replace('\n', ' '))
+            return false
         }
-        val req = ResultRequest(text, ok, rows, footer, action, onOpen, holdMs)
         if (visible && root != null) {
             // Итог поверх итога — меняется на месте, без второго всплытия.
             collapseCard()
             resultReq = req
             applyWait()
             applyResult()
-            return
+            return true
         }
         show()
         resultReq = req
         applyWait()
         if (root != null) applyResult()
+        return true
     }
 
     /** Убрать итог, если он на экране: кнопку выключили, экран сложили. */
@@ -738,7 +785,7 @@ class DictationPill(
         val o = orb
         // Справа: есть что раскрыть — галочка вниз; нечего, но есть одно
         // действие — оно само, словом; иначе — «записано» или «!».
-        val expandable = req.rows.isNotEmpty() || (req.action != null && req.summary.length > 60)
+        val expandable = req.expandable
         if (o != null) {
             o.setColor(PillLook.orb(colour))
             o.mark = when {
@@ -779,6 +826,33 @@ class DictationPill(
         }
         r.removeCallbacks(resultDismiss)
         r.postDelayed(resultDismiss, PillLook.resultHold(req.holdMs))
+        // Вопрос: галочка слева от кружка — «да», кружок с волной — «наговорить».
+        val ao = askOrb
+        if (req.ask) {
+            val yes = req.actions.getOrNull(0)
+            val say = req.actions.getOrNull(1)
+            ao?.let {
+                it.setColor(PillLook.orb(colour))
+                it.mark = VoiceOrb.Mark.CHECK
+                it.visibility = View.VISIBLE
+                it.setOnClickListener {
+                    hide()
+                    yes?.onClick?.invoke()
+                }
+            }
+            o?.let {
+                it.mark = VoiceOrb.Mark.WAVE
+                it.setLevel(0f)
+                it.isClickable = true
+                it.contentDescription = "Наговорить"
+                it.setOnClickListener {
+                    hide()
+                    say?.onClick?.invoke()
+                }
+            }
+        } else {
+            ao?.visibility = View.GONE
+        }
     }
 
     /** Тап по итогу: есть список — раскрыть (второй тап — убрать), нет — в приложение. */
@@ -788,7 +862,7 @@ class DictationPill(
             hide()
             return
         }
-        val expandable = req.rows.isNotEmpty() || (req.action != null && req.summary.length > 60)
+        val expandable = req.expandable
         if (expandable) {
             expand()
         } else {
@@ -866,11 +940,14 @@ class DictationPill(
         actionChip?.visibility = View.GONE
         ticker?.visibility = View.VISIBLE
         skin?.setAccent(accent)
+        askOrb?.visibility = View.GONE
         orb?.let {
             it.visibility = View.VISIBLE
             it.setColor(PillLook.orb(accent))
             it.mark = VoiceOrb.Mark.WAVE
             it.isClickable = canSend
+            it.contentDescription = "Отправить"
+            it.setOnClickListener(orbTap)
         }
         lead?.cancel = onCancel != null
         applyWait()
@@ -960,8 +1037,7 @@ class DictationPill(
                 }
             })
         }
-        val a = req.action
-        if (req.footer.isNotBlank() || a != null) {
+        if (req.footer.isNotBlank() || req.actions.isNotEmpty()) {
             val bottom = LinearLayout(service).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -973,7 +1049,9 @@ class DictationPill(
                 textSize = 12.5f
                 maxLines = 2
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            if (a != null) {
+            // Действия — таблетками справа; у вопроса их две, первая («Да») —
+            // ближе к тексту, вторая — с краю, как «главная» у плашек.
+            for ((i, a) in req.actions.withIndex()) {
                 bottom.addView(TextView(service).apply {
                     text = a.label
                     setTextColor(PAPER)
@@ -981,13 +1059,15 @@ class DictationPill(
                     typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
                     background = android.graphics.drawable.GradientDrawable().apply {
                         cornerRadius = dp(16).toFloat()
-                        setColor(DiskLook.white(0.16f))
+                        setColor(DiskLook.white(if (i == req.actions.lastIndex) 0.22f else 0.12f))
                     }
                     setPadding(dp(14), dp(7), dp(14), dp(7))
                     setOnClickListener {
                         hide()
                         a.onClick()
                     }
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    marginStart = dp(8)
                 })
             }
             c.addView(bottom, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
@@ -1265,6 +1345,7 @@ class DictationPill(
         cardUp = false
         ticker = null
         orb = null
+        askOrb = null
         skin = null
         params = null
         lastText = ""

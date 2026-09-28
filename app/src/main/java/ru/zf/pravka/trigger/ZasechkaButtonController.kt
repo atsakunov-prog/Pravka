@@ -575,93 +575,48 @@ class ZasechkaButtonController(
         column.postDelayed(menuDismiss, 6000)
     }
 
-    // ---- «Всё ещё …?»: the check-in bubble beside the button ----
+    // ---- «Всё ещё …?»: вопрос строкой пилюли сверху ----
+    //
+    // До 27.09.2026 — янтарный столбик рядом с кнопкой, «Да» / «Нет, другое».
+    // Владелец: «он иногда спрашивает „всё ещё…“, и я вижу, что застряло
+    // предыдущее дело. Тогда должно быть „да“ и „наговорить“, и наговорить
+    // должно слушать, какое у меня дело было и с какого времени. И сделай это
+    // плашкой сверху тоже, как у нас все красивые плашки». Первый заход —
+    // раскрытая карточка с двумя таблетками; владелец (28.09): «классный,
+    // только большой, много места занимал… галочка — это „да“, микрофончик —
+    // наговорить». Теперь — одна строка пилюли (`DictationPill.ask`): слева
+    // вопрос и с какого времени, справа два кружка. Уходит сам через
+    // полминуты — молчание значит «да», как и раньше (часы вопроса уже
+    // переведены).
 
-    private var ask: android.widget.LinearLayout? = null
-    private val askDismiss = Runnable { hideAsk() }
+    private var askShown = false
 
     fun hideAsk() {
-        val a = ask ?: return
-        a.removeCallbacks(askDismiss)
-        runCatching { windowManager.removeView(a) }
-        ask = null
+        if (!askShown) return
+        askShown = false
+        pill.dropResult()
     }
 
     /**
-     * A dele has outlived its category's typical length: ask, in one line,
-     * whether it is still going. «Да» just resets the timer, «Нет» hands the
-     * owner straight to a new take. Fades on its own after half a minute -
-     * an unanswered question must not sit on the screen forever.
+     * Дело пережило базовое время своей категории (или телефон задвигался
+     * при сидячем деле): спросить, идёт ли оно ещё. [detail] — что и с какого
+     * времени (««Обед» с 14:10 · идёт 45 мин»): именно это владелец должен
+     * видеть, прежде чем наговаривать. Галочка — [onYes]; волна — [onSay],
+     * тейк с якорем и подсказкой. Не показывается на замке (пилюля легла бы
+     * над клавиатурой замка невидимой) и когда пилюля занята словами —
+     * тогда возвращает false, и спрашивающий решает, что делать (пуш).
      */
-    fun showAsk(question: String, onYes: () -> Unit, onNo: () -> Unit) {
-        hideAsk()
+    fun showAsk(question: String, detail: String, onYes: () -> Unit, onSay: () -> Unit): Boolean {
         hideMenu()
-        val column = android.widget.LinearLayout(service).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            background = BubbleSkin().apply {
-                cornerRadius = dp(16).toFloat()
-                setColor(AMBER)
-            }
-            elevation = dp(4).toFloat()
-            setPadding(dp(14), dp(10), dp(14), dp(10))
-        }
-        column.addView(
-            TextView(service).apply {
-                text = question
-                setTextColor(PAPER)
-                textSize = 15f
-                maxLines = 2
-            }
+        if (runCatching { service.keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)) return false
+        if (pill.showing && pill.isEditing) return false
+        val shown = pill.ask(
+            text = "$question\n$detail",
+            onYes = { askShown = false; onYes() },
+            onSay = { askShown = false; onSay() },
         )
-        val row = android.widget.LinearLayout(service).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-        }
-        fun pill(label: String, action: () -> Unit) = TextView(service).apply {
-            text = label
-            setTextColor(PAPER)
-            textSize = 15f
-            background = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
-                setColor(0x33000000)
-            }
-            setPadding(dp(16), dp(7), dp(16), dp(7))
-            setOnClickListener { hideAsk(); action() }
-        }
-        row.addView(pill("Да", onYes))
-        row.addView(
-            pill("Нет, другое", onNo),
-            android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { leftMargin = dp(8) },
-        )
-        column.addView(
-            row,
-            android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(8) },
-        )
-        val p = WindowManager.LayoutParams(
-            tickerWidthPx(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-        val bp = params
-        if (bp != null) {
-            val (w, h) = screenSize()
-            val plateW = tickerWidthPx()
-            val gap = dp(8)
-            val buttonCenterX = bp.x + buttonSize / 2
-            p.x = (if (buttonCenterX < w / 2) bp.x + buttonSize + gap else bp.x - plateW - gap)
-                .coerceIn(0, (w - plateW).coerceAtLeast(0))
-            p.y = bp.y.coerceIn(0, (h - dp(96)).coerceAtLeast(0))
-        }
-        ask = column
-        runCatching { windowManager.addView(column, p) }
-        column.postDelayed(askDismiss, 30_000)
+        askShown = shown
+        return shown
     }
 
     // ---- Серая «отмена» у идущей записи: как на «П» (владелец, 18.09.2026) ----
