@@ -153,12 +153,11 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     (`HeadRow` даёт главе до половины строки), внизу номер со всем объёмом у
     наружного края. «Обрез снизу» (`Prefs.readerBookTilt`, `PageLook.tilt`,
     `CardMetrics.foot`): торец блока под страницами веером к корешку;
-    книга заходит под системные панели целиком (подложка и лист без
-    безопасных отступов, текст — с ними: `PageFace(safeTop, safeBottom)`;
-    значки панелей под бумагу — `WindowCompat` в `ReaderScreen`); «Ляссе»
+    книга в безопасной области, сверху прижата к часам (`CardMetrics.top =
+    0`); значки панелей под стол — `WindowCompat` в `ReaderScreen`; «Ляссе»
     (`Prefs.readerBookRibbon`,
     `drawRibbon`). Изнанки для загиба снимаются заранее (`backCache`); валик
-    — конус к корешку (uniform `cone`), посадка листа — `sway`; неровности
+    — конус к корешку (uniform `cone`); вздрагивания при посадке нет; неровности
     печати — ещё и по словам в `litText(press)` плюс зерно поверх букв
     (`PageLook.press`). **Просвет с
     оборота** (`PageLook.bleed`, `Prefs.readerBleed/readerBleedLevel`):

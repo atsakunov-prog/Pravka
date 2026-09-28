@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.border
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -383,25 +382,17 @@ internal fun PagedBody(
             }
             backCache.keys.retainAll(around.map { leafOf(it) }.toSet())
         }
-        // Посадка листа: книга едва заметно вздрагивает - осела на столе от
-        // веса легшей страницы. Доли процента в масштабе и две точки вниз, с
-        // отскоком; читается не движением, а весом.
-        val sway = remember { Animatable(0f) }
-        suspend fun landed() {
-            sway.snapTo(1f)
-            sway.animateTo(0f, spring(dampingRatio = 0.42f, stiffness = Spring.StiffnessMedium))
-        }
+        // Вздрагивания книги при посадке листа нет: было, владелец на живой
+        // сборке - «выглядит совсем плохо».
         // Куда доводить лист после пальца: ровный ход с замедлением, длиной
         // по остатку пути. Пружина замирала у самого конца - лист висел
         // горбом, а потом исчезал скачком.
         val settle: suspend (Int) -> Unit = { target ->
             val left = kotlin.math.abs(target - (pagerState.currentPage + pagerState.currentPageOffsetFraction))
-            val turned = curl.slot >= 0 && target == (if (curl.forward) curl.slot + 1 else curl.slot)
             pagerState.animateScrollToPage(
                 target,
                 animationSpec = tween((200 + 420 * left.coerceIn(0f, 1f)).toInt(), easing = FastOutSlowInEasing),
             )
-            if (turned) landed()
         }
         /** Оборот без пальца - тап или кнопка: лист берётся за край на этой высоте. */
         fun turnTo(to: Int, y: Float?) {
@@ -424,7 +415,6 @@ internal fun PagedBody(
                     curl.settling = launch {
                         pagerState.animateScrollToPage(to, animationSpec = tween(560, easing = FastOutSlowInEasing))
                         curl.done()
-                        landed()
                     }
                     return@launch
                 }
@@ -444,14 +434,6 @@ internal fun PagedBody(
         Box(
             Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    val s = sway.value
-                    if (s != 0f) {
-                        scaleX = 1f - 0.004f * s
-                        scaleY = 1f - 0.004f * s
-                        translationY = 2.dp.toPx() * s
-                    }
-                }
                 .onGloballyPositioned { origin = it.positionInRoot() }
                 .curlDrag(
                     state = curl, pager = pagerState, scope = scope, enabled = curlOn,
@@ -488,10 +470,8 @@ internal fun PagedBody(
             // разворота, уезжавшая за край, владельцу на живой сборке
             // читалась поломкой - «левый край книги вылезает».
             val screenWidth = this@BoxWithConstraints.maxWidth
-            // В книжном виде подложка заходит под системные панели: там торцы
-            // блока, а страницы остаются в безопасной области.
-            val underTop = if (look.volume) 0.dp else topInset
-            val underBottom = if (look.volume) 0.dp else bottomInset
+            val underTop = topInset
+            val underBottom = bottomInset
             if (shape.half) Box(
                 // Разворот шире экрана на две полоски подглядывания, и камера
                 // ездит по нему: читаешь левую страницу - смахнул - книга
@@ -576,9 +556,6 @@ internal fun PagedBody(
                         page = page, side = side, app = app, bookId = bookId, palette = palette,
                         hits = hits, tones = tones, look = look, shape = shape,
                         pad = pagePadding(look, card, side, topInset, bottomInset, shape.half),
-                        // В книге лист уходит под панели, текст - нет.
-                        safeTop = if (look.volume) topInset else 0.dp,
-                        safeBottom = if (look.volume) bottomInset else 0.dp,
                         margins = margins, style = style, contStyle = contStyle,
                         headingStyle = headingStyle, gap = gap,
                         marks = page?.let { marksAt(it.startChar, numberOf(it.startChar)) } ?: PageMarks(),
@@ -702,9 +679,6 @@ internal fun PageFace(
     look: PageLook,
     shape: BookShape,
     pad: PaddingValues,
-    /** Безопасная область внутри листа: под часами и панелью навигации бумага есть, текста нет. */
-    safeTop: Dp,
-    safeBottom: Dp,
     margins: PageMargins,
     style: TextStyle,
     contStyle: TextStyle,
@@ -776,20 +750,18 @@ internal fun PageFace(
                         }
                     ),
             ) {
-                if (ghostMarks != null) PageMarksLayer(ghostMarks, back, palette, margins, contStyle, null, safeTop, safeBottom)
+                if (ghostMarks != null) PageMarksLayer(ghostMarks, back, palette, margins, contStyle, null)
                 PageColumn(
                     page = ghost, side = back, app = app, bookId = bookId, palette = palette, hits = hits,
-                    safeTop = safeTop, safeBottom = safeBottom,
                     margins = margins, style = style, contStyle = contStyle, headingStyle = headingStyle,
                     gap = gap, ink = TextInk(), onPicture = onPicture, noIndent = noIndent,
                     headingAir = headingAir, smallCaps = smallCaps, imperfect = imperfect, ghost = true,
                 )
             }
         }
-        PageMarksLayer(marks, side, palette, margins, contStyle, onChapters, safeTop, safeBottom)
+        PageMarksLayer(marks, side, palette, margins, contStyle, onChapters)
         PageColumn(
             page = page, side = side, app = app, bookId = bookId, palette = palette, hits = hits,
-            safeTop = safeTop, safeBottom = safeBottom,
             margins = margins, style = style, contStyle = contStyle, headingStyle = headingStyle,
             gap = gap, ink = ink, onPicture = onPicture, noIndent = noIndent,
             headingAir = headingAir, smallCaps = smallCaps, imperfect = imperfect, ghost = false,
@@ -810,8 +782,6 @@ private fun PageColumn(
     bookId: String,
     palette: ReaderPalette,
     hits: TextHits,
-    safeTop: Dp,
-    safeBottom: Dp,
     margins: PageMargins,
     style: TextStyle,
     contStyle: TextStyle,
@@ -831,8 +801,8 @@ private fun PageColumn(
             .padding(
                 start = margins.start(side),
                 end = margins.end(side),
-                top = margins.top + safeTop,
-                bottom = margins.bottom + safeBottom,
+                top = margins.top,
+                bottom = margins.bottom,
             )
             // Неровности печати: полоса набора чуть перекошена, базовые
             // линии соседних страниц не совпадают. Угол и сдвиг - от места
@@ -929,8 +899,6 @@ internal fun BoxScope.PageMarksLayer(
     margins: PageMargins,
     style: TextStyle,
     onChapters: (() -> Unit)?,
-    safeTop: Dp = 0.dp,
-    safeBottom: Dp = 0.dp,
 ) {
     if (!marks.any) return
     // Кегль колонтитула - 60% основного, разрядка 0.08 em: так он читается
@@ -956,7 +924,7 @@ internal fun BoxScope.PageMarksLayer(
                     end = margins.end(side),
                     // Колонтитул сидит в верхнем поле: под текстом он читался
                     // бы первой строкой полосы.
-                    top = safeTop + (margins.top - 24.dp).coerceAtLeast(4.dp),
+                    top = (margins.top - 24.dp).coerceAtLeast(4.dp),
                 ),
         ) {
             // В развороте как в книге: на левой странице автор и название, на
@@ -1000,7 +968,7 @@ internal fun BoxScope.PageMarksLayer(
                 .padding(
                     start = margins.start(side),
                     end = margins.end(side),
-                    bottom = safeBottom + 8.dp,
+                    bottom = 8.dp,
                 ),
         ) {
             HorizontalDivider(
@@ -1021,7 +989,7 @@ internal fun BoxScope.PageMarksLayer(
             style = small,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = margins.end(side), bottom = safeBottom + 12.dp),
+                .padding(end = margins.end(side), bottom = 12.dp),
         )
     }
 }

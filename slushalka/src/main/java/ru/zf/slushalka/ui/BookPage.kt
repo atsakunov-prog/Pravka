@@ -353,7 +353,10 @@ fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.styl
 
     Settings.PAGE_VOLUME -> CardMetrics(
         side = look.margin,
-        top = look.margin,
+        // Сверху книга прижата к часам: владелец после сборки, где она
+        // уходила под панели, попросил вернуть прежний размер и «просто чуть
+        // поднять вверх, до часов». Поле остаётся по бокам и снизу.
+        top = 0.dp,
         bottom = look.margin,
         // У книги углы почти прямые: скруглять их как карточку значит потерять
         // переплёт, у него кант жёсткий.
@@ -459,10 +462,6 @@ fun pagePadding(
     // камера доедет до своей стороны: у корешка плюс полоска подглядывания.
     val inner = card.spine / 2 + if (half) BOOK_PEEK else 0.dp
     val outer = card.side + card.cover + card.cut
-    // Лист книги заходит под системные панели: бумага под часами и под
-    // панелью навигации, а текст и колонтитулы остаются в безопасной области
-    // (её добавляют к полям полосы). Владелец: «чтобы книжка занимала верхнюю
-    // и нижнюю кусочки экрана».
     return PaddingValues(
         start = when (side) {
             PageSide.RIGHT -> inner
@@ -474,8 +473,8 @@ fun pagePadding(
             PageSide.LEFT -> inner
             else -> outer
         },
-        top = card.top + card.cover + card.reveal,
-        bottom = card.bottom + card.cover + card.foot,
+        top = safeTop + card.top + card.cover + card.reveal,
+        bottom = safeBottom + card.bottom + card.cover + card.foot,
     )
 }
 
