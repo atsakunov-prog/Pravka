@@ -379,6 +379,13 @@ class StackSettingsController(
         return (headX - (buttonSize - size) / 2) to (headY + size + dp(5))
     }
 
+    /** Окно головы прямоугольником — для сверки «видит ли система наши окна» (`OverlayWatch`). */
+    fun headBox(): ru.zf.pravka.core.OverlaySight.Box? {
+        val p = headParams ?: return null
+        if (head?.isAttachedToWindow != true) return null
+        return ru.zf.pravka.core.OverlaySight.Box(p.x, p.y, p.x + p.width, p.y + p.height)
+    }
+
     /** Пересобрать голову на том же месте — поверх окон, добавленных позже (тарелка диска). */
     fun reattach() {
         if (head == null) return

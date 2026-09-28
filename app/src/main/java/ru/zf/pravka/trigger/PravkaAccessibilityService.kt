@@ -658,6 +658,10 @@ class PravkaAccessibilityService : AccessibilityService() {
         lagExpectedAt = 0L
         lagHandler.removeCallbacks(lagTick)
         lagHandler.postDelayed(lagTick, 2_000)
+        // Видит ли система наши окна на самом деле (28.09.2026, Android 17 на
+        // Fold: окна висят, флаги честные, а диска на экране нет) — сторож
+        // смотрит в список окон системы и лечит то, что свои флаги не видят.
+        overlayWatch = OverlayWatch(this).also { it.start() }
     }
 
     // Main-thread lag sentinel. The fold black-screen class of bug is "the
@@ -2936,6 +2940,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Ручки снимаются мгновенно и возвращаются через configSettled, когда
         // складывание уже прошло; полсекунды без ручки никто не заметит.
         folding = true
+        overlayWatch?.onFoldStart()
         tailHandle?.hide()
         stackSettings?.hideAll()
         disk?.setFolded(true)
@@ -2986,6 +2991,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         disk?.onConfigurationChanged()
         refreshHandles()
         seenFrameKey = frameKeyNow()
+        overlayWatch?.onSettled()
         configHandler.removeCallbacks(configReport)
         configHandler.postDelayed(configReport, 1_500)
     }
@@ -3009,6 +3015,52 @@ class PravkaAccessibilityService : AccessibilityService() {
                     (if (cachedDiskMode) "; ${disk?.report() ?: "диска нет"}" else "")
             )
         }
+        // Флаги выше — наши; видит ли окна система, скажет только она.
+        overlayWatch?.afterFold()
+    }
+
+    /** Сторож «окна висят, а их не видно» (`OverlayWatch`); живёт от подключения службы до onDestroy. */
+    internal var overlayWatch: OverlayWatch? = null
+
+    /**
+     * Прямоугольники наших окон на экране по нашим параметрам — что сторож
+     * ищет в списке окон системы: кнопки, стекло диска, шестерёнка (или точка).
+     */
+    internal fun overlayBoxes(): List<ru.zf.pravka.core.OverlaySight.Box> {
+        val out = mutableListOf<ru.zf.pravka.core.OverlaySight.Box>()
+        chainButtons().forEach { b ->
+            b.shownBox()?.let { out += ru.zf.pravka.core.OverlaySight.Box(it.left, it.top, it.right, it.bottom) }
+        }
+        if (cachedDiskMode) disk?.plateBox()?.let { out += it }
+        stackSettings?.headBox()?.let { out += it }
+        return out
+    }
+
+    /** Полные размеры экрана — список окон системы обрезан ими. */
+    internal fun screenSize(): Pair<Int, Int> = runCatching {
+        getSystemService(android.view.WindowManager::class.java).currentWindowMetrics.bounds
+    }.getOrNull()?.let { it.width() to it.height() } ?: (0 to 0)
+
+    /**
+     * Можно ли сейчас перезапустить службу, ничего не потеряв: ни тейка, ни
+     * чистки, ни запроса к Claude в полёте, и приложение не у владельца в руках.
+     */
+    internal fun overlayIdle(): Boolean =
+        !micBusy() && !busy && app.liveWork.value == null && !ru.zf.pravka.MainActivity.shown
+
+    /**
+     * Снять и повесить заново все окна на экране — на тех же местах, без
+     * перекладки (`OverlayWatch`: система их не показывает, хотя они повешены).
+     * Диск — стеклом, под ним кнопки и шестерёнка в прежнем порядке; стопка —
+     * кнопками, шестерёнкой и ручкой.
+     */
+    internal fun rehangOverlays() {
+        if (folding) return
+        if (cachedDiskMode && disk?.rehang() == true) return
+        chainButtons().forEach { runCatching { it.reattach() } }
+        stackSettings?.reattach()
+        tailHandle?.hide()
+        refreshHandles()
     }
 
     override fun onInterrupt() = Unit
@@ -3025,6 +3077,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         lagHandler.removeCallbacks(lagTick)
         configHandler.removeCallbacks(configSettled)
         configHandler.removeCallbacks(configReport)
+        overlayWatch?.stop()
+        overlayWatch = null
         runCatching { headsetVoice.close() }
         if (speakerLazy.isInitialized()) runCatching { speakerLazy.value.shutdown() }
         googleSession?.stop()

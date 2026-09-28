@@ -1506,6 +1506,30 @@ class DiskController(
     /** Стекло висит по-настоящему — для отчёта после складывания. */
     fun plateAttached(): Boolean = plate?.isAttachedToWindow == true
 
+    /** Окно стекла прямоугольником — для сверки «видит ли система наши окна» (`OverlayWatch`). */
+    fun plateBox(): ru.zf.pravka.core.OverlaySight.Box? {
+        val p = plateParams ?: return null
+        if (plate?.isAttachedToWindow != true) return null
+        return ru.zf.pravka.core.OverlaySight.Box(p.x, p.y, p.x + p.width, p.y + p.height)
+    }
+
+    /**
+     * Снять и повесить заново стекло и всё, что на нём, — на тех же местах, без
+     * перекладки и без выезда из-за края (`OverlayWatch`: система не
+     * показывает окна, которые считает повешенными). Стекло вешается первым,
+     * кнопки и шестерёнка — поверх него (`showPlate`). Палец на диске —
+     * ничего не трогаем: касание дошло, значит окна видны. Ложь — стекла нет
+     * (выключен, сложен, всё убрано в точку): перевешивать кнопки будет служба.
+     */
+    fun rehang(): Boolean {
+        if (!shown || !placed || folded || allHidden) return false
+        if (turning != null || sliding || pinch) return true
+        hidePlate()
+        showPlate()
+        layout()
+        return true
+    }
+
     /** Одной строкой для журнала: под какой экран расставлен, где центр и тарелка. */
     fun report(): String =
         "диск: расставлен под $loadedKey, центр (${cx.roundToInt()}, ${cy.roundToInt()}), " +

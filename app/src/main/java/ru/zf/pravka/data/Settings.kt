@@ -63,6 +63,8 @@ class Settings(private val context: Context) {
         private val KEY_MIGRATED_OPUS_55 = booleanPreferencesKey("migrated_opus_5_5")
         private val KEY_MIGRATED_SPEECH_NET = booleanPreferencesKey("migrated_speech_network_1")
         private val KEY_PLAN_RULES_LAST_RUN = longPreferencesKey("plan_rules_last_run")
+        // Когда служба последний раз перезапускала сама себя из-за невидимых окон (OverlayWatch).
+        private val KEY_OVERLAY_RESTART_AT = longPreferencesKey("overlay_restart_at")
         private val KEY_DEBUG_LOG = booleanPreferencesKey("debug_log")
         // Суточная копия базы ночью (DailyBackup) — с завода включена.
         private val KEY_DAILY_BACKUP = booleanPreferencesKey("daily_backup")
@@ -479,6 +481,14 @@ class Settings(private val context: Context) {
     suspend fun planRulesLastRun(): Long = context.dataStore.data.map { it[KEY_PLAN_RULES_LAST_RUN] ?: 0L }.first()
     suspend fun setPlanRulesLastRun(ms: Long) {
         context.dataStore.edit { it[KEY_PLAN_RULES_LAST_RUN] = ms }
+    }
+
+    // Самоперезапуск службы из-за окон, которые система не показывает
+    // (`OverlayWatch`, 28.09.2026), — метка переживает сам перезапуск: иначе
+    // сторож «не чаще раза в полчаса» забывал бы, что перезапуск только что был.
+    suspend fun overlayRestartAt(): Long = context.dataStore.data.map { it[KEY_OVERLAY_RESTART_AT] ?: 0L }.first()
+    suspend fun setOverlayRestartAt(ms: Long) {
+        context.dataStore.edit { it[KEY_OVERLAY_RESTART_AT] = ms }
     }
 
     val rulesInProseFlow = context.dataStore.data.map { it[KEY_RULES_IN_PROSE] ?: false }

@@ -125,6 +125,14 @@ import ru.zf.pravka.ui.scrollFade
 class MainActivity : ComponentActivity() {
 
     companion object {
+        /**
+         * Приложение на экране прямо сейчас. Служба, которая собралась
+         * перезапустить сама себя из-за невидимых окон (`OverlayWatch`),
+         * ждёт, пока владелец из него выйдет: перезапуск процесса захлопнул бы
+         * открытую вкладку у него в руках.
+         */
+        @Volatile var shown = false
+
         // The Засечка button's long press and its notifications land straight
         // on the timesheet tab.
         const val EXTRA_TAB = "tab"
@@ -320,6 +328,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        shown = true
         serviceEnabled.value = ru.zf.pravka.trigger.PravkaAccessibilityService.instance != null
         notifEnabled.value = notificationsOn()
         // Доступ к файлам выдаётся на системном экране — вернулись оттуда,
@@ -328,6 +337,11 @@ class MainActivity : ComponentActivity() {
         // прочли папку пустой и записали бы эту пустоту поверх базы.
         if (ru.zf.pravka.data.DataRoot.refreshAccess(this)) ru.zf.pravka.data.DataRoot.restart(this)
         maybeAskNotifications()
+    }
+
+    override fun onPause() {
+        shown = false
+        super.onPause()
     }
 }
 

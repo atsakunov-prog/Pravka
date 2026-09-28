@@ -357,7 +357,8 @@ class FloatingButtonController(
         val p = params ?: return
         if (!attached) return
         runCatching { windowManager.removeView(v) }
-        runCatching { windowManager.addView(v, p) }
+        // Флаг — по факту (как в applyStash): не повесилась — сторож повесит.
+        attached = runCatching { windowManager.addView(v, p) }.isSuccess
     }
 
     override fun buttonSizePx(): Int = buttonSize
