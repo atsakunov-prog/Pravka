@@ -2353,10 +2353,36 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** Ключ экрана (полные размеры дисплея), под который окна расставлены последний раз. */
+    private var seenFrameKey = ""
+
+    private fun frameKeyNow(): String = runCatching {
+        getSystemService(android.view.WindowManager::class.java).currentWindowMetrics.bounds
+    }.getOrNull()?.let { "${it.width()}x${it.height()}" } ?: "0x0"
+
     private fun tickChrome() {
         val now = System.currentTimeMillis()
         val screenLocked = runCatching { keyguardManager?.isKeyguardLocked == true }
             .getOrDefault(false)
+
+        // Экран сменился, а раскладка прошла под прежний размер (владелец,
+        // 28.09.2026: «после складывания диск теряется, а телефон при этом
+        // блокируется»): при складывании с блокировкой дисплей переключается
+        // позже, чем через 600 мс после смены конфигурации, и configSettled
+        // расставляет окна под старый экран — они висят, но за краем, и
+        // перемерить их до следующего складывания было некому. Раз в две
+        // секунды сверяем размер с тем, под который расставляли; разошлись —
+        // расставляем заново тем же путём, что после складывания.
+        if (!folding) {
+            val key = frameKeyNow()
+            if (key != "0x0" && seenFrameKey.isNotBlank() && key != seenFrameKey) {
+                app.eventLog.add("экран сменился после раскладки: было $seenFrameKey, стало $key — расставляю заново")
+                configHandler.removeCallbacks(configSettled)
+                configSettled.run()
+            } else if (seenFrameKey.isBlank() && key != "0x0") {
+                seenFrameKey = key
+            }
+        }
 
         // Раньше здесь стопку на локскрине разворачивало: двойной тап целится
         // в «З», а из сложенной стопки торчала «П». Теперь «З» из стопки не
@@ -2955,6 +2981,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         chainButtons().forEach { it.onConfigurationChanged() }
         disk?.onConfigurationChanged()
         refreshHandles()
+        seenFrameKey = frameKeyNow()
         configHandler.removeCallbacks(configReport)
         configHandler.postDelayed(configReport, 1_500)
     }
@@ -2970,7 +2997,13 @@ class PravkaAccessibilityService : AccessibilityService() {
             val buttons = chainButtons()
             val on = buttons.count { it.onScreen() }
             val plate = if (cachedDiskMode) (if (disk?.plateAttached() == true) "стекло висит" else "СТЕКЛА НЕТ") else "стопка"
-            app.eventLog.add("после складывания: кнопок на экране $on из ${buttons.size}, $plate")
+            val spots = buttons.joinToString(" ") { b ->
+                if (b.onScreen()) b.currentPosition()?.let { (x, y) -> "($x,$y)" } ?: "(?)" else "—"
+            }
+            app.eventLog.add(
+                "после складывания: экран ${frameKeyNow()}, кнопок на экране $on из ${buttons.size} $spots, $plate" +
+                    (if (cachedDiskMode) "; ${disk?.report() ?: "диска нет"}" else "")
+            )
         }
     }
 

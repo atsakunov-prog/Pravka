@@ -438,9 +438,13 @@ class DiskController(
         load()
     }
 
+    /** Ключ экрана, под который диск расставлен последний раз — для отчёта после складывания. */
+    private var loadedKey = ""
+
     private fun load() {
         cachedFrame = null
         val key = frameKey()
+        loadedKey = key
         scope.launch {
             val (fx, fy, r) = settings.diskPlace(key)
             if (!shown) return@launch
@@ -1501,6 +1505,12 @@ class DiskController(
 
     /** Стекло висит по-настоящему — для отчёта после складывания. */
     fun plateAttached(): Boolean = plate?.isAttachedToWindow == true
+
+    /** Одной строкой для журнала: под какой экран расставлен, где центр и тарелка. */
+    fun report(): String =
+        "диск: расставлен под $loadedKey, центр (${cx.roundToInt()}, ${cy.roundToInt()}), " +
+            "тарелка ${plateParams?.let { "(${it.x},${it.y})" } ?: "—"}, убран=$tucked, " +
+            "показан=$shown, размещён=$placed, сложен=$folded"
 
     /**
      * Сторож (тик службы раз в минуту): диск показан, а стекла нет или его
