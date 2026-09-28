@@ -305,7 +305,9 @@ fun PravkaAccessibilityService.stopAnyLive() {
 internal fun PravkaAccessibilityService.onZasechkaLiveDone(text: String) {
     zSession = null
     runCatching { stopMicHold() }
-    runCatching { zButton?.hideTicker() }
+    // Пилюля остаётся ждать ответа на месте (заливка, секунды), а не уходит
+    // наверх; отмена и пустой тейк прячут её сами.
+    runCatching { zButton?.holdTicker() }
     runCatching { zButton?.hideCancelBubble() }
     zButton?.setRecording(false)
     if (zDiscard) {
@@ -319,6 +321,7 @@ internal fun PravkaAccessibilityService.onZasechkaLiveDone(text: String) {
         zEditTargetId = 0L
         zFromHeadset = false
         zButton?.setBusy(false)
+        zButton?.hideTicker()
         app.eventLog.add("засечка: наговор отменён (${text.length} зн.)")
         Feedback.toast(this, "Отменено")
         return

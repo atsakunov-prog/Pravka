@@ -491,6 +491,9 @@ class FloatingButtonController(
 
     fun hideTicker() = pill.hide()
 
+    /** Тейк кончился, запрос уходит: пилюля ждёт на месте с заливкой, итог встанет в неё же. */
+    fun holdTicker() = pill.hold()
+
     // ---- Long-press menu: colored columns side by side ----
 
     class MenuItem(val label: String, val color: Int, val onClick: () -> Unit)

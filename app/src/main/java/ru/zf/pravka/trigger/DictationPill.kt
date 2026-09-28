@@ -206,11 +206,36 @@ class DictationPill(
      */
     fun countdown(waiting: Boolean, label: String?, fraction: Float = -1f) {
         if (this.waiting == waiting && waitLabel == label && waitFraction == fraction) return
+        val wasWaiting = this.waiting
         this.waiting = waiting
         waitLabel = label
         waitFraction = fraction
         applyWait()
+        // Ждали на месте после «отправить»: ожидание кончилось, а итога нет —
+        // уйти, но не сразу: итог обычно приходит следом за концом отсчёта.
+        if (holding && wasWaiting != waiting) {
+            root?.removeCallbacks(holdCheck)
+            if (!waiting) root?.postDelayed(holdCheck, HOLD_AFTER_MS)
+        }
     }
+
+    /**
+     * Тейк кончился, запрос уходит — пилюля НЕ прячется (владелец, 28.09.2026:
+     * «когда нажимаю отправить, она не продолжает висеть и показывать
+     * прогресс-бар, а вылетает наверх»): остаётся со сказанным, дальше
+     * заливка, искры и секунды, а итог встаёт на её место без второго
+     * всплытия. Запроса не последовало (пусто, отмена) — уходит через
+     * [HOLD_GRACE_MS]; ожидание кончилось без итога — через [HOLD_AFTER_MS].
+     */
+    fun hold() {
+        if (!visible) return
+        holding = true
+        root?.removeCallbacks(holdCheck)
+        root?.postDelayed(holdCheck, HOLD_GRACE_MS)
+    }
+
+    private var holding = false
+    private val holdCheck = Runnable { if (holding && !waiting && resultReq == null && !editing) hide() }
 
     /** Доля ожидания (0…1) по оценке `core/Pace.kt`; −1 — отсчёта нет. */
     private var waitFraction = -1f
@@ -231,6 +256,10 @@ class DictationPill(
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val density = service.resources.displayMetrics.density
+    /** Ждём на месте после «отправить»: без отсчёта — уйти через столько. */
+    private val HOLD_GRACE_MS = 3_000L
+    /** Ожидание кончилось, итога нет — уйти через столько (итог обычно идёт следом). */
+    private val HOLD_AFTER_MS = 1_500L
     private val touchSlop = ViewConfiguration.get(service).scaledTouchSlop
     private fun dp(value: Int): Int = (value * density).toInt()
 
@@ -345,6 +374,8 @@ class DictationPill(
         // Новая запись поверх набора или итога: пилюля снова строка.
         if (editing) endEdit()
         editReq = null
+        holding = false
+        root?.removeCallbacks(holdCheck)
         clearResult()
         val already = visible
         visible = true
@@ -452,6 +483,8 @@ class DictationPill(
     fun hide() {
         if (!visible) return
         visible = false
+        holding = false
+        root?.removeCallbacks(holdCheck)
         gen++
         stopPolling()
         pendingText = null
@@ -789,10 +822,14 @@ class DictationPill(
     val free: Boolean get() = !visible || resultReq != null
 
     private fun place(req: ResultRequest): Boolean {
-        if (visible && resultReq == null) {
+        // Пилюля пишет или набирает — итог ей не отдаём; ЖДЁТ после
+        // «отправить» — итог встаёт на её место.
+        if (visible && resultReq == null && !holding) {
             if (!req.ask) ru.zf.pravka.ui.Feedback.toast(service, req.summary.replace('\n', ' '))
             return false
         }
+        holding = false
+        root?.removeCallbacks(holdCheck)
         if (visible && root != null) {
             // Итог поверх итога — меняется на месте, без второго всплытия.
             collapseCard()

@@ -1106,7 +1106,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         // process before the transcript was even journaled. Nothing on this
         // path is allowed to take the text down with it.
         runCatching { stopMicHold() }
-        runCatching { floatingButton?.hideTicker() }
+        // Пилюля остаётся ждать чистку на месте (заливка, секунды); стрим в
+        // поле или итог сменят её сами, отмена и пустой тейк — прячут.
+        runCatching { floatingButton?.holdTicker() }
         runCatching { floatingButton?.hideCancelBubble() }
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(false)
@@ -1114,6 +1116,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             // The gray "отмена" bubble: nothing is inserted or journaled as a
             // take; the draft goes too. Deliberate discard, not a lost take.
             discardTake = false
+            floatingButton?.hideTicker()
             app.eventLog.add("take discarded (${text.length} ch)")
             app.liveDraft.clear()
             Feedback.toast(this, "Отменено")
@@ -1142,6 +1145,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         if (scopeAlive) app.liveDraft.clear()
         else app.eventLog.add("сервис погиб посреди тейка — черновик сохранён для восстановления")
         if (text.isBlank()) {
+            floatingButton?.hideTicker()
             Haptics.error(this)
             Feedback.toast(this, getString(R.string.dictation_empty))
         }
