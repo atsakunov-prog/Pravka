@@ -119,6 +119,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -902,7 +903,8 @@ internal fun BoxScope.PageMarksLayer(
 ) {
     if (!marks.any) return
     // Кегль колонтитула - 60% основного, разрядка 0.08 em: так он читается
-    // служебной строкой, а не началом текста.
+    // служебной строкой, а не началом текста. Высота строки - та же, по
+    // которой поля страницы оставляют место под колонтитул ([markLine]).
     val small = style.copy(
         fontSize = style.fontSize * 0.6f,
         lineHeight = style.fontSize * 0.78f,
@@ -923,8 +925,10 @@ internal fun BoxScope.PageMarksLayer(
                     start = margins.start(side),
                     end = margins.end(side),
                     // Колонтитул сидит в верхнем поле: под текстом он читался
-                    // бы первой строкой полосы.
-                    top = (margins.top - 24.dp).coerceAtLeast(4.dp),
+                    // бы первой строкой полосы. Считается от полосы вниз, а не
+                    // от края бумаги: линейка с воздухом должна кончаться ровно
+                    // там, где начинается текст, при любом кегле.
+                    top = (margins.top - (markLine(style) + MARK_RULE + MARK_AIR)).coerceAtLeast(4.dp),
                 ),
         ) {
             // В развороте как в книге: на левой странице автор и название, на
@@ -968,7 +972,7 @@ internal fun BoxScope.PageMarksLayer(
                 .padding(
                     start = margins.start(side),
                     end = margins.end(side),
-                    bottom = 8.dp,
+                    bottom = MARK_EDGE,
                 ),
         ) {
             HorizontalDivider(
@@ -1037,14 +1041,24 @@ data class PageMargins(val inner: Dp, val top: Dp, val outer: Dp, val bottom: Dp
     fun end(side: PageSide): Dp = if (side == PageSide.LEFT) inner else outer
 }
 
-fun pageMargins(margin: Int, canon: Boolean): PageMargins {
-    if (!canon) return PageMargins(margin.dp, PAGE_TOP, margin.dp, PAGE_BOTTOM)
+fun pageMargins(
+    margin: Int,
+    canon: Boolean,
+    /** Строка колонтитула, см. [markLine]: поле не может быть меньше её с линейкой и воздухом. */
+    mark: Dp = 16.dp,
+): PageMargins {
+    // Верхнее и нижнее поле держат колонтитул с линейкой и номер. Меньше
+    // этого поле быть не может ни при каком каноне и кегле: иначе линейка
+    // ложится поверх полосы набора, и последняя строка выходит срезанной -
+    // владелец на живой сборке видел это дважды («строки залипают», «опять
+    // куда-то строки поползли»), и оба раза разбивка была ни при чём: полоса
+    // кончалась где положено, а колонтитул стоял выше её низа.
+    val reserve = markReserve(mark)
+    if (!canon) return PageMargins(margin.dp, maxOf(PAGE_TOP, reserve), margin.dp, maxOf(PAGE_BOTTOM, reserve))
     // База меньше самого поля: канон задаёт пропорцию, а не размер. На бумаге
     // внешнее поле - две девятых ширины; на телефоне такое оставило бы в
     // строке знаков тридцать, и книга читалась бы колонкой газеты.
     val base = margin / 2.5f
-    // Верхнее и нижнее поле держат колонтитул и номер: ниже этого они
-    // налезут на текст.
     return PageMargins(
         // Внутреннее поле заметно шире канонических двух долей: у корешка
         // бумага уходит в сгиб, тень сгиба съедает часть поля, и текст,
@@ -1057,14 +1071,39 @@ fun pageMargins(margin: Int, canon: Boolean): PageMargins {
         // Верхнее поле держит колонтитул с линейкой и воздух под ней: текст,
         // начинающийся сразу под линейкой, липнет к верхнему краю - владелец
         // на живой сборке это и увидел.
-        top = (base * 4.2f).coerceAtLeast(34f).dp,
+        top = maxOf((base * 4.2f).dp, reserve),
         outer = (base * 3.4f).dp,
         // Нижнее поле, наоборот, ужато: канонические шесть долей - про
         // бумажный разворот, где места вдоволь, а на экране это провал под
-        // текстом и потерянная строка.
-        bottom = (base * 3.2f).coerceAtLeast(22f).dp,
+        // текстом и потерянная строка. Но не уже колонтитула: 22 dp при
+        // номере с линейкой в 26 dp и давали срезанную строку.
+        bottom = maxOf((base * 3.2f).dp, reserve),
     )
 }
+
+/**
+ * Колонтитул на странице: отступ от края бумаги до строки, линейка с зазором
+ * и воздух до полосы набора. Те же числа - и в рисунке колонтитула, и в
+ * полях страницы, иначе они расходятся, и линейка оказывается внутри полосы.
+ */
+internal val MARK_EDGE = 8.dp
+/** Зазор до линейки (3 dp) и сама линейка (0,8 dp), с запасом. */
+internal val MARK_RULE = 4.dp
+internal val MARK_AIR = 8.dp
+
+/** Сколько поля занимает колонтитул строкой высотой [mark]: с краем, линейкой и воздухом. */
+internal fun markReserve(mark: Dp): Dp = MARK_EDGE + mark + MARK_RULE + MARK_AIR
+
+/**
+ * Высота строки колонтитула при основном кегле [size]: колонтитул набран в
+ * 60% кегля с высотой строки в 78%, а однострочный Text выходит по своему
+ * шрифту чуть выше - берём 80% с запасом, остальное покрывает воздух.
+ */
+@Composable
+internal fun markLine(size: TextUnit): Dp = with(LocalDensity.current) { (size * 0.8f).toDp() }
+
+@Composable
+private fun markLine(style: TextStyle): Dp = markLine(style.fontSize)
 
 /**
  * Поля карточки и ленты: сверху колонтитул, снизу номер. Нижнее было больше

@@ -328,6 +328,9 @@ fun ReaderScreen(
     val margins = pageMargins(
         prefs.readerMargin,
         prefs.readerCanon && prefs.readerPaged && prefs.readerPageStyle == Settings.PAGE_VOLUME,
+        // Поля не уже колонтитула при этом кегле: линейка иначе ложится на
+        // последнюю строку.
+        mark = markLine(prefs.readerSize.sp),
     )
 
     // Отбивка между абзацами: в книге её нет, абзац начинается отступом первой

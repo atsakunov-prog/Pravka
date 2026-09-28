@@ -37,6 +37,7 @@ import kotlin.math.abs
 import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.sin
 
 /**
@@ -351,10 +352,21 @@ fun Modifier.curlDrag(
     var baseDy = 0f
     var from = 0
     var forward = true
+    // Самое дальнее, куда палец увёл лист по ходу оборота (px): по нему
+    // видно, что лист вернули, - передумали.
+    var peak = 0f
     // Лёгкий взмах тоже переворачивает: порог совсем низкий, иначе
     // короткие смахивания возвращали страницу на место - владелец на живой
-    // сборке просил 50-75.
+    // сборке просил 50-75. Обратно же лист отпускают только решительным
+    // взмахом: у отпускаемого пальца скорость дрожит, и слабое «назад» в
+    // последней точке возвращало страницу, которую хотели перевернуть.
     val flick = 60f * density
+    val flickBack = 240f * density
+    // Ход, после которого отпущенный лист доворачивается сам: несколько
+    // точек сверх порога касания. Владелец: «чуть-чуть смахнуть с конца - и
+    // страница пойдёт сама», играть со страницами ему незачем. Прежний порог
+    // в пятнадцать процентов пути (около сантиметра) короткий взмах не брал.
+    val step = 6f * density
     detectDragGestures(
         onDragStart = {
             state.settling?.cancel()
@@ -362,6 +374,7 @@ fun Modifier.curlDrag(
             moved = Offset.Zero
             decided = false
             baseDy = 0f
+            peak = 0f
             tracker.resetTracking()
             // Лист поймали на лету, посреди доводки: гнём его дальше с того
             // же места, а не начинаем новый оборот другого листа.
@@ -408,15 +421,23 @@ fun Modifier.curlDrag(
                 }
             }
             if (state.slot >= 0) state.dy = baseDy + moved.y
+            peak = max(peak, runOf(moved, forward))
             // Пейджер меряет ход своей шириной, лист - своим путём; книга,
             // едущая камерой, - как пейджер.
             val scale = if (pan || state.slot < 0) 1f else size.width / state.travel
             pager.dispatchRawDelta(-amount.x * scale)
         },
-        onDragEnd = { if (decided) finish(state, pager, scope, tracker, flick, from, forward, settle) },
-        onDragCancel = { if (decided) finish(state, pager, scope, tracker, flick, from, forward, settle) },
+        onDragEnd = {
+            if (decided) finish(state, pager, scope, tracker, flick, flickBack, step, from, forward, runOf(moved, forward), peak, settle)
+        },
+        onDragCancel = {
+            if (decided) finish(state, pager, scope, tracker, flick, flickBack, step, from, forward, runOf(moved, forward), peak, settle)
+        },
     )
 }
+
+/** Сколько палец прошёл по ходу оборота: вперёд - положительно, назад - отрицательно. */
+private fun runOf(moved: Offset, forward: Boolean): Float = if (forward) -moved.x else moved.x
 
 /** Палец отпущен: лист либо ложится обратно, либо доворачивается. */
 private fun finish(
@@ -425,23 +446,28 @@ private fun finish(
     scope: CoroutineScope,
     tracker: VelocityTracker,
     flick: Float,
+    flickBack: Float,
+    step: Float,
     from: Int,
     forward: Boolean,
+    /** Ход пальца по обороту к моменту отпускания и самый дальний за жест (px). */
+    run: Float,
+    peak: Float,
     settle: suspend (Int) -> Unit,
 ) {
     val velocity = tracker.calculateVelocity().x
-    val pos = pager.currentPage + pager.currentPageOffsetFraction
     val to = (if (forward) from + 1 else from - 1).coerceIn(0, pager.pageCount - 1)
-    // Сколько хода пройдено: 0 - откуда начали, 1 - куда идём.
-    val progress = abs(pos - from).coerceIn(0f, 1f)
-    // Начатый оборот доводится задолго до половины: страницу, которую уже
-    // потянули, редко хотят вернуть, а вот отпустить на четверти хода - сплошь.
+    // Начатый оборот доводится почти с первого движения: страницу, которую
+    // тронули, хотят перевернуть, а не подержать. Обратно - только если лист
+    // решительно взмахнули назад или вернули больше чем на половину того,
+    // куда его увели: это единственные приметы «передумал».
     val onward = if (forward) velocity < -flick else velocity > flick
-    val backOff = if (forward) velocity > flick else velocity < -flick
+    val backOff = if (forward) velocity > flickBack else velocity < -flickBack
     val target = when {
         onward -> to
         backOff -> from
-        progress > 0.15f -> to
+        run < peak * 0.5f -> from
+        run > step -> to
         else -> from
     }
     state.settling = scope.launch {
