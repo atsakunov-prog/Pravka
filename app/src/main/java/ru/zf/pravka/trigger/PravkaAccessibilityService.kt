@@ -220,6 +220,8 @@ class PravkaAccessibilityService : AccessibilityService() {
     private var diskModeApplied = false
     /** Автоуборка диска: полминуты без касаний — к ближайшему краю и домой. */
     @Volatile internal var cachedDiskTuck = true
+    /** Опыт: на складывание окна кнопок не снимаются (`Settings.keepOnFoldFlow`). */
+    @Volatile internal var cachedKeepOnFold = false
     internal var eSession: GoogleSpeechSession? = null
     @Volatile internal var eWhisperRecording = false
     @Volatile internal var eTypeInstead = false
@@ -629,6 +631,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             }
         }
         scope.launch { app.settings.diskTuckFlow.collect { cachedDiskTuck = it } }
+        scope.launch { app.settings.keepOnFoldFlow.collect { cachedKeepOnFold = it } }
         scope.launch { app.settings.restSecFlow.collect { cachedRestSec = it } }
         scope.launch {
             app.settings.modeIconsFlow.collect {
@@ -2947,15 +2950,29 @@ class PravkaAccessibilityService : AccessibilityService() {
         // складывание уже прошло; полсекунды без ручки никто не заметит.
         folding = true
         overlayWatch?.onFoldStart()
-        tailHandle?.hide()
-        stackSettings?.hideAll()
-        disk?.setFolded(true)
-        // И сами кнопки. Владелец показал, где ответ: «если все кнопки
-        // сложить в три точки, то никаких проблем нет, складывается всё
-        // отлично» — в журнале при этом «наших окон 0». Значит дело не в том,
-        // ЧЬИ окна, а в том, сколько их: четыре — уже дорого. На полсекунды
-        // перехода они не нужны никому, экран в этот момент чёрный.
-        setFolded(true)
+        val keep = cachedKeepOnFold
+        if (keep) {
+            // Опыт (владелец, 28.09.2026: «давай попробуем»): на Android 17
+            // окна, снятые и повешенные заново посреди складывания с
+            // блокировкой, система больше не показывает — до перезапуска
+            // службы. А если их не трогать, переход сам гасит их и сам же
+            // проявляет, как у любого другого оверлея. Проверяем: окна
+            // кнопок, стекла, шестерёнки и ручки висят как висели, только
+            // движение стоит; веер и записка уходят — они на секунду.
+            // Перекладка под новый экран — всё равно в configSettled.
+            stackSettings?.hideFan()
+            disk?.freeze()
+        } else {
+            tailHandle?.hide()
+            stackSettings?.hideAll()
+            disk?.setFolded(true)
+            // И сами кнопки. Владелец показал, где ответ: «если все кнопки
+            // сложить в три точки, то никаких проблем нет, складывается всё
+            // отлично» — в журнале при этом «наших окон 0». Значит дело не в том,
+            // ЧЬИ окна, а в том, сколько их: четыре — уже дорого. На полсекунды
+            // перехода они не нужны никому, экран в этот момент чёрный.
+            setFolded(true)
+        }
         // Repositioning ADDS work to the transition the system is running right
         // now: updateViewLayout on our overlays makes WindowManager wait for
         // them to redraw mid-fold. Do it once the fold has settled instead -
@@ -2970,7 +2987,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             val n = chainButtons().sumOf { it.windowCount() } +
                 (tailHandle?.windowCount() ?: 0) + (stackSettings?.windowCount() ?: 0) +
                 (disk?.windowCount() ?: 0) + (if (screenKeeper != null) 1 else 0)
-            app.eventLog.add("смена конфигурации: наших окон $n")
+            app.eventLog.add("смена конфигурации: наших окон $n" + if (keep) " (опыт: окна не снимаю)" else "")
         }
     }
 

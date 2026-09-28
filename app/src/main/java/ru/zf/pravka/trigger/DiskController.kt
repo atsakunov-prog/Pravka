@@ -511,6 +511,15 @@ class DiskController(
         slots.forEach { it.button.setOffscreen(false) }
     }
 
+    /**
+     * Складывание, а окна не снимаем (опыт «не снимать кнопки при
+     * складывании»): только остановить движение — ни одной перекладки окна
+     * посреди перехода; расставит `onConfigurationChanged`, когда уляжется.
+     */
+    fun freeze() {
+        stopMotion()
+    }
+
     /** Складывание Fold: тарелка снимается на переход и возвращается после. */
     fun setFolded(value: Boolean) {
         folded = value
