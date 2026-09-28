@@ -43,6 +43,17 @@ internal fun PravkaAccessibilityService.checkNotificationsAfterUpdate() {
         "служба: сборка $build" + (if (updated) " (обновление с $seen)" else "") +
             " · уведомления " + (if (enabled) "разрешены" else "ВЫКЛЮЧЕНЫ")
     )
+    // Служба поднялась после падения процесса — причина словами, один раз.
+    // «Пропал диск» без единой строки в журнале иначе не расследовать
+    // (владелец, 28.09.2026). Файл читается не на главном потоке службы.
+    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        runCatching {
+            ru.zf.pravka.data.CrashLog.lastUnshown(this@checkNotificationsAfterUpdate)?.let { line ->
+                app.eventLog.add("служба: прошлый раз процесс УПАЛ — $line (стек целиком — crash.log рядом с базой)")
+                ru.zf.pravka.data.CrashLog.markShown(this@checkNotificationsAfterUpdate)
+            }
+        }
+    }
     if (enabled) return
     // Один раз на сборку: после каждого обновления — заново, но не при каждом
     // перезапуске службы, иначе это допрос, а не напоминание.
