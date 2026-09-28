@@ -53,6 +53,7 @@ class TranscriptionLog(private val context: Context) {
         val errors = health?.errorsLine()
         val mic = health?.mic
         val stuck = health?.stuck ?: 0
+        val offline = health?.offline
         DiskWriter.post {
             if (file.exists() && file.length() > MAX_BYTES) {
                 val backup = File(DataRoot.dir(context), "$FILE_NAME.1")
@@ -75,6 +76,7 @@ class TranscriptionLog(private val context: Context) {
                 if (!errors.isNullOrEmpty()) put("errors", errors)
                 if (mic != null) put("mic", mic)
                 if (stuck > 0) put("stuck", stuck)
+                if (offline != null) put("offline", offline)
             }
             file.appendText(entry.toString() + "\n")
         }
@@ -114,6 +116,8 @@ class TranscriptionLog(private val context: Context) {
         val mic: String? = null,
         /** Сколько раз распознаватель застревал (речь без слов) и поднимался заново. */
         val stuck: Int = 0,
+        /** Облако подвело, дослушивал офлайн-пакет: почему; null — не перекидывали. */
+        val offline: String? = null,
     ) {
         // >1 means slower than realtime, <1 faster. 0 when audio length unknown.
         val realtimeFactor: Double get() = if (audioMs > 0) transcribeMs.toDouble() / audioMs else 0.0
@@ -145,6 +149,7 @@ class TranscriptionLog(private val context: Context) {
                             errors = if (o.has("errors")) o.optString("errors") else "",
                             mic = if (o.has("mic")) o.optString("mic") else null,
                             stuck = o.optInt("stuck", 0),
+                            offline = if (o.has("offline")) o.optString("offline") else null,
                         )
                     }.getOrNull()
                 }
@@ -183,6 +188,7 @@ class TranscriptionLog(private val context: Context) {
                     if (e.errors.isNotEmpty()) put("errors", e.errors)
                     if (e.mic != null) put("mic", e.mic)
                     if (e.stuck > 0) put("stuck", e.stuck)
+                    if (e.offline != null) put("offline", e.offline)
                 }
                 w.write(o.toString()); w.write("\n")
             }

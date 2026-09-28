@@ -55,6 +55,15 @@ class TakeHealth(private val startedAtMs: Long) {
     var mutedSpeechMs = 0L
         private set
 
+    /** Облако подвело, и тейк дослушивал офлайн-пакет: почему — словами; null — не перекидывали. */
+    var offline: String? = null
+        private set
+
+    fun toOffline(why: String) {
+        if (closed || offline != null) return
+        offline = why
+    }
+
     fun stuck(speechMs: Long) {
         if (closed) return
         stuck++
@@ -129,6 +138,7 @@ class TakeHealth(private val startedAtMs: Long) {
         if (gaps > 0) append(" (").append(gaps).append(" ").append(windows(gaps)).append(")")
         errorsLine().takeIf { it.isNotEmpty() }?.let { append(" · ошибки ").append(it) }
         if (stuck > 0) append(" · застревал ").append(stuck).append(" раз (").append(mutedSpeechMs).append(" мс речи без слов)")
+        offline?.let { append(" · облако → офлайн-пакет (").append(it).append(")") }
         mic?.let { append(" · слушал ").append(it) }
         when (fed) {
             true -> append(" · звук Правки")
@@ -150,8 +160,17 @@ class TakeHealth(private val startedAtMs: Long) {
          * слов, — глухие окна, долгий старт, гарнитура. Всё в порядке — null,
          * карточка остаётся прежней.
          */
-        fun cardLine(startupMs: Long, deafMs: Long, gaps: Int, mic: String?, locale: Locale, stuck: Int = 0): String? {
+        fun cardLine(
+            startupMs: Long,
+            deafMs: Long,
+            gaps: Int,
+            mic: String?,
+            locale: Locale,
+            stuck: Int = 0,
+            offline: Boolean = false,
+        ): String? {
             val parts = mutableListOf<String>()
+            if (offline) parts += "облако не отвечало — дослушал офлайн-пакет"
             if (stuck > 0) parts += "застревал $stuck раз — поднимал заново"
             if (deafMs >= SHOW_DEAF_MS) {
                 val sec = String.format(locale, "%.1f", deafMs / 1000.0)

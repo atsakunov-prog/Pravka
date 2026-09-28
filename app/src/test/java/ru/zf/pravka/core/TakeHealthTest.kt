@@ -85,6 +85,9 @@ class TakeHealthTest {
         // Своя запись Правки кормила распознаватель — это видно в той же строке.
         val fed = TakeHealth(0).apply { ready(400); heard("гарнитура «OpenComm2»"); fed = true }
         assertEquals("старт 400 мс · глухо 0 мс · слушал гарнитура «OpenComm2» · звук Правки", fed.summary())
+        // Облако подвело — видно, что дослушивал пакет и почему; второй раз не переписывается.
+        val cut = TakeHealth(0).apply { ready(300); toOffline("ошибка 2"); toOffline("застрял") }
+        assertEquals("старт 300 мс · глухо 0 мс · облако → офлайн-пакет (ошибка 2)", cut.summary())
     }
 
     @Test

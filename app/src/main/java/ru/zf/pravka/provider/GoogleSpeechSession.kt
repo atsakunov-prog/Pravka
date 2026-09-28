@@ -145,6 +145,13 @@ class GoogleSpeechSession(
     /** Сколько сессий распознавателя заведено за тейк: первая звук не повторяет. */
     private var sessionsStarted = 0
 
+    /**
+     * Путь этого тейка сейчас: облако подвело — дальше слушает офлайн-пакет
+     * ([toOffline], `ListenPolicy.toOffline`). С него и начинается следующий
+     * тейк — снова облаком: [network] не меняется.
+     */
+    private var networkNow = network
+
     // ---- Застрял (ListenPolicy.stuck): речь слышит, слов не отдаёт ----
     /** Когда началась текущая речь (beginSpeech); 0 — речи нет. */
     private var speechBeganAtMs = 0L
@@ -254,6 +261,9 @@ class GoogleSpeechSession(
 
         /** Сторож микрофона (вход, отвалившиеся наушники, зависшая труба) — раз в столько. */
         private const val MIC_WATCH_MS = 1_000L
+
+        /** После смены облака на пакет — старт через столько: пусть уляжется destroy прежнего. */
+        private const val OFFLINE_START_MS = 300L
 
         // Only give up after a long run of pure errors with no speech at all
         // (a genuinely dead mic), never on a transient blip mid-dictation.
@@ -653,21 +663,25 @@ class GoogleSpeechSession(
     // слушать не даётся — startListening поверх его проверки поддержки ловил бы
     // ERROR_RECOGNIZER_BUSY.
     private fun createRecognizer(): SpeechRecognizer? {
-        boundGoogle = serviceFor(context, network) != null
-        return newRecognizer(context, network)
+        boundGoogle = serviceFor(context, networkNow) != null
+        return newRecognizer(context, networkNow)
     }
 
     // Invariant for the whole session (language and biasing never change), so
     // build it once. It used to be rebuilt per restart, copying the bias list
     // twice each time. Per session only the audio source differs ([intentFor]).
-    private val baseIntent: Intent by lazy {
+    private val cloudIntent: Intent by lazy { buildBaseIntent(offline = false) }
+    private val offlineIntent: Intent by lazy { buildBaseIntent(offline = true) }
+    private val baseIntent: Intent get() = if (networkNow) cloudIntent else offlineIntent
+
+    private fun buildBaseIntent(offline: Boolean): Intent =
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             // Офлайн-путь: только офлайн-движок. На сетевом флаг не ставим —
             // иначе это тот же офлайн-пакет под другим именем.
-            if (!network) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            if (offline) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 // The recognizer's own punctuation/caps: its word accuracy is
@@ -695,7 +709,6 @@ class GoogleSpeechSession(
                 }
             }
         }
-    }
 
     /**
      * Интент этой сессии: общее — из [baseIntent], своё — источник звука.
@@ -734,6 +747,14 @@ class GoogleSpeechSession(
 
     private fun startListening() {
         val r = recognizer ?: return
+        // Второй старт поверх идущей сессии — это ERROR_RECOGNIZER_BUSY, с
+        // которого здесь начинались штормы. Дороги подъёма теперь несколько
+        // (конец сессии, ошибка, сторож, смена пути), и опоздавшая из них
+        // просто уступает той, что уже подняла.
+        if (sessionLive) {
+            onLog("распознаватель уже слушает — второй старт пропускаю")
+            return
+        }
         listenAtMs = android.os.SystemClock.elapsedRealtime()
         val f = feed
         // Не первая сессия тейка — повторить ей звук с последнего слова: то, что
@@ -748,7 +769,10 @@ class GoogleSpeechSession(
         speechBeganAtMs = 0L
         speechSinceSegmentMs = 0L
         sessionLive = true
-        runCatching { r.startListening(intentFor(source)) }.onFailure { restartSoon(afterError = true) }
+        runCatching { r.startListening(intentFor(source)) }.onFailure {
+            sessionLive = false
+            restartSoon(afterError = true)
+        }
     }
 
     /** Маршрут переехал — слушаем, если тейк к этому мигу ещё жив. */
@@ -1036,6 +1060,8 @@ class GoogleSpeechSession(
             // Words the recognizer refused to finalize (NO_MATCH on rare words)
             // are still in lastPartial - rescue them before anything else.
             promoteOrphanedPartial("error $error")
+            // Дорога до облака (сеть, сервер) — не ждать её, а дослушать пакетом.
+            if (ListenPolicy.cloudLost(error) && toOffline("ошибка $error", cloudError = true)) return
             errorStreak++
             // Тишина (NO_MATCH / SPEECH_TIMEOUT) к «сдаться» не ведёт: сорок
             // пауз подряд — это человек думает, а не мёртвый микрофон. И паузы
@@ -1239,9 +1265,13 @@ class GoogleSpeechSession(
         val at = listenAtMs
         runCatching { r.stopListening() }
         main.postDelayed({
-            if (active && !stopping && recognizer != null && listenAtMs == at) {
+            val now = recognizer
+            if (active && !stopping && now != null && listenAtMs == at) {
                 onLog("распознаватель сам не поднялся — поднимаю")
                 promoteOrphanedPartial("relisten guard")
+                // Прежняя сессия так и не кончилась — снять её, иначе новый старт был бы вторым.
+                runCatching { now.cancel() }
+                sessionLive = false
                 startListening()
             }
         }, RELISTEN_GUARD_MS)
@@ -1289,7 +1319,7 @@ class GoogleSpeechSession(
             return false
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
-        if (feedVerdict[network] == false) {
+        if (feedVerdict[networkNow] == false) {
             onLog("свой микрофон: этот путь звук Правки не берёт — распознаватель слушает сам")
             return false
         }
@@ -1317,7 +1347,7 @@ class GoogleSpeechSession(
         publishMic()
         // Путь наш звук уже брал — звать говорить можно с тапа: сказанное до
         // «готов» распознавателя ляжет в очередь и дойдёт до него целиком.
-        if (feedVerdict[network] == true) fireReady()
+        if (feedVerdict[networkNow] == true) fireReady()
         startListening()
         return true
     }
@@ -1338,7 +1368,7 @@ class GoogleSpeechSession(
             f.silenced() -> dropFeed("система заглушила запись Правки — микрофон у другого", verdict = null, relisten = true)
             foreign != null -> dropFeed("распознаватель звук Правки не берёт — открыл свой микрофон (${foreign.label})", verdict = false, relisten = false)
             read >= FEED_READ_PROOF_BYTES -> {
-                if (feedVerdict.put(network, true) != true) onLog("свой микрофон: распознаватель берёт звук Правки")
+                if (feedVerdict.put(networkNow, true) != true) onLog("свой микрофон: распознаватель берёт звук Правки")
                 feedAccepted = true
             }
             !again -> main.postDelayed({ checkFeed(again = true) }, FEED_CHECK_AGAIN_MS)
@@ -1354,7 +1384,7 @@ class GoogleSpeechSession(
     private fun dropFeed(why: String, verdict: Boolean?, relisten: Boolean) {
         val f = feed ?: return
         onLog("свой микрофон: $why — дальше распознаватель слушает сам")
-        if (verdict != null) feedVerdict[network] = verdict
+        if (verdict != null) feedVerdict[networkNow] = verdict
         feed = null
         f.abort()
         feedAccepted = false
@@ -1406,8 +1436,10 @@ class GoogleSpeechSession(
                     now - f.lastWriteAtMs > FEED_STALL_MS && now - listenAtMs > FEED_STALL_MS
                 ) {
                     onLog("свой микрофон: распознаватель ${(now - f.lastWriteAtMs) / 1000} с не читает — поднимаю заново, звук ждёт в очереди")
-                    relisten()
+                    // Облако, переставшее читать, скорее всего потеряло сеть — сразу пакет.
+                    if (!toOffline("облако не читает звук", stalled = true)) relisten()
                 }
+                watchCapture(f, now)
             } else if (headsetMic && !routeMoving && micTicks % 2 == 0) {
                 val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 val heard = MicRouting.recognizerInput(am)
@@ -1424,6 +1456,68 @@ class GoogleSpeechSession(
                 }
             }
             main.postDelayed(this, MIC_WATCH_MS)
+        }
+    }
+
+    private var lastKickAtMs = 0L
+    private var scoRetried = false
+    private var deadAirKicked = false
+
+    /**
+     * Своя запись жива и слышит ли: звук не идёт — разбудить (повисшее
+     * чтение после смены входа), не оживает — отдать микрофон распознавателю;
+     * идут ровные нули — у наушников сперва заново поднять канал, потом
+     * вернуться на телефон, у телефона — открыть запись заново. До
+     * 28.09.2026 оба случая были немыми: звук распознавателю просто не шёл,
+     * а кружок горел «слышу».
+     */
+    private fun watchCapture(f: MicFeed, now: Long) {
+        val still = now - f.lastCaptureAtMs
+        if (still >= ListenPolicy.CAPTURE_GIVE_UP_MS) {
+            dropFeed("своя запись не отдаёт звук ${still / 1000} с", verdict = null, relisten = true)
+            return
+        }
+        if (still >= ListenPolicy.CAPTURE_STALL_MS && now - lastKickAtMs >= ListenPolicy.CAPTURE_STALL_MS) {
+            lastKickAtMs = now
+            f.kick("звук не идёт $still мс")
+            return
+        }
+        val zeros = f.zeroMs
+        if (zeros == 0L) {
+            scoRetried = false
+            deadAirKicked = false
+            return
+        }
+        if (zeros < ListenPolicy.DEAD_AIR_MS || routeMoving) return
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        when {
+            headsetMic && !scoRetried -> {
+                scoRetried = true
+                onLog("наушники молчат (нули $zeros мс) — поднимаю их канал заново")
+                if (MicRouting.toHeadset(am, onLog)) routeOurs = true
+            }
+            headsetMic && zeros >= ListenPolicy.DEAD_AIR_GIVE_UP_MS -> {
+                onLog("наушники молчат и после подъёма канала ($zeros мс) — слушает телефон")
+                f.setDevice(MicRouting.builtinMic(am))
+                if (routeOurs) {
+                    routeOurs = false
+                    MicRouting.drop(am, onLog)
+                }
+                headsetMic = false
+                health.heard("телефон")
+                publishMic()
+                noticeHeadsetDrop("Наушники молчат — слушает телефон")
+                scoRetried = false
+            }
+            !headsetMic && !deadAirKicked -> {
+                deadAirKicked = true
+                f.kick("телефон отдаёт нули $zeros мс")
+            }
+            !headsetMic && zeros >= ListenPolicy.DEAD_AIR_GIVE_UP_MS -> {
+                // Заново открытая запись тоже отдаёт нули: так Android глушит
+                // микрофон выключателем доступа в шторке — чинить тут нечего, надо сказать.
+                noticeHeadsetDrop("Микрофон телефона отдаёт тишину — не выключен ли доступ к микрофону в шторке?")
+            }
         }
     }
 
@@ -1452,12 +1546,50 @@ class GoogleSpeechSession(
             "распознаватель застрял: ${muted / 1000} с речи без единого слова — поднимаю заново" +
                 if (feed != null) ", звук с последнего слова повторю" else ""
         )
+        // Второй раз подряд на облаке — не тот же путь снова, а пакет.
+        if (toOffline("застрял ${stuckRestarts} раз подряд")) return
         if (stuckRestarts >= ListenPolicy.STUCK_NOTICE_AFTER && !stuckNoticed) {
             stuckNoticed = true
             val who = if (headsetMic) "наушники" else "телефон"
             noticeSink?.let { runCatching { it("Не разбираю ни слова — слушает $who. Далеко от микрофона?") } }
         }
         relisten()
+    }
+
+    /**
+     * Облако подвело — дослушать тейк офлайн-пакетом (`ListenPolicy.toOffline`,
+     * владелец 28.09.2026: «можно ли вообще пробовать при застревании
+     * перекидывать?»). Новый распознаватель — другого пути, не пересоздание
+     * того же после ошибки (от которого здесь были штормы), и один раз за
+     * тейк. Со своей записью первая его сессия получает звук с последнего
+     * разобранного слова — то, что облако не разобрало, разбирает пакет.
+     * true — перекинули.
+     */
+    private fun toOffline(why: String, cloudError: Boolean = false, stalled: Boolean = false): Boolean {
+        if (!active || stopping) return false
+        if (!ListenPolicy.toOffline(networkNow, onDeviceAvailable(context), cloudError, stuckRestarts, stalled)) return false
+        val fresh = newRecognizer(context, network = false) ?: return false
+        onLog(
+            "облако не отвечает ($why) — дослушиваю тейк офлайн-пакетом" +
+                if (feed != null) ", звук с последнего слова повторю" else ""
+        )
+        val old = recognizer
+        networkNow = false
+        health.toOffline(why)
+        fresh.setRecognitionListener(listener)
+        recognizer = fresh
+        runCatching { old?.cancel() }
+        runCatching { old?.destroy() }
+        sessionLive = false
+        restartPending = false
+        // Пакет — другой путь: берёт ли он наш звук, проверится на его «готов».
+        recognizerReadyOnce = false
+        feedAccepted = false
+        stuckRestarts = 0
+        mutedSpeechMs = 0
+        noticeSink?.let { runCatching { it("Облако Google не отвечает — дослушиваю офлайн-пакетом") } }
+        main.postDelayed({ if (active && !stopping && recognizer === fresh) startListening() }, OFFLINE_START_MS)
+        return true
     }
 
     /**

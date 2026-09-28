@@ -55,9 +55,19 @@ import kotlin.math.sqrt
  */
 @SuppressLint("MissingPermission") // RECORD_AUDIO проверяется до любого тейка
 class MicFeed private constructor(
-    private val record: AudioRecord,
+    initial: AudioRecord,
     private val log: (String) -> Unit,
 ) {
+
+    /**
+     * Сама запись. Меняется, только когда запись умерла и открыта заново
+     * ([rebuild], поток записи); главный поток читает её снимок, и вызов на
+     * уже отпущенной записи гасит runCatching.
+     */
+    @Volatile private var record: AudioRecord = initial
+
+    /** Куда просили смотреть — чтобы новая запись после [rebuild] смотрела туда же. */
+    @Volatile private var preferred: AudioDeviceInfo? = null
 
     companion object {
         const val SAMPLE_RATE = 16_000
@@ -85,6 +95,12 @@ class MicFeed private constructor(
         /** Дописать хвост после стопа — не дольше этого: распознаватель мог перестать читать. */
         private const val DRAIN_MAX_MS = 8_000L
 
+        /** Запись не отдаёт звук столько — умерла; открыть заново. */
+        private const val DEAD_READ_MS = 1_000L
+
+        /** Открывать заново за тейк не больше стольких раз: дальше это не сбой, а поломка. */
+        private const val MAX_REBUILDS = 5
+
         /** Громкость: тишина и полный голос в dBFS — для волны в пилюле. */
         private const val QUIET_DBFS = -55.0
         private const val LOUD_DBFS = -20.0
@@ -94,7 +110,9 @@ class MicFeed private constructor(
          * что берёт сам распознаватель, без телефонной обработки звонка.
          * Не вышло — null, и тейк идёт прежней дорогой: распознаватель слушает сам.
          */
-        fun open(log: (String) -> Unit): MicFeed? {
+        fun open(log: (String) -> Unit): MicFeed? = create(log)?.let { MicFeed(it, log) }
+
+        private fun create(log: (String) -> Unit): AudioRecord? {
             val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, ENCODING)
             if (minBuf <= 0) {
                 log("свой микрофон: запись 16 кГц не поддерживается ($minBuf)")
@@ -117,7 +135,7 @@ class MicFeed private constructor(
                 runCatching { rec.release() }
                 return null
             }
-            return MicFeed(rec, log)
+            return rec
         }
     }
 
@@ -161,6 +179,23 @@ class MicFeed private constructor(
     /** Громкость 0..1 из самой записи — зовётся с потока записи. */
     var onLevel: ((Float) -> Unit)? = null
 
+    /** Когда запись в последний раз отдала звук (elapsedRealtime): стоит — запись повисла. */
+    @Volatile var lastCaptureAtMs = SystemClock.elapsedRealtime()
+        private set
+
+    /**
+     * Сколько подряд запись отдаёт цифровую тишину — ровные нули, мс. Живой
+     * микрофон нулей не даёт никогда: даже в тихой комнате есть шум. Нули —
+     * это канал наушников, поднятый без звука, или вход, отданный другому.
+     */
+    @Volatile var zeroMs = 0L
+        private set
+
+    /** Сколько раз за тейк запись открывали заново. */
+    @Volatile var rebuilds = 0
+        private set
+
+    @Volatile private var kickReason: String? = null
     /** Наши копии концов чтения: труба уходит распознавателю через Binder, его копия — своя. */
     private val readEnds = ArrayList<ParcelFileDescriptor>()
 
@@ -239,7 +274,21 @@ class MicFeed private constructor(
     }
 
     /** Куда смотрит запись: гарнитура, телефон; null — как решит система. */
-    fun setDevice(device: AudioDeviceInfo?): Boolean = runCatching { record.setPreferredDevice(device) }.getOrDefault(false)
+    fun setDevice(device: AudioDeviceInfo?): Boolean {
+        preferred = device
+        return runCatching { record.setPreferredDevice(device) }.getOrDefault(false)
+    }
+
+    /**
+     * Открыть запись заново (сторож видит: звук не идёт, или идут одни нули).
+     * Остановка будит поток записи, если он повис в чтении, — дальше он сам
+     * отпускает старую запись и открывает новую.
+     */
+    fun kick(why: String) {
+        if (draining || !running) return
+        kickReason = why
+        runCatching { record.stop() }
+    }
 
     /** Что запись слушает на деле, по словам системы. */
     fun routed(): AudioDeviceInfo? = runCatching { record.routedDevice }.getOrNull()
@@ -277,19 +326,35 @@ class MicFeed private constructor(
 
     private fun captureLoop() {
         var lastLevelAt = 0L
-        var failures = 0
+        var badSince = 0L
         try {
             while (running && !draining) {
+                kickReason?.let { why ->
+                    kickReason = null
+                    rebuild(why)
+                    badSince = 0L
+                }
                 val buf = ByteArray(CHUNK_BYTES)
                 val n = runCatching { record.read(buf, 0, buf.size) }.getOrDefault(-1)
+                val now = SystemClock.elapsedRealtime()
                 if (n <= 0) {
-                    if (++failures == 40) log("свой микрофон: запись молчит ($n) — две секунды подряд")
-                    Thread.sleep(50)
+                    // Смена входа (наушники ↔ телефон) пересоздаёт вход у системы, и
+                    // запись может так и не ожить: ошибки чтения без конца. Без этого
+                    // сторожа распознаватель просто переставал получать звук —
+                    // ни речи, ни пустых кусков, а кружок горел «слышу».
+                    if (badSince == 0L) badSince = now
+                    if (kickReason == null && now - badSince >= DEAD_READ_MS && running && !draining) {
+                        rebuild("запись не отдаёт звук ${now - badSince} мс (код $n)")
+                        badSince = 0L
+                    } else {
+                        Thread.sleep(20)
+                    }
                     continue
                 }
-                failures = 0
+                badSince = 0L
+                lastCaptureAtMs = now
                 val chunk = if (n == buf.size) buf else buf.copyOf(n)
-                val now = SystemClock.elapsedRealtime()
+                zeroMs = if (allZero(chunk, n)) zeroMs + (n / BYTES_PER_MS) else 0L
                 if (now - lastLevelAt >= 60) {
                     lastLevelAt = now
                     onLevel?.let { sink -> runCatching { sink(level(chunk, n)) } }
@@ -315,6 +380,41 @@ class MicFeed private constructor(
             runCatching { record.release() }
             if (droppedBytes > 0) log("свой микрофон: распознаватель не читал — выброшено ${droppedBytes / BYTES_PER_MS / 1000} с старого звука")
         }
+    }
+
+    /**
+     * Отпустить умершую запись и открыть новую на тот же вход. Поток записи —
+     * единственный, кто читает, поэтому и меняет запись он. Не вышло или
+     * открывали уже [MAX_REBUILDS] раз — запись остаётся какая есть, а
+     * сторож сессии увидит, что звука нет, и отдаст микрофон распознавателю.
+     */
+    private fun rebuild(why: String) {
+        if (rebuilds >= MAX_REBUILDS) return
+        rebuilds++
+        log("свой микрофон: $why — открываю запись заново ($rebuilds)")
+        val old = record
+        runCatching { old.stop() }
+        runCatching { old.release() }
+        val fresh = create(log)
+        if (fresh == null) {
+            log("свой микрофон: заново не открылась")
+            return
+        }
+        preferred?.let { dev -> runCatching { fresh.setPreferredDevice(dev) } }
+        runCatching { fresh.startRecording() }
+        if (fresh.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            log("свой микрофон: заново открылась, но не пишет")
+            runCatching { fresh.release() }
+            return
+        }
+        record = fresh
+        zeroMs = 0L
+        lastCaptureAtMs = SystemClock.elapsedRealtime()
+    }
+
+    private fun allZero(pcm: ByteArray, n: Int): Boolean {
+        for (i in 0 until n) if (pcm[i].toInt() != 0) return false
+        return true
     }
 
     private fun writeLoop() {

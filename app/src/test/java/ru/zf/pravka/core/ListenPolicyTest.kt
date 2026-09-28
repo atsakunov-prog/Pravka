@@ -107,4 +107,28 @@ class ListenPolicyTest {
         // Слово было две минуты назад — повторяем только последние двадцать секунд.
         assertEquals(80_000L, ListenPolicy.replayFrom(lastWordsAtMs = -20_000, nowMs = 100_000))
     }
+
+    @Test
+    fun `облако не отвечает - перекидываем на офлайн-пакет`() {
+        // Сеть, таймаут, сервер, «слишком много запросов» — дорога до облака.
+        for (code in listOf(1, 2, 4, 10)) assertTrue(ListenPolicy.cloudLost(code))
+        // Тишина, занятый распознаватель, обрыв службы — не про облако.
+        for (code in listOf(5, 6, 7, 8, 11)) assertFalse(ListenPolicy.cloudLost(code))
+        assertTrue(ListenPolicy.toOffline(onCloud = true, offlineAvailable = true, cloudError = true, stuckRestarts = 0, stalled = false))
+        assertTrue(ListenPolicy.toOffline(onCloud = true, offlineAvailable = true, cloudError = false, stuckRestarts = 0, stalled = true))
+    }
+
+    @Test
+    fun `застрял - первый раз поднимаем облако, второй подряд - офлайн-пакет`() {
+        assertFalse(ListenPolicy.toOffline(onCloud = true, offlineAvailable = true, cloudError = false, stuckRestarts = 1, stalled = false))
+        assertTrue(ListenPolicy.toOffline(onCloud = true, offlineAvailable = true, cloudError = false, stuckRestarts = 2, stalled = false))
+    }
+
+    @Test
+    fun `некуда перекидывать - не перекидываем`() {
+        // Уже на пакете.
+        assertFalse(ListenPolicy.toOffline(onCloud = false, offlineAvailable = true, cloudError = true, stuckRestarts = 3, stalled = true))
+        // Пакета на телефоне нет.
+        assertFalse(ListenPolicy.toOffline(onCloud = true, offlineAvailable = false, cloudError = true, stuckRestarts = 3, stalled = true))
+    }
 }
