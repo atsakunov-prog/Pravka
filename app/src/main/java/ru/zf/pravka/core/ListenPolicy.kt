@@ -87,4 +87,28 @@ object ListenPolicy {
 
     /** Срывов подряд столько, что поднимать больше нечего — отдаём, что есть. */
     fun giveUpOnCollapses(collapses: Int): Boolean = collapses >= MAX_QUICK_ENDS
+
+    /**
+     * Через сколько поднимать распознаватель после ошибки, мс; 0 — сразу,
+     * следующим сообщением очереди.
+     *
+     * Каждая миллисекунда паузы здесь — время, когда тейк идёт, а слушать
+     * некому (владелец, 28.09.2026: «много пропускает слов»). До этого пауза
+     * была у ЛЮБОЙ ошибки: 600 мс с первой, до полутора секунд подряд, — и
+     * тишина («не разобрал», «никто не говорил») платила её так же, как
+     * мёртвая сеть. Тишина после сессии, которая честно поработала, — это
+     * человек замолчал и сейчас продолжит: слушать надо сразу. Пауза остаётся
+     * там, где она защищает: [hardErrors] настоящих ошибок подряд (сеть,
+     * служба) и [quickSilences] «тишин», прилетевших быстрее
+     * [SESSION_MIN_MS] после старта, — движок, отвечающий «не разобрал»
+     * мгновенно, без паузы закрутился бы в горячую петлю.
+     */
+    fun restartDelayMs(hardErrors: Int, quickSilences: Int): Long {
+        val n = hardErrors.coerceAtLeast(0) + quickSilences.coerceAtLeast(0)
+        return if (n == 0) 0L else (RESTART_BASE_MS + n * RESTART_STEP_MS).coerceAtMost(RESTART_MAX_MS)
+    }
+
+    private const val RESTART_BASE_MS = 450L
+    private const val RESTART_STEP_MS = 150L
+    private const val RESTART_MAX_MS = 1_500L
 }

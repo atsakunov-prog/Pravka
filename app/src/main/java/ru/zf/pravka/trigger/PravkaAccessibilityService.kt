@@ -554,6 +554,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         GoogleSpeechSession.levelSink = { level ->
             chainButtons().forEach { it.setLevel(level) }
         }
+        // Кто слушает и слышит ли — кружку микрофона в пилюле той, что пишет;
+        // раздаётся так же, как громкость.
+        GoogleSpeechSession.micSink = { state ->
+            chainButtons().forEach { it.setMic(state) }
+        }
+        GoogleSpeechSession.noticeSink = { text -> Feedback.toast(this, text) }
         // Сколько ждать ответа — секундами на занятой кнопке (владелец,
         // 26.09.2026: «на самой кнопке, где просто крутится… обратный отсчёт в
         // виде секунд… и до нуля»). До этого была дуга по кромке стекла, но у
@@ -964,7 +970,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 app.liveDraft.save(text)
             },
             onDone = { text ->
-                onLiveDone(if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, text)
+                onLiveDone(if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, text, session.health)
             },
             onError = { msg -> onLiveError(msg) },
             onLog = { line -> app.eventLog.add(line) },
@@ -1102,6 +1108,41 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** Живая сессия распознавателя любой кнопки: микрофон один, и тейк в любой миг ровно один. */
+    internal fun liveSession(): GoogleSpeechSession? =
+        googleSession ?: zSession ?: rSession ?: mSession ?: eSession
+
+    /** Кто слушает идущую запись — кружку микрофона в пилюле, которая только что встала. */
+    internal fun liveMicState(): ru.zf.pravka.core.MicPlan.Mic? =
+        liveSession()?.micState()
+            ?: DictationService.instance?.takeIf { DictationService.recording }?.micState()
+
+    /**
+     * Кружок микрофона в пилюле (владелец, 28.09.2026: «переключатель рядом
+     * с „Отправить“, что он слушает: микрофон телефона или микрофон
+     * наушников… нажимаю на телефоне, а потом хочу просто на наушниках
+     * продолжить»): перевести идущую запись на другой микрофон, не
+     * останавливая её, и запомнить выбор — тот же, что у кружка микрофона в
+     * веере шестерёнки, так что следующий тейк начнётся там же. Не вышло
+     * (наушников нет, идёт разговор) — записка словами, выбор не меняется.
+     * Возвращает, что показать кружку сейчас; null — записи нет.
+     */
+    internal fun switchLiveMic(): ru.zf.pravka.core.MicPlan.Mic? {
+        val session = liveSession()
+        val whisper = DictationService.instance?.takeIf { DictationService.recording }
+        val now = session?.micState() ?: whisper?.micState() ?: return null
+        val want = !now.headset
+        val note = if (session != null) session.switchMic(want) else whisper?.switchMic(want)
+        if (note != null) {
+            app.eventLog.add("кружок микрофона: $note")
+            Feedback.toast(this, note)
+        } else {
+            app.eventLog.add("кружок микрофона: ${if (want) "гарнитура" else "телефон"}")
+            scope.launch { app.settings.setPhoneMicOnly(!want) }
+        }
+        return session?.micState() ?: whisper?.micState()
+    }
+
     /** Second tap or the notification's Stop button: finalize the live take. */
     fun stopLiveDictation() {
         val session = googleSession ?: return
@@ -1112,7 +1153,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         session.stop()  // -> onLiveDone
     }
 
-    private fun onLiveDone(engine: String, text: String) {
+    private fun onLiveDone(engine: String, text: String, health: ru.zf.pravka.core.TakeHealth? = null) {
         googleSession = null
         // Every step below runs on the binder callback that delivers the take:
         // one throw here (screen off -> dead window/FGS token) used to kill the
@@ -1151,6 +1192,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             transcribeMs = 0,
             text = text,
             error = if (text.isBlank()) "пустой результат" else null,
+            health = health,
         )
         // Delivered (and logged to the transcripts) - the recovery draft is no
         // longer needed. Unless the service died mid-take: then nothing was

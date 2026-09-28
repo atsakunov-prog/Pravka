@@ -15,6 +15,7 @@ import android.speech.SpeechRecognizer
 import ru.zf.pravka.core.ListenPolicy
 import ru.zf.pravka.core.HeadsetPress
 import ru.zf.pravka.core.MicPlan
+import ru.zf.pravka.core.TakeHealth
 
 // Live, streaming speech recognition via Android's SpeechRecognizer - the same
 // system engine (Speech Services by Google) that Gboard's voice typing uses.
@@ -104,6 +105,30 @@ class GoogleSpeechSession(
     private var firstPartialLogged = false
     private var routeOurs = false     // маршрут заказали мы — нам его и возвращать
 
+    /**
+     * Сколько тейк был глух и кто его слушал (`core/TakeHealth.kt`): итог — в
+     * журнал на конце тейка и в запись «Расшифровок» (её пишет хозяин сессии
+     * из onDone). Владелец, 28.09.2026: «много пропускает слов… хотя вроде
+     * бы говорил нормально» — до этого окна глухоты не видел никто.
+     */
+    var health = TakeHealth(0L)
+        private set
+
+    /** Этот тейк слушает гарнитура (а не телефон) — решено на старте, меняет [switchMic]. */
+    @Volatile var headsetMic = false
+        private set
+
+    /** После [switchMic] маршрут переезжает: кружок микрофона в пилюле тусклый, пока не встанет. */
+    private var routeMoving = false
+    private var routeWatch: Runnable? = null
+
+    /**
+     * Подряд «тишин» (не разобрал / никто не говорил), прилетевших сразу
+     * после старта сессии, — только они и настоящие ошибки платят паузу
+     * перед подъёмом (`ListenPolicy.restartDelayMs`).
+     */
+    private var quickSilences = 0
+
     private var onReady: () -> Unit = {}
     private var onPartial: (String) -> Unit = {}
     private var onCheckpoint: (String) -> Unit = {}
@@ -123,6 +148,45 @@ class GoogleSpeechSession(
          */
         @Volatile
         var levelSink: ((Float) -> Unit)? = null
+
+        /**
+         * Кто слушает и слышит ли прямо сейчас — кружок микрофона в пилюле
+         * (владелец, 28.09.2026). Общее поле по той же причине, что и
+         * [levelSink]: микрофон один, живая сессия в любой миг одна. Туда же
+         * пишет запись Whisper (`DictationService`). Главный поток.
+         */
+        @Volatile
+        var micSink: ((MicPlan.Mic) -> Unit)? = null
+
+        /**
+         * Записка владельцу посреди тейка — когда слова пропадают не по его
+         * вине и сам он этого не увидит (запись заглушена системой). Служба
+         * показывает её тостом. Главный поток.
+         */
+        @Volatile
+        var noticeSink: ((String) -> Unit)? = null
+
+        /**
+         * Сколько ждать, пока идущая запись распознавателя переедет на новый
+         * вход после смены микрофона, мс. Не переехала — распознаватель
+         * поднимается заново уже на новом маршруте.
+         */
+        private const val ROUTE_FOLLOW_MS = 2_500L
+
+        /** Как часто смотреть, куда переехала запись. */
+        private const val ROUTE_POLL_MS = 250L
+
+        /**
+         * Вход у записи уже гарнитурный, а звук по каналу идёт не сразу:
+         * канал поднимается полсекунды-секунду. «Слышу» раньше — соврать.
+         */
+        private const val SCO_SETTLE_MS = 700L
+
+        /** Переподнятый распознаватель сам не вернулся за столько — поднимаем руками. */
+        private const val RELISTEN_GUARD_MS = 3_000L
+
+        /** Кто слушает — смотреть у системы через столько после первого «готов». */
+        private const val INPUT_CHECK_MS = 400L
 
         // Only give up after a long run of pure errors with no speech at all
         // (a genuinely dead mic), never on a transient blip mid-dictation.
@@ -404,6 +468,8 @@ class GoogleSpeechSession(
             hardErrorStreak = 0
             startedAtMs = android.os.SystemClock.elapsedRealtime()
             lastWordsAtMs = startedAtMs
+            health = TakeHealth(startedAtMs)
+            quickSilences = 0
             main.removeCallbacks(idleWatch)
             main.postDelayed(idleWatch, ListenPolicy.IDLE_CHECK_MS)
             onLog(
@@ -437,6 +503,14 @@ class GoogleSpeechSession(
                 btRouteUp = MicRouting.isScoUp(am),
                 callInProgress = inCall,
             )
+            // Что покажет кружок микрофона в пилюле: то, что слушает на деле,
+            // а не то, что выбрано, — выбрана гарнитура, а её нет, значит телефон.
+            headsetMic = when (plan) {
+                MicPlan.Route.HEADSET -> true
+                MicPlan.Route.BUILTIN -> false
+                MicPlan.Route.AS_IS -> inCall && MicRouting.commIsHeadset(am)
+            }
+            publishMic()
             when (plan) {
                 MicPlan.Route.AS_IS -> {
                     // Молчать тут нельзя: «не слышит» и «слышит не то» снаружи
@@ -469,6 +543,10 @@ class GoogleSpeechSession(
             if (!active && recognizer == null) return@onMain
             stopping = true
             active = false
+            // Глухое окно, если шло, кончилось стопом: дальше слушать и не надо.
+            health.close(android.os.SystemClock.elapsedRealtime())
+            routeWatch?.let { main.removeCallbacks(it) }
+            routeWatch = null
             runCatching { recognizer?.stopListening() }
             // Safety net: if no terminal callback lands, deliver anyway.
             main.postDelayed({ if (recognizer != null) finish() }, 2500)
@@ -571,11 +649,13 @@ class GoogleSpeechSession(
             restartPending = false
             if (active) startListening()
         }
-        // Clean segment end: resume on the very next looper message (any delay
-        // here is a window where speech is not being heard). Back off only when
-        // errors are actually piling up.
-        if (errorStreak == 0) main.post(resume)
-        else main.postDelayed(resume, (450L + errorStreak * 150L).coerceAtMost(1500L))
+        // Clean segment end — and plain silence after a session that really
+        // ran — resume on the very next looper message: any delay here is a
+        // window where speech is not being heard (owner, 28.09.2026: «много
+        // пропускает слов»). Back off only on real errors and on silences that
+        // arrive right after a start (a hot loop otherwise) — ListenPolicy.
+        val delay = ListenPolicy.restartDelayMs(hardErrorStreak, quickSilences)
+        if (delay == 0L) main.post(resume) else main.postDelayed(resume, delay)
     }
 
     private fun firstResult(bundle: Bundle?): String? =
@@ -591,6 +671,7 @@ class GoogleSpeechSession(
         errorStreak = 0
         hardErrorStreak = 0
         quickEnds = 0
+        quickSilences = 0
         producedAny = true
         var text = firstResult(bundle)?.trim().orEmpty()
         // The engine sometimes finalizes LESS than the partial the owner already
@@ -654,6 +735,9 @@ class GoogleSpeechSession(
         finished = true
         active = false
         main.removeCallbacks(idleWatch)
+        routeWatch?.let { main.removeCallbacks(it) }
+        routeWatch = null
+        health.close(android.os.SystemClock.elapsedRealtime())
         // Include a partial that never got finalized, so the last utterance is
         // never silently dropped when the session ends mid-phrase.
         val text = liveText().trim()
@@ -670,21 +754,31 @@ class GoogleSpeechSession(
         // разбужена, и глухое окно на старте короче. Не сразу — сперва пусть
         // уляжется destroy только что отработавшего клиента.
         warmMain.postDelayed({ warmUp(context, network) }, WARM_AFTER_TAKE_MS)
-        onLog("finish len=${text.length} segmented=$segmented")
+        onLog("finish len=${text.length} segmented=$segmented · ${health.summary()}")
         onDone(text)
     }
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
-            onLog("ready +${android.os.SystemClock.elapsedRealtime() - startedAtMs} ms")
+            val now = android.os.SystemClock.elapsedRealtime()
+            onLog("ready +${now - startedAtMs} ms")
+            health.ready(now)
             // Fire the "you can speak now" cue once per session, not on every
             // restart (that vibrated repeatedly through a silent lead-in).
-            if (!readyFired) { readyFired = true; onReady() }
+            if (!readyFired) {
+                readyFired = true
+                onReady()
+                // Кто слушает на деле — у системы, а не по нашему заказу: запись
+                // к этому мигу открыта. Одна строка в журнал и в итог тейка.
+                main.postDelayed({ if (active && !stopping) noteInput("старт") }, INPUT_CHECK_MS)
+            }
+            publishMic()
         }
         override fun onBeginningOfSpeech() {
             errorStreak = 0
             hardErrorStreak = 0
             quickEnds = 0
+            quickSilences = 0
             producedAny = true
             onLog("beginSpeech")
         }
@@ -735,6 +829,8 @@ class GoogleSpeechSession(
                 }
                 onLog("endOfSegmentedSession — тишина, слушаю дальше")
                 promoteOrphanedPartial("end of segmented session")
+                health.deaf(now)
+                publishMic()
                 // С паузой, а не следующим сообщением очереди: движку дают
                 // закрыть своё, и петля срывов не крутится на полной скорости.
                 main.postDelayed({ if (active && !stopping) startListening() }, ListenPolicy.RESUME_DELAY_MS)
@@ -750,7 +846,13 @@ class GoogleSpeechSession(
             // In segmented mode the session continues; otherwise this was the end
             // of one utterance and we restart to keep dictating.
             if (segmented) return
-            if (active && !stopping) restartSoon() else finish()
+            if (active && !stopping) {
+                // Фраза кончилась, до нового «готов» движок глух (режим перезапусков).
+                health.deaf(android.os.SystemClock.elapsedRealtime())
+                restartSoon()
+            } else {
+                finish()
+            }
         }
 
         override fun onError(error: Int) {
@@ -760,13 +862,23 @@ class GoogleSpeechSession(
             // and only surrender after a long run of pure errors with no speech
             // at all (a genuinely dead mic).
             if (stopping || !active) { finish(); return }
+            val now = android.os.SystemClock.elapsedRealtime()
+            // Сессия упала — до нового «готов» тейк глух: это окно и считаем.
+            health.error(error)
+            health.deaf(now)
+            publishMic()
             // Words the recognizer refused to finalize (NO_MATCH on rare words)
             // are still in lastPartial - rescue them before anything else.
             promoteOrphanedPartial("error $error")
             errorStreak++
             // Тишина (NO_MATCH / SPEECH_TIMEOUT) к «сдаться» не ведёт: сорок
-            // пауз подряд — это человек думает, а не мёртвый микрофон.
-            if (!ListenPolicy.isSilence(error)) hardErrorStreak++
+            // пауз подряд — это человек думает, а не мёртвый микрофон. И паузы
+            // перед подъёмом не платит, если сессия успела поработать.
+            if (ListenPolicy.isSilence(error)) {
+                quickSilences = ListenPolicy.countCollapse(quickSilences, now - listenAtMs)
+            } else {
+                hardErrorStreak++
+            }
             // Wedged system recognizer (busy/client/disconnected) that never
             // starts: fail fast with an actionable message instead of churning
             // silently. Plain silence (NO_MATCH / SPEECH_TIMEOUT) is NOT this.
@@ -806,6 +918,152 @@ class GoogleSpeechSession(
         }
 
         override fun onEvent(eventType: Int, params: Bundle?) {}
+    }
+
+    // ---- Кто слушает: кружок микрофона в пилюле ----
+
+    /** Кто слушает и слышит ли прямо сейчас — для пилюли, которая только что встала. */
+    fun micState(): MicPlan.Mic = MicPlan.Mic(headset = headsetMic, hearing = health.hearing && !routeMoving)
+
+    private fun publishMic() {
+        val sink = micSink ?: return
+        val state = micState()
+        runCatching { sink(state) }
+    }
+
+    /** Что слушает запись распознавателя на деле — в журнал и в итог тейка. */
+    private fun noteInput(why: String): MicRouting.Heard? {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val heard = MicRouting.recognizerInput(am)
+        if (heard == null) {
+            onLog("$why: кто слушает — системе не видно")
+            return null
+        }
+        health.heard(heard.label)
+        onLog(
+            "$why: слушает ${heard.label}" +
+                if (heard.silenced) " — система отдала микрофон другому, распознаватель слышит тишину" else ""
+        )
+        if (heard.silenced) {
+            noticeSink?.let { runCatching { it("Система отдала микрофон другому приложению — Правка может не слышать") } }
+        }
+        return heard
+    }
+
+    /**
+     * Сменить микрофон посреди тейка — кружок в пилюле рядом с «отправить»
+     * (владелец, 28.09.2026: «регулярно я нажимаю на телефоне, а потом хочу
+     * просто на наушниках продолжить всё говорить и ходить по квартире»).
+     *
+     * Тейк не останавливается и сказанное остаётся на месте. Системному
+     * распознавателю вход не укажешь (см. [start]), зато идущую запись система
+     * переводит сама, когда меняется устройство связи. Переехала ли она на
+     * самом деле, видно по её входу у системы ([followRoute]); не переехала за
+     * [ROUTE_FOLLOW_MS] — распознаватель поднимается заново уже на новом
+     * маршруте. Пока маршрут едет, кружок тусклый: это то окно, где сказанное
+     * может не дойти, и молчать о нём нельзя.
+     *
+     * Возвращает записку для владельца, если менять нельзя или нечего; null —
+     * смена пошла, кружок встанет сам ([micSink]). Главный поток.
+     */
+    fun switchMic(wantHeadset: Boolean): String? {
+        if (!active || stopping || recognizer == null) return "Запись уже кончилась"
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val change = MicPlan.change(
+            wantHeadset = wantHeadset,
+            headsetPresent = MicRouting.headsetMic(am) != null,
+            headsetRouted = MicRouting.commIsHeadset(am),
+            btRouteUp = MicRouting.isScoUp(am),
+            callInProgress = MicRouting.callInProgress(am),
+        )
+        onLog("микрофон посреди тейка: ${if (wantHeadset) "гарнитура" else "телефон"} — $change")
+        when (change) {
+            MicPlan.Change.CALL -> return "Идёт разговор — микрофон не переключаю"
+            MicPlan.Change.NO_HEADSET -> return "Наушников не видно — слушает телефон"
+            MicPlan.Change.NOTHING -> Unit
+            MicPlan.Change.HEADSET -> {
+                if (!MicRouting.toHeadset(am, onLog)) return "Наушники не отозвались — слушает телефон"
+                routeOurs = true
+            }
+            MicPlan.Change.BUILTIN -> {
+                if (MicRouting.forceBuiltin(am, onLog)) routeOurs = true
+            }
+        }
+        headsetMic = wantHeadset
+        routeMoving = true
+        publishMic()
+        followRoute(am, wantHeadset, android.os.SystemClock.elapsedRealtime(), relistened = false)
+        return null
+    }
+
+    /**
+     * Смотреть, куда переехала запись распознавателя, пока не встанет туда,
+     * куда просили; не встала — поднять распознаватель заново (один раз) и
+     * смотреть снова. Записи не видно вовсе — верим системе: ни перезапуска,
+     * ни вечного тусклого кружка.
+     */
+    private fun followRoute(am: AudioManager, wantHeadset: Boolean, sinceMs: Long, relistened: Boolean) {
+        routeWatch?.let { main.removeCallbacks(it) }
+        val step = object : Runnable {
+            override fun run() {
+                if (!active || stopping || recognizer == null) return
+                val now = android.os.SystemClock.elapsedRealtime()
+                val heard = MicRouting.recognizerInput(am)
+                val waited = now - sinceMs
+                val arrived = heard != null && heard.headset == wantHeadset
+                val settleMs = if (wantHeadset) SCO_SETTLE_MS else 0L
+                when {
+                    arrived && waited >= settleMs -> settleRoute(heard, waited)
+                    waited < ROUTE_FOLLOW_MS -> main.postDelayed(this, ROUTE_POLL_MS)
+                    heard == null -> settleRoute(null, waited)
+                    heard.headset == wantHeadset -> settleRoute(heard, waited)
+                    !relistened -> {
+                        onLog("запись так и слушает ${heard.label} — поднимаю распознаватель на новом маршруте")
+                        relisten()
+                        followRoute(am, wantHeadset, now, relistened = true)
+                    }
+                    else -> {
+                        onLog("и после подъёма слушает ${heard.label} — оставляю как есть")
+                        settleRoute(heard, waited)
+                    }
+                }
+            }
+        }
+        routeWatch = step
+        main.postDelayed(step, ROUTE_POLL_MS)
+    }
+
+    private fun settleRoute(heard: MicRouting.Heard?, waitedMs: Long) {
+        routeWatch = null
+        routeMoving = false
+        if (heard != null) {
+            health.heard(heard.label)
+            onLog("микрофон встал за $waitedMs мс: слушает ${heard.label}")
+        } else {
+            onLog("микрофон: кто слушает — системе не видно, верю маршруту")
+        }
+        publishMic()
+    }
+
+    /**
+     * Поднять распознаватель заново посреди тейка, не теряя сказанного:
+     * stopListening — движок дописывает то, что слышал, и сам сообщает о
+     * конце, а обычная дорога тейка (конец сессии, ошибка) поднимает его
+     * снова. Не поднял за [RELISTEN_GUARD_MS] — поднимаем руками.
+     */
+    private fun relisten() {
+        val r = recognizer ?: return
+        health.deaf(android.os.SystemClock.elapsedRealtime())
+        publishMic()
+        val at = listenAtMs
+        runCatching { r.stopListening() }
+        main.postDelayed({
+            if (active && !stopping && recognizer != null && listenAtMs == at) {
+                onLog("распознаватель сам не поднялся — поднимаю")
+                promoteOrphanedPartial("relisten guard")
+                startListening()
+            }
+        }, RELISTEN_GUARD_MS)
     }
 
     private fun errorText(code: Int): String = when (code) {

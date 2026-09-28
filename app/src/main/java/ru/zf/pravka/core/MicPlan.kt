@@ -64,4 +64,62 @@ object MicPlan {
      */
     fun waitsForRoute(route: Route, changed: Boolean): Boolean =
         changed && route != Route.AS_IS
+
+    // ---- Смена микрофона посреди тейка ----
+    //
+    // Кружок в пилюле рядом с «отправить» (владелец, 28.09.2026: «регулярно я
+    // нажимаю на телефоне, а потом хочу просто на наушниках продолжить всё
+    // говорить и ходить по квартире»). Начал у телефона, надел наушники и
+    // ушёл — а слушает по-прежнему телефон на столе, и слова пропадают.
+    // Тейк при этом не останавливается: Android сам переводит идущую запись
+    // на новый вход, когда меняется устройство связи; что она переехала,
+    // сверяется по записи распознавателя у системы (`MicRouting.recognizerInput`).
+
+    enum class Change {
+        /** Перевести связь на гарнитуру (поднять её канал). */
+        HEADSET,
+
+        /** Забрать вход телефону: связь смотрит на гарнитуру — свою или чужую. */
+        BUILTIN,
+
+        /** Уже слушает то, что просят, — трогать нечего. */
+        NOTHING,
+
+        /** Идёт разговор — маршрут не трогаем, как и на старте. */
+        CALL,
+
+        /** Гарнитуры среди входов нет — остаётся телефон. */
+        NO_HEADSET,
+    }
+
+    /**
+     * @param wantHeadset на что переключают
+     * @param headsetPresent гарнитура видна среди входов
+     * @param headsetRouted устройство связи — именно гарнитура (не «канал
+     *   поднят кем-то»: машина могла держать канал, а мы — забрать вход
+     *   телефону, и тогда слушает телефон)
+     * @param btRouteUp канал гарнитуры поднят кем угодно
+     * @param callInProgress идёт разговор
+     */
+    fun change(
+        wantHeadset: Boolean,
+        headsetPresent: Boolean,
+        headsetRouted: Boolean,
+        btRouteUp: Boolean,
+        callInProgress: Boolean,
+    ): Change = when {
+        callInProgress -> Change.CALL
+        wantHeadset && !headsetPresent -> Change.NO_HEADSET
+        wantHeadset -> if (headsetRouted) Change.NOTHING else Change.HEADSET
+        headsetRouted || btRouteUp -> Change.BUILTIN
+        else -> Change.NOTHING
+    }
+
+    /**
+     * Что показывает кружок микрофона в пилюле: кто слушает этот тейк и
+     * слышит ли прямо сейчас. [hearing] ложно, пока движок ещё не отозвался,
+     * поднимается после ошибки или маршрут переезжает, — ровно те окна, где
+     * сказанное пропадает (`core/TakeHealth.kt`).
+     */
+    data class Mic(val headset: Boolean, val hearing: Boolean)
 }

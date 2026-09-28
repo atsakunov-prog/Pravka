@@ -67,4 +67,20 @@ class ListenPolicyTest {
         assertFalse(ListenPolicy.resumeAfterSessionEnd(true, true, 0, 1_000))
         assertFalse(ListenPolicy.resumeAfterSessionEnd(false, false, 0, 1_000))
     }
+
+    @Test
+    fun `тишина после настоящей сессии - слушаем сразу, без паузы`() {
+        // Владелец замолчал и сейчас продолжит: каждая миллисекунда паузы —
+        // сказанное в никуда («много пропускает слов», 28.09.2026).
+        assertEquals(0L, ListenPolicy.restartDelayMs(hardErrors = 0, quickSilences = 0))
+    }
+
+    @Test
+    fun `настоящие ошибки и мгновенные тишины - с паузой, растущей до полутора секунд`() {
+        assertEquals(600L, ListenPolicy.restartDelayMs(hardErrors = 1, quickSilences = 0))
+        // Движок отвечает «не разобрал» тут же после старта — горячую петлю не крутим.
+        assertEquals(600L, ListenPolicy.restartDelayMs(hardErrors = 0, quickSilences = 1))
+        assertEquals(900L, ListenPolicy.restartDelayMs(hardErrors = 2, quickSilences = 1))
+        assertEquals(1_500L, ListenPolicy.restartDelayMs(hardErrors = 40, quickSilences = 0))
+    }
 }

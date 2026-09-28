@@ -50,6 +50,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.core.ProofreadMode
+import ru.zf.pravka.core.TakeHealth
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.TranscriptionLog
 import ru.zf.pravka.data.dayStartMs
@@ -438,6 +439,21 @@ private fun TranscriptCard(entry: TranscriptionLog.Entry, ruLoc: Locale, onCopy:
             entry.error?.let {
                 Spacer(Modifier.height(4.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            // Глухие окна, долгий старт, гарнитура (28.09.2026, владелец: «много
+            // пропускает слов… хотя вроде бы говорил нормально»): пропало ли
+            // слово в распознавании или его вовсе никто не слушал.
+            TakeHealth.cardLine(entry.startupMs, entry.deafMs, entry.deafGaps, entry.mic, ruLoc)?.let { line ->
+                Spacer(Modifier.height(4.dp))
+                val withErrors = if (entry.errors.isNotEmpty() && entry.deafMs >= TakeHealth.SHOW_DEAF_MS) {
+                    "$line · ошибки ${entry.errors}"
+                } else line
+                Text(
+                    withErrors,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (entry.deafMs >= TakeHealth.SHOW_DEAF_MS) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (entry.text.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))

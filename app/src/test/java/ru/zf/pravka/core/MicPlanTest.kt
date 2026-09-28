@@ -69,4 +69,66 @@ class MicPlanTest {
         assertFalse(MicPlan.waitsForRoute(MicPlan.Route.BUILTIN, changed = false))
         assertFalse(MicPlan.waitsForRoute(MicPlan.Route.AS_IS, changed = true))
     }
+
+    // ---- Кружок микрофона в пилюле: смена посреди тейка ----
+
+    @Test
+    fun `начал у телефона, надел наушники - переводим на гарнитуру`() {
+        assertEquals(
+            MicPlan.Change.HEADSET,
+            MicPlan.change(wantHeadset = true, headsetPresent = true, headsetRouted = false, btRouteUp = false, callInProgress = false),
+        )
+        // Машина держала канал, а мы забрали вход телефону: канал «поднят»,
+        // но слушает телефон — переводить на гарнитуру всё равно надо.
+        assertEquals(
+            MicPlan.Change.HEADSET,
+            MicPlan.change(wantHeadset = true, headsetPresent = true, headsetRouted = false, btRouteUp = true, callInProgress = false),
+        )
+    }
+
+    @Test
+    fun `наушников нет - остаётся телефон, и об этом говорится`() {
+        assertEquals(
+            MicPlan.Change.NO_HEADSET,
+            MicPlan.change(wantHeadset = true, headsetPresent = false, headsetRouted = false, btRouteUp = false, callInProgress = false),
+        )
+    }
+
+    @Test
+    fun `обратно на телефон - забираем вход, если связь смотрит на гарнитуру`() {
+        assertEquals(
+            MicPlan.Change.BUILTIN,
+            MicPlan.change(wantHeadset = false, headsetPresent = true, headsetRouted = true, btRouteUp = true, callInProgress = false),
+        )
+        // Канал держит машина, связь не наша — вход всё равно забираем себе.
+        assertEquals(
+            MicPlan.Change.BUILTIN,
+            MicPlan.change(wantHeadset = false, headsetPresent = true, headsetRouted = false, btRouteUp = true, callInProgress = false),
+        )
+        // Канал не поднят — слушает и так телефон.
+        assertEquals(
+            MicPlan.Change.NOTHING,
+            MicPlan.change(wantHeadset = false, headsetPresent = true, headsetRouted = false, btRouteUp = false, callInProgress = false),
+        )
+    }
+
+    @Test
+    fun `уже на гарнитуре - трогать нечего`() {
+        assertEquals(
+            MicPlan.Change.NOTHING,
+            MicPlan.change(wantHeadset = true, headsetPresent = true, headsetRouted = true, btRouteUp = true, callInProgress = false),
+        )
+    }
+
+    @Test
+    fun `посреди разговора микрофон не переключаем`() {
+        assertEquals(
+            MicPlan.Change.CALL,
+            MicPlan.change(wantHeadset = true, headsetPresent = true, headsetRouted = false, btRouteUp = false, callInProgress = true),
+        )
+        assertEquals(
+            MicPlan.Change.CALL,
+            MicPlan.change(wantHeadset = false, headsetPresent = true, headsetRouted = true, btRouteUp = true, callInProgress = true),
+        )
+    }
 }

@@ -7,6 +7,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import org.json.JSONObject
+import ru.zf.pravka.core.TakeHealth
 
 // Dedicated on-device log for dictation transcriptions, kept separate from
 // the CLEAN proofread history (history.jsonl). Two reasons the owner wanted
@@ -35,10 +36,22 @@ class TranscriptionLog(private val context: Context) {
         transcribeMs: Long,
         text: String,
         error: String?,
+        /**
+         * Сколько тейк был глух и кто слушал (`core/TakeHealth.kt`, 28.09.2026):
+         * по этим полям «пропустил слова» отличается от «не слушал вовсе».
+         * Есть только у живых тейков Google.
+         */
+        health: TakeHealth? = null,
     ) {
         // Queued off the main thread: this runs on the stop tap, right before the
         // text has to land in the field.
         val at = System.currentTimeMillis()
+        // Снимок здесь, на потоке тейка: запись уходит в очередь диска.
+        val startupMs = health?.startupMs
+        val deafMs = health?.deafMs
+        val deafGaps = health?.gaps
+        val errors = health?.errorsLine()
+        val mic = health?.mic
         DiskWriter.post {
             if (file.exists() && file.length() > MAX_BYTES) {
                 val backup = File(DataRoot.dir(context), "$FILE_NAME.1")
@@ -55,6 +68,11 @@ class TranscriptionLog(private val context: Context) {
                 put("ok", error == null)
                 put("text", text)
                 if (error != null) put("error", error)
+                if (startupMs != null) put("startup_ms", startupMs)
+                if (deafMs != null) put("deaf_ms", deafMs)
+                if (deafGaps != null) put("deaf_gaps", deafGaps)
+                if (!errors.isNullOrEmpty()) put("errors", errors)
+                if (mic != null) put("mic", mic)
             }
             file.appendText(entry.toString() + "\n")
         }
@@ -84,6 +102,14 @@ class TranscriptionLog(private val context: Context) {
         val ok: Boolean,
         val text: String,
         val error: String?,
+        /** Тап → «готов», мс; −1 — не записано (старая запись или Whisper). */
+        val startupMs: Long = -1,
+        val deafMs: Long = 0,
+        val deafGaps: Int = 0,
+        /** Коды ошибок распознавателя: «7×3, 2×1». */
+        val errors: String = "",
+        /** Кто слушал: «телефон», «гарнитура «…»», при смене — через стрелку. */
+        val mic: String? = null,
     ) {
         // >1 means slower than realtime, <1 faster. 0 when audio length unknown.
         val realtimeFactor: Double get() = if (audioMs > 0) transcribeMs.toDouble() / audioMs else 0.0
@@ -109,6 +135,11 @@ class TranscriptionLog(private val context: Context) {
                             ok = o.optBoolean("ok", true),
                             text = o.optString("text"),
                             error = if (o.has("error")) o.optString("error") else null,
+                            startupMs = o.optLong("startup_ms", -1),
+                            deafMs = o.optLong("deaf_ms", 0),
+                            deafGaps = o.optInt("deaf_gaps", 0),
+                            errors = if (o.has("errors")) o.optString("errors") else "",
+                            mic = if (o.has("mic")) o.optString("mic") else null,
                         )
                     }.getOrNull()
                 }
@@ -142,6 +173,10 @@ class TranscriptionLog(private val context: Context) {
                     put("transcribe_ms", e.transcribeMs); put("chars", e.chars); put("words", e.words)
                     put("ok", e.ok); put("text", e.text)
                     if (e.error != null) put("error", e.error)
+                    if (e.startupMs >= 0) put("startup_ms", e.startupMs)
+                    if (e.startupMs >= 0) { put("deaf_ms", e.deafMs); put("deaf_gaps", e.deafGaps) }
+                    if (e.errors.isNotEmpty()) put("errors", e.errors)
+                    if (e.mic != null) put("mic", e.mic)
                 }
                 w.write(o.toString()); w.write("\n")
             }
@@ -156,7 +191,7 @@ class TranscriptionLog(private val context: Context) {
      */
     fun shareMetricsCsvIntent(fromMs: Long = 0L, toMs: Long = Long.MAX_VALUE): Intent {
         val csv = buildString {
-            append("ts,engine,audio_sec,transcribe_sec,chars,words,chars_per_sec,realtime_factor,ok\n")
+            append("ts,engine,audio_sec,transcribe_sec,chars,words,chars_per_sec,realtime_factor,ok,startup_ms,deaf_ms,deaf_gaps\n")
             // Oldest-first in the export so a spreadsheet reads chronologically.
             val rows = if (fromMs == 0L && toMs == Long.MAX_VALUE) readLast(10_000) else readRange(fromMs, toMs)
             for (e in rows.asReversed()) {
@@ -171,7 +206,14 @@ class TranscriptionLog(private val context: Context) {
                 append(e.words).append(',')
                 append(String.format(Locale.US, "%.1f", charsPerSec)).append(',')
                 append(String.format(Locale.US, "%.2f", e.realtimeFactor)).append(',')
-                append(e.ok).append('\n')
+                append(e.ok).append(',')
+                // Пусто — запись до 28.09.2026 или Whisper: глухоту тогда не считали.
+                if (e.startupMs >= 0) append(e.startupMs)
+                append(',')
+                if (e.startupMs >= 0) append(e.deafMs)
+                append(',')
+                if (e.startupMs >= 0) append(e.deafGaps)
+                append('\n')
             }
         }
         val out = File(context.cacheDir, "pravka-transcription-metrics.csv")

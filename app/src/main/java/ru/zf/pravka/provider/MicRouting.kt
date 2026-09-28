@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.MediaRecorder
 import android.os.Build
 import android.os.Handler
 import java.util.concurrent.Executor
@@ -59,6 +60,85 @@ object MicRouting {
             am.isBluetoothScoOn
         }
     }.getOrDefault(false)
+
+    /**
+     * Устройство связи — именно гарнитура. Строже [isScoUp]: канал может
+     * держать машина, а вход мы забрали телефону ([forceBuiltin]) — тогда
+     * канал «поднят», но слушает телефон.
+     */
+    fun commIsHeadset(am: AudioManager): Boolean = runCatching {
+        if (Build.VERSION.SDK_INT >= 31) {
+            am.communicationDevice?.let { isHeadset(it) } == true
+        } else {
+            @Suppress("DEPRECATION")
+            am.isBluetoothScoOn
+        }
+    }.getOrDefault(false)
+
+    /**
+     * Перевести связь на гарнитуру посреди тейка (кружок микрофона в пилюле).
+     * В отличие от [raise], не отступает, если канал уже кем-то поднят: мы
+     * могли сами забрать вход телефону, и тогда просить гарнитуру надо заново.
+     * Возвращает true, если заявку приняли, — тогда на стопе [drop].
+     */
+    fun toHeadset(am: AudioManager, log: (String) -> Unit): Boolean = runCatching {
+        if (Build.VERSION.SDK_INT >= 31) {
+            val dev = am.availableCommunicationDevices.firstOrNull { isHeadset(it) }
+            if (dev == null) {
+                log("гарнитуры среди устройств связи нет — остаётся телефон")
+                false
+            } else {
+                val ok = am.setCommunicationDevice(dev)
+                log(if (ok) "маршрут: связь переведена на «${dev.productName}»" else "маршрут: система отказала перевести на гарнитуру")
+                ok
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            am.startBluetoothSco()
+            log("BT SCO: подняли канал (startBluetoothSco)")
+            true
+        }
+    }.getOrElse {
+        log("на гарнитуру не перевелось: ${it.javaClass.simpleName}: ${it.message}")
+        false
+    }
+
+    /** Кого слушает распознаватель: вход его записи, как его видит система. */
+    data class Heard(val headset: Boolean, val label: String, val silenced: Boolean)
+
+    /**
+     * Что на самом деле слушает идущая запись распознавателя — не то, что мы
+     * заказали, а то, что система ей отдала. Запись чужая (служба Google), но
+     * её вход и отметка «заглушена» видны любому приложению в
+     * `activeRecordingConfigurations` — без имени владельца, и оно здесь не
+     * нужно: пока идёт наш тейк, микрофон пишет ровно он. Горячее слово
+     * («Окей, Google») и служебные источники отсеиваются.
+     *
+     * «Заглушена» — система отдала микрофон другому (звонок, чужая запись
+     * поверх): распознаватель получает тишину, и слова пропадают целиком,
+     * хотя кнопка красная и всё выглядит живым.
+     *
+     * null — записи не видно (движок ещё не открыл микрофон или уже закрыл).
+     */
+    fun recognizerInput(am: AudioManager): Heard? = runCatching {
+        val live = am.activeRecordingConfigurations.filter { it.clientAudioSource < SYSTEM_SOURCES }
+        val c = live.firstOrNull { it.clientAudioSource == MediaRecorder.AudioSource.VOICE_RECOGNITION }
+            ?: live.firstOrNull()
+            ?: return@runCatching null
+        val silenced = Build.VERSION.SDK_INT >= 29 && c.isClientSilenced
+        val dev = c.audioDevice
+        val headset = dev != null && isHeadset(dev)
+        val label = when {
+            dev == null -> "вход не виден"
+            headset -> "гарнитура «${dev.productName}»"
+            dev.type == AudioDeviceInfo.TYPE_BUILTIN_MIC -> "телефон"
+            else -> dev.productName.toString().ifBlank { "вход ${dev.type}" }
+        }
+        Heard(headset, if (silenced) "$label (заглушена)" else label, silenced)
+    }.getOrNull()
+
+    /** Источники от этого номера — служебные (горячее слово, эхо, тюнер), не диктовка. */
+    private const val SYSTEM_SOURCES = 1997
 
     /** Идёт разговор: в маршрут не лезем — оборвём звук собеседнику. */
     fun callInProgress(am: AudioManager): Boolean = runCatching {

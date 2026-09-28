@@ -18,8 +18,10 @@ import java.io.File
 import kotlin.concurrent.thread
 import ru.zf.pravka.R
 import ru.zf.pravka.core.HeadsetPress
+import ru.zf.pravka.core.MicPlan
 import ru.zf.pravka.data.Recordings
 import ru.zf.pravka.data.WavFile
+import ru.zf.pravka.provider.GoogleSpeechSession
 import ru.zf.pravka.provider.MicRouting
 
 // Records the microphone to a WAV file while the owner moves between apps
@@ -62,6 +64,64 @@ class DictationService : Service() {
          * следующего тапа пальцем. Время — `SystemClock.elapsedRealtime`.
          */
         @Volatile var headsetUntil: Long = 0L
+
+        /** Живая служба записи — для кружка микрофона в пилюле ([switchMic]). */
+        @Volatile var instance: DictationService? = null
+            private set
+    }
+
+    /** Эта запись слушает гарнитуру — решено на старте, меняет [switchMic]. */
+    @Volatile var headsetMic = false
+        private set
+
+    /** Кто слушает запись Whisper — для пилюли: своя запись слышит сразу. */
+    fun micState(): MicPlan.Mic = MicPlan.Mic(headset = headsetMic, hearing = true)
+
+    private fun publishMic() {
+        GoogleSpeechSession.micSink?.let { sink -> runCatching { sink(micState()) } }
+    }
+
+    /**
+     * Сменить микрофон посреди записи — кружок в пилюле (владелец,
+     * 28.09.2026: «нажимаю на телефоне, а потом хочу на наушниках продолжить»).
+     * Своей записи вход указывается прямо (`setPreferredDevice`), и
+     * AudioRecord переезжает на ходу; канал гарнитуры поднимаем, если его нет,
+     * и опускаем, если поднимали мы. Записка — если менять нельзя; null — готово.
+     */
+    fun switchMic(wantHeadset: Boolean): String? {
+        val recorder = record ?: return "Запись уже кончилась"
+        val app = application as? ru.zf.pravka.PravkaApp
+        val log = { line: String -> app?.eventLog?.add("диктовка: $line") ?: Unit }
+        val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        val headset = MicRouting.headsetMic(am)
+        val change = MicPlan.change(
+            wantHeadset = wantHeadset,
+            headsetPresent = headset != null,
+            headsetRouted = MicRouting.commIsHeadset(am),
+            btRouteUp = MicRouting.isScoUp(am),
+            callInProgress = MicRouting.callInProgress(am),
+        )
+        log("микрофон посреди записи: ${if (wantHeadset) "гарнитура" else "телефон"} — $change")
+        when (change) {
+            MicPlan.Change.CALL -> return "Идёт разговор — микрофон не переключаю"
+            MicPlan.Change.NO_HEADSET -> return "Наушников не видно — слушает телефон"
+            else -> Unit
+        }
+        runCatching {
+            if (wantHeadset && headset != null) {
+                if (!scoRaised) scoRaised = MicRouting.raise(am, log)
+                recorder.setPreferredDevice(headset)
+            } else {
+                if (scoRaised) {
+                    scoRaised = false
+                    MicRouting.drop(am, log)
+                }
+                MicRouting.builtinMic(am)?.let { recorder.setPreferredDevice(it) }
+            }
+        }.onFailure { return "Микрофон не переключился: ${it.javaClass.simpleName}" }
+        headsetMic = wantHeadset
+        publishMic()
+        return null
     }
 
     private var record: AudioRecord? = null
@@ -91,6 +151,11 @@ class DictationService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -174,6 +239,7 @@ class DictationService : Service() {
         headsetUntil = 0L
         val phoneOnly = HeadsetPress.phoneMic(ownerChosePhone = app?.phoneMicOnly != false, fromHeadset = fromHeadset)
         if (fromHeadset) log("запись с кнопки гарнитуры — слушаем гарнитуру")
+        headsetMic = false
         runCatching {
             val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
             val headset = if (!phoneOnly) MicRouting.headsetMic(am) else null
@@ -183,6 +249,7 @@ class DictationService : Service() {
                 headset != null -> {
                     scoRaised = MicRouting.raise(am) { log(it) }
                     recorder.setPreferredDevice(headset)
+                    headsetMic = true
                 }
                 else -> {
                     log("выбрана гарнитура, но её нет среди входов — слушаем телефон")
@@ -197,6 +264,7 @@ class DictationService : Service() {
         recording = true
 
         recorder.startRecording()
+        publishMic()
         worker = thread(name = "pravka-mic") {
             val buf = ByteArray(minBuf)
             // The write is guarded: if stop() outwaits the 500ms join while
@@ -247,6 +315,7 @@ class DictationService : Service() {
         if (active) stop()
         releaseWakeLock()
         keepScreen(false)
+        if (instance === this) instance = null
         super.onDestroy()
     }
 

@@ -119,6 +119,11 @@ class FloatingButtonController(
         if (recording) pill.setLevel(level)
     }
 
+    /** Кто слушает и слышит ли — кружок микрофона в пилюле, пока идёт запись. */
+    override fun setMic(state: ru.zf.pravka.core.MicPlan.Mic) {
+        if (recording) pill.setMic(state)
+    }
+
     /** Запись кончилась — волна в пилюле снова значок, кнопка в своём размере. */
     private fun restPulse() {
         pill.rest()

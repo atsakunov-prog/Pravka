@@ -40,8 +40,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.zf.pravka.R
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.MicLevel
+import ru.zf.pravka.core.MicPlan
 import ru.zf.pravka.core.PillGeometry
 import ru.zf.pravka.core.PillLook
 import ru.zf.pravka.ui.Haptics
@@ -77,6 +79,15 @@ import ru.zf.pravka.ui.Haptics
  *    едет за пальцем сразу, как он поехал, или после удержания, и остаётся
  *    там до конца показа; следующий показ — снова на своём месте. Запоминать
  *    не нужно: «там же» — это место, а не последнее касание;
+ *  - **перед кружком — микрофон** (28.09.2026; владелец: «во всех плашках
+ *    сделаем такой переключатель рядом с „Отправить“, что он слушает:
+ *    микрофон телефона или микрофон наушников… нажимаю на телефоне, а потом
+ *    хочу просто на наушниках продолжить… можно даже пошире саму плашку
+ *    сделать»): телефон или наушники нашим штрихом, тап — идущая запись
+ *    переезжает на другой микрофон, не останавливаясь, и выбор запоминается
+ *    (`PravkaAccessibilityService.switchLiveMic`). Тусклый — движок сейчас
+ *    не слышит: ещё не отозвался, поднимается после ошибки, маршрут едет.
+ *    Пилюля за запись шире ровно на него, остальное место строки прежнее;
  *  - **посередине — подсказка** «Саша, слушаю» (`core/PillHint.kt`), не
  *    бегущая, а стоящая по центру, как «Ask Gemini»; первое слово её гасит.
  *  - **набор текстом — в ней же** ([edit]). У «З», «Д», «₽», «Е» тап
@@ -179,7 +190,82 @@ class DictationPill(
         set(value) {
             field = value
             orb?.isClickable = value || editing
+            if (value) {
+                // Запись пошла: кто её слушает — у службы, сессия к этому мигу уже заведена.
+                mic = service.liveMicState()
+                if (visible && !micRoom && mic != null) {
+                    micRoom = true
+                    relayout()
+                }
+            } else {
+                micSwitching = false
+            }
+            applyMic()
         }
+
+    /** Кружок микрофона перед «отправить»: кто слушает, тап — другой микрофон. */
+    private var micOrb: MicOrb? = null
+
+    /** Что показывает кружок микрофона; null — записи нет. */
+    private var mic: MicPlan.Mic? = null
+
+    /**
+     * Этот показ держит место под кружок микрофона. Решается на показе, до
+     * конца показа не снимается: после «отправить» кружок гаснет, а ширина
+     * пилюли не прыгает под бегущей строкой.
+     */
+    private var micRoom = false
+
+    /** Владелец только что тапнул кружок: маршрут встанет — отозваться вибрацией «слышу». */
+    private var micSwitching = false
+
+    /**
+     * Кто слушает и слышит ли прямо сейчас — от сессии через кнопку-хозяйку
+     * (`GoogleSpeechSession.micSink`). Смена, которую заказал владелец,
+     * встала — вибрация, как на первом «слышу»: теперь можно говорить в наушники.
+     */
+    fun setMic(state: MicPlan.Mic) {
+        val was = mic
+        mic = state
+        if (micSwitching && state.hearing && was?.hearing == false) {
+            micSwitching = false
+            Haptics.success(service)
+        }
+        if (visible && !micRoom && canSend) {
+            micRoom = true
+            relayout()
+        }
+        applyMic()
+    }
+
+    private fun micTap() {
+        if (!canSend || editing) return
+        val state = service.switchLiveMic() ?: return
+        Haptics.tick(service)
+        mic = state
+        micSwitching = !state.hearing
+        applyMic()
+    }
+
+    /**
+     * Кружок микрофона: живой, пока идёт запись; после «отправить» остаётся на
+     * месте тусклым и глухим к тапу — запись кончилась, слушать некому, и
+     * дыры в пилюле нет. Итог и набор — без него.
+     */
+    private fun applyMic() {
+        val m = micOrb ?: return
+        val state = mic
+        val own = state != null && !editing && resultReq == null
+        val live = own && canSend
+        m.visibility = if (live || (own && micRoom)) View.VISIBLE else View.GONE
+        m.isClickable = live
+        if (state != null) m.set(state.headset, hearing = live && state.hearing)
+    }
+
+    /** На сколько пилюля шире, пока держит место под кружок микрофона. */
+    private fun micExtra(): Int = if (micRoom) orbPx() + dp(4) else 0
+
+    private fun orbPx(): Int = dp(PillLook.HEIGHT_DP) - dp(14)
 
     /** Отмена этой записи — ✕ слева. Нет её — слева знак режима. */
     var onCancel: (() -> Unit)? = null
@@ -379,6 +465,7 @@ class DictationPill(
         clearResult()
         val already = visible
         visible = true
+        if (!already) micRoom = canSend && mic != null
         lastText = ""
         lastAt = 0L
         pendingText = null
@@ -536,7 +623,7 @@ class DictationPill(
 
     private fun create() {
         val pillH = dp(PillLook.HEIGHT_DP)
-        val orbSize = pillH - dp(14)
+        val orbSize = orbPx()
         val orbEnd = dp(7)
         val s = PillSkin(accent, orbCentreFromRight = orbEnd + orbSize / 2f).apply {
             setDensity(service.cachedTickerDensity)
@@ -573,6 +660,13 @@ class DictationPill(
             isClickable = true
         }
         row.addView(ao, LinearLayout.LayoutParams(orbSize, orbSize).apply { marginStart = dp(4) })
+        // Микрофон — перед «отправить»: кто слушает запись, тап — другой.
+        val mo = MicOrb(service).apply {
+            contentDescription = "Кто слушает: телефон или наушники"
+            setOnClickListener { micTap() }
+            visibility = View.GONE
+        }
+        row.addView(mo, LinearLayout.LayoutParams(orbSize, orbSize).apply { marginStart = dp(4) })
         val o = VoiceOrb(service, PillLook.orb(accent)).apply {
             setLevel(level)
             contentDescription = "Отправить"
@@ -606,8 +700,10 @@ class DictationPill(
         ticker = tv
         orb = o
         askOrb = ao
+        micOrb = mo
         skin = s
         params = p
+        applyMic()
         pendingHint?.let { tv.setHint(it) }
         pendingText?.let { tv.setTickerText(it) }
         pendingHint = null
@@ -639,6 +735,7 @@ class DictationPill(
             ticker = null
             orb = null
             askOrb = null
+            micOrb = null
             skin = null
             params = null
             visible = false
@@ -694,6 +791,7 @@ class DictationPill(
         }
         editing = true
         applyWait()
+        applyMic()
         tv.visibility = View.GONE
         e.visibility = View.VISIBLE
         e.setText(req.prefill)
@@ -741,6 +839,7 @@ class DictationPill(
         editing = false
         editReq = null
         applyWait()
+        applyMic()
         e?.visibility = View.GONE
         ticker?.visibility = View.VISIBLE
         lead?.cancel = onCancel != null
@@ -870,6 +969,7 @@ class DictationPill(
         }
         tv.visibility = View.GONE
         editor?.visibility = View.GONE
+        applyMic()
         sv.visibility = View.VISIBLE
         sv.text = req.summary
         lead?.cancel = false
@@ -1047,6 +1147,7 @@ class DictationPill(
         }
         lead?.cancel = onCancel != null
         applyWait()
+        applyMic()
         root?.alpha = 1f
     }
 
@@ -1213,7 +1314,9 @@ class DictationPill(
     private fun spotFor(): PillGeometry.Spot? {
         val (w, h) = screen()
         val pillH = dp(PillLook.HEIGHT_DP)
-        val want = dp(service.cachedTickerWidthDp)
+        // Кружок микрофона — сверх ширины из настроек: строке место прежнее
+        // (владелец: «можно даже пошире саму плашку сделать»).
+        val want = dp(service.cachedTickerWidthDp) + micExtra()
         val side = dp(PillLook.SIDE_DP)
         val gap = dp(PillLook.GAP_DP)
         val minW = dp(PillLook.MIN_WIDTH_DP)
@@ -1494,6 +1597,7 @@ class DictationPill(
         ticker = null
         orb = null
         askOrb = null
+        micOrb = null
         skin = null
         params = null
         lastText = ""
@@ -1702,6 +1806,62 @@ class DictationPill(
     }
 
     // ---- Кружок голоса: круг цвета режима и волна из трёх полосок ----
+
+    /**
+     * Кружок микрофона: стекло потише кружка «отправить» — главное действие
+     * в пилюле остаётся одно, — и в нём телефон или наушники нашим штрихом
+     * (те же значки, что у кружка микрофона в веере шестерёнки). Тусклый —
+     * движок сейчас не слышит, и сказанное в этот миг может не дойти.
+     */
+    private class MicOrb(context: Context) : View(context) {
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = DiskLook.white(0.14f) }
+        private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = DiskLook.white(0.24f)
+        }
+        private val pressedShade = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = DiskLook.black(0.22f) }
+        private val phone = context.getDrawable(R.drawable.ic_mic_phone)?.mutate()
+        private val headset = context.getDrawable(R.drawable.ic_mic_headset)?.mutate()
+        private var isHeadset = false
+        private var hearing = true
+
+        fun set(headset: Boolean, hearing: Boolean) {
+            if (isHeadset == headset && this.hearing == hearing) return
+            isHeadset = headset
+            this.hearing = hearing
+            alpha = if (hearing) 1f else DEAF_ALPHA
+            contentDescription = if (headset) "Слушают наушники — тап: телефон" else "Слушает телефон — тап: наушники"
+            invalidate()
+        }
+
+        override fun drawableStateChanged() {
+            super.drawableStateChanged()
+            invalidate()
+        }
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            rim.strokeWidth = minOf(w, h) * 0.03f
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val r = minOf(width, height) / 2f
+            val cx = width / 2f
+            val cy = height / 2f
+            canvas.drawCircle(cx, cy, r, fill)
+            canvas.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
+            if (isPressed) canvas.drawCircle(cx, cy, r, pressedShade)
+            val g = (if (isHeadset) headset else phone) ?: return
+            val half = (r * 0.52f).toInt()
+            g.setBounds((cx - half).toInt(), (cy - half).toInt(), (cx + half).toInt(), (cy + half).toInt())
+            g.draw(canvas)
+        }
+
+        private companion object {
+            /** Не слышит — кружок притушен, но значок читается. */
+            const val DEAF_ALPHA = 0.4f
+        }
+    }
 
     private class VoiceOrb(context: Context, color: Int) : View(context) {
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
