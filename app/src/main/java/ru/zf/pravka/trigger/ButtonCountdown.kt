@@ -45,7 +45,7 @@ class ButtonCountdown(private val context: Context) {
      * искры и секунды в ней ([DictationPill.countdown]). Зовётся на каждое
      * решение отсчёта; кто слушает, сам не перерисовывается без перемены.
      */
-    var onLabel: ((waiting: Boolean, label: String?) -> Unit)? = null
+    var onLabel: ((waiting: Boolean, label: String?, fraction: Float) -> Unit)? = null
     private var busy = false
     private var startedAt = 0L
     private var expectMs = 0L
@@ -110,12 +110,11 @@ class ButtonCountdown(private val context: Context) {
         val t = text ?: return
         t.removeCallbacks(tick)
         val waiting = busy && startedAt != 0L
-        val label = if (waiting) {
-            Countdown.label(expectMs - (SystemClock.uptimeMillis() - startedAt))
-        } else {
-            null
-        }
-        onLabel?.invoke(waiting, label)
+        val elapsed = if (waiting) SystemClock.uptimeMillis() - startedAt else 0L
+        val label = if (waiting) Countdown.label(expectMs - elapsed) else null
+        // Доля ожидания для заливки пилюли: срок вышел — полная, дальше ждём молча.
+        val fraction = if (waiting && expectMs > 0L) (elapsed.toFloat() / expectMs).coerceIn(0f, 1f) else -1f
+        onLabel?.invoke(waiting, label, fraction)
         if (label != null) {
             t.text = label
             t.visibility = View.VISIBLE

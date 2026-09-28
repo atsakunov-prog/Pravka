@@ -165,6 +165,7 @@ class Settings(private val context: Context) {
         private val KEY_AUTO_CAL_CATEGORY = stringPreferencesKey("auto_cal_category")
         private val KEY_AUTO_CALENDARS = stringPreferencesKey("auto_calendars")
         private val KEY_AUTO_WAKE_DEAL = stringPreferencesKey("auto_wake_deal")
+        private val KEY_AUTO_PLATES = booleanPreferencesKey("auto_plates")
         private val KEY_AUTO_BEDTIME = booleanPreferencesKey("auto_bedtime_close")
         /** Заводское дело по подъёму в будни — см. [autoWakeDealFlow]. */
         private val FACTORY_WAKE_DEAL = PlaceDeal("Сборы детей", "Семья")
@@ -1197,6 +1198,17 @@ class Settings(private val context: Context) {
                 org.json.JSONObject().put("title", title.trim()).put("category", category.trim()).toString()
             }
         }
+    }
+
+    /**
+     * Вопросы автопилота — плашкой сверху (строкой пилюли «З»), когда экран
+     * включён и открыт; пуш тогда ложится в шторку тихо. Владелец
+     * (28.09.2026): «давай всё переведём в эти плашки сверху». Выключено —
+     * только пуши, как раньше.
+     */
+    val autoPlatesFlow = context.dataStore.data.map { it[KEY_AUTO_PLATES] ?: true }
+    suspend fun setAutoPlates(value: Boolean) {
+        context.dataStore.edit { it[KEY_AUTO_PLATES] = value }
     }
 
     /**

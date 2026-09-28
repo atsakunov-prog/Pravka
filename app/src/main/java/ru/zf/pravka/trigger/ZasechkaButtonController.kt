@@ -89,7 +89,7 @@ class ZasechkaButtonController(
     // Секунды до ответа — и на кнопке, и в её пилюле: искры и число (версия 3).
     // Пилюлю лямбда берёт при вызове: отсчёт заговорит, когда кнопка уже собрана.
     private val replyClock = ButtonCountdown(service).also { c ->
-        c.onLabel = { waiting, label -> pill.countdown(waiting, label) }
+        c.onLabel = { waiting, label, fraction -> pill.countdown(waiting, label, fraction) }
     }
     private var params: WindowManager.LayoutParams? = null
     /** Убрана в ручку: сильнее любых других причин показать кнопку. */
@@ -606,6 +606,21 @@ class ZasechkaButtonController(
      * над клавиатурой замка невидимой) и когда пилюля занята словами —
      * тогда возвращает false, и спрашивающий решает, что делать (пуш).
      */
+    /** Пилюля не занята словами и не поле набора: вопрос или итог встанут в неё. */
+    fun plateFree(): Boolean = pill.free && !pill.isEditing
+
+    /**
+     * Вопрос автопилота строкой пилюли: [text] — заголовок и текст пуша
+     * двумя строками, [chips] — таблетки (первая — в строке, все — в
+     * карточке по тапу), [say] — волна справа. Уходит сам через полминуты.
+     */
+    fun showPlate(text: String, chips: List<DictationPill.ResultAction>, say: (() -> Unit)?): Boolean {
+        hideMenu()
+        val shown = pill.askWith(text, chips, say)
+        askShown = shown
+        return shown
+    }
+
     fun showAsk(question: String, detail: String, onYes: () -> Unit, onSay: () -> Unit): Boolean {
         hideMenu()
         if (runCatching { service.keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)) return false

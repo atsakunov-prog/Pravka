@@ -100,7 +100,7 @@ class BodyButtonController(
     // Секунды до ответа — и на кнопке, и в её пилюле: искры и число (версия 3).
     // Пилюлю лямбда берёт при вызове: отсчёт заговорит, когда кнопка уже собрана.
     private val replyClock = ButtonCountdown(service).also { c ->
-        c.onLabel = { waiting, label -> pill.countdown(waiting, label) }
+        c.onLabel = { waiting, label, fraction -> pill.countdown(waiting, label, fraction) }
     }
     private var params: WindowManager.LayoutParams? = null
     /** Убрана в ручку: сильнее любых других причин показать кнопку. */

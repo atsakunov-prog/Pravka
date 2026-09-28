@@ -171,6 +171,12 @@ class AutoPilot(
          * и снести старый.
          */
         const val CHANNEL = "pravka-auto-hi"
+        /**
+         * Тихая копия вопроса, который уже стоит плашкой сверху (28.09.2026):
+         * IMPORTANCE_LOW — в шторке лежит, баннером не всплывает, второго
+         * баннера на одно событие не бывает.
+         */
+        const val QUIET_CHANNEL = "pravka-auto-quiet"
         private const val OLD_CHANNEL = "pravka-auto"
         // Вопрос «уехал?» — через десять минут после потери сети, не через
         // три: короткий выход (мусор, машина за вещью) — не отъезд
@@ -366,6 +372,8 @@ class AutoPilot(
     /** Дело по подъёму в будни (см. `Settings.autoWakeDealFlow`); null — нет. */
     @Volatile private var wakeDeal: PlaceDeal? = null
     @Volatile private var autoBedtime = true
+    /** Вопросы — плашкой сверху, когда экран открыт (см. `Settings.autoPlatesFlow`). */
+    @Volatile private var platesOn = true
     /** Дела мест по приезду: имя места → что начать (см. `Settings.autoPlaceDealsFlow`). */
     @Volatile private var placeDeals: Map<String, PlaceDeal> = emptyMap()
 
@@ -457,6 +465,7 @@ class AutoPilot(
         jobs += scope.launch { app.settings.autoWalkStartFlow.collect { autoWalkStart = it } }
         jobs += scope.launch { app.settings.autoWakeDealFlow.collect { wakeDeal = it } }
         jobs += scope.launch { app.settings.autoBedtimeFlow.collect { autoBedtime = it } }
+        jobs += scope.launch { app.settings.autoPlatesFlow.collect { platesOn = it } }
         jobs += scope.launch { app.settings.autoPlaceDealsFlow.collect { placeDeals = it } }
         startWifiWatch()
         startScanWatch()
@@ -1099,6 +1108,7 @@ class AutoPilot(
     private fun dropLeaveQuestion() {
         pendingLeave?.let { handler.removeCallbacks(it) }
         pendingLeave = null
+        if (leaveNotifId != 0) service.zButton?.hideAsk()
         cancelNotif(leaveNotifId)
         leaveNotifId = 0
         pendingWalk?.let { handler.removeCallbacks(it) }
@@ -1186,6 +1196,7 @@ class AutoPilot(
     private fun dropCarOffQuestion() {
         pendingCarOff?.let { handler.removeCallbacks(it) }
         pendingCarOff = null
+        if (carOffNotifId != 0) service.zButton?.hideAsk()
         cancelNotif(carOffNotifId)
         carOffNotifId = 0
     }
@@ -1458,6 +1469,7 @@ class AutoPilot(
                     action("Закончил в ${timeHm(stillMotionAt)}", WHAT_STILL_DONE, stillMotionAt, ""),
                     sayAction(stillMotionAt, "Наговорить"),
                 ),
+                plate = false,
             )
         }
         app.eventLog.add(
@@ -1478,6 +1490,8 @@ class AutoPilot(
         toPlace: String = "",
     ) {
         scope.launch {
+            // Ответили кнопкой пуша — плашка того же вопроса сверху не нужна.
+            service.zButton?.hideAsk()
             val now = System.currentTimeMillis()
             when (what) {
                 WHAT_MOVE_CAR, WHAT_MOVE_WALK -> {
@@ -1632,7 +1646,30 @@ class AutoPilot(
 
     // ---- Обвязка ----
 
+    /**
+     * Ответ на вопрос автопилота — кнопка пуша и таблетка плашки из одного
+     * описания (28.09.2026; владелец: «давай всё переведём в эти плашки
+     * сверху, они мне очень нравятся»). [say] — это «Сказать»: в плашке —
+     * волна справа, не таблетка.
+     */
+    class Reply(val label: String, val push: Notification.Action, val run: () -> Unit, val say: Boolean = false)
+
     internal fun action(
+        label: String,
+        what: String,
+        at: Long,
+        place: String,
+        id: Long = 0L,
+        prevId: Long = 0L,
+        until: Long = 0L,
+        to: String = "",
+    ): Reply = Reply(
+        label,
+        pushAction(label, what, at, place, id, prevId, until, to),
+        run = { onAction(what, at, place, id, prevId, until, to) },
+    )
+
+    private fun pushAction(
         label: String,
         what: String,
         at: Long,
@@ -1669,7 +1706,14 @@ class AutoPilot(
      * (`ZasechkaEngine.record`). Код запроса — от якоря: с одним кодом на все
      * пуши FLAG_UPDATE_CURRENT переписал бы якорь во ВСЕХ висящих на последний.
      */
-    internal fun sayAction(anchorAt: Long, label: String = "Сказать"): Notification.Action {
+    internal fun sayAction(anchorAt: Long, label: String = "Сказать"): Reply = Reply(
+        label,
+        pushSay(anchorAt, label),
+        run = { service.onZasechkaTap(anchorStart = anchorAt) },
+        say = true,
+    )
+
+    private fun pushSay(anchorAt: Long, label: String): Notification.Action {
         val intent = Intent(service, ZasechkaQuickActivity::class.java)
             .putExtra(ZasechkaQuickActivity.EXTRA_WHAT, ZasechkaQuickActivity.W_RECORD)
             .putExtra(ZasechkaQuickActivity.EXTRA_AT, anchorAt)
@@ -1683,14 +1727,30 @@ class AutoPilot(
         ).build()
     }
 
-    /** Показать вопрос; возвращает id уведомления — чтобы снять его, когда ответ дала жизнь. */
+    /**
+     * Показать вопрос; возвращает id уведомления — чтобы снять его, когда ответ
+     * дала жизнь. С 28.09.2026 — сначала ПЛАШКОЙ сверху (строка пилюли «З»,
+     * `ZasechkaButtonController.showPlate`), если экран включён и открыт, а
+     * пилюля свободна; тогда пуш с теми же кнопками ложится в шторку ТИХО
+     * (канал [QUIET_CHANNEL]) — копия «на потом», без второго баннера. Экран
+     * заперт, погашен или пилюля занята словами — громкий пуш, как раньше.
+     * Ответ на плашке отзывает пуш, кнопка пуша прячет плашку. [plate] = false
+     * — только пуш (вопрос уже пробовал встать плашкой сам).
+     */
     internal fun notify(
         title: String,
         text: String,
-        actions: List<Notification.Action>,
+        actions: List<Reply>,
         openSettings: Boolean = false,
+        plate: Boolean = true,
     ): Int {
         val id = (title + text).hashCode()
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            // Плашка — вещь главного потока (календарь спрашивает из IO).
+            handler.post { notify(title, text, actions, openSettings, plate) }
+            return id
+        }
+        val onPlate = plate && !openSettings && platesOn && canPlate() && showPlate(title, text, actions, id)
         runCatching {
             val nm = service.getSystemService(NotificationManager::class.java)
             if (nm.getNotificationChannel(CHANNEL) == null) {
@@ -1705,7 +1765,15 @@ class AutoPilot(
                 )
                 runCatching { nm.deleteNotificationChannel(OLD_CHANNEL) }
             }
-            val b = Notification.Builder(service, CHANNEL)
+            if (onPlate && nm.getNotificationChannel(QUIET_CHANNEL) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        QUIET_CHANNEL, "Автопилот Засечки: копии плашек",
+                        NotificationManager.IMPORTANCE_LOW,
+                    )
+                )
+            }
+            val b = Notification.Builder(service, if (onPlate) QUIET_CHANNEL else CHANNEL)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(Notification.BigTextStyle().bigText(text))
@@ -1725,10 +1793,41 @@ class AutoPilot(
                     )
                 )
             }
-            actions.forEach { b.addAction(it) }
+            actions.forEach { b.addAction(it.push) }
             nm.notify(id, b.build())
         }.onFailure { app.eventLog.add("автопилот: уведомление не показалось — ${it.message}") }
         return id
+    }
+
+    /** Экран включён и открыт, кнопка «З» на месте, пилюля не занята словами. */
+    private fun canPlate(): Boolean {
+        val pm = service.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        if (pm != null && !pm.isInteractive) return false
+        if (runCatching { service.keyguardManager?.isKeyguardLocked == true }.getOrDefault(false)) return false
+        return service.zButton?.plateFree() == true
+    }
+
+    /**
+     * Вопрос строкой пилюли: заголовок и текст пуша двумя строками, таблетки
+     * из тех же ответов, волна — «Сказать». Ответ отзывает тихую копию в
+     * шторке по [notifId] — два ответа на один вопрос никому не нужны.
+     */
+    private fun showPlate(title: String, text: String, replies: List<Reply>, notifId: Int): Boolean {
+        val z = service.zButton ?: return false
+        val say = replies.firstOrNull { it.say }
+        val chips = replies.filter { !it.say }.map { r ->
+            DictationPill.ResultAction(r.label) {
+                cancelNotif(notifId)
+                r.run()
+            }
+        }
+        val shown = z.showPlate(
+            "$title\n$text",
+            chips,
+            say?.let { r -> { cancelNotif(notifId); r.run() } },
+        )
+        if (!shown) app.eventLog.add("автопилот: плашка «$title» не встала — пуш громкий")
+        return shown
     }
 
     private fun cancelNotif(id: Int) {

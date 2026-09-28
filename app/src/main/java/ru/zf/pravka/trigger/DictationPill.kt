@@ -204,21 +204,29 @@ class DictationPill(
      * нет — запоминаем: она может выехать посреди ожидания (стрим сильной
      * модели), и тогда встанет уже с ними. Всё остальное в пилюле — как было.
      */
-    fun countdown(waiting: Boolean, label: String?) {
-        if (this.waiting == waiting && waitLabel == label) return
+    fun countdown(waiting: Boolean, label: String?, fraction: Float = -1f) {
+        if (this.waiting == waiting && waitLabel == label && waitFraction == fraction) return
         this.waiting = waiting
         waitLabel = label
+        waitFraction = fraction
         applyWait()
     }
 
+    /** Доля ожидания (0…1) по оценке `core/Pace.kt`; −1 — отсчёта нет. */
+    private var waitFraction = -1f
+
     /**
-     * Искры и секунды — только в обычном деле пилюли: итог «что записано»
-     * держит свою галочку, а поле набора — стрелку «отправить».
+     * Искры, секунды и заливка — только в обычном деле пилюли: итог «что
+     * записано» держит свою галочку, а поле набора — стрелку «отправить».
+     * Заливка (владелец, 28.09.2026: «нажимаешь, и плашка заполняется слева
+     * направо чуть более насыщенным цветом, а отсчёт на кнопке остаётся») —
+     * та же доля, что секунды на кнопке, в цвете режима поверх стекла.
      */
     private fun applyWait() {
         val on = waiting && resultReq == null && !editing
         lead?.spark = on
         orb?.seconds = if (on) waitLabel else null
+        skin?.setProgress(if (on) waitFraction else -1f)
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -303,12 +311,20 @@ class DictationPill(
         val actions: List<ResultAction>,
         val onOpen: (() -> Unit)?,
         val holdMs: Long,
-        /** Вопрос в одну строку: справа галочка («да», actions[0]) и микрофон («наговорить», actions[1]). */
+        /**
+         * Вопрос в строку пилюли: справа галочка ([yes], «да») и волна ([say],
+         * «наговорить»), первая таблетка [chip] — в самой строке, все
+         * таблетки [actions] — в карточке по тапу.
+         */
         val ask: Boolean,
+        val chip: ResultAction? = null,
+        val say: (() -> Unit)? = null,
+        val yes: (() -> Unit)? = null,
     ) {
-        val action: ResultAction? get() = actions.singleOrNull()
+        val action: ResultAction? get() = if (ask) chip else actions.singleOrNull()
         val expandable: Boolean
-            get() = !ask && (rows.isNotEmpty() || actions.size > 1 || (actions.size == 1 && summary.length > 60))
+            get() = if (ask) actions.size > 1 || summary.length > 72
+            else rows.isNotEmpty() || actions.size > 1 || (actions.size == 1 && summary.length > 60)
     }
 
     /** Что показывает итог сейчас; null — пилюля в своём обычном деле (запись, поле). */
@@ -347,6 +363,7 @@ class DictationPill(
             // Переставленная пальцем остаётся, где была: это тот же показ.
             stopTravel()
             body?.translationY = 0f
+            body?.translationX = 0f
             body?.alpha = 1f
             root?.alpha = 1f
             rest()
@@ -725,12 +742,30 @@ class DictationPill(
         onSay: () -> Unit,
         holdMs: Long = PillLook.RESULT_OPEN_HOLD_MS,
     ): Boolean = place(
-        ResultRequest(
-            text, true, emptyList(), "",
-            listOf(ResultAction("Да", onYes), ResultAction("Наговорить", onSay)),
-            null, holdMs, ask = true,
-        )
+        ResultRequest(text, true, emptyList(), "", emptyList(), null, holdMs, ask = true, say = onSay, yes = onYes)
     )
+
+    /**
+     * Вопрос автопилота строкой пилюли (28.09.2026; владелец: «давай всё
+     * переведём в эти плашки сверху, они мне очень нравятся»): [text] — заголовок
+     * и текст пуша двумя строками, справа волна — «Сказать» ([say]), рядом
+     * первая таблетка ([chips]); тап по строке раскрывает карточку с текстом
+     * целиком и всеми таблетками. Пуш с теми же кнопками лежит в шторке тихо.
+     */
+    fun askWith(
+        text: String,
+        chips: List<ResultAction>,
+        say: (() -> Unit)?,
+        holdMs: Long = PillLook.RESULT_OPEN_HOLD_MS,
+    ): Boolean {
+        val all = chips + listOfNotNull(say?.let { ResultAction("Сказать", it) })
+        return place(
+            ResultRequest(text, true, emptyList(), "", all, null, holdMs, ask = true, chip = chips.firstOrNull(), say = say)
+        )
+    }
+
+    /** Пилюля свободна для итога или вопроса: не пишет и не набирает. */
+    val free: Boolean get() = !visible || resultReq != null
 
     private fun place(req: ResultRequest): Boolean {
         if (visible && resultReq == null) {
@@ -796,7 +831,7 @@ class DictationPill(
             o.isClickable = true
         }
         val a = req.action
-        if (a != null && !expandable) {
+        if (a != null && (!expandable || req.ask)) {
             val chip = actionChip ?: TextView(service).apply {
                 setTextColor(PAPER)
                 textSize = 13.5f
@@ -819,35 +854,38 @@ class DictationPill(
                 hide()
                 a.onClick()
             }
-            o?.visibility = View.GONE
+            // У обычного итога таблетка стоит на месте кружка; у вопроса кружок — «Сказать».
+            o?.visibility = if (req.ask) View.VISIBLE else View.GONE
         } else {
             actionChip?.visibility = View.GONE
             o?.visibility = View.VISIBLE
         }
         r.removeCallbacks(resultDismiss)
         r.postDelayed(resultDismiss, PillLook.resultHold(req.holdMs))
-        // Вопрос: галочка слева от кружка — «да», кружок с волной — «наговорить».
+        // Вопрос: галочка слева от кружка — «да», кружок с волной — «наговорить»
+        // (или «Сказать» автопилота); нет ни того, ни другого — кружка нет.
         val ao = askOrb
         if (req.ask) {
-            val yes = req.actions.getOrNull(0)
-            val say = req.actions.getOrNull(1)
+            val yes = req.yes
+            val say = req.say
             ao?.let {
                 it.setColor(PillLook.orb(colour))
                 it.mark = VoiceOrb.Mark.CHECK
-                it.visibility = View.VISIBLE
+                it.visibility = if (yes != null) View.VISIBLE else View.GONE
                 it.setOnClickListener {
                     hide()
-                    yes?.onClick?.invoke()
+                    yes?.invoke()
                 }
             }
             o?.let {
+                it.visibility = if (say != null) View.VISIBLE else View.GONE
                 it.mark = VoiceOrb.Mark.WAVE
                 it.setLevel(0f)
                 it.isClickable = true
-                it.contentDescription = "Наговорить"
+                it.contentDescription = "Сказать"
                 it.setOnClickListener {
                     hide()
-                    say?.onClick?.invoke()
+                    say?.invoke()
                 }
             }
         } else {
@@ -1186,6 +1224,16 @@ class DictationPill(
         // В поле ввода долгое нажатие — выделение текста, а не «взять пилюлю»:
         // переносить её там можно только движением.
         private val grab = Runnable { if (armed && !editing) startDrag(buzz = true) }
+        /** Скорость, с которой взмах — это «убрать», а не «перенести», dp/с. */
+        private val FLING_DP_PER_S = 1400f
+        private var velocity: android.view.VelocityTracker? = null
+
+        /**
+         * Смахнуть можно то, что всплыло само: ожидание ответа (заливка),
+         * итог, вопрос. Живую запись и поле набора — нет: там ✕ и «отправить»,
+         * и случайный взмах не должен ронять тейк.
+         */
+        private fun swipeable(): Boolean = !editing && (resultReq != null || waiting)
 
         override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
             when (ev.actionMasked) {
@@ -1194,9 +1242,12 @@ class DictationPill(
                     downY = ev.rawY
                     armed = true
                     dragging = false
+                    velocity?.recycle()
+                    velocity = android.view.VelocityTracker.obtain().also { it.addMovement(ev) }
                     postDelayed(grab, LONG_PRESS_MS)
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    velocity?.addMovement(ev)
                     if (dragging) {
                         moveTo(ev.rawX - downX, ev.rawY - downY)
                         return true
@@ -1213,10 +1264,28 @@ class DictationPill(
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     armed = false
                     removeCallbacks(grab)
+                    val vt = velocity
+                    var flingX = 0f
+                    if (vt != null) {
+                        vt.addMovement(ev)
+                        vt.computeCurrentVelocity(1000)
+                        flingX = vt.xVelocity
+                        vt.recycle()
+                        velocity = null
+                    }
                     if (dragging) {
                         dragging = false
                         scaleX = 1f
                         scaleY = 1f
+                        // Взмах вбок — убрать с экрана (владелец, 28.09.2026:
+                        // «смахивание — это просто убрать плашку»). Перенос
+                        // остаётся переносом: медленно везёшь — стоит, где бросил.
+                        if (ev.actionMasked == MotionEvent.ACTION_UP && swipeable() &&
+                            abs(flingX) >= FLING_DP_PER_S * density &&
+                            abs(ev.rawX - downX) > abs(ev.rawY - downY)
+                        ) {
+                            swipeAway(flingX > 0f)
+                        }
                         return true
                     }
                 }
@@ -1257,6 +1326,27 @@ class DictationPill(
             p.y = (startY + dy.toInt()).coerceIn(-offY(), (h - p.height - offY()).coerceAtLeast(-offY()))
             runCatching { windowManager.updateViewLayout(r, p) }
         }
+    }
+
+    /**
+     * Улететь вбок и уйти: окно — в свой размер, ряд едет за край экрана и
+     * гаснет, дальше обычный [hide]. Вопрос уходит без ответа — это «да»;
+     * ожидание ответа продолжается на кнопке, итог всплывёт сам.
+     */
+    private fun swipeAway(toRight: Boolean) {
+        val b = body ?: return
+        val (w, _) = screen()
+        val from = b.translationX
+        val to = if (toRight) w.toFloat() else -w.toFloat()
+        manual = false
+        travel(PillLook.EXIT_MS, AccelerateInterpolator()) { f ->
+            b.translationX = from + (to - from) * f
+            b.alpha = 1f - f
+        }
+        b.postDelayed({
+            hide()
+            b.translationX = 0f
+        }, PillLook.EXIT_MS + 20L)
     }
 
     // ---- Движение ----
@@ -1701,7 +1791,18 @@ class DictationPill(
         private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
         private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
         private val face = RectF()
+        private val bar = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val barFace = RectF()
         private var density = PillLook.DENSITY_DEFAULT
+        /** Заливка ожидания слева направо, 0…1; отрицательная — нет. */
+        private var progress = -1f
+
+        fun setProgress(value: Float) {
+            val v = if (value < 0f) -1f else value.coerceIn(0f, 1f)
+            if (v == progress) return
+            progress = v
+            invalidateSelf()
+        }
 
         fun setDensity(value: Float) {
             if (value == density && fill.shader != null) return
@@ -1746,6 +1847,9 @@ class DictationPill(
                 floatArrayOf(0f, 0.45f, 1f),
                 Shader.TileMode.CLAMP,
             )
+            // Заливка ожидания — цвет режима поверх стекла, плотнее тела, но
+            // не глухо: текст и кружок читаются сквозь неё.
+            bar.color = DiskLook.withAlpha(accent, PillLook.PROGRESS_ALPHA)
             val top = b.top.toFloat()
             sheen.shader = LinearGradient(
                 0f, top, 0f, top + h * 0.45f,
@@ -1767,6 +1871,14 @@ class DictationPill(
             face.set(b)
             val r = corner ?: (face.height() / 2f)
             canvas.drawRoundRect(face, r, r, fill)
+            if (progress > 0f) {
+                // Слева направо по доле ожидания; контур режет ряд (clipToOutline).
+                barFace.set(face.left, face.top, face.left + face.width() * progress, face.bottom)
+                canvas.save()
+                canvas.clipRect(barFace)
+                canvas.drawRoundRect(face, r, r, bar)
+                canvas.restore()
+            }
             canvas.drawRoundRect(face, r, r, glow)
             canvas.drawRoundRect(face, r, r, sheen)
             val inset = rim.strokeWidth / 2f
