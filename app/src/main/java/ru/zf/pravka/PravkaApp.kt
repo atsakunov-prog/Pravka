@@ -212,7 +212,11 @@ class PravkaApp : Application() {
             kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
                 runCatching {
                     ru.zf.pravka.data.CrashLog.note(this, "фон приложения", e, fatal = false)
-                    eventLog.add("CRASH (фон приложения) ${e.javaClass.simpleName}: ${e.message} @ ${e.stackTrace.firstOrNull()}")
+                    val own = e.stackTrace.firstOrNull { it.className.startsWith("ru.zf.pravka") }
+                    eventLog.add(
+                        "CRASH (фон приложения) ${e.javaClass.simpleName}: ${e.message} @ ${e.stackTrace.firstOrNull()}" +
+                            (if (own != null) " ← $own" else "")
+                    )
                 }
             }
     )

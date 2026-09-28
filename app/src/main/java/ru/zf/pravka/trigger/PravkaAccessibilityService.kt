@@ -111,7 +111,13 @@ class PravkaAccessibilityService : AccessibilityService() {
     // the take vanished with no journal line). Log it instead and stay alive.
     internal val crashLogger = kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
         runCatching {
-            app.eventLog.add("CRASH ${e.javaClass.simpleName}: ${e.message} @ ${e.stackTrace.firstOrNull()}")
+            // Верхний кадр — обычно кишки платформы («IoBridge.close…»), по
+            // нему не понять, чья корутина упала; первый свой кадр — понять.
+            val own = e.stackTrace.firstOrNull { it.className.startsWith("ru.zf.pravka") }
+            app.eventLog.add(
+                "CRASH ${e.javaClass.simpleName}: ${e.message} @ ${e.stackTrace.firstOrNull()}" +
+                    (if (own != null) " ← $own" else "")
+            )
             // Стек целиком — в crash.log: первого кадра для разбора мало.
             ru.zf.pravka.data.CrashLog.note(app, "служба", e, fatal = false)
         }
@@ -3003,18 +3009,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * а не по флагам.
      */
     internal val configReport = Runnable {
-        runCatching {
-            val buttons = chainButtons()
-            val on = buttons.count { it.onScreen() }
-            val plate = if (cachedDiskMode) (if (disk?.plateAttached() == true) "стекло висит" else "СТЕКЛА НЕТ") else "стопка"
-            val spots = buttons.joinToString(" ") { b ->
-                if (b.onScreen()) b.currentPosition()?.let { (x, y) -> "($x,$y)" } ?: "(?)" else "—"
-            }
-            app.eventLog.add(
-                "после складывания: экран ${frameKeyNow()}, кнопок на экране $on из ${buttons.size} $spots, $plate" +
-                    (if (cachedDiskMode) "; ${disk?.report() ?: "диска нет"}" else "")
-            )
-        }
+        runCatching { app.eventLog.add("после складывания: ${windowsReport()}") }
         // Флаги выше — наши; видит ли окна система, скажет только она.
         overlayWatch?.afterFold()
     }
@@ -3049,18 +3044,43 @@ class PravkaAccessibilityService : AccessibilityService() {
         !micBusy() && !busy && app.liveWork.value == null && !ru.zf.pravka.MainActivity.shown
 
     /**
-     * Снять и повесить заново все окна на экране — на тех же местах, без
-     * перекладки (`OverlayWatch`: система их не показывает, хотя они повешены).
-     * Диск — стеклом, под ним кнопки и шестерёнка в прежнем порядке; стопка —
-     * кнопками, шестерёнкой и ручкой.
+     * Что на экране по нашим окнам, одной строкой: размер экрана, кнопки с
+     * координатами, стекло, строка диска. Для отчёта после складывания и
+     * после самоперезапуска (`OverlayWatch`).
      */
-    internal fun rehangOverlays() {
-        if (folding) return
-        if (cachedDiskMode && disk?.rehang() == true) return
-        chainButtons().forEach { runCatching { it.reattach() } }
-        stackSettings?.reattach()
-        tailHandle?.hide()
+    internal fun windowsReport(): String {
+        val buttons = chainButtons()
+        val on = buttons.count { it.onScreen() }
+        val plate = if (cachedDiskMode) (if (disk?.plateAttached() == true) "стекло висит" else "СТЕКЛА НЕТ") else "стопка"
+        val spots = buttons.joinToString(" ") { b ->
+            if (b.onScreen()) b.currentPosition()?.let { (x, y) -> "($x,$y)" } ?: "(?)" else "—"
+        }
+        val gear = stackSettings?.currentPosition()?.let { (x, y) -> ", шестерёнка ($x,$y)" } ?: ""
+        return "экран ${frameKeyNow()}, кнопок на экране $on из ${buttons.size} $spots$gear, $plate" +
+            (if (cachedDiskMode) "; ${disk?.report() ?: "диска нет"}" else "")
+    }
+
+    /**
+     * Расставить диск заново тем же путём, что после складывания: место — из
+     * настроек, кнопки — на кольцо (после самоперезапуска, `OverlayWatch`).
+     */
+    internal fun relayoutDisk() {
+        if (folding || !cachedDiskMode) return
+        runCatching { disk?.onConfigurationChanged() }
         refreshHandles()
+    }
+
+    /** Хвост строки сторожа окон: расставлен ли диск (в 697 после самоперезапуска — нет). */
+    internal fun diskWords(): String =
+        if (!cachedDiskMode) "" else if (disk?.placedNow() == true) "; диск расставлен" else "; ДИСК НЕ РАССТАВЛЕН"
+
+    /**
+     * Окна видны, а диск так и не расставился — расставить сейчас (тот же
+     * сторож, что на минутном тике: `DiskController.ensure`).
+     */
+    internal fun healDisk() {
+        if (folding || !cachedDiskMode) return
+        runCatching { disk?.ensure() }
     }
 
     override fun onInterrupt() = Unit

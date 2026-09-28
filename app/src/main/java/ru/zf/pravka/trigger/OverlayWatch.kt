@@ -23,19 +23,23 @@ import ru.zf.pravka.core.OverlaySight
  *
  * Когда смотрит: через шесть секунд после старта службы (заодно проверка
  * проверяет сама себя: видит ли она наши окна, когда они заведомо на экране),
- * через полторы секунды после каждого складывания и при разблокировке, если
+ * через три секунды после каждого складывания и при разблокировке, если
  * после складывания ещё не смотрела. Складывание с Fold запирает экран, а на
  * замке проверка молчит: судить надо о том, что видит владелец, открыв
  * телефон.
  *
- * Что делает, если системе наших окон не видно: снимает и вешает их заново
- * на тех же местах; не помогло — перезапускает службу (ровно то, чем владелец
- * лечил это руками; система поднимает службу сама, как после переезда базы).
- * Перезапуск — только если проверка в эту жизнь службы уже видела наши окна,
- * ничего не пишется и не ждёт ответа Claude, приложение не на экране и
- * прошлый самоперезапуск был больше получаса назад. Иначе — уведомление
- * словами с дорогой в настройки служб (правило 6: молчаливая механика
- * читается как поломка).
+ * Что делает, если системе наших окон не видно: смотрит ещё раз через две
+ * секунды (переход складывания мог ещё идти) и перезапускает службу — ровно
+ * то, чем владелец лечил это руками; система поднимает службу сама, как после
+ * переезда базы. Перевешивать окна бесполезно: в 697 перевешивание трижды
+ * ничего не дало, а перезапуск вернул диск сразу. Перезапуск — только если
+ * проверка в эту жизнь службы уже видела наши окна, ничего не пишется и не
+ * ждёт ответа Claude, приложение не на экране и прошлый самоперезапуск был
+ * больше трёх минут назад. Иначе — уведомление словами с дорогой в
+ * настройки служб (правило 6: молчаливая механика читается как поломка).
+ * После самоперезапуска — ещё и сверка, что диск расставился: в 697 новая
+ * служба подняла кнопки, а место диска не прочиталось, и они стояли
+ * столбиком у края до следующего складывания.
  *
  * Список окон система отдаёт службе только с флагом
  * `FLAG_RETRIEVE_INTERACTIVE_WINDOWS`. Постоянно он не нужен и стоит системе
@@ -74,9 +78,6 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
     /** Проверка, отложенная до разблокировки (на замке не судим), — её повод. */
     private var waiting: String? = null
 
-    /** Отложенная до разблокировки проверка уже перевешивала окна. */
-    private var pendingRehung = false
-
     private var laterTries = 0
     private var unknownTries = 0
     private var told = false
@@ -93,7 +94,7 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
         service.scope.launch {
             val at = runCatching { service.app.settings.overlayRestartAt() }.getOrDefault(0L)
             lastRestartAt = at
-            if (at > 0 && System.currentTimeMillis() - at < 2 * 60_000L) {
+            if (at > 0 && System.currentTimeMillis() - at < RESTARTED_MS) {
                 log("окна: служба поднята после самоперезапуска — смотрю, вернулся ли диск")
             }
         }
@@ -115,7 +116,7 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
                 service.registerReceiver(rec, filter)
             }
         }
-        plan(START_CHECK_MS) { check("старт") }
+        plan(START_CHECK_MS) { check(START_REASON) }
     }
 
     fun stop() {
@@ -144,7 +145,6 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
         cleanStart = false
         hungLocked = locked() || !interactive()
         waiting = null
-        pendingRehung = false
         laterTries = 0
         unknownTries = 0
     }
@@ -155,20 +155,19 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
         // флаг окон на каждую из них не нужен.
         val reason = waiting ?: when {
             dirty -> "после разблокировки"
-            !trusted && !blind -> "старт"
+            !trusted && !blind -> START_REASON
             else -> return
         }
         waiting = null
         // Замок уходит анимацией — смотреть, когда она кончилась.
-        plan(UNLOCK_CHECK_MS) { check(reason, rehung = pendingRehung) }
+        plan(UNLOCK_CHECK_MS) { check(reason) }
     }
 
     /**
      * Посмотреть, видит ли система наши окна, и решить, что дальше
-     * (`OverlaySight.next`). [rehung] — окна уже перевешивали после прошлого
-     * «не вижу».
+     * (`OverlaySight.next`). [confirmed] — это второй взгляд после «не вижу».
      */
-    fun check(reason: String, rehung: Boolean = false, confirmed: Boolean = false) {
+    fun check(reason: String, confirmed: Boolean = false) {
         planned?.let { handler.removeCallbacks(it) }
         planned = null
         if (service.folding || looking != null) return
@@ -177,7 +176,6 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
             // Подтверждение при этом начинается заново: окна видны или нет —
             // решит свежий взгляд после разблокировки.
             waiting = reason
-            pendingRehung = rehung
             return
         }
         look { listed, overlays ->
@@ -195,7 +193,6 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
                 look = look,
                 cleanStart = clean,
                 blind = blind,
-                rehung = rehung,
                 trusted = trusted,
                 idle = service.overlayIdle(),
                 sinceRestartMs = System.currentTimeMillis() - lastRestartAt,
@@ -212,7 +209,6 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
             when (step) {
                 OverlaySight.Step.FINE -> {
                     dirty = false
-                    pendingRehung = false
                     laterTries = 0
                     // Сдавался, а окна вернулись (следующее складывание, ручной
                     // перевес) — уведомление о пропаже больше не правда.
@@ -222,28 +218,37 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
                     }
                     // Молчать о здоровом: в журнал — только старт, складывание
                     // и то, что было после «не вижу».
-                    if (reason != QUIET_REASON) log(head)
+                    if (reason != QUIET_REASON) log(head + service.diskWords())
+                    // Окна видны, а диск не расставлен (после самоперезапуска
+                    // место не прочиталось) — расставить сейчас, не ждать
+                    // минутного сторожа.
+                    service.healDisk()
+                    // Первый взгляд после самоперезапуска: диск — заново, как
+                    // после складывания, что бы ни сломалось на подъёме (697:
+                    // окна вернулись, а кнопки встали столбиком у края), и
+                    // через полторы секунды — где что стоит, в журнал.
+                    if (reason == START_REASON && System.currentTimeMillis() - lastRestartAt < RESTARTED_MS) {
+                        service.relayoutDisk()
+                        handler.postDelayed({
+                            runCatching { log("после самоперезапуска: ${service.windowsReport()}") }
+                        }, REPORT_AFTER_MS)
+                    }
                 }
                 OverlaySight.Step.UNKNOWN -> {
                     log("$head — система не назвала ни одного окна, смотрю ещё раз")
-                    if (unknownTries++ < 1) plan(UNKNOWN_RETRY_MS) { check(reason, rehung, confirmed) }
-                }
-                OverlaySight.Step.REHANG -> {
-                    log("$head — перевешиваю окна на тех же местах")
-                    service.rehangOverlays()
-                    plan(REHANG_CHECK_MS) { check("после перевешивания", rehung = true) }
+                    if (unknownTries++ < 1) plan(UNKNOWN_RETRY_MS) { check(reason, confirmed) }
                 }
                 OverlaySight.Step.CONFIRM -> {
-                    log("$head — не видно и после перевешивания; смотрю ещё раз, потом перезапуск службы")
-                    plan(CONFIRM_MS) { check("подтверждение", rehung = true, confirmed = true) }
+                    log("$head — смотрю ещё раз, потом перезапуск службы")
+                    plan(CONFIRM_MS) { check("подтверждение", confirmed = true) }
                 }
                 OverlaySight.Step.LATER -> {
                     if (laterTries == 0) log("$head — перезапущу службу, когда кончится работа")
                     laterTries++
-                    plan(LATER_MS) { check(QUIET_REASON, rehung = true, confirmed = true) }
+                    plan(LATER_MS) { check(QUIET_REASON, confirmed = true) }
                 }
                 OverlaySight.Step.RESTART -> {
-                    log("$head — перевешивание не помогло дважды, перезапускаю службу (так диск возвращался руками)")
+                    log("$head — не видно дважды подряд, перезапускаю службу (так диск возвращался руками)")
                     restart()
                 }
                 OverlaySight.Step.BLIND -> {
@@ -259,7 +264,7 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
                     val why = when {
                         !trusted -> "проверка ещё ни разу не видела наших окон, перезапуску по ней не верю"
                         System.currentTimeMillis() - lastRestartAt < OverlaySight.RESTART_GAP_MS ->
-                            "самоперезапуск уже был меньше получаса назад"
+                            "самоперезапуск уже был меньше трёх минут назад"
                         else -> "работа так и не кончилась"
                     }
                     log("$head — не трогаю: $why; перезапусти службу руками")
@@ -335,6 +340,10 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
         service.scope.launch(Dispatchers.IO) {
             runCatching { service.app.settings.setOverlayRestartAt(now) }
             ru.zf.pravka.data.DiskWriter.drain(3_000L)
+            // Полсекунды — файловой системе папки базы: в 697 новая служба
+            // через 0,4 с после подъёма поймала «close failed: EIO», похоже,
+            // на файле, который старая записала за миг до выхода.
+            kotlinx.coroutines.delay(EXIT_SETTLE_MS)
             Runtime.getRuntime().exit(0)
         }
     }
@@ -364,9 +373,9 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
                 .setContentText("Кнопки висят, но их не видно. Перезапусти службу — диск вернётся.")
                 .setStyle(
                     android.app.Notification.BigTextStyle().bigText(
-                        "После складывания система не показывает окна диска, хотя они на месте, и " +
-                            "перевешивание не помогло. Выключи и включи службу Правки в " +
-                            "«Специальных возможностях» — тап открывает этот экран.",
+                        "После складывания система не показывает окна диска, хотя они на месте, а " +
+                            "сама служба перезапуститься сейчас не может. Выключи и включи службу " +
+                            "Правки в «Специальных возможностях» — тап открывает этот экран.",
                     )
                 )
                 .setSmallIcon(ru.zf.pravka.R.drawable.ic_tile)
@@ -403,11 +412,11 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
         /** После складывания — когда переход точно кончился (отчёт уже через 1,5 с после раскладки). */
         const val FOLD_CHECK_MS = 1_500L
 
-        /** Перевесили — посмотреть, когда окна нарисуются. */
-        const val REHANG_CHECK_MS = 2_500L
+        /** Второй взгляд после «не вижу» — перед перезапуском. */
+        const val CONFIRM_MS = 2_000L
 
-        /** Второй взгляд после перевешивания — перед перезапуском. */
-        const val CONFIRM_MS = 3_000L
+        /** Пауза между последней записью и выходом процесса при самоперезапуске. */
+        const val EXIT_SETTLE_MS = 500L
 
         const val UNKNOWN_RETRY_MS = 2_000L
         const val LATER_MS = 30_000L
@@ -417,6 +426,14 @@ internal class OverlayWatch(private val service: PravkaAccessibilityService) {
 
         /** Повтор ожидания работы — в журнал не пишется: одна строка на «жду». */
         const val QUIET_REASON = "ожидание"
+
+        const val START_REASON = "старт"
+
+        /** Старт службы считается самоперезапуском, если метка свежее двух минут. */
+        const val RESTARTED_MS = 2 * 60_000L
+
+        /** Строка «где что стоит» после перерасстановки — когда кнопки доехали. */
+        const val REPORT_AFTER_MS = 1_500L
 
         const val NOTIF_ID = 48
     }

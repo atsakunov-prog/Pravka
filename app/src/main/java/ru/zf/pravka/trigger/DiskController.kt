@@ -78,6 +78,10 @@ class DiskController(
 ) {
 
     private companion object {
+        /** Чтение места диска: попыток и пауза между ними (вторая — вдвое дольше). */
+        private const val LOAD_TRIES = 3
+        private const val LOAD_RETRY_MS = 500L
+
         /**
          * Тень под стеклом: диск — предмет над приложением, а не пятно на нём.
          * Владелец (19.09, поздно) о шкале-метках: «засечки выглядят плохо,
@@ -441,12 +445,36 @@ class DiskController(
     /** Ключ экрана, под который диск расставлен последний раз — для отчёта после складывания. */
     private var loadedKey = ""
 
+    /** Чтение места идёт прямо сейчас — сторож не зовёт второе поверх. */
+    private var loading = false
+
     private fun load() {
         cachedFrame = null
         val key = frameKey()
         loadedKey = key
+        loading = true
         scope.launch {
-            val (fx, fy, r) = settings.diskPlace(key)
+            // Место читается из настроек, а настройки — файл в папке базы.
+            // 28.09.2026 сразу после самоперезапуска службы в журнале
+            // «IOException: close failed: EIO», а кнопки стояли на своих
+            // местах из стопки — столбиком у края, без стекла, — до следующего
+            // складывания: похоже, умерла именно эта корутина.
+            // Поэтому три попытки с паузой, а не вышло — заводское место:
+            // диск на экране важнее того, где именно он стоял.
+            var place: Triple<Float, Float, Float>? = null
+            var failure: Throwable? = null
+            for (attempt in 0 until LOAD_TRIES) {
+                if (attempt > 0) kotlinx.coroutines.delay(LOAD_RETRY_MS * attempt)
+                val got = runCatching { settings.diskPlace(key) }
+                if (got.isSuccess) { place = got.getOrNull(); break }
+                failure = got.exceptionOrNull()
+            }
+            loading = false
+            val (fx, fy, r) = place ?: Triple(1f, 0.45f, 0f).also {
+                (service.applicationContext as? ru.zf.pravka.PravkaApp)?.eventLog?.add(
+                    "диск: место не прочиталось (${failure?.javaClass?.simpleName}: ${failure?.message}) — ставлю на заводское"
+                )
+            }
             if (!shown) return@launch
             val d = dims()
             val (w, h) = frame()
@@ -1513,22 +1541,8 @@ class DiskController(
         return ru.zf.pravka.core.OverlaySight.Box(p.x, p.y, p.x + p.width, p.y + p.height)
     }
 
-    /**
-     * Снять и повесить заново стекло и всё, что на нём, — на тех же местах, без
-     * перекладки и без выезда из-за края (`OverlayWatch`: система не
-     * показывает окна, которые считает повешенными). Стекло вешается первым,
-     * кнопки и шестерёнка — поверх него (`showPlate`). Палец на диске —
-     * ничего не трогаем: касание дошло, значит окна видны. Ложь — стекла нет
-     * (выключен, сложен, всё убрано в точку): перевешивать кнопки будет служба.
-     */
-    fun rehang(): Boolean {
-        if (!shown || !placed || folded || allHidden) return false
-        if (turning != null || sliding || pinch) return true
-        hidePlate()
-        showPlate()
-        layout()
-        return true
-    }
+    /** Диск показан и расставлен — для строки сторожа окон после старта. */
+    fun placedNow(): Boolean = shown && placed
 
     /** Одной строкой для журнала: под какой экран расставлен, где центр и тарелка. */
     fun report(): String =
@@ -1542,6 +1556,16 @@ class DiskController(
      * лечилось только перезапуском службы.
      */
     fun ensure() {
+        // Диск показан, а так и не расставлен (чтение места умерло, не успев
+        // ни повторить, ни упасть на заводское) — кнопки стоят где попало:
+        // расставить заново тем же путём, что после складывания.
+        if (shown && !placed && !folded && !loading) {
+            (service.applicationContext as? ru.zf.pravka.PravkaApp)?.eventLog?.add(
+                "диск: сторож — показан, а не расставлен; расставляю"
+            )
+            load()
+            return
+        }
         if (!shown || !placed || folded || allHidden) return
         if (animating || turning != null || sliding || pinch) return
         val v = plate
