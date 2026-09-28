@@ -37,6 +37,12 @@ class TakeHealth(private val startedAtMs: Long) {
     var mic: String? = null
         private set
 
+    /**
+     * Чей звук ел распознаватель: true — своя запись Правки (`MicFeed`), и
+     * его перезапуски звука не теряют; false — он слушал сам; null — не знаем.
+     */
+    var fed: Boolean? = null
+
     private var deafSince = 0L
     private var closed = false
     private val errors = sortedMapOf<Int, Int>()
@@ -105,6 +111,11 @@ class TakeHealth(private val startedAtMs: Long) {
         if (gaps > 0) append(" (").append(gaps).append(" ").append(windows(gaps)).append(")")
         errorsLine().takeIf { it.isNotEmpty() }?.let { append(" · ошибки ").append(it) }
         mic?.let { append(" · слушал ").append(it) }
+        when (fed) {
+            true -> append(" · звук Правки")
+            false -> append(" · звук распознавателя")
+            null -> Unit
+        }
     }
 
     companion object {

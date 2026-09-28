@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.RecognizerIntent
@@ -129,6 +130,18 @@ class GoogleSpeechSession(
      */
     private var quickSilences = 0
 
+    /**
+     * Своя запись Правки, из которой распознаватель получает звук
+     * (`MicFeed`, 28.09.2026). null — распознаватель слушает сам (настройка
+     * выключена, Android старше 13, путь наш звук не берёт, запись не пошла).
+     */
+    private var feed: MicFeed? = null
+    /** Сколько байт ушло распознавателю к первому «готов» — отсюда видно, читает ли он. */
+    private var feedWrittenAtReady = 0L
+    private var feedWatch: Runnable? = null
+    /** Сессия распознавателя сейчас идёт (между startListening и её концом или ошибкой). */
+    private var sessionLive = false
+
     private var onReady: () -> Unit = {}
     private var onPartial: (String) -> Unit = {}
     private var onCheckpoint: (String) -> Unit = {}
@@ -187,6 +200,43 @@ class GoogleSpeechSession(
 
         /** Кто слушает — смотреть у системы через столько после первого «готов». */
         private const val INPUT_CHECK_MS = 400L
+
+        // ---- Свой микрофон (MicFeed) ----
+
+        /**
+         * Берёт ли распознаватель пути (true — сеть, false — офлайн-пакет) звук
+         * Правки: true — берёт, false — открывает свой микрофон или не читает,
+         * нет ключа — ещё не пробовали. Живёт до перезапуска процесса или
+         * «Перезагрузить микрофон»: служба Google могла обновиться.
+         */
+        private val feedVerdict = java.util.concurrent.ConcurrentHashMap<Boolean, Boolean>()
+
+        /** Что известно о пути — строкой для настроек. */
+        fun feedLabel(network: Boolean): String = when (feedVerdict[network]) {
+            true -> "берёт звук Правки"
+            false -> "звук Правки не берёт — слушает свой микрофон"
+            null -> "ещё не пробовали в этот запуск"
+        }
+
+        /** Проверить, читает ли распознаватель наш звук, — через столько после «готов». */
+        private const val FEED_CHECK_MS = 700L
+        private const val FEED_CHECK_AGAIN_MS = 1_500L
+
+        /** Столько ушло распознавателю после «готов» — значит, читает (четверть секунды звука). */
+        private const val FEED_READ_PROOF_BYTES = 8_000L
+
+        /** Распознаватель не берёт звук столько, пока сессия идёт, — завис; поднять заново. */
+        private const val FEED_STALL_MS = 4_000L
+
+        /** После стопа: дописали хвост — ждём конца сессии столько, потом просим сами. */
+        private const val FEED_EOF_WAIT_MS = 2_500L
+
+        /** Смена микрофона своей записи: смотреть раз в столько, ждать не дольше. */
+        private const val FEED_POLL_MS = 150L
+        private const val FEED_ROUTE_MS = 4_000L
+
+        /** Звук по каналу гарнитуры не пошёл за столько — переводим запись всё равно. */
+        private const val SCO_PREFER_ANYWAY_MS = 1_500L
 
         // Only give up after a long run of pure errors with no speech at all
         // (a genuinely dead mic), never on a transient blip mid-dictation.
@@ -391,6 +441,8 @@ class GoogleSpeechSession(
             googleServiceCached = null
             googleServiceProbed = false
             googleServiceBad = false
+            // И что знали о своём микрофоне: после обновления Google ответ мог измениться.
+            feedVerdict.clear()
             warmMain.postDelayed({ warmUp(context, network, log) }, 300)
         }
 
@@ -511,6 +563,9 @@ class GoogleSpeechSession(
                 MicPlan.Route.AS_IS -> inCall && MicRouting.commIsHeadset(am)
             }
             publishMic()
+            // Свой микрофон: вход выбираем сами, маршрут связи распознавателю
+            // больше не указ, и ждать его переезда незачем (`MicFeed`).
+            if (tryFeed(am, plan, inCall)) return@onMain
             when (plan) {
                 MicPlan.Route.AS_IS -> {
                     // Молчать тут нельзя: «не слышит» и «слышит не то» снаружи
@@ -547,6 +602,25 @@ class GoogleSpeechSession(
             health.close(android.os.SystemClock.elapsedRealtime())
             routeWatch?.let { main.removeCallbacks(it) }
             routeWatch = null
+            val f = feed
+            if (f != null) {
+                // Своя запись: дописать распознавателю хвост и закрыть трубу —
+                // он дочитает сказанное перед самым «стопом» и сам кончит
+                // сессию. stopListening сейчас оборвал бы недочитанное.
+                val drainMs = f.backlogMs()
+                f.finish()
+                onLog("стоп: дописываю распознавателю $drainMs мс звука и закрываю трубу")
+                if (!sessionLive) {
+                    // Сессии нет (поднималась после ошибки) — дочитывать некому.
+                    main.postDelayed({ if (recognizer != null) finish() }, 300)
+                    return@onMain
+                }
+                main.postDelayed({
+                    if (recognizer != null && !finished) runCatching { recognizer?.stopListening() }
+                }, drainMs + FEED_EOF_WAIT_MS)
+                main.postDelayed({ if (recognizer != null) finish() }, drainMs + FEED_EOF_WAIT_MS + 2500)
+                return@onMain
+            }
             runCatching { recognizer?.stopListening() }
             // Safety net: if no terminal callback lands, deliver anyway.
             main.postDelayed({ if (recognizer != null) finish() }, 2500)
@@ -566,8 +640,8 @@ class GoogleSpeechSession(
 
     // Invariant for the whole session (language and biasing never change), so
     // build it once. It used to be rebuilt per restart, copying the bias list
-    // twice each time.
-    private val intent: Intent by lazy {
+    // twice each time. Per session only the audio source differs ([intentFor]).
+    private val baseIntent: Intent by lazy {
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
@@ -577,21 +651,6 @@ class GoogleSpeechSession(
             if (!network) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                if (segmentedSession) {
-                    // Continuous dictation: keep one session alive across pauses
-                    // and receive finalized chunks via onSegmentResults(). The
-                    // silence length is what ends the whole session, so both
-                    // extras belong to this mode ONLY - in restart mode a 30s
-                    // complete-silence would delay every utterance end.
-                    putExtra(
-                        RecognizerIntent.EXTRA_SEGMENTED_SESSION,
-                        RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                    )
-                    putExtra(
-                        RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                        SEGMENTED_SILENCE_MS,
-                    )
-                }
                 // The recognizer's own punctuation/caps: its word accuracy is
                 // measurably better with the formatted pipeline, and CLEAN v1.9
                 // distrusts source punctuation anyway (pause-periods rebuilt).
@@ -619,10 +678,49 @@ class GoogleSpeechSession(
         }
     }
 
+    /**
+     * Интент этой сессии: общее — из [baseIntent], своё — источник звука.
+     * [source] — труба своей записи (`MicFeed.openSource`): распознаватель
+     * читает её вместо микрофона, и непрерывная сессия длится, пока труба
+     * открыта. null — слушает сам, и непрерывную сессию кончает тишина.
+     */
+    private fun intentFor(source: ParcelFileDescriptor?): Intent {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return baseIntent
+        return Intent(baseIntent).apply {
+            if (source != null) {
+                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source)
+                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, MicFeed.CHANNELS)
+                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, MicFeed.ENCODING)
+                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, MicFeed.SAMPLE_RATE)
+                if (segmentedSession) {
+                    putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
+                }
+            } else if (segmentedSession) {
+                // Continuous dictation: keep one session alive across pauses
+                // and receive finalized chunks via onSegmentResults(). The
+                // silence length is what ends the whole session, so both
+                // extras belong to this mode ONLY - in restart mode a 30s
+                // complete-silence would delay every utterance end.
+                putExtra(
+                    RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+                    RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                )
+                putExtra(
+                    RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                    SEGMENTED_SILENCE_MS,
+                )
+            }
+        }
+    }
+
     private fun startListening() {
         val r = recognizer ?: return
         listenAtMs = android.os.SystemClock.elapsedRealtime()
-        runCatching { r.startListening(intent) }.onFailure { restartSoon(afterError = true) }
+        val f = feed
+        val source = f?.openSource()
+        if (f != null && source == null) dropFeed("труба не создалась", verdict = null, relisten = false)
+        sessionLive = true
+        runCatching { r.startListening(intentFor(source)) }.onFailure { restartSoon(afterError = true) }
     }
 
     /** Маршрут переехал — слушаем, если тейк к этому мигу ещё жив. */
@@ -737,6 +835,11 @@ class GoogleSpeechSession(
         main.removeCallbacks(idleWatch)
         routeWatch?.let { main.removeCallbacks(it) }
         routeWatch = null
+        feedWatch?.let { main.removeCallbacks(it) }
+        feedWatch = null
+        sessionLive = false
+        feed?.abort()
+        feed = null
         health.close(android.os.SystemClock.elapsedRealtime())
         // Include a partial that never got finalized, so the last utterance is
         // never silently dropped when the session ends mid-phrase.
@@ -765,12 +868,19 @@ class GoogleSpeechSession(
             health.ready(now)
             // Fire the "you can speak now" cue once per session, not on every
             // restart (that vibrated repeatedly through a silent lead-in).
-            if (!readyFired) {
-                readyFired = true
-                onReady()
-                // Кто слушает на деле — у системы, а не по нашему заказу: запись
-                // к этому мигу открыта. Одна строка в журнал и в итог тейка.
-                main.postDelayed({ if (active && !stopping) noteInput("старт") }, INPUT_CHECK_MS)
+            if (!recognizerReadyOnce) {
+                recognizerReadyOnce = true
+                fireReady()
+                val f = feed
+                if (f != null) {
+                    // Своя запись: читает ли распознаватель наш звук — видно по трубе.
+                    feedWrittenAtReady = f.writtenBytes
+                    main.postDelayed({ checkFeed(again = false) }, FEED_CHECK_MS)
+                } else {
+                    // Кто слушает на деле — у системы, а не по нашему заказу: запись
+                    // к этому мигу открыта. Одна строка в журнал и в итог тейка.
+                    main.postDelayed({ if (active && !stopping) noteInput("старт") }, INPUT_CHECK_MS)
+                }
             }
             publishMic()
         }
@@ -783,6 +893,8 @@ class GoogleSpeechSession(
             onLog("beginSpeech")
         }
         override fun onRmsChanged(rmsdB: Float) {
+            // Своя запись меряет громкость сама — распознаватель её не перебивает.
+            if (feed != null) return
             levelSink?.let { sink -> runCatching { sink(ru.zf.pravka.core.MicLevel.normalise(rmsdB)) } }
         }
         override fun onBufferReceived(buffer: ByteArray?) {}
@@ -815,6 +927,7 @@ class GoogleSpeechSession(
         // не кончается (ListenPolicy): владелец не жал «стоп» — слушаем
         // дальше тем же клиентом, накопленный текст на месте.
         override fun onEndOfSegmentedSession() {
+            sessionLive = false
             val now = android.os.SystemClock.elapsedRealtime()
             if (ListenPolicy.resumeAfterSessionEnd(active, stopping, lastWordsAtMs, now)) {
                 // Сессия, кончившаяся не дослушав своей тишины, — это срыв, а
@@ -829,7 +942,8 @@ class GoogleSpeechSession(
                 }
                 onLog("endOfSegmentedSession — тишина, слушаю дальше")
                 promoteOrphanedPartial("end of segmented session")
-                health.deaf(now)
+                // Своя запись копит звук, пока сессии нет, — глухоты это не стоит.
+                if (feed == null) health.deaf(now)
                 publishMic()
                 // С паузой, а не следующим сообщением очереди: движку дают
                 // закрыть своё, и петля срывов не крутится на полной скорости.
@@ -847,8 +961,10 @@ class GoogleSpeechSession(
             // of one utterance and we restart to keep dictating.
             if (segmented) return
             if (active && !stopping) {
-                // Фраза кончилась, до нового «готов» движок глух (режим перезапусков).
-                health.deaf(android.os.SystemClock.elapsedRealtime())
+                // Фраза кончилась, до нового «готов» движок глух (режим перезапусков),
+                // если только звук не копит своя запись.
+                sessionLive = false
+                if (feed == null) health.deaf(android.os.SystemClock.elapsedRealtime())
                 restartSoon()
             } else {
                 finish()
@@ -863,9 +979,11 @@ class GoogleSpeechSession(
             // at all (a genuinely dead mic).
             if (stopping || !active) { finish(); return }
             val now = android.os.SystemClock.elapsedRealtime()
+            sessionLive = false
             // Сессия упала — до нового «готов» тейк глух: это окно и считаем.
+            // Со своей записью звук ждёт в очереди и глухоты не стоит.
             health.error(error)
-            health.deaf(now)
+            if (feed == null) health.deaf(now)
             publishMic()
             // Words the recognizer refused to finalize (NO_MATCH on rare words)
             // are still in lastPartial - rescue them before anything else.
@@ -896,6 +1014,7 @@ class GoogleSpeechSession(
                 }
                 active = false
                 main.removeCallbacks(idleWatch)
+                releaseOnGiveUp()
                 val r = recognizer; recognizer = null
                 runCatching { r?.destroy() }
                 onError("Системный распознаватель занят. Выключи и включи «Правку» в Спец. возможностях (или перезагрузи телефон) и попробуй снова.")
@@ -906,6 +1025,7 @@ class GoogleSpeechSession(
                 if (liveText().isBlank()) {
                     active = false
                     main.removeCallbacks(idleWatch)
+                    releaseOnGiveUp()
                     val r = recognizer; recognizer = null
                     runCatching { r?.destroy() }
                     onError(errorText(error))
@@ -923,7 +1043,11 @@ class GoogleSpeechSession(
     // ---- Кто слушает: кружок микрофона в пилюле ----
 
     /** Кто слушает и слышит ли прямо сейчас — для пилюли, которая только что встала. */
-    fun micState(): MicPlan.Mic = MicPlan.Mic(headset = headsetMic, hearing = health.hearing && !routeMoving)
+    fun micState(): MicPlan.Mic = MicPlan.Mic(
+        headset = headsetMic,
+        // Своя запись слышит с тапа и копит звук сквозь перезапуски распознавателя.
+        hearing = (if (feed != null) true else health.hearing) && !routeMoving,
+    )
 
     private fun publishMic() {
         val sink = micSink ?: return
@@ -968,6 +1092,7 @@ class GoogleSpeechSession(
      */
     fun switchMic(wantHeadset: Boolean): String? {
         if (!active || stopping || recognizer == null) return "Запись уже кончилась"
+        feed?.let { return switchFeed(it, wantHeadset) }
         val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val change = MicPlan.change(
             wantHeadset = wantHeadset,
@@ -1039,6 +1164,14 @@ class GoogleSpeechSession(
         if (heard != null) {
             health.heard(heard.label)
             onLog("микрофон встал за $waitedMs мс: слушает ${heard.label}")
+            // Кружок показывает, что слушает на деле, а не что заказали: до
+            // 28.09 он говорил «наушники», пока распознаватель слушал телефон.
+            if (heard.headset != headsetMic) {
+                headsetMic = heard.headset
+                noticeSink?.let {
+                    runCatching { it(if (heard.headset) "Слушают наушники" else "Распознаватель слушает телефон — наушники ему не отдаются") }
+                }
+            }
         } else {
             onLog("микрофон: кто слушает — системе не видно, верю маршруту")
         }
@@ -1053,7 +1186,7 @@ class GoogleSpeechSession(
      */
     private fun relisten() {
         val r = recognizer ?: return
-        health.deaf(android.os.SystemClock.elapsedRealtime())
+        if (feed == null) health.deaf(android.os.SystemClock.elapsedRealtime())
         publishMic()
         val at = listenAtMs
         runCatching { r.stopListening() }
@@ -1064,6 +1197,250 @@ class GoogleSpeechSession(
                 startListening()
             }
         }, RELISTEN_GUARD_MS)
+    }
+
+    // ---- Свой микрофон (MicFeed) ----
+
+    /**
+     * Распознаватель сдался (занят, мёртв) и тейк кончается ошибкой, минуя
+     * [finish]: своя запись не должна писать дальше в пустоту, а канал
+     * гарнитуры, если поднимали мы, — держать музыку в наушниках немой.
+     */
+    private fun releaseOnGiveUp() {
+        routeWatch?.let { main.removeCallbacks(it) }
+        routeWatch = null
+        feedWatch?.let { main.removeCallbacks(it) }
+        feedWatch = null
+        sessionLive = false
+        feed?.abort()
+        feed = null
+        if (routeOurs) {
+            routeOurs = false
+            runCatching { MicRouting.drop(context.getSystemService(Context.AUDIO_SERVICE) as AudioManager, onLog) }
+        }
+        health.close(android.os.SystemClock.elapsedRealtime())
+    }
+
+    private var recognizerReadyOnce = false
+
+    /** «Говори» — один раз за тейк: с первого «готов» распознавателя или сразу, если звук копит своя запись. */
+    private fun fireReady() {
+        if (readyFired) return
+        readyFired = true
+        onReady()
+    }
+
+    /**
+     * Открыть свою запись и отдать распознавателю её звук (`MicFeed`): если
+     * позволяет настройка, Android 13+, нет разговора и распознаватель этого
+     * пути наш звук ещё не отверг. true — тейк пошёл этой дорогой.
+     */
+    private fun tryFeed(am: AudioManager, plan: MicPlan.Route, inCall: Boolean): Boolean {
+        val app = context.applicationContext as? ru.zf.pravka.PravkaApp
+        if (app?.speechOwnMic == false) {
+            onLog("свой микрофон выключен настройкой — распознаватель слушает сам")
+            return false
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        if (feedVerdict[network] == false) {
+            onLog("свой микрофон: этот путь звук Правки не берёт — распознаватель слушает сам")
+            return false
+        }
+        if (inCall) {
+            onLog("идёт разговор — свой микрофон не открываю")
+            return false
+        }
+        val f = MicFeed.open(onLog) ?: return false
+        // Телефон — сразу; гарнитура — когда по её каналу пойдёт звук (followFeed).
+        f.setDevice(MicRouting.builtinMic(am))
+        f.onLevel = { level -> main.post { levelSink?.let { sink -> runCatching { sink(level) } } } }
+        if (!f.start()) return false
+        feed = f
+        health.fed = true
+        val wantHeadset = plan == MicPlan.Route.HEADSET
+        headsetMic = wantHeadset
+        routeMoving = wantHeadset
+        onLog("свой микрофон: слушает Правка, распознаватель получает её звук" + if (wantHeadset) " — перевожу на гарнитуру" else "")
+        if (wantHeadset) {
+            if (!MicRouting.commIsHeadset(am) && MicRouting.toHeadset(am, onLog)) routeOurs = true
+            followFeed(wantHeadset = true, sinceMs = android.os.SystemClock.elapsedRealtime())
+        } else {
+            followFeed(wantHeadset = false, sinceMs = android.os.SystemClock.elapsedRealtime())
+        }
+        publishMic()
+        // Путь наш звук уже брал — звать говорить можно с тапа: сказанное до
+        // «готов» распознавателя ляжет в очередь и дойдёт до него целиком.
+        if (feedVerdict[network] == true) fireReady()
+        startListening()
+        return true
+    }
+
+    /**
+     * Читает ли распознаватель наш звук. Открыл свой микрофон — наш звук ему не
+     * нужен: запись закрываем, он дослушивает сам, и путь запоминается. Не
+     * читает и своего не открыл — поднимаем его заново уже без нашей трубы.
+     * Система заглушила нашу запись — тоже отдаём микрофон распознавателю.
+     */
+    private fun checkFeed(again: Boolean) {
+        val f = feed ?: return
+        if (!active || stopping) return
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val foreign = MicRouting.foreignCapture(am, f.sessionId)
+        val read = f.writtenBytes - feedWrittenAtReady
+        when {
+            f.silenced() -> dropFeed("система заглушила запись Правки — микрофон у другого", verdict = null, relisten = true)
+            foreign != null -> dropFeed("распознаватель звук Правки не берёт — открыл свой микрофон (${foreign.label})", verdict = false, relisten = false)
+            read >= FEED_READ_PROOF_BYTES -> {
+                if (feedVerdict.put(network, true) != true) onLog("свой микрофон: распознаватель берёт звук Правки")
+                startFeedWatch()
+            }
+            !again -> main.postDelayed({ checkFeed(again = true) }, FEED_CHECK_AGAIN_MS)
+            else -> dropFeed("распознаватель звук Правки не читает", verdict = false, relisten = true)
+        }
+    }
+
+    /**
+     * Своя запись больше не нужна или невозможна: закрыть, дальше слушает
+     * распознаватель сам. Кружок показывает правду — что слушает теперь; если
+     * просили наушники, а их больше некому слушать, — записка словами.
+     */
+    private fun dropFeed(why: String, verdict: Boolean?, relisten: Boolean) {
+        val f = feed ?: return
+        onLog("свой микрофон: $why — дальше распознаватель слушает сам")
+        if (verdict != null) feedVerdict[network] = verdict
+        feed = null
+        f.abort()
+        feedWatch?.let { main.removeCallbacks(it) }
+        feedWatch = null
+        routeWatch?.let { main.removeCallbacks(it) }
+        routeWatch = null
+        routeMoving = false
+        health.fed = false
+        val wanted = headsetMic
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val heard = MicRouting.recognizerInput(am)
+        headsetMic = heard?.headset == true
+        heard?.let { health.heard(it.label) }
+        if (wanted && !headsetMic) {
+            noticeSink?.let { runCatching { it("Распознаватель не берёт звук Правки — наушники недоступны, слушает телефон") } }
+        }
+        publishMic()
+        if (relisten && active && !stopping) relisten()
+    }
+
+    /** Сторож трубы: сессия идёт, звук ждёт, а распознаватель не читает — поднять его заново. */
+    private fun startFeedWatch() {
+        if (feedWatch != null) return
+        val w = object : Runnable {
+            override fun run() {
+                val f = feed ?: return
+                if (!active || stopping) return
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (sessionLive && f.backlogMs() > 0 &&
+                    now - f.lastWriteAtMs > FEED_STALL_MS && now - listenAtMs > FEED_STALL_MS
+                ) {
+                    onLog("свой микрофон: распознаватель ${(now - f.lastWriteAtMs) / 1000} с не читает — поднимаю заново, звук ждёт в очереди")
+                    relisten()
+                }
+                main.postDelayed(this, 1_000L)
+            }
+        }
+        feedWatch = w
+        main.postDelayed(w, 1_000L)
+    }
+
+    /**
+     * Смена микрофона своей записи: вход указывается прямо, распознаватель её
+     * даже не замечает. Гарнитуре сперва поднимается канал ([MicRouting.toHeadset]),
+     * и запись переезжает, когда по нему пошёл звук, — до того слушает телефон,
+     * без дыры. Обратно — сразу на телефон, а канал, если поднимали мы,
+     * опускается: музыка в наушниках молчит, пока он поднят.
+     */
+    private fun switchFeed(f: MicFeed, wantHeadset: Boolean): String? {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        if (MicRouting.callInProgress(am)) return "Идёт разговор — микрофон не переключаю"
+        if (wantHeadset) {
+            if (MicRouting.headsetMic(am) == null) return "Наушников не видно — слушает телефон"
+            if (!MicRouting.commIsHeadset(am)) {
+                if (!MicRouting.toHeadset(am, onLog)) return "Наушники не отозвались — слушает телефон"
+                routeOurs = true
+            }
+        } else {
+            f.setDevice(MicRouting.builtinMic(am))
+            if (routeOurs) {
+                routeOurs = false
+                MicRouting.drop(am, onLog)
+            }
+        }
+        onLog("микрофон посреди тейка (своя запись): ${if (wantHeadset) "гарнитура" else "телефон"}")
+        headsetMic = wantHeadset
+        routeMoving = true
+        publishMic()
+        followFeed(wantHeadset, android.os.SystemClock.elapsedRealtime())
+        return null
+    }
+
+    /**
+     * Довести свою запись до нужного входа и убедиться, что она там: вход
+     * записи спрашивается у неё самой (`routedDevice`). Гарнитура не отдала
+     * вход за [FEED_ROUTE_MS] — обратно на телефон, и записка словами.
+     */
+    private fun followFeed(wantHeadset: Boolean, sinceMs: Long) {
+        routeWatch?.let { main.removeCallbacks(it) }
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        var preferred = !wantHeadset
+        val step = object : Runnable {
+            override fun run() {
+                val f = feed ?: return
+                if (!active || stopping) return
+                val waited = android.os.SystemClock.elapsedRealtime() - sinceMs
+                if (!preferred && (MicRouting.scoAudioConnected(context) || waited >= SCO_PREFER_ANYWAY_MS)) {
+                    preferred = true
+                    f.setDevice(MicRouting.headsetMic(am))
+                    onLog(
+                        if (waited >= SCO_PREFER_ANYWAY_MS) "канал гарнитуры не отозвался за $waited мс — перевожу запись всё равно"
+                        else "канал гарнитуры поднялся за $waited мс — запись переезжает на гарнитуру"
+                    )
+                }
+                val routed = f.routed()
+                val arrived = preferred && routed != null && MicRouting.isHeadsetDevice(routed) == wantHeadset
+                when {
+                    arrived -> {
+                        routeWatch = null
+                        routeMoving = false
+                        headsetMic = wantHeadset
+                        health.heard(MicRouting.label(routed))
+                        onLog("микрофон встал за $waited мс: слушает ${MicRouting.label(routed)}")
+                        publishMic()
+                    }
+                    waited < FEED_ROUTE_MS -> main.postDelayed(this, FEED_POLL_MS)
+                    wantHeadset -> {
+                        f.setDevice(MicRouting.builtinMic(am))
+                        routeWatch = null
+                        routeMoving = false
+                        headsetMic = false
+                        onLog("гарнитура так и не отдала вход (запись: ${MicRouting.label(routed)}) — слушает телефон")
+                        if (routeOurs) {
+                            routeOurs = false
+                            MicRouting.drop(am, onLog)
+                        }
+                        health.heard("телефон")
+                        noticeSink?.let { runCatching { it("Наушники не отдали микрофон — слушает телефон") } }
+                        publishMic()
+                    }
+                    else -> {
+                        routeWatch = null
+                        routeMoving = false
+                        headsetMic = MicRouting.isHeadsetDevice(routed)
+                        health.heard(MicRouting.label(routed))
+                        onLog("микрофон: запись слушает ${MicRouting.label(routed)}")
+                        publishMic()
+                    }
+                }
+            }
+        }
+        routeWatch = step
+        main.post(step)
     }
 
     private fun errorText(code: Int): String = when (code) {

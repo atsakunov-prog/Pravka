@@ -82,6 +82,9 @@ class TakeHealthTest {
         h.close(9_000)
         assertEquals("старт 800 мс · глухо 1200 мс (1 окно) · ошибки 11×1 · слушал телефон", h.summary())
         assertEquals("старт: движок не отозвался · глухо 0 мс", TakeHealth(0).summary())
+        // Своя запись Правки кормила распознаватель — это видно в той же строке.
+        val fed = TakeHealth(0).apply { ready(400); heard("гарнитура «OpenComm2»"); fed = true }
+        assertEquals("старт 400 мс · глухо 0 мс · слушал гарнитура «OpenComm2» · звук Правки", fed.summary())
     }
 
     @Test

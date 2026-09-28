@@ -125,17 +125,54 @@ object MicRouting {
         val c = live.firstOrNull { it.clientAudioSource == MediaRecorder.AudioSource.VOICE_RECOGNITION }
             ?: live.firstOrNull()
             ?: return@runCatching null
+        heardOf(c)
+    }.getOrNull()
+
+    /**
+     * Чужая запись с микрофона, пока идёт наша ([ownSession] — номер сессии
+     * своей записи, `MicFeed.sessionId`). Распознаватель, который не принял
+     * наш звук, открывает микрофон сам — и появляется ровно здесь. Горячее
+     * слово и служебные источники не в счёт. null — чужой записи нет.
+     */
+    fun foreignCapture(am: AudioManager, ownSession: Int): Heard? = runCatching {
+        am.activeRecordingConfigurations
+            .firstOrNull { it.clientAudioSource < SYSTEM_SOURCES && it.clientAudioSessionId != ownSession }
+            ?.let { heardOf(it) }
+    }.getOrNull()
+
+    private fun heardOf(c: android.media.AudioRecordingConfiguration): Heard {
         val silenced = Build.VERSION.SDK_INT >= 29 && c.isClientSilenced
         val dev = c.audioDevice
-        val headset = dev != null && isHeadset(dev)
-        val label = when {
-            dev == null -> "вход не виден"
-            headset -> "гарнитура «${dev.productName}»"
-            dev.type == AudioDeviceInfo.TYPE_BUILTIN_MIC -> "телефон"
-            else -> dev.productName.toString().ifBlank { "вход ${dev.type}" }
+        val label = label(dev)
+        return Heard(dev != null && isHeadset(dev), if (silenced) "$label (заглушена)" else label, silenced)
+    }
+
+    /** Вход словами: «телефон», «гарнитура «OpenComm2»». */
+    fun label(dev: AudioDeviceInfo?): String = when {
+        dev == null -> "вход не виден"
+        isHeadset(dev) -> "гарнитура «${dev.productName}»"
+        dev.type == AudioDeviceInfo.TYPE_BUILTIN_MIC -> "телефон"
+        else -> dev.productName.toString().ifBlank { "вход ${dev.type}" }
+    }
+
+    /** Вход — Bluetooth-гарнитура (канал связи или BLE). */
+    fun isHeadsetDevice(dev: AudioDeviceInfo?): Boolean = dev != null && isHeadset(dev)
+
+    /**
+     * Звук по каналу гарнитуры уже идёт (SCO поднят), а не только заказан.
+     * Спрашивается у липкой рассылки системы: последний её ответ хранится, и
+     * приёмник для этого не нужен. До этого мига запись с гарнитуры дала бы
+     * тишину — поэтому своя запись переезжает на неё только теперь.
+     */
+    fun scoAudioConnected(context: Context): Boolean = runCatching {
+        val filter = IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
+        val sticky = if (Build.VERSION.SDK_INT >= 33) {
+            context.registerReceiver(null, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            context.registerReceiver(null, filter)
         }
-        Heard(headset, if (silenced) "$label (заглушена)" else label, silenced)
-    }.getOrNull()
+        sticky?.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1) == AudioManager.SCO_AUDIO_STATE_CONNECTED
+    }.getOrDefault(false)
 
     /** Источники от этого номера — служебные (горячее слово, эхо, тюнер), не диктовка. */
     private const val SYSTEM_SOURCES = 1997

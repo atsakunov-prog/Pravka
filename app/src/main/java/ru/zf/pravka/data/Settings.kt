@@ -50,6 +50,7 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_FORMATTING = booleanPreferencesKey("speech_formatting")
         private val KEY_SPEECH_BIASING = booleanPreferencesKey("speech_biasing")
         private val KEY_SPEECH_NETWORK = booleanPreferencesKey("speech_network")
+        private val KEY_SPEECH_OWN_MIC = booleanPreferencesKey("speech_own_mic")
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
@@ -334,6 +335,19 @@ class Settings(private val context: Context) {
     val speechNetworkFlow = context.dataStore.data.map { it[KEY_SPEECH_NETWORK] ?: true }
     suspend fun setSpeechNetwork(value: Boolean) {
         context.dataStore.edit { it[KEY_SPEECH_NETWORK] = value }
+    }
+
+    /**
+     * Микрофон держит Правка, распознаватель получает её звук (`MicFeed`,
+     * 28.09.2026; владелец: «отходил далеко в наушниках… телефон просто
+     * переставал это слышать… переключения — мнимые»). С завода — да;
+     * выключено — прежняя дорога: распознаватель слушает сам, а мы только
+     * просим маршрут. Откат одним движением, если своя запись где-то сломает
+     * распознавание.
+     */
+    val speechOwnMicFlow = context.dataStore.data.map { it[KEY_SPEECH_OWN_MIC] ?: true }
+    suspend fun setSpeechOwnMic(value: Boolean) {
+        context.dataStore.edit { it[KEY_SPEECH_OWN_MIC] = value }
     }
 
     /**
