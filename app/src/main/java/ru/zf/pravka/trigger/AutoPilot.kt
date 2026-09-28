@@ -1439,32 +1439,13 @@ class AutoPilot(
         }
         lastStillAsk = now
         lastFire = "движение при «${open.title}»"
-        // Сначала плашкой сверху — той же, что «всё ещё …?» по базовому
-        // времени: «Да» и «Наговорить» с якорем в момент первого толчка
-        // (владелец, 27.09.2026). Экран заперт или пилюля занята — пушем.
-        val motionAt = stillMotionAt
-        val shown = service.zButton?.showAsk(
-            question = "Всё ещё «${open.title}»?",
-            detail = "«${open.title}» с ${timeHm(open.start)} · телефон задвигался в ${timeHm(motionAt)}" +
-                " и с тех пор не лежит ($stillMotions толчков)",
-            onYes = { Feedback.toast(app, "Ок, считаем дальше") },
-            onSay = { service.askAndRecord(open.title, open.start, motionAt) },
-        ) == true
-        if (!shown) {
-            notify(
-                "Всё ещё «${open.title}»?",
-                "Телефон задвигался в ${timeHm(stillMotionAt)} и с тех пор не лежит " +
-                    "($stillMotions толчков за 10 мин). Продолжаешь — просто смахни.",
-                listOf(
-                    action("Закончил в ${timeHm(stillMotionAt)}", WHAT_STILL_DONE, stillMotionAt, ""),
-                    sayAction(stillMotionAt, "Наговорить"),
-                ),
-            )
-        }
-        app.eventLog.add(
-            "автопилот: движение при «${open.title}» с ${timeHm(stillMotionAt)}, толчков $stillMotions — спросил" +
-                if (shown) " плашкой" else " пушем"
+        notify(
+            "Всё ещё «${open.title}»?",
+            "Телефон задвигался в ${timeHm(stillMotionAt)} и с тех пор не лежит " +
+                "($stillMotions толчков за 10 мин). Продолжаешь — просто смахни.",
+            listOf(action("Закончил в ${timeHm(stillMotionAt)}", WHAT_STILL_DONE, stillMotionAt, "")),
         )
+        app.eventLog.add("автопилот: движение при «${open.title}» с ${timeHm(stillMotionAt)}, толчков $stillMotions — спросил")
     }
 
     // ---- Кнопки уведомлений (через AutoPilotActivity) ----

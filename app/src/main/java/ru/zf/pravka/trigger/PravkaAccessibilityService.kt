@@ -136,12 +136,6 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     @Volatile internal var zAnchorStart = 0L
     @Volatile internal var zAnchorEnd = 0L
-    /**
-     * Подпись пилюли для тейка из вопроса «всё ещё …?» (««Обед» с 14:10 —
-     * что вместо?»): владелец наговаривает, видя, какое дело застряло и с
-     * какого времени. Живёт вместе с якорем, потребляется тем же тейком.
-     */
-    @Volatile internal var zAskHint = ""
     /** Запись, которую правит ближайший тейк «З» (микрофон в редакторе записи); 0 — обычный тап. */
     @Volatile internal var zEditTargetId = 0L
     @Volatile internal var zAnchorSetAt = 0L
@@ -1173,7 +1167,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                 zAnchorStart = 0L
                 zAnchorEnd = 0L
                 zEditTargetId = 0L
-                zAskHint = ""
                 file?.let { app.recordings.delete(it.name) }
                 zButton?.hideTicker()
                 zButton?.setBusy(false)

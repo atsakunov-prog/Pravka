@@ -156,15 +156,10 @@ internal fun PravkaAccessibilityService.startZasechkaComment(entryId: Long) {
     startZasechkaCapture()
 }
 
-/**
- * Подпись плашки на старте: мысль должна быть узнаваема с первого взгляда, а
- * ответ на «всё ещё …?» — показывать, какое дело застряло и с какого времени.
- */
-internal fun PravkaAccessibilityService.zTickerPrompt(): String = when {
-    zCommentFor > 0L -> ru.zf.pravka.core.PillHint.thought(app.profileStore.current?.name)
-    zAskHint.isNotBlank() && zAnchorStart > 0L -> zAskHint
-    else -> listenHint()
-}
+/** Подпись плашки на старте: мысль должна быть узнаваема с первого взгляда. */
+internal fun PravkaAccessibilityService.zTickerPrompt(): String =
+    if (zCommentFor > 0L) ru.zf.pravka.core.PillHint.thought(app.profileStore.current?.name)
+    else listenHint()
 
 internal fun PravkaAccessibilityService.startZasechkaCapture() {
     zButton?.hideInput()
@@ -438,7 +433,6 @@ internal fun PravkaAccessibilityService.onZasechkaText(
     zAnchorStart = 0L
     zAnchorEnd = 0L
     zEditTargetId = 0L
-    zAskHint = ""
     val spoken = zFromHeadset
     zFromHeadset = false
     // Развилка: Сонет решает, что это за фраза — лента, мысль к делу, еда
@@ -689,13 +683,10 @@ internal fun PravkaAccessibilityService.zasechkaReminderCheck() {
 /**
  * «Всё ещё «Обед»?» - every category carries the owner's typical length
  * for it; when the running дело outlives that, the button winks and asks.
- * «Да» resets the clock (ask again after another base period),
- * «Наговорить» starts a take on the spot that KNOWS what is stuck: the
- * pill says «„Обед“ с 14:10 — что вместо?», the anchor is the moment of the
- * question, so what he says lands from here unless he names a time (владелец,
- * 27.09.2026). Plate at the top, like every other plate (`showAsk`). Never
- * on a locked screen and never for the auto-filled «Потери» - losses are
- * not a дело to confirm.
+ * «Да» resets the clock (ask again after another base period), «Нет»
+ * starts a new take on the spot. Never on a locked screen (the bubble
+ * would sit unseen above the keyguard) and never for the auto-filled
+ * «Потери» - losses are not a дело to confirm.
  */
 internal suspend fun PravkaAccessibilityService.checkInOnOpenEntry(
     open: ru.zf.pravka.data.ZasechkaStore.Entry,
@@ -721,9 +712,8 @@ internal suspend fun PravkaAccessibilityService.checkInOnOpenEntry(
         .apply()
     val name = open.title.ifBlank { open.category.ifBlank { "дело" } }
     Haptics.start(this)
-    val shown = zButton?.showAsk(
-        question = "Всё ещё «$name»?",
-        detail = "«$name» с ${zHm(open.start)} · идёт ${zDur(now - open.start)}",
+    zButton?.showAsk(
+        question = "Всё ещё «$name»? Идёт ${zDur(now - open.start)}",
         onYes = {
             getSharedPreferences(PravkaAccessibilityService.PREFS_INTERNAL, android.content.Context.MODE_PRIVATE).edit()
                 .putLong(PravkaAccessibilityService.KEY_Z_ASK_ID, open.id)
@@ -731,28 +721,12 @@ internal suspend fun PravkaAccessibilityService.checkInOnOpenEntry(
                 .apply()
             Feedback.toast(this, "Ок, считаем дальше")
         },
-        // Straight into a take that knows the context: the pill shows what
-        // is stuck and since when, the anchor is the question's moment.
-        onSay = { askAndRecord(name, open.start, now) },
-    ) == true
-    app.eventLog.add(
-        "засечка: спросил «всё ещё $name?» (база $baseMin мин)" + if (shown) "" else " — плашка не показалась"
+        // Straight into a new take: the mic starts, and a tap on the live
+        // plate switches to typing if the answer is private.
+        onNo = { onZasechkaTap() },
     )
+    app.eventLog.add("засечка: спросил «всё ещё $name?» (база $baseMin мин)")
 }
-
-/**
- * «Наговорить» из вопроса «всё ещё …?»: тейк «З» с якорем в момент вопроса
- * [askedAt] и подписью пилюли «„Обед“ с 14:10 — что вместо?». Названное
- * владельцем время сильнее якоря («с трёх был звонок»); без времени сказанное
- * ложится с момента вопроса, а застрявшее дело закрывается там же.
- */
-internal fun PravkaAccessibilityService.askAndRecord(name: String, since: Long, askedAt: Long) {
-    zAskHint = "«$name» с ${zHm(since)} — что вместо?"
-    onZasechkaTap(anchorStart = askedAt)
-}
-
-internal fun zHm(ms: Long): String =
-    java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))
 
 internal fun PravkaAccessibilityService.zNotify(title: String, text: String) {
     runCatching {
