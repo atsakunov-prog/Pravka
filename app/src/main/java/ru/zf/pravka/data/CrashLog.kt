@@ -33,12 +33,18 @@ object CrashLog {
     fun install(context: Context) {
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, e ->
-            runCatching { write(context, thread.name, e) }
+            runCatching { note(context, thread.name, e, fatal = true) }
             prev?.uncaughtException(thread, e)
         }
     }
 
-    private fun write(context: Context, thread: String, e: Throwable) {
+    /**
+     * Записать ошибку. [fatal] — процесс сейчас умрёт (необработанное
+     * исключение); false — перехвачена обработчиком корутин и процесс жив,
+     * но место знать всё равно надо: в журнале событий от неё одна строка
+     * с первым кадром, стек целиком — здесь.
+     */
+    fun note(context: Context, where: String, e: Throwable, fatal: Boolean) {
         val f = File(DataRoot.dir(context), FILE)
         if (f.exists() && f.length() > MAX_BYTES) {
             f.renameTo(File(DataRoot.dir(context), "$FILE.1"))
@@ -46,8 +52,11 @@ object CrashLog {
         val sw = StringWriter()
         e.printStackTrace(PrintWriter(sw))
         val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
-        f.appendText("=== $stamp · поток $thread\n$sw\n", Charsets.UTF_8)
+        f.appendText("=== $stamp · $where · ${if (fatal) FATAL else CAUGHT}\n$sw\n", Charsets.UTF_8)
     }
+
+    private const val FATAL = "УПАЛ"
+    private const val CAUGHT = "перехвачено"
 
     /**
      * Последнее падение одной строкой — для журнала при подъёме службы:
@@ -63,7 +72,7 @@ object CrashLog {
         val block = text.split("=== ").lastOrNull { it.isNotBlank() } ?: return null
         val lines = block.lines()
         val head = lines.firstOrNull().orEmpty()
-        val cause = lines.drop(1).firstOrNull { it.isNotBlank() }.orEmpty()
+        val cause = lines.drop(1).firstOrNull { it.isNotBlank() }.orEmpty().take(200)
         // Первый кадр из нашего кода — точнее любого «at android.…».
         val frame = lines.drop(1).take(FRAMES * 4)
             .firstOrNull { it.trim().startsWith("at ru.zf.pravka") }

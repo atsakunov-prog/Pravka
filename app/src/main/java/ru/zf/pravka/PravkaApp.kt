@@ -203,8 +203,18 @@ class PravkaApp : Application() {
     // UI-independent scope: learning accept/reject must survive tab switches
     // and the settings screen closing (rememberCoroutineScope dies with them -
     // that was the "принял четыре правила, записалось одно" bug).
+    // Необработанная ошибка в корутине этого scope раньше убивала ВЕСЬ
+    // процесс — вместе со службой доступности и диском на экране, и без
+    // строки в журнале. У службы такой перехватчик есть с лета; здесь его не
+    // было. Теперь — как у неё: строка в журнал, стек в crash.log, процесс жив.
     val appScope = kotlinx.coroutines.CoroutineScope(
-        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main +
+            kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+                runCatching {
+                    ru.zf.pravka.data.CrashLog.note(this, "фон приложения", e, fatal = false)
+                    eventLog.add("CRASH (фон приложения) ${e.javaClass.simpleName}: ${e.message} @ ${e.stackTrace.firstOrNull()}")
+                }
+            }
     )
     val learnLog by lazy { ru.zf.pravka.data.EventLog(this, "learning.log") }
     val rulesStore by lazy { ru.zf.pravka.data.RulesStore(this) }
