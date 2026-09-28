@@ -43,6 +43,24 @@ class TakeHealth(private val startedAtMs: Long) {
      */
     var fed: Boolean? = null
 
+    /**
+     * Сколько раз распознаватель застревал: слышал речь, а слов не отдавал
+     * (владелец, 28.09.2026: «в конце может застревать и просто вообще уже
+     * ничего не воспринимать»), — и его поднимали заново.
+     */
+    var stuck = 0
+        private set
+
+    /** Сколько секунд речи ушло в пустые куски за весь тейк, мс. */
+    var mutedSpeechMs = 0L
+        private set
+
+    fun stuck(speechMs: Long) {
+        if (closed) return
+        stuck++
+        mutedSpeechMs += speechMs.coerceAtLeast(0)
+    }
+
     private var deafSince = 0L
     private var closed = false
     private val errors = sortedMapOf<Int, Int>()
@@ -110,6 +128,7 @@ class TakeHealth(private val startedAtMs: Long) {
         append(" · глухо ").append(deafMs).append(" мс")
         if (gaps > 0) append(" (").append(gaps).append(" ").append(windows(gaps)).append(")")
         errorsLine().takeIf { it.isNotEmpty() }?.let { append(" · ошибки ").append(it) }
+        if (stuck > 0) append(" · застревал ").append(stuck).append(" раз (").append(mutedSpeechMs).append(" мс речи без слов)")
         mic?.let { append(" · слушал ").append(it) }
         when (fed) {
             true -> append(" · звук Правки")
@@ -131,8 +150,9 @@ class TakeHealth(private val startedAtMs: Long) {
          * слов, — глухие окна, долгий старт, гарнитура. Всё в порядке — null,
          * карточка остаётся прежней.
          */
-        fun cardLine(startupMs: Long, deafMs: Long, gaps: Int, mic: String?, locale: Locale): String? {
+        fun cardLine(startupMs: Long, deafMs: Long, gaps: Int, mic: String?, locale: Locale, stuck: Int = 0): String? {
             val parts = mutableListOf<String>()
+            if (stuck > 0) parts += "застревал $stuck раз — поднимал заново"
             if (deafMs >= SHOW_DEAF_MS) {
                 val sec = String.format(locale, "%.1f", deafMs / 1000.0)
                 parts += "глухо $sec с" + (if (gaps > 1) " ($gaps ${windows(gaps)})" else "")

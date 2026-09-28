@@ -52,6 +52,7 @@ class TranscriptionLog(private val context: Context) {
         val deafGaps = health?.gaps
         val errors = health?.errorsLine()
         val mic = health?.mic
+        val stuck = health?.stuck ?: 0
         DiskWriter.post {
             if (file.exists() && file.length() > MAX_BYTES) {
                 val backup = File(DataRoot.dir(context), "$FILE_NAME.1")
@@ -73,6 +74,7 @@ class TranscriptionLog(private val context: Context) {
                 if (deafGaps != null) put("deaf_gaps", deafGaps)
                 if (!errors.isNullOrEmpty()) put("errors", errors)
                 if (mic != null) put("mic", mic)
+                if (stuck > 0) put("stuck", stuck)
             }
             file.appendText(entry.toString() + "\n")
         }
@@ -110,6 +112,8 @@ class TranscriptionLog(private val context: Context) {
         val errors: String = "",
         /** Кто слушал: «телефон», «гарнитура «…»», при смене — через стрелку. */
         val mic: String? = null,
+        /** Сколько раз распознаватель застревал (речь без слов) и поднимался заново. */
+        val stuck: Int = 0,
     ) {
         // >1 means slower than realtime, <1 faster. 0 when audio length unknown.
         val realtimeFactor: Double get() = if (audioMs > 0) transcribeMs.toDouble() / audioMs else 0.0
@@ -140,6 +144,7 @@ class TranscriptionLog(private val context: Context) {
                             deafGaps = o.optInt("deaf_gaps", 0),
                             errors = if (o.has("errors")) o.optString("errors") else "",
                             mic = if (o.has("mic")) o.optString("mic") else null,
+                            stuck = o.optInt("stuck", 0),
                         )
                     }.getOrNull()
                 }
@@ -177,6 +182,7 @@ class TranscriptionLog(private val context: Context) {
                     if (e.startupMs >= 0) { put("deaf_ms", e.deafMs); put("deaf_gaps", e.deafGaps) }
                     if (e.errors.isNotEmpty()) put("errors", e.errors)
                     if (e.mic != null) put("mic", e.mic)
+                    if (e.stuck > 0) put("stuck", e.stuck)
                 }
                 w.write(o.toString()); w.write("\n")
             }

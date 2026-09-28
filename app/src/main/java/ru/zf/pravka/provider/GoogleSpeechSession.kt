@@ -138,9 +138,23 @@ class GoogleSpeechSession(
     private var feed: MicFeed? = null
     /** Сколько байт ушло распознавателю к первому «готов» — отсюда видно, читает ли он. */
     private var feedWrittenAtReady = 0L
-    private var feedWatch: Runnable? = null
+    /** Распознаватель этого тейка читает наш звук — проверено ([checkFeed]). */
+    private var feedAccepted = false
     /** Сессия распознавателя сейчас идёт (между startListening и её концом или ошибкой). */
     private var sessionLive = false
+    /** Сколько сессий распознавателя заведено за тейк: первая звук не повторяет. */
+    private var sessionsStarted = 0
+
+    // ---- Застрял (ListenPolicy.stuck): речь слышит, слов не отдаёт ----
+    /** Когда началась текущая речь (beginSpeech); 0 — речи нет. */
+    private var speechBeganAtMs = 0L
+    /** Речь с прошлого куска, мс: уходит в [mutedSpeechMs], если кусок пуст. */
+    private var speechSinceSegmentMs = 0L
+    /** Речь подряд без единого слова, мс. */
+    private var mutedSpeechMs = 0L
+    /** Подъёмов подряд без слов между ними. */
+    private var stuckRestarts = 0
+    private var stuckNoticed = false
 
     private var onReady: () -> Unit = {}
     private var onPartial: (String) -> Unit = {}
@@ -237,6 +251,9 @@ class GoogleSpeechSession(
 
         /** Звук по каналу гарнитуры не пошёл за столько — переводим запись всё равно. */
         private const val SCO_PREFER_ANYWAY_MS = 1_500L
+
+        /** Сторож микрофона (вход, отвалившиеся наушники, зависшая труба) — раз в столько. */
+        private const val MIC_WATCH_MS = 1_000L
 
         // Only give up after a long run of pure errors with no speech at all
         // (a genuinely dead mic), never on a transient blip mid-dictation.
@@ -524,6 +541,8 @@ class GoogleSpeechSession(
             quickSilences = 0
             main.removeCallbacks(idleWatch)
             main.postDelayed(idleWatch, ListenPolicy.IDLE_CHECK_MS)
+            main.removeCallbacks(micWatch)
+            main.postDelayed(micWatch, MIC_WATCH_MS)
             onLog(
                 "start путь=${if (network) "сеть" else "офлайн-пакет"} " +
                     "служба=${if (network) networkServiceLabel(context) else "офлайн-пакет устройства"} " +
@@ -717,8 +736,17 @@ class GoogleSpeechSession(
         val r = recognizer ?: return
         listenAtMs = android.os.SystemClock.elapsedRealtime()
         val f = feed
-        val source = f?.openSource()
+        // Не первая сессия тейка — повторить ей звук с последнего слова: то, что
+        // прежняя прочла и не разобрала (ошибка, застряла), разберётся заново.
+        val replay = if (f != null && sessionsStarted > 0) {
+            ListenPolicy.replayFrom(lastWordsAtMs, listenAtMs)
+        } else 0L
+        val source = f?.openSource(rewindSinceMs = replay)
         if (f != null && source == null) dropFeed("труба не создалась", verdict = null, relisten = false)
+        if (f != null && source != null && f.lastRewindMs > 0) onLog("повторяю распознавателю ${f.lastRewindMs} мс звука с последнего слова")
+        sessionsStarted++
+        speechBeganAtMs = 0L
+        speechSinceSegmentMs = 0L
         sessionLive = true
         runCatching { r.startListening(intentFor(source)) }.onFailure { restartSoon(afterError = true) }
     }
@@ -771,6 +799,7 @@ class GoogleSpeechSession(
         quickEnds = 0
         quickSilences = 0
         producedAny = true
+        val before = head.length
         var text = firstResult(bundle)?.trim().orEmpty()
         // The engine sometimes finalizes LESS than the partial the owner already
         // watched on the ticker (tail words cut mid-word, rare words dropped).
@@ -800,6 +829,15 @@ class GoogleSpeechSession(
         // One value, one write: onCheckpoint persists it and the caller mirrors
         // it to the ticker, so we don't also push it through onPartial.
         onCheckpoint(head)
+        // Застрял ли: речь с прошлого куска ушла в пустоту — копим; есть слова — счёт с нуля.
+        if (head.length > before) {
+            mutedSpeechMs = 0
+            stuckRestarts = 0
+        } else {
+            mutedSpeechMs += speechSinceSegmentMs
+        }
+        speechSinceSegmentMs = 0
+        if (active && !stopping && ListenPolicy.stuck(mutedSpeechMs)) onStuck()
     }
 
     // The recognizer refused to finalize an utterance (NO_MATCH on rare words,
@@ -835,8 +873,7 @@ class GoogleSpeechSession(
         main.removeCallbacks(idleWatch)
         routeWatch?.let { main.removeCallbacks(it) }
         routeWatch = null
-        feedWatch?.let { main.removeCallbacks(it) }
-        feedWatch = null
+        main.removeCallbacks(micWatch)
         sessionLive = false
         feed?.abort()
         feed = null
@@ -890,6 +927,7 @@ class GoogleSpeechSession(
             quickEnds = 0
             quickSilences = 0
             producedAny = true
+            speechBeganAtMs = android.os.SystemClock.elapsedRealtime()
             onLog("beginSpeech")
         }
         override fun onRmsChanged(rmsdB: Float) {
@@ -898,7 +936,13 @@ class GoogleSpeechSession(
             levelSink?.let { sink -> runCatching { sink(ru.zf.pravka.core.MicLevel.normalise(rmsdB)) } }
         }
         override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onEndOfSpeech() { onLog("endSpeech") }
+        override fun onEndOfSpeech() {
+            if (speechBeganAtMs > 0L) {
+                speechSinceSegmentMs += android.os.SystemClock.elapsedRealtime() - speechBeganAtMs
+                speechBeganAtMs = 0L
+            }
+            onLog("endSpeech")
+        }
 
         override fun onPartialResults(partialResults: Bundle?) {
             val partial = firstResult(partialResults) ?: return
@@ -906,7 +950,11 @@ class GoogleSpeechSession(
                 firstPartialLogged = true
                 onLog("first partial +${android.os.SystemClock.elapsedRealtime() - startedAtMs} ms")
             }
-            if (partial != lastPartial) lastWordsAtMs = android.os.SystemClock.elapsedRealtime()
+            if (partial != lastPartial) {
+                lastWordsAtMs = android.os.SystemClock.elapsedRealtime()
+                // Слова пошли — не застрял.
+                if (partial.isNotBlank()) mutedSpeechMs = 0
+            }
             lastPartial = partial
             onPartial(liveText())
         }
@@ -1209,8 +1257,7 @@ class GoogleSpeechSession(
     private fun releaseOnGiveUp() {
         routeWatch?.let { main.removeCallbacks(it) }
         routeWatch = null
-        feedWatch?.let { main.removeCallbacks(it) }
-        feedWatch = null
+        main.removeCallbacks(micWatch)
         sessionLive = false
         feed?.abort()
         feed = null
@@ -1292,7 +1339,7 @@ class GoogleSpeechSession(
             foreign != null -> dropFeed("распознаватель звук Правки не берёт — открыл свой микрофон (${foreign.label})", verdict = false, relisten = false)
             read >= FEED_READ_PROOF_BYTES -> {
                 if (feedVerdict.put(network, true) != true) onLog("свой микрофон: распознаватель берёт звук Правки")
-                startFeedWatch()
+                feedAccepted = true
             }
             !again -> main.postDelayed({ checkFeed(again = true) }, FEED_CHECK_AGAIN_MS)
             else -> dropFeed("распознаватель звук Правки не читает", verdict = false, relisten = true)
@@ -1310,8 +1357,7 @@ class GoogleSpeechSession(
         if (verdict != null) feedVerdict[network] = verdict
         feed = null
         f.abort()
-        feedWatch?.let { main.removeCallbacks(it) }
-        feedWatch = null
+        feedAccepted = false
         routeWatch?.let { main.removeCallbacks(it) }
         routeWatch = null
         routeMoving = false
@@ -1328,25 +1374,90 @@ class GoogleSpeechSession(
         if (relisten && active && !stopping) relisten()
     }
 
-    /** Сторож трубы: сессия идёт, звук ждёт, а распознаватель не читает — поднять его заново. */
-    private fun startFeedWatch() {
-        if (feedWatch != null) return
-        val w = object : Runnable {
-            override fun run() {
-                val f = feed ?: return
-                if (!active || stopping) return
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (sessionLive && f.backlogMs() > 0 &&
+    /**
+     * Сторож микрофона, раз в секунду на весь тейк. Своя запись: вход сменился
+     * сам (наушники ушли из зоны, разрядились, отдали канал) — кружок и тост
+     * говорят правду; сессия идёт, звук ждёт, а распознаватель не читает —
+     * поднять его заново. Без своей записи: просили наушники, а запись
+     * распознавателя вернулась на телефон — так Android снимает маршрут
+     * связи, который держит не записывающее само приложение (журнал 28.09:
+     * «слушает гарнитура» через 0,75 с, а через полминуты — телефон).
+     */
+    private var micTicks = 0
+    private var headsetDropNoticed = false
+    private val micWatch = object : Runnable {
+        override fun run() {
+            if (!active || stopping) return
+            micTicks++
+            val now = android.os.SystemClock.elapsedRealtime()
+            val f = feed
+            if (f != null) {
+                if (!routeMoving) {
+                    val routed = f.routed()
+                    if (routed != null && MicRouting.isHeadsetDevice(routed) != headsetMic) {
+                        headsetMic = MicRouting.isHeadsetDevice(routed)
+                        health.heard(MicRouting.label(routed))
+                        onLog("вход своей записи сменился сам: слушает ${MicRouting.label(routed)}")
+                        publishMic()
+                        if (!headsetMic) noticeHeadsetDrop("Наушники отвалились — слушает телефон")
+                    }
+                }
+                if (feedAccepted && sessionLive && f.backlogMs() > 0 &&
                     now - f.lastWriteAtMs > FEED_STALL_MS && now - listenAtMs > FEED_STALL_MS
                 ) {
                     onLog("свой микрофон: распознаватель ${(now - f.lastWriteAtMs) / 1000} с не читает — поднимаю заново, звук ждёт в очереди")
                     relisten()
                 }
-                main.postDelayed(this, 1_000L)
+            } else if (headsetMic && !routeMoving && micTicks % 2 == 0) {
+                val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val heard = MicRouting.recognizerInput(am)
+                if (heard != null && !heard.headset) {
+                    headsetMic = false
+                    health.heard(heard.label)
+                    onLog("запись распознавателя сама вернулась на ${heard.label}: маршрут связи Android держит лишь за записывающим приложением")
+                    publishMic()
+                    val ownMicOn = (context.applicationContext as? ru.zf.pravka.PravkaApp)?.speechOwnMic != false
+                    noticeHeadsetDrop(
+                        if (ownMicOn) "Наушники отвалились — распознаватель не берёт звук Правки и слушает телефон"
+                        else "Наушники отвалились — распознаватель слушает телефон. Включи «Микрофон держит Правка»"
+                    )
+                }
             }
+            main.postDelayed(this, MIC_WATCH_MS)
         }
-        feedWatch = w
-        main.postDelayed(w, 1_000L)
+    }
+
+    private fun noticeHeadsetDrop(text: String) {
+        if (headsetDropNoticed) return
+        headsetDropNoticed = true
+        noticeSink?.let { runCatching { it(text) } }
+    }
+
+    /**
+     * Застрял: речь слышит, куски отдаёт пустые ([ListenPolicy.stuck]).
+     * Поднять заново; со своей записью новая сессия получит звук с последнего
+     * слова, и застрявшие секунды разберутся снова. Подряд без слов — сразу
+     * [ListenPolicy.STUCK_MAX_RESTARTS] раза, дальше реже; после второго — записка.
+     */
+    private fun onStuck() {
+        val muted = mutedSpeechMs
+        if (!ListenPolicy.mayRestartStuck(stuckRestarts, muted)) {
+            // Копим дальше: следующий подъём — через полминуты речи без слов.
+            return
+        }
+        mutedSpeechMs = 0
+        stuckRestarts++
+        health.stuck(muted)
+        onLog(
+            "распознаватель застрял: ${muted / 1000} с речи без единого слова — поднимаю заново" +
+                if (feed != null) ", звук с последнего слова повторю" else ""
+        )
+        if (stuckRestarts >= ListenPolicy.STUCK_NOTICE_AFTER && !stuckNoticed) {
+            stuckNoticed = true
+            val who = if (headsetMic) "наушники" else "телефон"
+            noticeSink?.let { runCatching { it("Не разбираю ни слова — слушает $who. Далеко от микрофона?") } }
+        }
+        relisten()
     }
 
     /**

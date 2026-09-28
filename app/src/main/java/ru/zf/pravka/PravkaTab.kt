@@ -443,7 +443,7 @@ private fun TranscriptCard(entry: TranscriptionLog.Entry, ruLoc: Locale, onCopy:
             // Глухие окна, долгий старт, гарнитура (28.09.2026, владелец: «много
             // пропускает слов… хотя вроде бы говорил нормально»): пропало ли
             // слово в распознавании или его вовсе никто не слушал.
-            TakeHealth.cardLine(entry.startupMs, entry.deafMs, entry.deafGaps, entry.mic, ruLoc)?.let { line ->
+            TakeHealth.cardLine(entry.startupMs, entry.deafMs, entry.deafGaps, entry.mic, ruLoc, stuck = entry.stuck)?.let { line ->
                 Spacer(Modifier.height(4.dp))
                 val withErrors = if (entry.errors.isNotEmpty() && entry.deafMs >= TakeHealth.SHOW_DEAF_MS) {
                     "$line · ошибки ${entry.errors}"
@@ -451,7 +451,7 @@ private fun TranscriptCard(entry: TranscriptionLog.Entry, ruLoc: Locale, onCopy:
                 Text(
                     withErrors,
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (entry.deafMs >= TakeHealth.SHOW_DEAF_MS) MaterialTheme.colorScheme.error
+                    color = if (entry.deafMs >= TakeHealth.SHOW_DEAF_MS || entry.stuck > 0) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }

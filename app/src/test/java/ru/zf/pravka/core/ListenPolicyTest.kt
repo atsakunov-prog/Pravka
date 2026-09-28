@@ -83,4 +83,28 @@ class ListenPolicyTest {
         assertEquals(900L, ListenPolicy.restartDelayMs(hardErrors = 2, quickSilences = 1))
         assertEquals(1_500L, ListenPolicy.restartDelayMs(hardErrors = 40, quickSilences = 0))
     }
+
+    @Test
+    fun `речь без слов шесть секунд - распознаватель застрял`() {
+        // Журнал 28.09: пять секунд речи, потом ещё две с половиной — и куски пустые.
+        assertFalse(ListenPolicy.stuck(5_300))
+        assertTrue(ListenPolicy.stuck(8_100))
+        assertTrue(ListenPolicy.stuck(ListenPolicy.STUCK_SPEECH_MS))
+    }
+
+    @Test
+    fun `подъёмы без слов - четыре подряд сразу, дальше раз в полминуты речи`() {
+        assertTrue(ListenPolicy.mayRestartStuck(0, mutedSpeechMs = 6_000))
+        assertTrue(ListenPolicy.mayRestartStuck(ListenPolicy.STUCK_MAX_RESTARTS - 1, mutedSpeechMs = 6_000))
+        assertFalse(ListenPolicy.mayRestartStuck(ListenPolicy.STUCK_MAX_RESTARTS, mutedSpeechMs = 6_000))
+        // Но не бросаем навсегда: застрявшая сессия иначе молчала бы до конца тейка.
+        assertTrue(ListenPolicy.mayRestartStuck(ListenPolicy.STUCK_MAX_RESTARTS, mutedSpeechMs = ListenPolicy.STUCK_LATE_MS))
+    }
+
+    @Test
+    fun `повтор звука - с последнего слова, но не дальше двадцати секунд`() {
+        assertEquals(95_000L, ListenPolicy.replayFrom(lastWordsAtMs = 95_000, nowMs = 100_000))
+        // Слово было две минуты назад — повторяем только последние двадцать секунд.
+        assertEquals(80_000L, ListenPolicy.replayFrom(lastWordsAtMs = -20_000, nowMs = 100_000))
+    }
 }

@@ -11,7 +11,6 @@ import android.os.SystemClock
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.math.log10
 import kotlin.math.sqrt
@@ -26,8 +25,11 @@ import kotlin.math.sqrt
  * слышать… переключения на наушники — мнимые, телефон просто слушает своими
  * микрофонами». Так и было: распознаватель Google открывает микрофон в своём
  * процессе, вход ему не укажешь, и мы только просили систему перевести
- * «связь» на гарнитуру в надежде, что его запись поедет следом. Его запись
- * держит встроенный микрофон — и просьба ничего не значила.
+ * «связь» на гарнитуру в надежде, что его запись поедет следом. Она ехала —
+ * на секунды: Android (14+) держит маршрут связи только за приложением,
+ * которое само пишет или играет звук, а писал распознаватель, и заявку
+ * Правки система снимала (журнал 28.09: «слушает гарнитура» через 0,75 с,
+ * через полминуты — телефон). Когда пишет сама Правка, маршрут — её.
  *
  * Здесь вход выбираем мы: `setPreferredDevice` у СВОЕЙ записи — гарнитура или
  * телефон — и смена на ходу, не трогая распознаватель вовсе. Заодно
@@ -42,6 +44,14 @@ import kotlin.math.sqrt
  * ([openSource]); старую закрывает сам писатель — единственный, кто в неё
  * пишет, — чтобы закрытый номер дескриптора не достался чужому файлу посреди
  * записи.
+ *
+ * Память звука (владелец, 28.09.2026: «иногда в конце может застревать и
+ * просто вообще уже ничего не воспринимать… что бы я ни говорил, ничего не
+ * получается»): последние полторы минуты записи хранятся, и новая сессия
+ * распознавателя может получить звук не с «сейчас», а с последнего слова,
+ * которое прежняя успела разобрать ([openSource] с `rewindSinceMs`). Сессия,
+ * которая слышала речь и не отдала ни слова, заменяется новой, и та
+ * разбирает те же секунды заново.
  */
 @SuppressLint("MissingPermission") // RECORD_AUDIO проверяется до любого тейка
 class MicFeed private constructor(
@@ -68,6 +78,9 @@ class MicFeed private constructor(
 
         /** `F_SETPIPE_SZ` из fcntl.h: в OsConstants его нет. */
         private const val F_SETPIPE_SZ = 1031
+
+        /** Память звука для повтора: полторы минуты. */
+        private const val HISTORY_MAX_BYTES = SAMPLE_RATE * 2 * 90
 
         /** Дописать хвост после стопа — не дольше этого: распознаватель мог перестать читать. */
         private const val DRAIN_MAX_MS = 8_000L
@@ -116,10 +129,26 @@ class MicFeed private constructor(
     private var backlogBytes = 0
     private var droppedBytes = 0L
 
+    /** Кусок записи и когда он кончился (elapsedRealtime) — для повтора. */
+    private class Piece(val atMs: Long, val pcm: ByteArray)
+    private val history = ArrayDeque<Piece>()
+    private var historyBytes = 0
+
+    /**
+     * Номер перемотки: писатель, державший кусок до неё, его выбрасывает —
+     * этот кусок уже лежит в повторе. Меняется под [lock].
+     */
+    private var generation = 0
+
+    /** Сколько звука пошло в повтор при последней перемотке, мс. */
+    @Volatile var lastRewindMs = 0L
+        private set
+
     @Volatile private var running = true
     @Volatile private var draining = false
     @Volatile private var drainDeadline = 0L
-    private val nextTarget = AtomicReference<ParcelFileDescriptor?>(null)
+    /** Труба новой сессии, ждущая писателя. Под [lock] — вместе с перемоткой. */
+    private var nextTarget: ParcelFileDescriptor? = null
 
     /** Сколько байт ушло распознавателю всего — растёт, значит он читает. */
     @Volatile var writtenBytes = 0L
@@ -155,8 +184,14 @@ class MicFeed private constructor(
     /**
      * Труба для новой сессии распознавателя: конец чтения — в интент, конец
      * записи — писателю. Прежнюю трубу писатель закроет сам. null — трубы нет.
+     *
+     * [rewindSinceMs] > 0 — новая сессия получит звук с этого мига
+     * (elapsedRealtime), а не только то, что ещё не отправлено: всё, что
+     * прежняя сессия прочла, но не разобрала, будет разобрано заново.
+     * Перемотка и новая труба ставятся одним движением под замком, иначе
+     * писатель успел бы отдать кусок повтора ещё старой, мёртвой трубе.
      */
-    fun openSource(): ParcelFileDescriptor? {
+    fun openSource(rewindSinceMs: Long = 0L): ParcelFileDescriptor? {
         val pair = runCatching { ParcelFileDescriptor.createPipe() }.getOrElse {
             log("свой микрофон: труба не создалась — ${it.javaClass.simpleName}")
             return null
@@ -175,8 +210,27 @@ class MicFeed private constructor(
             return null
         }
         runCatching { Os.fcntlInt(writeEnd.fileDescriptor, F_SETPIPE_SZ, PIPE_BYTES) }
-        // Писатель её ещё не взял — значит, и не писал в неё: закрыть можно здесь.
-        nextTarget.getAndSet(writeEnd)?.let { runCatching { it.close() } }
+        val stale = synchronized(lock) {
+            val prev = nextTarget
+            nextTarget = writeEnd
+            lastRewindMs = 0L
+            if (rewindSinceMs > 0L) {
+                generation++
+                backlog.clear()
+                backlogBytes = 0
+                for (p in history) {
+                    if (p.atMs > rewindSinceMs) {
+                        backlog.addLast(p.pcm)
+                        backlogBytes += p.pcm.size
+                    }
+                }
+                lastRewindMs = (backlogBytes / BYTES_PER_MS).toLong()
+            }
+            lock.notifyAll()
+            prev
+        }
+        // Прежняя ждущая труба писателю не досталась — значит, он в неё не писал: закрыть можно здесь.
+        stale?.let { runCatching { it.close() } }
         // Прежние концы чтения к этому мигу у распознавателя (интент ушёл) — наша копия лишняя.
         readEnds.forEach { runCatching { it.close() } }
         readEnds.clear()
@@ -248,6 +302,9 @@ class MicFeed private constructor(
                         backlogBytes -= old.size
                         droppedBytes += old.size
                     }
+                    history.addLast(Piece(now, chunk))
+                    historyBytes += chunk.size
+                    while (historyBytes > HISTORY_MAX_BYTES) historyBytes -= history.removeFirst().pcm.size
                     lock.notifyAll()
                 }
             }
@@ -263,26 +320,33 @@ class MicFeed private constructor(
     private fun writeLoop() {
         var target: ParcelFileDescriptor? = null
         var chunk: ByteArray? = null
+        var chunkGen = 0
         try {
             while (running) {
-                nextTarget.getAndSet(null)?.let { fresh ->
-                    target?.let { runCatching { it.close() } }
-                    target = fresh
+                // Новая труба и следующий кусок — под одним замком с перемоткой:
+                // после неё первый же взятый кусок — уже из повтора и уже в новую трубу.
+                var fresh: ParcelFileDescriptor? = null
+                var empty = false
+                synchronized(lock) {
+                    fresh = nextTarget
+                    nextTarget = null
+                    if (chunk != null && chunkGen != generation) chunk = null
+                    if (chunk == null && backlog.isNotEmpty()) {
+                        chunk = backlog.removeFirst().also { backlogBytes -= it.size }
+                        chunkGen = generation
+                    }
+                    empty = chunk == null && backlog.isEmpty()
+                    if (chunk == null && fresh == null && !draining) lock.wait(50)
                 }
-                if (chunk == null) {
-                    chunk = synchronized(lock) {
-                        if (backlog.isEmpty()) {
-                            if (!draining) lock.wait(50)
-                            null
-                        } else {
-                            backlog.removeFirst().also { backlogBytes -= it.size }
-                        }
-                    }
-                    if (chunk == null) {
-                        // Стоп и всё дописано — закрыть трубу: распознаватель увидит конец звука.
-                        if (draining && synchronized(lock) { backlog.isEmpty() }) break
-                        continue
-                    }
+                fresh?.let { next ->
+                    target?.let { runCatching { it.close() } }
+                    target = next
+                }
+                val c = chunk
+                if (c == null) {
+                    // Стоп и всё дописано — закрыть трубу: распознаватель увидит конец звука.
+                    if (draining && empty) break
+                    continue
                 }
                 if (draining && SystemClock.elapsedRealtime() > drainDeadline) break
                 val out = target
@@ -293,7 +357,6 @@ class MicFeed private constructor(
                     continue
                 }
                 try {
-                    val c = chunk!!
                     val n = Os.write(out.fileDescriptor, c, 0, c.size)
                     if (n >= c.size) {
                         writtenBytes += n
@@ -314,7 +377,7 @@ class MicFeed private constructor(
         } catch (_: InterruptedException) {
         } finally {
             target?.let { runCatching { it.close() } }
-            nextTarget.getAndSet(null)?.let { runCatching { it.close() } }
+            synchronized(lock) { nextTarget.also { nextTarget = null } }?.let { runCatching { it.close() } }
         }
     }
 
