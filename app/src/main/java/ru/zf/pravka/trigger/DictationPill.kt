@@ -589,7 +589,28 @@ class DictationPill(
                 calibrate()
             }
         })
-        runCatching { windowManager.addView(frame, p) }
+        val ok = runCatching { windowManager.addView(frame, p) }
+            .onFailure {
+                (service.applicationContext as? ru.zf.pravka.PravkaApp)?.eventLog?.add(
+                    "пилюля: окно не повесилось — ${it.javaClass.simpleName}: ${it.message}"
+                )
+            }
+            .isSuccess
+        if (!ok) {
+            // Окна нет — и пилюли нет: иначе show() видел бы «уже висит» и
+            // молчал до destroy(). Просьбы (итог, набор) остаются — следующий
+            // показ их применит.
+            root = null
+            body = null
+            lead = null
+            ticker = null
+            orb = null
+            askOrb = null
+            skin = null
+            params = null
+            visible = false
+            return
+        }
         if (editReq != null) applyEdit()
         if (resultReq != null) applyResult()
     }

@@ -396,12 +396,40 @@ class BodyButtonController(
             v.alpha = if (busy || recording) 1f else idleAlpha
         }
         if (want == attached) return
-        attached = want
         if (want) {
-            runCatching { windowManager.addView(v, p) }
+            // Прикреплена — только если окно ДЕЙСТВИТЕЛЬНО повесилось. Раньше
+            // флаг ставился до addView, а отказ системы (Fold сразу после
+            // раскладывания) глотался — кнопка считала себя висящей, больше не
+            // пробовала и пропадала до перезапуска службы (владелец,
+            // 28.09.2026: «диск пропал», без единой строки в журнале). Отказ —
+            // в журнал, повтор — сторож службы ([ensureAttached]) на ближайшем тике.
+            attached = runCatching { windowManager.addView(v, p) }
+                .onFailure {
+                    (service.applicationContext as? ru.zf.pravka.PravkaApp)?.eventLog?.add(
+                        "кнопка «Т»: окно не повесилось — ${it.javaClass.simpleName}: ${it.message}; сторож повторит"
+                    )
+                }
+                .isSuccess
         } else {
+            attached = false
             runCatching { windowManager.removeView(v) }
         }
+    }
+
+    /**
+     * Сторож (тик службы раз в минуту): кнопка должна висеть, а окна нет —
+     * или флаг врёт в любую сторону — чинится здесь, а не перезапуском службы.
+     */
+    override fun ensureAttached() {
+        val v = button ?: return
+        val really = v.isAttachedToWindow
+        if (attached != really) {
+            (service.applicationContext as? ru.zf.pravka.PravkaApp)?.eventLog?.add(
+                "кнопка «Т»: сторож — окно ${if (really) "висит" else "не висит"}, флаг говорил иначе; чиню"
+            )
+            attached = really
+        }
+        applyStash()
     }
 
     override fun currentPosition(): Pair<Int, Int>? = params?.let { it.x to it.y }

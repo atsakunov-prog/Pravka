@@ -283,7 +283,15 @@ class StackSettingsController(
         // Подложка, цвет и плотность — одним местом: они зависят от режима и
         // стекла, а те меняются и после того, как голова собрана.
         paintHead()
-        runCatching { windowManager.addView(frame, p) }
+        val ok = runCatching { windowManager.addView(frame, p) }
+            .onFailure {
+                (service.applicationContext as? ru.zf.pravka.PravkaApp)?.eventLog?.add(
+                    "шестерёнка: окно не повесилось — ${it.javaClass.simpleName}: ${it.message}"
+                )
+            }
+            .isSuccess
+        // Не повесилась — головы нет: следующий show() повесит заново.
+        if (!ok) head = null
         // Точка ВЫСКАКИВАЕТ: всё сжалось в неё, и ей положено появиться с
         // перелётом. Шестерёнка встаёт тихо — она возвращается на своё место.
         if (dot) {

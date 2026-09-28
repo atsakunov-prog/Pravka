@@ -1440,9 +1440,20 @@ class DiskController(
             x = (bx - size / 2f).roundToInt()
             y = (by - size / 2f).roundToInt()
         }
+        // Стекло есть, только если окно ДЕЙСТВИТЕЛЬНО повесилось: с plate,
+        // выставленным до addView, отказ системы (Fold сразу после раскладывания)
+        // оставлял диск без стекла до следующего складывания — showPlate видел
+        // «уже есть» и выходил (владелец, 28.09.2026: «диск пропал»).
+        val ok = runCatching { windowManager.addView(v, p) }
+            .onFailure {
+                (service.applicationContext as? ru.zf.pravka.PravkaApp)?.eventLog?.add(
+                    "диск: стекло не повесилось — ${it.javaClass.simpleName}: ${it.message}; сторож повторит"
+                )
+            }
+            .isSuccess
+        if (!ok) return
         plate = v
         plateParams = p
-        runCatching { windowManager.addView(v, p) }
         // Стекло добавилось последним — то есть ПОВЕРХ кнопок и шестерёнки, а
         // ему положено лежать под ними: касание сначала им. Порядок окон
         // одного типа — порядок добавления, так что всё, что сейчас висит,
@@ -1487,6 +1498,27 @@ class DiskController(
 
     /** Перепись окон для журнала складывания. */
     fun windowCount(): Int = if (plate != null) 1 else 0
+
+    /** Стекло висит по-настоящему — для отчёта после складывания. */
+    fun plateAttached(): Boolean = plate?.isAttachedToWindow == true
+
+    /**
+     * Сторож (тик службы раз в минуту): диск показан, а стекла нет или его
+     * окно не висит — повесить заново, кнопки расставить. Раньше такое
+     * лечилось только перезапуском службы.
+     */
+    fun ensure() {
+        if (!shown || !placed || folded || allHidden) return
+        if (animating || turning != null || sliding || pinch) return
+        val v = plate
+        if (v != null && v.isAttachedToWindow) return
+        (service.applicationContext as? ru.zf.pravka.PravkaApp)?.eventLog?.add(
+            "диск: сторож — стекла на экране нет, вешаю заново"
+        )
+        hidePlate()
+        showPlate()
+        layout()
+    }
 
     fun destroy() {
         stopAll()

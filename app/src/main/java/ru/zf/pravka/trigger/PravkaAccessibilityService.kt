@@ -2753,6 +2753,14 @@ class PravkaAccessibilityService : AccessibilityService() {
                 android.util.Log.w("Pravka", "база: доступ вернулся — перезапуск процесса")
                 Runtime.getRuntime().exit(0)
             }
+            // Сторож окон (28.09.2026): кнопка или стекло, которые считают
+            // себя висящими, а окна нет (система отказала в addView сразу
+            // после раскладывания Fold), — перевешиваются здесь, раз в минуту,
+            // а не перезапуском службы. Посреди складывания — нет.
+            if (!folding) {
+                chainButtons().forEach { runCatching { it.ensureAttached() } }
+                if (cachedDiskMode) runCatching { disk?.ensure() }
+            }
             val mode = app.profileStore
             val zasechka = mode.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA)
             val sport = mode.has(ru.zf.pravka.data.Profile.Mode.SPORT)
@@ -2947,6 +2955,23 @@ class PravkaAccessibilityService : AccessibilityService() {
         chainButtons().forEach { it.onConfigurationChanged() }
         disk?.onConfigurationChanged()
         refreshHandles()
+        configHandler.removeCallbacks(configReport)
+        configHandler.postDelayed(configReport, 1_500)
+    }
+
+    /**
+     * Через полторы секунды после складывания — что вернулось на экран
+     * (28.09.2026: диск пропадал после складывания без единой строки в журнале,
+     * и понять, стекло это или кнопки, было неоткуда). Одна строка, по окнам,
+     * а не по флагам.
+     */
+    internal val configReport = Runnable {
+        runCatching {
+            val buttons = chainButtons()
+            val on = buttons.count { it.onScreen() }
+            val plate = if (cachedDiskMode) (if (disk?.plateAttached() == true) "стекло висит" else "СТЕКЛА НЕТ") else "стопка"
+            app.eventLog.add("после складывания: кнопок на экране $on из ${buttons.size}, $plate")
+        }
     }
 
     override fun onInterrupt() = Unit
@@ -2962,6 +2987,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         chromeHandler.removeCallbacks(chromeTicker)
         lagHandler.removeCallbacks(lagTick)
         configHandler.removeCallbacks(configSettled)
+        configHandler.removeCallbacks(configReport)
         runCatching { headsetVoice.close() }
         if (speakerLazy.isInitialized()) runCatching { speakerLazy.value.shutdown() }
         googleSession?.stop()
