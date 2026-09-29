@@ -1089,8 +1089,7 @@ private fun VoiceSettings(app: PravkaApp) {
         if (ownMic) {
             Text(
                 "Облачный Google: " + ru.zf.pravka.provider.GoogleSpeechSession.feedLabel(network = true) +
-                    "\nОфлайн-пакет: " + ru.zf.pravka.provider.GoogleSpeechSession.feedLabel(network = false) +
-                    "\nДва микрофона сразу: " + ru.zf.pravka.provider.GoogleSpeechSession.dualLabel(),
+                    "\nОфлайн-пакет: " + ru.zf.pravka.provider.GoogleSpeechSession.feedLabel(network = false),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

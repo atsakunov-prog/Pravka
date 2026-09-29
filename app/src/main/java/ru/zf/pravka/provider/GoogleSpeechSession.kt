@@ -150,17 +150,9 @@ class GoogleSpeechSession(
     @Volatile var stopQuiet = false
 
     /**
-     * Мост через телефон: канал наушников поднят, а они холодные и
-     * просыпаются — распознаватель пока слышит телефон ([startBridge]).
-     * Слушают «наушники» для звуков: канал их, и владелец в них.
-     */
-    private var bridging = false
-
-    /**
-     * «Говори» придержан: слушать велено наушники, а их канал ещё не поднят
-     * (или второй вход проверяется — он может сбить основной на спящие
-     * наушники). Готовность распознавателя в это время не зовёт говорить;
-     * снимает [cueWhenHeard].
+     * «Говори» придержан: слушать велено наушники, а их канал ещё не поднят.
+     * Готовность распознавателя в это время не зовёт говорить; снимает
+     * [cueWhenHeard].
      */
     private var holdCue = false
 
@@ -335,40 +327,6 @@ class GoogleSpeechSession(
         private fun clock(ms: Long): String =
             java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))
 
-        /**
-         * Когда наушники последний раз звучали у нас (elapsedRealtime): тейк
-         * слушал их или держал их канал. Отсюда «тёплые» или «холодные»
-         * (`ListenPolicy.headsetWarm`); 0 — с запуска не звучали.
-         */
-        @Volatile
-        private var headsetAudioAtMs = 0L
-
-        /** Наушники только что звучали (конец тейка на них, уход с них; запись Whisper тоже). */
-        fun noteHeadsetAudio() {
-            headsetAudioAtMs = android.os.SystemClock.elapsedRealtime()
-        }
-
-        /**
-         * Умеет ли телефон писать два входа сразу — основной на телефоне и
-         * второй на наушниках (мост через телефон). Решает звуковой тракт
-         * телефона, а не Android: проверено на деле первым холодным тейком и
-         * помнится до перезапуска; «Перезагрузить микрофон» стирает.
-         */
-        private data class DualVerdict(val works: Boolean, val why: String, val atMs: Long)
-
-        @Volatile
-        private var dualVerdict: DualVerdict? = null
-
-        /** Что известно о двух входах сразу — строкой для настроек. */
-        fun dualLabel(): String {
-            val v = dualVerdict ?: return "ещё не проверял — проверю на первом тейке с холодными наушниками"
-            return if (v.works) {
-                "умеет (проверено в ${clock(v.atMs)}): пока наушники просыпаются, слушаю их вторым входом"
-            } else {
-                "не умеет (${clock(v.atMs)}: ${v.why}) — пока наушники просыпаются, телефон слушает по сроку"
-            }
-        }
-
         /** Что известно о пути — строкой для настроек. */
         fun feedLabel(network: Boolean): String {
             val v = feedVerdict[network] ?: return "ещё не пробовали в этот запуск"
@@ -398,17 +356,12 @@ class GoogleSpeechSession(
         private const val FEED_POLL_MS = 150L
         private const val FEED_ROUTE_MS = 4_000L
 
-        /** Мост через телефон: как часто смотреть, не пора ли на наушники. */
-        private const val BRIDGE_POLL_MS = 60L
-
-        /** Второй вход открыт — через столько смотреть, не сбил ли он основной. */
-        private const val DUAL_CHECK_MS = 350L
-
-        /** Сколько раз смотреть на второй вход, пока он открывается. */
-        private const val DUAL_LOOKS = 3
-
-        /** Второй вход не отдавал кусков столько — считать его молчащим. */
-        private const val WATCH_STALE_MS = 300L
+        /**
+         * За каналом наушников следит стек (событие «поднят»): ждать его
+         * столько. Холодный канал после простоя поднимается 2,3 с (журнал
+         * 29.09: 16:47 и 16:55, наушники молчали 4 и 8 минут), тёплый — 0,14 с.
+         */
+        private const val LINK_EVENT_WAIT_MS = 4_000L
 
         /** Звук по каналу гарнитуры не пошёл за столько — переводим запись всё равно. */
         private const val SCO_PREFER_ANYWAY_MS = 1_500L
@@ -624,7 +577,6 @@ class GoogleSpeechSession(
             googleServiceBad = false
             // И что знали о своём микрофоне: после обновления Google ответ мог измениться.
             feedVerdict.clear()
-            dualVerdict = null
             warmMain.postDelayed({ warmUp(context, network, log) }, 300)
         }
 
@@ -787,8 +739,13 @@ class GoogleSpeechSession(
 
     /** Ends the session; the accumulated text is delivered via onDone. */
     fun stop() {
+        // Кто остановил — из стека вызова, пока он наш: 29.09 тейк Засечки с
+        // кнопки гарнитуры кончился через 2,5 с, и по журналу было не понять,
+        // чем (диском, пилюлей, касанием в кармане) — у «З» стоп без строки.
+        val who = stopCaller()
         onMain {
             if (!active && recognizer == null) return@onMain
+            if (!stopping) onLog("стоп: откуда — $who")
             val first = !stopping
             stopping = true
             active = false
@@ -799,11 +756,11 @@ class GoogleSpeechSession(
             routeWatch = null
             if (first) {
                 // Стоп кнопкой гарнитуры — владелец в наушниках, даже если слушал телефон.
-                headsetAtStop = headsetMic || bridging || fromHeadset || stopByHeadset ||
+                headsetAtStop = headsetMic || fromHeadset || stopByHeadset ||
                     ListenPolicy.headsetStopPending(vrClosedAtMs, now)
                 // «Принял» — когда хвост записан: звук в наушники поверх
                 // последнего слога попал бы в их же микрофон.
-                val headsetUp = (headsetMic || bridging) && !stopByHeadset
+                val headsetUp = headsetMic && !stopByHeadset
                 val byHeadset = stopByHeadset
                 if (!stopQuiet) {
                     main.postDelayed({
@@ -840,6 +797,17 @@ class GoogleSpeechSession(
             main.postDelayed({ if (recognizer != null) finish() }, tail + 2500)
         }
     }
+
+    /** Три-четыре звена нашего кода над [stop] — «Кнопка.тап ← Служба.стоп»; пусто — остановил сам движок. */
+    private fun stopCaller(): String = runCatching {
+        Throwable().stackTrace.asSequence()
+            .filter { it.className.startsWith("ru.zf.pravka.") && !it.className.startsWith(GoogleSpeechSession::class.java.name) }
+            .map { "${it.className.substringAfterLast('.').substringBefore('$').removeSuffix("Kt")}.${it.methodName.substringBefore('$')}" }
+            .distinct()
+            .take(4)
+            .joinToString(" ← ")
+            .ifBlank { "сам движок (сторож тишины)" }
+    }.getOrDefault("не понять")
 
     /**
      * Канал гарнитуры закрыла сама гарнитура — её кнопка (служба узнаёт это
@@ -1125,8 +1093,6 @@ class GoogleSpeechSession(
         warmMain.postDelayed({ warmUp(context, network) }, WARM_AFTER_TAKE_MS)
         onLog("finish len=${text.length} segmented=$segmented · ${health.summary()}")
         if (headsetAtStop == null) headsetAtStop = headsetMic || fromHeadset
-        // Наушники звучали до конца тейка — следующий тейк застанет их тёплыми.
-        if (headsetMic || bridging) noteHeadsetAudio()
         doneSink?.let { sink -> runCatching { sink(this, text) } }
         onDone(text)
     }
@@ -1556,11 +1522,9 @@ class GoogleSpeechSession(
         readyFired = true
         onReady()
         // Звук «говори» — туда, откуда слушаем: в наушниках этот миг наступает,
-        // только когда их канал поднят (awaitSco, awaitLink); на мосту через
-        // телефон — тоже в наушники: канал их, и владелец в них.
-        val headset = headsetMic || bridging
-        readySink?.let { sink -> runCatching { sink(headset) } }
-        onLog("говори: ${if (bridging) "наушники (пока слушает телефон)" else if (headsetMic) "наушники" else "телефон"}")
+        // только когда их канал поднят (awaitSco, awaitLink).
+        readySink?.let { sink -> runCatching { sink(headsetMic) } }
+        onLog("говори: ${if (headsetMic) "наушники" else "телефон"}")
     }
 
     /**
@@ -1682,8 +1646,7 @@ class GoogleSpeechSession(
         routeWatch = null
         routeMoving = false
         health.fed = false
-        val wanted = headsetMic || bridging
-        bridging = false
+        val wanted = headsetMic
         val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val heard = MicRouting.recognizerInput(am)
         headsetMic = heard?.headset == true
@@ -1715,9 +1678,7 @@ class GoogleSpeechSession(
             val now = android.os.SystemClock.elapsedRealtime()
             val f = feed
             if (f != null) {
-                // На мосту через телефон вход меняем мы сами (и второй вход может
-                // на миг сбить основной) — это не «сменился сам».
-                if (!routeMoving && !bridging) {
+                if (!routeMoving) {
                     val routed = f.routed()
                     if (routed != null && MicRouting.isHeadsetDevice(routed) != headsetMic) {
                         headsetMic = MicRouting.isHeadsetDevice(routed)
@@ -1821,7 +1782,6 @@ class GoogleSpeechSession(
         // наушниках вернётся, а кнопка гарнитуры остановит тейк и так (при
         // опущенном канале её просьба доходит до Правки, `HeadsetPress.STOP`).
         holdVoice(false)
-        noteHeadsetAudio()
         if (headsetDropNoticed) return
         headsetDropNoticed = true
         noticeSink?.let { runCatching { it(text) } }
@@ -1925,15 +1885,6 @@ class GoogleSpeechSession(
     private fun switchFeed(f: MicFeed, wantHeadset: Boolean): String? {
         val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         if (MicRouting.callInProgress(am)) return "Идёт разговор — микрофон не переключаю"
-        if (bridging && wantHeadset) {
-            // Мост через телефон, а владелец просит наушники кружком — сейчас же.
-            onLog("микрофон посреди тейка: гарнитура — мост через телефон кончаю досрочно")
-            bridging = false
-            routeWatch?.let { main.removeCallbacks(it) }
-            moveFeed(f, wantHeadset = true, sinceMs = android.os.SystemClock.elapsedRealtime(), cue = Cue.CHIME)
-            return null
-        }
-        if (!wantHeadset && headsetMic) noteHeadsetAudio()
         if (wantHeadset) {
             if (MicRouting.headsetMic(am) == null) return "Наушников не видно — слушает телефон"
             // Сперва распознавание стеку, потом канал: кнопка гарнитуры остановит тейк.
@@ -1963,7 +1914,7 @@ class GoogleSpeechSession(
 
     /**
      * Довести свою запись до нужного входа. Телефон — сразу ([moveFeed]);
-     * наушники — когда поднялся их канал ([awaitLink]), и дальше по их теплу.
+     * наушники — когда поднялся их канал ([awaitLink]).
      */
     private fun followFeed(wantHeadset: Boolean, sinceMs: Long) {
         routeWatch?.let { main.removeCallbacks(it) }
@@ -1979,167 +1930,43 @@ class GoogleSpeechSession(
         /** Посреди тейка: звон «говори» в наушники — «слушаю тут». */
         CHIME,
 
-        /** Ничего: «говори» уже прозвучал (мост через телефон). */
+        /** Ничего. */
         NONE,
     }
 
     /**
      * Дождаться, пока поднимется канал наушников: до того своя запись слушает
-     * телефон, и сказанное раньше не пропадает. Поднят ли он — у самого стека
-     * Bluetooth (`MicRouting.scoAudioConnected`); молчит — через
-     * [SCO_PREFER_ANYWAY_MS] считаем поднятым. Дальше — по теплу
-     * (`ListenPolicy.headsetWarm`): тёплые — запись сразу на них, холодные —
-     * мост через телефон ([startBridge]).
+     * телефон, и сказанное раньше не пропадает. Поднят ли он — по событию
+     * стека Bluetooth (`MicRouting.scoAudioConnected` → `HeadsetVoice`);
+     * поднят — запись на наушники и «говори». Холодный канал после простоя
+     * поднимается 2,3 с (журнал 29.09) — это и было «засыпает канал… первые
+     * три-четыре слова»: запись раньше уходила на наушники по липкой рассылке,
+     * помнившей прошлый тейк, и слушала канал, которого ещё нет. Стек молчит
+     * [LINK_EVENT_WAIT_MS] (за каналом не следим — [SCO_PREFER_ANYWAY_MS]) —
+     * переводим всё равно.
      */
     private fun awaitLink(sinceMs: Long) {
         val step = object : Runnable {
             override fun run() {
                 val f = feed ?: return
                 if (!active || stopping) return
-                val now = android.os.SystemClock.elapsedRealtime()
-                val waited = now - sinceMs
+                val waited = android.os.SystemClock.elapsedRealtime() - sinceMs
+                val watched = MicRouting.linkProbe?.let { probe -> runCatching { probe() }.getOrNull() } != null
                 val up = MicRouting.scoAudioConnected(context)
-                if (!up && waited < SCO_PREFER_ANYWAY_MS) {
+                val limit = if (watched) LINK_EVENT_WAIT_MS else SCO_PREFER_ANYWAY_MS
+                if (!up && waited < limit) {
                     main.postDelayed(this, FEED_POLL_MS)
                     return
                 }
                 onLog(
-                    if (up) "канал гарнитуры поднялся за $waited мс"
-                    else "канал гарнитуры не отозвался за $waited мс — считаю поднятым"
+                    if (up) "канал гарнитуры поднялся за $waited мс — запись переезжает на гарнитуру"
+                    else "канал гарнитуры не отозвался за $waited мс — перевожу запись всё равно"
                 )
-                val last = headsetAudioAtMs
-                if (ListenPolicy.headsetWarm(last, now)) {
-                    onLog("наушники тёплые (звучали ${(now - last) / 1000} с назад) — запись сразу на них")
-                    moveFeed(f, wantHeadset = true, sinceMs = now, cue = if (readyFired) Cue.CHIME else Cue.READY)
-                } else {
-                    onLog(
-                        "наушники холодные (" +
-                            (if (last == 0L) "с запуска у нас не звучали" else "звучали ${(now - last) / 60_000} мин назад") +
-                            ") — пока просыпаются, слушает телефон"
-                    )
-                    startBridge(f, linkAtMs = now)
-                }
+                moveFeed(f, wantHeadset = true, sinceMs = android.os.SystemClock.elapsedRealtime(), cue = if (readyFired) Cue.CHIME else Cue.READY)
             }
         }
         routeWatch = step
         main.post(step)
-    }
-
-    /**
-     * Мост через телефон (владелец, 29.09.2026: «он сам теперь каждый раз
-     * ждёт по 2,5 секунды… это очень долго… попробовать писать два трека:
-     * один на микрофон, а второй на Bluetooth… либо просто оставлять
-     * включённым микрофон на первые 3 секунды, а дальше уже переключаться»).
-     *
-     * Холодные наушники после подъёма канала секунду-полторы шлют нули, а по
-     * их звуку спящие от живых не отличить: шумодав и живыми шлёт в тишине
-     * ровные нули. Поэтому «говори» — сразу, как поднялся канал, а
-     * распознаватель пока слышит телефон. Второй вход ([MicFeed.openWatch])
-     * слушает сами наушники: пошёл с них живой звук — проснулись. Телефон
-     * два входа сразу не умеет — проснулись по сроку ([ListenPolicy.COLD_WAKE_MS]).
-     * Запись переходит на наушники в паузе (`ListenPolicy.bridgeStep`,
-     * [MicFeed.quietMs]) — не посреди слова.
-     */
-    private fun startBridge(f: MicFeed, linkAtMs: Long) {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        bridging = true
-        headsetMic = false
-        routeMoving = false
-        health.heard("телефон, пока наушники просыпались")
-        publishMic()
-        var dual = false
-        val verdict = dualVerdict
-        val headsetIn = MicRouting.headsetMic(am)
-        val watching = verdict?.works != false && headsetIn != null && f.openWatch(headsetIn)
-        val bridge = object : Runnable {
-            override fun run() {
-                if (feed !== f || !active || stopping || !bridging) return
-                val now = android.os.SystemClock.elapsedRealtime()
-                val since = now - linkAtMs
-                // Со вторым входом пауза — тишина на обоих; второй вход, не отдающий
-                // кусков (спящий канал), паузе не мешает.
-                val watchQuiet = if (now - f.watchCaptureAtMs > WATCH_STALE_MS) Long.MAX_VALUE else f.watchQuietMs
-                val quiet = if (dual) minOf(f.quietMs, watchQuiet) else f.quietMs
-                val heardAt = f.watchHeardAtMs
-                when (ListenPolicy.bridgeStep(since, dual, heardAt > 0L, quiet)) {
-                    ListenPolicy.Bridge.WAIT -> {
-                        main.postDelayed(this, BRIDGE_POLL_MS)
-                        return
-                    }
-                    ListenPolicy.Bridge.SWITCH_IN_PAUSE -> onLog(
-                        "мост через телефон: " +
-                            (if (dual && heardAt > 0L) "наушники заговорили через ${heardAt - linkAtMs} мс после канала"
-                            else if (dual) "наушники молчат ${since} мс — владелец молчит, шумодав шлёт нули"
-                            else "наушники проснулись по сроку") +
-                            " — в паузе перевожу запись на них"
-                    )
-                    ListenPolicy.Bridge.SWITCH_ANYWAY -> onLog("мост через телефон: паузы нет ${since / 1000} с — перевожу запись на наушники как есть")
-                }
-                bridging = false
-                moveFeed(f, wantHeadset = true, sinceMs = now, cue = Cue.NONE)
-            }
-        }
-        if (!watching) {
-            if (verdict?.works == false) onLog("мост через телефон: два входа сразу этот телефон не умеет — наушники проснутся по сроку")
-            // Канал поднят: «говори» сейчас — сказанное слышит телефон.
-            cueBridge()
-            routeWatch = bridge
-            main.post(bridge)
-            return
-        }
-        onLog("мост через телефон: второй вход слушает наушники")
-        var looks = 0
-        val check = object : Runnable {
-            override fun run() {
-                if (feed !== f || !active || stopping || !bridging) return
-                // Второй вход ещё открывается (открытие — вызов в аудиосистему) — не
-                // приговаривать телефон за медленный старт: ещё взгляд, всего три.
-                if (f.watchOpen && f.watchRouted() == null && ++looks < DUAL_LOOKS) {
-                    main.postDelayed(this, DUAL_CHECK_MS)
-                    return
-                }
-                val why = dualTrouble(f, am)
-                if (why == null) {
-                    dual = true
-                    if (dualVerdict?.works != true) onLog("два входа сразу: телефон умеет — основной слушает телефон, второй наушники")
-                    dualVerdict = DualVerdict(true, "", System.currentTimeMillis())
-                } else {
-                    f.closeWatch()
-                    // Основной мог уйти за вторым на наушники — вернуть его на телефон.
-                    f.setDevice(MicRouting.builtinMic(am))
-                    dualVerdict = DualVerdict(false, why, System.currentTimeMillis())
-                    onLog("два входа сразу: не умеет — $why; наушники проснутся по сроку")
-                }
-                // Первый раз «говори» ждал проверки: второй вход мог сбить основной на спящие наушники.
-                if (verdict == null) cueBridge()
-                routeWatch = bridge
-                main.post(bridge)
-            }
-        }
-        // Уже проверено, что умеет, — «говори» сразу; проверка — для журнала.
-        if (verdict != null) cueBridge()
-        routeWatch = check
-        main.postDelayed(check, DUAL_CHECK_MS)
-    }
-
-    /** «Говори» на мосту через телефон: в начале тейка — «говори», посреди — звон в наушники. */
-    private fun cueBridge() {
-        if (readyFired) readySink?.let { sink -> runCatching { sink(true) } } else cueWhenHeard()
-    }
-
-    /**
-     * Что не так со вторым входом: он должен слушать наушники, а основной —
-     * по-прежнему телефон, и тот не заглох. null — оба на месте.
-     */
-    private fun dualTrouble(f: MicFeed, am: AudioManager): String? {
-        if (!f.watchOpen) return "второй вход не открылся"
-        val mainIn = f.routed()
-        if (mainIn != null && MicRouting.isHeadsetDevice(mainIn)) return "второй вход увёл за собой основной на наушники"
-        val watchIn = f.watchRouted() ?: return "второй вход не встал ни на что"
-        if (!MicRouting.isHeadsetDevice(watchIn)) return "второй вход слушает ${MicRouting.label(watchIn)}, а не наушники"
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (now - f.lastCaptureAtMs > 500 || f.silenced()) return "основной вход заглох"
-        return null
     }
 
     /**
@@ -2168,7 +1995,6 @@ class GoogleSpeechSession(
                             // Наушники встали — если снова отвалятся, об этом снова скажет звук.
                             headsetDropNoticed = false
                             headsetZerosNoted = false
-                            f.closeWatch()
                         }
                         health.heard(MicRouting.label(routed))
                         onLog("микрофон встал за $waited мс: слушает ${MicRouting.label(routed)}")
@@ -2182,7 +2008,6 @@ class GoogleSpeechSession(
                     }
                     waited < FEED_ROUTE_MS -> main.postDelayed(this, FEED_POLL_MS)
                     wantHeadset -> {
-                        f.closeWatch()
                         f.setDevice(MicRouting.builtinMic(am))
                         routeWatch = null
                         routeMoving = false

@@ -14,8 +14,6 @@ import android.system.OsConstants
 import kotlin.concurrent.thread
 import kotlin.math.log10
 import kotlin.math.sqrt
-import ru.zf.pravka.core.ListenPolicy
-import ru.zf.pravka.core.PauseDetector
 
 /**
  * Свой микрофон для системного распознавателя: Правка открывает запись сама
@@ -54,15 +52,6 @@ import ru.zf.pravka.core.PauseDetector
  * которое прежняя успела разобрать ([openSource] с `rewindSinceMs`). Сессия,
  * которая слышала речь и не отдала ни слова, заменяется новой, и та
  * разбирает те же секунды заново.
- *
- * Второй вход ([openWatch], 29.09.2026; владелец: «попробовать писать два
- * трека: один на микрофон, а второй на Bluetooth, смотреть начало фразы»):
- * пока холодные наушники просыпаются, распознавателю пишет телефон, а вторая
- * запись слушает сами наушники — только чтобы увидеть, что они заговорили.
- * Её звук распознавателю не идёт: две записи одного голоса с разной
- * задержкой, склеенные посреди слова, дали бы слог дважды. Умеет ли телефон
- * писать два входа сразу — решает его звуковой тракт, проверяется на деле
- * (`GoogleSpeechSession`).
  */
 @SuppressLint("MissingPermission") // RECORD_AUDIO проверяется до любого тейка
 class MicFeed private constructor(
@@ -204,16 +193,6 @@ class MicFeed private constructor(
     @Volatile var zeroMs = 0L
         private set
 
-    /** Тишина по громкости основной записи ([PauseDetector]): ведёт поток записи. */
-    private val pause = PauseDetector()
-
-    /**
-     * Сколько тишины подряд в основной записи к последнему куску, мс: пауза,
-     * где вход можно переставить, не разрезав слово.
-     */
-    @Volatile var quietMs = 0L
-        private set
-
     /** Сколько раз за тейк запись открывали заново. */
     @Volatile var rebuilds = 0
         private set
@@ -343,7 +322,6 @@ class MicFeed private constructor(
 
     private fun finishNow() {
         if (draining) return
-        closeWatch()
         drainDeadline = SystemClock.elapsedRealtime() + DRAIN_MAX_MS
         draining = true
         runCatching { record.stop() }
@@ -352,7 +330,6 @@ class MicFeed private constructor(
 
     /** Бросить всё: тейк кончен, отменён или распознаватель наш звук не берёт. */
     fun abort() {
-        closeWatch()
         running = false
         draining = true
         runCatching { record.stop() }
@@ -398,8 +375,6 @@ class MicFeed private constructor(
                 val zero = allZero(chunk, n)
                 zeroMs = if (zero) zeroMs + n / BYTES_PER_MS else 0L
                 val db = if (zero) Double.NEGATIVE_INFINITY else dbfs(chunk, n)
-                pause.feed(db, (n / BYTES_PER_MS).toLong())
-                quietMs = pause.quietMs
                 if (now - lastLevelAt >= 60) {
                     lastLevelAt = now
                     onLevel?.let { sink -> runCatching { sink(level(db)) } }
@@ -547,103 +522,5 @@ class MicFeed private constructor(
     private fun level(db: Double): Float {
         if (db == Double.NEGATIVE_INFINITY) return 0f
         return ((db - QUIET_DBFS) / (LOUD_DBFS - QUIET_DBFS)).coerceIn(0.0, 1.0).toFloat()
-    }
-
-    // ---- Второй вход: заговорили ли наушники (мост через телефон) ----
-
-    /** Вторая запись — только пока наушники просыпаются. Меняет главный поток, читает её поток. */
-    @Volatile private var watchRecord: AudioRecord? = null
-
-    /** Второй вход открыт и пишет. */
-    @Volatile var watchOpen = false
-        private set
-
-    /** Когда второй вход впервые дал живой звук подряд [ListenPolicy.HEADSET_LIVE_MS] (elapsedRealtime); 0 — не давал. */
-    @Volatile var watchHeardAtMs = 0L
-        private set
-
-    /** Тишины подряд на втором входе, мс (нули шумодава — тоже тишина). */
-    @Volatile var watchQuietMs = 0L
-        private set
-
-    /** Когда второй вход последний раз отдал кусок (elapsedRealtime). */
-    @Volatile var watchCaptureAtMs = 0L
-        private set
-
-    /**
-     * Открыть вторую запись на [device] — своим потоком (открытие — вызов в
-     * аудиосистему, главному потоку службы тяжёлое запрещено). Звук её никуда
-     * не идёт: поток только отмечает, когда пошёл живой звук. false — уже
-     * открыта или запись кончается.
-     */
-    fun openWatch(device: AudioDeviceInfo): Boolean {
-        if (watchRecord != null || watchOpen || draining || !running) return false
-        watchHeardAtMs = 0L
-        watchQuietMs = 0L
-        watchCaptureAtMs = 0L
-        watchOpen = true
-        thread(name = "pravka-feed-watch") {
-            val rec = create(log)
-            if (rec == null) {
-                watchOpen = false
-                return@thread
-            }
-            runCatching { rec.setPreferredDevice(device) }
-            runCatching { rec.startRecording() }
-            if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING || !watchOpen) {
-                if (watchOpen) log("свой микрофон: второй вход не пошёл")
-                runCatching { rec.release() }
-                watchOpen = false
-                return@thread
-            }
-            watchRecord = rec
-            watchLoop(rec)
-        }
-        return true
-    }
-
-    /** Что второй вход слушает на деле. */
-    fun watchRouted(): AudioDeviceInfo? = runCatching { watchRecord?.routedDevice }.getOrNull()
-
-    /** Закрыть второй вход: останов будит его чтение, отпускает запись его же поток. */
-    fun closeWatch() {
-        if (!watchOpen && watchRecord == null) return
-        watchOpen = false
-        val rec = watchRecord
-        watchRecord = null
-        rec?.let { runCatching { it.stop() } }
-    }
-
-    private fun watchLoop(rec: AudioRecord) {
-        val quiet = PauseDetector()
-        var liveMs = 0L
-        try {
-            val buf = ByteArray(CHUNK_BYTES)
-            while (watchOpen && running && watchRecord === rec) {
-                val n = runCatching { rec.read(buf, 0, buf.size) }.getOrDefault(-1)
-                if (n <= 0) {
-                    Thread.sleep(20)
-                    continue
-                }
-                val now = SystemClock.elapsedRealtime()
-                watchCaptureAtMs = now
-                val ms = (n / BYTES_PER_MS).toLong()
-                val zero = allZero(buf, n)
-                quiet.feed(if (zero) Double.NEGATIVE_INFINITY else dbfs(buf, n), ms)
-                watchQuietMs = quiet.quietMs
-                liveMs = if (zero) 0L else liveMs + ms
-                if (liveMs >= ListenPolicy.HEADSET_LIVE_MS && watchHeardAtMs == 0L) watchHeardAtMs = now
-            }
-        } catch (_: InterruptedException) {
-        } finally {
-            // Отпускает запись тот же поток, что читал: release посреди read роняет процесс.
-            runCatching { rec.stop() }
-            runCatching { rec.release() }
-            // Закрыли снаружи — флаги уже сняты, и, может быть, открыт новый вход: не трогать.
-            if (watchRecord === rec) {
-                watchRecord = null
-                watchOpen = false
-            }
-        }
     }
 }

@@ -71,6 +71,9 @@ class HeadsetVoice(
     private var onDrop: ((gone: Boolean) -> Unit)? = null
     private var downNoticed = false
 
+    /** Канал поднят — последнее, что сказало событие стека, пока следим ([watchDrop]). */
+    @Volatile private var audioOn = false
+
     /** Следим ли за каналом идущего тейка ([watchDrop]). */
     val watching: Boolean get() = receiver != null
 
@@ -140,7 +143,7 @@ class HeadsetVoice(
             return false
         }
         val dev = connected(p) ?: return false
-        if (runCatching { p.isAudioConnected(dev) }.getOrDefault(false)) {
+        if (audioConnected() == true) {
             log("канал гарнитуры уже поднят — подтверждать поздно (стек уронил бы его), стоп кнопкой может не дойти")
             return false
         }
@@ -148,18 +151,16 @@ class HeadsetVoice(
     }
 
     /**
-     * Канал к гарнитуре поднят — по словам самого стека Bluetooth. Липкая
-     * рассылка системы (`MicRouting.scoAudioConnected`) про канал, поднятый
-     * стеком (распознавание по кнопке), молчит и может помнить прошлый тейк.
-     * null — стека нет под рукой, спросить некого.
+     * Канал к гарнитуре поднят — по событию самого стека Bluetooth
+     * (`ACTION_AUDIO_STATE_CHANGED`), которое слушает [watchDrop]. Не
+     * запросом `isAudioConnected`: он отвечал «нет» и при поднятом канале
+     * (журнал 29.09: «канал гарнитуры поднят» через 140 мс, а запрос до
+     * полутора секунд — «не отозвался»), и «говори» опаздывал на них каждый
+     * тейк. И не липкой рассылкой системы: про канал, поднятый стеком под
+     * распознавание, она молчит и помнит прошлый тейк. null — не следим
+     * (распознавание не подтверждено), спросить некого.
      */
-    @SuppressLint("MissingPermission")
-    fun audioConnected(): Boolean? {
-        val p = proxy ?: return null
-        val devices = runCatching { p.connectedDevices }.getOrNull() ?: return null
-        if (devices.isEmpty()) return false
-        return runCatching { devices.any { p.isAudioConnected(it) } }.getOrNull()
-    }
+    fun audioConnected(): Boolean? = if (receiver != null) audioOn else null
 
     @SuppressLint("MissingPermission")
     private fun connected(p: BluetoothHeadset): BluetoothDevice? =
@@ -201,9 +202,8 @@ class HeadsetVoice(
         this.onDown = onDown
         this.onDrop = onDrop
         downNoticed = false
-        // Канал уже поднят (стек поднял его под распознавание раньше, чем мы
-        // встали следить) — его подъёма не будет, а обрыв должен считаться.
-        sawAudio = audioConnected() == true
+        sawAudio = false
+        audioOn = false
         val r = object : BroadcastReceiver() {
             override fun onReceive(c: Context, intent: Intent) {
                 // Липкое последнее состояние канала — из прошлого, не про этот тейк.
@@ -268,6 +268,7 @@ class HeadsetVoice(
 
     private fun onAudio(up: Boolean) {
         if (receiver == null) return
+        audioOn = up
         if (up) {
             if (!sawAudio) log("канал гарнитуры поднят")
             sawAudio = true
@@ -303,6 +304,7 @@ class HeadsetVoice(
         main.removeCallbacks(dropCheck)
         onDrop = null
         onDown = null
+        audioOn = false
         receiver?.let { r -> runCatching { context.unregisterReceiver(r) } }
         receiver = null
     }
