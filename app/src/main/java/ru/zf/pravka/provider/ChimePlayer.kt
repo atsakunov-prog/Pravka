@@ -11,58 +11,86 @@ import java.util.concurrent.Executors
 import ru.zf.pravka.core.ReadyChime
 
 /**
- * Проиграть звук «говори» (`core/ReadyChime.kt`) — туда, где владелец его
+ * Проиграть звук диктовки (`core/ReadyChime.kt`) — туда, где владелец его
  * услышит.
  *
- * В наушники — назначением «связь» и прямо в выход канала гарнитуры: пока
- * он поднят под микрофон, музыкальный канал тех же наушников молчит, и звук с
- * назначением «уведомление» ушёл бы в динамик телефона — то есть на стол, к
- * которому владелец не смотрит. Остальное — назначением «помощник», как голос
- * Засечки в конце (`Speaker.kt`): туда, где играет музыка (динамик или
- * наушники по музыкальному каналу), и беззвучный режим его не глушит —
- * звук интерфейса у владельца в беззвучном молчал бы, и «Послушать» тоже.
+ * В наушники, пока их канал поднят под микрофон, — назначением «связь» и
+ * прямо в выход канала гарнитуры: музыкальный канал тех же наушников в это
+ * время молчит, и звук с назначением «уведомление» ушёл бы в динамик
+ * телефона — то есть на стол, к которому владелец не смотрит. Остальное —
+ * назначением «помощник», как голос в конце (`Speaker.kt`): туда, где играет
+ * музыка (динамик или наушники по музыкальному каналу), и беззвучный режим
+ * его не глушит — звук интерфейса у владельца в беззвучном молчал бы, и
+ * «Послушать» тоже.
  *
  * «Наушники отвалились» ([Kind.LOST]) — всегда «помощником» и с паузой:
  * канал гарнитуры только что упал, и музыкальный канал тех же наушников
- * возвращается не сразу — сыграй сразу, звук ушёл бы в динамик.
+ * возвращается не сразу — сыграй сразу, звук ушёл бы в динамик. Так же —
+ * «принял» после стопа кнопкой гарнитуры: её канал закрыла она сама.
  *
  * Свой поток: создание дорожки — вызов в аудиосистему, а главному потоку
  * службы тяжёлое запрещено (складывание Fold). Дорожка на один раз: звук
- * звучит полсекунды, держать её незачем.
+ * звучит секунду, держать её незачем.
  */
 object ChimePlayer {
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "pravka-chime").apply { isDaemon = true } }
 
-    enum class Kind {
+    enum class Kind(val word: String) {
         /** «Говори»: всё поднялось и слышит. */
-        READY,
+        READY("говори"),
+
+        /** «Принял»: стоп нажат, сказанное расшифровывается. */
+        STOP("принял"),
 
         /** «Наушники отвалились»: слушает уже телефон. */
-        LOST,
+        LOST("отвалились"),
     }
 
     @Volatile private var readyPcm: ShortArray? = null
+    @Volatile private var stopPcm: ShortArray? = null
     @Volatile private var lostPcm: ShortArray? = null
 
     /** Музыкальный канал наушников возвращается после канала гарнитуры не сразу. */
-    private const val LOST_DELAY_MS = 700L
+    const val LOST_DELAY_MS = 700L
 
-    fun play(context: Context, toHeadset: Boolean, kind: Kind = Kind.READY, log: (String) -> Unit = {}) {
+    /**
+     * Сыграть [kind] через [delayMs]. Возвращает, через сколько миллисекунд
+     * от этого мига звук отзвучит: голос в конце («Расшифровал») ждёт его и
+     * не говорит поверх.
+     */
+    fun play(
+        context: Context,
+        toHeadset: Boolean,
+        kind: Kind = Kind.READY,
+        delayMs: Long = if (kind == Kind.LOST) LOST_DELAY_MS else 0L,
+        log: (String) -> Unit = {},
+    ): Long {
         val app = context.applicationContext
         worker.execute {
             runCatching {
-                if (kind == Kind.LOST) Thread.sleep(LOST_DELAY_MS)
-                playNow(app, toHeadset = toHeadset && kind == Kind.READY, kind = kind)
-            }.onFailure { log("звук «${if (kind == Kind.READY) "говори" else "отвалились"}» не сыгрался: ${it.javaClass.simpleName}: ${it.message}") }
+                if (delayMs > 0) Thread.sleep(delayMs)
+                // Синтез — здесь, на своём потоке: первый раз это десятки тысяч отсчётов с эхом.
+                playNow(app, toHeadset = toHeadset && kind != Kind.LOST, data = pcm(kind))
+            }.onFailure { log("звук «${kind.word}» не сыгрался: ${it.javaClass.simpleName}: ${it.message}") }
         }
+        return delayMs + lengthMs(kind)
     }
 
-    private fun playNow(context: Context, toHeadset: Boolean, kind: Kind) {
-        val data = when (kind) {
-            Kind.READY -> readyPcm ?: ReadyChime.render().also { readyPcm = it }
-            Kind.LOST -> lostPcm ?: ReadyChime.renderLost().also { lostPcm = it }
-        }
+    /** Длина звука, мс — по числам звука, без синтеза. */
+    fun lengthMs(kind: Kind): Long = ReadyChime.LEAD_MS + when (kind) {
+        Kind.READY -> ReadyChime.READY_BODY_MS
+        Kind.STOP -> ReadyChime.STOP_BODY_MS
+        Kind.LOST -> ReadyChime.LOST_BODY_MS
+    }.toLong()
+
+    private fun pcm(kind: Kind): ShortArray = when (kind) {
+        Kind.READY -> readyPcm ?: ReadyChime.render().also { readyPcm = it }
+        Kind.STOP -> stopPcm ?: ReadyChime.renderStop().also { stopPcm = it }
+        Kind.LOST -> lostPcm ?: ReadyChime.renderLost().also { lostPcm = it }
+    }
+
+    private fun playNow(context: Context, toHeadset: Boolean, data: ShortArray) {
         val attrs = AudioAttributes.Builder()
             .setUsage(if (toHeadset) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_ASSISTANT)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)

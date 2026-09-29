@@ -165,6 +165,8 @@ class MicFeed private constructor(
     @Volatile private var running = true
     @Volatile private var draining = false
     @Volatile private var drainDeadline = 0L
+    /** Стоп с хвостом: запись кончится в этот миг (elapsedRealtime), 0 — стопа не было. */
+    @Volatile private var stopAtMs = 0L
     /** Труба новой сессии, ждущая писателя. Под [lock] — вместе с перемоткой. */
     private var nextTarget: ParcelFileDescriptor? = null
 
@@ -190,6 +192,26 @@ class MicFeed private constructor(
      */
     @Volatile var zeroMs = 0L
         private set
+
+    /**
+     * С какого мига (elapsedRealtime) запись подряд отдаёт живой звук — не
+     * ровные нули; 0 — сейчас идут нули. Пишет только поток записи, читает
+     * главный ([signalMsSince]): без счётчика, который обнуляли бы оба.
+     */
+    @Volatile private var signalSinceMs = 0L
+
+    /**
+     * Сколько живого звука подряд запись отдала после [markMs] — так видно,
+     * что наушники после подъёма канала действительно заговорили (владелец,
+     * 29.09.2026: «если наушники последние 5 минут через них ничего не шло…
+     * засыпает канал… первые три-четыре слова… они просыпаются»): канал у
+     * системы уже «поднят», вход у записи уже гарнитурный, а идут ровные нули.
+     */
+    fun signalMsSince(markMs: Long): Long {
+        val since = signalSinceMs
+        if (since == 0L) return 0L
+        return (lastCaptureAtMs - maxOf(since, markMs)).coerceAtLeast(0L)
+    }
 
     /** Сколько раз за тейк запись открывали заново. */
     @Volatile var rebuilds = 0
@@ -302,11 +324,23 @@ class MicFeed private constructor(
     fun backlogMs(): Long = synchronized(lock) { (backlogBytes / BYTES_PER_MS).toLong() }
 
     /**
-     * Стоп тейка: запись кончается сейчас, а накопленное дописывается в трубу
-     * и труба закрывается — распознаватель дочитывает до конца и сам кончает
-     * сессию. Сказанное перед самым «стопом» не теряется.
+     * Стоп тейка: запись кончается через [tailMs] (хвост — последний слог,
+     * договорённый под самый тап, не срезается), а накопленное дописывается в
+     * трубу и труба закрывается — распознаватель дочитывает до конца и сам
+     * кончает сессию. Сказанное перед самым «стопом» не теряется (владелец,
+     * 29.09.2026: «я иногда могу нажать стоп, когда я договорил, а слова ещё
+     * должны доехать»).
      */
-    fun finish() {
+    fun finish(tailMs: Long = 0L) {
+        if (draining || stopAtMs > 0L) return
+        if (tailMs <= 0L) {
+            finishNow()
+            return
+        }
+        stopAtMs = SystemClock.elapsedRealtime() + tailMs
+    }
+
+    private fun finishNow() {
         if (draining) return
         drainDeadline = SystemClock.elapsedRealtime() + DRAIN_MAX_MS
         draining = true
@@ -329,6 +363,10 @@ class MicFeed private constructor(
         var badSince = 0L
         try {
             while (running && !draining) {
+                if (stopAtMs > 0L && SystemClock.elapsedRealtime() >= stopAtMs) {
+                    finishNow()
+                    break
+                }
                 kickReason?.let { why ->
                     kickReason = null
                     rebuild(why)
@@ -354,7 +392,13 @@ class MicFeed private constructor(
                 badSince = 0L
                 lastCaptureAtMs = now
                 val chunk = if (n == buf.size) buf else buf.copyOf(n)
-                zeroMs = if (allZero(chunk, n)) zeroMs + (n / BYTES_PER_MS) else 0L
+                if (allZero(chunk, n)) {
+                    zeroMs += n / BYTES_PER_MS
+                    signalSinceMs = 0L
+                } else {
+                    zeroMs = 0L
+                    if (signalSinceMs == 0L) signalSinceMs = now - n / BYTES_PER_MS
+                }
                 if (now - lastLevelAt >= 60) {
                     lastLevelAt = now
                     onLevel?.let { sink -> runCatching { sink(level(chunk, n)) } }
@@ -409,6 +453,7 @@ class MicFeed private constructor(
         }
         record = fresh
         zeroMs = 0L
+        signalSinceMs = 0L
         lastCaptureAtMs = SystemClock.elapsedRealtime()
     }
 

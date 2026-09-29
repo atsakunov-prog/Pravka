@@ -35,6 +35,15 @@ import android.os.SystemClock
  * (`MicRouting.raise`). Связь со стеком держим открытой всё время службы:
  * получать её на нажатии — это десятки миллисекунд, а первые слова дороже.
  *
+ * С 29.09.2026 распознавание подтверждается и тейку с касания телефона,
+ * который слушает наушники ([startNow]; владелец: «когда я нажал на телефоне,
+ * и слушают наушники… я должен иметь возможность остановить длинным нажатием
+ * на кнопку»). Без этого кнопка гарнитуры при поднятом канале до Правки не
+ * доходит вовсе: стек отвечает на её просьбу помощника отказом и сам же
+ * роняет канал (`startVoiceRecognitionByHeadset` → `isAudioOn()` →
+ * `disconnectAudio`) — тейк слышал телефон, а на экране было «наушники
+ * отвалились».
+ *
  * Закрыть распознавание — тоже наша забота: пока стек считает его открытым,
  * следующее нажатие гарнитуры он потратит на то, чтобы закрыть старое, и
  * кнопку придётся жать дважды. Тейки кончаются десятком дорог (кнопка,
@@ -58,7 +67,12 @@ class HeadsetVoice(
 
     private var receiver: BroadcastReceiver? = null
     private var sawAudio = false
-    private var onDrop: (() -> Unit)? = null
+    private var onDown: (() -> Unit)? = null
+    private var onDrop: ((gone: Boolean) -> Unit)? = null
+    private var downNoticed = false
+
+    /** Следим ли за каналом идущего тейка ([watchDrop]). */
+    val watching: Boolean get() = receiver != null
 
     /** «Устройства поблизости» (Android 12+) — без него стек с приложением не говорит. */
     fun hasPermission(): Boolean =
@@ -95,26 +109,77 @@ class HeadsetVoice(
             }
             // Кто именно нажал, стек знает сам: при ждущей просьбе гарнитуры он
             // подставляет её вместо переданной («fall back to requesting device»).
-            val dev = runCatching { p.connectedDevices }.getOrDefault(emptyList()).firstOrNull()
+            val dev = connected(p)
             if (dev == null) {
                 log("подключённых гарнитур нет — команда пришла не с гарнитуры")
                 onDone(false)
                 return@withProxy
             }
-            val ok = runCatching { p.startVoiceRecognition(dev) }.getOrElse {
-                log("startVoiceRecognition: ${it.javaClass.simpleName}: ${it.message}")
-                false
-            }
-            if (ok) {
-                active = true
-                device = dev
-                startedAt = SystemClock.elapsedRealtime()
-                log("распознавание подтверждено стеку — «${name(dev)}»")
-            } else {
-                log("стек отказал в распознавании («${name(dev)}») — маршрут поднимет тейк")
-            }
-            onDone(ok)
+            onDone(confirm(p, dev))
         }
+    }
+
+    /**
+     * Подтвердить распознавание тейку с касания телефона, который будет
+     * слушать наушники, — сейчас же и ДО того, как тейк поднимет свой маршрут
+     * (см. порядок в описании класса). Связи со стеком ещё нет или канал уже
+     * поднят — не подтверждаем: ждать связи значит отдать первые слова, а
+     * подтверждение поверх поднятого канала стек отвергает, роняя канал. Тогда
+     * тейк идёт как раньше, только стоп кнопкой гарнитуры может не дойти.
+     * true — стек принял.
+     */
+    @SuppressLint("MissingPermission") // proxy есть только с разрешением
+    fun startNow(): Boolean {
+        if (active) return true
+        val p = proxy
+        if (p == null) {
+            log(
+                if (hasPermission()) "стек гарнитуры ещё не на связи — тейк без подтверждения, стоп кнопкой может не дойти"
+                else "нет разрешения «Устройства поблизости» — стоп кнопкой гарнитуры не дойдёт"
+            )
+            return false
+        }
+        val dev = connected(p) ?: return false
+        if (runCatching { p.isAudioConnected(dev) }.getOrDefault(false)) {
+            log("канал гарнитуры уже поднят — подтверждать поздно (стек уронил бы его), стоп кнопкой может не дойти")
+            return false
+        }
+        return confirm(p, dev)
+    }
+
+    /**
+     * Канал к гарнитуре поднят — по словам самого стека Bluetooth. Липкая
+     * рассылка системы (`MicRouting.scoAudioConnected`) про канал, поднятый
+     * стеком (распознавание по кнопке), молчит и может помнить прошлый тейк.
+     * null — стека нет под рукой, спросить некого.
+     */
+    @SuppressLint("MissingPermission")
+    fun audioConnected(): Boolean? {
+        val p = proxy ?: return null
+        val devices = runCatching { p.connectedDevices }.getOrNull() ?: return null
+        if (devices.isEmpty()) return false
+        return runCatching { devices.any { p.isAudioConnected(it) } }.getOrNull()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connected(p: BluetoothHeadset): BluetoothDevice? =
+        runCatching { p.connectedDevices }.getOrDefault(emptyList()).firstOrNull()
+
+    @SuppressLint("MissingPermission")
+    private fun confirm(p: BluetoothHeadset, dev: BluetoothDevice): Boolean {
+        val ok = runCatching { p.startVoiceRecognition(dev) }.getOrElse {
+            log("startVoiceRecognition: ${it.javaClass.simpleName}: ${it.message}")
+            false
+        }
+        if (ok) {
+            active = true
+            device = dev
+            startedAt = SystemClock.elapsedRealtime()
+            log("распознавание подтверждено стеку — «${name(dev)}»")
+        } else {
+            log("стек отказал в распознавании («${name(dev)}») — маршрут поднимет тейк")
+        }
+        return ok
     }
 
     /**
@@ -123,11 +188,22 @@ class HeadsetVoice(
      * Во всех случаях тейку пора кончаться — иначе он дослушивал бы
      * телефоном из кармана. Короткий «моргнувший» канал (обрыв и тут же
      * подъём, пока маршрут делят стек и тейк) стопом не считается.
+     *
+     * [onDown] — сразу на обрыве, до проверки на «моргнул»: запись тейка
+     * замечает смену входа раньше, чем [onDrop], и без этого предупреждения
+     * говорила «наушники отвалились» на каждом стопе кнопкой (владелец,
+     * 29.09.2026: «пишет мне, что наушники отключились… но они не отвалились,
+     * я просто кнопку нажал»). [onDrop] получает `gone`: гарнитура не просто
+     * закрыла канал, а отключилась совсем (села, ушла из зоны).
      */
-    fun watchDrop(onDrop: () -> Unit) {
+    fun watchDrop(onDown: () -> Unit = {}, onDrop: (gone: Boolean) -> Unit) {
         unwatch()
+        this.onDown = onDown
         this.onDrop = onDrop
-        sawAudio = false
+        downNoticed = false
+        // Канал уже поднят (стек поднял его под распознавание раньше, чем мы
+        // встали следить) — его подъёма не будет, а обрыв должен считаться.
+        sawAudio = audioConnected() == true
         val r = object : BroadcastReceiver() {
             override fun onReceive(c: Context, intent: Intent) {
                 // Липкое последнее состояние канала — из прошлого, не про этот тейк.
@@ -164,6 +240,7 @@ class HeadsetVoice(
         receiver = if (ok) r else null
         if (!ok) {
             this.onDrop = null
+            this.onDown = null
             log("не вышло следить за каналом — стоп только кнопкой на экране")
         }
     }
@@ -194,25 +271,38 @@ class HeadsetVoice(
         if (up) {
             if (!sawAudio) log("канал гарнитуры поднят")
             sawAudio = true
+            downNoticed = false
             main.removeCallbacks(dropCheck)
             return
         }
         // Обрыв до подъёма — это ещё старт, не стоп.
         if (!sawAudio) return
+        if (!downNoticed) {
+            downNoticed = true
+            onDown?.let { runCatching { it() } }
+        }
         main.removeCallbacks(dropCheck)
         main.postDelayed(dropCheck, DROP_DEBOUNCE_MS)
     }
 
+    @SuppressLint("MissingPermission")
     private val dropCheck = Runnable {
         val cb = onDrop ?: return@Runnable
+        val d = device
+        val p = proxy
+        // Кнопка закрывает только канал — гарнитура остаётся подключённой.
+        // Села или ушла из зоны — её нет и среди подключённых.
+        val gone = p != null && d != null &&
+            runCatching { p.getConnectionState(d) != BluetoothProfile.STATE_CONNECTED }.getOrDefault(false)
         unwatch()
-        log("канал гарнитуры закрылся — тейк кончается")
-        cb()
+        log(if (gone) "гарнитура отключилась посреди тейка — тейк кончается" else "канал гарнитуры закрылся — тейк кончается")
+        cb(gone)
     }
 
     private fun unwatch() {
         main.removeCallbacks(dropCheck)
         onDrop = null
+        onDown = null
         receiver?.let { r -> runCatching { context.unregisterReceiver(r) } }
         receiver = null
     }

@@ -124,6 +124,32 @@ class GoogleSpeechSession(
     private var routeWatch: Runnable? = null
 
     /**
+     * Когда канал гарнитуры закрыла её кнопка ([headsetClosing]); 0 — не
+     * закрывала. Смена входа на телефон сразу после — стоп на подходе, а не
+     * «наушники отвалились» (`ListenPolicy.headsetStopPending`).
+     */
+    private var vrClosedAtMs = 0L
+
+    /** Слушали ли наушники к мигу стопа — тогда в конце голос «Расшифровал» ([spokeInHeadset]). */
+    private var headsetAtStop: Boolean? = null
+
+    /**
+     * Тейк слушали наушники, когда его остановили (или его позвала их
+     * кнопка): голос в конце говорит в них. Решено в [stop]; тейк, кончившийся
+     * сам (десять минут без слов), — на конце.
+     */
+    val spokeInHeadset: Boolean get() = headsetAtStop ?: (headsetMic || fromHeadset)
+
+    /**
+     * Стоп пришёл с кнопки гарнитуры — звук «принял» по музыкальному каналу:
+     * канал гарнитуры она закрыла сама. Ставит служба перед [stop].
+     */
+    @Volatile var stopByHeadset = false
+
+    /** Стоп без звука «принял»: вместо него служба сыграет свой («отвалились»). */
+    @Volatile var stopQuiet = false
+
+    /**
      * Подряд «тишин» (не разобрал / никто не говорил), прилетевших сразу
      * после старта сессии, — только они и настоящие ошибки платят паузу
      * перед подъёмом (`ListenPolicy.restartDelayMs`).
@@ -217,6 +243,34 @@ class GoogleSpeechSession(
         var lostSink: (() -> Unit)? = null
 
         /**
+         * Тейк будет слушать наушники (true) или больше их не слушает (false):
+         * подтвердить стеку Bluetooth распознавание, чтобы кнопка гарнитуры
+         * тейк останавливала, — или закрыть его (`HeadsetVoice`, у службы).
+         * true зовётся ДО подъёма маршрута: поверх поднятого канала стек
+         * подтверждение отвергает и канал роняет. Главный поток.
+         */
+        @Volatile
+        var voiceSink: ((Boolean) -> Unit)? = null
+
+        /**
+         * Стоп принят — звук «принял» (владелец, 29.09.2026: «в конце, когда я
+         * нажимаю, тоже должно быть, что, грубо говоря, он принял и
+         * расшифровывает»). [headset] — канал наушников ещё поднят и слушают
+         * они; [byHeadset] — стоп нажат их кнопкой. Главный поток.
+         */
+        @Volatile
+        var stopSink: ((headset: Boolean, byHeadset: Boolean) -> Unit)? = null
+
+        /**
+         * Сказанное расшифровано — за миг до того, как текст уйдёт хозяину
+         * сессии: голос «Расшифровал» в наушники (владелец, 29.09.2026: «когда
+         * расшифровал, он должен говорить даже через Silent режим… если это
+         * именно наушники»). Главный поток.
+         */
+        @Volatile
+        var doneSink: ((GoogleSpeechSession, String) -> Unit)? = null
+
+        /**
          * Сколько ждать, пока идущая запись распознавателя переедет на новый
          * вход после смены микрофона, мс. Не переехала — распознаватель
          * поднимается заново уже на новом маршруте.
@@ -294,6 +348,9 @@ class GoogleSpeechSession(
         /** Смена микрофона своей записи: смотреть раз в столько, ждать не дольше. */
         private const val FEED_POLL_MS = 150L
         private const val FEED_ROUTE_MS = 4_000L
+
+        /** Как часто смотреть, проснулись ли наушники. */
+        private const val WAKE_POLL_MS = 60L
 
         /** Звук по каналу гарнитуры не пошёл за столько — переводим запись всё равно. */
         private const val SCO_PREFER_ANYWAY_MS = 1_500L
@@ -636,6 +693,10 @@ class GoogleSpeechSession(
                 MicPlan.Route.AS_IS -> inCall && MicRouting.commIsHeadset(am)
             }
             publishMic()
+            // Слушать будут наушники — сперва распознавание стеку, потом
+            // маршрут: тогда кнопка гарнитуры остановит и тейк, начатый
+            // касанием телефона (`HeadsetVoice.startNow`).
+            if (plan == MicPlan.Route.HEADSET) holdVoice(true)
             // Свой микрофон: вход выбираем сами, маршрут связи распознавателю
             // больше не указ, и ждать его переезда незачем (`MicFeed`).
             if (tryFeed(am, plan, inCall)) return@onMain
@@ -669,20 +730,38 @@ class GoogleSpeechSession(
     fun stop() {
         onMain {
             if (!active && recognizer == null) return@onMain
+            val first = !stopping
             stopping = true
             active = false
+            val now = android.os.SystemClock.elapsedRealtime()
             // Глухое окно, если шло, кончилось стопом: дальше слушать и не надо.
-            health.close(android.os.SystemClock.elapsedRealtime())
+            health.close(now)
             routeWatch?.let { main.removeCallbacks(it) }
             routeWatch = null
+            if (first) {
+                // Стоп кнопкой гарнитуры — владелец в наушниках, даже если слушал телефон.
+                headsetAtStop = headsetMic || fromHeadset || stopByHeadset ||
+                    ListenPolicy.headsetStopPending(vrClosedAtMs, now)
+                // «Принял» — когда хвост записан: звук в наушники поверх
+                // последнего слога попал бы в их же микрофон.
+                val headsetUp = headsetMic && !stopByHeadset
+                val byHeadset = stopByHeadset
+                if (!stopQuiet) {
+                    main.postDelayed({
+                        stopSink?.let { sink -> runCatching { sink(headsetUp, byHeadset) } }
+                    }, ListenPolicy.STOP_TAIL_MS)
+                }
+            }
+            val tail = ListenPolicy.STOP_TAIL_MS
             val f = feed
             if (f != null) {
-                // Своя запись: дописать распознавателю хвост и закрыть трубу —
-                // он дочитает сказанное перед самым «стопом» и сам кончит
+                // Своя запись: дописать хвост (последний слог под самый тап),
+                // отдать распознавателю накопленное и закрыть трубу — он
+                // дочитает сказанное перед самым «стопом» и сам кончит
                 // сессию. stopListening сейчас оборвал бы недочитанное.
                 val drainMs = f.backlogMs()
-                f.finish()
-                onLog("стоп: дописываю распознавателю $drainMs мс звука и закрываю трубу")
+                f.finish(tailMs = tail)
+                onLog("стоп: пишу ещё $tail мс, дописываю распознавателю $drainMs мс звука и закрываю трубу")
                 if (!sessionLive) {
                     // Сессии нет (поднималась после ошибки) — дочитывать некому.
                     main.postDelayed({ if (recognizer != null) finish() }, 300)
@@ -690,14 +769,37 @@ class GoogleSpeechSession(
                 }
                 main.postDelayed({
                     if (recognizer != null && !finished) runCatching { recognizer?.stopListening() }
-                }, drainMs + FEED_EOF_WAIT_MS)
-                main.postDelayed({ if (recognizer != null) finish() }, drainMs + FEED_EOF_WAIT_MS + 2500)
+                }, tail + drainMs + FEED_EOF_WAIT_MS)
+                main.postDelayed({ if (recognizer != null) finish() }, tail + drainMs + FEED_EOF_WAIT_MS + 2500)
                 return@onMain
             }
-            runCatching { recognizer?.stopListening() }
+            // Распознаватель слушает сам: хвост — отложенным stopListening.
+            main.postDelayed({
+                if (recognizer != null && !finished) runCatching { recognizer?.stopListening() }
+            }, tail)
             // Safety net: if no terminal callback lands, deliver anyway.
-            main.postDelayed({ if (recognizer != null) finish() }, 2500)
+            main.postDelayed({ if (recognizer != null) finish() }, tail + 2500)
         }
+    }
+
+    /**
+     * Канал гарнитуры закрыла сама гарнитура — её кнопка (служба узнаёт это
+     * от стека, `HeadsetVoice.watchDrop`): стоп на подходе. Запись заметит
+     * смену входа раньше, чем стоп дойдёт, и не должна называть это «наушники
+     * отвалились» (владелец, 29.09.2026: «они не отвалились, я просто кнопку
+     * нажал»).
+     */
+    fun headsetClosing() {
+        onMain {
+            if (!active || stopping) return@onMain
+            vrClosedAtMs = android.os.SystemClock.elapsedRealtime()
+            onLog("канал закрыла гарнитура — жду стопа, «отвалились» не говорю")
+        }
+    }
+
+    /** Распознавание у стека Bluetooth: держать ([on]) — кнопка гарнитуры остановит тейк, или отпустить. */
+    private fun holdVoice(on: Boolean) {
+        voiceSink?.let { sink -> runCatching { sink(on) } }
     }
 
     /** Тейк ушёл в ЯВНУЮ службу Google, а не в системную по умолчанию. */
@@ -963,6 +1065,8 @@ class GoogleSpeechSession(
         // уляжется destroy только что отработавшего клиента.
         warmMain.postDelayed({ warmUp(context, network) }, WARM_AFTER_TAKE_MS)
         onLog("finish len=${text.length} segmented=$segmented · ${health.summary()}")
+        if (headsetAtStop == null) headsetAtStop = headsetMic || fromHeadset
+        doneSink?.let { sink -> runCatching { sink(this, text) } }
         onDone(text)
     }
 
@@ -1227,11 +1331,16 @@ class GoogleSpeechSession(
             MicPlan.Change.NO_HEADSET -> return "Наушников не видно — слушает телефон"
             MicPlan.Change.NOTHING -> Unit
             MicPlan.Change.HEADSET -> {
-                if (!MicRouting.toHeadset(am, onLog)) return "Наушники не отозвались — слушает телефон"
+                holdVoice(true)
+                if (!MicRouting.toHeadset(am, onLog)) {
+                    holdVoice(false)
+                    return "Наушники не отозвались — слушает телефон"
+                }
                 routeOurs = true
             }
             MicPlan.Change.BUILTIN -> {
                 if (MicRouting.forceBuiltin(am, onLog)) routeOurs = true
+                holdVoice(false)
             }
         }
         headsetMic = wantHeadset
@@ -1646,6 +1755,14 @@ class GoogleSpeechSession(
      * звук.
      */
     private fun headsetLost(text: String) {
+        if (ListenPolicy.headsetStopPending(vrClosedAtMs, android.os.SystemClock.elapsedRealtime())) {
+            onLog("вход ушёл на телефон: канал закрыла кнопка гарнитуры — это стоп, а не «отвалились»")
+            return
+        }
+        // Слушает телефон — распознавание у стека больше не наше: музыка в
+        // наушниках вернётся, а кнопка гарнитуры остановит тейк и так (при
+        // опущенном канале её просьба доходит до Правки, `HeadsetPress.STOP`).
+        holdVoice(false)
         if (headsetDropNoticed) return
         headsetDropNoticed = true
         noticeSink?.let { runCatching { it(text) } }
@@ -1751,8 +1868,13 @@ class GoogleSpeechSession(
         if (MicRouting.callInProgress(am)) return "Идёт разговор — микрофон не переключаю"
         if (wantHeadset) {
             if (MicRouting.headsetMic(am) == null) return "Наушников не видно — слушает телефон"
+            // Сперва распознавание стеку, потом канал: кнопка гарнитуры остановит тейк.
+            holdVoice(true)
             if (!MicRouting.commIsHeadset(am)) {
-                if (!MicRouting.toHeadset(am, onLog)) return "Наушники не отозвались — слушает телефон"
+                if (!MicRouting.toHeadset(am, onLog)) {
+                    holdVoice(false)
+                    return "Наушники не отозвались — слушает телефон"
+                }
                 routeOurs = true
             }
         } else {
@@ -1761,6 +1883,7 @@ class GoogleSpeechSession(
                 routeOurs = false
                 MicRouting.drop(am, onLog)
             }
+            holdVoice(false)
         }
         onLog("микрофон посреди тейка (своя запись): ${if (wantHeadset) "гарнитура" else "телефон"}")
         headsetMic = wantHeadset
@@ -1795,12 +1918,20 @@ class GoogleSpeechSession(
                 val routed = f.routed()
                 val arrived = preferred && routed != null && MicRouting.isHeadsetDevice(routed) == wantHeadset
                 when {
+                    arrived && wantHeadset -> {
+                        headsetMic = true
+                        // Наушники встали — если снова отвалятся, об этом снова скажет звук.
+                        headsetDropNoticed = false
+                        health.heard(MicRouting.label(routed))
+                        onLog("микрофон встал за $waited мс: слушает ${MicRouting.label(routed)} — жду их звука")
+                        // Вход гарнитурный — ещё не значит, что наушники слышат:
+                        // после простоя они просыпаются секунду-полторы.
+                        awaitHeadsetSound(f, android.os.SystemClock.elapsedRealtime())
+                    }
                     arrived -> {
                         routeWatch = null
                         routeMoving = false
-                        headsetMic = wantHeadset
-                        // Наушники встали — если снова отвалятся, об этом снова скажет звук.
-                        if (wantHeadset) headsetDropNoticed = false
+                        headsetMic = false
                         health.heard(MicRouting.label(routed))
                         onLog("микрофон встал за $waited мс: слушает ${MicRouting.label(routed)}")
                         publishMic()
@@ -1832,6 +1963,52 @@ class GoogleSpeechSession(
                         publishMic()
                         cueWhenHeard()
                     }
+                }
+            }
+        }
+        routeWatch = step
+        main.post(step)
+    }
+
+    /**
+     * Запись встала на гарнитуру — дождаться, что наушники правда
+     * заговорили: пошёл живой звук, а не ровные нули (`ListenPolicy.headsetWake`).
+     * Владелец (29.09.2026): «если наушники последние 5 минут через них
+     * ничего не шло… засыпает канал… первые три или четыре слова они
+     * просыпаются… а звук при этом проигрывается… в тот момент, когда плашка
+     * вылезает». Канал у системы к этому мигу «поднят» и вход у записи
+     * гарнитурный — спросить больше некого, кроме самого звука. До того
+     * кружок тусклый, «говори» молчит; проснулись — «говори», а посреди тейка
+     * (переключили кружком) — один звон в наушники: «слушаю тут».
+     */
+    private fun awaitHeadsetSound(f: MicFeed, arrivedAtMs: Long) {
+        routeMoving = true
+        publishMic()
+        val step = object : Runnable {
+            override fun run() {
+                if (feed !== f || !active || stopping) return
+                val now = android.os.SystemClock.elapsedRealtime()
+                val waited = now - arrivedAtMs
+                when (ListenPolicy.headsetWake(f.signalMsSince(arrivedAtMs), waited)) {
+                    ListenPolicy.Wake.WAIT -> {
+                        main.postDelayed(this, WAKE_POLL_MS)
+                        return
+                    }
+                    ListenPolicy.Wake.AWAKE -> onLog(
+                        "наушники слышат: живой звук пошёл через ${waited - ListenPolicy.HEADSET_SOUND_MS} мс после входа"
+                    )
+                    ListenPolicy.Wake.GIVE_UP -> onLog(
+                        "наушники ${waited} мс отдают ровные нули — зову говорить по сроку"
+                    )
+                }
+                routeWatch = null
+                routeMoving = false
+                publishMic()
+                if (readyFired) {
+                    // Посреди тейка: «говори» уже звучал — звон только в наушники.
+                    readySink?.let { sink -> runCatching { sink(true) } }
+                } else {
+                    cueWhenHeard()
                 }
             }
         }

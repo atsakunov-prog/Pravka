@@ -108,7 +108,10 @@ class DictationService : Service() {
             else -> Unit
         }
         runCatching {
+            val voice = ru.zf.pravka.provider.GoogleSpeechSession.voiceSink
             if (wantHeadset && headset != null) {
+                // Распознавание стеку до канала: кнопка гарнитуры остановит запись.
+                voice?.let { sink -> runCatching { sink(true) } }
                 if (!scoRaised) scoRaised = MicRouting.raise(am, log)
                 recorder.setPreferredDevice(headset)
             } else {
@@ -117,6 +120,7 @@ class DictationService : Service() {
                     MicRouting.drop(am, log)
                 }
                 MicRouting.builtinMic(am)?.let { recorder.setPreferredDevice(it) }
+                voice?.let { sink -> runCatching { sink(false) } }
             }
         }.onFailure { return "Микрофон не переключился: ${it.javaClass.simpleName}" }
         headsetMic = wantHeadset
@@ -247,6 +251,9 @@ class DictationService : Service() {
                 phoneOnly ->
                     MicRouting.builtinMic(am)?.let { recorder.setPreferredDevice(it) }
                 headset != null -> {
+                    // Сперва распознавание стеку, потом канал — кнопка гарнитуры
+                    // остановит и запись, начатую касанием телефона.
+                    ru.zf.pravka.provider.GoogleSpeechSession.voiceSink?.let { sink -> runCatching { sink(true) } }
                     scoRaised = MicRouting.raise(am) { log(it) }
                     recorder.setPreferredDevice(headset)
                     headsetMic = true

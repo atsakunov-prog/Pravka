@@ -1094,12 +1094,13 @@ private fun VoiceSettings(app: PravkaApp) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        // Звук «говори» (29.09.2026; владелец: «иногда я просто нажимаю на
-        // кнопку — ничего не происходит в наушниках… мне точно нужен фидбэк»).
+        // Звуки диктовки (29.09.2026; владелец: «иногда я просто нажимаю на
+        // кнопку — ничего не происходит в наушниках… мне точно нужен фидбэк»;
+        // «должны быть звуки по поводу всего: по поводу начала, по поводу конца»).
         Spacer(Modifier.height(8.dp))
         val chime by settings.readyChimeFlow.collectAsState(initial = ru.zf.pravka.core.ReadyChime.Mode.HEADSET)
         val chimeContext = LocalContext.current
-        Text("Звуки «говори» и «наушники отвалились»", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Звуки диктовки", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ChipRow {
             PaperChip("В наушниках", selected = chime == ru.zf.pravka.core.ReadyChime.Mode.HEADSET, onClick = {
                 scope.launch { settings.setReadyChime(ru.zf.pravka.core.ReadyChime.Mode.HEADSET) }
@@ -1112,21 +1113,27 @@ private fun VoiceSettings(app: PravkaApp) {
             })
             ru.zf.pravka.ui.InfoButton(
                 "Звуки",
-                "«Говори» — колокольчик из двух нот вверх в тот миг, когда всё поднялось и можно " +
-                    "говорить: в наушниках это значит, что по их каналу уже пошёл звук и " +
-                    "распознаватель готов, а не просто «кнопку нажали». Звенит туда, откуда слушаем: " +
-                    "в наушниках — в сами наушники, на телефоне (при «Всегда») — телефоном. " +
-                    "«Наушники отвалились» — одна низкая нота вниз: наушники не отдали микрофон или " +
-                    "потеряли его посреди записи, и слушает телефон. «В наушниках» — на телефоне " +
-                    "хватает пилюли «слушаю» и вибрации; «Выкл» — без обоих звуков.",
+                "«Говори» — три ноты вверх с эхом в тот миг, когда можно говорить: в наушниках это " +
+                    "значит, что от них уже пошёл живой звук (после простоя они просыпаются " +
+                    "секунду-полторы) и распознаватель готов, а не просто «кнопку нажали». " +
+                    "«Принял» — две ноты вниз: стоп нажат (на пилюле, на диске или кнопкой " +
+                    "наушников), сказанное расшифровывается. Когда расшифровано — голос " +
+                    "«Расшифровал» в наушники, и беззвучный режим его не глушит. " +
+                    "«Наушники отвалились» — одна низкая нота вниз: наушники не отдали микрофон, " +
+                    "потеряли его посреди записи или отключились, и слушает телефон. Звучит туда, " +
+                    "откуда слушаем. «В наушниках» — на телефоне хватает пилюли и вибрации; " +
+                    "«Всегда» — звуки и телефоном (голос — только в наушниках); «Выкл» — без звуков и голоса.",
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             ru.zf.pravka.ui.PaperTextButton("«Говори»", icon = Glyphs.Play, onClick = {
                 ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false)
             })
+            ru.zf.pravka.ui.PaperTextButton("«Принял»", icon = Glyphs.Play, onClick = {
+                ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false, kind = ru.zf.pravka.provider.ChimePlayer.Kind.STOP)
+            })
             ru.zf.pravka.ui.PaperTextButton("«Отвалились»", icon = Glyphs.Play, onClick = {
-                ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false, kind = ru.zf.pravka.provider.ChimePlayer.Kind.LOST)
+                ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false, kind = ru.zf.pravka.provider.ChimePlayer.Kind.LOST, delayMs = 0L)
             })
         }
         // «Перезагрузить микрофон» (владелец, 22.09.2026: «подключаюсь к машине, и

@@ -159,12 +159,27 @@ object MicRouting {
     fun isHeadsetDevice(dev: AudioDeviceInfo?): Boolean = dev != null && isHeadset(dev)
 
     /**
-     * Звук по каналу гарнитуры уже идёт (SCO поднят), а не только заказан.
-     * Спрашивается у липкой рассылки системы: последний её ответ хранится, и
-     * приёмник для этого не нужен. До этого мига запись с гарнитуры дала бы
-     * тишину — поэтому своя запись переезжает на неё только теперь.
+     * Спросить сам стек Bluetooth, поднят ли канал к гарнитуре
+     * (`HeadsetVoice.audioConnected`); ставит служба. null в ответе — стека
+     * под рукой нет, и слово за липкой рассылкой.
      */
-    fun scoAudioConnected(context: Context): Boolean = runCatching {
+    @Volatile
+    var linkProbe: (() -> Boolean?)? = null
+
+    /**
+     * Звук по каналу гарнитуры уже идёт (SCO поднят), а не только заказан.
+     * Сперва — у самого стека ([linkProbe]): канал, который он поднял под
+     * распознавание по кнопке гарнитуры, в рассылку системы не попадает, и
+     * липкий ответ мог остаться от прошлого тейка — «поднят», когда канала
+     * ещё нет (владелец, 29.09.2026: звук «говори» звучал, «когда плашка
+     * вылезает», а первые слова пропадали). Нет стека — липкая рассылка:
+     * последний её ответ хранится, и приёмник для этого не нужен. До этого
+     * мига запись с гарнитуры дала бы тишину — поэтому своя запись переезжает
+     * на неё только теперь.
+     */
+    fun scoAudioConnected(context: Context): Boolean = linkProbe?.let { probe ->
+        runCatching { probe() }.getOrNull()
+    } ?: runCatching {
         val filter = IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
         val sticky = if (Build.VERSION.SDK_INT >= 33) {
             context.registerReceiver(null, filter, Context.RECEIVER_EXPORTED)
@@ -318,8 +333,27 @@ object MicRouting {
             }
         }.isSuccess
         if (!registered) receiver = null
+        // Канал, поднятый стеком под распознавание (кнопка гарнитуры), в
+        // рассылку не попадает — про него спрашиваем стек сам, пока ждём.
+        if (linkProbe != null) {
+            val startedAt = android.os.SystemClock.elapsedRealtime()
+            val poll = object : Runnable {
+                override fun run() {
+                    if (fired) return
+                    if (scoAudioConnected(context)) {
+                        fire("канал поднялся за ${android.os.SystemClock.elapsedRealtime() - startedAt} мс (по словам стека)")
+                    } else {
+                        main.postDelayed(this, SCO_POLL_MS)
+                    }
+                }
+            }
+            main.postDelayed(poll, SCO_POLL_MS)
+        }
         main.postDelayed({ fire("канал не поднялся за $timeoutMs мс — стартуем как есть") }, timeoutMs)
     }
+
+    /** Как часто спрашивать стек о канале, пока его ждём. */
+    private const val SCO_POLL_MS = 100L
 
     /**
      * Дождаться, пока вход реально переедет на встроенный микрофон. Та же

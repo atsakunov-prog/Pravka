@@ -152,4 +152,28 @@ class ListenPolicyTest {
         // Облако отказалось посреди тейка в наушниках — перекидываем.
         assertTrue(ListenPolicy.toOffline(onCloud = true, offlineAvailable = true, cloudError = false, stuckRestarts = 0, stalled = false, headsetRefused = true))
     }
+
+    @Test
+    fun `наушники после простоя - говори только когда пошёл их живой звук`() {
+        // Вход гарнитурный, а идут ровные нули — наушники ещё просыпаются.
+        assertEquals(ListenPolicy.Wake.WAIT, ListenPolicy.headsetWake(signalMs = 0, waitedMs = 900))
+        // Остаток звука телефона после смены входа — ещё не голос наушников.
+        assertEquals(ListenPolicy.Wake.WAIT, ListenPolicy.headsetWake(signalMs = 150, waitedMs = 200))
+        assertEquals(ListenPolicy.Wake.AWAKE, ListenPolicy.headsetWake(signalMs = ListenPolicy.HEADSET_SOUND_MS, waitedMs = 1_400))
+        // Нули слишком долго — зовём по сроку, а не молчим вечно.
+        assertEquals(ListenPolicy.Wake.GIVE_UP, ListenPolicy.headsetWake(signalMs = 0, waitedMs = ListenPolicy.HEADSET_WAKE_MAX_MS))
+        // Срок — раньше, чем сторож нулей начнёт поднимать канал заново.
+        assertTrue(ListenPolicy.HEADSET_WAKE_MAX_MS <= ListenPolicy.DEAD_AIR_MS + 1_000)
+    }
+
+    @Test
+    fun `канал закрыла кнопка гарнитуры - это стоп, а не наушники отвалились`() {
+        val closed = 1_000_000L
+        assertTrue(ListenPolicy.headsetStopPending(closed, closed + 800))
+        assertTrue(ListenPolicy.headsetStopPending(closed, closed + ListenPolicy.HEADSET_STOP_GRACE_MS - 1))
+        // Давно — значит, отвалились по-настоящему.
+        assertFalse(ListenPolicy.headsetStopPending(closed, closed + ListenPolicy.HEADSET_STOP_GRACE_MS))
+        // Кнопка канал не закрывала.
+        assertFalse(ListenPolicy.headsetStopPending(0L, closed))
+    }
 }
