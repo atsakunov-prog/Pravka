@@ -959,7 +959,8 @@ class GoogleSpeechSession(
             // restart (that vibrated repeatedly through a silent lead-in).
             if (!recognizerReadyOnce) {
                 recognizerReadyOnce = true
-                fireReady()
+                // Своя запись ещё переезжает на наушники — «говори» скажет она, когда переедет.
+                if (!(feed != null && routeMoving && headsetMic)) fireReady()
                 val f = feed
                 if (f != null) {
                     // Своя запись: читает ли распознаватель наш звук — видно по трубе.
@@ -1353,6 +1354,15 @@ class GoogleSpeechSession(
         return "наушники, облако звук Правки не берёт"
     }
 
+    /**
+     * «Говори» после переезда на нужный вход: если путь наш звук уже брал —
+     * сразу (сказанное ляжет в очередь), иначе — когда и распознаватель
+     * готов; не готов — скажет его «готов».
+     */
+    private fun cueWhenHeard() {
+        if (feedAcceptedBefore(networkNow) || recognizerReadyOnce || feed == null) fireReady()
+    }
+
     /** «Говори» — один раз за тейк: с первого «готов» распознавателя или сразу, если звук копит своя запись. */
     private fun fireReady() {
         if (readyFired) return
@@ -1400,8 +1410,11 @@ class GoogleSpeechSession(
         }
         publishMic()
         // Путь наш звук уже брал — звать говорить можно с тапа: сказанное до
-        // «готов» распознавателя ляжет в очередь и дойдёт до него целиком.
-        if (feedAcceptedBefore(networkNow)) fireReady()
+        // «готов» распознавателя ляжет в очередь и дойдёт до него целиком. В
+        // наушниках — не с тапа, а когда по их каналу пошёл звук (followFeed):
+        // тейк с кнопки гарнитуры идёт с телефоном в кармане, и позвать
+        // говорить раньше — значит отдать первую фразу карману.
+        if (feedAcceptedBefore(networkNow) && !wantHeadset) fireReady()
         startListening()
         return true
     }
@@ -1484,6 +1497,8 @@ class GoogleSpeechSession(
             noticeSink?.let { runCatching { it("Распознаватель не берёт звук Правки — наушники недоступны, слушает телефон") } }
         }
         publishMic()
+        // Ждали наушников для «говори», а своей записи больше нет — сказать по готовности распознавателя.
+        if (recognizerReadyOnce) cueWhenHeard()
         if (relisten && active && !stopping) relisten()
     }
 
@@ -1750,6 +1765,8 @@ class GoogleSpeechSession(
                         health.heard(MicRouting.label(routed))
                         onLog("микрофон встал за $waited мс: слушает ${MicRouting.label(routed)}")
                         publishMic()
+                        // Звук пошёл оттуда, откуда просили, — теперь «говори» правда.
+                        cueWhenHeard()
                     }
                     waited < FEED_ROUTE_MS -> main.postDelayed(this, FEED_POLL_MS)
                     wantHeadset -> {
@@ -1765,6 +1782,7 @@ class GoogleSpeechSession(
                         health.heard("телефон")
                         noticeSink?.let { runCatching { it("Наушники не отдали микрофон — слушает телефон") } }
                         publishMic()
+                        cueWhenHeard()
                     }
                     else -> {
                         routeWatch = null
@@ -1773,6 +1791,7 @@ class GoogleSpeechSession(
                         health.heard(MicRouting.label(routed))
                         onLog("микрофон: запись слушает ${MicRouting.label(routed)}")
                         publishMic()
+                        cueWhenHeard()
                     }
                 }
             }
