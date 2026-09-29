@@ -131,4 +131,25 @@ class ListenPolicyTest {
         // Пакета на телефоне нет.
         assertFalse(ListenPolicy.toOffline(onCloud = true, offlineAvailable = false, cloudError = true, stuckRestarts = 3, stalled = true))
     }
+
+    @Test
+    fun `отказ пути помнится полчаса, потом пробуем снова`() {
+        assertTrue(ListenPolicy.feedRefusalLive(refusedAtMs = 1_000_000, nowMs = 1_000_000 + 60_000))
+        assertFalse(ListenPolicy.feedRefusalLive(refusedAtMs = 1_000_000, nowMs = 1_000_000 + ListenPolicy.FEED_REFUSAL_TTL_MS))
+        // Часы ушли назад (перезагрузка, смена времени) — отказ не в силе.
+        assertFalse(ListenPolicy.feedRefusalLive(refusedAtMs = 1_000_000, nowMs = 500_000))
+    }
+
+    @Test
+    fun `наушники, а облако звук не берёт - тейк сразу офлайн-пакетом`() {
+        assertTrue(ListenPolicy.headsetToOffline(wantHeadset = true, onCloud = true, cloudRefused = true, offlineAvailable = true, offlineRefused = false))
+        // Телефон — облако и без своей записи слышит, пакет не нужен.
+        assertFalse(ListenPolicy.headsetToOffline(wantHeadset = false, onCloud = true, cloudRefused = true, offlineAvailable = true, offlineRefused = false))
+        // Облако не отказывало — пробуем облако.
+        assertFalse(ListenPolicy.headsetToOffline(wantHeadset = true, onCloud = true, cloudRefused = false, offlineAvailable = true, offlineRefused = false))
+        // Пакет тоже не берёт — некуда.
+        assertFalse(ListenPolicy.headsetToOffline(wantHeadset = true, onCloud = true, cloudRefused = true, offlineAvailable = true, offlineRefused = true))
+        // Облако отказалось посреди тейка в наушниках — перекидываем.
+        assertTrue(ListenPolicy.toOffline(onCloud = true, offlineAvailable = true, cloudError = false, stuckRestarts = 0, stalled = false, headsetRefused = true))
+    }
 }

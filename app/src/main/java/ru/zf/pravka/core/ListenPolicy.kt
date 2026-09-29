@@ -184,8 +184,42 @@ object ListenPolicy {
         cloudError: Boolean,
         stuckRestarts: Int,
         stalled: Boolean,
+        headsetRefused: Boolean = false,
     ): Boolean = onCloud && offlineAvailable &&
-        (cloudError || stalled || stuckRestarts >= STUCK_BEFORE_OFFLINE)
+        (cloudError || stalled || headsetRefused || stuckRestarts >= STUCK_BEFORE_OFFLINE)
+
+    // ---- Берёт ли распознаватель звук Правки ----
+    //
+    // Журнал 29.09: весь день «этот путь звук Правки не берёт», каждый тейк в
+    // наушниках шёл прежней дорогой, и через 5–12 с Android снимал канал
+    // гарнитуры — «отваливается микрофон на наушниках», и слова глотались
+    // телефоном на столе. А накануне переключение работало: облако звук
+    // брало. Один отказ, вынесенный за 2,2 с (через VPN облако начинает читать
+    // и позже), выключал свою запись до перезапуска приложения.
+
+    /** Не читает звук столько после «готов» — только тогда считать, что не читает. */
+    const val FEED_PROOF_WAIT_MS = 5_000L
+
+    /** Отказ пути (открыл свой микрофон) помнится столько, потом пробуем снова. */
+    const val FEED_REFUSAL_TTL_MS = 30L * 60 * 1000
+
+    /** Отказ, вынесенный в [refusedAtMs], ещё в силе в [nowMs]. */
+    fun feedRefusalLive(refusedAtMs: Long, nowMs: Long): Boolean =
+        nowMs - refusedAtMs in 0 until FEED_REFUSAL_TTL_MS
+
+    /**
+     * Начать тейк сразу офлайн-пакетом: слушать велено наушники, облако звук
+     * Правки не берёт (отказ в силе), а пакет — не отказывал. Наушники без
+     * своей записи держатся секунды, и тейк услышал бы телефон на столе:
+     * пакет в наушниках лучше облака без них.
+     */
+    fun headsetToOffline(
+        wantHeadset: Boolean,
+        onCloud: Boolean,
+        cloudRefused: Boolean,
+        offlineAvailable: Boolean,
+        offlineRefused: Boolean,
+    ): Boolean = wantHeadset && onCloud && cloudRefused && offlineAvailable && !offlineRefused
 
     // ---- Своя запись: звука нет или одни нули ----
 

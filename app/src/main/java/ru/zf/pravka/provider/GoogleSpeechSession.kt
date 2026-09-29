@@ -225,19 +225,42 @@ class GoogleSpeechSession(
         // ---- Свой микрофон (MicFeed) ----
 
         /**
-         * Берёт ли распознаватель пути (true — сеть, false — офлайн-пакет) звук
-         * Правки: true — берёт, false — открывает свой микрофон или не читает,
-         * нет ключа — ещё не пробовали. Живёт до перезапуска процесса или
-         * «Перезагрузить микрофон»: служба Google могла обновиться.
+         * Что путь (true — сеть, false — офлайн-пакет) показал о звуке Правки:
+         * берёт или отказал — почему и когда (часы стены, для надписи и срока).
          */
-        private val feedVerdict = java.util.concurrent.ConcurrentHashMap<Boolean, Boolean>()
+        private data class FeedVerdict(val accepted: Boolean, val why: String, val atMs: Long)
+
+        /**
+         * Вердикты путей. Отказ — только доказанный (распознаватель открыл свой
+         * микрофон, дважды подряд) и живёт [ListenPolicy.FEED_REFUSAL_TTL_MS],
+         * а не до перезапуска: 29.09 один отказ выключил свою запись на весь
+         * день, и наушники отваливались каждый тейк. «Не читает» отказом не
+         * считается вовсе — через VPN облако начинает читать и позже.
+         * «Перезагрузить микрофон» стирает всё.
+         */
+        private val feedVerdict = java.util.concurrent.ConcurrentHashMap<Boolean, FeedVerdict>()
+
+        private fun feedRefused(network: Boolean): Boolean {
+            val v = feedVerdict[network] ?: return false
+            return !v.accepted && ListenPolicy.feedRefusalLive(v.atMs, System.currentTimeMillis())
+        }
+
+        private fun feedAcceptedBefore(network: Boolean): Boolean = feedVerdict[network]?.accepted == true
+
+        private fun clock(ms: Long): String =
+            java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))
 
         /** Что известно о пути — строкой для настроек. */
-        fun feedLabel(network: Boolean): String = when (feedVerdict[network]) {
-            true -> "берёт звук Правки"
-            false -> "звук Правки не берёт — слушает свой микрофон"
-            null -> "ещё не пробовали в этот запуск"
+        fun feedLabel(network: Boolean): String {
+            val v = feedVerdict[network] ?: return "ещё не пробовали в этот запуск"
+            if (v.accepted) return "берёт звук Правки"
+            val left = (ListenPolicy.FEED_REFUSAL_TTL_MS - (System.currentTimeMillis() - v.atMs)) / 60_000
+            return if (left > 0) "звук Правки не взял в ${clock(v.atMs)}: ${v.why} — снова попробую через $left мин"
+            else "звук Правки не взял в ${clock(v.atMs)}: ${v.why} — следующий тейк попробует снова"
         }
+
+        /** Про тейк в наушниках офлайн-пакетом — сказать один раз, а не каждый тейк. */
+        @Volatile private var headsetOfflineTold = false
 
         /** Проверить, читает ли распознаватель наш звук, — через столько после «готов». */
         private const val FEED_CHECK_MS = 700L
@@ -533,6 +556,10 @@ class GoogleSpeechSession(
         this.onError = onError
         this.onLog = onLog
         onMain {
+            // Наушники, а облако звук Правки не берёт: без своей записи канал
+            // гарнитуры держится секунды — тейк сразу офлайн-пакетом, если он
+            // наш звук не отвергал (`ListenPolicy.headsetToOffline`).
+            val startOffline = headsetStartOffline()
             val r = createRecognizer()
             if (r == null) {
                 onLog("start FAILED: no recognizer")
@@ -548,14 +575,15 @@ class GoogleSpeechSession(
             startedAtMs = android.os.SystemClock.elapsedRealtime()
             lastWordsAtMs = startedAtMs
             health = TakeHealth(startedAtMs)
+            startOffline?.let { health.toOffline(it) }
             quickSilences = 0
             main.removeCallbacks(idleWatch)
             main.postDelayed(idleWatch, ListenPolicy.IDLE_CHECK_MS)
             main.removeCallbacks(micWatch)
             main.postDelayed(micWatch, MIC_WATCH_MS)
             onLog(
-                "start путь=${if (network) "сеть" else "офлайн-пакет"} " +
-                    "служба=${if (network) networkServiceLabel(context) else "офлайн-пакет устройства"} " +
+                "start путь=${if (networkNow) "сеть" else "офлайн-пакет"} " +
+                    "служба=${if (networkNow) networkServiceLabel(context) else "офлайн-пакет устройства"} " +
                     "onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} " +
                     "formatting=$formatting segmentedRequested=$segmentedSession"
             )
@@ -763,7 +791,7 @@ class GoogleSpeechSession(
             ListenPolicy.replayFrom(lastWordsAtMs, listenAtMs)
         } else 0L
         val source = f?.openSource(rewindSinceMs = replay)
-        if (f != null && source == null) dropFeed("труба не создалась", verdict = null, relisten = false)
+        if (f != null && source == null) dropFeed("труба не создалась", relisten = false)
         if (f != null && source != null && f.lastRewindMs > 0) onLog("повторяю распознавателю ${f.lastRewindMs} мс звука с последнего слова")
         sessionsStarted++
         speechBeganAtMs = 0L
@@ -936,7 +964,8 @@ class GoogleSpeechSession(
                 if (f != null) {
                     // Своя запись: читает ли распознаватель наш звук — видно по трубе.
                     feedWrittenAtReady = f.writtenBytes
-                    main.postDelayed({ checkFeed(again = false) }, FEED_CHECK_MS)
+                    feedReadyAtMs = now
+                    main.postDelayed({ checkFeed(0) }, FEED_CHECK_MS)
                 } else {
                     // Кто слушает на деле — у системы, а не по нашему заказу: запись
                     // к этому мигу открыта. Одна строка в журнал и в итог тейка.
@@ -1300,6 +1329,30 @@ class GoogleSpeechSession(
 
     private var recognizerReadyOnce = false
 
+    /**
+     * До распознавателя: слушать велено наушники, а облако звук Правки не
+     * берёт (отказ в силе) — тейк сразу офлайн-пакетом со своей записью.
+     * Решение то же, что в [start] у MicPlan, только раньше: путь нужен до
+     * того, как заведён распознаватель.
+     */
+    private fun headsetStartOffline(): String? {
+        if (!networkNow || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
+        val app = context.applicationContext as? ru.zf.pravka.PravkaApp
+        if (app?.speechOwnMic == false) return null
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val wantHeadset = !HeadsetPress.phoneMic(ownerChosePhone = app?.phoneMicOnly != false, fromHeadset = fromHeadset) &&
+            MicRouting.headsetMic(am) != null && !MicRouting.callInProgress(am)
+        if (!ListenPolicy.headsetToOffline(wantHeadset, networkNow, feedRefused(true), onDeviceAvailable(context), feedRefused(false))) return null
+        networkNow = false
+        val v = feedVerdict[true]
+        onLog("наушники: облако звук Правки не взяло в ${v?.atMs?.let { clock(it) }} (${v?.why}) — тейк слушает офлайн-пакет")
+        if (!headsetOfflineTold) {
+            headsetOfflineTold = true
+            noticeSink?.let { runCatching { it("Облако не берёт звук из наушников — в наушниках слушает офлайн-пакет") } }
+        }
+        return "наушники, облако звук Правки не берёт"
+    }
+
     /** «Говори» — один раз за тейк: с первого «готов» распознавателя или сразу, если звук копит своя запись. */
     private fun fireReady() {
         if (readyFired) return
@@ -1319,8 +1372,9 @@ class GoogleSpeechSession(
             return false
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
-        if (feedVerdict[networkNow] == false) {
-            onLog("свой микрофон: этот путь звук Правки не берёт — распознаватель слушает сам")
+        if (feedRefused(networkNow)) {
+            val v = feedVerdict[networkNow]
+            onLog("свой микрофон: этот путь звук Правки не взял в ${v?.atMs?.let { clock(it) }} (${v?.why}) — распознаватель слушает сам")
             return false
         }
         if (inCall) {
@@ -1347,33 +1401,63 @@ class GoogleSpeechSession(
         publishMic()
         // Путь наш звук уже брал — звать говорить можно с тапа: сказанное до
         // «готов» распознавателя ляжет в очередь и дойдёт до него целиком.
-        if (feedVerdict[networkNow] == true) fireReady()
+        if (feedAcceptedBefore(networkNow)) fireReady()
         startListening()
         return true
     }
 
     /**
-     * Читает ли распознаватель наш звук. Открыл свой микрофон — наш звук ему не
-     * нужен: запись закрываем, он дослушивает сам, и путь запоминается. Не
-     * читает и своего не открыл — поднимаем его заново уже без нашей трубы.
-     * Система заглушила нашу запись — тоже отдаём микрофон распознавателю.
+     * Читает ли распознаватель наш звук — три взгляда: через 0,7, 2,2 и 5 с
+     * после первого «готов». Берёт — если ушла четверть секунды звука или
+     * уже есть слова при чистом списке записей. Открыл свой микрофон — и
+     * так на двух взглядах подряд — отказ: запись закрываем, он дослушивает
+     * сам, путь запоминается на полчаса; в наушниках — тейк перекидывается
+     * на офлайн-пакет со своей записью. Не читает и своего не открыл за
+     * [ListenPolicy.FEED_PROOF_WAIT_MS] — этот тейк без трубы, но отказом это
+     * не считается. Система заглушила нашу запись — отдаём микрофон
+     * распознавателю.
      */
-    private fun checkFeed(again: Boolean) {
+    private fun checkFeed(look: Int) {
         val f = feed ?: return
         if (!active || stopping) return
         val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val foreign = MicRouting.foreignCapture(am, f.sessionId)
         val read = f.writtenBytes - feedWrittenAtReady
+        val words = head.isNotEmpty() || lastPartial.isNotEmpty()
+        val waited = android.os.SystemClock.elapsedRealtime() - feedReadyAtMs
         when {
-            f.silenced() -> dropFeed("система заглушила запись Правки — микрофон у другого", verdict = null, relisten = true)
-            foreign != null -> dropFeed("распознаватель звук Правки не берёт — открыл свой микрофон (${foreign.label})", verdict = false, relisten = false)
-            read >= FEED_READ_PROOF_BYTES -> {
-                if (feedVerdict.put(networkNow, true) != true) onLog("свой микрофон: распознаватель берёт звук Правки")
+            f.silenced() -> dropFeed("система заглушила запись Правки — микрофон у другого", relisten = true)
+            foreign != null && look >= 1 -> refuseFeed("открыл свой микрофон (${foreign.label})")
+            foreign != null -> {
+                onLog("свой микрофон: рядом чужая запись (${foreign.label}) — посмотрю ещё раз")
+                main.postDelayed({ checkFeed(look + 1) }, FEED_CHECK_AGAIN_MS)
+            }
+            read >= FEED_READ_PROOF_BYTES || words -> {
+                val was = feedVerdict.put(networkNow, FeedVerdict(true, "берёт", System.currentTimeMillis()))
+                if (was?.accepted != true) onLog("свой микрофон: распознаватель берёт звук Правки (за $waited мс, $read байт)")
                 feedAccepted = true
             }
-            !again -> main.postDelayed({ checkFeed(again = true) }, FEED_CHECK_AGAIN_MS)
-            else -> dropFeed("распознаватель звук Правки не читает", verdict = false, relisten = true)
+            waited < ListenPolicy.FEED_PROOF_WAIT_MS -> {
+                val next = if (look == 0) FEED_CHECK_AGAIN_MS else ListenPolicy.FEED_PROOF_WAIT_MS - waited
+                main.postDelayed({ checkFeed(look + 1) }, next.coerceAtLeast(250L))
+            }
+            else -> dropFeed("распознаватель $waited мс не читает звук Правки и своего микрофона не открыл (сеть?) — этот тейк без трубы", relisten = true)
         }
+    }
+
+    /** Когда пришло первое «готов» — от него считаются взгляды [checkFeed]. */
+    private var feedReadyAtMs = 0L
+
+    /**
+     * Доказанный отказ пути: распознаватель открыл свой микрофон. Запомнить на
+     * полчаса; в наушниках — не на прежнюю дорогу (там канал держится
+     * секунды), а на офлайн-пакет со своей записью; иначе — закрыть запись.
+     */
+    private fun refuseFeed(why: String) {
+        feedVerdict[networkNow] = FeedVerdict(false, why, System.currentTimeMillis())
+        onLog("свой микрофон: путь ${if (networkNow) "сеть" else "офлайн-пакет"} звук Правки не берёт — $why")
+        if (headsetMic && !feedRefused(false) && toOffline("облако не берёт звук Правки", headsetRefused = true)) return
+        dropFeed(why, relisten = false)
     }
 
     /**
@@ -1381,10 +1465,9 @@ class GoogleSpeechSession(
      * распознаватель сам. Кружок показывает правду — что слушает теперь; если
      * просили наушники, а их больше некому слушать, — записка словами.
      */
-    private fun dropFeed(why: String, verdict: Boolean?, relisten: Boolean) {
+    private fun dropFeed(why: String, relisten: Boolean) {
         val f = feed ?: return
         onLog("свой микрофон: $why — дальше распознаватель слушает сам")
-        if (verdict != null) feedVerdict[networkNow] = verdict
         feed = null
         f.abort()
         feedAccepted = false
@@ -1474,7 +1557,7 @@ class GoogleSpeechSession(
     private fun watchCapture(f: MicFeed, now: Long) {
         val still = now - f.lastCaptureAtMs
         if (still >= ListenPolicy.CAPTURE_GIVE_UP_MS) {
-            dropFeed("своя запись не отдаёт звук ${still / 1000} с", verdict = null, relisten = true)
+            dropFeed("своя запись не отдаёт звук ${still / 1000} с", relisten = true)
             return
         }
         if (still >= ListenPolicy.CAPTURE_STALL_MS && now - lastKickAtMs >= ListenPolicy.CAPTURE_STALL_MS) {
@@ -1565,12 +1648,17 @@ class GoogleSpeechSession(
      * разобранного слова — то, что облако не разобрало, разбирает пакет.
      * true — перекинули.
      */
-    private fun toOffline(why: String, cloudError: Boolean = false, stalled: Boolean = false): Boolean {
+    private fun toOffline(
+        why: String,
+        cloudError: Boolean = false,
+        stalled: Boolean = false,
+        headsetRefused: Boolean = false,
+    ): Boolean {
         if (!active || stopping) return false
-        if (!ListenPolicy.toOffline(networkNow, onDeviceAvailable(context), cloudError, stuckRestarts, stalled)) return false
+        if (!ListenPolicy.toOffline(networkNow, onDeviceAvailable(context), cloudError, stuckRestarts, stalled, headsetRefused)) return false
         val fresh = newRecognizer(context, network = false) ?: return false
         onLog(
-            "облако не отвечает ($why) — дослушиваю тейк офлайн-пакетом" +
+            "облако подвело ($why) — дослушиваю тейк офлайн-пакетом" +
                 if (feed != null) ", звук с последнего слова повторю" else ""
         )
         val old = recognizer
@@ -1587,7 +1675,14 @@ class GoogleSpeechSession(
         feedAccepted = false
         stuckRestarts = 0
         mutedSpeechMs = 0
-        noticeSink?.let { runCatching { it("Облако Google не отвечает — дослушиваю офлайн-пакетом") } }
+        noticeSink?.let {
+            runCatching {
+                it(
+                    if (headsetRefused) "Облако не берёт звук из наушников — дослушиваю офлайн-пакетом"
+                    else "Облако Google не отвечает — дослушиваю офлайн-пакетом"
+                )
+            }
+        }
         main.postDelayed({ if (active && !stopping && recognizer === fresh) startListening() }, OFFLINE_START_MS)
         return true
     }
