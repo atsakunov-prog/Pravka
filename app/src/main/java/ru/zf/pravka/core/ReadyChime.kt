@@ -23,6 +23,12 @@ import kotlin.math.sin
  * Впереди — [LEAD_MS] тишины: наушники, только что поднявшие канал, первые
  * десятки миллисекунд звука глотают, и без запаса колокольчик звучал бы с
  * отрезанным ударом.
+ *
+ * Второй звук — «наушники отвалились» ([renderLost], владелец, 29.09.2026:
+ * «да, когда отвалились наушники, надо сделать такой звук»): одна низкая нота
+ * ля, на полутон соскальзывающая вниз, с долгим затуханием. Ниже и одна — не
+ * спутать с колокольчиком, не глядя на экран: вверх — слушаю, вниз — слушает
+ * уже не наушники.
  */
 object ReadyChime {
 
@@ -66,6 +72,13 @@ object ReadyChime {
     /** Вторая нота вступает через столько после первой, мс. */
     private const val STEP_MS = 120
 
+    /** «Отвалились»: ля первой октавы, к концу — на полутон ниже. */
+    private const val LOST_HZ = 440.0
+    private const val LOST_END_HZ = 415.3
+
+    /** Длина «отвалились» без тишины впереди, мс. */
+    const val LOST_BODY_MS = 620
+
     /**
      * Звук целиком: 16-битные отсчёты моно. Начинается и кончается нулём —
      * без щелчков на краях.
@@ -77,6 +90,20 @@ object ReadyChime {
         val out = DoubleArray(lead + body)
         note(out, from = lead, freq = LOW_HZ, decayMs = 140.0, gain = 0.85, sampleRate = sampleRate)
         note(out, from = lead + step, freq = HIGH_HZ, decayMs = 190.0, gain = 1.0, sampleRate = sampleRate)
+        return finish(out, sampleRate)
+    }
+
+    /** «Наушники отвалились»: одна низкая нота, соскальзывающая вниз. Края — нули. */
+    fun renderLost(sampleRate: Int = SAMPLE_RATE): ShortArray {
+        val lead = sampleRate * LEAD_MS / 1000
+        val body = sampleRate * LOST_BODY_MS / 1000
+        val out = DoubleArray(lead + body)
+        note(out, from = lead, freq = LOST_HZ, endFreq = LOST_END_HZ, decayMs = 260.0, gain = 1.0, sampleRate = sampleRate)
+        return finish(out, sampleRate)
+    }
+
+    /** Хвост к нулю и громкость к [PEAK]. */
+    private fun finish(out: DoubleArray, sampleRate: Int): ShortArray {
         // Хвост к нулю за последние 40 мс: затухание к концу ещё не ноль.
         val fade = sampleRate * 40 / 1000
         for (i in 0 until fade) {
@@ -88,17 +115,30 @@ object ReadyChime {
         return ShortArray(out.size) { i -> (out[i] * scale).roundToInt().coerceIn(-Short.MAX_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
     }
 
-    /** Одна нота: удар за 6 мс, дальше затухание, как у бруска маримбы. */
-    private fun note(out: DoubleArray, from: Int, freq: Double, decayMs: Double, gain: Double, sampleRate: Int) {
+    /**
+     * Одна нота: удар за 6 мс, дальше затухание, как у бруска маримбы.
+     * [endFreq] — к концу ноты тон плавно уходит туда (фаза копится, а не
+     * считается от времени: иначе глиссандо щёлкало бы).
+     */
+    private fun note(
+        out: DoubleArray,
+        from: Int,
+        freq: Double,
+        decayMs: Double,
+        gain: Double,
+        sampleRate: Int,
+        endFreq: Double = freq,
+    ) {
         val attack = sampleRate * 6 / 1000
         val tau = decayMs / 1000.0 * sampleRate
-        for (n in 0 until out.size - from) {
+        val length = out.size - from
+        var phase = 0.0
+        for (n in 0 until length) {
             val env = (if (n < attack) n.toDouble() / attack else 1.0) * exp(-n / tau)
             if (env < 1e-4 && n > attack) break
-            val t = n.toDouble() / sampleRate
-            val tone = sin(2 * PI * freq * t) +
-                0.18 * sin(2 * PI * 2 * freq * t) +
-                0.06 * sin(2 * PI * 3 * freq * t)
+            val f = freq + (endFreq - freq) * n / length
+            phase += 2 * PI * f / sampleRate
+            val tone = sin(phase) + 0.18 * sin(2 * phase) + 0.06 * sin(3 * phase)
             out[from + n] += gain * env * tone
         }
     }

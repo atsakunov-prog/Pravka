@@ -1099,7 +1099,7 @@ private fun VoiceSettings(app: PravkaApp) {
         Spacer(Modifier.height(8.dp))
         val chime by settings.readyChimeFlow.collectAsState(initial = ru.zf.pravka.core.ReadyChime.Mode.HEADSET)
         val chimeContext = LocalContext.current
-        Text("Звук «говори»", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Звуки «говори» и «наушники отвалились»", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ChipRow {
             PaperChip("В наушниках", selected = chime == ru.zf.pravka.core.ReadyChime.Mode.HEADSET, onClick = {
                 scope.launch { settings.setReadyChime(ru.zf.pravka.core.ReadyChime.Mode.HEADSET) }
@@ -1111,17 +1111,24 @@ private fun VoiceSettings(app: PravkaApp) {
                 scope.launch { settings.setReadyChime(ru.zf.pravka.core.ReadyChime.Mode.OFF) }
             })
             ru.zf.pravka.ui.InfoButton(
-                "Звук «говори»",
-                "Колокольчик из двух нот вверх — в тот миг, когда всё поднялось и можно говорить: " +
-                    "в наушниках это значит, что по их каналу уже пошёл звук и распознаватель готов, а " +
-                    "не просто «кнопку нажали». Звенит туда, откуда слушаем: в наушниках — в сами " +
-                    "наушники, на телефоне (при «Всегда») — телефоном. «В наушниках» — на телефоне " +
-                    "хватает пилюли «слушаю» и вибрации.",
+                "Звуки",
+                "«Говори» — колокольчик из двух нот вверх в тот миг, когда всё поднялось и можно " +
+                    "говорить: в наушниках это значит, что по их каналу уже пошёл звук и " +
+                    "распознаватель готов, а не просто «кнопку нажали». Звенит туда, откуда слушаем: " +
+                    "в наушниках — в сами наушники, на телефоне (при «Всегда») — телефоном. " +
+                    "«Наушники отвалились» — одна низкая нота вниз: наушники не отдали микрофон или " +
+                    "потеряли его посреди записи, и слушает телефон. «В наушниках» — на телефоне " +
+                    "хватает пилюли «слушаю» и вибрации; «Выкл» — без обоих звуков.",
             )
         }
-        ru.zf.pravka.ui.PaperTextButton("Послушать", icon = Glyphs.Play, onClick = {
-            ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false)
-        })
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ru.zf.pravka.ui.PaperTextButton("«Говори»", icon = Glyphs.Play, onClick = {
+                ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false)
+            })
+            ru.zf.pravka.ui.PaperTextButton("«Отвалились»", icon = Glyphs.Play, onClick = {
+                ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false, kind = ru.zf.pravka.provider.ChimePlayer.Kind.LOST)
+            })
+        }
         // «Перезагрузить микрофон» (владелец, 22.09.2026: «подключаюсь к машине, и
         // он не слышит… а потом каким-то странным образом начинает»). Кнопка
         // рассказывает, что нашла и что сделала: тишина после нажатия читалась бы

@@ -566,6 +566,14 @@ class PravkaAccessibilityService : AccessibilityService() {
                 ru.zf.pravka.provider.ChimePlayer.play(this, toHeadset = headset) { line -> app.eventLog.add(line) }
             }
         }
+        // «Наушники отвалились» — тот же выбор: владелец в наушниках, звуки не выключены.
+        GoogleSpeechSession.lostSink = {
+            if (ru.zf.pravka.core.ReadyChime.shouldPlay(app.readyChime, headset = true)) {
+                ru.zf.pravka.provider.ChimePlayer.play(
+                    this, toHeadset = false, kind = ru.zf.pravka.provider.ChimePlayer.Kind.LOST,
+                ) { line -> app.eventLog.add(line) }
+            }
+        }
         // Сколько ждать ответа — секундами на занятой кнопке (владелец,
         // 26.09.2026: «на самой кнопке, где просто крутится… обратный отсчёт в
         // виде секунд… и до нуля»). До этого была дуга по кромке стекла, но у

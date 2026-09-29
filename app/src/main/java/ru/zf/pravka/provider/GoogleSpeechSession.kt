@@ -209,6 +209,14 @@ class GoogleSpeechSession(
         var readySink: ((headset: Boolean) -> Unit)? = null
 
         /**
+         * Наушники отвалились или не дались — слушает телефон: звук
+         * «отвалились» (`provider/ChimePlayer.kt`, `Kind.LOST`), чтобы и не
+         * глядя на экран было понятно. Главный поток.
+         */
+        @Volatile
+        var lostSink: (() -> Unit)? = null
+
+        /**
          * Сколько ждать, пока идущая запись распознавателя переедет на новый
          * вход после смены микрофона, мс. Не переехала — распознаватель
          * поднимается заново уже на новом маршруте.
@@ -1506,7 +1514,7 @@ class GoogleSpeechSession(
         headsetMic = heard?.headset == true
         heard?.let { health.heard(it.label) }
         if (wanted && !headsetMic) {
-            noticeSink?.let { runCatching { it("Распознаватель не берёт звук Правки — наушники недоступны, слушает телефон") } }
+            headsetLost("Распознаватель не берёт звук Правки — наушники недоступны, слушает телефон")
         }
         publishMic()
         // Ждали наушников для «говори», а своей записи больше нет — сказать по готовности распознавателя.
@@ -1539,7 +1547,7 @@ class GoogleSpeechSession(
                         health.heard(MicRouting.label(routed))
                         onLog("вход своей записи сменился сам: слушает ${MicRouting.label(routed)}")
                         publishMic()
-                        if (!headsetMic) noticeHeadsetDrop("Наушники отвалились — слушает телефон")
+                        if (!headsetMic) headsetLost("Наушники отвалились — слушает телефон")
                     }
                 }
                 if (feedAccepted && sessionLive && f.backlogMs() > 0 &&
@@ -1559,7 +1567,7 @@ class GoogleSpeechSession(
                     onLog("запись распознавателя сама вернулась на ${heard.label}: маршрут связи Android держит лишь за записывающим приложением")
                     publishMic()
                     val ownMicOn = (context.applicationContext as? ru.zf.pravka.PravkaApp)?.speechOwnMic != false
-                    noticeHeadsetDrop(
+                    headsetLost(
                         if (ownMicOn) "Наушники отвалились — распознаватель не берёт звук Правки и слушает телефон"
                         else "Наушники отвалились — распознаватель слушает телефон. Включи «Микрофон держит Правка»"
                     )
@@ -1616,7 +1624,7 @@ class GoogleSpeechSession(
                 headsetMic = false
                 health.heard("телефон")
                 publishMic()
-                noticeHeadsetDrop("Наушники молчат — слушает телефон")
+                headsetLost("Наушники молчат — слушает телефон")
                 scoRetried = false
             }
             !headsetMic && !deadAirKicked -> {
@@ -1626,14 +1634,31 @@ class GoogleSpeechSession(
             !headsetMic && zeros >= ListenPolicy.DEAD_AIR_GIVE_UP_MS -> {
                 // Заново открытая запись тоже отдаёт нули: так Android глушит
                 // микрофон выключателем доступа в шторке — чинить тут нечего, надо сказать.
-                noticeHeadsetDrop("Микрофон телефона отдаёт тишину — не выключен ли доступ к микрофону в шторке?")
+                noticeOnce("Микрофон телефона отдаёт тишину — не выключен ли доступ к микрофону в шторке?")
             }
         }
     }
 
-    private fun noticeHeadsetDrop(text: String) {
+    /**
+     * Наушники отвалились или не дались, и слушает телефон: тост словами и
+     * звук «отвалились» — один раз, пока наушники снова не встанут
+     * ([followFeed] сбрасывает): вернул их кружком и они упали снова — снова
+     * звук.
+     */
+    private fun headsetLost(text: String) {
         if (headsetDropNoticed) return
         headsetDropNoticed = true
+        noticeSink?.let { runCatching { it(text) } }
+        lostSink?.let { runCatching { it() } }
+        onLog("наушники потеряны: $text")
+    }
+
+    private var micNoticed = false
+
+    /** Записка про сам микрофон (не про наушники) — один раз за тейк, без звука. */
+    private fun noticeOnce(text: String) {
+        if (micNoticed) return
+        micNoticed = true
         noticeSink?.let { runCatching { it(text) } }
     }
 
@@ -1774,6 +1799,8 @@ class GoogleSpeechSession(
                         routeWatch = null
                         routeMoving = false
                         headsetMic = wantHeadset
+                        // Наушники встали — если снова отвалятся, об этом снова скажет звук.
+                        if (wantHeadset) headsetDropNoticed = false
                         health.heard(MicRouting.label(routed))
                         onLog("микрофон встал за $waited мс: слушает ${MicRouting.label(routed)}")
                         publishMic()
@@ -1792,7 +1819,7 @@ class GoogleSpeechSession(
                             MicRouting.drop(am, onLog)
                         }
                         health.heard("телефон")
-                        noticeSink?.let { runCatching { it("Наушники не отдали микрофон — слушает телефон") } }
+                        headsetLost("Наушники не отдали микрофон — слушает телефон")
                         publishMic()
                         cueWhenHeard()
                     }

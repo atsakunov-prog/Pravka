@@ -44,4 +44,17 @@ class ReadyChimeTest {
         // И звук действительно есть, а не почти тишина.
         assertTrue(peak >= limit - 1)
     }
+
+    @Test
+    fun `наушники отвалились - свой звук, длиннее и без щелчков`() {
+        val pcm = ReadyChime.renderLost()
+        val sr = ReadyChime.SAMPLE_RATE
+        assertEquals(sr * (ReadyChime.LEAD_MS + ReadyChime.LOST_BODY_MS) / 1000, pcm.size)
+        assertTrue((0 until sr * ReadyChime.LEAD_MS / 1000).all { pcm[it].toInt() == 0 })
+        assertEquals(0, pcm.last().toInt())
+        val peak = pcm.maxOf { abs(it.toInt()) }
+        assertTrue(peak <= (ReadyChime.PEAK * Short.MAX_VALUE).toInt() + 1)
+        // Не спутать с колокольчиком: другой звук, а не тот же.
+        assertFalse(pcm.contentEquals(ReadyChime.render()))
+    }
 }
