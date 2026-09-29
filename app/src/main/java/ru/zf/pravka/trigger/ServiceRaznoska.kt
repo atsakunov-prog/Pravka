@@ -139,6 +139,7 @@ internal fun PravkaAccessibilityService.cancelRaznoskaTake() {
     when {
         rSession != null -> {
             rDiscard = true
+            rSession?.stopNow = true
             app.eventLog.add("разноска: отмена наговора")
             stopRaznoskaLive()
         }
@@ -163,6 +164,7 @@ internal fun PravkaAccessibilityService.onRaznoskaTickerTap() {
     when {
         rSession != null -> {
             rTypeInstead = true
+            rSession?.stopNow = true
             stopRaznoskaLive()
         }
         rWhisperRecording && DictationService.recording -> {

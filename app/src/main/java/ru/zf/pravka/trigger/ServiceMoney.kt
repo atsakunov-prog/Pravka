@@ -175,6 +175,7 @@ internal fun PravkaAccessibilityService.cancelMoneyTake() {
     when {
         mSession != null -> {
             mDiscard = true
+            mSession?.stopNow = true
             app.eventLog.add("деньги: отмена наговора")
             stopMoneyLive()
         }
@@ -199,6 +200,7 @@ internal fun PravkaAccessibilityService.onMoneyTickerTap() {
     when {
         mSession != null -> {
             mTypeInstead = true
+            mSession?.stopNow = true
             stopMoneyLive()
         }
         mWhisperRecording && DictationService.recording -> {

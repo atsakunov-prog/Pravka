@@ -223,6 +223,7 @@ internal fun PravkaAccessibilityService.cancelFoodTake() {
     when {
         eSession != null -> {
             eDiscard = true
+            eSession?.stopNow = true
             app.eventLog.add("еда: отмена наговора")
             stopFoodLive()
         }
@@ -247,6 +248,7 @@ internal fun PravkaAccessibilityService.onFoodTickerTap() {
     when {
         eSession != null -> {
             eTypeInstead = true
+            eSession?.stopNow = true
             stopFoodLive()
         }
         eWhisperRecording && DictationService.recording -> {

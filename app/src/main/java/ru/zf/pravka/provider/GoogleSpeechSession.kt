@@ -150,6 +150,14 @@ class GoogleSpeechSession(
     @Volatile var stopQuiet = false
 
     /**
+     * Бросить тейк сразу, без хвоста и дочитки: отмена («✕») и «набрать
+     * текстом» (тап по пилюле) — сказанное либо не нужно, либо ложится в поле
+     * набора тем, что уже видно. Владелец ждал поля набора почти три секунды и
+     * жал ещё трижды (журнал 29.09, 21:49). Ставит служба перед [stop].
+     */
+    @Volatile var stopNow = false
+
+    /**
      * Подряд «тишин» (не разобрал / никто не говорил), прилетевших сразу
      * после старта сессии, — только они и настоящие ошибки платят паузу
      * перед подъёмом (`ListenPolicy.restartDelayMs`).
@@ -344,6 +352,9 @@ class GoogleSpeechSession(
 
         /** После стопа: дописали хвост — ждём конца сессии столько, потом просим сами. */
         private const val FEED_EOF_WAIT_MS = 2_500L
+
+        /** После хвоста в трубу не ушло ни куска столько — распознаватель её не читает. */
+        private const val UNREAD_STOP_MS = 400L
 
         /** Смена микрофона своей записи: смотреть раз в столько, ждать не дольше. */
         private const val FEED_POLL_MS = 150L
@@ -729,8 +740,14 @@ class GoogleSpeechSession(
         val who = stopCaller()
         onMain {
             if (!active && recognizer == null) return@onMain
-            if (!stopping) onLog("стоп: откуда — $who")
-            val first = !stopping
+            if (stopping) {
+                // Второй стоп поверх идущего — без второго хвоста и таймеров
+                // (29.09: четыре тапа — четыре «пишу ещё 300 мс»); отмена
+                // поверх стопа — бросить сразу.
+                if (stopNow) finish()
+                return@onMain
+            }
+            onLog("стоп: откуда — $who")
             stopping = true
             active = false
             val now = android.os.SystemClock.elapsedRealtime()
@@ -738,19 +755,22 @@ class GoogleSpeechSession(
             health.close(now)
             routeWatch?.let { main.removeCallbacks(it) }
             routeWatch = null
-            if (first) {
-                // Стоп кнопкой гарнитуры — владелец в наушниках, даже если слушал телефон.
-                headsetAtStop = headsetMic || fromHeadset || stopByHeadset ||
-                    ListenPolicy.headsetStopPending(vrClosedAtMs, now)
-                // «Принял» — когда хвост записан: звук в наушники поверх
-                // последнего слога попал бы в их же микрофон.
-                val headsetUp = headsetMic && !stopByHeadset
-                val byHeadset = stopByHeadset
-                if (!stopQuiet) {
-                    main.postDelayed({
-                        stopSink?.let { sink -> runCatching { sink(headsetUp, byHeadset) } }
-                    }, ListenPolicy.STOP_TAIL_MS)
-                }
+            // Стоп кнопкой гарнитуры — владелец в наушниках, даже если слушал телефон.
+            headsetAtStop = headsetMic || fromHeadset || stopByHeadset ||
+                ListenPolicy.headsetStopPending(vrClosedAtMs, now)
+            // «Принял» — когда хвост записан: звук в наушники поверх
+            // последнего слога попал бы в их же микрофон.
+            val headsetUp = headsetMic && !stopByHeadset
+            val byHeadset = stopByHeadset
+            if (!stopQuiet) {
+                main.postDelayed({
+                    stopSink?.let { sink -> runCatching { sink(headsetUp, byHeadset) } }
+                }, ListenPolicy.STOP_TAIL_MS)
+            }
+            if (stopNow) {
+                onLog("стоп: бросаю сразу — ни хвоста, ни дочитки")
+                finish()
+                return@onMain
             }
             val tail = ListenPolicy.STOP_TAIL_MS
             val f = feed
@@ -767,6 +787,15 @@ class GoogleSpeechSession(
                     main.postDelayed({ if (recognizer != null) finish() }, 300)
                     return@onMain
                 }
+                // Распознаватель трубу не читает (короткий тейк: ещё не начал;
+                // 29.09 — 2,7 с до итога) — конца трубы он не увидит, и ждать
+                // его незачем: пусть отдаст, что слышал, сейчас.
+                main.postDelayed({
+                    if (recognizer != null && !finished && f.lastWriteAtMs < now) {
+                        onLog("стоп: распознаватель трубу не читает — не жду её конца")
+                        runCatching { recognizer?.stopListening() }
+                    }
+                }, tail + UNREAD_STOP_MS)
                 main.postDelayed({
                     if (recognizer != null && !finished) runCatching { recognizer?.stopListening() }
                 }, tail + drainMs + FEED_EOF_WAIT_MS)
@@ -786,9 +815,12 @@ class GoogleSpeechSession(
     private fun stopCaller(): String = runCatching {
         Throwable().stackTrace.asSequence()
             .filter { it.className.startsWith("ru.zf.pravka.") && !it.className.startsWith(GoogleSpeechSession::class.java.name) }
-            .map { "${it.className.substringAfterLast('.').substringBefore('$').removeSuffix("Kt")}.${it.methodName.substringBefore('$')}" }
+            .map { it.className.substringAfterLast('.').substringBefore('$').removeSuffix("Kt") to it.methodName.substringBefore('$') }
+            // Кадры лямбд («invoke», «$r8$lambda…») — шум: имя места в них не видно.
+            .filter { (_, method) -> method.isNotEmpty() && method != "invoke" }
+            .map { (cls, method) -> "$cls.$method" }
             .distinct()
-            .take(4)
+            .take(5)
             .joinToString(" ← ")
             .ifBlank { "сам движок (сторож тишины)" }
     }.getOrDefault("не понять")

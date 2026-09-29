@@ -67,15 +67,41 @@ object ChimePlayer {
         log: (String) -> Unit = {},
     ): Long {
         val app = context.applicationContext
+        val intoHeadset = toHeadset && kind != Kind.LOST
         worker.execute {
             runCatching {
                 if (delayMs > 0) Thread.sleep(delayMs)
-                // Синтез — здесь, на своём потоке: первый раз это десятки тысяч отсчётов с эхом.
-                playNow(app, toHeadset = toHeadset && kind != Kind.LOST, data = pcm(kind))
+                if (intoHeadset) awaitHeadsetChannel(log)
+                // Синтез — здесь, на своём потоке: первый раз это тысячи отсчётов с хвостом комнаты.
+                playNow(app, toHeadset = intoHeadset, data = pcm(kind))
             }.onFailure { log("звук «${kind.word}» не сыгрался: ${it.javaClass.simpleName}: ${it.message}") }
         }
         return delayMs + lengthMs(kind)
     }
+
+    /**
+     * Звук в наушники — когда их канал встал: сыгранный раньше, он уходит в
+     * канал, которого ещё нет, и не слышен (владелец, 29.09.2026: «звук не
+     * слышен теперь»; холодный канал поднимается до 2,3 с). Ждёт только звук —
+     * запись и распознаватель идут своим ходом. За каналом не следим (стек не
+     * подтвердил распознавание) — играем сразу, как раньше.
+     */
+    private fun awaitHeadsetChannel(log: (String) -> Unit) {
+        val probe = MicRouting.linkProbe ?: return
+        val start = android.os.SystemClock.elapsedRealtime()
+        while (runCatching { probe() }.getOrNull() == false) {
+            val waited = android.os.SystemClock.elapsedRealtime() - start
+            if (waited >= HEADSET_CHANNEL_WAIT_MS) {
+                log("звук: канал наушников не встал за $waited мс — играю как есть")
+                return
+            }
+            Thread.sleep(CHANNEL_POLL_MS)
+        }
+    }
+
+    /** Сколько звук ждёт канала наушников. */
+    private const val HEADSET_CHANNEL_WAIT_MS = 2_500L
+    private const val CHANNEL_POLL_MS = 40L
 
     /** Длина звука, мс — по числам звука, без синтеза. */
     fun lengthMs(kind: Kind): Long = ReadyChime.LEAD_MS + when (kind) {

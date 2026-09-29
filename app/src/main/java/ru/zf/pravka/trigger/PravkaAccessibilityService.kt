@@ -61,6 +61,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         internal const val SILENT_AFTER_FOLD_MS = 1_500L
 
         /** Окно двойного тапа по «З» на локскрине. */
+        /** Тик опоздал больше этого — снять стек главного потока. */
+        private const val LAG_SAMPLE_AFTER_MS = 500L
+
         internal const val LOCK_DOUBLE_TAP_MS = 1_500L
         /** Сколько якорь времени ждёт свой тейк (см. `onZasechkaTap`). */
         const val Z_ANCHOR_TTL_MS = 2 * 60_000L
@@ -676,6 +679,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         lagExpectedAt = 0L
         lagHandler.removeCallbacks(lagTick)
         lagHandler.postDelayed(lagTick, 2_000)
+        startLagSampler()
         // Видит ли система наши окна на самом деле (28.09.2026, Android 17 на
         // Fold: окна висят, флаги честные, а диска на экране нет) — сторож
         // смотрит в список окон системы и лечит то, что свои флаги не видят.
@@ -688,16 +692,59 @@ class PravkaAccessibilityService : AccessibilityService() {
     // behind whatever hogged the thread. A timestamped no-op every 2s makes
     // the hog visible: it runs late, and the lag lands in the log.
     internal val lagHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    internal var lagExpectedAt = 0L
+    @Volatile internal var lagExpectedAt = 0L
     internal val lagTick = object : Runnable {
         override fun run() {
             val now = SystemClock.uptimeMillis()
             if (lagExpectedAt > 0) {
                 val lag = now - lagExpectedAt
-                if (lag > 700) app.eventLog.add("⚠️ главный поток службы вис ~$lag мс")
+                if (lag > 700) {
+                    val where = lagSample?.let { " — поток был в: $it" } ?: ""
+                    app.eventLog.add("⚠️ главный поток службы вис ~$lag мс$where")
+                }
             }
+            lagSample = null
             lagExpectedAt = now + 2_000
             lagHandler.postDelayed(this, 2_000)
+        }
+    }
+
+    /**
+     * Что делал главный поток, пока висел. Сторож выше видит зависание задним
+     * числом, когда поток уже свободен, и строка «вис ~755 мс» не говорит,
+     * чем он был занят (29.09 — трижды за вечер). Раз в 250 мс свой поток
+     * смотрит, не опоздал ли тик больше чем на полсекунды, и снимает стек
+     * главного — первые свои кадры уходят в строку о зависании. Стоит один
+     * взгляд в стек за зависание, на тихом потоке — ничего.
+     */
+    @Volatile private var lagSample: String? = null
+    private val lagSampler by lazy {
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "pravka-lag-sampler").apply { isDaemon = true }
+        }
+    }
+
+    @Volatile private var lagSamplerOn = false
+
+    internal fun startLagSampler() {
+        if (lagSamplerOn) return
+        lagSamplerOn = true
+        runCatching {
+            lagSampler.scheduleWithFixedDelay({
+                val expected = lagExpectedAt
+                if (expected > 0 && lagSample == null && SystemClock.uptimeMillis() - expected > LAG_SAMPLE_AFTER_MS) {
+                    lagSample = runCatching {
+                        val stack = android.os.Looper.getMainLooper().thread.stackTrace
+                        val own = stack.filter { it.className.startsWith("ru.zf.pravka.") }
+                            .map { "${it.className.substringAfterLast('.').substringBefore('$').removeSuffix("Kt")}.${it.methodName.substringBefore('$')}" }
+                            .filter { !it.endsWith(".invoke") && !it.endsWith(".") }
+                            .distinct()
+                            .take(3)
+                        val top = stack.firstOrNull()?.let { "${it.className.substringAfterLast('.')}.${it.methodName}" }
+                        (own + listOfNotNull(top?.let { "верх: $it" })).joinToString(" ← ")
+                    }.getOrNull()
+                }
+            }, 1_000, 250, java.util.concurrent.TimeUnit.MILLISECONDS)
         }
     }
 
@@ -1098,6 +1145,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         when {
             googleSession != null -> {
                 discardTake = true
+                googleSession?.stopNow = true
                 app.eventLog.add("cancel requested")
                 stopLiveDictation()
             }
@@ -3149,6 +3197,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
+        if (lagSamplerOn) runCatching { lagSampler.shutdownNow() }
         runCatching { autoPilot.stop() }
         ripenessHandler.removeCallbacks(ripenessCheck)
         ripenessHandler.removeCallbacks(digestRunnable)

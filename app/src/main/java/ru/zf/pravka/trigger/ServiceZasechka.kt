@@ -243,6 +243,7 @@ internal fun PravkaAccessibilityService.cancelZasechkaTake() {
     when {
         zSession != null -> {
             zDiscard = true
+            zSession?.stopNow = true
             app.eventLog.add("засечка: отмена наговора")
             stopZasechkaLive()
         }
@@ -272,6 +273,7 @@ internal fun PravkaAccessibilityService.onZasechkaPlateTap() {
     when {
         zSession != null -> {
             zTypeInstead = true
+            zSession?.stopNow = true
             stopZasechkaLive()   // -> onZasechkaLiveDone routes to the box
         }
         zWhisperRecording && DictationService.recording -> {

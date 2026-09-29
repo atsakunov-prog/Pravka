@@ -7,17 +7,15 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-// Звуки диктовки: «говори», «принял», «отвалились» (владелец, 29.09.2026:
-// «очень мелодичный, приятный звук»; второе издание — «очень высокий звук.
-// Чуть помелодичнее и чуть тише. И с таким эхом»).
+// Звуки диктовки: «говори», «принял», «отвалились». Четвёртое издание
+// (владелец, 29.09.2026: «звук не слышен теперь. Должен быть как такой мягкий
+// тройной быстрый щелчок»).
 class ReadyChimeTest {
 
     private val sr = ReadyChime.SAMPLE_RATE
-    private val all = listOf(
-        "говори" to (ReadyChime.render() to ReadyChime.READY_BODY_MS),
-        "принял" to (ReadyChime.renderStop() to ReadyChime.STOP_BODY_MS),
-        "отвалились" to (ReadyChime.renderLost() to ReadyChime.LOST_BODY_MS),
-    )
+    private val ready = ReadyChime.render()
+    private val stop = ReadyChime.renderStop()
+    private val lost = ReadyChime.renderLost()
 
     @Test
     fun `с завода звенит только в наушниках`() {
@@ -34,70 +32,82 @@ class ReadyChimeTest {
 
     @Test
     fun `звуки - нужной длины, с тишиной впереди и без щелчков на краях`() {
-        for ((name, v) in all) {
-            val (pcm, bodyMs) = v
-            assertEquals(name, sr * (ReadyChime.LEAD_MS + bodyMs) / 1000, pcm.size)
+        val all = listOf(
+            ready to ReadyChime.READY_BODY_MS,
+            stop to ReadyChime.STOP_BODY_MS,
+            lost to ReadyChime.LOST_BODY_MS,
+        )
+        for ((pcm, bodyMs) in all) {
+            assertEquals(sr * (ReadyChime.LEAD_MS + bodyMs) / 1000, pcm.size)
             // Тишина впереди: наушники глотают начало звука после подъёма канала.
             val lead = sr * ReadyChime.LEAD_MS / 1000
-            assertTrue(name, (0 until lead).all { pcm[it].toInt() == 0 })
-            // Кончается нулём — без щелчка.
-            assertEquals(name, 0, pcm.last().toInt())
+            assertTrue((0 until lead).all { pcm[it].toInt() == 0 })
+            // Кончается нулём — без щелчка на краю.
+            assertEquals(0, pcm.last().toInt())
         }
     }
 
     @Test
-    fun `громкость - не выше пика и без перегруза, и тише прежнего`() {
-        val limit = (ReadyChime.PEAK * Short.MAX_VALUE).toInt()
-        for ((name, v) in all) {
-            val peak = v.first.maxOf { abs(it.toInt()) }
-            assertTrue("$name: пик $peak выше $limit", peak <= limit + 1)
-            // И звук действительно есть, а не почти тишина.
-            assertTrue(name, peak >= limit - 1)
+    fun `громкость - ровно до своего пика`() {
+        val cases = listOf(ready to ReadyChime.CLICK_PEAK, stop to ReadyChime.CLICK_PEAK, lost to ReadyChime.LOST_PEAK)
+        for ((pcm, peak) in cases) {
+            val max = pcm.maxOf { abs(it.toInt()) }
+            val limit = (peak * Short.MAX_VALUE).toInt()
+            assertTrue("пик $max выше $limit", max <= limit + 1)
+            assertTrue(max >= limit - 1)
         }
-        // Первое издание било на 0,34 шкалы: «чуть тише»; второе — 0,24: «спокойнее и тише».
-        assertTrue(ReadyChime.PEAK < 0.24)
+        // Третье издание (0,15 и почти чистый тон 330–440 Гц) в наушниках не было слышно.
+        assertTrue(ReadyChime.CLICK_PEAK > 0.15)
     }
 
     @Test
-    fun `ноты - на октаву ниже первого издания`() {
-        // Первое издание — соль и ре второй-третьей октавы (784 и 1175 Гц): «очень высокий».
-        assertTrue(ReadyChime.READY_HZ.all { it < 700.0 })
-        assertTrue(ReadyChime.STOP_HZ.all { it < 700.0 })
-        assertTrue(ReadyChime.LOST_HZ < 700.0 && ReadyChime.LOST_END_HZ < ReadyChime.LOST_HZ)
-        // «Говори» — вверх, «принял» — вниз: не спутать, не глядя на экран.
+    fun `говори - три быстрых щелчка, принял - два`() {
+        assertEquals(3, bursts(ready))
+        assertEquals(2, bursts(stop))
+        // Быстро: весь «говори» короче полусекунды.
+        assertTrue(ReadyChime.LEAD_MS + ReadyChime.READY_BODY_MS <= 500)
+    }
+
+    @Test
+    fun `частоты - в середине полосы наушников, вверх и вниз`() {
+        // Костная проводимость и узкий канал гарнитуры звучат лучше всего между 0,8 и 3 кГц.
+        val band = 800.0..3_000.0
+        assertTrue(ReadyChime.READY_HZ.all { it in band })
+        assertTrue(ReadyChime.STOP_HZ.all { it in band })
+        assertTrue(ReadyChime.LOST_HZ in 400.0..3_000.0 && ReadyChime.LOST_END_HZ in 400.0..3_000.0)
         val up = ReadyChime.READY_HZ
         assertTrue((1 until up.size).all { up[it] > up[it - 1] })
         val down = ReadyChime.STOP_HZ
         assertTrue((1 until down.size).all { down[it] < down[it - 1] })
-    }
-
-    @Test
-    fun `у звука есть эхо - хвост после нот, затухающий к концу`() {
-        for ((name, v) in all) {
-            val pcm = v.first
-            val lead = sr * ReadyChime.LEAD_MS / 1000
-            val peak = pcm.maxOf { abs(it.toInt()) }.toDouble()
-            // Через полсекунды после удара ноты давно отзвучали бы сухими —
-            // слышно там только эхо и зал.
-            val tail = rms(pcm, lead + sr * 600 / 1000, sr * 200 / 1000)
-            assertTrue("$name: хвоста нет (${tail / peak})", tail > peak * 0.01)
-            // И он гаснет, а не гудит до конца.
-            val end = rms(pcm, pcm.size - sr * 150 / 1000, sr * 150 / 1000)
-            assertTrue("$name: хвост не гаснет", end < tail)
-        }
+        assertTrue(ReadyChime.LOST_END_HZ < ReadyChime.LOST_HZ)
     }
 
     @Test
     fun `три звука - разные`() {
-        val sounds = all.map { it.second.first }
-        for (i in sounds.indices) for (j in i + 1 until sounds.size) {
-            assertFalse(sounds[i].contentEquals(sounds[j]))
-        }
+        assertFalse(ready.contentEquals(stop))
+        assertFalse(ready.contentEquals(lost))
+        assertFalse(stop.contentEquals(lost))
     }
 
-    private fun rms(pcm: ShortArray, from: Int, len: Int): Double {
-        var sum = 0.0
-        for (i in from until (from + len).coerceAtMost(pcm.size)) sum += pcm[i].toDouble() * pcm[i]
-        return sqrt(sum / len)
+    /** Сколько ударов в звуке: громкость по 5 мс, считаем подъёмы выше трети пика. */
+    private fun bursts(pcm: ShortArray): Int {
+        val frame = sr * 5 / 1000
+        val rms = (0 until pcm.size / frame).map { f ->
+            var sum = 0.0
+            for (i in f * frame until (f + 1) * frame) sum += pcm[i].toDouble() * pcm[i]
+            sqrt(sum / frame)
+        }
+        val top = rms.maxOrNull() ?: return 0
+        var count = 0
+        var above = false
+        for (v in rms) {
+            if (!above && v > top / 3) {
+                count++
+                above = true
+            } else if (above && v < top / 6) {
+                above = false
+            }
+        }
+        return count
     }
 }
