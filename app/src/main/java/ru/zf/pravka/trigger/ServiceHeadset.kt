@@ -1,6 +1,7 @@
 package ru.zf.pravka.trigger
 
 import android.os.SystemClock
+import kotlinx.coroutines.launch
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.core.HeadsetPress
 import ru.zf.pravka.core.ReadyChime
@@ -34,6 +35,16 @@ fun PravkaAccessibilityService.onHeadsetButton() {
     if (action == HeadsetPress.Action.STOP) {
         stopTakeFromHeadset(byHeadset = true)
         return
+    }
+    // Кнопкой наушников — значит, дальше слушают наушники, и следующий тейк
+    // тоже, с какой бы кнопки он ни начался, пока владелец не переключит
+    // кружком (владелец, 29.09.2026: «нажал на кнопку на наушниках — и он
+    // слушает… а следующий раз будет слушать тоже наушник, пока я не
+    // переключу»). Тот же выбор, что у кружка микрофона в веере.
+    if (app.phoneMicOnly) {
+        app.phoneMicOnly = false
+        scope.launch { app.settings.setPhoneMicOnly(false) }
+        app.eventLog.add("гарнитура: кружок микрофона — наушники (кнопкой наушников; до переключения)")
     }
     // Сперва подтверждаем стеку распознавание, потом тейк: подтверждение при
     // уже поднятом канале стек отвергает и канал роняет (см. HeadsetVoice).

@@ -54,8 +54,8 @@ class ReadyChimeTest {
             // И звук действительно есть, а не почти тишина.
             assertTrue(name, peak >= limit - 1)
         }
-        // Первое издание било на 0,34 шкалы: «чуть тише».
-        assertTrue(ReadyChime.PEAK < 0.34)
+        // Первое издание било на 0,34 шкалы: «чуть тише»; второе — 0,24: «спокойнее и тише».
+        assertTrue(ReadyChime.PEAK < 0.24)
     }
 
     @Test

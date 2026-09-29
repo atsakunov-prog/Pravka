@@ -150,13 +150,6 @@ class GoogleSpeechSession(
     @Volatile var stopQuiet = false
 
     /**
-     * «Говори» придержан: слушать велено наушники, а их канал ещё не поднят.
-     * Готовность распознавателя в это время не зовёт говорить; снимает
-     * [cueWhenHeard].
-     */
-    private var holdCue = false
-
-    /**
      * Подряд «тишин» (не разобрал / никто не говорил), прилетевших сразу
      * после старта сессии, — только они и настоящие ошибки платят паузу
      * перед подъёмом (`ListenPolicy.restartDelayMs`).
@@ -356,15 +349,6 @@ class GoogleSpeechSession(
         private const val FEED_POLL_MS = 150L
         private const val FEED_ROUTE_MS = 4_000L
 
-        /**
-         * За каналом наушников следит стек (событие «поднят»): ждать его
-         * столько. Холодный канал после простоя поднимается 2,3 с (журнал
-         * 29.09: 16:47 и 16:55, наушники молчали 4 и 8 минут), тёплый — 0,14 с.
-         */
-        private const val LINK_EVENT_WAIT_MS = 4_000L
-
-        /** Звук по каналу гарнитуры не пошёл за столько — переводим запись всё равно. */
-        private const val SCO_PREFER_ANYWAY_MS = 1_500L
 
         /** Сторож микрофона (вход, отвалившиеся наушники, зависшая труба) — раз в столько. */
         private const val MIC_WATCH_MS = 1_000L
@@ -1106,8 +1090,7 @@ class GoogleSpeechSession(
             // restart (that vibrated repeatedly through a silent lead-in).
             if (!recognizerReadyOnce) {
                 recognizerReadyOnce = true
-                // Своя запись ещё ждёт канала наушников — «говори» скажет она, когда он встанет.
-                if (!(feed != null && holdCue)) fireReady()
+                fireReady()
                 val f = feed
                 if (f != null) {
                     // Своя запись: читает ли распознаватель наш звук — видно по трубе.
@@ -1512,7 +1495,6 @@ class GoogleSpeechSession(
      * готов; не готов — скажет его «готов».
      */
     private fun cueWhenHeard() {
-        holdCue = false
         if (feedAcceptedBefore(networkNow) || recognizerReadyOnce || feed == null) fireReady()
     }
 
@@ -1521,8 +1503,7 @@ class GoogleSpeechSession(
         if (readyFired) return
         readyFired = true
         onReady()
-        // Звук «говори» — туда, откуда слушаем: в наушниках этот миг наступает,
-        // только когда их канал поднят (awaitSco, awaitLink).
+        // Звук «говори» — туда, откуда слушаем.
         readySink?.let { sink -> runCatching { sink(headsetMic) } }
         onLog("говори: ${if (headsetMic) "наушники" else "телефон"}")
     }
@@ -1549,30 +1530,24 @@ class GoogleSpeechSession(
             return false
         }
         val f = MicFeed.open(onLog) ?: return false
-        // Телефон — сразу; гарнитура — когда по её каналу пойдёт звук (followFeed).
-        f.setDevice(MicRouting.builtinMic(am))
+        val wantHeadset = plan == MicPlan.Route.HEADSET
+        // Вход — сразу тот, что выбран: без ожиданий канала (владелец,
+        // 29.09.2026: «я просто буду ждать несколько секунд и говорить…
+        // нажал на кнопку на наушниках — и он слушает, без всяких секунд»).
+        f.setDevice(if (wantHeadset) MicRouting.headsetMic(am) else MicRouting.builtinMic(am))
         f.onLevel = { level -> main.post { levelSink?.let { sink -> runCatching { sink(level) } } } }
         if (!f.start()) return false
         feed = f
         health.fed = true
-        val wantHeadset = plan == MicPlan.Route.HEADSET
         headsetMic = wantHeadset
-        routeMoving = wantHeadset
-        holdCue = wantHeadset
-        onLog("свой микрофон: слушает Правка, распознаватель получает её звук" + if (wantHeadset) " — перевожу на гарнитуру" else "")
-        if (wantHeadset) {
-            if (!MicRouting.commIsHeadset(am) && MicRouting.toHeadset(am, onLog)) routeOurs = true
-            followFeed(wantHeadset = true, sinceMs = android.os.SystemClock.elapsedRealtime())
-        } else {
-            followFeed(wantHeadset = false, sinceMs = android.os.SystemClock.elapsedRealtime())
-        }
+        routeMoving = true
+        onLog("свой микрофон: слушает Правка, распознаватель получает её звук — ${if (wantHeadset) "гарнитура" else "телефон"}")
+        if (wantHeadset && !MicRouting.commIsHeadset(am) && MicRouting.toHeadset(am, onLog)) routeOurs = true
+        followFeed(wantHeadset, sinceMs = android.os.SystemClock.elapsedRealtime())
         publishMic()
         // Путь наш звук уже брал — звать говорить можно с тапа: сказанное до
-        // «готов» распознавателя ляжет в очередь и дойдёт до него целиком. В
-        // наушниках — не с тапа, а когда по их каналу пошёл звук (followFeed):
-        // тейк с кнопки гарнитуры идёт с телефоном в кармане, и позвать
-        // говорить раньше — значит отдать первую фразу карману.
-        if (feedAcceptedBefore(networkNow) && !wantHeadset) fireReady()
+        // «готов» распознавателя ляжет в очередь и дойдёт до него целиком.
+        if (feedAcceptedBefore(networkNow)) fireReady()
         startListening()
         return true
     }
@@ -1913,13 +1888,13 @@ class GoogleSpeechSession(
     }
 
     /**
-     * Довести свою запись до нужного входа. Телефон — сразу ([moveFeed]);
-     * наушники — когда поднялся их канал ([awaitLink]).
+     * Довести свою запись до нужного входа и проверить, что она там
+     * ([moveFeed]). Посреди тейка переезд на наушники звенит в них «говори».
      */
     private fun followFeed(wantHeadset: Boolean, sinceMs: Long) {
         routeWatch?.let { main.removeCallbacks(it) }
         val f = feed ?: return
-        if (wantHeadset) awaitLink(sinceMs) else moveFeed(f, wantHeadset = false, sinceMs = sinceMs, cue = Cue.READY)
+        moveFeed(f, wantHeadset, sinceMs, cue = if (wantHeadset && readyFired) Cue.CHIME else Cue.READY)
     }
 
     /** Что сказать, когда запись встала на вход. */
@@ -1932,41 +1907,6 @@ class GoogleSpeechSession(
 
         /** Ничего. */
         NONE,
-    }
-
-    /**
-     * Дождаться, пока поднимется канал наушников: до того своя запись слушает
-     * телефон, и сказанное раньше не пропадает. Поднят ли он — по событию
-     * стека Bluetooth (`MicRouting.scoAudioConnected` → `HeadsetVoice`);
-     * поднят — запись на наушники и «говори». Холодный канал после простоя
-     * поднимается 2,3 с (журнал 29.09) — это и было «засыпает канал… первые
-     * три-четыре слова»: запись раньше уходила на наушники по липкой рассылке,
-     * помнившей прошлый тейк, и слушала канал, которого ещё нет. Стек молчит
-     * [LINK_EVENT_WAIT_MS] (за каналом не следим — [SCO_PREFER_ANYWAY_MS]) —
-     * переводим всё равно.
-     */
-    private fun awaitLink(sinceMs: Long) {
-        val step = object : Runnable {
-            override fun run() {
-                val f = feed ?: return
-                if (!active || stopping) return
-                val waited = android.os.SystemClock.elapsedRealtime() - sinceMs
-                val watched = MicRouting.linkProbe?.let { probe -> runCatching { probe() }.getOrNull() } != null
-                val up = MicRouting.scoAudioConnected(context)
-                val limit = if (watched) LINK_EVENT_WAIT_MS else SCO_PREFER_ANYWAY_MS
-                if (!up && waited < limit) {
-                    main.postDelayed(this, FEED_POLL_MS)
-                    return
-                }
-                onLog(
-                    if (up) "канал гарнитуры поднялся за $waited мс — запись переезжает на гарнитуру"
-                    else "канал гарнитуры не отозвался за $waited мс — перевожу запись всё равно"
-                )
-                moveFeed(f, wantHeadset = true, sinceMs = android.os.SystemClock.elapsedRealtime(), cue = if (readyFired) Cue.CHIME else Cue.READY)
-            }
-        }
-        routeWatch = step
-        main.post(step)
     }
 
     /**

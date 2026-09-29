@@ -39,6 +39,12 @@ import kotlin.math.sin
  *    (четыре гребенчатых фильтра и два фазовых — ревербератор Шрёдера);
  *  · тише: пик [PEAK] — 0,24 полной шкалы вместо 0,34 (−3 дБ).
  *
+ * Третье издание (владелец, 29.09.2026, ночь: «сделай какой-то спокойнее и
+ * тише звук»): две ноты вместо трёх — ми и ля первой октавы (кварта вверх,
+ * «принял» — она же вниз), удар мягче (25 мс вместо 12), обертонов почти нет
+ * — ближе к тихому «бом», чем к звоночку, эхо — один-два слабых повтора, пик
+ * 0,15 шкалы (ещё −4 дБ).
+ *
  * Частоты — под канал наушников: он узкий (у старого кодека до 4 кГц, у
  * нового до 8 кГц), и всё, что звучит здесь, укладывается даже в узкий.
  *
@@ -75,38 +81,38 @@ object ReadyChime {
     /** Тишина впереди, мс: наушники после подъёма канала глотают начало звука. */
     const val LEAD_MS = 80
 
-    /** Пик громкости — доля полной шкалы: слышно, но не бьёт по уху в звонковой громкости. */
-    const val PEAK = 0.24
+    /** Пик громкости — доля полной шкалы: слышно в тишине, не бьёт по уху в звонковой громкости. */
+    const val PEAK = 0.15
 
-    /** «Говори»: соль, си, ре — трезвучие вверх. */
-    val READY_HZ = doubleArrayOf(392.00, 493.88, 587.33)
+    /** «Говори»: ми и ля — кварта вверх, спокойно. */
+    val READY_HZ = doubleArrayOf(329.63, 440.00)
 
-    /** «Принял»: ре вниз к соль — зеркало «говори». */
-    val STOP_HZ = doubleArrayOf(587.33, 392.00)
+    /** «Принял»: ля вниз к ми — зеркало «говори». */
+    val STOP_HZ = doubleArrayOf(440.00, 329.63)
 
-    /** «Отвалились»: ми первой октавы, к концу — на полутон ниже (ре-диез). */
-    const val LOST_HZ = 329.63
-    const val LOST_END_HZ = 311.13
+    /** «Отвалились»: до-диез первой октавы, к концу — на полутон ниже (до). */
+    const val LOST_HZ = 277.18
+    const val LOST_END_HZ = 261.63
 
     /** Длина звуков без тишины впереди, мс: вместе с эхом и хвостом зала. */
-    const val READY_BODY_MS = 1_200
-    const val STOP_BODY_MS = 1_100
-    const val LOST_BODY_MS = 1_300
+    const val READY_BODY_MS = 1_000
+    const val STOP_BODY_MS = 1_000
+    const val LOST_BODY_MS = 1_200
 
-    /** Шаг между нотами, мс. */
-    private const val READY_STEP_MS = 90
-    private const val STOP_STEP_MS = 120
+    /** Шаг между нотами, мс: не торопливо. */
+    private const val READY_STEP_MS = 150
+    private const val STOP_STEP_MS = 150
 
     /** Эхо: задержка повтора, доля первого повтора, сколько остаётся от каждого следующего. */
-    const val ECHO_MS = 180
-    private const val ECHO_MIX = 0.42
-    private const val ECHO_FEEDBACK = 0.42
+    const val ECHO_MS = 200
+    private const val ECHO_MIX = 0.25
+    private const val ECHO_FEEDBACK = 0.30
 
     /** Сколько верхов срезает каждый повтор эха: 0 — ничего, 1 — всё. */
-    private const val ECHO_DAMP = 0.45
+    private const val ECHO_DAMP = 0.55
 
     /** Доля хвоста зала. */
-    private const val ROOM_MIX = 0.20
+    private const val ROOM_MIX = 0.15
 
     /** Хвост к нулю в конце, мс: затухание к концу ещё не ноль. */
     private const val FADE_MS = 120
@@ -116,10 +122,9 @@ object ReadyChime {
         val lead = sampleRate * LEAD_MS / 1000
         val step = sampleRate * READY_STEP_MS / 1000
         val dry = DoubleArray(lead + sampleRate * READY_BODY_MS / 1000)
-        // Последняя нота громче и дольше: на ней «слушаю» и держится.
-        note(dry, lead, READY_HZ[0], decayMs = 220.0, gain = 0.80, sampleRate = sampleRate)
-        note(dry, lead + step, READY_HZ[1], decayMs = 240.0, gain = 0.85, sampleRate = sampleRate)
-        note(dry, lead + 2 * step, READY_HZ[2], decayMs = 340.0, gain = 1.0, sampleRate = sampleRate)
+        // Вторая нота дольше: на ней «слушаю» и держится.
+        note(dry, lead, READY_HZ[0], decayMs = 260.0, gain = 0.85, sampleRate = sampleRate)
+        note(dry, lead + step, READY_HZ[1], decayMs = 340.0, gain = 1.0, sampleRate = sampleRate)
         return finish(space(dry, sampleRate), sampleRate)
     }
 
@@ -128,8 +133,8 @@ object ReadyChime {
         val lead = sampleRate * LEAD_MS / 1000
         val step = sampleRate * STOP_STEP_MS / 1000
         val dry = DoubleArray(lead + sampleRate * STOP_BODY_MS / 1000)
-        note(dry, lead, STOP_HZ[0], decayMs = 200.0, gain = 0.85, sampleRate = sampleRate)
-        note(dry, lead + step, STOP_HZ[1], decayMs = 330.0, gain = 1.0, sampleRate = sampleRate)
+        note(dry, lead, STOP_HZ[0], decayMs = 240.0, gain = 0.85, sampleRate = sampleRate)
+        note(dry, lead + step, STOP_HZ[1], decayMs = 320.0, gain = 1.0, sampleRate = sampleRate)
         return finish(space(dry, sampleRate), sampleRate)
     }
 
@@ -211,7 +216,7 @@ object ReadyChime {
     }
 
     /**
-     * Одна нота, как брусок вибрафона: удар за 12 мс по косинусу, дальше
+     * Одна нота, как мягкий брусок вибрафона: удар за 25 мс по косинусу, дальше
      * затухание; обертоны тише основного тона и гаснут быстрее — к хвосту
      * остаётся почти чистый тон. [endFreq] — за [glideMs] тон плавно уходит
      * туда (фаза копится, а не считается от времени: иначе глиссандо щёлкало бы).
@@ -226,7 +231,7 @@ object ReadyChime {
         endFreq: Double = freq,
         glideMs: Int = 0,
     ) {
-        val attack = sampleRate * 12 / 1000
+        val attack = sampleRate * 25 / 1000
         val tau = decayMs / 1000.0 * sampleRate
         val glide = (sampleRate * glideMs / 1000).coerceAtLeast(1)
         val length = out.size - from
@@ -247,6 +252,6 @@ object ReadyChime {
         }
     }
 
-    /** Громкость основного тона и обертонов 2×, 3×, 4×. */
-    private val PARTIALS = doubleArrayOf(1.0, 0.28, 0.08, 0.035)
+    /** Громкость основного тона и обертонов 2×, 3×: почти чистый тон — «бом», а не звоночек. */
+    private val PARTIALS = doubleArrayOf(1.0, 0.12, 0.03)
 }
