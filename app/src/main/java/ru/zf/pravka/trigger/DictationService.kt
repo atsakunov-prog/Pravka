@@ -299,6 +299,8 @@ class DictationService : Service() {
             writer?.close()
             record = null
             writer = null
+            // Наушники звучали до конца записи — следующий тейк застанет их тёплыми.
+            if (headsetMic) ru.zf.pravka.provider.GoogleSpeechSession.noteHeadsetAudio()
             if (scoRaised) {
                 scoRaised = false
                 runCatching {

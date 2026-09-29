@@ -154,16 +154,47 @@ class ListenPolicyTest {
     }
 
     @Test
-    fun `наушники после простоя - говори только когда пошёл их живой звук`() {
-        // Вход гарнитурный, а идут ровные нули — наушники ещё просыпаются.
-        assertEquals(ListenPolicy.Wake.WAIT, ListenPolicy.headsetWake(signalMs = 0, waitedMs = 900))
-        // Остаток звука телефона после смены входа — ещё не голос наушников.
-        assertEquals(ListenPolicy.Wake.WAIT, ListenPolicy.headsetWake(signalMs = 150, waitedMs = 200))
-        assertEquals(ListenPolicy.Wake.AWAKE, ListenPolicy.headsetWake(signalMs = ListenPolicy.HEADSET_SOUND_MS, waitedMs = 1_400))
-        // Нули слишком долго — зовём по сроку, а не молчим вечно.
-        assertEquals(ListenPolicy.Wake.GIVE_UP, ListenPolicy.headsetWake(signalMs = 0, waitedMs = ListenPolicy.HEADSET_WAKE_MAX_MS))
-        // Срок — раньше, чем сторож нулей начнёт поднимать канал заново.
-        assertTrue(ListenPolicy.HEADSET_WAKE_MAX_MS <= ListenPolicy.DEAD_AIR_MS + 1_000)
+    fun `наушники звучали недавно - тёплые, запись сразу на них`() {
+        val now = 10_000_000L
+        assertTrue(ListenPolicy.headsetWarm(lastAudioAtMs = now - 60_000, nowMs = now))
+        // Владелец: «последние 5 минут через них ничего не шло… засыпает канал» — у нас с запасом.
+        assertFalse(ListenPolicy.headsetWarm(lastAudioAtMs = now - ListenPolicy.HEADSET_WARM_MS, nowMs = now))
+        assertTrue(ListenPolicy.HEADSET_WARM_MS < 5 * 60_000L)
+        // С запуска не звучали — холодные.
+        assertFalse(ListenPolicy.headsetWarm(lastAudioAtMs = 0L, nowMs = now))
+        // Часы ушли назад — не верим.
+        assertFalse(ListenPolicy.headsetWarm(lastAudioAtMs = now + 1_000, nowMs = now))
+    }
+
+    @Test
+    fun `мост через телефон без второго входа - на наушники по сроку и в паузе`() {
+        // Рано — слушает телефон, даже в тишине.
+        assertEquals(ListenPolicy.Bridge.WAIT, ListenPolicy.bridgeStep(sinceLinkMs = 900, dual = false, headsetHeard = false, quietMs = 5_000))
+        // Срок прошёл, но владелец говорит — не резать слово.
+        assertEquals(ListenPolicy.Bridge.WAIT, ListenPolicy.bridgeStep(sinceLinkMs = ListenPolicy.COLD_WAKE_MS, dual = false, headsetHeard = false, quietMs = 0))
+        assertEquals(
+            ListenPolicy.Bridge.SWITCH_IN_PAUSE,
+            ListenPolicy.bridgeStep(sinceLinkMs = ListenPolicy.COLD_WAKE_MS, dual = false, headsetHeard = false, quietMs = ListenPolicy.PAUSE_MS),
+        )
+        // Паузы так и нет — мост не вечный.
+        assertEquals(ListenPolicy.Bridge.SWITCH_ANYWAY, ListenPolicy.bridgeStep(sinceLinkMs = ListenPolicy.BRIDGE_MAX_MS, dual = false, headsetHeard = false, quietMs = 0))
+        // Владелец просил «первые 3 секунды» — мост не длиннее этого, когда он молчит.
+        assertTrue(ListenPolicy.COLD_WAKE_MS <= 3_000L)
+    }
+
+    @Test
+    fun `два входа сразу - на наушники, когда второй вход услышал их живой звук`() {
+        // Наушники заговорили уже через полсекунды — не ждать срока.
+        assertEquals(ListenPolicy.Bridge.SWITCH_IN_PAUSE, ListenPolicy.bridgeStep(sinceLinkMs = 500, dual = true, headsetHeard = true, quietMs = 400))
+        // Ещё не заговорили — ждём их, а не срока без второго входа.
+        assertEquals(ListenPolicy.Bridge.WAIT, ListenPolicy.bridgeStep(sinceLinkMs = ListenPolicy.COLD_WAKE_MS, dual = true, headsetHeard = false, quietMs = 5_000))
+        // Молчат долго — владелец молчит, шумодав шлёт нули: дальше как без второго входа.
+        assertEquals(
+            ListenPolicy.Bridge.SWITCH_IN_PAUSE,
+            ListenPolicy.bridgeStep(sinceLinkMs = ListenPolicy.DUAL_PATIENCE_MS, dual = true, headsetHeard = false, quietMs = 5_000),
+        )
+        // Заговорили, но фраза идёт — переставим в паузе.
+        assertEquals(ListenPolicy.Bridge.WAIT, ListenPolicy.bridgeStep(sinceLinkMs = 900, dual = true, headsetHeard = true, quietMs = 100))
     }
 
     @Test
