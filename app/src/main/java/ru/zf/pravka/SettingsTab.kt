@@ -1094,6 +1094,34 @@ private fun VoiceSettings(app: PravkaApp) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // Звук «говори» (29.09.2026; владелец: «иногда я просто нажимаю на
+        // кнопку — ничего не происходит в наушниках… мне точно нужен фидбэк»).
+        Spacer(Modifier.height(8.dp))
+        val chime by settings.readyChimeFlow.collectAsState(initial = ru.zf.pravka.core.ReadyChime.Mode.HEADSET)
+        val chimeContext = LocalContext.current
+        Text("Звук «говори»", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ChipRow {
+            PaperChip("В наушниках", selected = chime == ru.zf.pravka.core.ReadyChime.Mode.HEADSET, onClick = {
+                scope.launch { settings.setReadyChime(ru.zf.pravka.core.ReadyChime.Mode.HEADSET) }
+            })
+            PaperChip("Всегда", selected = chime == ru.zf.pravka.core.ReadyChime.Mode.ALWAYS, onClick = {
+                scope.launch { settings.setReadyChime(ru.zf.pravka.core.ReadyChime.Mode.ALWAYS) }
+            })
+            PaperChip("Выкл", selected = chime == ru.zf.pravka.core.ReadyChime.Mode.OFF, onClick = {
+                scope.launch { settings.setReadyChime(ru.zf.pravka.core.ReadyChime.Mode.OFF) }
+            })
+            ru.zf.pravka.ui.InfoButton(
+                "Звук «говори»",
+                "Колокольчик из двух нот вверх — в тот миг, когда всё поднялось и можно говорить: " +
+                    "в наушниках это значит, что по их каналу уже пошёл звук и распознаватель готов, а " +
+                    "не просто «кнопку нажали». Звенит туда, откуда слушаем: в наушниках — в сами " +
+                    "наушники, на телефоне (при «Всегда») — телефоном. «В наушниках» — на телефоне " +
+                    "хватает пилюли «слушаю» и вибрации.",
+            )
+        }
+        ru.zf.pravka.ui.PaperTextButton("Послушать", icon = Glyphs.Play, onClick = {
+            ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false)
+        })
         // «Перезагрузить микрофон» (владелец, 22.09.2026: «подключаюсь к машине, и
         // он не слышит… а потом каким-то странным образом начинает»). Кнопка
         // рассказывает, что нашла и что сделала: тишина после нажатия читалась бы

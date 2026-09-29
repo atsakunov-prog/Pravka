@@ -41,6 +41,8 @@ class PravkaApp : Application() {
     @Volatile var phoneMicOnly: Boolean = true
     /** Микрофон держит Правка и отдаёт звук распознавателю (`provider/MicFeed.kt`). */
     @Volatile var speechOwnMic: Boolean = true
+    /** Когда звенеть «говори» (`core/ReadyChime.kt`). */
+    @Volatile var readyChime: ru.zf.pravka.core.ReadyChime.Mode = ru.zf.pravka.core.ReadyChime.Mode.HEADSET
 
     override fun onCreate() {
         super.onCreate()
@@ -71,6 +73,7 @@ class PravkaApp : Application() {
         ru.zf.pravka.data.Backups.tick(this) { line -> eventLog.add(line) }
         appScope.launch { settings.phoneMicOnlyFlow.collect { phoneMicOnly = it } }
         appScope.launch { settings.speechOwnMicFlow.collect { speechOwnMic = it } }
+        appScope.launch { settings.readyChimeFlow.collect { readyChime = it } }
         // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет;
         // затем все дороги Опуса и Fable — на Опус 5.5 с новыми усилиями (22.09).
         appScope.launch {

@@ -560,6 +560,12 @@ class PravkaAccessibilityService : AccessibilityService() {
             chainButtons().forEach { it.setMic(state) }
         }
         GoogleSpeechSession.noticeSink = { text -> Feedback.toast(this, text) }
+        // Звук «говори»: в наушники — когда слушают они (с завода), всегда или никогда.
+        GoogleSpeechSession.readySink = { headset ->
+            if (ru.zf.pravka.core.ReadyChime.shouldPlay(app.readyChime, headset)) {
+                ru.zf.pravka.provider.ChimePlayer.play(this, toHeadset = headset) { line -> app.eventLog.add(line) }
+            }
+        }
         // Сколько ждать ответа — секундами на занятой кнопке (владелец,
         // 26.09.2026: «на самой кнопке, где просто крутится… обратный отсчёт в
         // виде секунд… и до нуля»). До этого была дуга по кромке стекла, но у

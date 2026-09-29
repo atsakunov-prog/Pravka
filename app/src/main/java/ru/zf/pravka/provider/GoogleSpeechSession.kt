@@ -201,6 +201,14 @@ class GoogleSpeechSession(
         var noticeSink: ((String) -> Unit)? = null
 
         /**
+         * «Говори» — в тот же миг, что вибрация и «слушаю» в пилюле: всё
+         * поднялось и слышит. [headset] — слушают наушники: туда и звенеть
+         * (`provider/ChimePlayer.kt`). Главный поток.
+         */
+        @Volatile
+        var readySink: ((headset: Boolean) -> Unit)? = null
+
+        /**
          * Сколько ждать, пока идущая запись распознавателя переедет на новый
          * вход после смены микрофона, мс. Не переехала — распознаватель
          * поднимается заново уже на новом маршруте.
@@ -1368,6 +1376,10 @@ class GoogleSpeechSession(
         if (readyFired) return
         readyFired = true
         onReady()
+        // Звук «говори» — туда, откуда слушаем: в наушниках этот миг наступает,
+        // только когда по их каналу пошёл звук (awaitSco, followFeed).
+        readySink?.let { sink -> runCatching { sink(headsetMic) } }
+        onLog("говори: ${if (headsetMic) "наушники" else "телефон"}")
     }
 
     /**

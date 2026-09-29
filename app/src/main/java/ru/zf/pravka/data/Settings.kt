@@ -51,6 +51,7 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_BIASING = booleanPreferencesKey("speech_biasing")
         private val KEY_SPEECH_NETWORK = booleanPreferencesKey("speech_network")
         private val KEY_SPEECH_OWN_MIC = booleanPreferencesKey("speech_own_mic")
+        private val KEY_READY_CHIME = stringPreferencesKey("ready_chime")
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
@@ -348,6 +349,17 @@ class Settings(private val context: Context) {
     val speechOwnMicFlow = context.dataStore.data.map { it[KEY_SPEECH_OWN_MIC] ?: true }
     suspend fun setSpeechOwnMic(value: Boolean) {
         context.dataStore.edit { it[KEY_SPEECH_OWN_MIC] = value }
+    }
+
+    /**
+     * Звук «говори» (`core/ReadyChime.kt`, 29.09.2026; владелец: «я могу не
+     * смотреть даже на телефон, поэтому мне точно нужен фидбэк… его можно
+     * выключить, конечно, но он по-хорошему должен идти в наушники всегда»).
+     * С завода — в наушниках.
+     */
+    val readyChimeFlow = context.dataStore.data.map { ru.zf.pravka.core.ReadyChime.Mode.fromKey(it[KEY_READY_CHIME]) }
+    suspend fun setReadyChime(mode: ru.zf.pravka.core.ReadyChime.Mode) {
+        context.dataStore.edit { it[KEY_READY_CHIME] = mode.key }
     }
 
     /**
