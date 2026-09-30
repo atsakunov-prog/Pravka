@@ -56,8 +56,11 @@ class ReadyChimeTest {
             assertTrue("пик $max выше $limit", max <= limit + 1)
             assertTrue(max >= limit - 1)
         }
-        // Третье издание (0,15 и почти чистый тон 330–440 Гц) в наушниках не было слышно.
-        assertTrue(ReadyChime.CLICK_PEAK > 0.15)
+        // Третье издание (0,15 и почти чистый тон 330–440 Гц) в наушниках не было слышно;
+        // 30.09 щелчки попросили «чуть-чуть погромче» четвёртого издания (0,40).
+        assertTrue(ReadyChime.CLICK_PEAK > 0.40)
+        // Громче — но с запасом до полной шкалы: хвост комнаты не должен резаться.
+        assertTrue(ReadyChime.CLICK_PEAK <= 0.8)
     }
 
     @Test

@@ -269,6 +269,8 @@ class DictationService : Service() {
         writer = out
         active = true
         recording = true
+        // Музыку — на паузу и тейку Whisper (`TakeFocus`).
+        ru.zf.pravka.provider.TakeFocus.hold(this) { line -> log(line) }
 
         recorder.startRecording()
         publishMic()
@@ -293,6 +295,7 @@ class DictationService : Service() {
         if (active) {
             active = false
             recording = false
+            ru.zf.pravka.provider.TakeFocus.release(ru.zf.pravka.provider.TakeFocus.STOP_RELEASE_MS)
             runCatching { worker?.join(500) }
             runCatching { record?.stop() }
             runCatching { record?.release() }

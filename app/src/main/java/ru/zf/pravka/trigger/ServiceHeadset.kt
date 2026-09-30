@@ -156,13 +156,16 @@ private fun PravkaAccessibilityService.headsetFieldFocused(): Boolean =
 /** Срок метки «с гарнитуры» для записи Whisper: служба микрофона встаёт за доли секунды. */
 private const val HEADSET_MARK_MS = 5_000L
 
-// ---- Звуки тейка: «говори», «принял», «отвалились» и голос в конце ----
+// ---- Звуки тейка: «говори», «принял», «отвалились» ----
 
 /**
- * Раздать движку распознавания, куда звучать и говорить (владелец,
- * 29.09.2026: «должны быть звуки по поводу всего: по поводу начала, по
- * поводу конца»). Звуки — `provider/ChimePlayer.kt`, голос — `Speaker.kt`,
- * когда звучать — одна настройка «Звуки диктовки» (`ReadyChime.Mode`).
+ * Раздать движку распознавания, куда звучать (владелец, 29.09.2026: «должны
+ * быть звуки по поводу всего: по поводу начала, по поводу конца»). Звуки —
+ * `provider/ChimePlayer.kt`, когда звучать — одна настройка «Звуки диктовки»
+ * (`ReadyChime.Mode`). Голоса «Расшифровал» больше нет (владелец, 30.09.2026:
+ * «это ужасно, роботизированный голос, и он где-то всё время говорится,
+ * где-то посередине. Просто можно оставить вот эти звуки»): конец тейка
+ * слышен по «принял».
  */
 internal fun PravkaAccessibilityService.installTakeSounds() {
     // «Говори»: в наушники — когда слушают они (с завода), всегда или никогда.
@@ -177,6 +180,11 @@ internal fun PravkaAccessibilityService.installTakeSounds() {
             ChimePlayer.play(this, toHeadset = false, kind = ChimePlayer.Kind.LOST) { line -> app.eventLog.add(line) }
         }
     }
+    // Канал закрыла кнопка наушников, а стек промолчал или опоздал — тот же стоп, что у кнопки.
+    GoogleSpeechSession.headsetStopSink = { session ->
+        headsetVoice.stop("канал закрыла кнопка")
+        if (liveSession() === session) stopTakeFromHeadset(byHeadset = true) else session.stop()
+    }
     GoogleSpeechSession.voiceSink = { on -> holdHeadsetVoice(on) }
     GoogleSpeechSession.stopSink = { headset, byHeadset -> onTakeStopSound(headset, byHeadset) }
     GoogleSpeechSession.doneSink = { session, text -> onTakeHeard(session, text) }
@@ -184,11 +192,11 @@ internal fun PravkaAccessibilityService.installTakeSounds() {
     MicRouting.linkProbe = { headsetVoice.audioConnected() }
 }
 
-/** Тейк выбрасывают серой «отменой» — ни «принял», ни «Расшифровал». */
+/** Тейк выбрасывают серой «отменой» — без «принял». */
 private fun PravkaAccessibilityService.takeDiscarding(): Boolean =
     discardTake || zDiscard || rDiscard || mDiscard || eDiscard
 
-/** Когда отзвучит последний «принял» (elapsedRealtime): голос в конце его ждёт. */
+/** Когда отзвучит последний «принял» (elapsedRealtime): распознавание у стека закрываем после него. */
 private var chimeUntilMs = 0L
 
 /**
@@ -210,34 +218,15 @@ private fun PravkaAccessibilityService.onTakeStopSound(headset: Boolean, byHeads
 }
 
 /**
- * Сказанное расшифровано: закрыть распознавание у стека (как только
- * отзвучит «принял» — канал гарнитуры оборвал бы его) и сказать в наушники
- * «Расшифровал» — голосом помощника, который беззвучный режим не глушит.
- * Молчит, если тейк выброшен, если его слушал телефон, если звуки
- * выключены и если итог скажет сам режим (Засечка с кнопки гарнитуры:
- * «записал коммент»).
+ * Сказанное расшифровано: закрыть распознавание у стека — как только
+ * отзвучит «принял» (канал гарнитуры оборвал бы его).
  */
+@Suppress("UNUSED_PARAMETER") // текст раньше выбирал фразу голоса; контракт `doneSink` прежний
 private fun PravkaAccessibilityService.onTakeHeard(session: GoogleSpeechSession, text: String) {
-    val now = SystemClock.elapsedRealtime()
-    val chimeLeft = (chimeUntilMs - now).coerceAtLeast(0L)
-    val channelUp = headsetVoice.active
-    if (channelUp) {
-        chromeHandler.postDelayed({ if (!micBusy()) headsetVoice.stop("тейк кончился") }, chimeLeft)
-    }
-    if (takeDiscarding() || !session.spokeInHeadset) return
-    if (app.readyChime == ReadyChime.Mode.OFF) return
-    if (session === zSession && (zFromHeadset || zTypeInstead)) return
-    val phrase = if (text.isBlank()) "Ничего не расслышал" else "Расшифровал"
-    // Канал гарнитуры закрываем только что — музыкальный вернётся через полсекунды-секунду.
-    val gap = if (channelUp) VOICE_AFTER_CHANNEL_MS else VOICE_AFTER_CHIME_MS
-    chromeHandler.postDelayed({ say(phrase) }, chimeLeft + gap)
+    if (!headsetVoice.active) return
+    val chimeLeft = (chimeUntilMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+    chromeHandler.postDelayed({ if (!micBusy()) headsetVoice.stop("тейк кончился") }, chimeLeft)
 }
 
 /** «Принял» после кнопки гарнитуры: её канал закрыт 0,7 с назад, музыкальный почти вернулся. */
 private const val HEADSET_STOP_CHIME_DELAY_MS = 250L
-
-/** Голос после закрытия канала гарнитуры: музыкальный канал возвращается не сразу. */
-private const val VOICE_AFTER_CHANNEL_MS = 900L
-
-/** Голос после «принял» без канала гарнитуры: просто не поверх звука. */
-private const val VOICE_AFTER_CHIME_MS = 150L

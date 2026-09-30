@@ -563,8 +563,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             chainButtons().forEach { it.setMic(state) }
         }
         GoogleSpeechSession.noticeSink = { text -> Feedback.toast(this, text) }
-        // Звуки тейка («говори», «принял», «отвалились»), голос «Расшифровал»
-        // и распознавание у стека гарнитуры — `ServiceHeadset.kt`.
+        // Звуки тейка («говори», «принял», «отвалились») и распознавание у
+        // стека гарнитуры — `ServiceHeadset.kt`.
         installTakeSounds()
         // Сколько ждать ответа — секундами на занятой кнопке (владелец,
         // 26.09.2026: «на самой кнопке, где просто крутится… обратный отсчёт в
@@ -2519,6 +2519,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         // распознавание у стека, иначе следующее нажатие он потратит на
         // закрытие старого (`HeadsetVoice`).
         headsetVoice.tick(takeRunning = micBusy())
+        // И музыку вернуть, если тейк кончился дорогой мимо `TakeFocus.release`.
+        ru.zf.pravka.provider.TakeFocus.tick(takeRunning = micBusy())
 
         // Стопка: собрать кнопки, когда их давно не трогали. Посреди работы
         // не складываем никогда — кнопка, уехавшая под другую в тот момент,

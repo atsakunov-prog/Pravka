@@ -163,4 +163,46 @@ class ListenPolicyTest {
         // Кнопка канал не закрывала.
         assertFalse(ListenPolicy.headsetStopPending(0L, closed))
     }
+
+    @Test
+    fun `вход ушёл с наушников, а они на связи - это их кнопка, стоп со сказанным`() {
+        // Владелец, 30.09: долгое нажатие в конце — «наушники отвалились», и ничего не ушло.
+        val heard = 1_000_000L
+        val later = heard + 30_000L
+        // Стек не сказал (или опоздал), а гарнитура подключена — стоп.
+        assertEquals(
+            ListenPolicy.HeadsetDrop.BUTTON_STOP,
+            ListenPolicy.headsetDrop(closedAtMs = 0L, nowMs = later, stillConnected = true, heardFromMs = heard),
+        )
+        // Стек успел сказать — стоп уже идёт своей дорогой, второй не нужен.
+        assertEquals(
+            ListenPolicy.HeadsetDrop.STOP_PENDING,
+            ListenPolicy.headsetDrop(closedAtMs = later - 300, nowMs = later, stillConnected = true, heardFromMs = heard),
+        )
+        // Гарнитуры нет среди подключённых — отвалились по-настоящему.
+        assertEquals(
+            ListenPolicy.HeadsetDrop.LOST,
+            ListenPolicy.headsetDrop(closedAtMs = 0L, nowMs = later, stillConnected = false, heardFromMs = heard),
+        )
+        // Первые секунды наушников — старт: канал делят стек и тейк, моргание не стоп.
+        assertEquals(
+            ListenPolicy.HeadsetDrop.LOST,
+            ListenPolicy.headsetDrop(
+                closedAtMs = 0L, nowMs = heard + ListenPolicy.HEADSET_BUTTON_MIN_MS - 1,
+                stillConnected = true, heardFromMs = heard,
+            ),
+        )
+        assertEquals(
+            ListenPolicy.HeadsetDrop.BUTTON_STOP,
+            ListenPolicy.headsetDrop(
+                closedAtMs = 0L, nowMs = heard + ListenPolicy.HEADSET_BUTTON_MIN_MS,
+                stillConnected = true, heardFromMs = heard,
+            ),
+        )
+        // Наушники так и не встали — не их кнопка.
+        assertEquals(
+            ListenPolicy.HeadsetDrop.LOST,
+            ListenPolicy.headsetDrop(closedAtMs = 0L, nowMs = later, stillConnected = true, heardFromMs = 0L),
+        )
+    }
 }
