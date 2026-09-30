@@ -47,6 +47,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.core.ProofreadMode
@@ -70,6 +71,7 @@ import ru.zf.pravka.ui.PaperChip
 import ru.zf.pravka.ui.PaperField
 import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.PaperLabel
+import ru.zf.pravka.ui.PaperSheet
 import ru.zf.pravka.ui.PaperTextButton
 import ru.zf.pravka.ui.ScreenPad
 import ru.zf.pravka.ui.SheetAction
@@ -98,20 +100,76 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
     var log by remember { mutableStateOf<List<TranscriptionLog.Entry>>(emptyList()) }
     var hasMore by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(showAll) {
+    // Чей звук ещё лежит (`TakeAudio`): проверка файлов — диск, не композиция.
+    var withAudio by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // Переразбор сохранённого звука (30.09.2026): что идёт, насколько, итог.
+    var replaying by remember { mutableStateOf<String?>(null) }
+    var replayShare by remember { mutableStateOf(0f) }
+    var replayOut by remember { mutableStateOf<ReplayOut?>(null) }
+    var reload by remember { mutableStateOf(0) }
+    LaunchedEffect(showAll, reload) {
         val limit = if (showAll) 2000 else RECENT_TAKES
         val loaded = withContext(Dispatchers.IO) {
-            transcriptionLog.readLast(limit + 1) to liveDraft.read()
+            val entries = transcriptionLog.readLast(limit + 1)
+            val audio = entries.mapNotNull { e -> e.audio?.takeIf { app.takeAudio.file(it) != null } }.toSet()
+            Triple(entries, liveDraft.read(), audio)
         }
         hasMore = loaded.first.size > limit
         log = loaded.first.take(limit)
         draft = loaded.second
+        withAudio = loaded.third
     }
     val ruLoc = remember { Locale.forLanguageTag("ru") }
 
     fun copy(text: String) {
         putClipboard(context, text)
         Feedback.toast(context, context.getString(R.string.transcript_copied))
+    }
+
+    // Разобрать фразу заново из её звука (владелец, 30.09.2026: «если на него
+    // нажимаешь, то просто ещё раз разбирается эта фраза»): тем же путём, с тем
+    // же словарём, что живой тейк; итог — в лист и отдельной строкой в журнал.
+    fun replay(entry: TranscriptionLog.Entry) {
+        if (replaying != null) return
+        val name = entry.audio ?: return
+        replaying = name
+        replayShare = 0f
+        app.appScope.launch {
+            val file = withContext(Dispatchers.IO) { app.takeAudio.file(name) }
+            if (file == null) {
+                replaying = null
+                withAudio = withAudio - name
+                Feedback.toast(context, "Звука этой фразы уже нет — ушёл, чтобы уложиться в 300 МБ")
+                return@launch
+            }
+            val network = app.settings.speechNetworkFlow.first()
+            val formatting = app.settings.speechFormattingFlow.first()
+            val biasing = if (app.settings.speechBiasingFlow.first()) {
+                runCatching {
+                    val store = app.dictionaryStore
+                    ru.zf.pravka.core.BiasingList.build(store.all(), isSeed = store::isSeed).strings
+                }.getOrDefault(emptyList())
+            } else emptyList()
+            val job = ru.zf.pravka.provider.SpeechReplay(
+                context.applicationContext, file, network, biasing, formatting,
+                log = { line -> app.eventLog.add(line) },
+            )
+            job.start(onProgress = { replayShare = it }) { result ->
+                replaying = null
+                val text = result.getOrNull().orEmpty()
+                val error = result.exceptionOrNull()?.message
+                app.transcriptionLog.append(
+                    engine = Settings.SPEECH_GOOGLE_REPLAY,
+                    audioMs = job.audioMs,
+                    transcribeMs = job.elapsedMs,
+                    text = text,
+                    error = error ?: if (text.isBlank()) "пустой результат" else null,
+                    audio = name,
+                )
+                replayOut = ReplayOut(was = entry.text, now = text, error = error, audioMs = job.audioMs, tookMs = job.elapsedMs)
+                reload++
+            }
+        }
     }
 
     val listState = rememberLazyListState()
@@ -166,8 +224,14 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
         if (log.isEmpty()) {
             item { Text(stringResource(R.string.transcripts_empty), style = MaterialTheme.typography.bodyMedium) }
         }
-        items(log, key = { it.ts + it.chars }) { entry ->
-            TranscriptCard(entry, ruLoc, onCopy = { copy(entry.text) })
+        items(log, key = { it.ts + it.chars + it.engine }) { entry ->
+            val audio = entry.audio?.takeIf { it in withAudio }
+            TranscriptCard(
+                entry, ruLoc,
+                onCopy = { copy(entry.text) },
+                onReplay = if (audio != null) ({ replay(entry) }) else null,
+                replayShare = if (audio != null && audio == replaying) replayShare else null,
+            )
         }
         if (hasMore && !showAll) {
             item {
@@ -175,6 +239,40 @@ internal fun PravkaTab(app: PravkaApp, serviceEnabled: Boolean) {
                     PaperTextButton("Показать всё", icon = Glyphs.ChevronDown, onClick = { showAll = true })
                 }
             }
+        }
+    }
+
+    replayOut?.let { out ->
+        ReplaySheet(out, ruLoc, onCopy = { copy(out.now) }, onDismiss = { replayOut = null })
+    }
+}
+
+/** Итог переразбора: что было в тейке, что вышло теперь. */
+private class ReplayOut(val was: String, val now: String, val error: String?, val audioMs: Long, val tookMs: Long)
+
+@Composable
+private fun ReplaySheet(out: ReplayOut, ruLoc: Locale, onCopy: () -> Unit, onDismiss: () -> Unit) {
+    val sub = String.format(ruLoc, "%.1f с звука · разобрано за %.1f с", out.audioMs / 1000.0, out.tookMs / 1000.0)
+    PaperSheet(
+        onDismiss = onDismiss,
+        title = if (out.error == null) "Разобрано заново" else "Не разобралось",
+        icon = Glyphs.Wave,
+        subtitle = sub,
+        footer = if (out.now.isNotBlank()) {
+            {
+                Spacer(Modifier.weight(1f))
+                PaperButton("Скопировать", icon = Glyphs.Copy, primary = true, onClick = { onCopy(); onDismiss() })
+            }
+        } else null,
+    ) {
+        when {
+            out.error != null -> Text(out.error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+            out.now.isBlank() -> Text("Распознаватель не разобрал ни слова.", style = MaterialTheme.typography.bodyMedium)
+            else -> SelectionContainer { Text(out.now, style = MaterialTheme.typography.bodyLarge) }
+        }
+        if (out.was.isNotBlank() && out.was != out.now) {
+            PaperLabel("было в тейке")
+            Text(out.was, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -380,6 +478,7 @@ private fun StreamingText(text: String) {
 private fun engineLabel(engine: String): String = when (engine) {
     Settings.SPEECH_GOOGLE -> "Google"
     Settings.SPEECH_GOOGLE_NET -> "Google (сеть)"
+    Settings.SPEECH_GOOGLE_REPLAY -> "Google заново"
     Settings.SPEECH_WHISPER_SMALL -> "Whisper small"
     Settings.SPEECH_WHISPER_BASE -> "Whisper base"
     else -> engine
@@ -403,9 +502,19 @@ private fun TapPaperCard(onClick: () -> Unit, enabled: Boolean, content: @Compos
     }
 }
 
-/** Одна расшифровка: строка метрик, время, текст; тап — текст в буфер. */
+/**
+ * Одна расшифровка: строка метрик, время, текст; тап — текст в буфер.
+ * [onReplay] — звук тейка лежит: значок волны разбирает фразу заново;
+ * [replayShare] — разбор идёт, доля поданного звука.
+ */
 @Composable
-private fun TranscriptCard(entry: TranscriptionLog.Entry, ruLoc: Locale, onCopy: () -> Unit) {
+private fun TranscriptCard(
+    entry: TranscriptionLog.Entry,
+    ruLoc: Locale,
+    onCopy: () -> Unit,
+    onReplay: (() -> Unit)? = null,
+    replayShare: Float? = null,
+) {
     val canCopy = entry.text.isNotBlank()
     TapPaperCard(onClick = { if (canCopy) onCopy() }, enabled = canCopy) {
         Column {
@@ -433,6 +542,15 @@ private fun TranscriptCard(entry: TranscriptionLog.Entry, ruLoc: Locale, onCopy:
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
+                if (replayShare != null) {
+                    Text(
+                        "разбираю… ${(replayShare * 100).toInt()} %",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else if (onReplay != null) {
+                    GlyphButton(Glyphs.Wave, "разобрать заново", onClick = onReplay, size = 30.dp)
+                }
                 // Значок — подсказка, что тап копирует; делает то же самое.
                 if (canCopy) GlyphButton(Glyphs.Copy, "скопировать", onClick = onCopy, size = 30.dp)
             }

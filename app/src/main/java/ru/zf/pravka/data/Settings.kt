@@ -38,6 +38,9 @@ class Settings(private val context: Context) {
         // Тот же Google по сетевому пути — не выбор движка, а метка тейка в
         // «Расшифровках», чтобы офлайн-пакет и сеть сравнивались по журналу.
         const val SPEECH_GOOGLE_NET = "google-net"
+        // Фраза, разобранная заново из сохранённого звука (`SpeechReplay`,
+        // 30.09.2026), — тоже не движок, а метка строки в «Расшифровках».
+        const val SPEECH_GOOGLE_REPLAY = "google-replay"
         const val SPEECH_WHISPER_SMALL = "whisper-small"
         const val SPEECH_WHISPER_BASE = "whisper-base"
 

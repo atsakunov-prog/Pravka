@@ -986,6 +986,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Путь фиксируем на старте: настройку могут переключить посреди тейка,
         // а в «Расшифровках» тейк должен значиться тем путём, которым шёл.
         val network = cachedNetwork
+        // Звук тейка — в файл, чтобы фразу можно было разобрать заново
+        // (`data/TakeAudio.kt`); старое сверх 300 МБ уходит на потоке диска.
+        ru.zf.pravka.data.DiskWriter.post { runCatching { app.takeAudio.prune() } }
         val session = GoogleSpeechSession(
             this,
             biasing = if (cachedBiasingOn) cachedBiasing else emptyList(),
@@ -993,6 +996,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             segmentedSession = cachedSegmented,
             network = network,
             fromHeadset = headsetTake,
+            tape = app.takeAudio.newFile(),
         )
         googleSession = session
         // Start listening FIRST, then dress the UI: the button, the ticker's
@@ -1020,9 +1024,11 @@ class PravkaAccessibilityService : AccessibilityService() {
                 app.liveDraft.save(text)
             },
             onDone = { text ->
-                onLiveDone(if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, text, session.health)
+                onLiveDone(if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, text, session.health, session.audioFile)
             },
-            onError = { msg -> onLiveError(msg) },
+            onError = { msg ->
+                onLiveError(msg, if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, session)
+            },
             onLog = { line -> app.eventLog.add(line) },
         )
         // The tree walk to capture the target field is 1-3 binder IPCs into the
@@ -1204,7 +1210,12 @@ class PravkaAccessibilityService : AccessibilityService() {
         session.stop()  // -> onLiveDone
     }
 
-    private fun onLiveDone(engine: String, text: String, health: ru.zf.pravka.core.TakeHealth? = null) {
+    private fun onLiveDone(
+        engine: String,
+        text: String,
+        health: ru.zf.pravka.core.TakeHealth? = null,
+        audio: File? = null,
+    ) {
         googleSession = null
         // Every step below runs on the binder callback that delivers the take:
         // one throw here (screen off -> dead window/FGS token) used to kill the
@@ -1224,6 +1235,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             floatingButton?.hideTicker()
             app.eventLog.add("take discarded (${text.length} ch)")
             app.liveDraft.clear()
+            // Отменённому тейку расшифровки нет — и звук его ни к чему не привязан.
+            audio?.let { f -> ru.zf.pravka.data.DiskWriter.post { app.takeAudio.delete(f.name) } }
             Feedback.toast(this, "Отменено")
             return
         }
@@ -1244,6 +1257,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             text = text,
             error = if (text.isBlank()) "пустой результат" else null,
             health = health,
+            audio = audio?.name,
         )
         // Delivered (and logged to the transcripts) - the recovery draft is no
         // longer needed. Unless the service died mid-take: then nothing was
@@ -1257,8 +1271,23 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun onLiveError(msg: String) {
+    private fun onLiveError(msg: String, engine: String? = null, session: GoogleSpeechSession? = null) {
         googleSession = null
+        // Тейк упал, а звук записан — расшифровка с ошибкой и значком: сказанное
+        // можно разобрать заново из вкладки Правки, а не надиктовывать снова.
+        session?.audioFile?.let { f ->
+            if (engine != null) {
+                app.transcriptionLog.append(
+                    engine = engine,
+                    audioMs = SystemClock.elapsedRealtime() - googleStartedAt,
+                    transcribeMs = 0,
+                    text = "",
+                    error = msg,
+                    health = session.health,
+                    audio = f.name,
+                )
+            }
+        }
         stopMicHold()
         floatingButton?.hideTicker()
         floatingButton?.hideCancelBubble()

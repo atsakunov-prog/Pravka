@@ -201,6 +201,20 @@ class MicFeed private constructor(
     /** Наши копии концов чтения: труба уходит распознавателю через Binder, его копия — своя. */
     private val readEnds = ArrayList<ParcelFileDescriptor>()
 
+    /**
+     * Куда писать звук тейка (`data/TakeAudio.kt`): тот же звук, что уходит
+     * распознавателю, от первого куска до хвоста после стопа. Файл открывает и
+     * закрывает поток записи — единственный, кто его пишет: главный поток
+     * службы диска не ждёт, а заголовок WAV дописывается, когда запись
+     * кончилась любой дорогой (стоп, отмена, отказ распознавателя).
+     */
+    @Volatile private var tapeFile: java.io.File? = null
+
+    /** Писать звук тейка в [file]. Зовётся до [start]. */
+    fun tapeTo(file: java.io.File) {
+        tapeFile = file
+    }
+
     /** Запустить запись и писателя. false — запись не пошла (микрофон занят, нет прав). */
     fun start(): Boolean {
         runCatching { record.startRecording() }.onFailure {
@@ -341,6 +355,12 @@ class MicFeed private constructor(
     private fun captureLoop() {
         var lastLevelAt = 0L
         var badSince = 0L
+        // Файл — только у этого потока: открыть здесь, писать здесь, закрыть в finally.
+        var tape: ru.zf.pravka.data.WavFile.Writer? = tapeFile?.let { f ->
+            runCatching { ru.zf.pravka.data.WavFile.Writer(f) }
+                .onFailure { log("звук тейка: файл не открылся — ${it.javaClass.simpleName}: ${it.message}") }
+                .getOrNull()
+        }
         try {
             while (running && !draining) {
                 if (stopAtMs > 0L && SystemClock.elapsedRealtime() >= stopAtMs) {
@@ -372,6 +392,14 @@ class MicFeed private constructor(
                 badSince = 0L
                 lastCaptureAtMs = now
                 val chunk = if (n == buf.size) buf else buf.copyOf(n)
+                tape?.let { w ->
+                    // Диск подвёл — теряем файл, а не тейк: звук распознавателю идёт дальше.
+                    runCatching { w.write(chunk, n) }.onFailure {
+                        log("звук тейка: запись в файл оборвалась — ${it.javaClass.simpleName}: ${it.message}")
+                        runCatching { w.close() }
+                        tape = null
+                    }
+                }
                 val zero = allZero(chunk, n)
                 zeroMs = if (zero) zeroMs + n / BYTES_PER_MS else 0L
                 val db = if (zero) Double.NEGATIVE_INFINITY else dbfs(chunk, n)
@@ -398,6 +426,7 @@ class MicFeed private constructor(
             // Отпускает запись тот же поток, что читал: release посреди read роняет процесс.
             runCatching { record.stop() }
             runCatching { record.release() }
+            tape?.close()
             if (droppedBytes > 0) log("свой микрофон: распознаватель не читал — выброшено ${droppedBytes / BYTES_PER_MS / 1000} с старого звука")
         }
     }

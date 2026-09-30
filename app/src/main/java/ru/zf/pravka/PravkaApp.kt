@@ -280,6 +280,8 @@ class PravkaApp : Application() {
     val dictMiner by lazy { DictMiner(settings, httpClient, stats) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
+    /** Звук тейков Google — переразобрать фразу заново (30.09.2026). */
+    val takeAudio by lazy { ru.zf.pravka.data.TakeAudio(this) }
 
     // Засечка (timesheet): store, the Sheets mirror, phrase -> entry pipeline.
     // Правила разбора Засечки: набор, одобренный владельцем, едет в каждый

@@ -42,6 +42,11 @@ class TranscriptionLog(private val context: Context) {
          * Есть только у живых тейков Google.
          */
         health: TakeHealth? = null,
+        /**
+         * Звук тейка в `TakeAudio` — имя файла (30.09.2026): у расшифровки
+         * появляется значок «разобрать заново». null — звук не сохранён.
+         */
+        audio: String? = null,
     ) {
         // Queued off the main thread: this runs on the stop tap, right before the
         // text has to land in the field.
@@ -77,6 +82,7 @@ class TranscriptionLog(private val context: Context) {
                 if (mic != null) put("mic", mic)
                 if (stuck > 0) put("stuck", stuck)
                 if (offline != null) put("offline", offline)
+                if (audio != null) put("audio", audio)
             }
             file.appendText(entry.toString() + "\n")
         }
@@ -118,6 +124,8 @@ class TranscriptionLog(private val context: Context) {
         val stuck: Int = 0,
         /** Облако подвело, дослушивал офлайн-пакет: почему; null — не перекидывали. */
         val offline: String? = null,
+        /** Звук тейка в `TakeAudio` (имя файла); null — не сохранён. */
+        val audio: String? = null,
     ) {
         // >1 means slower than realtime, <1 faster. 0 when audio length unknown.
         val realtimeFactor: Double get() = if (audioMs > 0) transcribeMs.toDouble() / audioMs else 0.0
@@ -150,6 +158,7 @@ class TranscriptionLog(private val context: Context) {
                             mic = if (o.has("mic")) o.optString("mic") else null,
                             stuck = o.optInt("stuck", 0),
                             offline = if (o.has("offline")) o.optString("offline") else null,
+                            audio = if (o.has("audio")) o.optString("audio") else null,
                         )
                     }.getOrNull()
                 }

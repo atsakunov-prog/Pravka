@@ -63,7 +63,16 @@ class GoogleSpeechSession(
     // Тейк позван кнопкой гарнитуры: «чем нажал — тем и слушаем», гарнитура
     // при любом кружке микрофона (`core/HeadsetPress.phoneMic`).
     private val fromHeadset: Boolean = false,
+    // Куда писать звук тейка (`data/TakeAudio.kt`, 30.09.2026): пишет своя
+    // запись, так что без неё (выключена, путь не берёт наш звук) файла нет.
+    private val tape: java.io.File? = null,
 ) {
+    /** Звук тейка записывался своей записью в [tape]. */
+    @Volatile private var taped = false
+
+    /** Звук этого тейка в файле; null — своей записи не было, звук не сохранён. */
+    val audioFile: java.io.File? get() = if (taped) tape else null
+
     private val main = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
     private val finalized = StringBuilder()
@@ -482,7 +491,49 @@ class GoogleSpeechSession(
             else "системная по умолчанию — $system"
         }
 
-        private fun newRecognizer(context: Context, network: Boolean): SpeechRecognizer? = runCatching {
+
+        /**
+         * Общая часть интента распознавания: язык, гипотезы, форматирование,
+         * подсказки словаря. Одна на живой тейк и на переразбор файла
+         * (`SpeechReplay`): фраза, разобранная заново, разбирается так же.
+         */
+        internal fun recognizeIntent(language: String, biasing: List<String>, formatting: Boolean, offline: Boolean): Intent =
+            Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                // Офлайн-путь: только офлайн-движок. На сетевом флаг не ставим —
+                // иначе это тот же офлайн-пакет под другим именем.
+                if (offline) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    // The recognizer's own punctuation/caps: its word accuracy is
+                    // measurably better with the formatted pipeline, and CLEAN v1.9
+                    // distrusts source punctuation anyway (pause-periods rebuilt).
+                    if (formatting) {
+                        putExtra(
+                            RecognizerIntent.EXTRA_ENABLE_FORMATTING,
+                            RecognizerIntent.FORMATTING_OPTIMIZE_QUALITY,
+                        )
+                    }
+                    // A dictation tool must not censor: by default the recognizer
+                    // masks "offensive" words with asterisks.
+                    putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
+                    // Подсказки из контекста устройства (контакты, личный словарь) —
+                    // часть того, чем клавиатура Google «понятливее». По документации
+                    // распознаватель вправе флаг игнорировать; стоит он ноль.
+                    putExtra(RecognizerIntent.EXTRA_ENABLE_BIASING_DEVICE_CONTEXT, true)
+                    // Bias toward the owner's vocabulary (names, brands, terms).
+                    if (biasing.isNotEmpty()) {
+                        putStringArrayListExtra(
+                            RecognizerIntent.EXTRA_BIASING_STRINGS,
+                            ArrayList(biasing.take(100)),
+                        )
+                    }
+                }
+            }
+
+        internal fun newRecognizer(context: Context, network: Boolean): SpeechRecognizer? = runCatching {
             val explicit = serviceFor(context, network)
             when {
                 // Сетевой путь: сначала явная служба Google, иначе системная —
@@ -870,41 +921,7 @@ class GoogleSpeechSession(
     private val offlineIntent: Intent by lazy { buildBaseIntent(offline = true) }
     private val baseIntent: Intent get() = if (networkNow) cloudIntent else offlineIntent
 
-    private fun buildBaseIntent(offline: Boolean): Intent =
-        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            // Офлайн-путь: только офлайн-движок. На сетевом флаг не ставим —
-            // иначе это тот же офлайн-пакет под другим именем.
-            if (offline) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                // The recognizer's own punctuation/caps: its word accuracy is
-                // measurably better with the formatted pipeline, and CLEAN v1.9
-                // distrusts source punctuation anyway (pause-periods rebuilt).
-                if (formatting) {
-                    putExtra(
-                        RecognizerIntent.EXTRA_ENABLE_FORMATTING,
-                        RecognizerIntent.FORMATTING_OPTIMIZE_QUALITY,
-                    )
-                }
-                // A dictation tool must not censor: by default the recognizer
-                // masks "offensive" words with asterisks.
-                putExtra(RecognizerIntent.EXTRA_MASK_OFFENSIVE_WORDS, false)
-                // Подсказки из контекста устройства (контакты, личный словарь) —
-                // часть того, чем клавиатура Google «понятливее». По документации
-                // распознаватель вправе флаг игнорировать; стоит он ноль.
-                putExtra(RecognizerIntent.EXTRA_ENABLE_BIASING_DEVICE_CONTEXT, true)
-                // Bias toward the owner's vocabulary (names, brands, terms).
-                if (biasing.isNotEmpty()) {
-                    putStringArrayListExtra(
-                        RecognizerIntent.EXTRA_BIASING_STRINGS,
-                        ArrayList(biasing.take(100)),
-                    )
-                }
-            }
-        }
+    private fun buildBaseIntent(offline: Boolean): Intent = recognizeIntent(language, biasing, formatting, offline)
 
     /**
      * Интент этой сессии: общее — из [baseIntent], своё — источник звука.
@@ -1589,7 +1606,9 @@ class GoogleSpeechSession(
         // нажал на кнопку на наушниках — и он слушает, без всяких секунд»).
         f.setDevice(if (wantHeadset) MicRouting.headsetMic(am) else MicRouting.builtinMic(am))
         f.onLevel = { level -> main.post { levelSink?.let { sink -> runCatching { sink(level) } } } }
+        tape?.let { f.tapeTo(it) }
         if (!f.start()) return false
+        taped = tape != null
         feed = f
         health.fed = true
         headsetMic = wantHeadset

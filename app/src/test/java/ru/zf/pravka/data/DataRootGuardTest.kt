@@ -17,6 +17,7 @@ class DataRootGuardTest {
         "data/DataRoot.kt" to "сам решает, где база",
         "data/LiveDraft.kt" to "черновик тейка на лету — не база",
         "data/Recordings.kt" to "WAV на повтор пишется в реальном времени",
+        "data/TakeAudio.kt" to "звук тейков пишется в реальном времени, расходный архив",
         "provider/WhisperProvider.kt" to "модели Whisper скачиваются заново",
         "ReviewsTab.kt" to "файл-выгрузка для «поделиться», не данные",
     )
