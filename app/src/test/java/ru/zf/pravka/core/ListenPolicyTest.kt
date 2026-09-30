@@ -165,6 +165,22 @@ class ListenPolicyTest {
     }
 
     @Test
+    fun `кусок с парой слов на много секунд речи - сессия оглохла`() {
+        // Журнал 30.09, 10:28:04: 13,5 с речи — и 10 знаков. Дальше куски пустые.
+        assertTrue(ListenPolicy.fewWords(chars = 10, speechMs = 13_500))
+        // Этого одного хватает, чтобы поднять заново: копится вся речь куска.
+        assertTrue(ListenPolicy.stuck(13_500))
+        // Пустой кусок — без слов при любой речи.
+        assertTrue(ListenPolicy.fewWords(chars = 0, speechMs = 1_000))
+        // Живые куски того же утра: 67 знаков за 10,9 с, 212 за 21,9 с, самый тощий — 20 за 6,6 с.
+        assertFalse(ListenPolicy.fewWords(chars = 67, speechMs = 10_900))
+        assertFalse(ListenPolicy.fewWords(chars = 212, speechMs = 21_900))
+        assertFalse(ListenPolicy.fewWords(chars = 20, speechMs = 6_600))
+        // Короткий кусок по густоте не судим: «да» за три секунды — нормально.
+        assertFalse(ListenPolicy.fewWords(chars = 2, speechMs = ListenPolicy.THIN_MIN_SPEECH_MS - 1))
+    }
+
+    @Test
     fun `вход ушёл с наушников, а они на связи - это их кнопка, стоп со сказанным`() {
         // Владелец, 30.09: долгое нажатие в конце — «наушники отвалились», и ничего не ушло.
         val heard = 1_000_000L

@@ -80,6 +80,9 @@ class GoogleSpeechSession(
     private var hardErrorStreak = 0
     // Когда пришло последнее новое слово — от него считает сторож тишины.
     private var lastWordsAtMs = 0L
+
+    /** Когда пришёл последний ЗДОРОВЫЙ кусок — откат метки [lastWordsAtMs] после почти пустого. */
+    private var healthyWordsAtMs = 0L
     // Когда в последний раз звали startListening и сколько раз подряд сессия
     // кончалась, толком не начавшись. Тишина теперь поднимает сессию заново, и
     // это ровно та петля, которая в этом файле уже устраивала шторм: движок,
@@ -657,6 +660,7 @@ class GoogleSpeechSession(
             hardErrorStreak = 0
             startedAtMs = android.os.SystemClock.elapsedRealtime()
             lastWordsAtMs = startedAtMs
+            healthyWordsAtMs = startedAtMs
             health = TakeHealth(startedAtMs)
             startOffline?.let { health.toOffline(it) }
             quickSilences = 0
@@ -1028,8 +1032,18 @@ class GoogleSpeechSession(
             onLog("$tag final(${text.length}) shorter than watched partial(${watched.length}) - keeping partial")
             text = watched
         }
+        // Пара слов на много секунд речи — сессия оглохла (`ListenPolicy.fewWords`).
+        // Метку «последнее слово» тогда откатываем к последнему здоровому куску:
+        // повтор звука после подъёма разберёт проглоченную речь заново. Пара слов
+        // этого куска может повториться — это дешевле потерянных секунд речи.
+        val thin = text.isNotEmpty() && ListenPolicy.fewWords(text.length, speechSinceSegmentMs)
         if (text.isNotEmpty()) {
-            lastWordsAtMs = android.os.SystemClock.elapsedRealtime()
+            if (thin) {
+                lastWordsAtMs = healthyWordsAtMs
+            } else {
+                lastWordsAtMs = android.os.SystemClock.elapsedRealtime()
+                healthyWordsAtMs = lastWordsAtMs
+            }
             if (finalized.isNotEmpty()) finalized.append(' ')
             finalized.append(text)
             head = finalized.toString()
@@ -1045,11 +1059,14 @@ class GoogleSpeechSession(
         // One value, one write: onCheckpoint persists it and the caller mirrors
         // it to the ticker, so we don't also push it through onPartial.
         onCheckpoint(head)
-        // Застрял ли: речь с прошлого куска ушла в пустоту — копим; есть слова — счёт с нуля.
-        if (head.length > before) {
+        // Застрял ли: речь с прошлого куска ушла в пустоту или почти в пустоту —
+        // копим; слова пошли как надо — счёт с нуля.
+        val gained = head.length - before
+        if (!ListenPolicy.fewWords(gained, speechSinceSegmentMs)) {
             mutedSpeechMs = 0
             stuckRestarts = 0
         } else {
+            if (gained > 0) onLog("кусок почти пуст: $gained зн. за ${speechSinceSegmentMs / 1000} с речи — считаю как без слов")
             mutedSpeechMs += speechSinceSegmentMs
         }
         speechSinceSegmentMs = 0

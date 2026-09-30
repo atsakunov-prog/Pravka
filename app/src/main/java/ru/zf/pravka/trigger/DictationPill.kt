@@ -155,6 +155,8 @@ class DictationPill(
         private val PAPER = 0xFFF7F3EA.toInt()
         /** Как часто спрашивать клавиатуру, пока пилюля видна. */
         private const val POLL_MS = 400L
+        /** Строка обновляется не чаще: сглаживает движение она сама. */
+        private const val UPDATE_MIN_MS = 60L
         /** Меньше этого пилюля за клавиатурой не переезжает, dp. */
         private const val MOVE_DP = 3
         /** Долгое нажатие — как у кнопок на стекле. */
@@ -381,6 +383,14 @@ class DictationPill(
     private var pendingHint: String? = null
     private var lastText = ""
     private var lastAt = 0L
+    /**
+     * Текст, придержанный потолком частоты: его покажут, как только выйдет
+     * срок. Проглотить его нельзя — это может быть последнее слово перед
+     * паузой, и строка стояла бы без него до следующей фразы.
+     */
+    private var trailingText: String? = null
+    private val trailing = Runnable { trailingText?.let { t -> trailingText = null; update(t) } }
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private var level = 0f
     /** Где стоит этот показ — решено на показе, настройка действует со следующего. */
     private var place = PillGeometry.Place.TOP
@@ -468,6 +478,7 @@ class DictationPill(
         if (!already) micRoom = canSend && mic != null
         lastText = ""
         lastAt = 0L
+        dropTrailing()
         pendingText = null
         pendingHint = null
         if (root != null) {
@@ -517,8 +528,16 @@ class DictationPill(
         // [force] — для коротких надписей службы: их одна за тейк, и
         // проглотить её потолком частоты значит соврать о том, слышит движок
         // или ещё нет. Остальное — не чаще раза в 60 мс: строка всё равно
-        // сглаживает движение сама.
-        if (!force && now - lastAt < 60) return
+        // сглаживает движение сама. Придержанное не выбрасываем, а
+        // показываем по сроку — последнее перед паузой тоже.
+        if (!force && now - lastAt < UPDATE_MIN_MS) {
+            trailingText = text
+            main.removeCallbacks(trailing)
+            main.postDelayed(trailing, UPDATE_MIN_MS - (now - lastAt))
+            return
+        }
+        trailingText = null
+        main.removeCallbacks(trailing)
         lastAt = now
         lastText = text
         val tv = ticker
@@ -574,6 +593,7 @@ class DictationPill(
         root?.removeCallbacks(holdCheck)
         gen++
         stopPolling()
+        dropTrailing()
         pendingText = null
         pendingHint = null
         val b = body
@@ -1602,7 +1622,14 @@ class DictationPill(
         params = null
         lastText = ""
         lastAt = 0L
+        dropTrailing()
         manual = false
+    }
+
+    /** Придержанный текст прежнего показа новому не нужен. */
+    private fun dropTrailing() {
+        trailingText = null
+        main.removeCallbacks(trailing)
     }
 
     // ---- Отступы экрана: строка состояния сверху, клавиатура снизу ----
