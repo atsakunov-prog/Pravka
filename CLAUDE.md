@@ -349,7 +349,8 @@ CI (`.github/workflows/build-apk.yml`) собирает APK на каждый п
    Claude читает `settings.modelChoice(ModelRoute.X)`; дороги и заводские —
    `data/ModelRoutes.kt`. Заводские (с 22.09.2026 — Опус 5.5,
    `claude-opus-5-5`, усилие у него пишется явно: его «по умолчанию» —
-   medium): правка текста — medium, Засечка — xhigh, Еда (своя дорога
+   medium): правка текста — с 30.09.2026 Сонет 5.5 (`claude-sonnet-5-5`) на
+   high без размышлений («сильнее» и обучение — Опус medium), Засечка — xhigh, Еда (своя дорога
    `FOOD`) — xhigh, спорт (`BODY`) — medium, Дела — high, Деньги: голос (`MONEY`) — high,
    подсказки сверки (`MONEY_MATCH`) — xhigh, вопрос про деньги (`MONEY_ASK`) —
    high, паттерны трат (`MONEY_PATTERNS`) — xhigh; развилка Засечки
@@ -357,8 +358,10 @@ CI (`.github/workflows/build-apk.yml`) собирает APK на каждый п
    проверка, правка промпта, судья, сверка паттернов) — Опус 5.5 на max
    батчами; подсказки тренера — Сонет. Разборы режимов — со стабильным
    префиксом под часовым кэшем (словарь `{DICT}` — в переменном хвосте).
-   `thinking: disabled` — только Сонету и только до high (`RequestPolicy`):
-   Опусу 5.5 и Fable явное «disabled» — это 400 на любом усилии.
+   Мысли выключаются только Сонету и только до high, словом из
+   `RequestPolicy.thinkingOffType`: Сонету 5.5 — `between_tools` (`disabled`
+   у него 400), прежнему Сонету 5 — `disabled`; Опусу 5.5 и Fable явное
+   «disabled» — это 400 на любом усилии, им поле не передаётся.
 8. **Подпись — только `keystore/pravka.jks`.** Прокси на VPS не делаем. Своей
    камеры не открываем (системный интент и сканер Play Services).
 9. **intervals.icu:** поля `fatTotal` и `icu_rpe`; `optString` у JSON null

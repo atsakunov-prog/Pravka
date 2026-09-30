@@ -114,8 +114,11 @@ private fun sec(ms: Number): String = String.format(RU, "%.1f", ms.toDouble() / 
 private fun examplesLine(v: PaceStore.View): String =
     v.examples.joinToString(" · ") { (chars, ms) -> "$chars зн. — ${sec(ms)}" } + " с"
 
-private fun modelName(model: String): String =
-    if (model == Settings.MODEL_OPUS_5) "Опус 5" else Models.label(model)
+private fun modelName(model: String): String = when (model) {
+    Settings.MODEL_OPUS_5 -> "Опус 5"
+    Settings.MODEL_SONNET_5 -> "Сонет 5"
+    else -> Models.label(model)
+}
 
 /** Вид запроса словами: «вопрос» у Тела — вопрос тренеру, «ответ» у Денег — ответ на карточку. */
 private fun kindTitle(kind: String, photo: Boolean): String {
@@ -175,7 +178,7 @@ private fun SecondsCard(app: PravkaApp, round: Int, onTuned: () -> Unit) {
     ) {
         Text("Модели между собой — по журналу правок, 1862 чистки:", style = MaterialTheme.typography.bodyMedium)
         val rows = listOf(
-            Triple(Settings.MODEL_SONNET, "high", "размышлений нет"),
+            Triple(Settings.MODEL_SONNET_5, "high", "размышлений нет; Сонет 5.5 начинает с неё"),
             Triple(Settings.MODEL_OPUS_5, "high", "усилие менялось"),
             Triple(Settings.MODEL_OPUS, "medium", "думает"),
             Triple(Settings.MODEL_FABLE, "high", "прикидка, своих замеров нет"),

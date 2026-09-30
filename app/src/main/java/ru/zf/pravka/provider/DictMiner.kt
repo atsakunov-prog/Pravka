@@ -72,8 +72,8 @@ $samples
                     if (choice.effort.isNotBlank()) {
                         put("output_config", JSONObject().put("effort", choice.effort))
                     }
-                    if (RequestPolicy.thinkingOff(choice.model, choice.effort)) {
-                        put("thinking", JSONObject().put("type", "disabled"))
+                    RequestPolicy.thinkingOffType(choice.model, choice.effort)?.let {
+                        put("thinking", JSONObject().put("type", it))
                     }
                     put(
                         "messages",

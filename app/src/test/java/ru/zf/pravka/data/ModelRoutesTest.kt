@@ -27,9 +27,9 @@ class ModelRoutesTest {
     @Test
     fun `заводские — Опус 5_5 с усилиями владельца от 22_09`() {
         assertEquals("claude-opus-5-5", Settings.MODEL_OPUS)
-        // Правка и спорт — medium, засечка и еда — xhigh, Дела держат high.
+        // Спорт — medium, засечка и еда — xhigh, Дела держат high. Чистка с
+        // 30.09 — на Сонете 5.5 (ниже), «сильнее» и обучение остались на Опусе.
         val expected = mapOf(
-            ModelRoute.PRAVKA to "medium",
             ModelRoute.PRAVKA_STRONG to "medium",
             ModelRoute.PRAVKA_LEARN to "medium",
             ModelRoute.ZASECHKA to "xhigh",
@@ -55,6 +55,24 @@ class ModelRoutesTest {
         // Fable нигде не заводской, но остаётся в каталоге выбора.
         assertTrue(ModelRoute.entries.none { it.defaultModel == Settings.MODEL_FABLE })
         assertTrue(Settings.MODEL_FABLE in Models.ALL)
+    }
+
+    @Test
+    fun `чистка — Сонет 5_5 на high от 30_09`() {
+        assertEquals("claude-sonnet-5-5", Settings.MODEL_SONNET)
+        assertEquals(Settings.MODEL_SONNET, ModelRoute.PRAVKA.defaultModel)
+        assertEquals("high", ModelRoute.PRAVKA.defaultEffort)
+        assertEquals("Сонет 5.5", Models.label(Settings.MODEL_SONNET))
+        // Прежний Сонет из каталога выбора ушёл.
+        assertFalse(Settings.MODEL_SONNET_5 in Models.ALL)
+    }
+
+    @Test
+    fun `явный Сонет 5 в хранилище читается как Сонет 5_5, не как заводская`() {
+        // Засечка на Опусе по заводской: явный Сонет — выбор владельца, он и остаётся Сонетом.
+        val c = ModelChoice.of(ModelRoute.ZASECHKA, Settings.MODEL_SONNET_5, "medium")
+        assertEquals(Settings.MODEL_SONNET, c.model)
+        assertEquals("medium", c.effort)
     }
 
     @Test
@@ -90,8 +108,8 @@ class ModelRoutesTest {
     @Test
     fun `модель не из каталога откатывается к заводской, а не уезжает в запрос`() {
         val c = ModelChoice.of(ModelRoute.PRAVKA, "claude-3-opus-20240229", "turbo")
-        assertEquals(Settings.MODEL_OPUS, c.model)
-        assertEquals("medium", c.effort)
+        assertEquals(Settings.MODEL_SONNET, c.model)
+        assertEquals("high", c.effort)
     }
 
     @Test

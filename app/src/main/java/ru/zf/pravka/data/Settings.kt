@@ -22,7 +22,11 @@ class Settings(private val context: Context) {
     companion object {
         // Каталог моделей. Кто где работает — не здесь: заводские значения
         // дорог лежат в ModelRoute, выбор владельца читается modelChoice().
-        const val MODEL_SONNET = "claude-sonnet-5"
+        const val MODEL_SONNET = "claude-sonnet-5-5"
+        // Прежний Сонет (до 30.09.2026): не в каталоге выбора, но живёт в
+        // хранилище старых сборок, в журналах и в батчах, отправленных до
+        // обновления.
+        const val MODEL_SONNET_5 = "claude-sonnet-5"
         const val MODEL_OPUS = "claude-opus-5-5"
         // Прежний Опус (до 22.09.2026): не в каталоге выбора, но живёт в
         // хранилище старых сборок и в батчах, отправленных до обновления.
@@ -63,6 +67,7 @@ class Settings(private val context: Context) {
         private val KEY_NIGHT_BUDGET = intPreferencesKey("night_budget_usd")
         private val KEY_MIGRATED_OPUS = booleanPreferencesKey("migrated_pravka_opus_1")
         private val KEY_MIGRATED_OPUS_55 = booleanPreferencesKey("migrated_opus_5_5")
+        private val KEY_MIGRATED_PRAVKA_SONNET_55 = booleanPreferencesKey("migrated_pravka_sonnet_5_5")
         private val KEY_MIGRATED_SPEECH_NET = booleanPreferencesKey("migrated_speech_network_1")
         private val KEY_PLAN_RULES_LAST_RUN = longPreferencesKey("plan_rules_last_run")
         // Когда служба последний раз перезапускала сама себя из-за невидимых окон (OverlayWatch).
@@ -475,7 +480,7 @@ class Settings(private val context: Context) {
             if (p[KEY_MIGRATED_OPUS] == true) return@edit
             p[KEY_MIGRATED_OPUS] = true
             val key = modelKey(ModelRoute.PRAVKA)
-            if (p[key] == null || p[key] == MODEL_SONNET) p[key] = MODEL_OPUS
+            if (p[key] == null || p[key] == MODEL_SONNET_5) p[key] = MODEL_OPUS
         }
     }
 
@@ -500,6 +505,25 @@ class Settings(private val context: Context) {
                     p.remove(effortKey(route))
                 }
             }
+        }
+    }
+
+    /**
+     * Разовая миграция 30.09.2026: чистка — на Сонет 5.5. Владелец: «надо
+     * заменить Сонет 5 на Сонет 5.5. И давай сделаем его дефолтным для правки
+     * пока». Заводская дороги поменялась в ModelRoutes, но в хранилище у
+     * чистки лежит явный Опус — от [migratePravkaToOpus] или от веера, — и он
+     * сильнее любой заводской. Снимается один раз, вместе с усилием (у Опуса
+     * medium, у Сонета заводское high); дальше выбор владельца не трогаем.
+     * Стоит после двух прежних: на чистой установке первая из них кладёт
+     * Опус, а эта его снимает.
+     */
+    suspend fun migratePravkaToSonnet55() {
+        context.dataStore.edit { p ->
+            if (p[KEY_MIGRATED_PRAVKA_SONNET_55] == true) return@edit
+            p[KEY_MIGRATED_PRAVKA_SONNET_55] = true
+            p.remove(modelKey(ModelRoute.PRAVKA))
+            p.remove(effortKey(ModelRoute.PRAVKA))
         }
     }
 

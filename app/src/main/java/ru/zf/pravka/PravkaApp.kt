@@ -75,10 +75,13 @@ class PravkaApp : Application() {
         appScope.launch { settings.speechOwnMicFlow.collect { speechOwnMic = it } }
         appScope.launch { settings.readyChimeFlow.collect { readyChime = it } }
         // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет;
-        // затем все дороги Опуса и Fable — на Опус 5.5 с новыми усилиями (22.09).
+        // затем все дороги Опуса и Fable — на Опус 5.5 с новыми усилиями (22.09);
+        // затем чистка — на Сонет 5.5 (30.09). Порядок важен: последняя снимает
+        // Опус, который первая кладёт на чистой установке.
         appScope.launch {
             runCatching { settings.migratePravkaToOpus() }
             runCatching { settings.migrateToOpus55() }
+            runCatching { settings.migratePravkaToSonnet55() }
         }
         // Распознавание — по сетевому пути Google (22.09.2026): владелец выбрал
         // облачный движок главным, а лежащее в DataStore старое «офлайн»

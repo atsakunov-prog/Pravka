@@ -104,6 +104,8 @@ suspend fun ClaudeProvider.submitBatch(
             // maxTokens=2000 без запаса, и на max ответ обрезался бы весь.
             put("max_tokens", maxTokens + RequestPolicy.batchThinkingHeadroom(model, effort))
             if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
+            // Запас выше считан без мыслей у Сонета — значит, и выключить их надо.
+            RequestPolicy.thinkingOffType(model, effort)?.let { put("thinking", JSONObject().put("type", it)) }
             put("system", JSONArray().put(JSONObject().apply {
                 put("type", "text")
                 put("text", system)

@@ -70,12 +70,17 @@ object PaceSeed {
     private val SONNET = Guess(1_930.0, 4.5, "high")
     private val FABLE = Guess(1_800.0, 9.0, "high")
 
+    // Сонет 5.5 (30.09.2026) своих замеров ещё не имеет и начинает с прямой
+    // Сонета 5: та же линейка, те же цены, и оба отвечают без размышлений.
     private val BY_MODEL = mapOf(
         Settings.MODEL_OPUS to OPUS,
         Settings.MODEL_OPUS_5 to OPUS_5,
         Settings.MODEL_SONNET to SONNET,
+        Settings.MODEL_SONNET_5 to SONNET,
         Settings.MODEL_FABLE to FABLE,
     )
+
+    private val SONNETS = setOf(Settings.MODEL_SONNET, Settings.MODEL_SONNET_5)
 
     /**
      * Незнакомая модель — как Сонет: из трёх заводских дорог он посередине, и
@@ -95,14 +100,14 @@ object PaceSeed {
     fun effortFactor(model: String, effort: String): Double {
         val e = Models.effectiveEffort(model, effort)
         // Сонет до high отвечает без размышлений — усилие ему время не меняет.
-        if (model == Settings.MODEL_SONNET && e !in setOf("xhigh", "max")) return 1.0
+        if (model in SONNETS && e !in setOf("xhigh", "max")) return 1.0
         return when (e) {
             "low" -> 0.6
             "medium" -> 0.8
             "xhigh" -> 1.5
             "max" -> 2.2
             else -> 1.0
-        } * if (model == Settings.MODEL_SONNET) 2.0 else 1.0
+        } * if (model in SONNETS) 2.0 else 1.0
     }
 
     /** Прямая модели на усилии [effort]: снятая строка, растянутая от своего усилия к нужному. */

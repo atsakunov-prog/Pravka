@@ -725,7 +725,7 @@ $listing
     // договору — до суток). Для ночного разбора это ровно тот случай, когда
     // ждать нечего и скидка достаётся даром.
     //
-    // temperature здесь НЕ передаётся сознательно: на Opus 5 и Sonnet 5
+    // temperature здесь НЕ передаётся сознательно: на Opus 5.5 и Sonnet 5.5
     // параметры сэмплирования удалены и запрос с ними отвергается с 400.
     // Глубину задаёт output_config.effort, а не температура.
 
@@ -937,9 +937,10 @@ $listing
             // добавляют секунды и деньги. Вне Сонета параметр опускается:
             // адаптивные мысли — поведение по умолчанию, явное «disabled» на
             // Опусе имеет документированные сбои, а на Fable — это 400.
-            // Усилие xhigh/max включает мысли и Сонету (см. RequestPolicy).
-            if (thinkingOff) {
-                put("thinking", JSONObject().put("type", "disabled"))
+            // Усилие xhigh/max включает мысли и Сонету; каким словом их
+            // выключать (у Сонета 5.5 — between_tools) — тоже RequestPolicy.
+            RequestPolicy.thinkingOffType(model, effortOverride)?.let {
+                put("thinking", JSONObject().put("type", it))
             }
             put(
                 "messages",
@@ -954,7 +955,7 @@ $listing
                                 // invalidate the cache on every dictation. 1h TTL:
                                 // the owner's real gaps between fixes run up to ~30
                                 // min, which the default 5m TTL would keep missing.
-                                // Below Sonnet's 1024-token minimum it is a no-op.
+                                // Below the model's cache minimum (512 tokens on Sonnet 5.5) it is a no-op.
                                 // Assist tasks have no stable prefix - an empty text
                                 // block would be rejected by the API, so skip it.
                                 if (parts.stablePrefix.isNotBlank()) put(

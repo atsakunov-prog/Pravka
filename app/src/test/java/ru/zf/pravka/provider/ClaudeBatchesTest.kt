@@ -45,7 +45,9 @@ class ClaudeBatchesTest {
         assertEquals(RequestPolicy.maxTokens(Settings.MODEL_OPUS, "", parts.dictPart.length + "текст диктовки".length), p.getInt("max_tokens"))
 
         val sonnet = ClaudeBatches.cleanParams(Settings.MODEL_SONNET, "", parts, "текст", cache = false)
-        assertEquals("disabled", sonnet.getJSONObject("thinking").getString("type"))
+        // Сонет 5.5: «disabled» у него — 400, самое низкое положение — between_tools.
+        assertEquals("between_tools", sonnet.getJSONObject("thinking").getString("type"))
+        assertEquals(1, sonnet.getJSONObject("thinking").length())
         assertFalse(sonnet.getJSONArray("messages").getJSONObject(0).getJSONArray("content").getJSONObject(0).has("cache_control"))
     }
 
@@ -59,9 +61,13 @@ class ClaudeBatchesTest {
     @Test
     fun `параметры для Сонета — thinking выключен`() {
         val p = ClaudeBatches.params(Settings.MODEL_SONNET, "", 2000, "", "вопрос")
-        assertEquals("disabled", p.getJSONObject("thinking").getString("type"))
+        assertEquals("between_tools", p.getJSONObject("thinking").getString("type"))
         assertFalse(p.has("output_config"))
         assertFalse(p.has("system"))
+        // На xhigh between_tools — 400: мысли включены, поле не передаётся.
+        assertFalse(ClaudeBatches.params(Settings.MODEL_SONNET, "xhigh", 2000, "", "вопрос").has("thinking"))
+        // Прежний Сонет 5 (батч, собранный старой сборкой) понимает только disabled.
+        assertEquals("disabled", ClaudeBatches.params(Settings.MODEL_SONNET_5, "", 2000, "", "вопрос").getJSONObject("thinking").getString("type"))
     }
 
     @Test

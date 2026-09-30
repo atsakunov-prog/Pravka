@@ -32,9 +32,13 @@ object ComparePolicy {
 
     data class Arm(val key: String, val label: String, val model: String, val effort: String)
 
-    /** Плечи фиксированы — владелец так и просил: «сравнивай всегда» эти три. */
+    /**
+     * Плечи фиксированы — владелец так и просил: «сравнивай всегда» эти три.
+     * Сонет — нынешний, 5.5 с 30.09.2026: сравнение отвечает на вопрос,
+     * какую модель ставить на чистку сейчас, а не какая была.
+     */
     val ARMS = listOf(
-        Arm("sonnet", "Сонет 5", Settings.MODEL_SONNET, ""),
+        Arm("sonnet", "Сонет 5.5", Settings.MODEL_SONNET, ""),
         Arm("opus", "Опус 5.5", Settings.MODEL_OPUS, ""),
         Arm("opus_low", "Опус 5.5 low", Settings.MODEL_OPUS, "low"),
     )
@@ -200,10 +204,21 @@ object ComparePolicy {
         return out
     }
 
+    /**
+     * Прежние названия плеч: примеры прогонов до смены модели записаны под
+     * ними. Показываются под своим старым именем — текст Сонета 5 не
+     * подписывается Сонетом 5.5.
+     */
+    private val OLD_LABELS = mapOf("sonnet" to listOf("Сонет 5"))
+
     /** Тексты плеч из `Change.to` примера (JSON {название плеча: текст}) — в порядке плеч, пустые пропущены. */
     fun armTexts(toJson: String): List<Pair<String, String>> {
         val o = runCatching { JSONObject(toJson) }.getOrNull() ?: return emptyList()
-        return ARMS.mapNotNull { a -> o.optString(a.label).takeIf { it.isNotBlank() }?.let { a.label to it } }
+        return ARMS.mapNotNull { a ->
+            (listOf(a.label) + OLD_LABELS[a.key].orEmpty()).firstNotNullOfOrNull { name ->
+                o.optString(name).takeIf { it.isNotBlank() }?.let { name to it }
+            }
+        }
     }
 
     // ---- хранение ----

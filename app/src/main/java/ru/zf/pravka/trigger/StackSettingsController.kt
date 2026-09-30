@@ -704,13 +704,21 @@ class StackSettingsController(
      * Модель чистки: «включено» — Опус (или что-то сильнее Сонета, если
      * владелец поставил Fable в настройках), «выключено» — Сонет. Тап меняет
      * на противоположное: с сильной — на Сонет, с Сонета — на Опус.
+     *
+     * Вместе с моделью — её усилие чистки: Опус — medium, Сонет — high. С
+     * 30.09.2026 заводская чистки — Сонет на high, и Опус, включённый одной
+     * моделью, унаследовал бы high: думал бы дольше и дороже того Опуса на
+     * medium, которым чистка работала до этого.
      */
     private fun flipModel() {
         val next = if (strongModel) Settings.MODEL_SONNET else Settings.MODEL_OPUS
         strongModel = next != Settings.MODEL_SONNET
         modelLabel = Models.label(next)
         paintKnob(Knob.MODEL)
-        scope.launch { settings.setModel(ModelRoute.PRAVKA, next) }
+        scope.launch {
+            settings.setModel(ModelRoute.PRAVKA, next)
+            settings.setEffort(ModelRoute.PRAVKA, if (next == Settings.MODEL_OPUS) "medium" else "high")
+        }
         Haptics.start(service)
         service.app.eventLog.add("чистка: модель ${Models.label(next)} (кружок шестерёнки)")
         showNote("Чистка: ${Models.label(next)}")

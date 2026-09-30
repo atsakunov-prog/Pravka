@@ -33,6 +33,28 @@ class RequestPolicyTest {
     }
 
     @Test
+    fun `чем выключать мысли — between_tools Сонету 5_5, disabled прежнему Сонету 5, остальным ничего`() {
+        // Сонет 5.5 на «disabled» отвечает 400 — это была бы каждая чистка.
+        for (e in listOf("", "low", "medium", "high", " high ")) {
+            assertEquals(e, "between_tools", RequestPolicy.thinkingOffType(Settings.MODEL_SONNET, e))
+            assertEquals(e, "disabled", RequestPolicy.thinkingOffType(Settings.MODEL_SONNET_5, e))
+        }
+        // between_tools на xhigh/max — тоже 400: там мысли включены, поле опускается.
+        for (e in listOf("xhigh", "max")) {
+            assertEquals(e, null, RequestPolicy.thinkingOffType(Settings.MODEL_SONNET, e))
+            assertEquals(e, null, RequestPolicy.thinkingOffType(Settings.MODEL_SONNET_5, e))
+        }
+        // Никакая другая модель between_tools не принимает, а Опусу 5.5 и Fable 400 и за disabled.
+        for (m in listOf(Settings.MODEL_OPUS, Settings.MODEL_OPUS_5, Settings.MODEL_FABLE)) {
+            for (e in listOf("", "low", "medium", "high", "xhigh", "max")) {
+                assertEquals("$m/$e", null, RequestPolicy.thinkingOffType(m, e))
+            }
+        }
+        // Прежний Сонет без мыслей — и без запаса под них.
+        assertEquals(0, RequestPolicy.thinkingHeadroom(Settings.MODEL_SONNET_5, "high"))
+    }
+
+    @Test
     fun `бюджет ответа — по длине переменной части, с полом и потолком`() {
         // 1000 знаков → ~500 токенов, +30 % и 300 — ниже пола 1024.
         assertEquals(1024, RequestPolicy.maxTokens(Settings.MODEL_SONNET, "", 1000))

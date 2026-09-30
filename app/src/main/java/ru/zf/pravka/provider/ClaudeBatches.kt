@@ -94,7 +94,7 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
                 put("model", model)
                 put("max_tokens", maxTokens + RequestPolicy.batchThinkingHeadroom(model, effort))
                 if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
-                if (RequestPolicy.thinkingOff(model, effort)) put("thinking", JSONObject().put("type", "disabled"))
+                RequestPolicy.thinkingOffType(model, effort)?.let { put("thinking", JSONObject().put("type", it)) }
                 if (system.isNotBlank()) {
                     if (cacheSystem) {
                         put(
@@ -129,7 +129,7 @@ class ClaudeBatches(private val settings: Settings, private val client: OkHttpCl
                 put("model", model)
                 put("max_tokens", RequestPolicy.maxTokens(model, effort, parts.dictPart.length + input.length))
                 if (effort.isNotBlank()) put("output_config", JSONObject().put("effort", effort))
-                if (RequestPolicy.thinkingOff(model, effort)) put("thinking", JSONObject().put("type", "disabled"))
+                RequestPolicy.thinkingOffType(model, effort)?.let { put("thinking", JSONObject().put("type", it)) }
                 val content = JSONArray()
                 if (parts.stablePrefix.isNotBlank()) content.put(
                     JSONObject().apply {
