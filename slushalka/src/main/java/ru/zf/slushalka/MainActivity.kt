@@ -141,6 +141,9 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         app.state.syncPull()
+        // Оглавление библиотеки на сервере: по нему и полка «В библиотеке», и
+        // метки «есть на сервере» на телефонной. Свежее пяти минут не трогаем.
+        if (app.settings.now().cloudReady) app.scope.launch { app.server.refreshIfStale(5 * 60_000L) }
         // Сам Updater не спрашивает чаще раза в полчаса.
         app.scope.launch { app.updater.check(manual = false) }
     }
@@ -195,10 +198,12 @@ class MainActivity : ComponentActivity() {
         // полки, - только без полки. Уже открытая не переоткрывается.
         val asked by continueAsked.collectAsState()
         val books by state.books.collectAsState()
-        LaunchedEffect(asked, books) {
-            if (!asked || books.isEmpty()) return@LaunchedEffect
+        val serverBooks by state.serverBooks.collectAsState()
+        LaunchedEffect(asked, books, serverBooks) {
+            if (!asked || (books.isEmpty() && serverBooks.isEmpty())) return@LaunchedEffect
             continueAsked.value = false
-            val last = books.firstOrNull { it.id == app.positions.lastBook() } ?: return@LaunchedEffect
+            // Последняя книга могла быть и с сервера, не с полки.
+            val last = state.bookById(app.positions.lastBook()) ?: return@LaunchedEffect
             if (current?.id == last.id) {
                 screen = if (last.hasAudio) Screen.PLAYER else Screen.READER
             } else {
@@ -209,10 +214,10 @@ class MainActivity : ComponentActivity() {
         // Вопрос голосом: книга та, что играет или была последней; вопрос - с
         // микрофоном сразу. Книгу без записи спрашиваем с места чтения.
         val voice by voiceAsked.collectAsState()
-        LaunchedEffect(voice, books) {
-            if (!voice || books.isEmpty()) return@LaunchedEffect
+        LaunchedEffect(voice, books, serverBooks) {
+            if (!voice || (books.isEmpty() && serverBooks.isEmpty())) return@LaunchedEffect
             voiceAsked.value = false
-            val book = current ?: books.firstOrNull { it.id == app.positions.lastBook() } ?: return@LaunchedEffect
+            val book = current ?: state.bookById(app.positions.lastBook()) ?: return@LaunchedEffect
             if (current?.id != book.id) openBook(book)
             askAtChar = if (book.hasAudio) null else state.stateOf(book.id).readChar.coerceAtLeast(0)
             askPrefill = null

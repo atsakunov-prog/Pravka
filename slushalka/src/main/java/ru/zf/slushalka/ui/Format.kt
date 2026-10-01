@@ -53,3 +53,10 @@ fun formatAgo(at: Long): String {
         else -> formatDate(at)
     }
 }
+
+/** Объём передачи по-человечески: «738 МБ», «1,4 ГБ». */
+fun formatBytes(bytes: Long): String = when {
+    bytes >= 1L shl 30 -> "%.1f ГБ".format(bytes / (1L shl 30).toDouble())
+    bytes >= 1L shl 20 -> "${bytes shr 20} МБ"
+    else -> "${(bytes shr 10).coerceAtLeast(1)} КБ"
+}

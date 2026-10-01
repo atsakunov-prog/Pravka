@@ -222,7 +222,7 @@ fun PlayerScreen(
                         // Те же слова, что в читалке: одна вещь - одно имя на обоих экранах.
                         TextButton(onClick = { showChapters = true }) { Text("Содержание") }
                         TextButton(onClick = { showMarks = true }) { Text("Закладки") }
-                        if (b.textDocId != null) {
+                        if (b.hasText) {
                             TextButton(onClick = { showRecap = true }) {
                                 Text("Напомнить")
                             }
@@ -241,11 +241,11 @@ fun PlayerScreen(
                             modifier = Modifier.weight(1f).height(54.dp),
                         ) {
                             Text(
-                                if (b.textDocId != null) "Спросить" else "Спросить (нет текста)",
+                                if (b.hasText) "Спросить" else "Спросить (нет текста)",
                                 style = MaterialTheme.typography.titleMedium,
                             )
                         }
-                        if (b.textDocId != null) {
+                        if (b.hasText) {
                             OutlinedButton(
                                 onClick = onRead,
                                 modifier = Modifier.weight(1f).height(54.dp),
@@ -257,7 +257,7 @@ fun PlayerScreen(
 
                     // Разметка: без неё переход между звуком и текстом
                     // приблизительный, с ней - мгновенный и точный.
-                    val needsMarkup = b.textDocId != null && alignment != null &&
+                    val needsMarkup = b.hasText && alignment != null &&
                         !state.isMarkedUp() && app.recognizer.supported
                     if (markup != null || needsMarkup) {
                         Spacer(Modifier.height(12.dp))

@@ -1,6 +1,8 @@
 package ru.zf.slushalka.ui
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -52,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
@@ -62,6 +65,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.zf.slushalka.SlushalkaApp
 import kotlinx.coroutines.launch
+import ru.zf.slushalka.data.ServerLibrary
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
 
@@ -81,7 +85,12 @@ fun LibraryScreen(
 ) {
     val state = app.state
     val books by state.books.collectAsState()
+    val serverBooks by state.serverBooks.collectAsState()
+    val index by app.server.index.collectAsState()
+    val serverStatus by app.server.status.collectAsState()
+    val transfer by app.cloudBooks.transfer.collectAsState()
     val busy by state.busy.collectAsState()
+    val notice by state.notice.collectAsState()
     val others by state.others.collectAsState()
     val offer by state.resumeOffer.collectAsState()
     val rev by state.positionsRev.collectAsState()
@@ -90,6 +99,24 @@ fun LibraryScreen(
     val scope = rememberCoroutineScope()
     var shelf by rememberSaveable { mutableStateOf(Shelf.ALL) }
     var menuFor by remember { mutableStateOf<Book?>(null) }
+    var serverMenu by remember { mutableStateOf<ServerEntry?>(null) }
+    var deleteAsk by remember { mutableStateOf<Book?>(null) }
+
+    // Переключатель «На телефоне / В библиотеке» есть, когда настроено облако:
+    // библиотека - это его оглавление. Без облака полка - только телефон.
+    val serverOn = prefs.cloudReady
+    val inServer = serverOn && prefs.libraryView == Settings.VIEW_SERVER
+    LaunchedEffect(inServer) {
+        // Открыл библиотеку - свежее оглавление; минуту назад уже брали - хватит.
+        // В области приложения, а не экрана: ушёл с полки - запрос доходит.
+        if (inServer) app.scope.launch { app.server.refreshIfStale() }
+    }
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            kotlinx.coroutines.delay(4_000)
+            state.dismissNotice()
+        }
+    }
 
     // Напомнить с полки: книга открывается, и экран, куда она попала, сам
     // показывает пересказ до места, где остановились.
@@ -98,15 +125,37 @@ fun LibraryScreen(
         onOpen(book)
     }
 
+    // Телефон и сервер узнают одну книгу по имени папки, без учёта регистра.
+    val localByFolder = remember(books) {
+        books.groupBy { ServerLibrary.folderKey(it.folderName) }.mapValues { it.value.first() }
+    }
+    val entries = remember(serverBooks, localByFolder) {
+        serverBooks.map { ServerEntry(it, localByFolder[ServerLibrary.folderKey(it.folderName)]) }
+    }
+    /** Что о книге на телефоне знает сервер: метка под обложкой. null - сервера нет. */
+    fun phonePlace(book: Book): String? {
+        val idx = index ?: return null
+        return when {
+            idx.byFolder(book.folderName) == null -> "только на телефоне"
+            book.streams -> "звук на сервере"
+            else -> "есть на сервере"
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
                         Text("Слушалка")
-                        if (books.isNotEmpty()) {
+                        val sub = when {
+                            inServer && index != null -> booksWord(serverBooks.size, "в библиотеке")
+                            !inServer && books.isNotEmpty() -> booksWord(books.size, "на полке")
+                            else -> null
+                        }
+                        if (sub != null) {
                             Text(
-                                booksWord(books.size),
+                                sub,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -124,8 +173,14 @@ fun LibraryScreen(
                     IconButton(onClick = onCloud) {
                         Icon(Glyphs.Cloud, contentDescription = "Облако")
                     }
-                    IconButton(onClick = { state.rescan() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Перечитать папку")
+                    // В библиотеке - свежее оглавление сервера, на телефоне - папка.
+                    IconButton(onClick = {
+                        if (inServer) app.scope.launch { app.server.refresh() } else state.rescan()
+                    }) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = if (inServer) "Обновить библиотеку" else "Перечитать папку",
+                        )
                     }
                     IconButton(onClick = onSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Настройки")
@@ -133,7 +188,12 @@ fun LibraryScreen(
                 },
             )
         },
-        bottomBar = { busy?.let { BusyBar(it) } },
+        bottomBar = {
+            when {
+                busy != null -> BusyBar(busy!!)
+                notice != null -> NoticeBar(notice!!) { state.dismissNotice() }
+            }
+        },
     ) { padding ->
         if (!prefs.loaded) return@Scaffold
         if (prefs.libraryUri.isBlank()) {
@@ -142,105 +202,191 @@ fun LibraryScreen(
         }
 
         // Последняя книга - наверх и крупно: в девяти случаях из десяти
-        // приложение открывают, чтобы продолжить именно её.
+        // приложение открывают, чтобы продолжить именно её. Она могла быть и
+        // с сервера - ищется в обоих списках.
         val lastId = app.positions.lastBook()
-        val last = books.firstOrNull { it.id == lastId }
-        val progress = remember(books, rev) { books.associate { it.id to progressOf(app, it) } }
-        val counts = remember(progress) {
-            Shelf.entries.associateWith { sh -> books.count { sh.holds(progress.getValue(it.id)) } }
+        val last = remember(books, serverBooks, lastId) { state.bookById(lastId) }
+        val shownBooks: List<Book> = if (inServer) entries.map { it.shown } else books
+        val progress = remember(shownBooks, last, rev) {
+            (shownBooks + listOfNotNull(last)).associate { it.id to progressOf(app, it) }
         }
-        val shown = remember(books, progress, shelf, last) {
-            books.filter { it.id != last?.id && shelf.holds(progress.getValue(it.id)) }
+        val counts = remember(progress, shownBooks) {
+            Shelf.entries.associateWith { sh -> shownBooks.count { sh.holds(progress.getValue(it.id)) } }
+        }
+        val shown = remember(shownBooks, progress, shelf, last) {
+            shownBooks.filter { it.id != last?.id && shelf.holds(progress.getValue(it.id)) }
                 .sortedWith(shelfOrder(progress))
         }
+        val entryOf = remember(entries) { entries.associateBy { it.shown.id } }
 
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(TILE_MIN),
+        Refreshable(
+            enabled = inServer && !prefs.readerEink,
+            refreshing = serverStatus == ServerLibrary.Status.Loading,
+            onRefresh = { app.scope.launch { app.server.refresh() } },
             modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            // Новая версия - первой строкой: чтобы обновиться, не надо ничего
-            // никуда закидывать, довольно одной кнопки.
-            (update as? ru.zf.slushalka.update.Updater.Status.Ready)?.let { ready ->
-                item(key = "update", span = { GridItemSpan(maxLineSpan) }) {
-                    UpdateCard(ready.update.versionName) {
-                        scope.launch { app.updater.downloadAndInstall(ready.update) }
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(TILE_MIN),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                // Новая версия - первой строкой: чтобы обновиться, не надо ничего
+                // никуда закидывать, довольно одной кнопки.
+                (update as? ru.zf.slushalka.update.Updater.Status.Ready)?.let { ready ->
+                    item(key = "update", span = { GridItemSpan(maxLineSpan) }) {
+                        UpdateCard(ready.update.versionName) {
+                            scope.launch { app.updater.downloadAndInstall(ready.update) }
+                        }
                     }
                 }
-            }
-            (update as? ru.zf.slushalka.update.Updater.Status.Downloading)?.let { d ->
-                item(key = "downloading", span = { GridItemSpan(maxLineSpan) }) {
-                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                        Text("Качаю новую версию: ${d.percent}%", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = { d.percent / 100f },
-                            modifier = Modifier.fillMaxWidth(),
+                (update as? ru.zf.slushalka.update.Updater.Status.Downloading)?.let { d ->
+                    item(key = "downloading", span = { GridItemSpan(maxLineSpan) }) {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                            Text("Качаю новую версию: ${d.percent}%", style = MaterialTheme.typography.bodyMedium)
+                            Spacer(Modifier.height(6.dp))
+                            LinearProgressIndicator(
+                                progress = { d.percent / 100f },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+                // Книгу с сервера качают прямо с полки - передачу видно здесь же.
+                transfer?.let { tr ->
+                    item(key = "transfer", span = { GridItemSpan(maxLineSpan) }) { TransferCard(app, tr) }
+                }
+                if (last != null) {
+                    item(key = "continue", span = { GridItemSpan(maxLineSpan) }) {
+                        ContinueCard(
+                            app, last, progress.getValue(last.id), prefs.recapAfterHours,
+                            onOpen = onOpen, onRemind = remind,
                         )
                     }
                 }
-            }
-            if (last != null) {
-                item(key = "continue", span = { GridItemSpan(maxLineSpan) }) {
-                    ContinueCard(
-                        app, last, progress.getValue(last.id), prefs.recapAfterHours,
-                        onOpen = onOpen, onRemind = remind,
+                if (serverOn) {
+                    item(key = "view", span = { GridItemSpan(maxLineSpan) }) {
+                        ViewSwitch(
+                            inServer = inServer,
+                            phoneCount = books.size,
+                            serverCount = index?.let { serverBooks.size },
+                            eink = prefs.readerEink,
+                        ) { v -> scope.launch { app.settings.setLibraryView(v) } }
+                    }
+                }
+                if (inServer) {
+                    serverNote(index, serverStatus)?.let { note ->
+                        item(key = "server-note", span = { GridItemSpan(maxLineSpan) }) {
+                            Column {
+                                Text(
+                                    note,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (serverStatus is ServerLibrary.Status.Failed) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (index == null && serverStatus == ServerLibrary.Status.Loading) {
+                                    Spacer(Modifier.height(8.dp))
+                                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                                }
+                                if (serverStatus == ServerLibrary.Status.Missing) {
+                                    TextButton(onClick = onCloud) { Text("Книги облака") }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!inServer && books.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            "В выбранной папке книг не нашлось. Книга - это папка с mp3 внутри; " +
+                                "текст (fb2 или epub) и обложку клади туда же. Или найди книгу " +
+                                "во Флибусте - лупа сверху." +
+                                if (serverOn) " Или возьми из библиотеки на сервере." else "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else if (shownBooks.isNotEmpty()) {
+                    item(key = "shelves", span = { GridItemSpan(maxLineSpan) }) {
+                        ShelfChips(shelf, counts) { shelf = it }
+                    }
+                }
+                items(shown, key = { it.id }) { book ->
+                    val entry = if (inServer) entryOf[book.id] else null
+                    BookTile(
+                        app = app,
+                        book = book,
+                        progress = progress.getValue(book.id),
+                        others = others[book.id].orEmpty(),
+                        place = if (inServer) entry?.where?.label else phonePlace(book),
+                        onClick = {
+                            // С сервера своё: книга не на телефоне спрашивает, как её взять.
+                            if (entry != null && entry.local == null) serverMenu = entry else onOpen(book)
+                        },
+                        onLongClick = { if (entry != null) serverMenu = entry else menuFor = book },
                     )
                 }
-            }
-            if (books.isEmpty()) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        "В выбранной папке книг не нашлось. Книга - это папка с mp3 внутри; " +
-                            "текст (fb2 или epub) и обложку клади туда же. Или найди книгу " +
-                            "во Флибусте - лупа сверху.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            } else {
-                item(key = "shelves", span = { GridItemSpan(maxLineSpan) }) {
-                    ShelfChips(shelf, counts) { shelf = it }
-                }
-            }
-            items(shown, key = { it.id }) { book ->
-                BookTile(
-                    app = app,
-                    book = book,
-                    progress = progress.getValue(book.id),
-                    others = others[book.id].orEmpty(),
-                    onClick = { onOpen(book) },
-                    onLongClick = { menuFor = book },
-                )
-            }
-            if (books.isNotEmpty() && shown.isEmpty()) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        shelf.empty,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                if (shownBooks.isNotEmpty() && shown.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            shelf.empty,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
     }
 
     menuFor?.let { book ->
+        val onServer = index?.byFolder(book.folderName) != null
         BookMenu(
             book = book,
             progress = progressOf(app, book),
+            place = phonePlace(book),
             onOpen = { menuFor = null; onOpen(book) },
             onRemind = { menuFor = null; remind(book) },
             onTalk = { menuFor = null; onTalk(book) },
-            onUpload = if (prefs.cloudReady) { { menuFor = null; app.cloudBooks.upload(book); onCloud() } } else null,
+            // Уже лежит на сервере - выгружать незачем: в корне сервер принял бы
+            // её за новую и отправил в «_Исходники».
+            onUpload = if (prefs.cloudReady && !onServer && !book.streams) {
+                { menuFor = null; app.cloudBooks.upload(book, toRoot = index != null) }
+            } else null,
+            onDelete = if (book.onPhone) { { menuFor = null; deleteAsk = book } } else null,
             onClose = { menuFor = null },
         )
     }
 
+    serverMenu?.let { entry ->
+        val idx = index
+        val sb = idx?.byFolder(entry.server.folderName)
+        ServerBookMenu(
+            entry = entry,
+            server = sb,
+            progress = progressOf(app, entry.shown),
+            busy = transfer?.finished == false,
+            onOpen = entry.local?.let { local -> { serverMenu = null; onOpen(local) } },
+            onDownload = if (sb != null && idx != null && entry.where != Where.PHONE) {
+                { serverMenu = null; app.cloudBooks.download(sb.folder, idx.booksDir, into = entry.local) }
+            } else null,
+            onDelete = entry.local?.takeIf { it.onPhone }?.let { local -> { serverMenu = null; deleteAsk = local } },
+            onClose = { serverMenu = null },
+        )
+    }
+
+    deleteAsk?.let { book ->
+        DeleteDialog(
+            book = book,
+            onServer = index?.byFolder(book.folderName) != null,
+            onConfirm = { deleteAsk = null; state.deleteFromPhone(book) },
+            onClose = { deleteAsk = null },
+        )
+    }
+
     offer?.let { o ->
-        val book = books.firstOrNull { it.id == o.bookId }
+        val book = state.bookById(o.bookId)
         AlertDialog(
             onDismissRequest = { state.declineResume() },
             title = { Text("Продолжить с другого устройства?") },
@@ -263,6 +409,119 @@ fun LibraryScreen(
                 TextButton(onClick = { state.declineResume() }) { Text("Остаться здесь") }
             },
         )
+    }
+}
+
+/** Где книга библиотеки: целиком на телефоне, только текст или только на сервере. */
+private enum class Where(val label: String) {
+    PHONE("на телефоне"),
+    TEXT("текст на телефоне"),
+    SERVER("на сервере"),
+}
+
+/** Книга сервера и её копия на телефоне, если есть. */
+private class ServerEntry(val server: Book, val local: Book?) {
+    /** Что показывать: своя копия главнее - у неё и обложка, и место, и ключ. */
+    val shown: Book get() = local ?: server
+
+    val where: Where
+        get() = when {
+            local == null -> Where.SERVER
+            local.streams -> Where.TEXT
+            !local.hasAudio && server.hasAudio -> Where.TEXT
+            else -> Where.PHONE
+        }
+}
+
+/** Что сказать над книгами библиотеки: грузится, нет оглавления, сервер не ответил. */
+private fun serverNote(index: ServerLibrary.Index?, status: ServerLibrary.Status): String? = when {
+    status == ServerLibrary.Status.Missing ->
+        "На сервере нет оглавления index.json - это не домашняя библиотека. Книги этого облака - " +
+            "на экране «Облако»; для библиотеки в настройках облака нужна папка «корень сервера»."
+    status is ServerLibrary.Status.Failed ->
+        if (index != null) "Сервер не ответил (${status.message}) - показываю оглавление, " +
+            "взятое ${formatAgo(index.fetchedAt)}."
+        else "Сервер не ответил: ${status.message}"
+    index == null -> "Читаю оглавление библиотеки…"
+    index.books.isEmpty() -> "В библиотеке пока пусто."
+    else -> null
+}
+
+/**
+ * Переключатель полки. Свой, а не сегмент Material: у того галочка въезжает
+ * анимацией, а на электронной бумаге каждый кадр - мерцание.
+ */
+@Composable
+private fun ViewSwitch(inServer: Boolean, phoneCount: Int, serverCount: Int?, eink: Boolean, onPick: (String) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(50)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .clip(shape)
+            .border(1.dp, scheme.outline, shape),
+    ) {
+        listOf(
+            Triple(Settings.VIEW_PHONE, "На телефоне · $phoneCount", !inServer),
+            Triple(Settings.VIEW_SERVER, "В библиотеке" + (serverCount?.let { " · $it" } ?: ""), inServer),
+        ).forEachIndexed { i, (id, label, on) ->
+            if (i > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(scheme.outline))
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .background(if (on) scheme.secondaryContainer else Color.Transparent)
+                    .then(
+                        if (eink) Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onPick(id) } else Modifier.clickable { onPick(id) }
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (on) scheme.onSecondaryContainer else scheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Потянуть вниз - обновить. Где не нужно (телефонная полка, e-ink), просто коробка. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun Refreshable(
+    enabled: Boolean,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier,
+    content: @Composable () -> Unit,
+) {
+    if (enabled) {
+        androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = onRefresh,
+            modifier = modifier,
+        ) { content() }
+    } else {
+        Box(modifier) { content() }
+    }
+}
+
+@Composable
+private fun NoticeBar(text: String, onClose: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        TextButton(onClick = onClose) { Text("OK") }
     }
 }
 
@@ -297,7 +556,7 @@ private fun progressOf(app: SlushalkaApp, book: Book): Progress {
         started = started,
         done = done,
         touchedAt = st.updatedAt,
-        canRemind = book.textDocId != null && (st.absMs > 5 * 60_000 || st.readChar > 3 * Settings.PAGE_CHARS),
+        canRemind = book.hasText && (st.absMs > 5 * 60_000 || st.readChar > 3 * Settings.PAGE_CHARS),
     )
 }
 
@@ -323,7 +582,7 @@ private fun shelfOrder(progress: Map<String, Progress>) = compareBy<Book>(
     { b -> b.title.lowercase() },
 )
 
-private fun booksWord(n: Int): String {
+private fun booksWord(n: Int, where: String): String {
     val tail = n % 100
     val one = n % 10
     val word = when {
@@ -332,7 +591,7 @@ private fun booksWord(n: Int): String {
         one in 2..4 -> "книги"
         else -> "книг"
     }
-    return "$n $word на полке"
+    return "$n $word $where"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -502,6 +761,8 @@ private fun BookTile(
     book: Book,
     progress: Progress,
     others: List<AppState.OtherPlace>,
+    /** Где книга: на телефоне, на сервере, текстом. null - сервера нет, и говорить не о чем. */
+    place: String?,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -585,7 +846,7 @@ private fun BookTile(
             progress.done -> if (book.hasAudio) "дослушано" else "прочитано"
             progress.started -> "${(progress.share * 100).toInt().coerceAtLeast(1)}%"
             book.hasAudio && book.totalMs > 0 -> formatSpan(book.totalMs)
-            book.textDocId == null -> "без текста"
+            !book.hasText -> "без текста"
             else -> ""
         }
         val theirs = others.joinToString(" · ") { o ->
@@ -606,6 +867,15 @@ private fun BookTile(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        if (place != null) {
+            Text(
+                place,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -614,11 +884,15 @@ private fun BookTile(
 private fun BookMenu(
     book: Book,
     progress: Progress,
+    /** Где книга относительно сервера; null - сервера нет. */
+    place: String?,
     onOpen: () -> Unit,
     onRemind: () -> Unit,
     onTalk: () -> Unit,
-    /** Выгрузить в облако; null - облако не настроено. */
+    /** Выгрузить в облако; null - облако не настроено или книга там уже есть. */
     onUpload: (() -> Unit)?,
+    /** Удалить папку книги с телефона; null - папки на телефоне нет. */
+    onDelete: (() -> Unit)?,
     onClose: () -> Unit,
 ) {
     AlertDialog(
@@ -632,7 +906,7 @@ private fun BookMenu(
                         progress.done -> "Пройдена до конца."
                         progress.started -> "Пройдено ${(progress.share * 100).toInt()}%."
                         else -> "Ещё не начата."
-                    },
+                    } + (place?.let { " ${it.replaceFirstChar(Char::uppercase)}." } ?: ""),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -644,7 +918,7 @@ private fun BookMenu(
                         Text("Напомнить, о чём там")
                     }
                 }
-                if (book.textDocId != null && (progress.done || progress.started)) {
+                if (book.hasText && (progress.done || progress.started)) {
                     Spacer(Modifier.height(6.dp))
                     FilledTonalButton(onClick = onTalk, modifier = Modifier.fillMaxWidth()) {
                         Icon(Glyphs.Forum, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -660,10 +934,127 @@ private fun BookMenu(
                         Text("Выгрузить в облако")
                     }
                 }
+                if (onDelete != null) {
+                    TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
+                        Text("Удалить с телефона", color = MaterialTheme.colorScheme.error)
+                    }
+                }
             }
         },
         confirmButton = { TextButton(onClick = onOpen) { Text("Открыть") } },
         dismissButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
+    )
+}
+
+/**
+ * Книга библиотеки: где она, сколько весит и как её взять. Не на телефоне -
+ * скачать; на телефоне текстом - докачать звук; на телефоне - открыть.
+ */
+@Composable
+private fun ServerBookMenu(
+    entry: ServerEntry,
+    server: ServerLibrary.ServerBook?,
+    progress: Progress,
+    /** Идёт другая передача: вторая разом не начинается. */
+    busy: Boolean,
+    onOpen: (() -> Unit)?,
+    onDownload: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+    onClose: () -> Unit,
+) {
+    val book = entry.shown
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(book.title, maxLines = 3, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column {
+                if (book.author.isNotBlank()) Text(book.author, style = MaterialTheme.typography.bodyMedium)
+                val facts = buildList {
+                    if (server != null && server.audio.isNotEmpty()) {
+                        add("звук ${formatSpan(server.audioMs.takeIf { it > 0 } ?: entry.server.totalMs)} · " +
+                            formatBytes(server.audioBytes))
+                    }
+                    server?.mainText?.let { add("текст ${it.name.substringAfterLast('.', "").lowercase()} · ${formatBytes(it.size)}") }
+                    if (server != null && server.audio.isEmpty()) add("без записи")
+                }
+                if (facts.isNotEmpty()) {
+                    Text(
+                        facts.joinToString("; "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    when (entry.where) {
+                        Where.PHONE -> "На телефоне целиком."
+                        Where.TEXT -> "На телефоне только текст, звук играет с сервера."
+                        Where.SERVER -> "Только на сервере."
+                    } + when {
+                        progress.done -> " Пройдена до конца."
+                        progress.started -> " Пройдено ${(progress.share * 100).toInt()}%."
+                        else -> ""
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (onDownload != null && server != null) {
+                    Spacer(Modifier.height(10.dp))
+                    FilledTonalButton(onClick = onDownload, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Glyphs.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (entry.where == Where.TEXT) "Докачать звук · ${formatBytes(server.audioBytes)}"
+                            else "Скачать целиком · ${formatBytes(server.audioBytes + server.textBytes)}"
+                        )
+                    }
+                    if (busy) {
+                        Text(
+                            "Идёт другая передача - эта начнётся, когда та кончится.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (onDelete != null) {
+                    TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
+                        Text("Удалить с телефона", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (onOpen != null) TextButton(onClick = onOpen) { Text("Открыть") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
+    )
+}
+
+/**
+ * Удалить с телефона. Книга есть на сервере - уходит только папка здесь;
+ * нет - книга пропадает насовсем, и это сказано до кнопки.
+ */
+@Composable
+private fun DeleteDialog(book: Book, onServer: Boolean, onConfirm: () -> Unit, onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Удалить с телефона?") },
+        text = {
+            Text(
+                if (onServer) {
+                    "Папка «${book.folderName}» удалится с телефона. На сервере книга остаётся - её можно " +
+                        "слушать оттуда или скачать снова. Место, вопросы и пометки не пропадут."
+                } else {
+                    "Этой книги на сервере нет: папка «${book.folderName}» удалится насовсем, вернуть её будет " +
+                        "неоткуда. Место, вопросы и пометки останутся в приложении."
+                }
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(if (onServer) "Удалить" else "Удалить насовсем", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Оставить") } },
     )
 }
 

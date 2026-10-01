@@ -29,6 +29,9 @@ import org.xmlpull.v1.XmlPullParser
  * `_Слушалка/` - те же файлы позиций, вопросов и пометок, что в папке
  * библиотеки ([PositionSync]); `Книги/<папка книги>/` - книги целиком, как
  * они лежат на полке.
+ *
+ * Домашняя библиотека устроена так же, только от корня сервера (папка «/»), и
+ * в корне у неё ещё `index.json` - оглавление всех книг ([ServerLibrary]).
  */
 class Cloud(private val settings: Settings) {
 
@@ -50,16 +53,29 @@ class Cloud(private val settings: Settings) {
     private fun url(path: String): String {
         val p = settings.now()
         val parts = (p.cloudDir.split('/') + path.split('/')).filter { it.isNotBlank() }
-        return p.cloudUrl.trimEnd('/') + "/" + parts.joinToString("/") { enc(it) } +
-            if (path.endsWith("/") || path.isEmpty()) "/" else ""
+        val tail = parts.joinToString("/") { enc(it) }
+        // Корень сервера - один слеш, а не «//»: rclone принимает и так, но
+        // другой WebDAV на двойном слеше спотыкается.
+        val dir = tail.isNotEmpty() && (path.endsWith("/") || path.isEmpty())
+        return p.cloudUrl.trimEnd('/') + "/" + tail + if (dir) "/" else ""
+    }
+
+    /**
+     * Адрес файла целиком - для тех, кто ходит по HTTP сам: плеер, разбор
+     * длительности, распознавание куска. Один и тот же путь всегда даёт одну
+     * и ту же строку - по ней кэш записи узнаёт уже скачанное.
+     */
+    fun urlOf(path: String): String = url(path)
+
+    /** Заголовок входа для того же круга: у плеера свой HTTP, не OkHttp. */
+    fun authHeader(): String {
+        val p = settings.now()
+        return Credentials.basic(p.cloudUser, p.cloudPass, Charsets.UTF_8)
     }
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
-    private fun auth(b: Request.Builder): Request.Builder {
-        val p = settings.now()
-        return b.header("Authorization", Credentials.basic(p.cloudUser, p.cloudPass, Charsets.UTF_8))
-    }
+    private fun auth(b: Request.Builder): Request.Builder = b.header("Authorization", authHeader())
 
     /** Проверка настроек: папка есть или заводится, логин и пароль приняты. */
     suspend fun check(): Result<Unit> = withContext(Dispatchers.IO) {
@@ -89,6 +105,68 @@ class Cloud(private val settings: Settings) {
                 parse(resp.body?.byteStream() ?: return@runCatching emptyList<Item>())
                     .filter { it.path.trim('/') != URLDecoder.decode(self, "UTF-8").trim('/') }
             }
+        }
+    }
+
+    /** Что лежит по пути: размер и время. null - ничего нет. */
+    suspend fun stat(path: String): Result<Item?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = """<?xml version="1.0" encoding="utf-8"?>
+                <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>"""
+                .toRequestBody("application/xml; charset=utf-8".toMediaType())
+            val req = auth(Request.Builder().url(url(path)))
+                .method("PROPFIND", body)
+                .header("Depth", "0")
+                .build()
+            http.newCall(req).execute().use { resp ->
+                if (resp.code == 404) return@runCatching null
+                if (resp.code == 401) throw CloudException("Облако не приняло логин или пароль приложения")
+                if (!resp.isSuccessful) throw CloudException("Облако ответило ${resp.code}")
+                parse(resp.body?.byteStream() ?: return@runCatching null).firstOrNull()
+            }
+        }
+    }
+
+    /**
+     * Переложить внутри облака. Поверх лежащего - да: так докладывается
+     * файл, залитый под временным именем.
+     */
+    suspend fun move(from: String, to: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val req = auth(Request.Builder().url(url(from)))
+                .method("MOVE", null)
+                .header("Destination", url(to))
+                .header("Overwrite", "T")
+                .build()
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw CloudException("Облако не переложило $from: ${resp.code}")
+            }
+        }
+    }
+
+    /**
+     * Записать так, чтобы на месте файл появился целиком: сперва `имя.partial`,
+     * потом MOVE. PUT у rclone не атомарен - кто читает в эту секунду, увидел
+     * бы половину, а сервер библиотеки `*.partial` не берёт в работу.
+     */
+    suspend fun putTextAtomic(path: String, text: String): Result<Unit> {
+        val temp = "$path$PARTIAL"
+        return putText(temp, text).mapCatching { move(temp, path).getOrThrow() }
+    }
+
+    /**
+     * Большой файл тем же порядком: залить под `.partial`, сверить размер на
+     * той стороне (оборванный PUT оставляет огрызок, а не ошибку) и только
+     * тогда переложить на место.
+     */
+    suspend fun uploadAtomic(path: String, size: Long, open: () -> InputStream?): Result<Unit> {
+        val temp = "$path$PARTIAL"
+        return upload(temp, size, open).mapCatching {
+            val got = stat(temp).getOrThrow()?.size
+            if (got != null && got != size) {
+                throw CloudException("Облако приняло $path не целиком: $got из $size байт")
+            }
+            move(temp, path).getOrThrow()
         }
     }
 
@@ -147,18 +225,20 @@ class Cloud(private val settings: Settings) {
     }
 
     /**
-     * Завести папку со всеми родителями. MKCOL на существующую папку отвечает
-     * 405 - это не ошибка, папка уже есть.
+     * Завести папку со всеми родителями, от папки облака из настроек и ниже.
+     * MKCOL на существующую папку отвечает 405 - это не ошибка, папка уже есть.
+     * Корень сервера не заводится: он есть всегда.
      */
     private fun ensureDir(path: String) {
-        val parts = path.split('/').filter { it.isNotBlank() }
+        val p = settings.now()
+        val parts = (p.cloudDir.split('/') + path.split('/')).filter { it.isNotBlank() }
         // Синхронизация пишет раз в две минуты: заводить одни и те же папки
         // каждый раз - три лишних запроса. Помним заведённые до смены настроек.
-        val key = settings.now().let { it.cloudUrl + "|" + it.cloudUser + "|" + it.cloudDir } + "|" + parts.joinToString("/")
+        val key = p.cloudUrl + "|" + p.cloudUser + "|" + parts.joinToString("/")
         if (key in made) return
-        for (i in 0..parts.size) {
-            val sub = parts.take(i).joinToString("/") + "/"
-            val req = auth(Request.Builder().url(url(sub))).method("MKCOL", null).build()
+        for (i in 1..parts.size) {
+            val sub = p.cloudUrl.trimEnd('/') + "/" + parts.take(i).joinToString("/") { enc(it) } + "/"
+            val req = auth(Request.Builder().url(sub)).method("MKCOL", null).build()
             http.newCall(req).execute().use { resp ->
                 if (resp.code == 401) throw CloudException("Облако не приняло логин или пароль приложения")
                 if (!resp.isSuccessful && resp.code != 405 && resp.code != 409 && resp.code != 301) {
@@ -211,6 +291,9 @@ class Cloud(private val settings: Settings) {
         /** Папки внутри облака: синхронизация и книги. */
         const val SYNC_DIR = PositionSync.DIR
         const val BOOKS_DIR = "Книги"
+
+        /** Хвост временного имени: под ним файл льётся, без него лежит готовым. */
+        const val PARTIAL = ".partial"
 
         private val HTTP_DATE = ThreadLocal.withInitial {
             SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)

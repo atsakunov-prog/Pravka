@@ -52,7 +52,7 @@ class EinkViewTest {
     fun `e-ink - страницами, плоско, крупнее, без неровностей, а без режима - как было`() {
         val p = ru.zf.slushalka.data.Settings.Prefs(readerSize = 19, readerPaged = false, readerImperfect = true)
         assertEquals(p, p.readerView())
-        val e = p.copy(readerEink = true).readerView()
+        val e = p.copy(readerDevice = ru.zf.slushalka.data.Settings.DEVICE_EINK_LOW).readerView()
         assertEquals(true, e.readerPaged)
         assertEquals(ru.zf.slushalka.data.Settings.PAGE_FLAT, e.readerPageStyle)
         assertEquals(19 + ru.zf.slushalka.data.Settings.EINK_SIZE_BOOST, e.readerSize)

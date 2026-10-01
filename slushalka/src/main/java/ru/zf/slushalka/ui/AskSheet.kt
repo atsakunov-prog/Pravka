@@ -254,7 +254,7 @@ fun AskSheet(
     // вопроса, продолжается. Раньше его ловил общий обработчик и просто
     // закрывал окно, а книга так и стояла.
     androidx.activity.compose.BackHandler { finish() }
-    val t = book?.textDocId
+    val t = book?.takeIf { it.hasText }
     PaperScreen(
         app = app,
         icon = Glyphs.QuestionAnswer,

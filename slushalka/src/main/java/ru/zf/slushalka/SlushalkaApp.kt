@@ -44,6 +44,8 @@ class SlushalkaApp : Application() {
     lateinit var sync: PositionSync; private set
     lateinit var cloud: ru.zf.slushalka.data.Cloud; private set
     lateinit var cloudBooks: ru.zf.slushalka.data.CloudBooks; private set
+    /** Библиотека на домашнем сервере: оглавление `index.json` и обложки. */
+    lateinit var server: ru.zf.slushalka.data.ServerLibrary; private set
     lateinit var markup: Markup; private set
     lateinit var updater: Updater; private set
     lateinit var player: PlayerHolder; private set
@@ -73,6 +75,7 @@ class SlushalkaApp : Application() {
         journal = Journal(this)
         sync = PositionSync(this)
         cloud = ru.zf.slushalka.data.Cloud(settings)
+        server = ru.zf.slushalka.data.ServerLibrary(this, settings, cloud, scope)
         markup = Markup(this)
         updater = Updater(this, settings)
         speaker = Speaker(this)

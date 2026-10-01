@@ -59,7 +59,9 @@ class ContinueWidget : AppWidgetProvider() {
         private suspend fun render(app: SlushalkaApp, manager: AppWidgetManager, ids: IntArray) {
             val prefs = app.settings.flow.first { it.loaded }
             val lastId = app.positions.lastBook()
+            // Последней могла быть книга с сервера - её на полке нет.
             val book = app.library.books(prefs.libraryUris).firstOrNull { it.id == lastId }
+                ?: app.state.bookById(lastId)
             val views = RemoteViews(app.packageName, R.layout.widget_continue)
 
             val open = Intent(app, MainActivity::class.java)
@@ -105,7 +107,7 @@ class ContinueWidget : AppWidgetProvider() {
                 },
             )
             views.setViewVisibility(R.id.widget_progress, View.VISIBLE)
-            views.setViewVisibility(R.id.widget_mic, if (book.textDocId != null) View.VISIBLE else View.GONE)
+            views.setViewVisibility(R.id.widget_mic, if (book.hasText) View.VISIBLE else View.GONE)
             views.setProgressBar(R.id.widget_progress, 1000, (share * 1000).toInt(), false)
 
             val tree = app.state.treeOf(book)

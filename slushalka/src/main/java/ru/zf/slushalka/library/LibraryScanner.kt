@@ -31,10 +31,20 @@ class LibraryScanner(private val context: Context) {
     fun scan(treeUri: Uri): List<Book> {
         val rootId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
             ?: return emptyList()
-        val rootName = displayName(treeUri, rootId) ?: "Библиотека"
+        val rootName = rootName(treeUri) ?: return emptyList()
         return walk(treeUri, rootId, rootName, rootName)
             .map { it.copy(tree = treeUri.toString()) }
             .sortedWith(compareBy(NaturalOrder) { it.id })
+    }
+
+    /**
+     * Имя папки библиотеки - первая часть ключа каждой её книги. Книга с
+     * сервера получает ключ от этого же имени: тот, что будет у неё, когда
+     * она скачается.
+     */
+    fun rootName(treeUri: Uri): String? {
+        val rootId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull() ?: return null
+        return displayName(treeUri, rootId) ?: "Библиотека"
     }
 
     // ---------------------------------------------------------------- обход

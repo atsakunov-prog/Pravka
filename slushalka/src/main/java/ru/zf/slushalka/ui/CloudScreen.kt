@@ -56,6 +56,9 @@ fun CloudScreen(app: SlushalkaApp, onBack: () -> Unit, onSettings: () -> Unit) {
     val prefs by app.state.prefs.collectAsState()
     val books by app.state.books.collectAsState()
     val transfer by app.cloudBooks.transfer.collectAsState()
+    // Оглавление сервера есть - значит, это домашняя библиотека: новое она
+    // принимает в корень и раскладывает сама.
+    val index by app.server.index.collectAsState()
     var items by remember { mutableStateOf<List<Cloud.Item>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
@@ -76,7 +79,7 @@ fun CloudScreen(app: SlushalkaApp, onBack: () -> Unit, onSettings: () -> Unit) {
                         Text("Облако")
                         if (prefs.cloudReady) {
                             Text(
-                                prefs.cloudUrl.substringAfter("://") + " · " + prefs.cloudDir,
+                                prefs.cloudUrl.substringAfter("://") + " · " + prefs.cloudPath("").trimEnd('/').ifBlank { "/" },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -117,7 +120,8 @@ fun CloudScreen(app: SlushalkaApp, onBack: () -> Unit, onSettings: () -> Unit) {
 
         val onShelf = remember(books) { books.map { it.id.substringAfterLast('/') }.toSet() }
         val there = items?.map { it.name }?.toSet().orEmpty()
-        val local = remember(books, items) { books.filter { it.id.substringAfterLast('/') !in there } }
+        // Книга, взятая с сервера только текстом, там уже есть - выгружать её незачем.
+        val local = remember(books, items) { books.filter { it.id.substringAfterLast('/') !in there && !it.streams } }
 
         LazyColumn(
             Modifier.fillMaxSize().padding(padding),
@@ -126,38 +130,7 @@ fun CloudScreen(app: SlushalkaApp, onBack: () -> Unit, onSettings: () -> Unit) {
         ) {
             transfer?.let { tr ->
                 item(key = "transfer") {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(Modifier.padding(14.dp)) {
-                            Text(
-                                (if (tr.upload) "Выгружаю: " else "Качаю: ") + tr.name,
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            LinearProgressIndicator(progress = { tr.share }, modifier = Modifier.fillMaxWidth())
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                when {
-                                    tr.error != null -> tr.error
-                                    tr.finished -> if (tr.upload) "Готово: книга в облаке" else "Готово: книга на полке"
-                                    else -> "${mb(tr.doneBytes)} из ${mb(tr.totalBytes)}" +
-                                        if (tr.file.isNotBlank()) " · ${tr.file}" else ""
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (tr.error != null) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.onSecondaryContainer,
-                            )
-                            Row {
-                                Spacer(Modifier.weight(1f))
-                                if (tr.finished) TextButton(onClick = { app.cloudBooks.clear() }) { Text("Убрать") }
-                                else TextButton(onClick = { app.cloudBooks.cancel() }) { Text("Остановить") }
-                            }
-                        }
-                    }
+                    TransferCard(app, tr)
                     Spacer(Modifier.height(10.dp))
                 }
             }
@@ -176,7 +149,7 @@ fun CloudScreen(app: SlushalkaApp, onBack: () -> Unit, onSettings: () -> Unit) {
             } else if (list != null && list.isEmpty()) {
                 item(key = "cloud-empty") {
                     Text(
-                        "Пусто. Выгрузи книгу с полки ниже - или положи папки книг в «${prefs.cloudDir}/${Cloud.BOOKS_DIR}» " +
+                        "Пусто. Выгрузи книгу с полки ниже - или положи папки книг в «${prefs.cloudPath(Cloud.BOOKS_DIR)}» " +
                             "с компьютера: раскладка та же, что на полке.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -236,11 +209,51 @@ fun CloudScreen(app: SlushalkaApp, onBack: () -> Unit, onSettings: () -> Unit) {
                         }
                         TextButton(
                             enabled = !app.cloudBooks.busy,
-                            onClick = { app.cloudBooks.upload(book) },
+                            onClick = { app.cloudBooks.upload(book, toRoot = index != null) },
                         ) { Text("Выгрузить") }
                     }
                     HorizontalDivider()
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Идущая передача книги: что, сколько из скольких, какой файл. Её видно и на
+ * экране облака, и на полке - книгу с сервера качают прямо оттуда.
+ */
+@Composable
+fun TransferCard(app: SlushalkaApp, tr: ru.zf.slushalka.data.CloudBooks.Transfer) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(
+                (if (tr.upload) "Выгружаю: " else "Качаю: ") + tr.name,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(6.dp))
+            LinearProgressIndicator(progress = { tr.share }, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(4.dp))
+            Text(
+                when {
+                    tr.error != null -> tr.error
+                    tr.finished -> if (tr.upload) "Готово: книга в облаке" else "Готово: книга на полке"
+                    else -> "${mb(tr.doneBytes)} из ${mb(tr.totalBytes)}" +
+                        if (tr.file.isNotBlank()) " · ${tr.file}" else ""
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (tr.error != null) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            Row {
+                Spacer(Modifier.weight(1f))
+                if (tr.finished) TextButton(onClick = { app.cloudBooks.clear() }) { Text("Убрать") }
+                else TextButton(onClick = { app.cloudBooks.cancel() }) { Text("Остановить") }
             }
         }
     }
@@ -256,8 +269,4 @@ private fun Head(title: String, count: Int?) {
     )
 }
 
-private fun mb(bytes: Long): String = when {
-    bytes >= 1L shl 30 -> "%.1f ГБ".format(bytes / (1L shl 30).toDouble())
-    bytes >= 1L shl 20 -> "${bytes shr 20} МБ"
-    else -> "${(bytes shr 10).coerceAtLeast(1)} КБ"
-}
+private fun mb(bytes: Long): String = formatBytes(bytes)

@@ -16,8 +16,9 @@ import ru.zf.slushalka.library.documentUri
 import ru.zf.slushalka.text.TextRepo
 
 /**
- * Обложка книги - три источника по очереди: файл рядом с аудио, картинка,
- * вынутая из fb2/epub, и, если ничего нет, тег самого первого mp3.
+ * Обложка книги - источники по очереди: файл рядом с аудио, картинка,
+ * вынутая из fb2/epub, обложка на сервере библиотеки (у книги, которой нет на
+ * телефоне) и, если ничего нет, тег самого первого mp3.
  */
 object Covers {
 
@@ -42,6 +43,8 @@ object Covers {
                     ?.use { it.readBytes() }
             }.getOrNull()
             extracted.exists() -> runCatching { extracted.readBytes() }.getOrNull()
+            book.coverRemote != null ->
+                (context.applicationContext as? ru.zf.slushalka.SlushalkaApp)?.server?.coverBytes(book.coverRemote)
             else -> embeddedArt(context, treeUri, book)?.also { art ->
                 runCatching { extracted.parentFile?.mkdirs(); extracted.writeBytes(art) }
             }
@@ -53,7 +56,8 @@ object Covers {
     }
 
     private fun embeddedArt(context: Context, treeUri: Uri, book: Book): ByteArray? {
-        val first = book.files.firstOrNull() ?: return null
+        // Тег mp3 с сервера - это скачать начало файла ради картинки: незачем.
+        val first = book.files.firstOrNull()?.takeIf { !it.isRemote } ?: return null
         val r = MediaMetadataRetriever()
         return runCatching {
             r.setDataSource(context, documentUri(treeUri, first.docId))

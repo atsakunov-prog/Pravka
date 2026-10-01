@@ -67,6 +67,22 @@ class AppState(private val app: SlushalkaApp) {
     /** Дёргается при каждой записи позиции: карточки библиотеки перерисовываются. */
     val positionsRev: StateFlow<Int> = _positionsRev
 
+    /**
+     * Книги библиотеки на сервере - в виде книг полки, с ключом, который у
+     * них будет после скачивания. Пусто - облака нет или это не домашняя
+     * библиотека (нет `index.json`).
+     */
+    private val _serverBooks = MutableStateFlow<List<Book>>(emptyList())
+    val serverBooks: StateFlow<List<Book>> = _serverBooks
+
+    /** Короткая строка внизу экрана о том, что сделалось: «удалено», «не вышло». */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice
+
+    fun dismissNotice() {
+        _notice.value = null
+    }
+
     init {
         app.scope.launch {
             // Первое значение из DataStore приезжает асинхронно: спросить
@@ -77,6 +93,37 @@ class AppState(private val app: SlushalkaApp) {
                 if (_books.value.isEmpty()) rescan() else syncPull()
             }
         }
+        // Оглавление сервера пришло или сменилось - книги сервера пересобираются.
+        app.scope.launch {
+            app.server.index.collect { rebuildServerBooks() }
+        }
+    }
+
+    /** Имя главной папки и для какого дерева оно узнано: папку могут сменить. */
+    private var rootName: Pair<String, String>? = null
+
+    private suspend fun rootName(): String? {
+        val tree = treeUri() ?: return null
+        rootName?.takeIf { it.first == tree.toString() }?.let { return it.second }
+        val name = withContext(Dispatchers.IO) { LibraryScanner(app).rootName(tree) } ?: return null
+        rootName = tree.toString() to name
+        return name
+    }
+
+    private suspend fun rebuildServerBooks() {
+        val index = app.server.index.value
+        val root = if (index != null) rootName() else null
+        val tree = treeUri()?.toString().orEmpty()
+        _serverBooks.value = if (index == null || root == null) emptyList()
+        else withContext(Dispatchers.Default) {
+            index.books.map { ru.zf.slushalka.data.ServerLibrary.toBook(index, it, root, tree) }
+        }
+    }
+
+    /** Книга по ключу: сперва с полки, потом с сервера - последняя могла быть оттуда. */
+    fun bookById(id: String?): Book? {
+        if (id == null) return null
+        return _books.value.firstOrNull { it.id == id } ?: _serverBooks.value.firstOrNull { it.id == id }
     }
 
     /** Главная папка библиотеки: сюда качает каталог и здесь лежит `_Слушалка`. */
@@ -139,11 +186,11 @@ class AppState(private val app: SlushalkaApp) {
         // Уже измеренные длительности переносим: мерить заново долго и незачем.
         val merged = found.map { b ->
             val old = known[b.id] ?: return@map b
-            val byDoc = old.files.associateBy { it.docId }
+            val byDoc = old.files.associateBy { it.key }
             b.copy(
                 files = b.files.map { f ->
-                    val prev = byDoc[f.docId]
-                    if (prev != null && prev.size == f.size) f.copy(durationMs = prev.durationMs) else f
+                    val prev = byDoc[f.key]
+                    if (f.durationMs <= 0 && prev != null && prev.size == f.size) f.copy(durationMs = prev.durationMs) else f
                 },
                 title = b.title.ifBlank { old.title },
                 author = b.author.ifBlank { old.author },
@@ -152,7 +199,41 @@ class AppState(private val app: SlushalkaApp) {
         app.library.replace(tree.toString(), merged)
         _books.value = merged
         _busy.value = null
+        // Имя главной папки узнаётся заново: её могли сменить, а книги сервера
+        // получают ключ от него.
+        rootName = null
+        rebuildServerBooks()
         syncPull()
+    }
+
+    /**
+     * Удалить папку книги с телефона. Книга, которая есть на сервере, с ним и
+     * остаётся: место, вопросы и пометки живут в `_Слушалка/` и в приложении,
+     * а не в папке книги. Книга только с телефона уходит насовсем - экран
+     * предупреждает об этом до того, как спросить.
+     */
+    fun deleteFromPhone(book: Book) {
+        val tree = treeOf(book) ?: return
+        if (!book.onPhone) return
+        app.scope.launch {
+            // Открытая книга играла бы из удалённых файлов: сперва её закрыть.
+            if (app.player.isOpen(book.id)) app.player.close()
+            if (app.readAloud.state.value.bookId == book.id) app.readAloud.stop()
+            if (_current.value?.id == book.id) {
+                _current.value = null
+                _text.value = null
+                _alignment.value = null
+            }
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    android.provider.DocumentsContract.deleteDocument(
+                        app.contentResolver, documentUri(tree, book.folderDocId),
+                    )
+                }.getOrDefault(false)
+            }
+            _notice.value = if (ok) "«${book.title}» удалена с телефона" else "Папку книги удалить не вышло"
+            rescanNow()
+        }
     }
 
     /** Длительности нужны раньше звука: без них не посчитать место в книге. */
@@ -209,7 +290,7 @@ class AppState(private val app: SlushalkaApp) {
     private fun loadText(book: Book) {
         val tree = treeOf(book) ?: return
         app.scope.launch {
-            if (book.textDocId == null) return@launch
+            if (!book.hasText) return@launch
             _busy.value = "Разбираю текст книги…"
             val t = app.texts.textFor(tree, book)
             _busy.value = null
@@ -236,7 +317,7 @@ class AppState(private val app: SlushalkaApp) {
         _recapOffer.value = progressed &&
             s.updatedAt > 0 &&
             System.currentTimeMillis() - s.updatedAt > hours * 3600_000L &&
-            book.textDocId != null
+            book.hasText
     }
 
     /** Разобрать книгу заново - когда с картинками или главами что-то не так. */
@@ -910,7 +991,7 @@ class AppState(private val app: SlushalkaApp) {
     fun acceptResume() {
         val offer = _resumeOffer.value ?: return
         _resumeOffer.value = null
-        val book = _books.value.firstOrNull { it.id == offer.bookId } ?: return
+        val book = bookById(offer.bookId) ?: return
         // Место чтения - сразу в позиции: книга без записи откроется на той
         // странице, а у аудиокниги читалка сверит его со звуком, как всегда.
         if (offer.readChar >= 0) app.positions.setReadChar(book.id, offer.readChar)

@@ -493,6 +493,19 @@ class PlayerHolder(
         )
     }
 
+    /**
+     * Отпустить книгу совсем: её папку убрали с телефона, и играть больше не
+     * из чего. Место записывается до того, как плеер опустеет.
+     */
+    fun close() {
+        saveNow(markHistory = true)
+        player.stop()
+        player.clearMediaItems()
+        book = null
+        treeUri = null
+        push()
+    }
+
     fun clearError() {
         _state.value = _state.value.copy(error = null)
     }

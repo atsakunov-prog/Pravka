@@ -621,6 +621,10 @@ private fun NumberSlider(
  * Облако по WebDAV: адрес, логин, пароль приложения, папка - и проверка.
  * Пароль - именно «пароль приложения» (у Яндекса - id.yandex.ru, «Пароли
  * приложений», тип «Файлы»): обычный пароль от почты WebDAV не примет.
+ *
+ * Домашняя библиотека - то же облако, только папка - корень сервера: там
+ * `Книги/`, `_Слушалка/` и оглавление `index.json`. Проверка заодно говорит,
+ * нашлось ли оглавление.
  */
 @Composable
 private fun CloudSettings(app: SlushalkaApp) {
@@ -629,36 +633,57 @@ private fun CloudSettings(app: SlushalkaApp) {
     var url by remember { mutableStateOf(prefs.cloudUrl) }
     var user by remember { mutableStateOf(prefs.cloudUser) }
     var pass by remember { mutableStateOf(prefs.cloudPass) }
-    var dir by remember { mutableStateOf(prefs.cloudDir) }
+    var dir by remember { mutableStateOf(if (prefs.cloudAtRoot) "" else prefs.cloudDir) }
     var checking by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<String?>(null) }
+    // Сменили сервер, вход или папку - прежнее оглавление больше не про них.
+    val changed = { app.server.forget(); result = null }
 
     Section("Облако")
     Note(
-        "Синхронизация без сторонней программы и место для книг. Домашний сервер: адрес " +
-            "https://webdav.<имя>.netcraze.pro:8443/, логин этого устройства (на Boox - boox), его пароль; " +
-            "книги кладутся на сервере в «Слушалка\\Книги». Подходит и любой другой WebDAV: " +
-            "Яндекс.Диск (адрес webdav.yandex.ru, логин - почта, пароль - пароль приложения из " +
-            "id.yandex.ru → «Пароли приложений» → «Файлы»), Nextcloud, Box, Koofr."
+        "Синхронизация без сторонней программы, место для книг и домашняя библиотека. Домашняя " +
+            "библиотека: адрес ${Settings.HOME_LIBRARY_URL}, логин этого устройства (на Boox - boox), " +
+            "его пароль, папка - корень сервера; кнопка ниже подставит адрес и корень. Подходит и любой " +
+            "другой WebDAV: Яндекс.Диск (адрес webdav.yandex.ru, логин - почта, пароль - пароль " +
+            "приложения из id.yandex.ru → «Пароли приложений» → «Файлы»), Nextcloud, Box, Koofr."
     )
+    TextButton(onClick = {
+        url = Settings.HOME_LIBRARY_URL
+        dir = ""
+        changed()
+        scope.launch {
+            app.settings.setCloudUrl(Settings.HOME_LIBRARY_URL)
+            app.settings.setCloudDir(Settings.ROOT_DIR)
+        }
+    }) { Text("Домашняя библиотека") }
     OutlinedTextField(
-        value = url, onValueChange = { url = it; scope.launch { app.settings.setCloudUrl(it) } },
+        value = url, onValueChange = { url = it; changed(); scope.launch { app.settings.setCloudUrl(it) } },
         label = { Text("Адрес WebDAV") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
     )
     OutlinedTextField(
-        value = user, onValueChange = { user = it; scope.launch { app.settings.setCloudUser(it) } },
+        value = user, onValueChange = { user = it; changed(); scope.launch { app.settings.setCloudUser(it) } },
         label = { Text("Логин") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
     )
     OutlinedTextField(
-        value = pass, onValueChange = { pass = it; scope.launch { app.settings.setCloudPass(it) } },
+        value = pass, onValueChange = { pass = it; changed(); scope.launch { app.settings.setCloudPass(it) } },
         label = { Text("Пароль приложения") }, singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
         modifier = Modifier.fillMaxWidth(),
     )
-    OutlinedTextField(
-        value = dir, onValueChange = { dir = it; scope.launch { app.settings.setCloudDir(it) } },
-        label = { Text("Папка в облаке") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-    )
+    Toggle("Корень сервера", prefs.cloudAtRoot) { on ->
+        changed()
+        scope.launch {
+            // Выключили корень - возвращается набранная папка, а нет её - заводская.
+            app.settings.setCloudDir(if (on) Settings.ROOT_DIR else dir.ifBlank { Settings.DEFAULT_CLOUD_DIR })
+            if (!on && dir.isBlank()) dir = Settings.DEFAULT_CLOUD_DIR
+        }
+    }
+    if (!prefs.cloudAtRoot) {
+        OutlinedTextField(
+            value = dir, onValueChange = { dir = it; changed(); scope.launch { app.settings.setCloudDir(it) } },
+            label = { Text("Папка в облаке") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+    }
     Row(verticalAlignment = Alignment.CenterVertically) {
         TextButton(
             enabled = !checking && prefs.cloudReady,
@@ -667,7 +692,14 @@ private fun CloudSettings(app: SlushalkaApp) {
                 result = null
                 scope.launch {
                     result = app.cloud.check().fold(
-                        onSuccess = { "Облако на связи: папка «${prefs.cloudDir}» готова." },
+                        onSuccess = {
+                            val where = if (prefs.cloudAtRoot) "корень сервера" else "папка «${prefs.cloudDir}»"
+                            val idx = app.server.refresh()
+                            "Облако на связи: $where готов${if (prefs.cloudAtRoot) "" else "а"}. " + when {
+                                idx != null -> "Библиотека: книг ${idx.books.size} - полка «В библиотеке»."
+                                else -> "Оглавления index.json здесь нет - это облако, а не домашняя библиотека."
+                            }
+                        },
                         onFailure = { it.message ?: "Облако не ответило" },
                     )
                     checking = false
@@ -680,8 +712,9 @@ private fun CloudSettings(app: SlushalkaApp) {
         scope.launch { app.settings.setCloudSync(it) }
     }
     Note(
-        "Позиции, вопросы и пометки ездят через «${prefs.cloudDir}/_Слушалка» - те же файлы, что в папке " +
-            "библиотеки, так что обе дороги работают вместе. Книги - в «${prefs.cloudDir}/Книги», экран " +
-            "облака - значок на полке."
+        "Позиции, вопросы и пометки ездят через «${prefs.cloudPath("_Слушалка")}» - те же файлы, что в папке " +
+            "библиотеки, так что обе дороги работают вместе. Книги - в «${prefs.cloudPath("Книги")}»: у " +
+            "домашней библиотеки они на полке «В библиотеке», у другого облака - на экране облака " +
+            "(значок на полке)."
     )
 }

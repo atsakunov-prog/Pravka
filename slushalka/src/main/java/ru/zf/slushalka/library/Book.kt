@@ -5,7 +5,13 @@ import android.provider.DocumentsContract
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Один звуковой файл книги. Порядок в списке = порядок слушания. */
+/**
+ * Один звуковой файл книги. Порядок в списке = порядок слушания.
+ *
+ * Файл лежит либо на телефоне - документ SAF ([docId]), либо на сервере
+ * библиотеки - путь от корня облака ([remote]): у книги, взятой «только
+ * текстом» или открытой с сервера, звук идёт потоком.
+ */
 data class BookFile(
     val docId: String,
     val name: String,
@@ -14,10 +20,18 @@ data class BookFile(
     val size: Long,
     /** 0 - длительность ещё не измерена. */
     val durationMs: Long = 0L,
+    /** Путь на сервере (`Книги/<папка>/<файл>`); пусто - файл на телефоне. */
+    val remote: String = "",
 ) {
+    val isRemote: Boolean get() = remote.isNotBlank()
+
+    /** Чем файл отличается от соседей: документом на телефоне или путём на сервере. */
+    val key: String get() = docId.ifBlank { remote }
+
     fun toJson(): JSONObject = JSONObject()
         .put("d", docId).put("n", name).put("p", relPath)
         .put("s", size).put("ms", durationMs)
+        .apply { if (isRemote) put("r", remote) }
 
     companion object {
         fun fromJson(o: JSONObject) = BookFile(
@@ -26,6 +40,7 @@ data class BookFile(
             relPath = o.optString("p", o.getString("n")),
             size = o.optLong("s"),
             durationMs = o.optLong("ms"),
+            remote = o.optString("r"),
         )
     }
 }
@@ -48,6 +63,15 @@ data class Book(
     /** fb2/epub рядом с аудио - без него вопросы работать не будут. */
     val textDocId: String? = null,
     val textName: String? = null,
+    /**
+     * Папка книги на сервере библиотеки (`Книги/<папка>`). Пусто - сервер о
+     * книге не знает: она только на телефоне или облака нет вовсе.
+     */
+    val remoteDir: String = "",
+    /** Текст на сервере, когда своего файла нет: книга открыта, не скачиваясь. */
+    val textRemote: String? = null,
+    /** Обложка на сервере - у книги, которой нет на телефоне. */
+    val coverRemote: String? = null,
 ) {
     val totalMs: Long get() = files.sumOf { it.durationMs }
     val durationsReady: Boolean get() = files.isNotEmpty() && files.all { it.durationMs > 0 }
@@ -60,6 +84,18 @@ data class Book(
     val hasAudio: Boolean get() = files.isNotEmpty()
 
     val treeUri: Uri? get() = tree.takeIf { it.isNotBlank() }?.let(Uri::parse)
+
+    /** Есть текст - свой или на сервере: читалка, вопросы, справочник. */
+    val hasText: Boolean get() = textDocId != null || textRemote != null
+
+    /** У книги есть папка на телефоне. Нет - книга открыта прямо с сервера. */
+    val onPhone: Boolean get() = folderDocId.isNotBlank()
+
+    /** Звук идёт с сервера потоком, хотя бы частью. */
+    val streams: Boolean get() = files.any { it.isRemote }
+
+    /** Имя папки книги - по нему телефон и сервер узнают одну книгу. */
+    val folderName: String get() = id.substringAfterLast('/')
 
     /** Смещение начала файла [index] от начала книги. */
     fun offsetOf(index: Int): Long {
@@ -88,6 +124,11 @@ data class Book(
         .put("text", textDocId ?: JSONObject.NULL)
         .put("textName", textName ?: JSONObject.NULL)
         .put("files", JSONArray().apply { files.forEach { put(it.toJson()) } })
+        .apply {
+            if (remoteDir.isNotBlank()) put("remoteDir", remoteDir)
+            textRemote?.let { put("textRemote", it) }
+            coverRemote?.let { put("coverRemote", it) }
+        }
 
     companion object {
         fun fromJson(o: JSONObject): Book {
@@ -102,6 +143,9 @@ data class Book(
                 coverDocId = o.optString("cover").takeIf { it.isNotBlank() && it != "null" },
                 textDocId = o.optString("text").takeIf { it.isNotBlank() && it != "null" },
                 textName = o.optString("textName").takeIf { it.isNotBlank() && it != "null" },
+                remoteDir = o.optString("remoteDir"),
+                textRemote = o.optString("textRemote").takeIf { it.isNotBlank() },
+                coverRemote = o.optString("coverRemote").takeIf { it.isNotBlank() },
             )
         }
     }

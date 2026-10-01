@@ -173,10 +173,25 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val cloudPass: String = "",
         val cloudDir: String = DEFAULT_CLOUD_DIR,
         val cloudSync: Boolean = true,
+        /**
+         * Что показывает полка: книги на телефоне или всю библиотеку домашнего
+         * сервера (`index.json` в корне облака). Помнится: кто слушает с
+         * сервера, тот и открывает приложение на нём.
+         */
+        val libraryView: String = VIEW_PHONE,
     ) {
         /** Облако настроено: есть куда и с чем ходить. */
         val cloudReady: Boolean
             get() = cloudUrl.isNotBlank() && cloudUser.isNotBlank() && cloudPass.isNotBlank()
+
+        /**
+         * Облако смотрит в корень сервера. Так устроена домашняя библиотека:
+         * `Книги/`, `_Слушалка/` и `index.json` лежат прямо от корня.
+         */
+        val cloudAtRoot: Boolean get() = cloudDir.trim('/').isEmpty()
+
+        /** Путь в облаке для людей: «/_Слушалка» у корня, «Слушалка/_Слушалка» у папки. */
+        fun cloudPath(sub: String): String = if (cloudAtRoot) "/$sub" else "$cloudDir/$sub"
 
         /** Электронная бумага любая: без анимаций, шрифт плотнее, листать кнопками. */
         val readerEink: Boolean get() = readerDevice != DEVICE_PHONE
@@ -267,6 +282,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 cloudPass = p[KEY_CLOUD_PASS] ?: "",
                 cloudDir = p[KEY_CLOUD_DIR]?.takeIf { it.isNotBlank() } ?: DEFAULT_CLOUD_DIR,
                 cloudSync = p[KEY_CLOUD_SYNC] ?: true,
+                libraryView = p[KEY_LIB_VIEW]?.takeIf { it in VIEWS } ?: VIEW_PHONE,
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -367,8 +383,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setCloudUrl(v: String) = edit { it[KEY_CLOUD_URL] = v.trim().trimEnd('/') }
     suspend fun setCloudUser(v: String) = edit { it[KEY_CLOUD_USER] = v.trim() }
     suspend fun setCloudPass(v: String) = edit { it[KEY_CLOUD_PASS] = v.trim() }
-    suspend fun setCloudDir(v: String) = edit { it[KEY_CLOUD_DIR] = v.trim().trim('/') }
+    suspend fun setCloudDir(v: String) = edit {
+        val t = v.trim()
+        // «/» - корень сервера. Пустая строка значит «не задано» и откатывается
+        // к заводской папке, поэтому корень хранится явным слешем.
+        it[KEY_CLOUD_DIR] = if (t.isNotEmpty() && t.trim('/').isEmpty()) ROOT_DIR else t.trim('/')
+    }
     suspend fun setCloudSync(v: Boolean) = edit { it[KEY_CLOUD_SYNC] = v }
+    suspend fun setLibraryView(v: String) = edit { if (v in VIEWS) it[KEY_LIB_VIEW] = v }
 
     companion object {
         // Модели - в ask/Models.kt: там же имена, цены и «по умолчанию».
@@ -412,6 +434,20 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         /** WebDAV Яндекс.Диска: логин - почта, пароль - «пароль приложения» из id.yandex.ru. */
         const val DEFAULT_CLOUD_URL = "https://webdav.yandex.ru"
         const val DEFAULT_CLOUD_DIR = "Слушалка"
+        /** Папка облака «корень сервера»: так подключается домашняя библиотека. */
+        const val ROOT_DIR = "/"
+
+        /**
+         * Домашняя библиотека: WebDAV на rclone, раскладка от корня, логин и
+         * пароль у каждого устройства свои. Подставляется кнопкой в настройках
+         * облака - набирать адрес на электронной книге мучительно.
+         */
+        const val HOME_LIBRARY_URL = "https://books.znakomiy.netcraze.pro:8443"
+
+        // Полка: что на телефоне или что в библиотеке на сервере.
+        const val VIEW_PHONE = "phone"
+        const val VIEW_SERVER = "server"
+        val VIEWS = listOf(VIEW_PHONE, VIEW_SERVER)
 
         /**
          * Книжный - Literata, своя гарнитура в ресурсах. Системный «с
@@ -676,6 +712,7 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_CLOUD_PASS = stringPreferencesKey("cloud_pass")
         private val KEY_CLOUD_DIR = stringPreferencesKey("cloud_dir")
         private val KEY_CLOUD_SYNC = booleanPreferencesKey("cloud_sync")
+        private val KEY_LIB_VIEW = stringPreferencesKey("library_view")
     }
 }
 
