@@ -104,7 +104,14 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     `Prefs.libraryView` (`ViewSwitch` в `LibraryScreen`), метки «на
     телефоне / текст на телефоне / на сервере», меню `ServerBookMenu`.
     Телефон и сервер сравнивают книги по имени папки без регистра
-    (`ServerLibrary.folderKey`).
+    (`ServerLibrary.folderKey`). «Только текст» — `CloudBooks.downloadText`
+    + метка `слушалка-звук.json` (`ServerLibrary.MARKER`), её читает
+    `LibraryScanner` → файлы книги с `remote`. Поток — `player/Streaming.kt`:
+    HTTP с Basic, `SimpleCache` в `cache/stream` (свой LRU-вытеснитель с
+    пределом из лямбды), `prefetch` следующего файла, `mediaSource` для
+    `AudioChunk`/`Durations`, `explain` — ошибки сети по-русски. Разметка и
+    справочник — через `data/BookDir.kt` (папка на телефоне и, у книги со
+    звуком на сервере, папка там).
   - `update/Updater.kt` — самообновление из `apk-builds`.
   - `stats/` — `Journal.kt` (журнал подходов: плеер
     тиком и паузой, читалка страницей и уходом, озвучка абзацем; паузы до 15

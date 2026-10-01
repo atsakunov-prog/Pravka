@@ -199,6 +199,17 @@ class AppState(private val app: SlushalkaApp) {
         app.library.replace(tree.toString(), merged)
         _books.value = merged
         _busy.value = null
+        // Открытая книга сменилась на полке - докачала звук, взята текстом.
+        // Плеер на паузе переезжает на новые файлы сам: иначе книга, уже
+        // лежащая на телефоне, так и играла бы с сервера до перезапуска.
+        val cur = _current.value
+        val fresh = cur?.let { c -> merged.firstOrNull { it.id == c.id } }
+        if (cur != null && fresh != null && fresh != cur) {
+            _current.value = fresh
+            if (cur.streams && !fresh.streams && app.player.isOpen(fresh.id) && !app.player.state.value.playing) {
+                treeOf(fresh)?.let { app.player.open(it, fresh) }
+            }
+        }
         // Имя главной папки узнаётся заново: её могли сменить, а книги сервера
         // получают ключ от него.
         rootName = null
@@ -236,12 +247,26 @@ class AppState(private val app: SlushalkaApp) {
         }
     }
 
+    /**
+     * Звук книги, взятой только текстом, - по свежему оглавлению сервера, если
+     * оно есть: метка в папке писалась в день скачивания, а сервер мог с тех
+     * пор переложить файлы. Без оглавления - как в метке.
+     */
+    private fun withServerAudio(book: Book): Book {
+        if (!book.streams || !book.onPhone) return book
+        val index = app.server.index.value ?: return book
+        val sb = index.byFolder(book.folderName) ?: return book
+        val files = ru.zf.slushalka.data.ServerLibrary.toBook(index, sb, "", "").files
+        if (files.isEmpty() || files == book.files) return book
+        return book.copy(files = files, remoteDir = index.dirOf(sb))
+    }
+
     /** Длительности нужны раньше звука: без них не посчитать место в книге. */
     private suspend fun ensureDurations(book: Book): Book {
         if (book.durationsReady || !book.hasAudio) return book
         val tree = treeOf(book) ?: return book
         val measured = withContext(Dispatchers.IO) {
-            Durations.probe(app, tree, book) { done, total ->
+            Durations.probe(app, tree, book, remote = { app.streaming.mediaSource(it) }) { done, total ->
                 _busy.value = "Меряю длительности: $done из $total"
             }
         }
@@ -261,7 +286,7 @@ class AppState(private val app: SlushalkaApp) {
             if (app.readAloud.state.value.active && app.readAloud.state.value.bookId != book.id) {
                 app.readAloud.stop()
             }
-            val ready = ensureDurations(book)
+            val ready = ensureDurations(withServerAudio(book))
             _current.value = ready
             _text.value = null
             _alignment.value = null
@@ -412,8 +437,7 @@ class AppState(private val app: SlushalkaApp) {
         bump()
         // Вместе с отметками уходит и файл разметки: иначе та же карта
         // вернулась бы при следующем открытии книги.
-        val tree = treeOf(book) ?: return
-        app.scope.launch { withContext(Dispatchers.IO) { app.markup.delete(tree, book) } }
+        app.scope.launch { app.markup.delete(book) }
     }
 
     fun bump() {
@@ -521,7 +545,10 @@ class AppState(private val app: SlushalkaApp) {
         val anchorMs = if (forward) atMs + span else atMs
 
         val pcm = withContext(Dispatchers.IO) {
-            AudioChunk.decode(app, documentUri(tree, file.docId), from, span)
+            // С сервера - через кэш плеера: только что игравшие секунды уже на
+            // телефоне, недостающее докачивается куском по Range.
+            if (file.isRemote) AudioChunk.decode(app.streaming.mediaSource(file), from, span)
+            else AudioChunk.decode(app, documentUri(tree, file.docId), from, span)
         } ?: return Probe(null, null, 0, Miss.NO_AUDIO, anchorMs)
 
         val transcript = app.recognizer.recognize(pcm)
@@ -745,19 +772,15 @@ class AppState(private val app: SlushalkaApp) {
     /** Карта уезжает файлом в папку книги - оттуда её возьмут другие устройства. */
     private suspend fun saveMarkup(): Boolean {
         val book = _current.value ?: return false
-        val tree = treeOf(book) ?: return false
         val text = _text.value ?: return false
         val anchors = app.positions.get(book.id).anchors.filter { it.manual }
         if (anchors.isEmpty()) return false
-        return withContext(Dispatchers.IO) {
-            app.markup.write(tree, book, text, prefs.value.profile.ifBlank { "без имени" }, anchors)
-        }
+        return app.markup.write(book, text, prefs.value.profile.ifBlank { "без имени" }, anchors)
     }
 
     /** Разметка, приехавшая вместе с книгой: считать заново ничего не надо. */
     private suspend fun loadMarkup(book: Book, text: BookText) {
-        val tree = treeOf(book) ?: return
-        val map = withContext(Dispatchers.IO) { app.markup.read(tree, book) } ?: return
+        val map = app.markup.read(book) ?: return
         if (!map.matches(book, text)) return
         val mine = app.positions.get(book.id).anchors
         // Свои отметки главнее: их ставили руками и здесь.

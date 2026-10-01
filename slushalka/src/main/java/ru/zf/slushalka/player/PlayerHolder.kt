@@ -56,6 +56,8 @@ class PlayerHolder(
     private val positions: PositionStore,
     /** Журнал подходов: каждый тик игры и каждая пауза - для статистики. */
     private val journal: Journal,
+    /** Звук с сервера библиотеки: адреса, кэш, подкачка, ошибки сети. */
+    private val streaming: Streaming,
     /** Дёргается, когда позицию пора отправить в папку библиотеки. */
     private val onSyncDue: (bookId: String) -> Unit,
 ) {
@@ -83,8 +85,22 @@ class PlayerHolder(
      */
     var artworkFor: ((bookId: String, absMs: Long) -> Uri?)? = null
 
+    @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
     val player: ExoPlayer by lazy {
         ExoPlayer.Builder(context)
+            // Файл с телефона читается как раньше, с сервера - через кэш
+            // записи (см. Streaming): сыгранное второй раз не качается.
+            .setMediaSourceFactory(
+                androidx.media3.exoplayer.source.DefaultMediaSourceFactory(streaming.dataSourceFactory),
+            )
+            // Запас вперёд - минуты, а не полминуты по умолчанию: с сервера
+            // книга переживает лифт и тоннель. Для своих файлов это лишь
+            // десяток мегабайт памяти.
+            .setLoadControl(
+                androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(4 * 60_000, 10 * 60_000, 2_500, 5_000)
+                    .build(),
+            )
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -123,12 +139,15 @@ class PlayerHolder(
                 saveNow(markHistory = true)
                 book?.id?.let(onSyncDue)
             }
+            if (isPlaying) prefetchNext()
             push()
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             // Граница файла - самое обидное место для потери позиции.
             saveNow()
+            // С сервера: начался новый файл - заранее качается следующий.
+            prefetchNext()
             push()
         }
 
@@ -138,7 +157,10 @@ class PlayerHolder(
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            _state.value = _state.value.copy(error = error.message ?: "Файл не читается")
+            // Файл с сервера: сказать, что с сетью или входом, а не код ошибки.
+            val remote = book?.files?.getOrNull(player.currentMediaItemIndex)?.isRemote == true
+            val text = (if (remote) streaming.explain(error) else null) ?: error.message ?: "Файл не читается"
+            _state.value = _state.value.copy(error = text)
         }
     }
 
@@ -186,8 +208,9 @@ class PlayerHolder(
         val coverUri = coverUriFor(tree, b)
         val items = b.files.mapIndexed { i, f ->
             MediaItem.Builder()
-                .setUri(documentUri(tree, f.docId))
-                .setMediaId(f.docId)
+                // Файл с сервера - адресом: его прочтёт сетевой источник с кэшем.
+                .setUri(if (f.isRemote) streaming.uriOf(f) else documentUri(tree, f.docId))
+                .setMediaId(f.key)
                 .setMediaMetadata(
                     MediaMetadata.Builder()
                         .setTitle(b.title.ifBlank { f.name })
@@ -214,13 +237,27 @@ class PlayerHolder(
         player.playWhenReady = false
         listenedAcc = saved.listenedMs
         lastPauseAt = 0L
+        // Новая книга: подкачка прежней больше ни к чему.
+        streaming.prefetch(null)
         push()
+    }
+
+    /**
+     * Следующий файл с сервера - заранее и целиком, пока играет этот. Свой
+     * файл или конец книги - подкачка отменяется.
+     */
+    private fun prefetchNext() {
+        val b = book ?: return streaming.prefetch(null)
+        streaming.prefetch(b.files.getOrNull(player.currentMediaItemIndex + 1))
     }
 
     private fun coverUriFor(tree: Uri, b: Book): Uri? {
         b.coverDocId?.let { return documentUri(tree, it) }
         val extracted = java.io.File(java.io.File(context.filesDir, "covers"), coverKey(b.id))
-        return if (extracted.exists()) Uri.fromFile(extracted) else null
+        if (extracted.exists()) return Uri.fromFile(extracted)
+        // Книга прямо с сервера: обложка уже лежит в кэше - её качала полка.
+        val remote = b.coverRemote?.let { (context as? ru.zf.slushalka.SlushalkaApp)?.server?.cachedCover(it) }
+        return remote?.let(Uri::fromFile)
     }
 
     private fun coverKey(bookId: String): String {
@@ -288,6 +325,12 @@ class PlayerHolder(
         if (player.isPlaying) {
             player.pause()
         } else {
+            // После ошибки (сеть пропала, сервер не ответил) плеер стоит в
+            // IDLE, и play() ничего не сделал бы: сперва подготовить заново.
+            if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
+                clearError()
+                player.prepare()
+            }
             applyRewindAfterPause()
             player.play()
         }
@@ -499,6 +542,7 @@ class PlayerHolder(
      */
     fun close() {
         saveNow(markHistory = true)
+        streaming.prefetch(null)
         player.stop()
         player.clearMediaItems()
         book = null

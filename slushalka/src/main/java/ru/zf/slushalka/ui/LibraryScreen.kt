@@ -371,6 +371,12 @@ fun LibraryScreen(
             onDownload = if (sb != null && idx != null && entry.where != Where.PHONE) {
                 { serverMenu = null; app.cloudBooks.download(sb.folder, idx.booksDir, into = entry.local) }
             } else null,
+            // Только текст - когда есть и текст, и звук, а на телефоне книги ещё нет.
+            onTextOnly = if (sb != null && idx != null && entry.where == Where.SERVER &&
+                sb.mainText != null && sb.audio.isNotEmpty()
+            ) {
+                { serverMenu = null; app.cloudBooks.downloadText(idx, sb) }
+            } else null,
             onDelete = entry.local?.takeIf { it.onPhone }?.let { local -> { serverMenu = null; deleteAsk = local } },
             onClose = { serverMenu = null },
         )
@@ -959,6 +965,8 @@ private fun ServerBookMenu(
     busy: Boolean,
     onOpen: (() -> Unit)?,
     onDownload: (() -> Unit)?,
+    /** Скачать текст, а звук слушать с сервера; null - не к этой книге. */
+    onTextOnly: (() -> Unit)?,
     onDelete: (() -> Unit)?,
     onClose: () -> Unit,
 ) {
@@ -997,8 +1005,16 @@ private fun ServerBookMenu(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (onDownload != null && server != null) {
+                if (onTextOnly != null && server != null) {
                     Spacer(Modifier.height(10.dp))
+                    FilledTonalButton(onClick = onTextOnly, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Glyphs.MenuBook, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Только текст · ${formatBytes(server.textBytes)}, звук потоком")
+                    }
+                }
+                if (onDownload != null && server != null) {
+                    Spacer(Modifier.height(if (onTextOnly != null) 6.dp else 10.dp))
                     FilledTonalButton(onClick = onDownload, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                         Icon(Glyphs.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))

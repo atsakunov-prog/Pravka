@@ -28,11 +28,21 @@ object AudioChunk {
     /** Частота, на которой говорят все распознаватели. */
     const val TARGET_RATE = 16_000
 
-    fun decode(context: Context, uri: Uri, startMs: Long, durationMs: Long): Pcm? {
+    fun decode(context: Context, uri: Uri, startMs: Long, durationMs: Long): Pcm? =
+        decode(startMs, durationMs) { it.setDataSource(context, uri, null) }
+
+    /**
+     * То же для файла с сервера: [source] читает через кэш плеера, и только
+     * что сыгранные секунды берутся с телефона, без сети.
+     */
+    fun decode(source: android.media.MediaDataSource, startMs: Long, durationMs: Long): Pcm? =
+        decode(startMs, durationMs) { it.setDataSource(source) }
+
+    private fun decode(startMs: Long, durationMs: Long, open: (MediaExtractor) -> Unit): Pcm? {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         try {
-            extractor.setDataSource(context, uri, null)
+            open(extractor)
             var track = -1
             var format: MediaFormat? = null
             for (i in 0 until extractor.trackCount) {

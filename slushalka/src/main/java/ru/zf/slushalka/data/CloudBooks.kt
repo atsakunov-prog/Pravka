@@ -80,6 +80,40 @@ class CloudBooks(private val app: SlushalkaApp) {
         }
     }
 
+    /**
+     * Взять книгу из библиотеки только текстом: на полку ложится её папка с
+     * текстом, обложкой и файлами Слушалки (разметка, справочник), а звук
+     * остаётся на сервере и играет потоком. Чтобы сканер полки не счёл такую
+     * папку книгой без записи, в неё кладётся метка [ServerLibrary.MARKER] -
+     * папка на сервере и аудио с длительностями: полка соберёт книгу и без
+     * сети.
+     */
+    fun downloadText(index: ServerLibrary.Index, book: ServerLibrary.ServerBook) {
+        val dir = index.dirOf(book)
+        fetch(book.folder, into = null) { tree, bookDir ->
+            // Обложка - отдельно: её размера оглавление не знает, качается всегда.
+            val files = book.textKit.map { Pull("$dir/${it.path}", it.path, it.size) } +
+                listOfNotNull(book.cover?.let { Pull("$dir/$it", it, 0L) })
+            Plan(files) {
+                val marker = org.json.JSONObject()
+                    .put("folder", book.folder)
+                    .put("dir", dir)
+                    .put("at", System.currentTimeMillis())
+                    .put("audio", org.json.JSONArray().apply {
+                        book.audio.forEach { a ->
+                            put(org.json.JSONObject().put("path", a.path).put("size", a.size).put("ms", a.ms))
+                        }
+                    })
+                    .toString()
+                val ok = withContext(Dispatchers.IO) {
+                    Saf.ensureChild(app, tree, bookDir, ServerLibrary.MARKER, "application/json")
+                        ?.let { Saf.writeText(app, tree, it, marker) } == true
+                }
+                if (!ok) throw Cloud.CloudException("Не записалась метка «звук на сервере» в папку книги")
+            }
+        }
+    }
+
     /** Что качать: откуда на сервере, куда в папке книги, сколько байт. */
     private data class Pull(val from: String, val rel: String, val size: Long)
 

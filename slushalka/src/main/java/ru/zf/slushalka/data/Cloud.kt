@@ -170,6 +170,16 @@ class Cloud(private val settings: Settings) {
         }
     }
 
+    /** Удалить файл. Его и так нет (404) - тоже удалён. */
+    suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val req = auth(Request.Builder().url(url(path))).delete().build()
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful && resp.code != 404) throw CloudException("Облако не удалило $path: ${resp.code}")
+            }
+        }
+    }
+
     /** Файл целиком - для маленьких файлов синхронизации. null - файла нет. */
     suspend fun getText(path: String): Result<String?> = withContext(Dispatchers.IO) {
         runCatching {

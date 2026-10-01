@@ -1,10 +1,9 @@
 package ru.zf.slushalka.ask
 
 import android.content.Context
-import android.net.Uri
-import android.provider.DocumentsContract
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -14,10 +13,8 @@ import org.json.JSONObject
 import ru.zf.slushalka.data.Ask
 import ru.zf.slushalka.data.AskLog
 import ru.zf.slushalka.data.GuideStore
-import ru.zf.slushalka.data.Saf
 import ru.zf.slushalka.data.Settings
 import ru.zf.slushalka.library.Book
-import ru.zf.slushalka.library.documentUri
 import ru.zf.slushalka.text.BookText
 import ru.zf.slushalka.text.Chapter
 
@@ -45,6 +42,8 @@ class GuideEngine(
     private val client: ClaudeClient,
     private val store: GuideStore,
     private val askLog: AskLog,
+    /** Папка книги - на телефоне, а у книги со звуком на сервере ещё и там. */
+    private val dir: ru.zf.slushalka.data.BookDir,
 ) {
 
     private val _states = MutableStateFlow<Map<String, GuideState>>(emptyMap())
@@ -254,15 +253,10 @@ class GuideEngine(
     fun forget(book: Book) {
         store.delete(book.id)
         _states.value = _states.value - book.id
-        val tree = treeOf(book) ?: return
-        Thread {
-            runCatching {
-                Saf.findChild(context, tree, book.folderDocId, FILE)?.let { docId ->
-                    DocumentsContract.deleteDocument(context.contentResolver, documentUri(tree, docId))
-                }
-            }
-        }.start()
+        forgetScope.launch { runCatching { dir.delete(book, FILE) } }
     }
+
+    private val forgetScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
 
     private fun put(bookId: String, state: GuideState): GuideState {
         store.save(bookId, state)
@@ -288,23 +282,15 @@ class GuideEngine(
         }
     }
 
-    /** Папка, в которой книга найдена; у книг из старой библиотеки - главная. */
-    private fun treeOf(book: Book): Uri? =
-        book.treeUri ?: settings.now().libraryUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
-
     /** Что за файл лежит в папке книги; null - файла нет (или папки библиотеки уже нет). */
-    private fun fitInBook(book: Book): Fit? {
-        val tree = treeOf(book) ?: return Fit(0, 0, "")
-        val docId = Saf.findChild(context, tree, book.folderDocId, FILE) ?: return null
-        val raw = Saf.readText(context, tree, docId) ?: return null
+    private suspend fun fitInBook(book: Book): Fit? {
+        val raw = dir.read(book, FILE) ?: return null
         return runCatching { fitOf(JSONObject(raw)) }.getOrNull()
     }
 
     private fun fitOf(o: JSONObject) = Fit(o.optInt("chars", -1), o.optInt("главы", -1), o.optString("text"))
 
-    private fun writeToBook(book: Book, state: GuideState, text: BookText?): Boolean {
-        val tree = treeOf(book) ?: return false
-        val docId = Saf.ensureChild(context, tree, book.folderDocId, FILE, "application/json") ?: return false
+    private suspend fun writeToBook(book: Book, state: GuideState, text: BookText?): Boolean {
         val body = state.toJson().apply {
             put("книга", book.title)
             put("text", book.textName.orEmpty())
@@ -313,13 +299,11 @@ class GuideEngine(
                 put("главы", text.chapters.size)
             }
         }.toString()
-        return Saf.writeText(context, tree, docId, body)
+        return dir.write(book, FILE, body)
     }
 
-    private fun readFromBook(book: Book): Pair<GuideState, Fit>? {
-        val tree = treeOf(book) ?: return null
-        val docId = Saf.findChild(context, tree, book.folderDocId, FILE) ?: return null
-        val raw = Saf.readText(context, tree, docId) ?: return null
+    private suspend fun readFromBook(book: Book): Pair<GuideState, Fit>? {
+        val raw = dir.read(book, FILE) ?: return null
         return runCatching {
             val o = JSONObject(raw)
             val state = GuideState.fromJson(o)

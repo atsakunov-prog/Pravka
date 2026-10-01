@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.DocumentsContract
+import ru.zf.slushalka.data.ServerLibrary
 
 /**
  * Обход выбранной папки: что здесь книга, а что полка с книгами.
@@ -16,6 +17,10 @@ import android.provider.DocumentsContract
  * И ещё одно: **папка с одним текстом и без подпапок - тоже книга**, только
  * без звука. Так выглядит книга, скачанная из каталога Флибусты: её читают
  * глазами, а звук, если появится рядом, подхватится при следующем чтении папки.
+ *
+ * А если рядом с текстом лежит метка `слушалка-звук.json` - книга взята с
+ * сервера библиотеки только текстом, и звук у неё есть, только на сервере:
+ * файлы с длительностями записаны в метке, плеер играет их потоком.
  */
 class LibraryScanner(private val context: Context) {
 
@@ -65,6 +70,15 @@ class LibraryScanner(private val context: Context) {
             return listOf(makeBook(relPath, docId, folderName, files, cover, text))
         }
 
+        // Текст здесь, звук на сервере: книга, взятая из библиотеки только текстом.
+        if (text != null) {
+            entries.firstOrNull { !it.isDir && it.name == ServerLibrary.MARKER }
+                ?.let { readMarker(treeUri, it.docId) }
+                ?.let { (dir, files) ->
+                    return listOf(makeBook(relPath, docId, folderName, files, cover, text).copy(remoteDir = dir))
+                }
+        }
+
         if (dirs.isEmpty()) {
             // Текст без записи и без подпапок - книга для чтения. Условие про
             // подпапки нарочно: случайный fb2 в корне библиотеки не должен
@@ -82,6 +96,31 @@ class LibraryScanner(private val context: Context) {
         }
         return dirs.flatMap { walk(treeUri, it.docId, it.name, "$relPath/${it.name}") }
     }
+
+    /**
+     * Метка «звук на сервере»: папка книги там и её аудио - путь, размер,
+     * длительность. Битая или пустая - метки нет, книга останется текстом.
+     */
+    private fun readMarker(treeUri: Uri, docId: String): Pair<String, List<BookFile>>? = runCatching {
+        val text = context.contentResolver.openInputStream(documentUri(treeUri, docId))
+            ?.use { it.readBytes().toString(Charsets.UTF_8) } ?: return null
+        val o = org.json.JSONObject(text)
+        val dir = o.optString("dir").trim('/').takeIf { it.isNotBlank() } ?: return null
+        val arr = o.optJSONArray("audio") ?: return null
+        val files = (0 until arr.length()).mapNotNull { i ->
+            val a = arr.optJSONObject(i) ?: return@mapNotNull null
+            val path = a.optString("path").trim('/').takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            BookFile(
+                docId = "",
+                name = path.substringAfterLast('/'),
+                relPath = path,
+                size = a.optLong("size"),
+                durationMs = a.optLong("ms"),
+                remote = "$dir/$path",
+            )
+        }
+        if (files.isEmpty()) null else dir to files
+    }.getOrNull()
 
     private fun collectAudio(treeUri: Uri, docId: String, prefix: String): List<BookFile> {
         val entries = children(treeUri, docId)
@@ -226,6 +265,8 @@ object Durations {
         context: Context,
         treeUri: Uri,
         book: Book,
+        /** Файл с сервера - чем его читать. Сервер мерит длительности сам, это на случай, если не смог. */
+        remote: ((BookFile) -> android.media.MediaDataSource)? = null,
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
     ): Book {
         val todo = book.files.count { it.durationMs <= 0 }
@@ -237,7 +278,8 @@ object Durations {
             if (f.durationMs > 0) return@map f
             val r = MediaMetadataRetriever()
             val ms = runCatching {
-                r.setDataSource(context, documentUri(treeUri, f.docId))
+                if (f.isRemote) r.setDataSource(remote?.invoke(f) ?: return@runCatching 0L)
+                else r.setDataSource(context, documentUri(treeUri, f.docId))
                 if (tagAlbum == null) {
                     tagAlbum = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
                     tagArtist = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)

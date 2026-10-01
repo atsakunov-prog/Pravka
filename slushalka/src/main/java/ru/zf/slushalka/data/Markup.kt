@@ -1,8 +1,5 @@
 package ru.zf.slushalka.data
 
-import android.content.Context
-import android.net.Uri
-import android.provider.DocumentsContract
 import org.json.JSONObject
 import ru.zf.slushalka.library.Book
 import ru.zf.slushalka.text.Alignment
@@ -20,9 +17,10 @@ import ru.zf.slushalka.text.BookText
  *
  * Файл живёт в папке книги, поэтому переезжает вместе с ней: скопировал книгу
  * на планшет или второму слушателю — разметка уже там, второй раз её считать
- * не надо.
+ * не надо. У книги, чей звук на сервере библиотеки, — ещё и в её папке там
+ * ([BookDir]).
  */
-class Markup(private val context: Context) {
+class Markup(private val dir: BookDir) {
 
     data class Map(
         val textName: String,
@@ -44,9 +42,8 @@ class Markup(private val context: Context) {
                 kotlin.math.abs(totalMs - book.totalMs) < 2000
     }
 
-    fun read(treeUri: Uri, book: Book): Map? {
-        val docId = Saf.findChild(context, treeUri, book.folderDocId, FILE) ?: return null
-        val text = Saf.readText(context, treeUri, docId) ?: return null
+    suspend fun read(book: Book): Map? {
+        val text = dir.read(book, FILE) ?: return null
         return runCatching {
             val o = JSONObject(text)
             Map(
@@ -61,17 +58,13 @@ class Markup(private val context: Context) {
         }.getOrNull()
     }
 
-    fun write(
-        treeUri: Uri,
+    suspend fun write(
         book: Book,
         text: BookText,
         by: String,
         anchors: List<Anchor>,
     ): Boolean {
         if (anchors.isEmpty()) return false
-        val docId = Saf.ensureChild(
-            context, treeUri, book.folderDocId, FILE, "application/json",
-        ) ?: return false
         val body = JSONObject().apply {
             put("книга", book.title)
             put("text", book.textName.orEmpty())
@@ -82,18 +75,10 @@ class Markup(private val context: Context) {
             put("by", by)
             put("points", Alignment.listToJson(anchors.sortedBy { it.audioMs }))
         }.toString()
-        return Saf.writeText(context, treeUri, docId, body)
+        return dir.write(book, FILE, body)
     }
 
-    fun delete(treeUri: Uri, book: Book): Boolean {
-        val docId = Saf.findChild(context, treeUri, book.folderDocId, FILE) ?: return true
-        return runCatching {
-            DocumentsContract.deleteDocument(
-                context.contentResolver,
-                ru.zf.slushalka.library.documentUri(treeUri, docId),
-            )
-        }.getOrDefault(false)
-    }
+    suspend fun delete(book: Book): Boolean = dir.delete(book, FILE)
 
     private companion object {
         const val FILE = "слушалка-разметка.json"

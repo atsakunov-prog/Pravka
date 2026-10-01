@@ -49,6 +49,8 @@ class SlushalkaApp : Application() {
     lateinit var markup: Markup; private set
     lateinit var updater: Updater; private set
     lateinit var player: PlayerHolder; private set
+    /** Звук с сервера: кэш записи, подкачка, источник для распознавания. */
+    lateinit var streaming: ru.zf.slushalka.player.Streaming; private set
     lateinit var ask: AskEngine; private set
     lateinit var guide: GuideEngine; private set
     lateinit var search: ru.zf.slushalka.ask.MeaningSearch; private set
@@ -76,17 +78,20 @@ class SlushalkaApp : Application() {
         sync = PositionSync(this)
         cloud = ru.zf.slushalka.data.Cloud(settings)
         server = ru.zf.slushalka.data.ServerLibrary(this, settings, cloud, scope)
-        markup = Markup(this)
+        // Разметка и справочник - в папке книги, а у книги со звуком на сервере ещё и там.
+        val bookDir = ru.zf.slushalka.data.BookDir(this, settings, cloud)
+        markup = Markup(bookDir)
         updater = Updater(this, settings)
         speaker = Speaker(this)
         recognizer = ChunkRecognizer(this)
         val claude = ClaudeClient(settings)
         ask = AskEngine(settings, claude, askLog)
-        guide = GuideEngine(this, settings, claude, GuideStore(this), askLog)
+        guide = GuideEngine(this, settings, claude, GuideStore(this), askLog, bookDir)
         advisor = Advisor(this, claude)
         search = ru.zf.slushalka.ask.MeaningSearch(claude, settings, askLog)
         talk = ru.zf.slushalka.ask.BookTalk(claude, settings, askLog)
-        player = PlayerHolder(this, settings, positions, journal) { bookId ->
+        streaming = ru.zf.slushalka.player.Streaming(this, settings, cloud)
+        player = PlayerHolder(this, settings, positions, journal, streaming) { bookId ->
             scope.launch { state.syncPush(bookId) }
         }
         state = AppState(this)
