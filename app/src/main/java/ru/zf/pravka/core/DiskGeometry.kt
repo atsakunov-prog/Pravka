@@ -75,7 +75,51 @@ object DiskGeometry {
      * радиус минус краешек. Дальше это число идёт в [dock] отрицательным
      * отступом.
      */
-    fun tuckDepth(plateRadius: Float): Int = (plateRadius * (1f - SLIVER)).roundToInt()
+    fun tuckDepth(plateRadius: Float, minSliver: Float = 0f): Int =
+        (plateRadius - maxOf(plateRadius * SLIVER, minSliver)).roundToInt().coerceAtLeast(0)
+
+    /**
+     * Шестерёнка на краешке убранного диска — вместо стрелки (владелец,
+     * 01.10.2026: «вместо стрелки, которая вытягивает весь диск… давай
+     * поставим шестерёнку, чтобы она тоже так крутилась красиво»). Стоит на
+     * лице, между «П» и «З»; возвращает, на сколько её центр отстоит от края
+     * экрана. Ближе к экрану, чем вплотную к передним кнопкам ([pad] зазора),
+     * ей нельзя: их центры — полкнопки и [edge] от края (так их ставит
+     * [extrusion]) и полшага по кольцу вверх и вниз от лица. Дальше, чем
+     * целиком на экране, — незачем. Остаток уходит за край, как у шестерёнки
+     * докованного диска («до середины кружка настроек»).
+     */
+    fun sliverGear(buttonSize: Int, gearSize: Int, ringRadius: Float, count: Int, edge: Int, pad: Float): Float {
+        val buttonR = buttonSize / 2f
+        val gearR = gearSize / 2f
+        val front = buttonR + edge
+        val apart = ringRadius * sin(Math.toRadians((spread(count) / 2f).toDouble())).toFloat()
+        val need = gearR + buttonR + pad
+        val x = if (apart >= need) gearR else front - sqrt(need * need - apart * apart)
+        return minOf(x, gearR)
+    }
+
+    /**
+     * Краешек стекла под шестерёнкой: чтобы она стояла НА стекле, а не над
+     * чужим приложением, у края остаётся не меньше её дальней кромки и зазора.
+     * Отсюда — [tuckDepth] с этим минимумом.
+     */
+    fun sliverFor(gearCentre: Float, gearSize: Int, pad: Float): Float = gearCentre + gearSize / 2f + pad
+
+    /**
+     * Спиннер — док, вытянутый от края за кнопку (владелец, 01.10.2026: «и когда
+     * я буду вытягивать этот док, он так же и будет выглядеть, просто как
+     * такой, как будто спиннер»). Кнопки разъезжаются от центра на полкнопки,
+     * стекло тянется за каждой лепестком — как у дока, только вокруг.
+     */
+    fun spinSpread(buttonSize: Int): Float = buttonSize / 2f
+
+    /**
+     * Докуда от центра кольца может дотянуться стекло — для размера его окна:
+     * тарелка или лепестки спиннера, что дальше.
+     */
+    fun bodyReach(plateRadius: Float, ringRadius: Float, buttonSize: Int, gap: Int): Float =
+        maxOf(plateRadius, ringRadius + spinSpread(buttonSize) + podRadius(buttonSize, gap))
 
     /**
      * Насколько передние кнопки («П» и «З») выступают от центра диска В
@@ -98,8 +142,8 @@ object DiskGeometry {
      * Ноль снизу: если кольцо и без того выносит кнопки на экран, вдавливать
      * их обратно к краю незачем.
      */
-    fun extrusion(plateRadius: Float, ringRadius: Float, buttonSize: Int, count: Int, edge: Int): Float =
-        (tuckDepth(plateRadius) + buttonSize / 2f + edge - frontReach(ringRadius, count)).coerceAtLeast(0f)
+    fun extrusion(plateRadius: Float, ringRadius: Float, buttonSize: Int, count: Int, edge: Int, minSliver: Float = 0f): Float =
+        (tuckDepth(plateRadius, minSliver) + buttonSize / 2f + edge - frontReach(ringRadius, count)).coerceAtLeast(0f)
 
     /** Сколько лучей у контура стекла: два градуса на луч — глазу хватает с запасом. */
     const val BLOB_RAYS = 180

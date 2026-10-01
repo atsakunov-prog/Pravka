@@ -298,11 +298,65 @@ class AutoPilotShortExitTest {
     }
 
     @Test
+    fun `сказал на выходе, куда идёт - не ходьба`() {
+        val v = AutoPilotRules.walkVerdict(
+            6, now - 21 * m, now, "Разговор с другом", "Социальное: внешнее",
+            latestOwnerStart = now - 25 * m, ownerTold = true,
+        )
+        assertEquals(AutoPilotRules.Walk.NONE, v)
+    }
+
+    // ---- «пошёл развозить детей» (01.10.2026) ----
+
+    @Test
+    fun `пошёл развозить детей за пять минут до потери сети - ответ на куда`() {
+        val left = now - 10 * m
+        assertTrue(AutoPilotRules.ownerToldLeave(left - 5 * m, "voice", "Развожу детей", "Пошёл развозить детей", left))
+        // Сказал уже после отъезда — тем более.
+        assertTrue(AutoPilotRules.ownerToldLeave(left + 2 * m, "voice", "Встреча с другом", "встречаюсь с Ильёй", left))
+    }
+
+    @Test
+    fun `слова выхода растягивают окно до получаса, без них - десять минут`() {
+        val left = now
+        assertTrue(AutoPilotRules.ownerToldLeave(left - 25 * m, "voice", "Разговор с другом", "Пошёл поговорить с другом", left))
+        assertTrue(AutoPilotRules.ownerToldLeave(left - 20 * m, "voice", "Отвожу Борю в школу", "отвожу Борю", left))
+        // «Завтракаю» за двадцать минут до выхода — не ответ: дорога и вопрос в силе.
+        assertFalse(AutoPilotRules.ownerToldLeave(left - 20 * m, "voice", "Завтрак", "Завтракаю", left))
+        assertTrue(AutoPilotRules.ownerToldLeave(left - 8 * m, "voice", "Завтрак", "Завтракаю", left))
+        // Час назад — давно, какие бы ни были слова.
+        assertFalse(AutoPilotRules.ownerToldLeave(left - 60 * m, "voice", "Прогулка", "Пошёл гулять", left))
+    }
+
+    @Test
+    fun `робот, заполнитель и запись без слов - не слово владельца`() {
+        assertFalse(AutoPilotRules.ownerToldLeave(now - 2 * m, "auto", "сон", "", now))
+        assertFalse(AutoPilotRules.ownerToldLeave(now - 2 * m, "gap", "Не размечено", "", now))
+        assertFalse(AutoPilotRules.ownerToldLeave(null, null, "", "", now))
+        // Встреча из календаря и дело по подъёму — владельческий источник, но без надиктовки.
+        assertFalse(AutoPilotRules.ownerToldLeave(now - 2 * m, "voice", "Созвон Tasty Coffee", "", now))
+    }
+
+    @Test
     fun `окно прошло - решение устарело`() {
         assertEquals(AutoPilotRules.Walk.NONE, AutoPilotRules.walkVerdict(6, now - h, now, null, null, 0L))
     }
 
     // ---- «всё ещё …?» ----
+
+    @Test
+    fun `всё ещё - по всем делам, кроме тех, где движение и есть дело`() {
+        assertTrue(AutoPilotRules.stillAskable("Работа: ЗФ", "Работа: текущая"))
+        assertTrue(AutoPilotRules.stillAskable("Обед", "Еда"))
+        assertTrue(AutoPilotRules.stillAskable("Разговор с Марианной", "Семья"))
+        assertTrue(AutoPilotRules.stillAskable("Сериал", "Отдых"))
+        assertTrue(AutoPilotRules.stillAskable("Ютуб", "Потери"))
+        assertFalse(AutoPilotRules.stillAskable("Поездка из «дом»", "Передвижение: транспорт"))
+        assertFalse(AutoPilotRules.stillAskable("Бег", "Спорт: бег"))
+        assertFalse(AutoPilotRules.stillAskable("Уборка", "Быт"))
+        assertFalse(AutoPilotRules.stillAskable("Сон", "Сон"))
+        assertFalse(AutoPilotRules.stillAskable("Не размечено", "Не размечено"))
+    }
 
     @Test
     fun `вынес мусор - один толчок, сеть на месте - не спрашиваем`() {
@@ -330,23 +384,64 @@ class AutoPilotBedtimeTest {
     private val m = 60_000L
     private val now = 100 * h
 
-    @Test
-    fun `зарядка вечером, экран погас - отбой позднее из двух`() {
-        val charged = now - 5 * m
-        val off = now - 2 * m
-        assertEquals(off, AutoPilotRules.bedtimeCandidate(charged, off, chargeHour = 23))
-        assertEquals(charged, AutoPilotRules.bedtimeCandidate(charged, now - 30 * m, chargeHour = 0))
+    // ---- сон сам (01.10.2026) ----
+
+    private val zone = java.util.TimeZone.getTimeZone("Europe/Moscow")
+
+    /** Миг [day] октября 2026 в [hh]:[mm] по Москве. */
+    private fun at(day: Int, hh: Int, mm: Int = 0): Long {
+        val c = java.util.Calendar.getInstance(zone)
+        c.clear()
+        c.set(2026, java.util.Calendar.OCTOBER, day, hh, mm, 0)
+        return c.timeInMillis
     }
 
     @Test
-    fun `зарядка с семи вечера на столе - не отбой`() {
-        assertEquals(0L, AutoPilotRules.bedtimeCandidate(now - 4 * h, now - 2 * m, chargeHour = 19))
+    fun `зарядка в 23-10, экран погас в 23-12 - сон с 23-12, решаем через полчаса`() {
+        val p = AutoPilotRules.sleepPlan(at(1, 23, 10), at(1, 23, 12), 0L, at(1, 21, 0), zone)!!
+        assertEquals(at(1, 23, 12), p.from)
+        assertEquals(at(1, 23, 42), p.decideAt)
     }
 
     @Test
-    fun `экран горит или нет зарядки - не отбой`() {
-        assertEquals(0L, AutoPilotRules.bedtimeCandidate(now - 5 * m, 0L, chargeHour = 23))
-        assertEquals(0L, AutoPilotRules.bedtimeCandidate(0L, now - 5 * m, chargeHour = 23))
+    fun `лёг в 22-15 - сон с 22-15, но решаем не раньше 23-00`() {
+        val p = AutoPilotRules.sleepPlan(at(1, 22, 10), at(1, 22, 15), 0L, 0L, zone)!!
+        assertEquals(at(1, 22, 15), p.from)
+        assertEquals(at(1, 23, 0), p.decideAt)
+    }
+
+    @Test
+    fun `толчок и слово владельца двигают начало сна`() {
+        val moved = AutoPilotRules.sleepPlan(at(1, 23, 0), at(1, 23, 2), at(1, 23, 20), 0L, zone)!!
+        assertEquals(at(1, 23, 20), moved.from)
+        assertEquals(at(1, 23, 50), moved.decideAt)
+        // «Читаю» в 23:30 гарнитурой — не спит, сон не раньше этого.
+        val said = AutoPilotRules.sleepPlan(at(1, 23, 0), at(1, 23, 2), 0L, at(1, 23, 30), zone)!!
+        assertEquals(at(1, 23, 30), said.from)
+    }
+
+    @Test
+    fun `после полуночи - решаем через полчаса, 23-00 уже прошли`() {
+        val p = AutoPilotRules.sleepPlan(at(2, 0, 40), at(2, 0, 45), 0L, 0L, zone)!!
+        assertEquals(at(2, 0, 45), p.from)
+        assertEquals(at(2, 1, 15), p.decideAt)
+    }
+
+    @Test
+    fun `зарядка с семи вечера на столе - не сон`() {
+        assertNull(AutoPilotRules.sleepPlan(at(1, 19, 0), at(1, 23, 0), 0L, 0L, zone))
+    }
+
+    @Test
+    fun `экран горит или нет зарядки - не сон`() {
+        assertNull(AutoPilotRules.sleepPlan(at(1, 23, 0), 0L, 0L, 0L, zone))
+        assertNull(AutoPilotRules.sleepPlan(0L, at(1, 23, 0), 0L, 0L, zone))
+    }
+
+    @Test
+    fun `взял телефон в четыре ночи - не подъём, с пяти утра - подъём`() {
+        for (hour in listOf(22, 23, 0, 1, 2, 3, 4)) assertFalse("час $hour", AutoPilotRules.sleepWakeHour(hour))
+        for (hour in listOf(5, 6, 7, 9, 13, 21)) assertTrue("час $hour", AutoPilotRules.sleepWakeHour(hour))
     }
 
     @Test

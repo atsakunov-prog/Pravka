@@ -60,7 +60,8 @@ class ButtonCountdown(private val context: Context) {
     fun attach(container: FrameLayout, spinner: View) {
         text?.let { (it.parent as? FrameLayout)?.removeView(it) }
         val t = TextView(context).apply {
-            setTextColor(PAPER)
+            // Серым, а не белой бумагой: число ждёт, а не кричит (PillLook.SECONDS_ALPHA).
+            setTextColor(ru.zf.pravka.core.DiskLook.withAlpha(PAPER, ru.zf.pravka.core.PillLook.SECONDS_ALPHA))
             textSize = 14f
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
             // Цифры одной ширины: «9,4» → «9,3» не должно ёрзать по кнопке.

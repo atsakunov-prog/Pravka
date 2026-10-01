@@ -78,6 +78,21 @@ class DiskController(
 ) {
 
     private companion object {
+        /**
+         * Круглый диск — половиной у края и целиком — ВРЕМЕННО выключен
+         * (владелец, 01.10.2026: «состояние полного диска давай временно
+         * отключим. Оставим состояние как сейчас есть в доке, когда оно
+         * такими волнами… и когда я буду вытягивать этот док, он так же и
+         * будет выглядеть, просто как такой, как будто спиннер»). Покой —
+         * только док у края; на краешке вместо стрелки шестерёнка; вытянутый
+         * за кнопку док раскрывается спиннером, отпустил — снова док у
+         * ближайшего края. true — всё как до 01.10: стрелка, половина, целиком.
+         */
+        const val ROUND_DISK = false
+
+        /** Зазор шестерёнки на краешке до «П» и «З» и до кромки стекла, dp. */
+        private const val SLIVER_GEAR_PAD_DP = 3
+
         /** Чтение места диска: попыток и пауза между ними (вторая — вдвое дольше). */
         private const val LOAD_TRIES = 3
         private const val LOAD_RETRY_MS = 500L
@@ -225,6 +240,15 @@ class DiskController(
     // двух сейчас ведёт выдавливание — [pushSpring].
     private val pushQuick = DiskPhysics.quick(0f)
     private var pushSpring = push
+    // Спиннер: кнопки разъезжаются от центра ([spread], `DiskGeometry.spinSpread`),
+    // пока док тянут за кнопку от края. Своя пружина, быстрая — отцепился
+    // от края, и лепестки уже раскрылись под пальцем.
+    private val spreadSpring = DiskPhysics.quick(0f)
+    private var spread = 0f
+    private var spreadTarget = 0f
+    private var spreading = false
+    /** Угол кнопки, за которую тянут спиннер: она остаётся под пальцем, пока лепестки раскрываются. */
+    private var carryAngle = 0f
     private var turnTarget = 0f
     private var slideTargetX = 0f
     private var slideTargetY = 0f
@@ -389,7 +413,27 @@ class DiskController(
      * рывком; кнопки же — свои окна, им ждать нечего. Окно, которое только
      * едет, так не делает: так ездит весь остальной диск, и там всё гладко.
      */
-    private fun plateSide(d: Dims): Int = 2 * ceil(d.plate + d.shadow).toInt()
+    private fun plateSide(d: Dims): Int =
+        2 * ceil((if (ROUND_DISK) d.plate else DiskGeometry.bodyReach(d.plate, d.ring, d.button, d.gap)) + d.shadow).toInt()
+
+    /** Кольцо кнопок сейчас: свой радиус плюс раскрытие спиннера. */
+    private fun ringNow(d: Dims): Float = d.ring + spread
+
+    /** Шестерёнка стоит на краешке дока вместо стрелки: круглого диска нет, а кнопок хотя бы две. */
+    private fun gearOnSliver(): Boolean = !ROUND_DISK && liveSlots().size >= 2
+
+    private fun sliverPad(): Float = dp(SLIVER_GEAR_PAD_DP).toFloat()
+
+    /** Центр шестерёнки на краешке — от края экрана (`DiskGeometry.sliverGear`). */
+    private fun sliverGear(d: Dims): Float =
+        DiskGeometry.sliverGear(d.button, d.gear, d.ring, liveSlots().size, d.gap, sliverPad())
+
+    /** Сколько стекла оставить у края, чтобы шестерёнка стояла на нём; 0 — прежняя четверть. */
+    private fun minSliver(d: Dims): Float =
+        if (gearOnSliver()) DiskGeometry.sliverFor(sliverGear(d), d.gear, sliverPad()) else 0f
+
+    /** Глубина уборки за край — под шестерёнку на краешке. */
+    private fun tuckDepth(d: Dims): Int = DiskGeometry.tuckDepth(d.plate, minSliver(d))
 
     private fun dims(): Dims {
         val b = buttonSize().coerceAtLeast(1)
@@ -489,9 +533,12 @@ class DiskController(
             // из прежней геометрии.
             tucked = false
             extrude = 0f
+            spread = 0f
             stopAll()
             showPlate()
             layout()
+            // Круглого диска нет — сразу в док к своему краю.
+            if (!ROUND_DISK) retract()
         }
     }
 
@@ -502,6 +549,7 @@ class DiskController(
         stopAll()
         tucked = false
         extrude = 0f
+        spread = 0f
         turning = null
         pull = null
         sliding = false
@@ -543,11 +591,14 @@ class DiskController(
             // сдвинутого под давно уехавший край.
             tucked = false
             extrude = 0f
+            spread = 0f
+            spreading = false
             hidePlate()
             placeHead()
         } else if (shown && placed && !folded) {
             showPlate()
             layout()
+            if (!ROUND_DISK) retract()
         }
     }
 
@@ -577,7 +628,7 @@ class DiskController(
             live.forEachIndexed { i, slot ->
                 val angle = DiskGeometry.slotAngle(i, live.size, f, rotation)
                 socketAngles[i] = angle
-                val (x, y) = DiskGeometry.slotOrigin(bx, by, d.ring, angle, d.button)
+                val (x, y) = DiskGeometry.slotOrigin(bx, by, ringNow(d), angle, d.button)
                 // Сначала место, потом окно: снятое окно ставится на место в
                 // параметрах и вешается уже там, где надо. Кнопка уже там —
                 // WindowManager не зовём: пока кнопки выдавливаются, кольцо
@@ -594,7 +645,7 @@ class DiskController(
             // бы на первом кадре поворота.
             plate?.setBody(
                 d.plate,
-                d.ring,
+                ringNow(d),
                 d.button / 2f,
                 DiskGeometry.podRadius(d.button, d.gap),
                 socketAngles,
@@ -608,6 +659,9 @@ class DiskController(
         // у края.
         plate?.let {
             it.allHiddenView = allHidden
+            // Стрелка — только у круглого диска: выводить её больше некуда, в
+            // доке на её месте шестерёнка.
+            it.arrowOn = ROUND_DISK
             it.setFacing(f, cx - d.plate < 0f || cx + d.plate > w, tucked)
         }
     }
@@ -623,7 +677,7 @@ class DiskController(
         val f = facing ?: DiskGeometry.facing(cx, w)
         val angle = DiskGeometry.slotAngle(index, live.size, f, rotation)
         val (bx, by) = ringCentre(f)
-        return DiskGeometry.slotOrigin(bx, by, d.ring, angle, d.button)
+        return DiskGeometry.slotOrigin(bx, by, ringNow(d), angle, d.button)
     }
 
     /**
@@ -640,7 +694,7 @@ class DiskController(
 
     /** Насколько кнопки выдавлены из стекла в убранном диске: считает геометрия. */
     private fun extrusion(d: Dims): Float =
-        DiskGeometry.extrusion(d.plate, d.ring, d.button, liveSlots().size, d.gap)
+        DiskGeometry.extrusion(d.plate, d.ring, d.button, liveSlots().size, d.gap, minSliver(d))
 
     /**
      * Отступ докования для текущего состояния: обычный диск встаёт центром
@@ -648,7 +702,7 @@ class DiskController(
      * остаётся краешек со стрелкой).
      */
     private fun dockInset(d: Dims): Int =
-        if (tucked) -DiskGeometry.tuckDepth(d.plate) else DiskGeometry.DOCK_INSET
+        if (tucked) -tuckDepth(d) else DiskGeometry.DOCK_INSET
 
     /**
      * Самолечение по тику службы: кнопка не там, где ей быть (включили
@@ -670,7 +724,7 @@ class DiskController(
         val (bx, by) = ringCentre(f)
         val drifted = live.withIndex().any { (i, slot) ->
             val angle = DiskGeometry.slotAngle(i, live.size, f, rotation)
-            val (x, y) = DiskGeometry.slotOrigin(bx, by, d.ring, angle, d.button)
+            val (x, y) = DiskGeometry.slotOrigin(bx, by, ringNow(d), angle, d.button)
             val (px, py) = slot.button.currentPosition() ?: return@any true
             abs(px - x) > DRIFT_PX || abs(py - y) > DRIFT_PX
         }
@@ -684,11 +738,38 @@ class DiskController(
         val h = head ?: return
         val d = dims()
         h.glassLight = lightGlass
-        h.moveToCentre(cx.roundToInt(), cy.roundToInt(), d.button)
-        // Шестерёнка крутится вместе с диском (владелец: «будет классный эффект»).
+        val k = sliverShare(d)
+        val (hx, hy) = headCentre(d, k)
+        h.moveToCentre(hx.roundToInt(), hy.roundToInt(), d.button)
+        // Шестерёнка крутится вместе с диском (владелец: «будет классный эффект»)
+        // — и на краешке дока тоже: «чтобы она тоже так крутилась красиво».
         h.setTurn(rotation)
-        // Веер и записки шестерёнки — снаружи тарелки, не поверх кнопок.
-        h.clearance = if (allHidden) 0 else (d.plate - h.headSizePx() / 2f).roundToInt().coerceAtLeast(0)
+        // Веер и записки шестерёнки — снаружи тарелки, не поверх кнопок; с
+        // краешка — сразу за «П» и «З».
+        val round = d.plate - h.headSizePx() / 2f
+        val dock = (d.button + 2f * d.gap) - (sliverGear(d) + h.headSizePx() / 2f)
+        h.clearance = if (allHidden) 0 else (round + (dock - round) * k).roundToInt().coerceAtLeast(0)
+    }
+
+    /**
+     * Насколько шестерёнка уехала на краешек: 0 — в центре тарелки, 1 — на
+     * краешке дока. Едет вместе с выдавливанием кнопок — уборка уводит её из
+     * центра на край, вытягивание в спиннер возвращает в центр.
+     */
+    private fun sliverShare(d: Dims): Float {
+        if (allHidden || !gearOnSliver()) return 0f
+        val full = extrusion(d)
+        if (full <= 0.5f) return if (tucked) 1f else 0f
+        return (extrude / full).coerceIn(0f, 1f)
+    }
+
+    /** Центр шестерёнки: центр тарелки, сдвинутый вдоль лица на [k] пути до краешка. */
+    private fun headCentre(d: Dims, k: Float): Pair<Float, Float> {
+        if (k <= 0f) return cx to cy
+        val f = facing ?: DiskGeometry.facing(cx, frame().first)
+        val off = k * (tuckDepth(d) + sliverGear(d))
+        val a = Math.toRadians(f.toDouble())
+        return (cx + off * cos(a).toFloat()) to (cy + off * sin(a).toFloat())
     }
 
     // ---- Палец крутит за кнопку ----
@@ -859,6 +940,14 @@ class DiskController(
             tucked = false
             pushTo(0f, quick = true)
         }
+        if (!ROUND_DISK) {
+            // Вытянул док — спиннер: кнопки разъезжаются лепестками, а та, за
+            // которую тянут, остаётся под пальцем ([carryPlate]).
+            val live = liveSlots()
+            val index = live.indexOfFirst { it.button === turning }.coerceAtLeast(0)
+            carryAngle = DiskGeometry.slotAngle(index, live.size, slideFacing, rotation)
+            spreadTo(DiskGeometry.spinSpread(dims().button))
+        }
         if (docked) Haptics.tick(service)
     }
 
@@ -870,8 +959,9 @@ class DiskController(
      */
     private fun carryPlate() {
         val a = Math.toRadians(slideFacing.toDouble())
-        cx = carryX - extrude * cos(a).toFloat()
-        cy = carryY - extrude * sin(a).toFloat()
+        val b = Math.toRadians(carryAngle.toDouble())
+        cx = carryX - extrude * cos(a).toFloat() - spread * cos(b).toFloat()
+        cy = carryY - extrude * sin(a).toFloat() - spread * sin(b).toFloat()
     }
 
     /** Тарелка заходит за левый или правый край: диск стоит у края — половиной или убранным. */
@@ -933,6 +1023,19 @@ class DiskController(
         if (allHidden) placeHead() else layout()
         if (!dropped) return
         sliding = false
+        if (!ROUND_DISK && !allHidden) {
+            // Круглого диска нет: отпустил где угодно — спиннер складывается и
+            // уезжает в док к ближайшему краю.
+            val newFacing = DiskGeometry.facing(cx, w)
+            if (newFacing != slideFacing) {
+                // Другая половина экрана — раскладка зеркалится, домой «П» сверху.
+                rotation = 0f
+                flip(newFacing)
+            }
+            spreadTo(0f)
+            retract()
+            return
+        }
         var (dx, dy) = docked()
         val newFacing = DiskGeometry.facing(dx, w)
         if (newFacing != slideFacing) {
@@ -1082,6 +1185,8 @@ class DiskController(
         private var held = false
         private val hold = Runnable {
             if (pinch || pinched || dragging || onArrow) return@Runnable
+            // Выдвинуть целиком нечего: круглого диска нет (ROUND_DISK).
+            if (!ROUND_DISK) return@Runnable
             held = true
             Haptics.start(service)
             togglePullOut()
@@ -1231,7 +1336,7 @@ class DiskController(
         val (w, h) = frame()
         val f = facing ?: DiskGeometry.facing(cx, w)
         val edge = if (f == 0f) 0f else w.toFloat()
-        val (dx, dy) = DiskGeometry.dock(edge, cy, w, h, d.plate, -DiskGeometry.tuckDepth(d.plate))
+        val (dx, dy) = DiskGeometry.dock(edge, cy, w, h, d.plate, -tuckDepth(d))
         val target = DiskGeometry.home(rotation)
         // Уже убран и стоит ровно там — не тревожим диск и не пишем место:
         // тик простоя приходит каждые полминуты.
@@ -1284,6 +1389,7 @@ class DiskController(
      * каждом обычном тапе — а тапают тут одной рукой, на ходу.
      */
     private fun arrowTap() {
+        if (!ROUND_DISK) return
         val second = arrowAgain()
         arrowTapAt = SystemClock.uptimeMillis()
         onTouched?.invoke()
@@ -1311,6 +1417,7 @@ class DiskController(
      * третьей иначе надо крутить.
      */
     private fun togglePullOut() {
+        if (!ROUND_DISK) return
         if (!shown || !placed || folded || allHidden) return
         onTouched?.invoke()
         val d = dims()
@@ -1323,7 +1430,7 @@ class DiskController(
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            if (!animating && !pushing) {
+            if (!animating && !pushing && !spreading) {
                 framing = false
                 return
             }
@@ -1349,8 +1456,13 @@ class DiskController(
                 // подъезжает под них и между касаниями.
                 if (pull == DiskGeometry.Pull.CARRY && turning != null) carryPlate()
             }
+            if (spreading) {
+                if (spreadSpring.step(spreadTarget, dt)) spreading = false
+                spread = spreadSpring.position.coerceAtLeast(0f)
+                if (pull == DiskGeometry.Pull.CARRY && turning != null) carryPlate()
+            }
             layout()
-            if (animating || pushing) {
+            if (animating || pushing || spreading) {
                 Choreographer.getInstance().postFrameCallback(this)
             } else {
                 framing = false
@@ -1387,6 +1499,19 @@ class DiskController(
         pushSpring = spring
         pushTarget = target
         pushing = true
+        startFrames()
+    }
+
+    /** Раскрыть спиннер (или сложить обратно) — своей быстрой пружиной. */
+    private fun spreadTo(target: Float) {
+        if (spreading && spreadTarget == target) return
+        if (abs(target - spread) < 0.5f && !spreading) {
+            spread = target
+            return
+        }
+        spreadSpring.reset(spread, if (spreading) spreadSpring.velocity else 0f)
+        spreadTarget = target
+        spreading = true
         startFrames()
     }
 
@@ -1428,7 +1553,7 @@ class DiskController(
         turn.reset(rotation)
         slideX.reset(cx)
         slideY.reset(cy)
-        if (!pushing && framing) {
+        if (!pushing && !spreading && framing) {
             framing = false
             Choreographer.getInstance().removeFrameCallback(frameCallback)
         }
@@ -1437,6 +1562,7 @@ class DiskController(
     /** Всё разом: и тело, и выдавливание — на выключении диска. */
     private fun stopAll() {
         pushing = false
+        spreading = false
         animating = false
         if (framing) {
             framing = false
@@ -1557,7 +1683,7 @@ class DiskController(
     /** Одной строкой для журнала: под какой экран расставлен, где центр и тарелка. */
     fun report(): String =
         "диск: расставлен под $loadedKey, центр (${cx.roundToInt()}, ${cy.roundToInt()}), " +
-            "тарелка ${plateParams?.let { "(${it.x},${it.y})" } ?: "—"}, убран=$tucked, " +
+            "тарелка ${plateParams?.let { "(${it.x},${it.y})" } ?: "—"}, убран=$tucked, спиннер=${spread.roundToInt()}, " +
             "показан=$shown, размещён=$placed, сложен=$folded"
 
     /**
@@ -1653,6 +1779,13 @@ class DiskController(
         private var retracted = false
         /** Всё убрано в точку — стекла нет, и стрелки тоже. */
         var allHiddenView = false
+        /** Стрелка есть вообще: в доке без круглого диска на её месте шестерёнка. */
+        var arrowOn = true
+            set(value) {
+                if (field == value) return
+                field = value
+                invalidate()
+            }
         private val arrow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
@@ -1729,7 +1862,7 @@ class DiskController(
         }
 
         /** Стрелка сейчас видна — значит по ней и жмут. */
-        fun arrowShown(): Boolean = atEdge && !allHiddenView
+        fun arrowShown(): Boolean = arrowOn && atEdge && !allHiddenView
 
         /**
          * Где тело диска: тарелка [plate], кольцо кнопок [ring] с углами

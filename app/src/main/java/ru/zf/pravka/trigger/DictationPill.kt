@@ -168,6 +168,14 @@ class DictationPill(
         /** Предупреждение в строке (похоже на дубль): песочный, красный на стекле не читается. */
         private val SAND = 0xFFF6C177.toInt()
 
+        /**
+         * Итог встал в пилюлю — тейк дошёл до конца: служба звенит «готово»
+         * (`ServiceHeadset.takeDone`). [ok] — итог-успех; [holdMs] — сколько
+         * он держится: короче двух секунд — служебная реплика, не итог.
+         * Главный поток.
+         */
+        @Volatile var resultSink: ((ok: Boolean, holdMs: Long) -> Unit)? = null
+
         // Отступы экрана — общие на все пилюли: последнее, что узнали.
         // Новая пилюля встаёт по ним сразу, пока не пришёл свежий ответ.
         @Volatile private var lastIme = 0
@@ -897,9 +905,12 @@ class DictationPill(
         holdMs: Long = PillLook.RESULT_HOLD_MS,
         /** Несколько действий — таблетками внизу карточки; [action] — то же одним. */
         actions: List<ResultAction> = listOfNotNull(action),
-    ): Boolean = place(
-        ResultRequest(ru.zf.pravka.core.PillText.plain(summary), ok, rows, footer, actions, onOpen, holdMs, ask = false)
-    )
+    ): Boolean {
+        resultSink?.let { sink -> runCatching { sink(ok, holdMs) } }
+        return place(
+            ResultRequest(ru.zf.pravka.core.PillText.plain(summary), ok, rows, footer, actions, onOpen, holdMs, ask = false)
+        )
+    }
 
     /**
      * Вопрос в одну строку пилюли (28.09.2026; владелец о раскрытой карточке:
@@ -1923,7 +1934,8 @@ class DictationPill(
             }
 
         private val digits = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.color = PAPER
+            // Мягкий серый, не белая бумага (PillLook.SECONDS_ALPHA).
+            this.color = DiskLook.withAlpha(PAPER, PillLook.SECONDS_ALPHA)
             textAlign = Paint.Align.CENTER
             typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
             // Цифры одной ширины: «9,4» → «9,3» не должно ёрзать по кружку.
@@ -2006,7 +2018,7 @@ class DictationPill(
                     return
                 }
             }
-            val bars = PillLook.bars(level)
+            val bars = PillLook.bars(level, android.os.SystemClock.uptimeMillis())
             val maxH = r * 0.9f
             val step = r * 0.36f
             for (i in 0..2) {
@@ -2014,6 +2026,8 @@ class DictationPill(
                 val half = maxH * bars[i] / 2f
                 canvas.drawLine(x, cy - half, x, cy + half, bar)
             }
+            // Пока слышно — волна живёт кадр за кадром; затихла — стоит чёрточками.
+            if (PillLook.barsMoving(level)) postInvalidateOnAnimation()
         }
     }
 

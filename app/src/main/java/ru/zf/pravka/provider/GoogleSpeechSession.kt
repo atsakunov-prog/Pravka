@@ -242,10 +242,12 @@ class GoogleSpeechSession(
         /**
          * «Говори» — в тот же миг, что вибрация и «слушаю» в пилюле: всё
          * поднялось и слышит. [headset] — слушают наушники: туда и звенеть
-         * (`provider/ChimePlayer.kt`). Главный поток.
+         * (`provider/ChimePlayer.kt`). [anchorMs] — от какого мига считать
+         * ползунок задержки звука (`ReadyChime.readyDelayMs`): начало тейка,
+         * а посреди тейка ([switched]) — переключение на наушники. Главный поток.
          */
         @Volatile
-        var readySink: ((headset: Boolean) -> Unit)? = null
+        var readySink: ((headset: Boolean, anchorMs: Long, switched: Boolean) -> Unit)? = null
 
         /**
          * Наушники отвалились или не дались — слушает телефон: звук
@@ -809,6 +811,9 @@ class GoogleSpeechSession(
             onLog("стоп: откуда — $who")
             stopping = true
             active = false
+            // Отложенный «говори» (ползунок задержки), не успевший прозвучать, —
+            // уже неправда: тейк кончился.
+            ChimePlayer.cancelReady()
             // Музыка вернётся, когда отзвучит «принял», а не поверх него.
             TakeFocus.release(TakeFocus.STOP_RELEASE_MS)
             val now = android.os.SystemClock.elapsedRealtime()
@@ -1574,7 +1579,8 @@ class GoogleSpeechSession(
         readyFired = true
         onReady()
         // Звук «говори» — туда, откуда слушаем.
-        readySink?.let { sink -> runCatching { sink(headsetMic) } }
+        // Стоп уже нажат («готов» распознавателя опоздал) — «говори» после «принял» лжёт.
+        if (!stopping) readySink?.let { sink -> runCatching { sink(headsetMic, startedAtMs, false) } }
         onLog("говори: ${if (headsetMic) "наушники" else "телефон"}")
     }
 
@@ -2053,7 +2059,7 @@ class GoogleSpeechSession(
                         // Звук пошёл оттуда, откуда просили, — теперь «говори» правда.
                         when (cue) {
                             Cue.READY -> cueWhenHeard()
-                            Cue.CHIME -> readySink?.let { sink -> runCatching { sink(true) } }
+                            Cue.CHIME -> readySink?.let { sink -> runCatching { sink(true, sinceMs, true) } }
                             Cue.NONE -> Unit
                         }
                     }

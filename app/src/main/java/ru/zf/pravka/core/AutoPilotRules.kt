@@ -110,6 +110,53 @@ object AutoPilotRules {
     fun leaveAskDelay(lostAtMs: Long, now: Long): Long =
         (SHORT_EXIT_MS - (now - lostAtMs)).coerceAtLeast(0L)
 
+    /**
+     * Сказанное прямо перед выходом — ответ на «куда?». Владелец (01.10.2026):
+     * «если я, например, написал: „Пошёл развозить детей“ — и отключается
+     * домашний Wi-Fi, то… это просто развоз детей на машине, это транспорт.
+     * Или пошёл поговорить с другом — это выход из дома, и понятно, что я
+     * сейчас сделаю какую-то встречу». Дело, начатое владельцем за
+     * [SAID_BEFORE_LEAVE_MS] до потери сети (или уже после неё), — его слово
+     * о выходе: ни «уехал?», ни ходьбы, ни «Поездки на машине» поверх.
+     */
+    const val SAID_BEFORE_LEAVE_MS = 10 * 60_000L
+
+    /**
+     * Слова выхода («пошёл», «везу», «развожу», «к другу») растягивают окно
+     * до [OUTING_BEFORE_LEAVE_MS]: «пошёл развозить детей» говорят, пока дети
+     * обуваются, а не на пороге. Без таких слов десяти минут хватает — и
+     * «завтракаю» за двадцать минут до выхода дорогу не отменяет.
+     */
+    const val OUTING_BEFORE_LEAVE_MS = 30 * 60_000L
+
+    private val OUTING = Regex(
+        "(пош[её]л|пойд[уё]|иду|ид[её]м|выхож|выйд|вышел|еду|ед[её]м|поехал|поед|выезжа|" +
+            "везу|отвож|отвоз|отвез|развож|развоз|развез|забира|заберу|к друг|к подруг|" +
+            "на встреч|встреча|встречу|в гости|гуля|прогул)",
+    )
+
+    /** Слова выхода из дома в названии или надиктовке дела. */
+    fun outing(text: String): Boolean = OUTING.containsMatchIn(text.lowercase())
+
+    /**
+     * Сказал ли владелец, куда идёт: открытое дело [openStart] его
+     * ([openSource] — не робот и не заполнитель) и СКАЗАНО — есть надиктовка
+     * [openRaw] (поездку, встречу из календаря и дело по подъёму автопилот
+     * заводит владельческим источником, но без слов, и ответом на «куда?»
+     * они не считаются); начато после потери сети [leftAtMs], за
+     * [SAID_BEFORE_LEAVE_MS] до неё или — со словами выхода в названии
+     * [openTitle] или надиктовке — за [OUTING_BEFORE_LEAVE_MS].
+     */
+    fun ownerToldLeave(openStart: Long?, openSource: String?, openTitle: String, openRaw: String, leftAtMs: Long): Boolean {
+        if (openStart == null || openStart <= 0L || leftAtMs <= 0L) return false
+        if (openSource == null || openSource == "auto" || openSource == "gap") return false
+        if (openRaw.isBlank()) return false
+        val before = leftAtMs - openStart
+        if (before < 0L) return true
+        if (before <= SAID_BEFORE_LEAVE_MS) return true
+        return before <= OUTING_BEFORE_LEAVE_MS && outing("$openTitle $openRaw")
+    }
+
     /** Что автопилот делает, когда телефон двадцать минут в движении после отъезда. */
     enum class Walk {
         /** Начать «Дорогу пешком» с момента отъезда. */
@@ -134,6 +181,8 @@ object AutoPilotRules {
         openTitle: String?,
         openCategory: String?,
         latestOwnerStart: Long,
+        /** Владелец сказал, куда идёт, на выходе ([ownerToldLeave]) — его слово сильнее толчков. */
+        ownerTold: Boolean = false,
     ): Walk {
         if (leftAtMs <= 0L || now < leftAtMs) return Walk.NONE
         if (now - leftAtMs < WALK_AFTER_MS) return Walk.WAIT
@@ -141,6 +190,7 @@ object AutoPilotRules {
         if (now - leftAtMs > WALK_AFTER_MS + SHORT_EXIT_MS) return Walk.NONE
         if (openTitle != null && travelish(openTitle, openCategory.orEmpty())) return Walk.NONE
         if (latestOwnerStart > leftAtMs) return Walk.NONE
+        if (ownerTold) return Walk.NONE
         if (motions < WALK_MIN_MOTIONS) return Walk.NONE
         return Walk.START
     }
@@ -181,29 +231,76 @@ object AutoPilotRules {
     /**
      * Отбой узнаётся по трём вещам сразу: телефон поставлен на зарядку
      * ВЕЧЕРОМ (сам факт подключения после этого часа — на тумбочке, а не на
-     * столе с семи вечера), экран погашен и [BEDTIME_STILL_MS] без единого
-     * толчка датчика значимого движения. Отбой — момент последнего из двух
-     * действий: подключения или гашения экрана; что было позже, то он и
-     * делал последним, бодрствуя.
+     * столе с семи вечера), экран погашен и тишина датчика значимого
+     * движения. С 01.10.2026 отбой не только закрывает день — с него
+     * начинается сон ([sleepPlan]).
      */
     const val BEDTIME_FROM_HOUR = 22
     const val BEDTIME_TO_HOUR = 4
-    const val BEDTIME_STILL_MS = 20 * 60_000L
 
     /** Час подключения к зарядке, который считается вечерним: с 22:00 до 04:00. */
     fun bedtimeHour(hour: Int): Boolean = hour >= BEDTIME_FROM_HOUR || hour < BEDTIME_TO_HOUR
 
+    // ---- Сон сам (владелец, 01.10.2026: «если я сам не включил сон через NFC
+    // или через что-то ещё… то сон включается в момент, когда [подключается]
+    // зарядка и плюс телефон неподвижен полчаса… плюс вечернее время, после
+    // 11. И уведомление, что включается он, и давать мне возможность убрать.
+    // И выключается он, когда телефон задвигался с утра») ----
+
+    /** Как зовётся сон, начатый автопилотом: по названию его узнают Garmin и «Отменить». */
+    const val SLEEP_TITLE = "Сон"
+
+    /** Полчаса без единого толчка — телефон лежит, владелец спит. */
+    const val SLEEP_STILL_MS = 30 * 60_000L
+
+    /** Сон решается не раньше этого часа: «плюс вечернее время, после 11». */
+    const val SLEEP_DECIDE_HOUR = 23
+
     /**
-     * Есть ли кандидат в отбой: [chargingSince] — когда подключили зарядку
-     * (0 — не на зарядке), [screenOffSince] — когда погас экран (0 — горит),
-     * [chargeHour] — час подключения. Возвращает момент отбоя (позднее из
-     * двух) или 0, если не отбой. Тишину в двадцать минут отсчитывает
-     * автопилот от этого момента; толчок — отсчёт заново.
+     * Толчок с этого часа кончает сон: утро. Ночью — «если он задвигался в
+     * 4:00, я что-то взял, посмотрел, убрал, то это не прерывание сна».
      */
-    fun bedtimeCandidate(chargingSince: Long, screenOffSince: Long, chargeHour: Int): Long {
-        if (chargingSince <= 0L || screenOffSince <= 0L) return 0L
-        if (!bedtimeHour(chargeHour)) return 0L
-        return maxOf(chargingSince, screenOffSince)
+    const val SLEEP_WAKE_FROM_HOUR = 5
+
+    /** Сон сам: с какого мига ([from]) и когда решать ([decideAt]). */
+    data class SleepPlan(val from: Long, val decideAt: Long)
+
+    /**
+     * Кандидат в сон. Телефон на зарядке, подключённой ВЕЧЕРОМ ([bedtimeHour]
+     * часа подключения: на тумбочке, а не на столе с семи), экран погашен.
+     * Лёг — позднее из подключения, гашения экрана, последнего толчка
+     * [lastMotionAt] и последнего слова владельца [ownerSaidAt]: что было
+     * позже, то он и делал последним, бодрствуя. Решать — через
+     * [SLEEP_STILL_MS] тишины, но не раньше [SLEEP_DECIDE_HOUR] той ночи.
+     */
+    fun sleepPlan(
+        chargingSince: Long,
+        screenOffSince: Long,
+        lastMotionAt: Long,
+        ownerSaidAt: Long,
+        zone: java.util.TimeZone = java.util.TimeZone.getDefault(),
+    ): SleepPlan? {
+        if (chargingSince <= 0L || screenOffSince <= 0L) return null
+        if (!bedtimeHour(hourOf(chargingSince, zone))) return null
+        val from = maxOf(chargingSince, screenOffSince, lastMotionAt, ownerSaidAt)
+        val c = java.util.Calendar.getInstance(zone)
+        c.timeInMillis = from
+        // 23:00 той ночи: после полуночи — вчерашние, они уже прошли.
+        if (c.get(java.util.Calendar.HOUR_OF_DAY) < BEDTIME_TO_HOUR) c.add(java.util.Calendar.DAY_OF_MONTH, -1)
+        c.set(java.util.Calendar.HOUR_OF_DAY, SLEEP_DECIDE_HOUR)
+        c.set(java.util.Calendar.MINUTE, 0)
+        c.set(java.util.Calendar.SECOND, 0)
+        c.set(java.util.Calendar.MILLISECOND, 0)
+        return SleepPlan(from, maxOf(from + SLEEP_STILL_MS, c.timeInMillis))
+    }
+
+    /** Толчок в этот час кончает сон: с пяти утра до десяти вечера. Ночью — взгляд, не подъём. */
+    fun sleepWakeHour(hour: Int): Boolean = hour in SLEEP_WAKE_FROM_HOUR until BEDTIME_FROM_HOUR
+
+    private fun hourOf(ms: Long, zone: java.util.TimeZone): Int {
+        val c = java.util.Calendar.getInstance(zone)
+        c.timeInMillis = ms
+        return c.get(java.util.Calendar.HOUR_OF_DAY)
     }
 
     /** Подъём в будни считается в эти часы: раньше пяти — не подъём, после десяти — не сборы. */
@@ -262,9 +359,17 @@ object AutoPilotRules {
     /** Тренировка: приехал домой — скорее всего закончил, но спросим. */
     fun sporty(category: String): Boolean = category.startsWith("Спорт", ignoreCase = true)
 
-    /** Сидячие дела — по ним «точно ещё …?» после значимого движения. */
-    fun sedentary(category: String): Boolean = category.lowercase().let {
-        it.startsWith("работа") || it == "систематизация" || it == "чтение"
+    /**
+     * По каким делам «всё ещё …?», когда телефон задвигался. До 01.10.2026 —
+     * только сидячие (работа, систематизация, чтение); владелец: «надо
+     * использовать побольше… как только я взял телефон, то дело какое-то
+     * другое началось». Теперь — все, кроме тех, где движение и есть дело:
+     * дорога, спорт, быт (уборка, покупки), сон, заполнитель дыры.
+     */
+    fun stillAskable(title: String, category: String): Boolean {
+        if (travelish(title, category) || sporty(category)) return false
+        val c = category.trim().lowercase()
+        return c != "сон" && c != "быт" && c != "не размечено"
     }
 
     /** Что автопилот делает, увидев место. */
@@ -351,4 +456,11 @@ interface AutoWitness {
     fun leaveAnswered(by: String)
     /** Телефон нашёл ночь [sleptFrom]–[wakeAt] и записал её: автопилот решает про дело по подъёму. */
     fun woke(sleptFrom: Long, wakeAt: Long)
+
+    /**
+     * Детектор ночи по экрану увидел подъём в [wakeAt], а сон, начатый
+     * автопилотом, ещё идёт: true — автопилот закрыл его этим подъёмом
+     * (и сам решил про дело по подъёму), ночь второй раз не пишется.
+     */
+    suspend fun nightSeen(wakeAt: Long): Boolean = false
 }

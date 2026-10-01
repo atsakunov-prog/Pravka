@@ -156,7 +156,7 @@ private fun PravkaAccessibilityService.headsetFieldFocused(): Boolean =
 /** Срок метки «с гарнитуры» для записи Whisper: служба микрофона встаёт за доли секунды. */
 private const val HEADSET_MARK_MS = 5_000L
 
-// ---- Звуки тейка: «говори», «принял», «отвалились» ----
+// ---- Звуки тейка: «говори», «принял», «готово», «отвалились» ----
 
 /**
  * Раздать движку распознавания, куда звучать (владелец, 29.09.2026: «должны
@@ -164,14 +164,25 @@ private const val HEADSET_MARK_MS = 5_000L
  * `provider/ChimePlayer.kt`, когда звучать — одна настройка «Звуки диктовки»
  * (`ReadyChime.Mode`). Голоса «Расшифровал» больше нет (владелец, 30.09.2026:
  * «это ужасно, роботизированный голос, и он где-то всё время говорится,
- * где-то посередине. Просто можно оставить вот эти звуки»): конец тейка
- * слышен по «принял».
+ * где-то посередине. Просто можно оставить вот эти звуки»): стоп слышен по
+ * «принял», а конец разбора — по «готово» (01.10.2026, [takeDone]).
  */
 internal fun PravkaAccessibilityService.installTakeSounds() {
     // «Говори»: в наушники — когда слушают они (с завода), всегда или никогда.
-    GoogleSpeechSession.readySink = { headset ->
+    // В наушники — не раньше ползунка от начала тейка или от переключения на
+    // них (01.10.2026, `ReadyChime.readyDelayMs`).
+    GoogleSpeechSession.readySink = { headset, anchorMs, switched ->
+        // Новый тейк — «готово» прошлого, так и не дождавшегося итога, уже ни к чему.
+        if (!switched) doneArmedAt = 0L
         if (ReadyChime.shouldPlay(app.readyChime, headset)) {
-            ChimePlayer.play(this, toHeadset = headset) { line -> app.eventLog.add(line) }
+            val after = when {
+                !headset -> 0L
+                switched -> app.chimeAfterSwitchMs
+                else -> app.chimeAfterStartMs
+            }
+            val delay = ReadyChime.readyDelayMs(anchorMs, SystemClock.elapsedRealtime(), after)
+            if (delay > 0) app.eventLog.add("звук «говори»: через $delay мс (ползунок ${after} мс)")
+            ChimePlayer.play(this, toHeadset = headset, delayMs = delay) { line -> app.eventLog.add(line) }
         }
     }
     // «Наушники отвалились» — тот же выбор: владелец в наушниках, звуки не выключены.
@@ -188,6 +199,11 @@ internal fun PravkaAccessibilityService.installTakeSounds() {
     GoogleSpeechSession.voiceSink = { on -> holdHeadsetVoice(on) }
     GoogleSpeechSession.stopSink = { headset, byHeadset -> onTakeStopSound(headset, byHeadset) }
     GoogleSpeechSession.doneSink = { session, text -> onTakeHeard(session, text) }
+    // Итог в пилюле (Засечка, Дела, Деньги, Еда) — конец тейка: «готово».
+    DictationPill.resultSink = { ok, holdMs ->
+        // Служебные реплики короче двух секунд («ещё раз, и пишу») — не итог.
+        if (holdMs >= 2_000L) takeDone(ok)
+    }
     // Поднят ли канал — у самого стека: липкая рассылка про канал под распознавание молчит.
     MicRouting.linkProbe = { headsetVoice.audioConnected() }
 }
@@ -195,6 +211,38 @@ internal fun PravkaAccessibilityService.installTakeSounds() {
 /** Тейк выбрасывают серой «отменой» — без «принял». */
 private fun PravkaAccessibilityService.takeDiscarding(): Boolean =
     discardTake || zDiscard || rDiscard || mDiscard || eDiscard
+
+/**
+ * Когда прозвучал «принял» тейка, чей итог ещё не пришёл (elapsedRealtime);
+ * 0 — ждать нечего. «Готово» звучит один раз на тейк и только после
+ * «принял»: тот же выбор «когда звенеть», те же наушники.
+ */
+private var doneArmedAt = 0L
+
+/** Итог дольше этого после «принял» — уже не про тот тейк. */
+private const val DONE_WINDOW_MS = 180_000L
+
+/**
+ * Тейк дошёл до конца: текст встал в поле, запись — в ленту, еда — в
+ * дневник. [ok] — легло как надо: звук «готово» (владелец, 01.10.2026:
+ * «когда всё принято — отдельный звук, и когда расшифровалась — второй
+ * звук»); не легло — без звука, пилюля и вибрация скажут сами. Звучит
+ * «помощником»: канал гарнитуры к этому мигу давно закрыт, а музыкальный
+ * канал тех же наушников вернулся.
+ */
+internal fun PravkaAccessibilityService.takeDone(ok: Boolean) {
+    val armed = doneArmedAt
+    if (armed == 0L) return
+    doneArmedAt = 0L
+    val since = SystemClock.elapsedRealtime() - armed
+    if (since > DONE_WINDOW_MS) return
+    if (!ok) {
+        app.eventLog.add("звук «готово»: итог с ошибкой — без звука")
+        return
+    }
+    ChimePlayer.play(this, toHeadset = false, kind = ChimePlayer.Kind.DONE) { line -> app.eventLog.add(line) }
+    app.eventLog.add("звук «готово»: через ${since / 100 / 10.0} с после «принял»")
+}
 
 /** Когда отзвучит последний «принял» (elapsedRealtime): распознавание у стека закрываем после него. */
 private var chimeUntilMs = 0L
@@ -206,8 +254,10 @@ private var chimeUntilMs = 0L
  * который возвращается не сразу.
  */
 private fun PravkaAccessibilityService.onTakeStopSound(headset: Boolean, byHeadset: Boolean) {
+    doneArmedAt = 0L
     if (takeDiscarding()) return
     if (!ReadyChime.shouldPlay(app.readyChime, headset || byHeadset)) return
+    doneArmedAt = SystemClock.elapsedRealtime()
     val ms = ChimePlayer.play(
         this,
         toHeadset = headset && !byHeadset,

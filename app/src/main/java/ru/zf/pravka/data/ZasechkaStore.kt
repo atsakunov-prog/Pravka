@@ -1004,11 +1004,19 @@ class ZasechkaStore(private val context: Context) {
      * Возвращённое дело открывается только если ничего другого в основном
      * треке не идёт — владелец мог уже сказать следующее.
      */
-    suspend fun revertAutoStart(startedId: Long, reopenId: Long): Entry? = mutex.withLock {
+    suspend fun revertAutoStart(startedId: Long, reopenId: Long): Entry? = revertAutoStart(setOf(startedId), reopenId)
+
+    /**
+     * То же для записи, которую полночь разрезала на куски ([startedIds] —
+     * все её куски): сон автопилота с 23:30, отменённый в час ночи, — это
+     * голова до полуночи и открытый хвост после, и убрать надо оба ОДНИМ
+     * шагом, по той же причине, что выше.
+     */
+    suspend fun revertAutoStart(startedIds: Set<Long>, reopenId: Long): Entry? = mutex.withLock {
         ensureLoaded()
-        val started = entries.firstOrNull { it.id == startedId } ?: return@withLock null
+        val started = entries.filter { it.id in startedIds }.minByOrNull { it.start } ?: return@withLock null
         snapshotLocked("отмену «${started.title.ifBlank { "без названия" }}»")
-        entries.removeAll { it.id == startedId }
+        entries.removeAll { it.id in startedIds }
         var reopened: Entry? = null
         val i = entries.indexOfFirst { it.id == reopenId }
         if (i >= 0 && entries.none { it.open }) {

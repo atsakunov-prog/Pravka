@@ -43,6 +43,9 @@ class PravkaApp : Application() {
     @Volatile var speechOwnMic: Boolean = true
     /** Когда звенеть «говори» (`core/ReadyChime.kt`). */
     @Volatile var readyChime: ru.zf.pravka.core.ReadyChime.Mode = ru.zf.pravka.core.ReadyChime.Mode.HEADSET
+    /** Через сколько звенеть «говори» в наушники: от начала тейка и от переключения, мс. */
+    @Volatile var chimeAfterStartMs: Long = ru.zf.pravka.core.ReadyChime.AFTER_START_MS
+    @Volatile var chimeAfterSwitchMs: Long = ru.zf.pravka.core.ReadyChime.AFTER_SWITCH_MS
 
     override fun onCreate() {
         super.onCreate()
@@ -74,6 +77,8 @@ class PravkaApp : Application() {
         appScope.launch { settings.phoneMicOnlyFlow.collect { phoneMicOnly = it } }
         appScope.launch { settings.speechOwnMicFlow.collect { speechOwnMic = it } }
         appScope.launch { settings.readyChimeFlow.collect { readyChime = it } }
+        appScope.launch { settings.chimeAfterStartFlow.collect { chimeAfterStartMs = it } }
+        appScope.launch { settings.chimeAfterSwitchFlow.collect { chimeAfterSwitchMs = it } }
         // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет;
         // затем все дороги Опуса и Fable — на Опус 5.5 с новыми усилиями (22.09);
         // затем чистка — на Сонет 5.5 (30.09). Порядок важен: последняя снимает

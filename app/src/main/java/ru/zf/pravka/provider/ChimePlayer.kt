@@ -8,6 +8,8 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import ru.zf.pravka.core.ReadyChime
 
 /**
@@ -23,6 +25,9 @@ import ru.zf.pravka.core.ReadyChime
  * его не глушит — звук интерфейса у владельца в беззвучном молчал бы, и
  * «Послушать» тоже.
  *
+ * «Готово» ([Kind.DONE]) — тоже «помощником»: к концу разбора канал
+ * гарнитуры давно закрыт, а музыкальный канал тех же наушников вернулся.
+ *
  * «Наушники отвалились» ([Kind.LOST]) — всегда «помощником» и с паузой:
  * канал гарнитуры только что упал, и музыкальный канал тех же наушников
  * возвращается не сразу — сыграй сразу, звук ушёл бы в динамик. Так же —
@@ -34,7 +39,12 @@ import ru.zf.pravka.core.ReadyChime
  */
 object ChimePlayer {
 
-    private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "pravka-chime").apply { isDaemon = true } }
+    /**
+     * Свой поток со сроками: ожидание (пауза «через N секунд», канал
+     * наушников) не держит поток — отложенный «говори» не задерживает
+     * «принял», вставший за ним.
+     */
+    private val worker = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "pravka-chime").apply { isDaemon = true } }
 
     enum class Kind(val word: String) {
         /** «Говори»: всё поднялось и слышит. */
@@ -43,13 +53,29 @@ object ChimePlayer {
         /** «Принял»: стоп нажат, сказанное расшифровывается. */
         STOP("принял"),
 
+        /** «Готово»: разобрано и легло на место — в поле, в ленту, в дневник. */
+        DONE("готово"),
+
         /** «Наушники отвалились»: слушает уже телефон. */
         LOST("отвалились"),
     }
 
     @Volatile private var readyPcm: ShortArray? = null
     @Volatile private var stopPcm: ShortArray? = null
+    @Volatile private var donePcm: ShortArray? = null
     @Volatile private var lostPcm: ShortArray? = null
+
+    /**
+     * Поколение «говори»: стоп тейка его сдвигает, и отложенный «говори»
+     * ([ReadyChime.readyDelayMs]), не успевший прозвучать, молчит — короткий
+     * тейк не должен звенеть «говори» после «принял».
+     */
+    private val readyEpoch = AtomicInteger()
+
+    /** Тейк кончился: «говори», ещё ждущий своего срока, не звенит. */
+    fun cancelReady() {
+        readyEpoch.incrementAndGet()
+    }
 
     /** Музыкальный канал наушников возвращается после канала гарнитуры не сразу. */
     const val LOST_DELAY_MS = 700L
@@ -67,36 +93,40 @@ object ChimePlayer {
         log: (String) -> Unit = {},
     ): Long {
         val app = context.applicationContext
-        val intoHeadset = toHeadset && kind != Kind.LOST
-        worker.execute {
-            runCatching {
-                if (delayMs > 0) Thread.sleep(delayMs)
-                if (intoHeadset) awaitHeadsetChannel(log)
-                // Синтез — здесь, на своём потоке: первый раз это тысячи отсчётов с хвостом комнаты.
-                playNow(app, toHeadset = intoHeadset, data = pcm(kind))
-            }.onFailure { log("звук «${kind.word}» не сыгрался: ${it.javaClass.simpleName}: ${it.message}") }
-        }
-        return delayMs + lengthMs(kind)
-    }
-
-    /**
-     * Звук в наушники — когда их канал встал: сыгранный раньше, он уходит в
-     * канал, которого ещё нет, и не слышен (владелец, 29.09.2026: «звук не
-     * слышен теперь»; холодный канал поднимается до 2,3 с). Ждёт только звук —
-     * запись и распознаватель идут своим ходом. За каналом не следим (стек не
-     * подтвердил распознавание) — играем сразу, как раньше.
-     */
-    private fun awaitHeadsetChannel(log: (String) -> Unit) {
-        val probe = MicRouting.linkProbe ?: return
-        val start = android.os.SystemClock.elapsedRealtime()
-        while (runCatching { probe() }.getOrNull() == false) {
-            val waited = android.os.SystemClock.elapsedRealtime() - start
-            if (waited >= HEADSET_CHANNEL_WAIT_MS) {
-                log("звук: канал наушников не встал за $waited мс — играю как есть")
-                return
+        val intoHeadset = toHeadset && kind != Kind.LOST && kind != Kind.DONE
+        val epoch = readyEpoch.get()
+        val attempt = object : Runnable {
+            private var waited = 0L
+            override fun run() {
+                runCatching {
+                    if (kind == Kind.READY && readyEpoch.get() != epoch) {
+                        log("звук «говори» не сыгран: тейк уже кончился")
+                        return
+                    }
+                    // Звук в наушники — когда их канал встал: сыгранный раньше, он
+                    // уходит в канал, которого ещё нет, и не слышен (владелец,
+                    // 29.09.2026: «звук не слышен теперь»; холодный канал
+                    // поднимается до 2,3 с). Ждёт только звук — запись и
+                    // распознаватель идут своим ходом. За каналом не следим (стек
+                    // не подтвердил распознавание) — играем сразу.
+                    if (intoHeadset) {
+                        val probe = MicRouting.linkProbe
+                        if (probe != null && runCatching { probe() }.getOrNull() == false) {
+                            if (waited < HEADSET_CHANNEL_WAIT_MS) {
+                                waited += CHANNEL_POLL_MS
+                                worker.schedule(this, CHANNEL_POLL_MS, TimeUnit.MILLISECONDS)
+                                return
+                            }
+                            log("звук: канал наушников не встал за $waited мс — играю как есть")
+                        }
+                    }
+                    // Синтез — здесь, на своём потоке: первый раз это тысячи отсчётов с хвостом комнаты.
+                    playNow(app, toHeadset = intoHeadset, data = pcm(kind))
+                }.onFailure { log("звук «${kind.word}» не сыгрался: ${it.javaClass.simpleName}: ${it.message}") }
             }
-            Thread.sleep(CHANNEL_POLL_MS)
         }
+        worker.schedule(attempt, delayMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+        return delayMs + lengthMs(kind)
     }
 
     /** Сколько звук ждёт канала наушников. */
@@ -107,12 +137,14 @@ object ChimePlayer {
     fun lengthMs(kind: Kind): Long = ReadyChime.LEAD_MS + when (kind) {
         Kind.READY -> ReadyChime.READY_BODY_MS
         Kind.STOP -> ReadyChime.STOP_BODY_MS
+        Kind.DONE -> ReadyChime.DONE_BODY_MS
         Kind.LOST -> ReadyChime.LOST_BODY_MS
     }.toLong()
 
     private fun pcm(kind: Kind): ShortArray = when (kind) {
         Kind.READY -> readyPcm ?: ReadyChime.render().also { readyPcm = it }
         Kind.STOP -> stopPcm ?: ReadyChime.renderStop().also { stopPcm = it }
+        Kind.DONE -> donePcm ?: ReadyChime.renderDone().also { donePcm = it }
         Kind.LOST -> lostPcm ?: ReadyChime.renderLost().also { lostPcm = it }
     }
 

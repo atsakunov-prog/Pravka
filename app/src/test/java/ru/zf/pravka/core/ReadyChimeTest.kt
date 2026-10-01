@@ -7,15 +7,16 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-// Звуки диктовки: «говори», «принял», «отвалились». Четвёртое издание
+// Звуки диктовки: «говори», «принял», «готово», «отвалились». Четвёртое издание
 // (владелец, 29.09.2026: «звук не слышен теперь. Должен быть как такой мягкий
-// тройной быстрый щелчок»).
+// тройной быстрый щелчок»); «готово» — с 01.10.2026 вместо голоса «Расшифровал».
 class ReadyChimeTest {
 
     private val sr = ReadyChime.SAMPLE_RATE
     private val ready = ReadyChime.render()
     private val stop = ReadyChime.renderStop()
     private val lost = ReadyChime.renderLost()
+    private val done = ReadyChime.renderDone()
 
     @Test
     fun `с завода звенит только в наушниках`() {
@@ -36,6 +37,7 @@ class ReadyChimeTest {
             ready to ReadyChime.READY_BODY_MS,
             stop to ReadyChime.STOP_BODY_MS,
             lost to ReadyChime.LOST_BODY_MS,
+            done to ReadyChime.DONE_BODY_MS,
         )
         for ((pcm, bodyMs) in all) {
             assertEquals(sr * (ReadyChime.LEAD_MS + bodyMs) / 1000, pcm.size)
@@ -49,7 +51,12 @@ class ReadyChimeTest {
 
     @Test
     fun `громкость - ровно до своего пика`() {
-        val cases = listOf(ready to ReadyChime.CLICK_PEAK, stop to ReadyChime.CLICK_PEAK, lost to ReadyChime.LOST_PEAK)
+        val cases = listOf(
+            ready to ReadyChime.CLICK_PEAK,
+            stop to ReadyChime.CLICK_PEAK,
+            lost to ReadyChime.LOST_PEAK,
+            done to ReadyChime.CLICK_PEAK,
+        )
         for ((pcm, peak) in cases) {
             val max = pcm.maxOf { abs(it.toInt()) }
             val limit = (peak * Short.MAX_VALUE).toInt()
@@ -86,10 +93,43 @@ class ReadyChimeTest {
     }
 
     @Test
-    fun `три звука - разные`() {
-        assertFalse(ready.contentEquals(stop))
-        assertFalse(ready.contentEquals(lost))
-        assertFalse(stop.contentEquals(lost))
+    fun `четыре звука - разные`() {
+        val all = listOf(ready, stop, lost, done)
+        for (i in all.indices) for (j in i + 1 until all.size) assertFalse(all[i].contentEquals(all[j]))
+    }
+
+    @Test
+    fun `готово - колокольчики вверх, звенят дольше щелчка`() {
+        val band = 800.0..3_000.0
+        assertTrue(ReadyChime.DONE_HZ.all { it in band })
+        val up = ReadyChime.DONE_HZ
+        assertTrue((1 until up.size).all { up[it] > up[it - 1] })
+        // Через 60–100 мс после первого удара колокольчик ещё звенит, щелчок — уже нет.
+        assertTrue(ring(done) > 2 * ring(stop))
+    }
+
+    @Test
+    fun `говори в наушниках - через заданное от начала, но не раньше готовности`() {
+        // Тейк начался в 10 000, готов в 10 300, ползунок — секунда: ждать ещё 700 мс.
+        assertEquals(700L, ReadyChime.readyDelayMs(anchorMs = 10_000, nowMs = 10_300, afterMs = 1_000))
+        // Готов позже ползунка — сразу.
+        assertEquals(0L, ReadyChime.readyDelayMs(anchorMs = 10_000, nowMs = 11_800, afterMs = 1_000))
+        // Ноль — как раньше: в миг готовности.
+        assertEquals(0L, ReadyChime.readyDelayMs(anchorMs = 10_000, nowMs = 10_300, afterMs = 0))
+        assertTrue(ReadyChime.AFTER_START_MS in 0..ReadyChime.AFTER_MAX_MS)
+        assertTrue(ReadyChime.AFTER_SWITCH_MS in 0..ReadyChime.AFTER_MAX_MS)
+    }
+
+    /** Громкость в окне 60–100 мс после первого удара, к пику звука. */
+    private fun ring(pcm: ShortArray): Double {
+        val lead = sr * ReadyChime.LEAD_MS / 1000
+        fun rms(from: Int, to: Int): Double {
+            var sum = 0.0
+            for (i in from until to) sum += pcm[i].toDouble() * pcm[i]
+            return sqrt(sum / (to - from))
+        }
+        val peak = rms(lead, lead + sr * 10 / 1000)
+        return rms(lead + sr * 60 / 1000, lead + sr * 100 / 1000) / peak
     }
 
     /** Сколько ударов в звуке: громкость по 5 мс, считаем подъёмы выше трети пика. */

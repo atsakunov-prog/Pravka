@@ -136,6 +136,10 @@ internal fun SettingsTab(
             .padding(ScreenPad.Padding),
         verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
     ) {
+        // Самым верхним — «Проверить обновления» (владелец, 01.10.2026:
+        // «вытаскивать эту кнопку и дальше нажимать из шестерёнки… очень
+        // каждый раз сложно, потому что у края экрана не получается»).
+        UpdateNowCard(app)
         // Служба и обновления — одной строкой сверху: без службы не работает ни
         // одна кнопка, и «есть свежая сборка» должно быть видно, не открывая
         // ничего. Тап — экран «Обновления и служба».
@@ -301,6 +305,92 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
 
 private fun keyStatus(present: Boolean) =
     if (present) GroupStatus("есть", ok = true, dot = true) else GroupStatus("нет ключа", ok = null, dot = true)
+
+/**
+ * Одна кнопка «Проверить обновления» над всем меню — та же дорога, что у
+ * кружка в веере шестерёнки (`StackSettingsController.checkUpdates`):
+ * проверить ветку, докачать, если есть что, и сразу открыть установщик.
+ * Причина неудачи — целой строкой под кнопкой (правило: ошибку не затирать).
+ */
+@Composable
+private fun UpdateNowCard(app: PravkaApp) {
+    val context = LocalContext.current
+    val updates = app.updates
+    val state by updates.state.collectAsState()
+    var note by remember { mutableStateOf<String?>(null) }
+    var bad by remember { mutableStateOf(false) }
+    var running by remember { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    fun install(file: java.io.File) {
+        runCatching {
+            context.startActivity(
+                if (updates.canInstall()) updates.installIntent(file) else updates.allowInstallIntent(),
+            )
+        }.onFailure {
+            note = "Установщик не открылся: ${it.message}"
+            bad = true
+        }
+    }
+
+    PaperCard {
+        PaperButton(
+            text = when {
+                state.progress >= 0 -> "Качаю… ${state.progress} %"
+                running || state.checking -> "Проверяю…"
+                else -> "Проверить обновления"
+            },
+            icon = Glyphs.Refresh,
+            primary = true,
+            enabled = !running && !state.checking && state.progress < 0,
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                running = true
+                bad = false
+                note = null
+                scope.launch {
+                    try {
+                        val build = updates.check(force = true)
+                        val error = updates.state.value.error
+                        when {
+                            build == null -> {
+                                note = "Не проверилось: ${error.ifBlank { "нет ответа" }}"
+                                bad = true
+                            }
+                            !updates.isNewer(build) -> note =
+                                if (build.versionCode > BuildConfig.VERSION_CODE) {
+                                    "В ветке чужая сборка (${build.branch}) — у тебя ${BuildConfig.VERSION_NAME}, обновлений нет"
+                                } else {
+                                    "Обновлений нет — у тебя ${BuildConfig.VERSION_NAME}"
+                                }
+                            else -> {
+                                val ready = withContext(Dispatchers.IO) { updates.readyNow() }
+                                val file = ready ?: updates.download(build)
+                                if (file != null) {
+                                    note = "Есть ${build.versionName} — ставлю"
+                                    install(file)
+                                } else {
+                                    note = "Не скачалось: ${updates.state.value.error.ifBlank { "файл не прошёл проверку" }}"
+                                    bad = true
+                                }
+                            }
+                        }
+                    } finally {
+                        running = false
+                    }
+                }
+            },
+        )
+        note?.let {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (bad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 
 /** Строка «служба · обновления» над меню. */
 @Composable
@@ -1113,24 +1203,69 @@ private fun VoiceSettings(app: PravkaApp) {
             })
             ru.zf.pravka.ui.InfoButton(
                 "Звуки",
-                "«Говори» — две тихие ноты вверх: запись пошла и слушает выбранный микрофон. " +
-                    "Наушникам после простоя нужно секунды две, чтобы проснуться, — первую фразу " +
-                    "лучше начать чуть погодя. " +
-                    "«Принял» — две ноты вниз: стоп нажат (на пилюле, на диске или кнопкой " +
-                    "наушников), сказанное расшифровывается. Когда расшифровано — голос " +
-                    "«Расшифровал» в наушники, и беззвучный режим его не глушит. " +
-                    "«Наушники отвалились» — одна низкая нота вниз: наушники не отдали микрофон, " +
+                "«Говори» — три мягких щелчка вверх: запись пошла и слушает выбранный микрофон; " +
+                    "в наушниках — не раньше, чем через время с ползунка ниже. " +
+                    "«Принял» — два щелчка вниз: стоп нажат (на пилюле, на диске или кнопкой " +
+                    "наушников), сказанное ушло разбираться. «Готово» — два колокольчика вверх: " +
+                    "разобрано и легло на место — текст в поле, запись в ленту, еда в дневник. " +
+                    "Беззвучный режим звуки не глушит. " +
+                    "«Наушники отвалились» — мягкий тон вниз: наушники не отдали микрофон, " +
                     "потеряли его посреди записи или отключились, и слушает телефон. Звучит туда, " +
                     "откуда слушаем. «В наушниках» — на телефоне хватает пилюли и вибрации; " +
-                    "«Всегда» — звуки и телефоном (голос — только в наушниках); «Выкл» — без звуков и голоса.",
+                    "«Всегда» — звуки и телефоном; «Выкл» — без звуков.",
             )
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Когда звенеть «говори» в наушниках (01.10.2026; владелец: «в настройках
+        // ползунок, через сколько секунд его делать, и я подберу»).
+        if (chime != ru.zf.pravka.core.ReadyChime.Mode.OFF) {
+            val afterStart by settings.chimeAfterStartFlow.collectAsState(initial = ru.zf.pravka.core.ReadyChime.AFTER_START_MS)
+            val afterSwitch by settings.chimeAfterSwitchFlow.collectAsState(initial = ru.zf.pravka.core.ReadyChime.AFTER_SWITCH_MS)
+            var startSlider by remember(afterStart) { mutableStateOf(afterStart / 1000f) }
+            var switchSlider by remember(afterSwitch) { mutableStateOf(afterSwitch / 1000f) }
+            val maxSec = ru.zf.pravka.core.ReadyChime.AFTER_MAX_MS / 1000f
+            val stepSec = ru.zf.pravka.core.ReadyChime.AFTER_STEP_MS / 1000f
+            val steps = (maxSec / stepSec).toInt() - 1
+            fun secText(v: Float): String {
+                val ms = Math.round(v * 1000)
+                val frac = ms % 1000
+                return if (frac == 0) "${ms / 1000} с"
+                else "${ms / 1000}," + frac.toString().padStart(3, '0').trimEnd('0') + " с"
+            }
+            fun snap(v: Float) = (Math.round(v / stepSec) * stepSec).coerceIn(0f, maxSec)
+            PaperSlider(
+                title = "«Говори» в наушниках — после пилюли",
+                valueText = secText(startSlider),
+                value = startSlider,
+                onValueChange = { startSlider = snap(it) },
+                onValueChangeFinished = { scope.launch { settings.setChimeAfterStart((startSlider * 1000).toLong()) } },
+                valueRange = 0f..maxSec,
+                steps = steps,
+                info = "Через сколько секунд после появления пилюли звенит «говори», когда слушают " +
+                    "наушники. Раньше, чем запись услышит тебя, звук не прозвучит; ноль — в тот же " +
+                    "миг, как всё поднялось. Говорить можно и до звука: сказанное ждёт в очереди.",
+            )
+            PaperSlider(
+                title = "«Говори» — после переключения на наушники",
+                valueText = secText(switchSlider),
+                value = switchSlider,
+                onValueChange = { switchSlider = snap(it) },
+                onValueChangeFinished = { scope.launch { settings.setChimeAfterSwitch((switchSlider * 1000).toLong()) } },
+                valueRange = 0f..maxSec,
+                steps = steps,
+                info = "Посреди записи нажал кружок микрофона в пилюле и выбрал наушники — через " +
+                    "столько секунд от нажатия они звенят «говори», но не раньше, чем запись " +
+                    "встала на их микрофон.",
+            )
+        }
+        ChipRow {
             ru.zf.pravka.ui.PaperTextButton("«Говори»", icon = Glyphs.Play, onClick = {
                 ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false)
             })
             ru.zf.pravka.ui.PaperTextButton("«Принял»", icon = Glyphs.Play, onClick = {
                 ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false, kind = ru.zf.pravka.provider.ChimePlayer.Kind.STOP)
+            })
+            ru.zf.pravka.ui.PaperTextButton("«Готово»", icon = Glyphs.Play, onClick = {
+                ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false, kind = ru.zf.pravka.provider.ChimePlayer.Kind.DONE)
             })
             ru.zf.pravka.ui.PaperTextButton("«Отвалились»", icon = Glyphs.Play, onClick = {
                 ru.zf.pravka.provider.ChimePlayer.play(chimeContext, toHeadset = false, kind = ru.zf.pravka.provider.ChimePlayer.Kind.LOST, delayMs = 0L)

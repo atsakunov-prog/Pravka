@@ -188,8 +188,14 @@ class IcuSweeper(
             String.format(Locale.US, "%.1f", sleepSecs / 3600.0) + " ч" +
             (if (score > 0) ", счёт $score" else "")
         val dayStart = dayStartMs(now)
+        // Сон телефона («сон», робот) или сон автопилота по зарядке («Сон», с 01.10.2026).
         val sleeps = zasechkaStore.forRange(dayStart - 8 * 3600_000L, now)
-            .filter { it.source == "auto" && it.title == "сон" && !it.open && it.end >= dayStart }
+            .filter {
+                !it.open && it.end >= dayStart && (
+                    (it.source == "auto" && it.title == "сон") ||
+                        (it.title == ru.zf.pravka.core.AutoPilotRules.SLEEP_TITLE && ru.zf.pravka.core.DayReport.isSleep(it.category))
+                    )
+            }
         val target = sleeps.firstOrNull()
         if (target != null) {
             if (target.raw.isBlank()) zasechkaStore.update(target.copy(raw = note))

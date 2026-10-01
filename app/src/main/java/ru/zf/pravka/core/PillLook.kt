@@ -105,6 +105,14 @@ object PillLook {
      */
     /** Плотность заливки ожидания в цвете режима поверх стекла пилюли. */
     const val PROGRESS_ALPHA = 0.30f
+
+    /**
+     * Секунды до ответа — в кружке пилюли и на занятой кнопке — бумагой на
+     * этой доле, а не чистой: на цвете режима выходит мягкий серый
+     * (владелец, 01.10.2026: «должны быть не ярко-белым, а, может быть,
+     * каким-то серым»). Ярче этого число спорит со словами в пилюле.
+     */
+    const val SECONDS_ALPHA = 0.62f
     const val RESULT_HOLD_MS = 5_000L
     const val RESULT_OPEN_HOLD_MS = 30_000L
 
@@ -168,19 +176,40 @@ object PillLook {
     fun sheenAlpha(density: Float): Float = 0.06f + 0.10f * density.coerceIn(0f, 1f)
 
     /**
-     * Три полоски волны в кружке: в тишине — значок (короткая, длинная,
-     * короткая), от голоса все три растут. Доли от наибольшей высоты.
+     * Три полоски волны в кружке (владелец, 01.10.2026: «в начале она должна
+     * быть как три такие маленькие штучки. А дальше, если я говорю, то они
+     * должны сильнее двигаться»). В тишине — три одинаковые короткие
+     * чёрточки ([BAR_REST]); от голоса каждая растёт до своего пика и ещё
+     * ходит своим ритмом ([BAR_PERIOD_MS]): ровное масштабирование всех трёх
+     * читалось как «чуть подросло», а не «слышу». Громкость идёт корнем —
+     * тихая речь тоже видна, а не только крик. [nowMs] — часы кадра. Доли от
+     * наибольшей высоты.
      */
-    fun bars(level: Float): FloatArray {
-        val l = level.coerceIn(0f, 1f)
+    fun bars(level: Float, nowMs: Long): FloatArray {
+        val l = sqrt(level.coerceIn(0f, 1f))
         return FloatArray(3) { i ->
-            val rest = BAR_REST[i]
-            rest + (BAR_PEAK[i] - rest) * l
+            val phase = 2.0 * PI * ((nowMs % BAR_PERIOD_MS[i]).toDouble() / BAR_PERIOD_MS[i]) + BAR_PHASE[i]
+            val sway = BAR_SWAY_MIN + (1f - BAR_SWAY_MIN) * (0.5f + 0.5f * sin(phase).toFloat())
+            BAR_REST + (BAR_PEAK[i] - BAR_REST) * l * sway
         }
     }
 
-    private val BAR_REST = floatArrayOf(0.34f, 0.62f, 0.34f)
-    private val BAR_PEAK = floatArrayOf(0.78f, 1.0f, 0.78f)
+    /** Живёт ли волна сама (кадр за кадром) при этой громкости, или стоит чёрточками. */
+    fun barsMoving(level: Float): Boolean = level > BAR_STILL
+
+    /** Тишина — три одинаковые чёрточки; столько же у каждой полоски внизу хода. */
+    const val BAR_REST = 0.14f
+    private val BAR_PEAK = floatArrayOf(0.80f, 1.0f, 0.80f)
+
+    /** Ритмы трёх полосок, мс: взаимно не кратные — волна не повторяет рисунок. */
+    private val BAR_PERIOD_MS = longArrayOf(290L, 230L, 340L)
+    private val BAR_PHASE = doubleArrayOf(0.0, 2.1, 4.2)
+
+    /** Нижняя точка хода от громкости: полоска не падает в чёрточку посреди слова. */
+    private const val BAR_SWAY_MIN = 0.45f
+
+    /** Ниже этой громкости волна замирает чёрточками: перерисовывать каждый кадр незачем. */
+    private const val BAR_STILL = 0.02f
 
     /** Смесь двух цветов: [t] — доля второго. Альфа — первого. */
     fun mix(a: Int, b: Int, t: Float): Int {

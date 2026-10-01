@@ -8,13 +8,17 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * Звуки диктовки — числами, без Android, под тестом. Три звука:
+ * Звуки диктовки — числами, без Android, под тестом. Четыре звука:
  *
  *  · «говори» ([render]) — нажал, слушает (владелец, 29.09.2026: «мне точно
  *    нужен фидбэк… когда уже понятно, что можно говорить»);
  *  · «принял» ([renderStop]) — стоп нажат, сказанное ушло расшифровываться
  *    («когда я в конце на наушниках нажимаю кнопку… там просто вообще никаких
  *    звуков»);
+ *  · «готово» ([renderDone]) — всё разобрано и легло на место: текст встал в
+ *    поле, запись — в ленту (владелец, 01.10.2026: «убери это слово
+ *    „Расшифровал“. Замени его на звуки свои прекрасные… когда всё принято —
+ *    отдельный звук, и когда расшифровалась — второй звук»);
  *  · «наушники отвалились» ([renderLost]) — слушает уже телефон.
  *
  * Четвёртое издание — щелчки (владелец, 29.09.2026, ночь: «звук не слышен
@@ -29,6 +33,8 @@ import kotlin.math.sin
  *
  *  · «говори» — три щелчка подряд, чуть вверх ([READY_HZ], шаг [READY_STEP_MS]);
  *  · «принял» — два щелчка вниз ([STOP_HZ]);
+ *  · «готово» — не щелчки, а два колокольчика вверх на кварту ([DONE_HZ]):
+ *    звенят дольше щелчка, и в кармане его не спутать с «говори»;
  *  · «отвалились» — не щелчок, а мягкий тон, сползающий вниз
  *    ([LOST_HZ] → [LOST_END_HZ]): не спутать с двумя другими, не глядя на экран.
  *
@@ -54,6 +60,23 @@ object ReadyChime {
             fun fromKey(key: String?): Mode = entries.firstOrNull { it.key == key } ?: HEADSET
         }
     }
+
+    /**
+     * Через сколько звенеть «говори» в наушники, мс. Владелец (01.10.2026):
+     * «в настройках ползунок, через сколько секунд его делать… через секунду
+     * после того, как вылезла плашка сверху, или… когда я переключил на
+     * наушники, после этого через полторы секунды». Отсчёт — от [anchorMs]
+     * (начало тейка или переключение на наушники), но не раньше этого мига:
+     * звук звенит, когда тейк уже слышит, — иначе «говори» был бы неправдой.
+     */
+    fun readyDelayMs(anchorMs: Long, nowMs: Long, afterMs: Long): Long =
+        (anchorMs + afterMs.coerceAtLeast(0L) - nowMs).coerceAtLeast(0L)
+
+    /** Ползунки задержки «говори» в наушниках, мс: заводские, предел и шаг. */
+    const val AFTER_START_MS = 1_000L
+    const val AFTER_SWITCH_MS = 1_500L
+    const val AFTER_MAX_MS = 4_000L
+    const val AFTER_STEP_MS = 250L
 
     /** Звенеть ли сейчас: слушают наушники ([headset]) или телефон. */
     fun shouldPlay(mode: Mode, headset: Boolean): Boolean = when (mode) {
@@ -86,6 +109,9 @@ object ReadyChime {
     /** «Принял»: два щелчка вниз. */
     val STOP_HZ = doubleArrayOf(1_600.0, 1_250.0)
 
+    /** «Готово»: два колокольчика вверх на кварту (ми — ля). */
+    val DONE_HZ = doubleArrayOf(1_320.0, 1_760.0)
+
     /** «Отвалились»: мягкий тон вниз. */
     const val LOST_HZ = 880.0
     const val LOST_END_HZ = 620.0
@@ -93,10 +119,12 @@ object ReadyChime {
     /** Шаг между щелчками, мс: быстро, но слышно, что их три. */
     const val READY_STEP_MS = 80
     const val STOP_STEP_MS = 100
+    const val DONE_STEP_MS = 150
 
     /** Длина звуков без тишины впереди, мс: вместе с хвостом комнаты. */
     const val READY_BODY_MS = 420
     const val STOP_BODY_MS = 380
+    const val DONE_BODY_MS = 700
     const val LOST_BODY_MS = 600
 
     /** Доля хвоста комнаты. */
@@ -112,6 +140,19 @@ object ReadyChime {
     /** «Принял»: два щелчка вниз. */
     fun renderStop(sampleRate: Int = SAMPLE_RATE): ShortArray =
         clicks(STOP_HZ, STOP_STEP_MS, STOP_BODY_MS, sampleRate)
+
+    /**
+     * «Готово»: два колокольчика вверх. Удар тот же мягкий, что у щелчка, но
+     * тон звенит дольше (около десятой секунды), а над ним тихий
+     * негармонический обертон — так звучит колокольчик, а не клавиша.
+     */
+    fun renderDone(sampleRate: Int = SAMPLE_RATE): ShortArray {
+        val lead = sampleRate * LEAD_MS / 1000
+        val step = sampleRate * DONE_STEP_MS / 1000
+        val dry = DoubleArray(lead + sampleRate * DONE_BODY_MS / 1000)
+        DONE_HZ.forEachIndexed { i, f -> bell(dry, lead + i * step, f, sampleRate) }
+        return finish(room(dry, sampleRate), sampleRate, CLICK_PEAK)
+    }
 
     /** «Наушники отвалились»: мягкий тон, сползающий вниз. */
     fun renderLost(sampleRate: Int = SAMPLE_RATE): ShortArray {
@@ -155,6 +196,26 @@ object ReadyChime {
             val t = n.toDouble() / sampleRate
             val tone = exp(-n / tau) * sin(2 * PI * freq * t) +
                 0.45 * exp(-n / bodyTau) * sin(2 * PI * freq / 2 * t)
+            out[from + n] += rise * tone
+        }
+    }
+
+    /**
+     * Один колокольчик: удар за 3 мс, основной тон гаснет за ~90 мс, под ним
+     * нота октавой ниже (как у щелчка), над ним обертон 2,76× — короткий.
+     */
+    private fun bell(out: DoubleArray, from: Int, freq: Double, sampleRate: Int) {
+        val attack = sampleRate * 3 / 1000
+        val tau = 0.090 * sampleRate
+        val bodyTau = 0.040 * sampleRate
+        val shimmerTau = 0.030 * sampleRate
+        val length = minOf(out.size - from, sampleRate * 500 / 1000)
+        for (n in 0 until length) {
+            val rise = if (n < attack) 0.5 - 0.5 * cos(PI * n / attack) else 1.0
+            val t = n.toDouble() / sampleRate
+            val tone = exp(-n / tau) * sin(2 * PI * freq * t) +
+                0.35 * exp(-n / bodyTau) * sin(2 * PI * freq / 2 * t) +
+                0.12 * exp(-n / shimmerTau) * sin(2 * PI * freq * 2.76 * t)
             out[from + n] += rise * tone
         }
     }

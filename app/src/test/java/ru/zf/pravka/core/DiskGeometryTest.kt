@@ -360,6 +360,68 @@ class DiskGeometryTest {
         }
     }
 
+    // Шестерёнка на краешке вместо стрелки и спиннер (владелец, 01.10.2026).
+
+    @Test
+    fun `шестерёнка на краешке - между П и З, не задевая их, и на стекле`() {
+        val plate = DiskGeometry.plateRadius(button, gear, gap)
+        val ring = DiskGeometry.ringRadius(button, gear, gap)
+        val pad = 3f
+        for (count in 2..4) {
+            val gx = DiskGeometry.sliverGear(button, gear, ring, count, gap, pad)
+            // Передние кнопки: полкнопки и просвет от края, полшага вверх и вниз.
+            val front = button / 2f + gap
+            val apart = ring * kotlin.math.sin(Math.toRadians(DiskGeometry.spread(count) / 2.0)).toFloat()
+            val dist = kotlin.math.hypot(front - gx, apart)
+            assertTrue("кнопок $count: зазор ${dist - gear / 2f - button / 2f}", dist >= gear / 2f + button / 2f + pad - 0.01f)
+            // Не дальше, чем целиком на экране, и больше половины — на экране.
+            assertTrue(gx <= gear / 2f + 0.01f)
+            assertTrue("кнопок $count: центр $gx", gx > 0f)
+            // Стекло под ней: краешек не уже её дальней кромки с зазором.
+            val minSliver = DiskGeometry.sliverFor(gx, gear, pad)
+            val sliver = plate - DiskGeometry.tuckDepth(plate, minSliver)
+            assertTrue(sliver >= gx + gear / 2f + pad - 1f)
+        }
+    }
+
+    @Test
+    fun `краешек шире под шестерёнку - а кнопки стоят там же`() {
+        val plate = DiskGeometry.plateRadius(button, gear, gap)
+        val ring = DiskGeometry.ringRadius(button, gear, gap)
+        val gx = DiskGeometry.sliverGear(button, gear, ring, 4, gap, 3f)
+        val minSliver = DiskGeometry.sliverFor(gx, gear, 3f)
+        val plain = -DiskGeometry.tuckDepth(plate) + DiskGeometry.extrusion(plate, ring, button, 4, gap)
+        val withGear = -DiskGeometry.tuckDepth(plate, minSliver) + DiskGeometry.extrusion(plate, ring, button, 4, gap, minSliver)
+        // Центр кольца от края экрана тот же: «П» и «З» не сдвинулись ни на пиксель.
+        assertEquals(plain, withGear, 0.6f)
+        assertTrue(DiskGeometry.tuckDepth(plate, minSliver) < DiskGeometry.tuckDepth(plate))
+        // Без минимума — прежняя четверть.
+        assertEquals(DiskGeometry.tuckDepth(plate), DiskGeometry.tuckDepth(plate, 0f))
+    }
+
+    @Test
+    fun `спиннер - лепестки под каждой кнопкой и целиком в окне стекла`() {
+        val rays = DiskGeometry.BLOB_RAYS
+        val plate = DiskGeometry.plateRadius(button, gear, gap)
+        val ring = DiskGeometry.ringRadius(button, gear, gap)
+        val podR = DiskGeometry.podRadius(button, gap)
+        val spread = DiskGeometry.spinSpread(button)
+        val reach = DiskGeometry.bodyReach(plate, ring, button, gap)
+        val out = FloatArray(rays)
+        val tmp = FloatArray(rays)
+        for (turn in 0 until 360 step 15) {
+            val pods = FloatArray(8)
+            for (i in 0 until 4) {
+                val a = Math.toRadians(DiskGeometry.slotAngle(i, 4, 0f, turn.toFloat()).toDouble())
+                pods[i * 2] = ((ring + spread) * kotlin.math.cos(a)).toFloat()
+                pods[i * 2 + 1] = ((ring + spread) * kotlin.math.sin(a)).toFloat()
+            }
+            assertTrue("стекло растянуто", DiskGeometry.blob(out, tmp, plate, pods, podR))
+            assertTrue("лепестки за тарелкой", out.max() > plate + spread * 0.5f)
+            assertTrue("в окне: ${out.max()} > $reach", out.max() <= reach + 0.5f)
+        }
+    }
+
     @Test
     fun `ход по кнопке - по краю, целиком или поворот`() {
         val ring = DiskGeometry.ringRadius(button, gear, gap)

@@ -146,6 +146,24 @@ import ru.zf.pravka.ui.Feedback
 //    телефон нашёл ночь (`PhoneSweeper` → `AutoWitness.woke`) — в будни между
 //    пятью и десятью начинается дело по подъёму («Сборы детей» [Семья], в
 //    настройках) с момента подъёма, если владелец сам ничего не сказал.
+// 19. Сон сам (01.10.2026; владелец: «сон почему-то не включается сам, когда
+//    я подключаю телефон на зарядку и он перестаёт двигаться… и выключается
+//    он, когда телефон задвигался с утра»). Зарядка вечером, экран погас,
+//    полчаса без толчка и уже после 23:00 (`AutoPilotRules.sleepPlan`) —
+//    «Сон» начинается с мига, когда телефон положили, и закрывает вечернее
+//    дело; пуш ТИХИЙ (в шторке, без баннера: экран на тумбочке не зажигаем)
+//    с «Отменить». Свой сон (NFC, голосом) — не трогаем. Кончается первым
+//    толчком с пяти утра (`AutoPilotRules.sleepWakeHour`; в четыре взял,
+//    глянул, положил — не подъём) или подъёмом, который увидел детектор ночи
+//    по экрану; дальше — дело по подъёму, как было.
+// 20. Сказал на выходе — не спрашиваем (01.10.2026; «Пошёл развозить детей»,
+//    «пошёл поговорить с другом»): дело владельца, начатое за десять минут до
+//    потери сети, после неё или — со словами выхода — за полчаса
+//    (`AutoPilotRules.ownerToldLeave`), снимает вопрос «уехал?», ходьбу и
+//    «Поездку на машине» поверх: его слово о выходе уже есть.
+// 21. «Всё ещё …?» по движению — по всем делам, кроме дороги, спорта, быта и
+//    сна (`AutoPilotRules.stillAskable`; владелец: «как только я взял
+//    телефон, то дело какое-то другое началось»), с двадцати минут дела.
 //
 // И ещё одно, из жизни: к сети в Летово владелец не подключается — пароля
 // нет и не надо. Но она появляется в эфире ровно тогда, когда он приехал.
@@ -188,8 +206,8 @@ class AutoPilot(
         private const val SCAN_FRESH_MS = 10 * 60_000L
         // Машина отключилась: две минуты на «заглушил у магазина и поехал».
         private const val CAR_OFF_DELAY_MS = 2 * 60_000L
-        // «Точно ещё …?» — только по делам длиннее получаса.
-        private const val SEDENTARY_MIN_MS = 30 * 60_000L
+        // «Точно ещё …?» — по делам длиннее двадцати минут (до 01.10.2026 — получаса).
+        private const val SEDENTARY_MIN_MS = 20 * 60_000L
         // И не чаще раза в двадцать минут: взял телефон — не допрос же.
         private const val STILL_THROTTLE_MS = 20 * 60_000L
         // Повторная поимка того же места — не событие.
@@ -342,6 +360,17 @@ class AutoPilot(
         const val WHAT_MEETING_ON = "meeting_on"
         /** Открыть обратно только что закрытую запись (встреча кончилась, а возвращать было нечего). */
         const val WHAT_REOPEN = "reopen"
+        /** Сон, начатый автопилотом, — «Отменить»: не сплю. */
+        const val WHAT_SLEEP_UNDO = "sleep_undo"
+        /** Сон, закрытый утренним толчком, — «Ещё сплю»: открыть обратно. */
+        const val WHAT_SLEEP_BACK = "sleep_back"
+
+        /** Сон, начатый автопилотом: с какого мига (0 — нет). Переживает перезапуск службы. */
+        private const val KEY_AUTO_SLEEP_FROM = "z_auto_sleep_from"
+        /** Ночь, про которую сон уже решён (начат или отменён), — второго за ночь нет. */
+        private const val KEY_SLEEP_NIGHT = "z_sleep_night"
+        const val SLEEP_TITLE = AutoPilotRules.SLEEP_TITLE
+        const val SLEEP_CATEGORY = "Сон"
 
         const val WALK_CATEGORY = "Передвижение: пешком"
 
@@ -417,7 +446,10 @@ class AutoPilot(
     private var chargingSince = 0L
     private var screenOffSince = 0L
     private var pendingBedtime: Runnable? = null
-    private var bedtimeNight = ""
+    /** Когда решать сон (System.currentTimeMillis): Handler в глубоком сне телефона опаздывает, тик досылает. */
+    private var bedtimeDueAt = 0L
+    /** Последний толчок датчика значимого движения: лёг — не раньше него. */
+    private var lastMotionAt = 0L
     private var powerReceiver: BroadcastReceiver? = null
     /** Сети «по видимости», которые слышно прямо сейчас. */
     private val around = HashSet<String>()
@@ -923,6 +955,10 @@ class AutoPilot(
                     app.eventLog.add("автопилот: потерял «$fromPlace», дорога уже идёт — молчу")
                     return@launch
                 }
+                if (open != null && ownerTold(open, atMs)) {
+                    app.eventLog.add("автопилот: потерял «$fromPlace» — ты сказал «${open.title}» на выходе, не спрашиваю")
+                    return@launch
+                }
                 lastFire = "спросил про отъезд из «$fromPlace»"
                 val moving = walkMotions >= 2
                 leaveNotifId = notify(
@@ -1010,6 +1046,23 @@ class AutoPilot(
             if (open != null && travelish(open)) {
                 app.eventLog.add("автопилот: BT «$carBt» подключился, «${open.title}» уже идёт")
                 dropLeaveQuestion()
+                return@launch
+            }
+            // Сказал на выходе, куда едет («пошёл развозить детей»), — его дело и
+            // есть дорога: «Поездку на машине» поверх не кладём. Шов — отъезд,
+            // если он только что был, иначе само подключение.
+            val seam = if (leftAtMs > 0L && at - leftAtMs in 0..AutoPilotRules.CAR_AFTER_LEAVE_MS) leftAtMs else at
+            if (open != null && ownerTold(open, seam)) {
+                dropLeaveQuestion()
+                lastFire = "машина в ${timeHm(at)}, идёт «${open.title}»"
+                notify(
+                    "🚗 Машина — оставил «${open.title}»",
+                    "Ты сказал «${open.title}» в ${timeHm(open.start)} — это и есть дорога, поездку поверх не начинаю. " +
+                        "Нужна отдельная «Поездка» — кнопка ниже.",
+                    listOf(action("Поездка", WHAT_MOVE_CAR, at, "")),
+                    quiet = true,
+                )
+                app.eventLog.add("автопилот: BT «$carBt» подключился — ты сказал «${open.title}» на выходе, поездку не начинаю")
                 return@launch
             }
             val start = AutoPilotRules.carTripStart(at, leftPlace, leftAtMs, open?.start)
@@ -1115,6 +1168,10 @@ class AutoPilot(
         pendingWalk = null
     }
 
+    /** Сказал ли владелец открытым делом [open], куда идёт, — к шву [atMs] (`AutoPilotRules.ownerToldLeave`). */
+    private fun ownerTold(open: ZasechkaStore.Entry, atMs: Long): Boolean =
+        AutoPilotRules.ownerToldLeave(open.start, open.source, open.title, open.raw, atMs)
+
     // ---- Что автопилот знает о швах (AutoWitness) — для тренировок с часов ----
 
     override fun lastLeave(): Leave? = if (leftAtMs > 0L && leftPlace.isNotBlank()) Leave(leftPlace, leftAtMs) else null
@@ -1144,14 +1201,20 @@ class AutoPilot(
         val now = System.currentTimeMillis()
         val open = app.zasechkaStore.openEntry()
         val latest = app.zasechkaStore.lastEntry()?.start ?: 0L
+        val told = open != null && ownerTold(open, leftAtMs)
         val verdict = AutoPilotRules.walkVerdict(
             motions = walkMotions, leftAtMs = leftAtMs, now = now,
             openTitle = open?.title, openCategory = open?.category, latestOwnerStart = latest,
+            ownerTold = told,
         )
         if (verdict != AutoPilotRules.Walk.START) {
             app.eventLog.add(
                 "автопилот: двадцать минут после отъезда из «$leftPlace», толчков $walkMotions — " +
-                    if (verdict == AutoPilotRules.Walk.WAIT) "рано" else "не ходьба"
+                    when {
+                        verdict == AutoPilotRules.Walk.WAIT -> "рано"
+                        told -> "ты сказал «${open?.title}» на выходе"
+                        else -> "не ходьба"
+                    }
             )
             return
         }
@@ -1249,45 +1312,169 @@ class AutoPilot(
     }
 
     /**
-     * Есть кандидат в отбой (зарядка подключена вечером, экран погас) —
-     * ждём двадцать минут тишины; толчок ([onSignificantMotion]) отсчитывает
-     * их заново, зажёгшийся экран или снятая зарядка снимают кандидата.
+     * Есть кандидат в сон (зарядка подключена вечером, экран погас,
+     * `AutoPilotRules.sleepPlan`) — ждём полчаса тишины, но не раньше 23:00;
+     * толчок ([onSignificantMotion]) отсчитывает их заново, зажёгшийся экран
+     * или снятая зарядка снимают кандидата.
      */
     private fun evalBedtime() {
         pendingBedtime?.let { handler.removeCallbacks(it) }
         pendingBedtime = null
+        bedtimeDueAt = 0L
         if (!autoBedtime) return
-        val at = AutoPilotRules.bedtimeCandidate(chargingSince, screenOffSince, hourOf(chargingSince))
-        if (at <= 0L || bedtimeNight == nightKey(at)) return
+        val plan = AutoPilotRules.sleepPlan(chargingSince, screenOffSince, lastMotionAt, 0L) ?: return
+        if (sleepNight() == nightKey(plan.from)) return
         val check = Runnable {
             pendingBedtime = null
-            scope.launch { onBedtime(at) }
+            bedtimeDueAt = 0L
+            scope.launch { onSleepDue(plan) }
         }
         pendingBedtime = check
-        handler.postDelayed(check, AutoPilotRules.BEDTIME_STILL_MS)
+        bedtimeDueAt = plan.decideAt
+        handler.postDelayed(check, (plan.decideAt - System.currentTimeMillis()).coerceAtLeast(0L))
         armMotion()
     }
 
+    private fun internal() = service.getSharedPreferences("pravka_internal", Context.MODE_PRIVATE)
+
+    private fun sleepNight(): String = runCatching { internal().getString(KEY_SLEEP_NIGHT, "").orEmpty() }.getOrDefault("")
+
+    /** Сон, начатый автопилотом и ещё не кончившийся: с какого мига; 0 — нет (или старше суток). */
+    private fun autoSleepFrom(): Long {
+        val from = runCatching { internal().getLong(KEY_AUTO_SLEEP_FROM, 0L) }.getOrDefault(0L)
+        return if (from > 0L && System.currentTimeMillis() - from < 20 * 3_600_000L) from else 0L
+    }
+
+    private fun setAutoSleepFrom(from: Long) {
+        runCatching { internal().edit().putLong(KEY_AUTO_SLEEP_FROM, from).apply() }
+    }
+
     /**
-     * Отбой. Вечернее дело закрывается моментом отбоя — это и есть «закрыть
-     * день», только без вечернего вопроса; момент уходит детектору ночи
-     * (`PhoneSweeper.KEY_BEDTIME`): сон начнётся не раньше него. Без пуша.
+     * Полчаса тишины прошли. Владелец сказал что-то после того, как лёг, —
+     * начало сдвигается к его слову (и, если полчаса от него ещё не прошли,
+     * ждём дальше). Свой сон уже идёт (метка NFC, «сплю» голосом) — молчим;
+     * в дороге — тоже. Иначе «Сон» начинается с мига, когда телефон
+     * положили: вечернее дело закрывается там же (это и есть «закрыть день»),
+     * момент уходит детектору ночи (`PhoneSweeper.KEY_BEDTIME`). Пуш — тихий:
+     * в шторке, без баннера и звука — экран на тумбочке не зажигаем.
      */
-    private suspend fun onBedtime(at: Long) {
-        bedtimeNight = nightKey(at)
+    private suspend fun onSleepDue(first: AutoPilotRules.SleepPlan) {
+        val now = System.currentTimeMillis()
+        val latestOwner = app.zasechkaStore.all()
+            .filter { it.source != "auto" && it.source != "gap" }
+            .maxOfOrNull { it.start } ?: 0L
+        var plan = first
+        if (latestOwner > plan.from) {
+            val again = AutoPilotRules.sleepPlan(chargingSince, screenOffSince, lastMotionAt, latestOwner) ?: return
+            if (again.decideAt > now) {
+                app.eventLog.add("автопилот: сон — ты сказал что-то в ${timeHm(latestOwner)}, жду полчаса от этого")
+                handler.post {
+                    pendingBedtime?.let { handler.removeCallbacks(it) }
+                    val check = Runnable {
+                        pendingBedtime = null
+                        bedtimeDueAt = 0L
+                        scope.launch { onSleepDue(again) }
+                    }
+                    pendingBedtime = check
+                    bedtimeDueAt = again.decideAt
+                    handler.postDelayed(check, again.decideAt - System.currentTimeMillis())
+                }
+                return
+            }
+            plan = again
+        }
+        val night = nightKey(plan.from)
+        if (sleepNight() == night) return
         runCatching {
-            service.getSharedPreferences("pravka_internal", Context.MODE_PRIVATE)
-                .edit().putLong(PhoneSweeper.KEY_BEDTIME, at).apply()
+            internal().edit()
+                .putString(KEY_SLEEP_NIGHT, night)
+                .putLong(PhoneSweeper.KEY_BEDTIME, plan.from)
+                .apply()
         }
         val open = app.zasechkaStore.openEntry()
-        val closed = if (open != null && open.start < at) app.zasechkaStore.closeOpen(at) else null
-        if (closed != null) app.zasechkaSync.kickSoon(scope)
-        lastFire = "отбой ${timeHm(at)}"
-        app.eventLog.add(
-            "автопилот: отбой в ${timeHm(at)} — зарядка с ${timeHm(chargingSince)}, экран погас в " +
-                "${timeHm(screenOffSince)}, 20 мин без движения" +
-                (closed?.let { "; «${it.title}» закрыто, ${it.durationMin()} мин" } ?: "")
+        val tail = "зарядка с ${timeHm(chargingSince)}, экран погас в ${timeHm(screenOffSince)}" +
+            (if (lastMotionAt > 0L && lastMotionAt >= chargingSince) ", последний толчок в ${timeHm(lastMotionAt)}" else "") +
+            ", полчаса без движения"
+        if (open != null && ru.zf.pravka.core.DayReport.isSleep(open.category)) {
+            app.eventLog.add("автопилот: отбой ${timeHm(plan.from)} — сон уже идёт с ${timeHm(open.start)} (твой), не трогаю")
+            return
+        }
+        if (open != null && travelish(open)) {
+            app.eventLog.add("автопилот: отбой ${timeHm(plan.from)} — идёт «${open.title}», сон не начинаю ($tail)")
+            return
+        }
+        val entry = app.zasechkaStore.startEntry(
+            start = plan.from,
+            raw = "",
+            title = SLEEP_TITLE,
+            category = SLEEP_CATEGORY,
+            client = "",
+            useful = 0,
+            // Владельческий источник, как у поездки и дела по подъёму: утренний
+            // детектор ночи видит время занятым и второй «сон» не пишет.
+            source = "voice",
         )
+        setAutoSleepFrom(plan.from)
+        app.zasechkaSync.kickSoon(scope)
+        lastFire = "сон с ${timeHm(plan.from)}"
+        notify(
+            "😴 Сон с ${timeHm(plan.from)}",
+            "Телефон на зарядке и лежит с ${timeHm(plan.from)}." +
+                (open?.let { " «${it.title}» закрыто в ${timeHm(plan.from)}." } ?: "") +
+                " Кончится, когда утром возьмёшь телефон. Не спишь — «Отменить».",
+            listOf(action("Отменить", WHAT_SLEEP_UNDO, plan.from, "", id = entry.id, prevId = open?.id ?: 0L)),
+            quiet = true,
+        )
+        app.eventLog.add(
+            "автопилот: сон с ${timeHm(plan.from)} — $tail" +
+                (open?.let { "; «${it.title}» закрыто" } ?: "")
+        )
+        handler.post { armMotion() }
+    }
+
+    /**
+     * Толчок, пока идёт сон автопилота. Ночью (до пяти) — «взял, посмотрел,
+     * убрал»: сон идёт, датчик взводится заново. Утром — подъём в миг толчка:
+     * сон закрывается, дальше — дело по подъёму, как у ночи по экрану.
+     */
+    private fun onSleepMotion(at: Long) {
+        if (!AutoPilotRules.sleepWakeHour(hourOf(at))) {
+            app.eventLog.add("автопилот: толчок ночью в ${timeHm(at)} — сон идёт")
+            armMotion()
+            return
+        }
+        scope.launch { endAutoSleep(at, "телефон задвигался") }
+    }
+
+    /**
+     * Сон автопилота кончился в [at] ([why] — по чему узнали). Возвращает
+     * true, если закрыли именно его. Владелец уже сказал что-то (сон закрыт
+     * его словом) — только снимаем метку.
+     */
+    private suspend fun endAutoSleep(at: Long, why: String): Boolean {
+        val from = autoSleepFrom()
+        if (from <= 0L) return false
+        setAutoSleepFrom(0L)
+        val open = app.zasechkaStore.openEntry()
+        if (open == null || !ru.zf.pravka.core.DayReport.isSleep(open.category) || open.start < from || at <= open.start) {
+            app.eventLog.add("автопилот: подъём ${timeHm(at)} ($why) — сон уже закрыт")
+            return false
+        }
+        val closed = app.zasechkaStore.closeOpen(at) ?: return false
+        app.zasechkaSync.kickSoon(scope)
+        val slept = (at - from) / 60_000L
+        lastFire = "подъём ${timeHm(at)}"
+        app.eventLog.add("автопилот: подъём ${timeHm(at)} ($why) — сон ${timeHm(from)}–${timeHm(at)}, ${slept / 60} ч ${slept % 60} мин")
+        if (!startWakeDeal(from, at)) {
+            notify(
+                "☀ Подъём ${timeHm(at)}",
+                "Сон ${timeHm(from)}–${timeHm(at)}, ${slept / 60} ч ${slept % 60} мин — $why. " +
+                    "Ещё не встал — «Ещё сплю», сон пойдёт дальше.",
+                listOf(action("Ещё сплю", WHAT_SLEEP_BACK, from, "", id = closed.id)),
+                quiet = true,
+            )
+        }
+        return true
     }
 
     /** Ключ ночи: 23:30 и 02:00 — одна ночь, та, что кончается днём +12 часов. */
@@ -1310,51 +1497,67 @@ class AutoPilot(
      * что-то сказал — молчим (`AutoPilotRules.wakeDealDue`).
      */
     override fun woke(sleptFrom: Long, wakeAt: Long) {
-        scope.launch {
-            val deal = wakeDeal ?: return@launch
-            val c = java.util.Calendar.getInstance()
-            c.timeInMillis = wakeAt
-            val dow = c.get(java.util.Calendar.DAY_OF_WEEK)
-            val hour = c.get(java.util.Calendar.HOUR_OF_DAY)
-            val latest = app.zasechkaStore.all()
-                .filter { it.source != "auto" && it.source != "gap" }
-                .maxOfOrNull { it.start } ?: 0L
-            val slept = (wakeAt - sleptFrom) / 60_000L
-            if (!AutoPilotRules.wakeDealDue(dow, hour, wakeAt, latest)) {
-                app.eventLog.add(
-                    "автопилот: подъём ${timeHm(wakeAt)} (сон ${slept / 60} ч ${slept % 60} мин) — дела по подъёму нет: " +
-                        when {
-                            dow !in 2..6 -> "выходной"
-                            latest >= wakeAt -> "ты уже сказал, что делаешь"
-                            else -> "не утро"
-                        }
-                )
-                return@launch
-            }
-            val now = System.currentTimeMillis()
-            val entry = app.zasechkaStore.startEntry(
-                start = wakeAt,
-                raw = "",
-                title = deal.title,
-                category = deal.category,
-                client = "",
-                useful = 0,
-                source = "voice",
+        scope.launch { startWakeDeal(sleptFrom, wakeAt) }
+    }
+
+    /**
+     * Детектор ночи по экрану нашёл подъём, а сон автопилота ещё идёт:
+     * утро (с пяти) — закрыть сон этим подъёмом (владелец взял телефон и
+     * читает в постели — значимого толчка могло и не быть). Ночной подъём
+     * экрана (в четыре почитал и уснул) сна не кончает.
+     */
+    override suspend fun nightSeen(wakeAt: Long): Boolean {
+        if (autoSleepFrom() <= 0L) return false
+        if (!AutoPilotRules.sleepWakeHour(hourOf(wakeAt))) return false
+        return endAutoSleep(wakeAt, "экран утром")
+    }
+
+    /** Начать дело по подъёму, если пора (`AutoPilotRules.wakeDealDue`). true — начато. */
+    private suspend fun startWakeDeal(sleptFrom: Long, wakeAt: Long): Boolean {
+        val deal = wakeDeal ?: return false
+        val c = java.util.Calendar.getInstance()
+        c.timeInMillis = wakeAt
+        val dow = c.get(java.util.Calendar.DAY_OF_WEEK)
+        val hour = c.get(java.util.Calendar.HOUR_OF_DAY)
+        val latest = app.zasechkaStore.all()
+            .filter { it.source != "auto" && it.source != "gap" }
+            .maxOfOrNull { it.start } ?: 0L
+        val slept = (wakeAt - sleptFrom) / 60_000L
+        if (!AutoPilotRules.wakeDealDue(dow, hour, wakeAt, latest)) {
+            app.eventLog.add(
+                "автопилот: подъём ${timeHm(wakeAt)} (сон ${slept / 60} ч ${slept % 60} мин) — дела по подъёму нет: " +
+                    when {
+                        dow !in 2..6 -> "выходной"
+                        latest >= wakeAt -> "ты уже сказал, что делаешь"
+                        else -> "не утро"
+                    }
             )
-            app.zasechkaSync.kickSoon(scope)
-            lastFire = "подъём ${timeHm(wakeAt)}, начато «${entry.title}»"
-            notify(
-                "☀ Подъём ${timeHm(wakeAt)} — ${entry.title}",
-                "Сон ${timeHm(sleptFrom)}–${timeHm(wakeAt)}, ${slept / 60} ч ${slept % 60} мин. С ${timeHm(wakeAt)} " +
-                    "идёт «${entry.title}» [${entry.category}]. Не то — скажи, запишу с ${timeHm(wakeAt)}; " +
-                    "не сегодня — «Отменить».",
-                listOf(
-                    action("Отменить", WHAT_UNDO, now, "", id = entry.id, prevId = 0L),
-                    sayAction(wakeAt),
-                ),
-            )
-            app.eventLog.add("автопилот: подъём ${timeHm(wakeAt)} — начато «${entry.title}» [${entry.category}]")
+            return false
         }
+        val now = System.currentTimeMillis()
+        val entry = app.zasechkaStore.startEntry(
+            start = wakeAt,
+            raw = "",
+            title = deal.title,
+            category = deal.category,
+            client = "",
+            useful = 0,
+            source = "voice",
+        )
+        app.zasechkaSync.kickSoon(scope)
+        lastFire = "подъём ${timeHm(wakeAt)}, начато «${entry.title}»"
+        notify(
+            "☀ Подъём ${timeHm(wakeAt)} — ${entry.title}",
+            "Сон ${timeHm(sleptFrom)}–${timeHm(wakeAt)}, ${slept / 60} ч ${slept % 60} мин. С ${timeHm(wakeAt)} " +
+                "идёт «${entry.title}» [${entry.category}]. Не то — скажи, запишу с ${timeHm(wakeAt)}; " +
+                "не сегодня — «Отменить».",
+            listOf(
+                action("Отменить", WHAT_UNDO, now, "", id = entry.id, prevId = 0L),
+                sayAction(wakeAt),
+            ),
+        )
+        app.eventLog.add("автопилот: подъём ${timeHm(wakeAt)} — начато «${entry.title}» [${entry.category}]")
+        return true
     }
 
     // ---- «Точно ещё …?» по датчику значимого движения ----
@@ -1370,12 +1573,20 @@ class AutoPilot(
     fun tick() {
         pollWifi()
         pollVisible()
+        val now = System.currentTimeMillis()
         // После отъезда датчик нужен ходьбе — независимо от «всё ещё …?».
-        if (leaveFresh(System.currentTimeMillis())) armMotion()
+        if (leaveFresh(now)) armMotion()
+        // Сон идёт — датчик ждёт утреннего толчка (и после перезапуска службы).
+        if (autoSleepFrom() > 0L) armMotion()
+        // Срок решить сон прошёл, а Handler проспал его вместе с телефоном — сейчас.
+        if (bedtimeDueAt in 1..now) pendingBedtime?.let { r ->
+            handler.removeCallbacks(r)
+            r.run()
+        }
         if (!askStill) return
         scope.launch {
             val open = app.zasechkaStore.openEntry() ?: return@launch
-            if (!AutoPilotRules.sedentary(open.category)) return@launch
+            if (!AutoPilotRules.stillAskable(open.title, open.category)) return@launch
             if (System.currentTimeMillis() - open.start < SEDENTARY_MIN_MS) return@launch
             armMotion()
         }
@@ -1401,10 +1612,12 @@ class AutoPilot(
      */
     private fun onSignificantMotion() {
         val now = System.currentTimeMillis()
+        lastMotionAt = now
         if (pendingBedtime != null) {
-            // Ещё не спит: двадцать минут тишины — с этого толчка заново.
+            // Ещё не спит: полчаса тишины — с этого толчка заново.
             handler.post { evalBedtime() }
         }
+        if (autoSleepFrom() > 0L) handler.post { onSleepMotion(now) }
         if (leaveFresh(now)) {
             walkMotions++
             armMotion()
@@ -1418,7 +1631,7 @@ class AutoPilot(
         if (!askStill || now - lastStillAsk < STILL_THROTTLE_MS) return
         scope.launch {
             val open = app.zasechkaStore.openEntry() ?: return@launch
-            if (!AutoPilotRules.sedentary(open.category)) return@launch
+            if (!AutoPilotRules.stillAskable(open.title, open.category)) return@launch
             if (now - open.start < SEDENTARY_MIN_MS) return@launch
             stillMotions = 1
             stillMotionAt = now
@@ -1437,7 +1650,7 @@ class AutoPilot(
     private suspend fun askStillIfMoved() {
         val now = System.currentTimeMillis()
         val open = app.zasechkaStore.openEntry() ?: return
-        if (open.id != stillOpenId || !AutoPilotRules.sedentary(open.category)) return
+        if (open.id != stillOpenId || !AutoPilotRules.stillAskable(open.title, open.category)) return
         // Сеть места пропала после первого толчка и не вернулась — это отъезд,
         // о нём спросит (или уже спросил) вопрос «уехал?».
         val leftAfter = leftAtMs > stillMotionAt && lastArriveAt < leftAtMs
@@ -1605,6 +1818,53 @@ class AutoPilot(
                             (back?.let { ", вернулся к «${it.title}»" } ?: "")
                     )
                 }
+                WHAT_SLEEP_UNDO -> {
+                    // «Не сплю»: сон автопилота убирается целиком (после полуночи
+                    // он разрезан на два дня — оба куска), прежнее дело открывается
+                    // обратно; этой ночью сам сон больше не начнётся.
+                    val pieces = app.zasechkaStore.all()
+                        .filter {
+                            it.id == id || (
+                                it.source == "voice" && it.title == SLEEP_TITLE &&
+                                    ru.zf.pravka.core.DayReport.isSleep(it.category) &&
+                                    // Куски этой ночи, не следующей: старый пуш жмут и днём позже.
+                                    it.start >= atMs && it.start < atMs + 16 * 3_600_000L
+                                )
+                        }
+                        .map { it.id }
+                        .toSet()
+                    if (autoSleepFrom() == atMs) setAutoSleepFrom(0L)
+                    runCatching { internal().edit().remove(PhoneSweeper.KEY_BEDTIME).apply() }
+                    val back = if (pieces.isEmpty()) null else app.zasechkaStore.revertAutoStart(pieces, prevId)
+                    app.zasechkaSync.kickSoon(scope)
+                    Feedback.toast(
+                        app,
+                        when {
+                            pieces.isEmpty() -> "Сна уже нет"
+                            back != null -> "↩︎ Сон убран, снова «${back.title}»"
+                            else -> "↩︎ Сон убран"
+                        },
+                    )
+                    app.eventLog.add(
+                        "автопилот: сон с ${timeHm(atMs)} отменён кнопкой" +
+                            (back?.let { ", вернулся к «${it.title}»" } ?: "")
+                    )
+                }
+                WHAT_SLEEP_BACK -> {
+                    // Утренний толчок оказался не подъёмом: сон идёт дальше.
+                    val back = app.zasechkaStore.reopen(id)
+                    if (back != null) {
+                        setAutoSleepFrom(atMs)
+                        app.zasechkaSync.kickSoon(scope)
+                        handler.post { armMotion() }
+                    }
+                    Feedback.toast(
+                        app,
+                        if (back != null) "😴 Сон снова идёт — кончится со следующим толчком"
+                        else "Сон не открыть — уже идёт другое дело",
+                    )
+                    if (back != null) app.eventLog.add("автопилот: сон открыт обратно кнопкой «Ещё сплю»")
+                }
                 WHAT_REOPEN -> {
                     val back = app.zasechkaStore.reopen(id)
                     if (back != null) app.zasechkaSync.kickSoon(scope)
@@ -1743,14 +2003,20 @@ class AutoPilot(
         actions: List<Reply>,
         openSettings: Boolean = false,
         plate: Boolean = true,
+        /**
+         * Только тихо в шторку — без плашки, баннера и звука: сон на
+         * тумбочке (01.10.2026), зажечь экран значит разбудить.
+         */
+        quiet: Boolean = false,
     ): Int {
         val id = (title + text).hashCode()
         if (Looper.myLooper() != Looper.getMainLooper()) {
             // Плашка — вещь главного потока (календарь спрашивает из IO).
-            handler.post { notify(title, text, actions, openSettings, plate) }
+            handler.post { notify(title, text, actions, openSettings, plate, quiet) }
             return id
         }
-        val onPlate = plate && !openSettings && platesOn && canPlate() && showPlate(title, text, actions, id)
+        val onPlate = !quiet && plate && !openSettings && platesOn && canPlate() && showPlate(title, text, actions, id)
+        val hush = onPlate || quiet
         runCatching {
             val nm = service.getSystemService(NotificationManager::class.java)
             if (nm.getNotificationChannel(CHANNEL) == null) {
@@ -1765,7 +2031,7 @@ class AutoPilot(
                 )
                 runCatching { nm.deleteNotificationChannel(OLD_CHANNEL) }
             }
-            if (onPlate && nm.getNotificationChannel(QUIET_CHANNEL) == null) {
+            if (hush && nm.getNotificationChannel(QUIET_CHANNEL) == null) {
                 nm.createNotificationChannel(
                     NotificationChannel(
                         QUIET_CHANNEL, "Автопилот Засечки: копии плашек",
@@ -1773,7 +2039,7 @@ class AutoPilot(
                     )
                 )
             }
-            val b = Notification.Builder(service, if (onPlate) QUIET_CHANNEL else CHANNEL)
+            val b = Notification.Builder(service, if (hush) QUIET_CHANNEL else CHANNEL)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(Notification.BigTextStyle().bigText(text))

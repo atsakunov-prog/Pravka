@@ -1572,6 +1572,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             app.eventLog.add("insert: SET_TEXT rejected -> paste=$pasted")
             if (!pasted) Feedback.toast(this, getString(R.string.dictation_to_clipboard))
             else Haptics.success(this)
+            takeDone(pasted)
             return
         }
         runCatching { node.refresh() }
@@ -1602,6 +1603,9 @@ class PravkaAccessibilityService : AccessibilityService() {
                 ProofreadMode.CLEAN, pinnedNode = node,
                 conversationContext = convoCtx, watchDictated = text,
             )
+        } else {
+            // Чистки не будет (выделение не встало) — сказанное уже в поле.
+            takeDone(true)
         }
     }
 
@@ -1631,6 +1635,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Raw text is still on the clipboard and in the notification.
             Feedback.toast(this, outcome.message)
         }
+        // Чистый текст в буфере и в уведомлении — тейк дошёл до конца.
+        takeDone(outcome !is ProofreadEngine.Outcome.Failed)
     }
 
     private fun showNoFieldNotification(text: String) {
@@ -2389,6 +2395,8 @@ class PravkaAccessibilityService : AccessibilityService() {
                     "${if (strongModel) "(сильнее)" else ""}: ${outcome.javaClass.simpleName}"
             )
             Feedback.report(this@PravkaAccessibilityService, outcome)
+            // Тейк «П» дошёл до поля — «готово» в наушники (только после «принял»).
+            if (watchDictated != null) takeDone(outcome !is ProofreadEngine.Outcome.Failed)
             // Auto-capture for learning: remember what we delivered; if the
             // owner hand-edits it, the edit ripens into a learning suggestion.
             if (watchDictated != null && outcome is ProofreadEngine.Outcome.Applied) {

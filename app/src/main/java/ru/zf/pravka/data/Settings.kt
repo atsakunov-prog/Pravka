@@ -59,6 +59,8 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_NETWORK = booleanPreferencesKey("speech_network")
         private val KEY_SPEECH_OWN_MIC = booleanPreferencesKey("speech_own_mic")
         private val KEY_READY_CHIME = stringPreferencesKey("ready_chime")
+        private val KEY_CHIME_AFTER_START = longPreferencesKey("chime_after_start_ms")
+        private val KEY_CHIME_AFTER_SWITCH = longPreferencesKey("chime_after_switch_ms")
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
         private val KEY_RULES_IN_PROSE = booleanPreferencesKey("rules_in_prose")
@@ -368,6 +370,21 @@ class Settings(private val context: Context) {
     val readyChimeFlow = context.dataStore.data.map { ru.zf.pravka.core.ReadyChime.Mode.fromKey(it[KEY_READY_CHIME]) }
     suspend fun setReadyChime(mode: ru.zf.pravka.core.ReadyChime.Mode) {
         context.dataStore.edit { it[KEY_READY_CHIME] = mode.key }
+    }
+
+    /**
+     * Через сколько звенеть «говори» в наушники (01.10.2026; владелец: «в
+     * настройках ползунок, через сколько секунд его делать, и я подберу»):
+     * от начала тейка и от переключения на наушники посреди тейка, мс.
+     * Не раньше, чем тейк слышит (`ReadyChime.readyDelayMs`).
+     */
+    val chimeAfterStartFlow = context.dataStore.data.map { it[KEY_CHIME_AFTER_START] ?: ru.zf.pravka.core.ReadyChime.AFTER_START_MS }
+    suspend fun setChimeAfterStart(ms: Long) {
+        context.dataStore.edit { it[KEY_CHIME_AFTER_START] = ms.coerceIn(0L, ru.zf.pravka.core.ReadyChime.AFTER_MAX_MS) }
+    }
+    val chimeAfterSwitchFlow = context.dataStore.data.map { it[KEY_CHIME_AFTER_SWITCH] ?: ru.zf.pravka.core.ReadyChime.AFTER_SWITCH_MS }
+    suspend fun setChimeAfterSwitch(ms: Long) {
+        context.dataStore.edit { it[KEY_CHIME_AFTER_SWITCH] = ms.coerceIn(0L, ru.zf.pravka.core.ReadyChime.AFTER_MAX_MS) }
     }
 
     /**

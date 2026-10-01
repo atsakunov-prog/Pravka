@@ -106,11 +106,24 @@ class PillLookTest {
     }
 
     @Test
-    fun `волна - в тишине значок, от голоса растёт`() {
-        val quiet = PillLook.bars(0f)
-        val loud = PillLook.bars(1f)
-        assertTrue("середина длиннее краёв", quiet[1] > quiet[0] && quiet[1] > quiet[2])
-        for (i in 0..2) assertTrue(loud[i] > quiet[i])
-        assertTrue(loud.all { it <= 1f })
+    fun `волна - в тишине три одинаковые чёрточки, от голоса растёт и ходит`() {
+        for (t in longArrayOf(0L, 117L, 999L)) {
+            val quiet = PillLook.bars(0f, t)
+            assertTrue("три одинаковые", quiet.all { it == PillLook.BAR_REST })
+        }
+        val heights = (0L until 1_000L step 20L).map { PillLook.bars(1f, it) }
+        for (h in heights) {
+            for (i in 0..2) assertTrue(h[i] > PillLook.BAR_REST)
+            assertTrue(h.all { it <= 1f })
+        }
+        // Ходит: за секунду у каждой полоски заметный размах, а не одно число.
+        for (i in 0..2) {
+            val span = heights.maxOf { it[i] } - heights.minOf { it[i] }
+            assertTrue("полоска $i ходит: $span", span > 0.2f)
+        }
+        // Тихая речь видна: корень, а не прямая.
+        val soft = PillLook.bars(0.1f, 0L)
+        assertTrue(soft[1] - PillLook.BAR_REST > (1f - PillLook.BAR_REST) * 0.1f)
+        assertTrue(!PillLook.barsMoving(0f) && PillLook.barsMoving(0.5f))
     }
 }
