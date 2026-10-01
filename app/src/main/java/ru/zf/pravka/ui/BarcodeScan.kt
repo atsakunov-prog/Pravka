@@ -41,3 +41,26 @@ fun scanBarcode(
         onFail("Сканер недоступен: ${e.message ?: e.javaClass.simpleName}")
     }
 }
+
+/**
+ * Тот же сканер Play Services, но строка — как есть: QR архива
+ * («pravka-archive:{…}») несёт адрес и токен, цифры из него не выбираются.
+ */
+fun scanQr(
+    context: Context,
+    onFail: (String) -> Unit,
+    onText: (String) -> Unit,
+) {
+    runCatching {
+        GmsBarcodeScanning.getClient(context)
+            .startScan()
+            .addOnSuccessListener { barcode ->
+                val text = barcode.rawValue.orEmpty()
+                if (text.isNotBlank()) onText(text) else onFail("QR пустой")
+            }
+            .addOnFailureListener { e -> onFail("Сканер не заработал: ${e.message ?: "нет сервисов Google"}") }
+            .addOnCanceledListener { }
+    }.onFailure { e ->
+        onFail("Сканер недоступен: ${e.message ?: e.javaClass.simpleName}")
+    }
+}

@@ -34,9 +34,9 @@ class StrengthStore(private val context: Context) {
 
     companion object {
         const val FILE_NAME = "strength.json"
-        // Сырые надиктовки: держим год. Это единственное, что нельзя добыть
-        // заново, но и бесконечно их копить незачем — разбор давно на месте.
-        private const val KEEP_RAW_DAYS = 400
+        // Сырые надиктовки — без срока (01.10.2026): шапка файла и железное
+        // правило 1 обещают «не удаляется никогда», а прежний срок в 400 дней
+        // с этим спорил. Текст весит копейки.
 
         /** Количество из дозы: «20–30 сек» → «20–30», «2×30 сек» → «2×30», «10 циклов» → «10». */
         fun doseQuantity(dose: String): String =
@@ -837,10 +837,8 @@ class StrengthStore(private val context: Context) {
     }
 
     private fun persist() {
-        // Сырые надиктовки обрезаются по сроку, но НИКОГДА по «уже разобрано»:
+        // Сырые надиктовки не обрезаются ни по сроку, ни по «уже разобрано»:
         // разбор можно переиграть, сказанное — нет.
-        val cutoff = dayKey(System.currentTimeMillis() - KEEP_RAW_DAYS * 86_400_000L)
-        _rawFlow.value = _rawFlow.value.filter { dayKey(it.ts) >= cutoff }
         val json = serialize().toString()
         DiskWriter.post { StoreFiles.writeAtomic(file, json) }
     }

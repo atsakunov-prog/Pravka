@@ -340,7 +340,8 @@ SELECT r.key                              AS id,
        d->>'text'                         AS text,
        COALESCE((d->>'ok')::boolean, true) AS ok,
        NULLIF(d->>'error', '')            AS error,
-       NULLIF(d->>'audio', '')            AS audio
+       NULLIF(d->>'audio', '')            AS audio,
+       NULLIF(d->>'mic', '')              AS mic
 FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.take' AND NOT r.deleted;
 COMMENT ON VIEW life.dictations IS 'Каждая диктовка Правки: распознанный текст до чистки. Это всё, что владелец наговаривал в любые поля: сообщения людям, заметки, письма.';
@@ -353,14 +354,17 @@ SELECT r.key                       AS id,
        NULLIF(d->>'model', '')     AS model,
        d->>'input'                 AS input,
        d->>'output'                AS output,
-       (d->>'latency_ms')::int     AS latency_ms
+       (d->>'latency_ms')::int     AS latency_ms,
+       (d->>'cost_usd')::numeric   AS cost_usd,
+       NULLIF(d->>'error', '')     AS error
 FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.clean' AND NOT r.deleted;
 COMMENT ON VIEW life.cleanups IS 'Чистка диктовки моделью: что пришло (input) и что модель вернула (output).';
 
 CREATE VIEW life.corrections AS
 SELECT r.key AS id, (d->>'day')::date AS day, (d->>'at')::timestamptz AS at,
-       d->>'said' AS said, d->>'model' AS model_text, d->>'final' AS final, NULLIF(d->>'app', '') AS app
+       d->>'said' AS said, d->>'model' AS model_text, d->>'final' AS final, NULLIF(d->>'app', '') AS app,
+       NULLIF(d->>'result', '') AS result
 FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.correction' AND NOT r.deleted;
 COMMENT ON VIEW life.corrections IS 'Правки владельца после модели: надиктовано — что вернула модель — что осталось в поле.';
@@ -453,7 +457,7 @@ COMMENT ON VIEW life.plan IS 'Календарь intervals: запланиров
 
 CREATE VIEW life.coach AS
 SELECT r.key AS id, (d->>'day')::date AS day, (d->>'at')::timestamptz AS at,
-       d->>'question' AS question, d->>'answer' AS answer, NULLIF(d->>'model', '') AS model, NULLIF(d->>'error', '') AS error
+       d->>'question' AS question, d->>'answer' AS answer, (d->>'cost_usd')::numeric AS cost_usd, NULLIF(d->>'error', '') AS error
 FROM core.records r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'sport.talk' AND NOT r.deleted;
 COMMENT ON VIEW life.coach IS 'Разговоры с тренером в приложении: вопрос владельца и ответ модели.';

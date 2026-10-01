@@ -34,9 +34,10 @@ class FoodStore(private val context: Context) {
 
     companion object {
         const val FILE_NAME = "food.json"
-        // Год с лишним: столько дневник имеет смысл держать под рукой, а
-        // выгрузка CSV забирает его целиком, если понадобится дальше.
-        private const val KEEP_DAYS = 420
+        // Срока у дневника больше нет (01.10.2026): дневник еды — незаменимые
+        // данные (железное правило 1), а прежние 420 дней молча стёрли бы
+        // первый приём осенью 2027-го. Архив на компе страхует, но не
+        // заменяет: телефон не должен сам терять то, что владелец записал.
         // Неподтверждённые приёмы старше полутора суток - брошенные: владелец
         // наговорил и ушёл, плашка истекла. Полтора суток, а не сутки, чтобы
         // вчерашний поздний ужин пережил ночь и утро; дальше убираем, иначе
@@ -283,11 +284,8 @@ class FoodStore(private val context: Context) {
 
     private fun write(list: List<Meal>, allowEmpty: Boolean = false) {
         val now = System.currentTimeMillis()
-        val cutoff = now - KEEP_DAYS * 86_400_000L
         val kept = list
             .filterNot { !it.confirmed && now - it.createdAt > PENDING_TTL_MS }
-            .filter { it.confirmed || it.createdAt >= cutoff }
-            .filter { it.ts >= cutoff || !it.confirmed }
             .sortedByDescending { it.ts }
         // Заслон против потери дневника: непустой файл нельзя заменить пустым
         // списком. Дневник сам собой не очищается — если он вдруг пуст, это баг

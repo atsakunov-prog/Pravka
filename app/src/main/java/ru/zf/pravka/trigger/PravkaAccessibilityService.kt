@@ -3035,6 +3035,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             scope.launch { runCatching { app.updates.tick() } }
             // Связь с облаками: сама решает, пора ли (интервал в настройках), на IO.
             scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.netProber.tick() } }
+            // Архив на компе: всё, что не дошло раньше, и журналы Правки. Не
+            // подключён — молчит; новое отправляется и без тика, через секунды.
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.archiveSync.tick() } }
             zasechkaReminderCheck()
             zReminderHandler.postDelayed(this, 5 * 60_000L)
         }

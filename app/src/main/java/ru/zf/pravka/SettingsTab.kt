@@ -113,6 +113,7 @@ internal enum class SettingsGroup(
     INTERVALS("intervals.icu", "тренировки, сон, вес", SettingsShelf.LINKS, { Glyphs.Activity }, ModeDecor.SPORT),
     SHEETS("Google Sheets", "таймшит из ленты", SettingsShelf.LINKS, { Glyphs.ListLines }, ModeDecor.ZASECHKA),
     CLOUD("Облако семьи", "домашний сервер: общие Деньги, копии базы", SettingsShelf.LINKS, { Glyphs.Cloud }),
+    ARCHIVE("Архив", "вся жизнь на компе, к ней ходит Claude", SettingsShelf.LINKS, { Glyphs.Archive }),
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, { Glyphs.Disk }),
     DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, { Glyphs.Palette }),
     CARDS("Плашки приложения", "значки, свечение режима, темнее, фаска, свет, зерно", SettingsShelf.LOOK, { Glyphs.Layers }),
@@ -264,6 +265,15 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
             when {
                 home == null -> GroupStatus("не задано", ok = null, dot = true)
                 sync.error.isNotBlank() || copy.error.isNotBlank() -> GroupStatus("ошибка", ok = false, dot = true)
+                else -> GroupStatus("подключён", ok = true, dot = true)
+            }
+        }
+        SettingsGroup.ARCHIVE -> {
+            val link by app.archiveSync.link.collectAsState()
+            val st by app.archiveSync.status.collectAsState()
+            when {
+                link == null -> GroupStatus("не задано", ok = null, dot = true)
+                st.lastError.isNotBlank() && st.lastErrorAt >= st.lastOk -> GroupStatus("ошибка", ok = false, dot = true)
                 else -> GroupStatus("подключён", ok = true, dot = true)
             }
         }
@@ -474,6 +484,7 @@ private fun GroupContent(
         SettingsGroup.INTERVALS -> IntervalsSettings(app)
         SettingsGroup.SHEETS -> ZasechkaSheetsSettings(app)
         SettingsGroup.CLOUD -> FamilyCloudSettings(app)
+        SettingsGroup.ARCHIVE -> ArchiveSettings(app)
         SettingsGroup.BUTTONS -> ButtonsSettings(app)
         SettingsGroup.DISK -> DiskSettings(app)
         SettingsGroup.CARDS -> CardsSettings(app)

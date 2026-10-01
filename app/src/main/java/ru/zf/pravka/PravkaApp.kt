@@ -2,6 +2,7 @@ package ru.zf.pravka
 
 import android.app.Application
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
@@ -21,6 +22,7 @@ import ru.zf.pravka.data.LiveDraft
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.data.TranscriptionLog
 import ru.zf.pravka.data.WavFile
+import ru.zf.pravka.data.ArchiveSync.Domain as ArchiveDomain
 import android.os.SystemClock
 import java.io.File
 import ru.zf.pravka.provider.ClaudeProvider
@@ -120,6 +122,12 @@ class PravkaApp : Application() {
             moneyStore.stateFlow.drop(1).debounce(30_000L)
                 .collect { runCatching { moneyCloudSync.sync("правка") } }
         }
+        // Архив на компе: пока он подключён, каждый ввод режима уходит через
+        // несколько секунд тишины (data/ArchiveSync.kt). Не подключён — сторы
+        // не будятся и ничего не слушается.
+        appScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            archiveSync.link.collectLatest { link -> if (link != null) watchArchive() }
+        }
         // Почерк значков (версия 3) — один на процесс: приложение перерисуется
         // само (`Glyphs.gemini` — состояние Compose), кнопки перечитывает служба.
         appScope.launch {
@@ -203,6 +211,37 @@ class PravkaApp : Application() {
     val transcriptionLog by lazy { TranscriptionLog(this) }
     val liveDraft by lazy { LiveDraft(this) }
     val eventLog by lazy { EventLog(this) }
+
+    /** Подписки архива на сторы — живут, пока архив подключён (отключили — collectLatest их снимет). */
+    private suspend fun watchArchive(): Unit = kotlinx.coroutines.coroutineScope {
+        val p = profileStore
+        fun watch(domain: ArchiveDomain, flow: kotlinx.coroutines.flow.Flow<*>) {
+            launch { flow.drop(1).collect { archiveSync.poke(domain) } }
+        }
+        TranscriptionLog.onAppend = { archiveSync.poke(ArchiveDomain.PRAVKA) }
+        HistoryLog.onAppend = { archiveSync.poke(ArchiveDomain.PRAVKA) }
+        if (p.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA)) {
+            watch(ArchiveDomain.ZASECHKA, zasechkaStore.entriesFlow)
+            watch(ArchiveDomain.ZASECHKA, zasechkaStore.categoriesFlow)
+            watch(ArchiveDomain.PHONE, phoneStore.daysFlow)
+        }
+        if (p.has(ru.zf.pravka.data.Profile.Mode.FOOD)) watch(ArchiveDomain.FOOD, foodStore.mealsFlow)
+        if (p.has(ru.zf.pravka.data.Profile.Mode.SPORT)) {
+            watch(ArchiveDomain.STRENGTH, strengthStore.sessionsFlow)
+            watch(ArchiveDomain.STRENGTH, strengthStore.gtgFlow)
+            watch(ArchiveDomain.STRENGTH, strengthStore.rawFlow)
+            watch(ArchiveDomain.SPORT, sportStore.talksFlow)
+        }
+        if (p.has(ru.zf.pravka.data.Profile.Mode.MONEY)) watch(ArchiveDomain.MONEY, moneyStore.stateFlow)
+        // Первый проход — сразу после подключения или старта: всё, что не дошло.
+        launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { archiveSync.tick() } }
+        try {
+            kotlinx.coroutines.awaitCancellation()
+        } finally {
+            TranscriptionLog.onAppend = null
+            HistoryLog.onAppend = null
+        }
+    }
     /** Лог запросов к Claude в режиме отладки: один запрос — десятки килобайт, потолок 4 МБ. */
     val requestLog by lazy { EventLog(this, "claude-requests.log", maxBytes = 4L * 1024 * 1024) }
 
@@ -423,6 +462,77 @@ class PravkaApp : Application() {
             reconcile = { moneyEngine.reconcile() },
             log = { eventLog.add(it) },
         )
+    }
+
+    /**
+     * Архив на домашнем компе (data/ArchiveSync.kt, docs/arkhiv.md): каждый
+     * ввод — событием на сервер. Откуда брать записи — здесь: режим,
+     * выключенный в профиле, свой стор не будит.
+     */
+    internal val archiveSync by lazy {
+        ru.zf.pravka.data.ArchiveSync(
+            context = this,
+            http = httpClient,
+            sources = archiveSources,
+            scope = appScope,
+            log = { eventLog.add(it) },
+        )
+    }
+
+    private val archiveSources = object : ru.zf.pravka.data.ArchiveSync.Sources {
+        override val profile: String? get() = profileStore.current?.id
+        override val appVersion: String get() = BuildConfig.VERSION_NAME
+
+        override suspend fun units(
+            domain: ArchiveDomain,
+            clock: ru.zf.pravka.core.ArchiveEvents.Clock,
+        ): List<ru.zf.pravka.core.ArchiveEvents.Item> {
+            val ev = ru.zf.pravka.core.ArchiveEvents
+            return when (domain) {
+                ArchiveDomain.ZASECHKA -> {
+                    if (!profileStore.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA)) return emptyList()
+                    val all = zasechkaStore.all()
+                    val now = System.currentTimeMillis()
+                    ev.zasechkaDays(all, { zasechkaStore.budgetMinutes(it, now) }, clock) +
+                        ev.zasechkaReference(zasechkaStore.categories(), zasechkaStore.clients())
+                }
+                ArchiveDomain.PHONE -> {
+                    if (!profileStore.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA)) return emptyList()
+                    phoneStore.trackedApps()  // поднимает стор с диска
+                    val labels = phoneStore.labelsFlow.value
+                    phoneStore.daysFlow.value.map { (date, day) -> ev.phoneDay(date, day, labels) }
+                }
+                ArchiveDomain.FOOD -> {
+                    if (!profileStore.has(ru.zf.pravka.data.Profile.Mode.FOOD)) return emptyList()
+                    foodStore.load().map { ev.meal(it, clock) } + ev.norms(ru.zf.pravka.core.Micronutrients.ALL)
+                }
+                ArchiveDomain.STRENGTH -> {
+                    if (!profileStore.has(ru.zf.pravka.data.Profile.Mode.SPORT)) return emptyList()
+                    strengthStore.load()
+                    strengthStore.sessionsFlow.value.map { ev.session(it) } +
+                        strengthStore.gtgFlow.value.filter { it.any }.map { ev.gtg(it) } +
+                        strengthStore.rawFlow.value.map { ev.strengthTake(it, clock) }
+                }
+                ArchiveDomain.MONEY -> {
+                    if (!profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) return emptyList()
+                    val st = moneyStore.load()
+                    // Черновик до «ОК» — ещё не факт: уйдёт, когда станет записью или будет вычеркнут.
+                    st.entries.filter { !it.draft }.map { ev.moneyEntry(it, clock) } +
+                        ev.moneyReference(st, clock) +
+                        st.takes.map { ev.moneyTake(it, clock) } +
+                        st.pushes.map { ev.moneyPush(it, clock) }
+                }
+                ArchiveDomain.SPORT -> {
+                    if (!profileStore.has(ru.zf.pravka.data.Profile.Mode.SPORT)) return emptyList()
+                    sportStore.load()
+                    sportStore.talksFlow.value.map { ev.talk(it, clock) }
+                }
+                ArchiveDomain.PRAVKA ->
+                    corrections.all().map {
+                        ev.correction(it.id, it.ts, it.pkg, it.dictated, it.cleaned, it.edited, it.result, clock)
+                    }
+            }
+        }
     }
 
     /** Ночная копия базы — ещё и в облако семьи, `Правка/Копии базы` (data/CloudBackup.kt). */

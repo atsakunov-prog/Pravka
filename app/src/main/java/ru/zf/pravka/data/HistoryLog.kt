@@ -15,7 +15,13 @@ import org.json.JSONObject
 class HistoryLog(private val context: Context) {
 
     companion object {
-        private const val FILE_NAME = "history.jsonl"
+        internal const val FILE_NAME = "history.jsonl"
+
+        /**
+         * Строка легла в журнал — архив на компе заберёт её через несколько
+         * секунд тишины (data/ArchiveSync.kt). Зовётся на потоке диска.
+         */
+        @Volatile var onAppend: (() -> Unit)? = null
         private const val MAX_BYTES = 5L * 1024 * 1024
     }
 
@@ -71,6 +77,7 @@ class HistoryLog(private val context: Context) {
                 if (error != null) put("error", error)
             }
             file.appendText(entry.toString() + "\n")
+            onAppend?.invoke()
         }
     }
 
