@@ -202,6 +202,13 @@ class GoogleSpeechSession(
     private var stuckRestarts = 0
     private var stuckNoticed = false
 
+    // ---- Облако молчит (ListenPolicy.cloudMute / CLOUD_READY_MS) ----
+    /** Текущая сессия распознавателя сказала «готов». */
+    private var readyThisSession = false
+    /** Голоса (своя запись или распознаватель слышат речь) с последнего слова, мс. */
+    private var voicedMs = 0L
+    private var lastLevelAtMs = 0L
+
     private var onReady: () -> Unit = {}
     private var onPartial: (String) -> Unit = {}
     private var onCheckpoint: (String) -> Unit = {}
@@ -356,6 +363,28 @@ class GoogleSpeechSession(
         /** Про тейк в наушниках офлайн-пакетом — сказать один раз, а не каждый тейк. */
         @Volatile private var headsetOfflineTold = false
 
+        /**
+         * Облако подвело (молчало, не читало, падало ошибкой сети): когда и на
+         * какой сети. Следующие тейки на ТОЙ ЖЕ сети [ListenPolicy.CLOUD_DEAD_TTL_MS]
+         * идут сразу офлайн-пакетом (`ListenPolicy.cloudStillDead`), сменилась
+         * сеть — снова облако. «Перезагрузить микрофон» забывает.
+         */
+        @Volatile private var cloudDeadAtMs = 0L
+        @Volatile private var cloudDeadNet = ""
+        /** Сказано ли владельцу, что облако не отвечает, а пакета нет, — в этот раз молчания. */
+        @Volatile private var noOfflineTold = 0L
+
+        /**
+         * Какая сеть сейчас — чтобы узнать, сменилась ли: у VPN, включённого
+         * заново, и у другой Wi-Fi свой номер сети.
+         */
+        private fun netKey(context: Context): String = runCatching {
+            val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+            val n = cm?.activeNetwork ?: return@runCatching "нет сети"
+            val vpn = cm.getNetworkCapabilities(n)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true
+            "$n${if (vpn) " vpn" else ""}"
+        }.getOrDefault("?")
+
         /** Проверить, читает ли распознаватель наш звук, — через столько после «готов». */
         private const val FEED_CHECK_MS = 700L
         private const val FEED_CHECK_AGAIN_MS = 1_500L
@@ -379,6 +408,9 @@ class GoogleSpeechSession(
 
         /** Сторож микрофона (вход, отвалившиеся наушники, зависшая труба) — раз в столько. */
         private const val MIC_WATCH_MS = 1_000L
+
+        /** Тейк хотя бы такой длины, а облако не сказало «готов», — запомнить, что оно молчит. */
+        private const val CLOUD_SHORT_TAKE_MS = 1_500L
 
         /** После смены облака на пакет — старт через столько: пусть уляжется destroy прежнего. */
         private const val OFFLINE_START_MS = 300L
@@ -630,6 +662,9 @@ class GoogleSpeechSession(
             googleServiceBad = false
             // И что знали о своём микрофоне: после обновления Google ответ мог измениться.
             feedVerdict.clear()
+            // И что облако молчало: «перезагрузить» значит попробовать его снова.
+            cloudDeadAtMs = 0L
+            cloudDeadNet = ""
             warmMain.postDelayed({ warmUp(context, network, log) }, 300)
         }
 
@@ -696,7 +731,7 @@ class GoogleSpeechSession(
             // Наушники, а облако звук Правки не берёт: без своей записи канал
             // гарнитуры держится секунды — тейк сразу офлайн-пакетом, если он
             // наш звук не отвергал (`ListenPolicy.headsetToOffline`).
-            val startOffline = headsetStartOffline()
+            val startOffline = headsetStartOffline() ?: deadCloudStartOffline()
             val r = createRecognizer()
             if (r == null) {
                 onLog("start FAILED: no recognizer")
@@ -717,6 +752,8 @@ class GoogleSpeechSession(
             health = TakeHealth(startedAtMs)
             startOffline?.let { health.toOffline(it) }
             quickSilences = 0
+            voicedMs = 0L
+            lastLevelAtMs = 0L
             main.removeCallbacks(idleWatch)
             main.postDelayed(idleWatch, ListenPolicy.IDLE_CHECK_MS)
             main.removeCallbacks(micWatch)
@@ -987,6 +1024,10 @@ class GoogleSpeechSession(
         speechBeganAtMs = 0L
         speechSinceSegmentMs = 0L
         sessionLive = true
+        // Облако обязано сказать «готов» быстро; молчит — нет дороги (VPN без сети).
+        readyThisSession = false
+        main.removeCallbacks(cloudReadyWatch)
+        if (networkNow) main.postDelayed(cloudReadyWatch, ListenPolicy.CLOUD_READY_MS)
         runCatching { r.startListening(intentFor(source)) }.onFailure {
             sessionLive = false
             restartSoon(afterError = true)
@@ -1060,6 +1101,7 @@ class GoogleSpeechSession(
         // этого куска может повториться — это дешевле потерянных секунд речи.
         val thin = text.isNotEmpty() && ListenPolicy.fewWords(text.length, speechSinceSegmentMs)
         if (text.isNotEmpty()) {
+            voicedMs = 0L
             if (thin) {
                 lastWordsAtMs = healthyWordsAtMs
             } else {
@@ -1124,12 +1166,23 @@ class GoogleSpeechSession(
         // take twice and inserted it twice (2026-07-29, twice in the journal).
         if (finished) return
         finished = true
+        // Короткий тейк кончился раньше сторожей, а облако так и не сказало
+        // «готов» — следующий тейк на этой сети пусть идёт сразу пакетом.
+        val tookMs = android.os.SystemClock.elapsedRealtime() - startedAtMs
+        if (networkNow && sessionsStarted > 0 && !readyThisSession && liveText().isBlank() &&
+            tookMs >= CLOUD_SHORT_TAKE_MS && onDeviceAvailable(context)
+        ) {
+            cloudDeadAtMs = android.os.SystemClock.elapsedRealtime()
+            cloudDeadNet = netKey(context)
+            onLog("облако за весь тейк (${tookMs} мс) не сказало «готов» — следующий тейк на этой сети пойдёт офлайн-пакетом")
+        }
         active = false
         TakeFocus.release(TakeFocus.END_RELEASE_MS)
         main.removeCallbacks(idleWatch)
         routeWatch?.let { main.removeCallbacks(it) }
         routeWatch = null
         main.removeCallbacks(micWatch)
+        main.removeCallbacks(cloudReadyWatch)
         sessionLive = false
         feed?.abort()
         feed = null
@@ -1158,6 +1211,8 @@ class GoogleSpeechSession(
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
             val now = android.os.SystemClock.elapsedRealtime()
+            readyThisSession = true
+            main.removeCallbacks(cloudReadyWatch)
             onLog("ready +${now - startedAtMs} ms")
             health.ready(now)
             // Fire the "you can speak now" cue once per session, not on every
@@ -1191,7 +1246,9 @@ class GoogleSpeechSession(
         override fun onRmsChanged(rmsdB: Float) {
             // Своя запись меряет громкость сама — распознаватель её не перебивает.
             if (feed != null) return
-            levelSink?.let { sink -> runCatching { sink(ru.zf.pravka.core.MicLevel.normalise(rmsdB)) } }
+            val level = ru.zf.pravka.core.MicLevel.normalise(rmsdB)
+            hearLevel(level)
+            levelSink?.let { sink -> runCatching { sink(level) } }
         }
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {
@@ -1210,8 +1267,11 @@ class GoogleSpeechSession(
             }
             if (partial != lastPartial) {
                 lastWordsAtMs = android.os.SystemClock.elapsedRealtime()
-                // Слова пошли — не застрял.
-                if (partial.isNotBlank()) mutedSpeechMs = 0
+                // Слова пошли — не застрял и не молчит.
+                if (partial.isNotBlank()) {
+                    mutedSpeechMs = 0
+                    voicedMs = 0L
+                }
             }
             lastPartial = partial
             onPartial(liveText())
@@ -1611,7 +1671,12 @@ class GoogleSpeechSession(
         // 29.09.2026: «я просто буду ждать несколько секунд и говорить…
         // нажал на кнопку на наушниках — и он слушает, без всяких секунд»).
         f.setDevice(if (wantHeadset) MicRouting.headsetMic(am) else MicRouting.builtinMic(am))
-        f.onLevel = { level -> main.post { levelSink?.let { sink -> runCatching { sink(level) } } } }
+        f.onLevel = { level ->
+            main.post {
+                hearLevel(level)
+                levelSink?.let { sink -> runCatching { sink(level) } }
+            }
+        }
         tape?.let { f.tapeTo(it) }
         if (!f.start()) return false
         taped = tape != null
@@ -1665,7 +1730,14 @@ class GoogleSpeechSession(
                 val next = if (look == 0) FEED_CHECK_AGAIN_MS else ListenPolicy.FEED_PROOF_WAIT_MS - waited
                 main.postDelayed({ checkFeed(look + 1) }, next.coerceAtLeast(250L))
             }
-            else -> dropFeed("распознаватель $waited мс не читает звук Правки и своего микрофона не открыл (сеть?) — этот тейк без трубы", relisten = true)
+            else -> {
+                // Облако не читает и своего микрофона не открыло — это дорога, а
+                // не отказ трубы: VPN без сети (владелец, 01.10.2026: «завис на
+                // минут 10»). Раньше здесь закрывали свою запись и ждали то же
+                // облако дальше — и сторожам застревания нечем было его поймать.
+                if (networkNow && toOffline("облако $waited мс не читает звук (сеть?)", silent = true)) return
+                dropFeed("распознаватель $waited мс не читает звук Правки и своего микрофона не открыл (сеть?) — этот тейк без трубы", relisten = true)
+            }
         }
     }
 
@@ -1729,6 +1801,13 @@ class GoogleSpeechSession(
             if (!active || stopping) return
             micTicks++
             val now = android.os.SystemClock.elapsedRealtime()
+            // Голос есть, а облако не отдаёт ни слова — дороги нет: на пакет, звук с последнего слова.
+            if (networkNow && sessionLive && ListenPolicy.cloudMute(voicedMs, now - lastWordsAtMs)) {
+                val heard = voicedMs
+                voicedMs = 0L
+                onLog("облако молчит: ${heard} мс голоса без единого слова")
+                if (!toOffline("облако молчит: ${heard / 1000} с голоса без слов", silent = true)) cloudSilentNoOffline()
+            }
             val f = feed
             if (f != null) {
                 if (!routeMoving) {
@@ -1917,6 +1996,63 @@ class GoogleSpeechSession(
     }
 
     /**
+     * Облачная сессия не сказала «готов» за [ListenPolicy.CLOUD_READY_MS]:
+     * дороги нет (VPN поднят, а сети за ним нет — ошибки сети облако тогда не
+     * шлёт, оно ждёт). На пакет, звук с последнего слова.
+     */
+    private val cloudReadyWatch = Runnable {
+        if (!active || stopping || !networkNow || !sessionLive || readyThisSession) return@Runnable
+        onLog("облако не сказало «готов» за ${ListenPolicy.CLOUD_READY_MS} мс")
+        if (!toOffline("облако не ответило за ${ListenPolicy.CLOUD_READY_MS / 100 / 10.0} с", silent = true)) cloudSilentNoOffline()
+    }
+
+    /**
+     * Громкость своей записи или распознавателя: голос ([ListenPolicy.voiced])
+     * копится, пока облако не отдаст новое слово ([ListenPolicy.cloudMute]).
+     * Главный поток.
+     */
+    private fun hearLevel(level: Float) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val dt = if (lastLevelAtMs == 0L) 0L else (now - lastLevelAtMs).coerceIn(0L, ListenPolicy.VOICED_STEP_MAX_MS)
+        lastLevelAtMs = now
+        // Между сессиями голос ждёт в очереди своей записи и уйдёт новой сессии
+        // повтором — молчанием облака он не считается.
+        if (!active || stopping || !networkNow || !sessionLive) return
+        if (ListenPolicy.voiced(level)) voicedMs += dt
+    }
+
+    /**
+     * Облако молчит, а офлайн-пакета нет — перекинуть некуда. Сказать словами
+     * один раз на эпизод: владелец догадался включить-выключить VPN только
+     * через десять минут.
+     */
+    private fun cloudSilentNoOffline() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        cloudDeadAtMs = now
+        cloudDeadNet = netKey(context)
+        if (now - noOfflineTold < ListenPolicy.CLOUD_DEAD_TTL_MS) return
+        noOfflineTold = now
+        onLog("облако молчит, а офлайн-пакета нет — перекинуть некуда")
+        noticeSink?.let {
+            runCatching { it("Облако Google не отвечает (нет сети? VPN?), а офлайн-пакета нет — Правка → «Подготовить модель»") }
+        }
+    }
+
+    /**
+     * Облако молчало на этой же сети недавно (`ListenPolicy.cloudStillDead`) —
+     * тейк сразу офлайн-пакетом, не тратя первые секунды на то же молчание.
+     */
+    private fun deadCloudStartOffline(): String? {
+        if (!networkNow || !onDeviceAvailable(context)) return null
+        val now = android.os.SystemClock.elapsedRealtime()
+        val net = netKey(context)
+        if (!ListenPolicy.cloudStillDead(cloudDeadAtMs, now, cloudDeadNet == net)) return null
+        networkNow = false
+        onLog("облако молчало ${(now - cloudDeadAtMs) / 1000} с назад на этой же сети ($net) — тейк сразу офлайн-пакетом")
+        return "облако молчало на этой сети"
+    }
+
+    /**
      * Облако подвело — дослушать тейк офлайн-пакетом (`ListenPolicy.toOffline`,
      * владелец 28.09.2026: «можно ли вообще пробовать при застревании
      * перекидывать?»). Новый распознаватель — другого пути, не пересоздание
@@ -1930,9 +2066,10 @@ class GoogleSpeechSession(
         cloudError: Boolean = false,
         stalled: Boolean = false,
         headsetRefused: Boolean = false,
+        silent: Boolean = false,
     ): Boolean {
         if (!active || stopping) return false
-        if (!ListenPolicy.toOffline(networkNow, onDeviceAvailable(context), cloudError, stuckRestarts, stalled, headsetRefused)) return false
+        if (!ListenPolicy.toOffline(networkNow, onDeviceAvailable(context), cloudError, stuckRestarts, stalled, headsetRefused, silent)) return false
         val fresh = newRecognizer(context, network = false) ?: return false
         onLog(
             "облако подвело ($why) — дослушиваю тейк офлайн-пакетом" +
@@ -1941,6 +2078,13 @@ class GoogleSpeechSession(
         val old = recognizer
         networkNow = false
         health.toOffline(why)
+        main.removeCallbacks(cloudReadyWatch)
+        voicedMs = 0L
+        // Облако подвело дорогой — следующие тейки на этой сети сразу пакетом.
+        if (!headsetRefused) {
+            cloudDeadAtMs = android.os.SystemClock.elapsedRealtime()
+            cloudDeadNet = netKey(context)
+        }
         fresh.setRecognitionListener(listener)
         recognizer = fresh
         runCatching { old?.cancel() }
@@ -1956,7 +2100,7 @@ class GoogleSpeechSession(
             runCatching {
                 it(
                     if (headsetRefused) "Облако не берёт звук из наушников — дослушиваю офлайн-пакетом"
-                    else "Облако Google не отвечает — дослушиваю офлайн-пакетом"
+                    else "Облако Google не отвечает (нет сети? VPN?) — дослушиваю офлайн-пакетом"
                 )
             }
         }

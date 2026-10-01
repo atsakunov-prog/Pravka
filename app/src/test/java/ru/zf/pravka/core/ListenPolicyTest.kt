@@ -221,4 +221,37 @@ class ListenPolicyTest {
             ListenPolicy.headsetDrop(closedAtMs = 0L, nowMs = later, stillConnected = true, heardFromMs = 0L),
         )
     }
+
+    // ---- Облако молчит (01.10.2026: «нет интернета… завис на минут 10») ----
+
+    @Test
+    fun `молчащее облако - на пакет, если он есть`() {
+        assertTrue(ListenPolicy.toOffline(true, true, cloudError = false, stuckRestarts = 0, stalled = false, silent = true))
+        // Пакета нет — перекидывать некуда; уже на пакете — тоже.
+        assertFalse(ListenPolicy.toOffline(true, false, false, 0, false, silent = true))
+        assertFalse(ListenPolicy.toOffline(false, true, false, 0, false, silent = true))
+    }
+
+    @Test
+    fun `три секунды голоса без слов - облако молчит, пауза владельца - нет`() {
+        assertTrue(ListenPolicy.cloudMute(voicedMs = 3_000, sinceWordsMs = 4_000))
+        // Голоса мало — человек думает, слова ещё придут.
+        assertFalse(ListenPolicy.cloudMute(voicedMs = 1_500, sinceWordsMs = 60_000))
+        // Слова только что были — счёт голоса начинается заново.
+        assertFalse(ListenPolicy.cloudMute(voicedMs = 3_000, sinceWordsMs = 1_000))
+        assertTrue(ListenPolicy.voiced(0.6f))
+        assertFalse(ListenPolicy.voiced(0.1f))
+        // Живое облако отдаёт слова быстрее, чем сработает сторож.
+        assertTrue(ListenPolicy.CLOUD_READY_MS in 2_000L..3_000L)
+        assertTrue(ListenPolicy.CLOUD_MUTE_MS in 2_000L..3_000L)
+    }
+
+    @Test
+    fun `облако подвело - пять минут на той же сети сразу пакетом, сменил сеть - пробуем облако`() {
+        val dead = 1_000_000L
+        assertTrue(ListenPolicy.cloudStillDead(dead, dead + 60_000, sameNetwork = true))
+        assertFalse(ListenPolicy.cloudStillDead(dead, dead + 60_000, sameNetwork = false))
+        assertFalse(ListenPolicy.cloudStillDead(dead, dead + ListenPolicy.CLOUD_DEAD_TTL_MS, sameNetwork = true))
+        assertFalse(ListenPolicy.cloudStillDead(0L, dead, sameNetwork = true))
+    }
 }
