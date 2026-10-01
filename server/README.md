@@ -189,8 +189,10 @@ powershell -ExecutionPolicy Bypass -File D:\PravkaArchive\repo\server\windows\in
 
 **Телефон.** `.venv\Scripts\python -m pravka_archive pair --env D:\PravkaArchive\secrets\server.env`
 печатает в консоли QR с адресом и токеном. Адрес — `PRAVKA_PHONE_URL`, если он
-задан, иначе `PRAVKA_PUBLIC_URL`. Сканер для него появится в Правке
-отдельной сборкой (Настройки → Подключения → Архив).
+задан, иначе `PRAVKA_PUBLIC_URL`. На телефоне: Настройки → Подключения →
+Архив → «Сканировать QR с компа». Телефон проверит пару пустой пачкой и
+сразу начнёт первую заливку всего, что у него есть; как он шлёт дальше —
+`docs/arkhiv.md`, раздел «Телефон».
 
 **Версия MCP SDK закреплена на 1.30.0.** На PyPI уже есть 2.x, а там другие
 имена: `FastMCP` стал `MCPServer`, настройки транспорта переехали в
