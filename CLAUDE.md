@@ -383,7 +383,8 @@ CI (`.github/workflows/build-apk.yml`) собирает APK на каждый п
    `RequestPolicy.thinkingOffType`: Сонету 5.5 — `between_tools` (`disabled`
    у него 400), прежнему Сонету 5 — `disabled`; Опусу 5.5 и Fable явное
    «disabled» — это 400 на любом усилии, им поле не передаётся.
-8. **Подпись — только `keystore/pravka.jks`.** Прокси на VPS не делаем. Своей
+8. **Подпись — только `keystore/pravka.jks`.** Прокси на VPS для Claude API не
+   делаем (вход claude.ai в архив через VPS Aeza — другое, см. `docs/arkhiv.md`). Своей
    камеры не открываем (системный интент и сканер Play Services).
 9. **intervals.icu:** поля `fatTotal` и `icu_rpe`; `optString` у JSON null
    отдаёт строку «null» — читать через `IcuSportSync.text(o, key)`.

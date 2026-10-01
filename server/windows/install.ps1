@@ -14,7 +14,8 @@
     4. правило брандмауэра: порт сервиса — только от роутера и только для
        python.exe (venv на Windows запускает базовый интерпретатор, поэтому
        правило на него ловит и службу из venv);
-    5. задача планировщика «Pravka Archive»: при старте системы, с перезапуском;
+    5. задача планировщика «Pravka Archive»: при старте системы; в ней сторож,
+       который поднимает службу после любого падения;
     6. запуск, ожидание /health, самопроверка (check).
   Итог — в D:\PravkaArchive\logs\install-<дата>.log.
 
@@ -123,7 +124,10 @@ try {
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     }
-    $action = New-ScheduledTaskAction -Execute $VenvPy -Argument "-m pravka_archive serve --env `"$EnvFile`"" -WorkingDirectory $Server
+    # Задача запускает сторожа, сторож — службу. Планировщик перезапускает
+    # задачу, только если она не смогла стартовать, а упавший посреди работы
+    # процесс не поднимает; сторож поднимает службу после любого выхода.
+    $action = New-ScheduledTaskAction -Execute $VenvPy -Argument "-m pravka_archive supervise --env `"$EnvFile`"" -WorkingDirectory $Server
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
@@ -132,8 +136,13 @@ try {
 
     # Порт должен быть свободен: на нём мог остаться проверочный hello.py из
     # шага 8 части А — тогда служба не встанет, а /health ответит не она.
-    Start-Sleep -Seconds 2
-    $busy = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    # Прежняя служба уходит сама за несколько секунд после своего сторожа.
+    $busy = $null
+    for ($i = 0; $i -lt 12; $i++) {
+        Start-Sleep -Seconds 1
+        $busy = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $busy) { break }
+    }
     if ($busy) {
         $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($busy.OwningProcess)" -ErrorAction SilentlyContinue
         $what = if ($proc) { "$($proc.Name) (PID $($proc.ProcessId)): $($proc.CommandLine)" } else { "PID $($busy.OwningProcess)" }

@@ -194,6 +194,12 @@ class Puller:
 
     # ------------------------------------------------------------ проходы
 
+    def _progress(self, conn: psycopg.Connection, where: str) -> None:
+        row = conn.execute("SELECT note FROM core.sources WHERE source = %s", (DEVICE,)).fetchone()
+        note = dict(row[0] or {}) if row else {}
+        note["full_progress"] = where
+        mark_source(conn, DEVICE, ok=True, note=note)
+
     def run(self, mode: str = "recent") -> dict[str, int]:
         """recent — каждые 10 минут, deep — раз в сутки, full — вся история."""
         today = self.today()
@@ -207,6 +213,10 @@ class Puller:
                         end = min(dt.date(year.year, 12, 31), today + dt.timedelta(days=1))
                         out[f"activities {year.year}"] = self.pull_activities(conn, year, end)
                         out[f"wellness {year.year}"] = self.pull_wellness(conn, year, end)
+                        # Первая выгрузка идёт до часа. Пока она не кончилась,
+                        # источник не должен выглядеть «ни разу не подключался»:
+                        # отмечаемся после каждого года, с тем, докуда дошли.
+                        self._progress(conn, f"{year.year} из {today.year}")
                         year = dt.date(year.year + 1, 1, 1)
                     out["events"] = self.pull_events(conn, today - dt.timedelta(days=365), today + dt.timedelta(days=120))
                 elif mode == "deep":

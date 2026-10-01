@@ -1,4 +1,4 @@
-"""python -m pravka_archive migrate | check | serve | pull [recent|deep|full] | pair"""
+"""python -m pravka_archive migrate | check | serve | supervise | pull [recent|deep|full] | pair"""
 
 from __future__ import annotations
 
@@ -7,7 +7,11 @@ import asyncio
 import json
 import logging
 import logging.handlers
+import os
+import subprocess
 import sys
+import time
+from pathlib import Path
 
 import psycopg
 
@@ -15,14 +19,14 @@ from . import config as config_mod
 from . import db
 
 
-def _logging(cfg: config_mod.Config, console: bool = True) -> None:
+def _logging(cfg: config_mod.Config, console: bool = True, name: str = "archive.log") -> None:
     handlers: list[logging.Handler] = []
     if console:
         handlers.append(logging.StreamHandler(sys.stdout))
     try:
         cfg.logs.mkdir(parents=True, exist_ok=True)
         handlers.append(logging.handlers.RotatingFileHandler(
-            cfg.logs / "archive.log", maxBytes=5_000_000, backupCount=5, encoding="utf-8"))
+            cfg.logs / name, maxBytes=5_000_000, backupCount=5, encoding="utf-8"))
     except OSError:
         pass
     logging.basicConfig(level=logging.INFO, handlers=handlers, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -113,15 +117,57 @@ def cmd_pair(cfg: config_mod.Config) -> int:
     """QR для телефона: адрес и токен. Только в консоли компа — в сеть не отдаётся."""
     import segno
 
-    payload = "pravka-archive:" + json.dumps({"url": cfg.public_url, "token": cfg.ingest_token}, separators=(",", ":"))
+    payload = "pravka-archive:" + json.dumps({"url": cfg.ingest_base, "token": cfg.ingest_token}, separators=(",", ":"))
+    print(f"Адрес для телефона: {cfg.ingest_base}/ingest")
     segno.make(payload, error="m").terminal(compact=True)
     print("Наведи на это сканер в Правке: Настройки → Подключения → Архив → «Сканировать».")
     return 0
 
 
+def next_delay(delay: float, ran: float) -> float:
+    """Пауза перед перезапуском: проработала служба дольше десяти минут —
+    снова 5 секунд; падает сразу — удваиваем до пяти минут, чтобы сломанный
+    server.env не крутил процесс по кругу, но и не ждал часами."""
+    if ran >= 600:
+        return 5.0
+    return min(max(delay, 5.0) * 2, 300.0)
+
+
+def cmd_supervise(cfg: config_mod.Config, env_file: str | None) -> int:
+    """Сторож: держит serve живым.
+
+    Планировщик Windows перезапускает задачу, только если она не смогла
+    стартовать; упавший посреди работы процесс он не поднимает (замечено на
+    компе 01.10). Поэтому задача запускает сторожа, а сторож — службу, и
+    поднимает её заново после любого выхода. Служба следит за сторожем
+    (PRAVKA_SUPERVISOR_PID): остановили задачу — уходит и она, порт свободен.
+    """
+    # Свой файл: два процесса, вращающие один журнал, на Windows мешают друг
+    # другу (файл занят).
+    _logging(cfg, console=False, name="supervise.log")
+    log = logging.getLogger("pravka.supervise")
+    args = [sys.executable, "-m", "pravka_archive", "serve"] + (["--env", env_file] if env_file else [])
+    env = dict(os.environ, PRAVKA_SUPERVISOR_PID=str(os.getpid()))
+    cwd = str(Path(__file__).resolve().parents[1])
+    delay = 5.0
+    while True:
+        started = time.monotonic()
+        log.info("сторож: запускаю службу")
+        proc = subprocess.Popen(args, env=env, cwd=cwd)
+        try:
+            code = proc.wait()
+        except KeyboardInterrupt:
+            proc.terminate()
+            return 0
+        ran = time.monotonic() - started
+        delay = next_delay(delay, ran)
+        log.warning("сторож: служба вышла с кодом %s через %d с — перезапуск через %d с", code, ran, delay)
+        time.sleep(delay)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="pravka_archive")
-    ap.add_argument("command", choices=["migrate", "check", "serve", "pull", "pair"])
+    ap.add_argument("command", choices=["migrate", "check", "serve", "supervise", "pull", "pair"])
     ap.add_argument("mode", nargs="?", default="recent", choices=["recent", "deep", "full"])
     ap.add_argument("--env", help="файл секретов (по умолчанию D:\\PravkaArchive\\secrets\\server.env)")
     args = ap.parse_args(argv)
@@ -136,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_pull(cfg, args.mode)
     if args.command == "pair":
         return cmd_pair(cfg)
+    if args.command == "supervise":
+        return cmd_supervise(cfg, args.env)
 
     problems = cfg.problems()
     if problems:

@@ -13,9 +13,11 @@ import gzip
 import hmac
 import json
 import logging
+import os
 
 import anyio
 import psycopg
+from psycopg.types.json import Jsonb
 from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -178,9 +180,64 @@ def asgi(cfg: Config):
     return app
 
 
+def seed_sources(cfg: Config) -> None:
+    """Заранее завести источники, которые должны появиться.
+
+    Источник, который ни разу не присылал, иначе в свежести просто не виден —
+    и Claude не отличит «телефон ещё не подключён» от «всё хорошо, телефона
+    нет и не было». Строка-заглушка «phone» уходит с первой пачкой телефона.
+    """
+    with psycopg.connect(cfg.db_url, autocommit=True) as conn:
+        if cfg.icu_athlete and cfg.icu_key:
+            conn.execute(
+                "INSERT INTO core.sources (source, note) VALUES ('intervals', %s) ON CONFLICT (source) DO NOTHING",
+                (Jsonb({"why": "сборщик только запущен"}),),
+            )
+        phones = conn.execute("SELECT 1 FROM core.sources WHERE source LIKE 'phone:%' LIMIT 1").fetchone()
+        if phones:
+            conn.execute("DELETE FROM core.sources WHERE source = 'phone'")
+        else:
+            conn.execute(
+                "INSERT INTO core.sources (source, note) VALUES ('phone', %s) ON CONFLICT (source) DO NOTHING",
+                (Jsonb({"why": "телефон ещё не подключён к архиву: нужна сборка Правки с архивом и QR из pair"}),),
+            )
+
+
+def pid_alive(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            return False
+        try:
+            return kernel32.WaitForSingleObject(handle, 0) == 0x102  # WAIT_TIMEOUT — ещё жив
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+async def watch_supervisor(pid: int) -> None:
+    """Сторож ушёл — уходим и мы: иначе осиротевшая служба держит порт, и
+    новый сторож её не поднимет."""
+    while True:
+        await asyncio.sleep(5)
+        if not pid_alive(pid):
+            log.warning("сторож (PID %d) пропал — служба выходит", pid)
+            os._exit(0)
+
+
 async def serve(cfg: Config) -> None:
     import uvicorn
 
+    await anyio.to_thread.run_sync(seed_sources, cfg)
     app = asgi(cfg)
     # Роутер Netcraze пересылает запросы под своим адресом (192.168.1.1), с
     # Host: 192.168.1.77 и без X-Forwarded-For (проверено 01.10 из домашней
@@ -192,4 +249,8 @@ async def serve(cfg: Config) -> None:
         app, host=cfg.listen_host, port=cfg.listen_port, log_level="info", log_config=None,
         proxy_headers=True, forwarded_allow_ips=cfg.proxies, server_header=False,
     ))
-    await asyncio.gather(server.serve(), pull_forever(cfg))
+    jobs = [server.serve(), pull_forever(cfg)]
+    parent = os.environ.get("PRAVKA_SUPERVISOR_PID", "")
+    if parent.isdigit():
+        jobs.append(watch_supervisor(int(parent)))
+    await asyncio.gather(*jobs)

@@ -181,4 +181,5 @@ def ingest_batch(conn: psycopg.Connection, batch: Any, owner_profile: str) -> tu
     with conn.transaction():
         res = store_events(conn, device, events, app=app, schema=SCHEMA)
         mark_source(conn, f"phone:{device}", ok=True, note={"app": app, "profile": profile, "last_batch": len(events)})
+        conn.execute("DELETE FROM core.sources WHERE source = 'phone'")
     return 200, {"ok": True, **res.as_json()}

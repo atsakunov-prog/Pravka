@@ -57,20 +57,26 @@ def table(names: Sequence[str], rows: Iterable[Sequence[Any]], limit: int = MAX_
 
 
 def freshness_line(conn: psycopg.Connection) -> str:
-    rows = conn.execute("SELECT source, last_ok, last_error, last_error_at FROM life.freshness ORDER BY source").fetchall()
+    rows = conn.execute("SELECT source, last_ok, last_error, last_error_at, note FROM life.freshness ORDER BY source").fetchall()
     if not rows:
         return "Свежесть: источники ещё ничего не присылали."
     now = dt.datetime.now(dt.timezone.utc)
     parts = []
-    for source, ok, err, err_at in rows:
-        name = "телефон" if source.startswith("phone:") else source
+    for source, ok, err, err_at, note in rows:
+        note = note or {}
+        name = "телефон" if source.startswith("phone") else source
         if ok is None:
-            parts.append(f"{name}: ни разу")
+            why = f" — {note['why']}" if note.get("why") else ""
+            bad = f" (ошибка {err_at:%d.%m %H:%M}: {cell(err, 120)})" if err and err_at else ""
+            parts.append(f"{name}: ни разу не присылал{why}{bad}")
             continue
         mins = int((now - ok).total_seconds() // 60)
         age = f"{mins} мин назад" if mins < 120 else f"{mins // 60} ч назад"
         bad = f" (последняя ошибка {err_at:%d.%m %H:%M}: {cell(err, 120)})" if err and err_at and err_at > ok else ""
-        parts.append(f"{name}: {age}{bad}")
+        going = ""
+        if source == "intervals" and not note.get("full_at") and note.get("full_progress"):
+            going = f", идёт первая выгрузка всей истории: дошла до {note['full_progress']}"
+        parts.append(f"{name}: {age}{going}{bad}")
     return "Свежесть: " + " · ".join(parts)
 
 

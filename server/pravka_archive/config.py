@@ -45,10 +45,15 @@ class Config:
     icu_key: str
     profile: str = "sasha"
     proxies: str = "127.0.0.1"
+    phone_url: str = ""
 
     @property
     def mcp_url(self) -> str:
         return self.public_url + "/mcp"
+
+    @property
+    def ingest_base(self) -> str:
+        return self.phone_url or self.public_url
 
     @property
     def reader_role(self) -> str:
@@ -96,4 +101,8 @@ def load(env_file: str | None = None) -> Config:
         profile=get("PRAVKA_PROFILE", "sasha"),
         # Кому верить X-Forwarded-For: роутер, который публикует сервис.
         proxies=get("PRAVKA_PROXIES", "127.0.0.1"),
+        # Куда ходит телефон. claude.ai ходит только на 443, поэтому
+        # PRAVKA_PUBLIC_URL смотрит на вход через VPS; телефону этот крюк через
+        # Нидерланды ни к чему — ему прямой адрес роутера (CrazeDNS, 8443).
+        phone_url=get("PRAVKA_PHONE_URL").rstrip("/"),
     )
