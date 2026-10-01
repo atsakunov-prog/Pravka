@@ -164,8 +164,13 @@ async def serve(cfg: Config) -> None:
 
     mcp, _ = build(cfg)
     app = mcp.streamable_http_app()
+    # Роутер пересылает запросы под своим адресом (192.168.1.1), настоящий
+    # адрес клиента — последним в X-Forwarded-For. Верим этому заголовку только
+    # от адресов из PRAVKA_PROXIES, иначе любой подделал бы себе адрес.
+    # log_config=None — журнал запросов uvicorn идёт в archive.log, а не в
+    # консоль задачи планировщика, которую никто не видит.
     server = uvicorn.Server(uvicorn.Config(
-        app, host=cfg.listen_host, port=cfg.listen_port, log_level="info",
-        proxy_headers=False, server_header=False,
+        app, host=cfg.listen_host, port=cfg.listen_port, log_level="info", log_config=None,
+        proxy_headers=True, forwarded_allow_ips=cfg.proxies, server_header=False,
     ))
     await asyncio.gather(server.serve(), pull_forever(cfg))

@@ -83,12 +83,20 @@ def cmd_check(cfg: config_mod.Config) -> int:
     if cfg.public_url.startswith("https://"):
         import httpx
 
+        # Изнутри домашней сети внешний адрес часто не открывается: Netcraze
+        # отдаёт своим устройствам служебный адрес, а не путь через интернет.
+        # Поэтому неудача отсюда — не «НЕТ», а «проверь с телефона».
         try:
             r = httpx.get(cfg.public_url + "/health", timeout=20)
             good = r.status_code == 200 and "pravka-archive" in r.text
-            say(good, f"снаружи {cfg.public_url}/health: {r.status_code}" + ("" if good else " — отвечает не сервис (страница роутера?)"))
+            if good:
+                say(True, f"снаружи {cfg.public_url}/health отвечает сервис")
+            else:
+                print(f"—    снаружи {cfg.public_url}/health: {r.status_code}, отвечает не сервис. Изнутри сети это бывает; "
+                      "проверь с телефона по мобильной сети")
         except Exception as e:
-            say(False, f"снаружи {cfg.public_url}/health: {e} (сервис запущен? приложение в роутере заведено?)")
+            print(f"—    снаружи {cfg.public_url}/health изнутри сети не открылся ({e.__class__.__name__}). "
+                  "Проверь с телефона по мобильной сети: должен ответить pravka-archive")
     print("Всё в порядке." if not bad else f"Проблем: {bad}.")
     return 1 if bad else 0
 

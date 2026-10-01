@@ -44,6 +44,7 @@ class Config:
     icu_athlete: str
     icu_key: str
     profile: str = "sasha"
+    proxies: str = "127.0.0.1"
 
     @property
     def mcp_url(self) -> str:
@@ -93,4 +94,6 @@ def load(env_file: str | None = None) -> Config:
         icu_key=get("ICU_API_KEY"),
         # Архив одного человека: телефон другого профиля перетёр бы его сутки.
         profile=get("PRAVKA_PROFILE", "sasha"),
+        # Кому верить X-Forwarded-For: роутер, который публикует сервис.
+        proxies=get("PRAVKA_PROXIES", "127.0.0.1"),
     )

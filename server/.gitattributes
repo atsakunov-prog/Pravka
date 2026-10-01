@@ -1,0 +1,2 @@
+# Скрипты для Windows PowerShell 5.1: CRLF и BOM, иначе кириллица ломается.
+*.ps1 text eol=crlf

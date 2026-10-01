@@ -9,8 +9,8 @@ claude.ai читает её через MCP. Как устроено и поче�
 Один процесс на Python (`python -m pravka_archive serve`), один порт
 (`PRAVKA_LISTEN`, с завода `0.0.0.0:8090`).
 
-Наружу его выводит роутер Netcraze: приложение CrazeDNS `archive`, свой домен
-и сертификат, доступ без авторизации роутером. Запасной путь — Caddy на компе.
+Наружу его выводит роутер Netcraze: приложение CrazeDNS (на компе владельца —
+`server`), свой домен и сертификат, доступ без авторизации роутером. Запасной путь — Caddy на компе.
 Оба описаны в `SETUP-PC.md`, шаг 7.
 
 Заголовок `Host` сервис не проверяет: за прокси он чужой, а вход и так
@@ -43,50 +43,78 @@ Claude читает ролью `pravka_reader`: только `life` и толь�
 ## Развёртывание
 
 На Windows, после части А из `SETUP-PC.md`: Postgres стоит, роли заведены,
-`D:\PravkaArchive\secrets\server.env` заполнен.
+`D:\PravkaArchive\secrets\server.env` заполнен. Как это выглядит на компе
+владельца (01.10.2026):
+
+- Python 3.14 лежит в `C:\Program Files\Python314\python.exe`, в PATH его нет;
+- сервис на `0.0.0.0:8092`: 8090 и 8091 заняты панелью VPN;
+- наружу его выводит приложение CrazeDNS `server`:
+  `https://server.znakomiy.netcraze.pro:8443`. HTTPS-порт роутера — 8443,
+  потому что 443 режет Билайн.
+
+**1. Код** — обычный PowerShell, от себя (git возьмёт твой вход в GitHub):
 
 ```powershell
-cd D:\PravkaArchive\repo\server
-py -3.12 -m venv .venv
-.venv\Scripts\python -m pip install --upgrade pip
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m pravka_archive migrate
-.venv\Scripts\python -m pravka_archive check
+git clone -b pravka https://github.com/atsakunov-prog/pravka D:\PravkaArchive\repo
 ```
 
-`check` проверяет базу двумя ролями, папки, ключ intervals и адрес снаружи.
-Адрес снаружи будет «НЕТ», пока сервис не запущен. Остальное должно быть «ОК».
+**2. Секреты.** В `server.env` должны быть заполнены:
 
-**Пробный запуск руками:** `.venv\Scripts\python -m pravka_archive serve`.
-Пока он работает, ещё раз `check` в другом окне: теперь и адрес снаружи
-должен быть «ОК». Если там страница роутера, проверь приложение в CrazeDNS:
-куда оно смотрит, открыт ли доступ без авторизации и тот ли внешний порт
-(443 или 8443). Изнутри сети внешний адрес может не открыться: не все роутеры
-умеют петлю NAT. Тогда проверяй с телефона по мобильной сети.
+- `PRAVKA_OWNER_PASSWORD` — пароль Claude к архиву;
+- `ICU_ATHLETE_ID` и `ICU_API_KEY` — можно и позже, тогда после них
+  перезапустить задачу;
+- строка `PRAVKA_PROXIES=192.168.1.1`. Роутер пересылает запросы под своим
+  адресом, а настоящий адрес клиента кладёт в `X-Forwarded-For`. Этому
+  заголовку сервис верит только от адресов из `PRAVKA_PROXIES`.
 
-**Служба — задача планировщика от SYSTEM** (по образцу задачи rclone):
+**3. Установка — PowerShell от имени администратора.** Задачу планировщика и
+правило брандмауэра регистрирует владелец сам: Claude Code в авто-режиме
+этого не делает.
 
 ```powershell
-$py  = "D:\PravkaArchive\repo\server\.venv\Scripts\python.exe"
-$act = New-ScheduledTaskAction -Execute $py -Argument "-m pravka_archive serve" -WorkingDirectory "D:\PravkaArchive\repo\server"
-$trg = New-ScheduledTaskTrigger -AtStartup
-$set = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-       -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-Register-ScheduledTask -TaskName "Pravka Archive" -Action $act -Trigger $trg -Settings $set -User "SYSTEM" -RunLevel Highest
-Start-ScheduledTask -TaskName "Pravka Archive"
+powershell -ExecutionPolicy Bypass -File D:\PravkaArchive\repo\server\windows\install.ps1
 ```
 
-Журнал службы — `PRAVKA_LOGS\archive.log`.
+Скрипт делает всё по порядку:
+
+1. venv и зависимости;
+2. `migrate`;
+3. права учётной записи службы;
+4. брандмауэр: порт из `PRAVKA_LISTEN`, только от роутера `192.168.1.1`, на
+   любом профиле сети (Wi-Fi компа — «Общедоступная»);
+5. задача «Pravka Archive» при старте системы, с перезапуском;
+6. запуск, ожидание `/health` и `check`.
+
+Итог пишет в `logs\install-<дата>.log`. Повтор безвреден.
+
+- **Ключи скрипта:** `-Python <путь>` (с завода — путь выше), `-Router <адрес>`,
+  `-RunAs System`.
+- **От чьего имени служба.** С завода — NETWORK SERVICE. Служба смотрит в
+  интернет, а учётная запись с правами на всю машину ей ни к чему. SYSTEM —
+  только запасной вариант, если с правами что-то не сложится.
+
+**4. Проверка снаружи — с телефона по мобильной сети.** Изнутри домашней сети
+внешний адрес не открыть: роутер отдаёт своим устройствам служебный адрес.
+`check` об этом и скажет — «проверь с телефона», а не «НЕТ».
+
+Открой `https://server.znakomiy.netcraze.pro:8443/health`. Должен ответить
+`pravka-archive`. Если там страница роутера, проверь приложение в CrazeDNS:
+
+- смотрит ли оно на `192.168.1.77:8092`;
+- открыт ли доступ без авторизации роутером.
+
+Журнал службы — `logs\archive.log`. В нём каждый запрос с настоящим адресом
+клиента: у Claude это `160.79.104.0/21`.
 
 **Первая выгрузка intervals** (вся история) пойдёт сама при первом запуске.
 Она может идти от минут до часа: по каждой тренировке тянутся карточка,
 потоки и исходный файл. Посмотреть руками:
-`.venv\Scripts\python -m pravka_archive pull full`.
+`.venv\Scripts\python -m pravka_archive pull full --env D:\PravkaArchive\secrets\server.env`.
 
-**Подключить в claude.ai:**
+**5. Подключить в claude.ai:**
 
 1. Settings → Connectors → Add custom connector: имя «Правка», адрес
-   `PRAVKA_PUBLIC_URL/mcp`.
+   `https://server.znakomiy.netcraze.pro:8443/mcp`.
 2. Connect. Откроется страница «Архив Правки», туда вводится пароль
    `PRAVKA_OWNER_PASSWORD`.
 3. В чате включить коннектор в меню инструментов и спросить, например:
@@ -94,25 +122,32 @@ Start-ScheduledTask -TaskName "Pravka Archive"
 
 Коннектор, подключённый в claude.ai, работает и в мобильном приложении.
 
-**Телефон.** `.venv\Scripts\python -m pravka_archive pair` печатает в консоли
-QR с адресом и токеном. Сканер для него появится в Правке отдельной сборкой
-(Настройки → Подключения → Архив).
+**Телефон.** `.venv\Scripts\python -m pravka_archive pair --env D:\PravkaArchive\secrets\server.env`
+печатает в консоли QR с адресом и токеном. Сканер для него появится в Правке
+отдельной сборкой (Настройки → Подключения → Архив).
+
+**Версия MCP SDK закреплена на 1.30.0.** На PyPI уже есть 2.x, а там другие
+имена: `FastMCP` стал `MCPServer`, настройки транспорта переехали в
+`streamable_http_app()`. Переход — отдельной работой, с прогоном тестов.
 
 ## Обновление
 
+PowerShell от имени администратора:
+
 ```powershell
-cd D:\PravkaArchive\repo
-git pull
-cd server
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m pravka_archive migrate
-Stop-ScheduledTask -TaskName "Pravka Archive"; Start-ScheduledTask -TaskName "Pravka Archive"
+powershell -ExecutionPolicy Bypass -File D:\PravkaArchive\repo\server\windows\update.ps1
 ```
+
+`git pull` ветки `pravka`, затем `install.ps1` заново. Данные базы не
+меняются: схема `life` строится заново, журнал событий не трогается.
 
 ## Если что-то не так
 
 - **`check`** говорит словами, что не так.
 - **Журнал** — `archive.log`.
+- **`import` падает с ошибкой загрузки DLL.** Первым делом смотреть журнал
+  `Microsoft-Windows-CodeIntegrity/Operational`. Это Smart App Control:
+  однажды он на минуту заблокировал неподписанную библиотеку из EDB.
 - **Свежесть источников** (кто и когда последний раз прислал данные) —
   вид `life.freshness`, её же Claude видит в `schema`.
 - **Выгнать Claude отовсюду:** сменить `PRAVKA_OWNER_PASSWORD`, выполнить
@@ -120,6 +155,8 @@ Stop-ScheduledTask -TaskName "Pravka Archive"; Start-ScheduledTask -TaskName "Pr
   После этого надо подключиться заново.
 - **Сменить токен телефона:** новый `PRAVKA_INGEST_TOKEN`, перезапуск,
   `pair` и сканировать заново.
+- **Перезапуск службы:** `Stop-ScheduledTask "Pravka Archive"; Start-ScheduledTask "Pravka Archive"`
+  от администратора.
 
 ## Тесты
 
