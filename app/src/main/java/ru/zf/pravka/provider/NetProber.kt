@@ -10,7 +10,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
@@ -54,6 +57,18 @@ internal class NetProber(
 
     private val running = AtomicBoolean(false)
 
+    private val _checking = MutableStateFlow(false)
+    /** Проверка идёт прямо сейчас — по расписанию или кнопкой. */
+    val checking: StateFlow<Boolean> = _checking
+
+    private val _progress = MutableStateFlow<Map<NetProbe.Target, NetProbe.Hit?>>(emptyMap())
+    /**
+     * Ход идущей проверки: цель → итог, null — ещё проверяется. Каждая цель
+     * встаёт сюда, как только ответила (владелец, 01.10.2026: «показывает,
+     * что работает, пока проверяет, а не ждёт конца всего прохода»).
+     */
+    val progress: StateFlow<Map<NetProbe.Target, NetProbe.Hit?>> = _progress
+
     /** Было ли «есть» у цели в прошлый раз — журнал пишет перемены. */
     private val lastOk = ConcurrentHashMap<NetProbe.Target, Boolean>()
 
@@ -61,8 +76,11 @@ internal class NetProber(
     suspend fun tick() {
         if (!settings.netProbeFlow.first()) return
         store.warm()
-        val intervalMs = settings.netProbeIntervalFlow.first() * 60_000L
-        if (!NetProbe.due(store.lastAt, System.currentTimeMillis(), intervalMs)) return
+        val now = System.currentTimeMillis()
+        val hour = java.util.Calendar.getInstance().apply { timeInMillis = now }.get(java.util.Calendar.HOUR_OF_DAY)
+        // Ночью, с 00:00 до 08:00, — не чаще раза в полчаса.
+        val intervalMs = NetProbe.intervalMin(settings.netProbeIntervalFlow.first(), hour) * 60_000L
+        if (!NetProbe.due(store.lastAt, now, intervalMs)) return
         probe("по расписанию")
     }
 
@@ -75,10 +93,18 @@ internal class NetProber(
             val at = System.currentTimeMillis()
             val net = netLabel()
             val key = runCatching { settings.apiKey() }.getOrDefault("")
-            val cloudOn = homeServer.saved.value != null
-            val targets = NetProbe.Target.entries.filter { it != NetProbe.Target.CLOUD || cloudOn }
+            val targets = NetProbe.targets(cloudConfigured = homeServer.saved.value != null)
+            _progress.value = targets.associateWith { null }
+            _checking.value = true
             val hits = coroutineScope {
-                targets.map { t -> async { t to hit(t, key) } }.awaitAll()
+                targets.map { t ->
+                    async {
+                        val h = hit(t, key)
+                        // Ответила — сразу на экран, не дожидаясь остальных.
+                        _progress.update { it + (t to h) }
+                        t to h
+                    }
+                }.awaitAll()
             }.toMap(LinkedHashMap())
             val p = NetProbeStore.Probe(at, net, hits)
             store.append(p)
@@ -94,6 +120,7 @@ internal class NetProber(
             )
             p
         } finally {
+            _checking.value = false
             running.set(false)
         }
     }

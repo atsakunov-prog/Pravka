@@ -387,7 +387,8 @@ class Settings(private val context: Context) {
     /**
      * Проверка связи с облаками (`provider/NetProber.kt`, 01.10.2026; владелец:
      * «тумблер, чтобы включался пинг каждые 5 минут… мне надо где-то неделю
-     * это проверять»). С завода включена — неделя наблюдения началась сразу.
+     * это проверять»). С завода включена — неделя наблюдения началась сразу;
+     * раз в 15 минут, ночью с 00:00 до 08:00 — раз в полчаса (`NetProbe.intervalMin`).
      */
     val netProbeFlow = context.dataStore.data.map { it[KEY_NET_PROBE] ?: true }
     suspend fun setNetProbe(on: Boolean) {

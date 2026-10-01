@@ -72,7 +72,8 @@ internal fun NetProbeSettings(app: PravkaApp) {
     val minutes by settings.netProbeIntervalFlow.collectAsState(initial = NetProbe.INTERVAL_DEFAULT_MIN)
     val last by app.netProbeStore.last.collectAsState()
     val version by app.netProbeStore.version.collectAsState()
-    var checking by remember { mutableStateOf(false) }
+    val checking by app.netProber.checking.collectAsState()
+    val progress by app.netProber.progress.collectAsState()
     var netNow by remember { mutableStateOf("") }
     LaunchedEffect(version) { netNow = withContext(Dispatchers.IO) { app.netProber.netLabel() } }
 
@@ -93,21 +94,23 @@ internal fun NetProbeSettings(app: PravkaApp) {
         label = "проверка",
         info = "Раз в выбранный срок Правка стучится к серверам тем же путём, каким ходит сама, — через " +
             "ту же сеть и тот же VPN: Интернет (пустой ответ Google, как проверяет связь сам Android), " +
-            "Google (дверь облачного распознавания), Claude (список моделей — бесплатный запрос; 403 — " +
-            "Anthropic не пускает отсюда) и облако семьи, если задано. Каждый раз — свежим соединением: " +
-            "тёплое прятало бы как раз рукопожатие через VPN. Проверка идёт, пока жива служба; телефон " +
-            "спит — проверок реже, на картинке это пустые места, а не «нет доступа».",
+            "Google (дверь облачного распознавания) и Claude (список моделей — бесплатный запрос; 403 — " +
+            "Anthropic не пускает отсюда). Облако семьи пока не проверяется. Каждый раз — свежим " +
+            "соединением: тёплое прятало бы как раз рукопожатие через VPN. Ночью, с 00:00 до 08:00, — не " +
+            "чаще раза в полчаса. Проверка идёт, пока жива служба; телефон спит — проверок реже, на " +
+            "картинке это пустые места, а не «нет доступа».",
     ) {
         PaperToggle(
             title = "Проверять связь с облаками",
             checked = on,
             onCheckedChange = { v -> scope.launch { settings.setNetProbe(v) } },
-            hint = if (on) "раз в $minutes мин · журнал и картинка ниже" else "выключено — картинка стоит",
+            hint = if (on) "раз в $minutes мин, ночью раз в ${maxOf(minutes, NetProbe.NIGHT_MIN)} · журнал и картинка ниже"
+            else "выключено — картинка стоит",
         )
         ChipRow {
             for (m in NetProbe.INTERVALS_MIN) {
                 PaperChip(
-                    if (m == 1) "Каждую минуту" else "Раз в $m мин",
+                    "Раз в $m мин",
                     selected = m == minutes,
                     onClick = { scope.launch { settings.setNetProbeInterval(m) } },
                 )
@@ -120,16 +123,8 @@ internal fun NetProbeSettings(app: PravkaApp) {
                 icon = Glyphs.Refresh,
                 primary = true,
                 enabled = !checking,
-                onClick = {
-                    checking = true
-                    scope.launch {
-                        try {
-                            app.netProber.probe("вручную")
-                        } finally {
-                            checking = false
-                        }
-                    }
-                },
+                // Идёт проверка по расписанию — кнопка просто показывает её ход.
+                onClick = { scope.launch { app.netProber.probe("вручную") } },
             )
             Spacer(Modifier.width(12.dp))
             Text(
@@ -140,14 +135,42 @@ internal fun NetProbeSettings(app: PravkaApp) {
         }
     }
 
-    val targets = NetProbe.Target.entries.filter { t ->
+    // Облако семьи пока не проверяется — и не рисуется, даже если в замерах осталось.
+    val targets = NetProbe.targets(cloudConfigured = true).filter { t ->
         t != NetProbe.Target.CLOUD || week.first.any { it.hits.containsKey(t) }
     }
     val todayFrom = dayStart(System.currentTimeMillis())
 
     PaperCard(label = "сейчас") {
         val p = last
-        if (p == null) {
+        if (checking && progress.isNotEmpty()) {
+            // Проверка идёт — каждая цель встаёт, как только ответила.
+            Text(
+                "Проверяю · $netNow",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            progress.entries.forEachIndexed { i, (t, h) ->
+                if (i > 0) RowRule()
+                Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(markColor(NetProbe.mark(h))))
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(t.title, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            when {
+                                h == null -> "проверяю…"
+                                h.ok -> "есть · ${h.ms} мс" + if (h.why != "есть") " · ${h.why}" else ""
+                                else -> "нет · ${h.why}"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (h?.ok == false) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        } else if (p == null) {
             PaperHint("Ещё не проверял — «Проверить сейчас» или подожди тика службы.")
         } else {
             Text(
@@ -192,7 +215,11 @@ internal fun NetProbeSettings(app: PravkaApp) {
             "(служба спала или проверка выключена). Оранжевые насечки — сбои в деле: тейк ушёл с молчащего " +
             "облака на офлайн-пакет, запрос к Claude не достучался. Справа — доля проверок с доступом.",
     ) {
-        val holdMs = 2L * minutes * 60_000L + 60_000L
+        // Удержание полосы — два срока проверки той поры: ночью они реже.
+        val holdOf = { at: Long ->
+            val hour = Calendar.getInstance().apply { timeInMillis = at }.get(Calendar.HOUR_OF_DAY)
+            2L * NetProbe.intervalMin(minutes, hour) * 60_000L + 60_000L
+        }
         targets.forEachIndexed { i, t ->
             if (i > 0) Spacer(Modifier.height(14.dp))
             val all = NetProbe.share(week.first.map { NetProbe.mark(it.hits[t]) })
@@ -213,7 +240,7 @@ internal fun NetProbeSettings(app: PravkaApp) {
                 val dayShare = NetProbe.share(points.filter { it.first in from until to }.map { it.second })
                 DayBar(
                     label = dayLabel(from),
-                    segments = NetProbe.segments(points, from, to, holdMs),
+                    segments = NetProbe.segments(points, from, to, holdOf),
                     lives = lives.filter { it in from until to },
                     from = from,
                     now = if (d == 0) System.currentTimeMillis() else 0L,

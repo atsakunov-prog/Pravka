@@ -92,4 +92,21 @@ class NetProbeTest {
         assertTrue(NetProbe.change(Target.CLAUDE, false, ok)!!.contains("снова есть"))
         assertTrue(NetProbe.change(Target.CLAUDE, null, ok)!!.contains("есть"))
     }
+
+    @Test
+    fun `с завода раз в 15 минут, ночью не чаще раза в полчаса`() {
+        assertEquals(15, NetProbe.INTERVAL_DEFAULT_MIN)
+        assertEquals(15, NetProbe.intervalMin(15, 14))
+        assertEquals(30, NetProbe.intervalMin(15, 0))
+        assertEquals(30, NetProbe.intervalMin(5, 7))
+        assertEquals(15, NetProbe.intervalMin(15, 8))
+        // Выбрано реже полчаса — ночь не учащает.
+        assertEquals(30, NetProbe.intervalMin(30, 3))
+    }
+
+    @Test
+    fun `облако семьи пока не проверяется`() {
+        assertFalse(NetProbe.targets(cloudConfigured = true).contains(Target.CLOUD))
+        assertTrue(NetProbe.targets(cloudConfigured = true).containsAll(listOf(Target.INTERNET, Target.GOOGLE, Target.CLAUDE)))
+    }
 }
