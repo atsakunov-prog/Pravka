@@ -155,17 +155,17 @@ class IcuSweeper(
                     if (restyled) inserted = true
                     if (found) continue
                 }
+                // Уже лежит (прошлый свип, со своим сшитым началом или без) — не
+                // второй раз. Для любой тренировки, а не только при автопилоте.
+                val laid = zasechkaStore.forRange(watchStart - AutoPilotRules.CAR_AFTER_LEAVE_MS, end)
+                if (AutoPilotRules.watchLaid(laid, name, end)) continue
                 var category = TYPE_CATEGORY[type] ?: "Спорт: прочее"
                 var start = watchStart
                 var note = ""
                 // От двери: сеть места пропала в двадцать минут до кнопки на
-                // часах — дорога началась там. Уже лежит (прошлый свип, со
-                // своим сшитым началом) — не второй раз.
+                // часах — дорога началась там.
                 val w = witness()
                 if (w != null && AutoPilotRules.outdoor(type)) {
-                    val already = zasechkaStore.forRange(watchStart - AutoPilotRules.CAR_AFTER_LEAVE_MS, end)
-                        .any { it.source == "auto" && it.title == name.trim() && kotlin.math.abs(it.end - end) < 60_000L }
-                    if (already) continue
                     val leave = w.lastLeave()
                     if (leave != null) {
                         val latest = zasechkaStore.lastEntry()?.start

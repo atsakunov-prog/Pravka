@@ -113,14 +113,41 @@ def cmd_pull(cfg: config_mod.Config, mode: str) -> int:
     return 0
 
 
-def cmd_pair(cfg: config_mod.Config) -> int:
-    """QR для телефона: адрес и токен. Только в консоли компа — в сеть не отдаётся."""
+PAIR_PREFIX = "pravka-archive:"
+
+
+def pairing_payload(cfg: config_mod.Config) -> str:
+    """Что лежит в QR: префикс и JSON с адресом и токеном (`ArchiveSync.parsePairing` на телефоне)."""
+    return PAIR_PREFIX + json.dumps({"url": cfg.ingest_base, "token": cfg.ingest_token}, separators=(",", ":"))
+
+
+def cmd_pair(cfg: config_mod.Config, env_file: str | None, ask=input) -> int:
+    """QR для телефона: адрес и токен. Только на экране компа — в сеть не отдаётся.
+
+    Картинкой, а не в консоли: терминальный QR рисует тёмные модули пробелами,
+    и на светлой консоли владелец увидел пустоту (01.10.2026). PNG — чёрное
+    на белом, лежит рядом с server.env (там же, где токен) и удаляется, как
+    только владелец отсканировал.
+    """
     import segno
 
-    payload = "pravka-archive:" + json.dumps({"url": cfg.ingest_base, "token": cfg.ingest_token}, separators=(",", ":"))
-    print(f"Адрес для телефона: {cfg.ingest_base}/ingest")
-    segno.make(payload, error="m").terminal(compact=True)
-    print("Наведи на это сканер в Правке: Настройки → Подключения → Архив → «Сканировать».")
+    print(f"Адрес для телефона: {cfg.ingest_base}/ingest  (в браузере не открывать: туда только POST с телефона)")
+    folder = Path(env_file or os.environ.get("PRAVKA_ENV_FILE") or config_mod.DEFAULT_ENV_FILE).parent
+    png = folder / "pair-qr.png"
+    segno.make(pairing_payload(cfg), error="m").save(str(png), kind="png", scale=10, border=4, dark="black", light="white")
+    try:
+        print(f"QR открыт картинкой: {png}")
+        if hasattr(os, "startfile"):
+            os.startfile(str(png))  # type: ignore[attr-defined]  # только Windows
+        print("В Правке: Настройки → Подключения → Архив → «Сканировать QR с компа».")
+        ask("Отсканировал? Нажми Enter — картинка удалится (в ней токен телефона). ")
+    finally:
+        try:
+            png.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as e:  # открыта просмотрщиком — скажем, а не промолчим
+            print(f"Картинку удалить не вышло ({e}) — удали руками: {png}")
     return 0
 
 
@@ -181,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         _logging(cfg)
         return cmd_pull(cfg, args.mode)
     if args.command == "pair":
-        return cmd_pair(cfg)
+        return cmd_pair(cfg, args.env)
     if args.command == "supervise":
         return cmd_supervise(cfg, args.env)
 

@@ -101,7 +101,7 @@ class ArchiveEventsTest {
             .put("input", "привет").put("output", "Привет.").put("latency_ms", 900).put("cost_usd", 0.002).put("error", "")
         return listOf(
             ArchiveEvents.zasechkaReference(listOf(ZasechkaStore.Category("Работа", "клиенты", 360, 5)), listOf("Клиент")),
-            ArchiveEvents.zasechkaDays(listOf(entry), { 45L }, clock).single(),
+            ArchiveEvents.zasechkaDays(listOf(entry), clock, t0 + 3_600_000L).single(),
             ArchiveEvents.phoneDay("2026-09-07", day, mapOf("org.telegram" to "Telegram")),
             ArchiveEvents.norms(Micronutrients.ALL),
             ArchiveEvents.meal(meal, clock),
@@ -154,7 +154,7 @@ class ArchiveEventsTest {
             id = 2, start = t0, end = 0, raw = "", title = "Гитара", category = "Хобби", client = "",
             useful = 0, source = "voice", synced = false, createdAt = t0,
         )
-        val e = ArchiveEvents.zasechkaDays(listOf(open), { 99L }, clock).single().data
+        val e = ArchiveEvents.zasechkaDays(listOf(open), clock, t0 + 600_000L).single().data
             .getJSONArray("entries").getJSONObject(0)
         assertTrue(e.isNull("end"))
         assertTrue(e.isNull("minutes"))
@@ -167,8 +167,44 @@ class ArchiveEventsTest {
             category = "Сон", client = "", useful = 0, source = "auto", synced = false, createdAt = t0,
         )
         val early = late.copy(id = 4, start = t0, end = t0 + 600_000)
-        val days = ArchiveEvents.zasechkaDays(listOf(late, early), { 10L }, clock)
+        val days = ArchiveEvents.zasechkaDays(listOf(late, early), clock, t0 + 86_400_000L)
         assertEquals(listOf("2026-09-08", "2026-09-07").sorted(), days.map { it.key })
+    }
+
+    @Test
+    fun `сутки с нахлёстами — ровно 1440 минут`() {
+        // Как на настоящей ленте 22.09: секундные нахлёсты на стыках, дубль
+        // тренировки с часов (от двери и с кнопки часов, конец один) и два
+        // одинаковых куска голосом.
+        val day0 = clock.dayStart(t0)
+        fun at(h: Int, m: Int, s: Int = 0) = day0 + ((h * 60L + m) * 60 + s) * 1000
+        fun e(id: Long, from: Long, to: Long, title: String, source: String = "voice") = ZasechkaStore.Entry(
+            id = id, start = from, end = to, raw = "", title = title, category = "Работа", client = "",
+            useful = 0, source = source, synced = false, createdAt = from,
+        )
+        val day = listOf(
+            e(1, at(0, 0), at(7, 30, 40), "Сон", "auto"),
+            e(2, at(7, 30, 20), at(10, 55), "Сборы"),            // нахлёст 20 с
+            e(3, at(10, 55), at(10, 58), "Звонок"),
+            e(4, at(10, 55), at(10, 58), "Звонок"),              // дубль голосом
+            e(5, at(10, 58), at(12, 40), "Работа"),
+            e(6, at(12, 40), at(13, 53), "BJJ: борьба", "auto"), // от двери
+            e(7, at(12, 58), at(13, 53), "BJJ: борьба", "auto"), // с кнопки часов
+            e(8, at(13, 53), at(15, 49, 30), "Работа"),
+            e(9, at(15, 40), at(16, 17), "Передвижение: вело"),  // нахлёст 9 мин
+            e(10, at(16, 17), day0 + 86_400_000L, "Вечер"),
+        )
+        val rows = ArchiveEvents.zasechkaDays(day.shuffled(java.util.Random(7)), clock, day0 + 90_000_000L)
+            .single().data.getJSONArray("entries")
+        val minutes = (0 until rows.length()).map { rows.getJSONObject(it) }
+        assertEquals(1440L, minutes.sumOf { it.getLong("minutes") })
+        // Дубли ушли в ноль, у первого куска — всё его время.
+        val byId = minutes.associate { it.getLong("id") to it.getLong("minutes") }
+        assertEquals(0L, byId[4L])
+        assertEquals(0L, byId[7L])
+        assertEquals(73L, byId[6L])
+        // Начало и конец — как в ленте: нахлёст виден.
+        assertEquals(clock.iso(at(15, 40)), minutes.first { it.getLong("id") == 9L }.getString("start"))
     }
 
     @Test

@@ -188,8 +188,9 @@ powershell -ExecutionPolicy Bypass -File D:\PravkaArchive\repo\server\windows\in
 Коннектор, подключённый в claude.ai, работает и в мобильном приложении.
 
 **Телефон.** `.venv\Scripts\python -m pravka_archive pair --env D:\PravkaArchive\secrets\server.env`
-печатает в консоли QR с адресом и токеном. Адрес — `PRAVKA_PHONE_URL`, если он
-задан, иначе `PRAVKA_PUBLIC_URL`. На телефоне: Настройки → Подключения →
+открывает QR с адресом и токеном картинкой (`pair-qr.png` рядом с
+`server.env`; Enter — удалить, в ней токен). Адрес — `PRAVKA_PHONE_URL`, если
+он задан, иначе `PRAVKA_PUBLIC_URL`. На телефоне: Настройки → Подключения →
 Архив → «Сканировать QR с компа». Телефон проверит пару пустой пачкой и
 сразу начнёт первую заливку всего, что у него есть; как он шлёт дальше —
 `docs/arkhiv.md`, раздел «Телефон».

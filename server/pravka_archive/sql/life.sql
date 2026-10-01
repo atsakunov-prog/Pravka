@@ -64,7 +64,7 @@ LEFT JOIN life.categories c ON lower(c.name) = lower(e->>'category')
 WHERE r.kind = 'zasechka.day' AND NOT r.deleted;
 COMMENT ON VIEW life.entries IS 'Лента Засечки: что владелец делал, кусками времени. Сумма minutes за полные сутки = 1440. source: voice/text — сказал или набрал, edit — правил руками, auto — телефон или часы (сон, тренировка), gap — заполнитель «не размечено», todoist — запуск из задачи, nfc, autopilot, calendar.';
 COMMENT ON COLUMN life.entries.day IS 'Сутки владельца (по поясу телефона). Группировать и сравнивать дни — только по нему.';
-COMMENT ON COLUMN life.entries.minutes IS 'Минуты суток куска: сумма за полные сутки сходится в 1440. Пусто у идущего дела.';
+COMMENT ON COLUMN life.entries.minutes IS 'Минуты суток куска сверх более ранних: нахлёст с предыдущим куском (дубль, секунды на стыке) второй раз не считается, поэтому сумма за полные сутки — 1440. Нахлёст виден по start/end; у дубля minutes = 0. Пусто у идущего дела.';
 COMMENT ON COLUMN life.entries.raw IS 'Что владелец сказал дословно, с ошибками распознавания. Строки «КБЖУ: …» дописала Еда.';
 COMMENT ON COLUMN life.entries.comment IS 'Слова владельца о деле, уже осознанные: что было внутри и чем кончилось. Весит больше надиктовки.';
 COMMENT ON COLUMN life.entries.points IS 'Очки = часы × ценность часа категории (по нынешнему справочнику). Пусто, если категории нет в справочнике: справочник присылает телефон (zasechka.reference), своего на сервере нет — второй источник правды разошёлся бы с телефоном.';
@@ -585,4 +585,4 @@ COMMENT ON VIEW life.raw IS 'Любая запись архива как она 
 
 CREATE VIEW life.history AS
 SELECT kind, key, op, at, device, data FROM core.events;
-COMMENT ON VIEW life.history IS 'Журнал изменений: каждая версия каждой записи. Как было до правки — здесь: WHERE kind = ''…'' AND key = ''…'' ORDER BY at.';
+COMMENT ON VIEW life.history IS 'Журнал изменений: каждая версия каждой записи. Как было до правки — здесь: WHERE kind = ''…'' AND key = ''…'' ORDER BY at. at у телефона — когда он заметил изменение (до 10 секунд после правки), а не время самой записи; всё, что было до подключения архива (01.10.2026), пришло одной заливкой с одним at. Время дела, приёма, траты — в полях записи.';

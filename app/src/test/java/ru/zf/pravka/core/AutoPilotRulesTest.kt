@@ -466,4 +466,30 @@ class AutoPilotBedtimeTest {
     fun `владелец уже сказал зарядка после подъёма - молчим`() {
         assertFalse(AutoPilotRules.wakeDealDue(3, 7, now, latestOwnerStart = now + 3 * m))
     }
+
+    // ---- тренировка с часов уже в ленте (22.09.2026: две BJJ, 1497 минут в сутках) ----
+
+    private fun auto(start: Long, end: Long, title: String, source: String = "auto") = ru.zf.pravka.data.ZasechkaStore.Entry(
+        id = start, start = start, end = end, raw = "", title = title, category = "Спорт: прочее", client = "",
+        useful = 0, source = source, synced = false, createdAt = start,
+    )
+
+    @Test
+    fun `тренировка, пришитая к двери, узнаётся по концу`() {
+        val watchStart = now
+        val end = now + 55 * m
+        // Прошлый свип пришил начало к двери за 18 минут до кнопки часов.
+        val laid = listOf(auto(watchStart - 18 * m, end, "BJJ: борьба"))
+        assertTrue(AutoPilotRules.watchLaid(laid, " BJJ: борьба ", end + 30_000L))
+    }
+
+    @Test
+    fun `другая тренировка, своя запись или открытая — не повтор`() {
+        val end = now + 55 * m
+        assertFalse(AutoPilotRules.watchLaid(listOf(auto(now, end, "Вело")), "BJJ: борьба", end))
+        assertFalse(AutoPilotRules.watchLaid(listOf(auto(now, end + 5 * m, "BJJ: борьба")), "BJJ: борьба", end))
+        assertFalse(AutoPilotRules.watchLaid(listOf(auto(now, end, "BJJ: борьба", source = "edit")), "BJJ: борьба", end))
+        assertFalse(AutoPilotRules.watchLaid(listOf(auto(now, 0L, "BJJ: борьба")), "BJJ: борьба", end))
+        assertFalse(AutoPilotRules.watchLaid(emptyList(), "BJJ: борьба", end))
+    }
 }

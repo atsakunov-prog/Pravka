@@ -493,7 +493,7 @@ class PravkaApp : Application() {
                     if (!profileStore.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA)) return emptyList()
                     val all = zasechkaStore.all()
                     val now = System.currentTimeMillis()
-                    ev.zasechkaDays(all, { zasechkaStore.budgetMinutes(it, now) }, clock) +
+                    ev.zasechkaDays(all, clock, now) +
                         ev.zasechkaReference(zasechkaStore.categories(), zasechkaStore.clients())
                 }
                 ArchiveDomain.PHONE -> {

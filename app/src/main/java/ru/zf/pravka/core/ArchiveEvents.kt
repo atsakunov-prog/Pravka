@@ -44,6 +44,15 @@ object ArchiveEvents {
         private val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = zone }
         fun iso(ms: Long): String = synchronized(iso) { iso.format(Date(ms)) }
         fun day(ms: Long): String = synchronized(dayFmt) { dayFmt.format(Date(ms)) }
+
+        /** Полночь суток, в которые попало [ms], — в поясе телефона. */
+        fun dayStart(ms: Long): Long = java.util.Calendar.getInstance(zone).apply {
+            timeInMillis = ms
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
     }
 
     /**
@@ -82,21 +91,39 @@ object ArchiveEvents {
      * (разрез по полуночи и вокруг сна рождает новые куски, заполнители
      * пересоздаются на каждом проходе). Сервер заменяет сутки целиком — ему
      * всё равно, какой номер у куска.
+     *
+     * `minutes` — сколько минут суток кусок занимает СВЕРХ более ранних:
+     * куски идут по началу, нахлёст с уже посчитанным второй раз не
+     * считается. Минута — та же разность минут суток, что у
+     * `ZasechkaStore.budgetMinutes`, но та считает кусок в одиночку, и
+     * первая заливка (01.10.2026) показала, что сумма 1440 держится только у
+     * кусков встык: секундные нахлёсты на стыках давали +1…+4 минуты, дубль
+     * тренировки с часов 22.09 — 1497 минут в сутках. Начало и конец уходят
+     * как есть — нахлёст в них виден.
      */
-    fun zasechkaDays(
-        entries: List<ZasechkaStore.Entry>,
-        minutes: (ZasechkaStore.Entry) -> Long,
-        clock: Clock,
-    ): List<Item> =
+    fun zasechkaDays(entries: List<ZasechkaStore.Entry>, clock: Clock, now: Long): List<Item> =
         entries.groupBy { clock.day(it.start) }.toSortedMap().map { (day, list) ->
+            val base = clock.dayStart(list.first().start)
+            fun minuteOf(ms: Long): Long = (ms - base + 30_000L) / 60_000L
+            var covered = Long.MIN_VALUE
+            // Одно начало — длинный кусок первым: дубль покороче уходит в ноль
+            // целиком; у одинаковых — минуты у заведённого раньше.
+            val ordered = list.sortedWith(
+                compareBy<ZasechkaStore.Entry> { it.start }.thenByDescending { if (it.open) now else it.end }
+                    .thenBy { it.id }
+            )
             Item("zasechka.day", day, obj(
                 "day" to day,
-                "entries" to arr(list.sortedBy { it.start }.map { e ->
+                "entries" to arr(ordered.map { e ->
+                    val from = maxOf(e.start, covered)
+                    val to = maxOf(if (e.open) now else e.end, covered)
+                    covered = to
+                    val minutes = minuteOf(to) - minuteOf(from)
                     obj(
                         "id" to e.id,
                         "start" to clock.iso(e.start),
                         "end" to if (e.open) null else clock.iso(e.end),
-                        "minutes" to if (e.open) null else minutes(e),
+                        "minutes" to if (e.open) null else minutes,
                         "title" to e.title,
                         "category" to e.category,
                         "client" to e.client,
