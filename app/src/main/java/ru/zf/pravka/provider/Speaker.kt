@@ -18,8 +18,19 @@ import java.util.Locale
  * дней он не нужен вовсе. Пока заводится — фразы ждут в очереди. Звук идёт как
  * у помощника (`USAGE_ASSISTANT`), то есть туда же, куда музыка: в гарнитуру,
  * если она подключена.
+ *
+ * Сказал — через минуту тишины отпускает синтезатор (01.10.2026, проверка
+ * батареи): заведённый `TextToSpeech` держит привязанной службу речи Google
+ * («Распознавание и синтез речи»), и раньше держал до конца жизни службы
+ * доступности — сутками ради одной фразы «еду не записал». Снова завести —
+ * доля секунды, а фразы у Правки редкие. Сколько держали — в счёт службы
+ * речи ([onHeld]: миллисекунды и сказанные фразы).
  */
-class Speaker(private val context: Context, private val log: (String) -> Unit) {
+class Speaker(
+    private val context: Context,
+    private val log: (String) -> Unit,
+    private val onHeld: (ms: Long, phrases: Int) -> Unit = { _, _ -> },
+) {
 
     private val main = Handler(Looper.getMainLooper())
     private var tts: TextToSpeech? = null
@@ -27,8 +38,15 @@ class Speaker(private val context: Context, private val log: (String) -> Unit) {
     private var broken = false
     private val pending = ArrayList<String>()
     private var seq = 0
+    private var heldSinceMs = 0L
+    private var phrases = 0
+    private val idleRelease = Runnable { releaseIfQuiet() }
 
     fun say(text: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { say(text) }
+            return
+        }
         if (text.isBlank() || broken) return
         if (ready) {
             speakNow(text)
@@ -36,6 +54,8 @@ class Speaker(private val context: Context, private val log: (String) -> Unit) {
         }
         pending += text
         if (tts != null) return
+        heldSinceMs = android.os.SystemClock.elapsedRealtime()
+        phrases = 0
         tts = runCatching {
             TextToSpeech(context.applicationContext) { status -> main.post { onInit(status) } }
         }.getOrElse {
@@ -44,13 +64,32 @@ class Speaker(private val context: Context, private val log: (String) -> Unit) {
             pending.clear()
             null
         }
+        // Синтезатор так и не ответил — через ту же минуту отпустить, а не держать вечно.
+        if (tts != null) main.postDelayed(idleRelease, IDLE_MS)
     }
 
     fun shutdown() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { shutdown() }
+            return
+        }
+        main.removeCallbacks(idleRelease)
         pending.clear()
         ready = false
-        runCatching { tts?.shutdown() }
+        val engine = tts ?: return
         tts = null
+        runCatching { engine.shutdown() }
+        onHeld(android.os.SystemClock.elapsedRealtime() - heldSinceMs, phrases)
+    }
+
+    /** Минута без новых фраз — отпустить; ещё договаривает — подождать. */
+    private fun releaseIfQuiet() {
+        val engine = tts ?: return
+        if (runCatching { engine.isSpeaking }.getOrDefault(false)) {
+            main.postDelayed(idleRelease, RECHECK_MS)
+            return
+        }
+        shutdown()
     }
 
     private fun onInit(status: Int) {
@@ -60,6 +99,8 @@ class Speaker(private val context: Context, private val log: (String) -> Unit) {
             log("синтезатор речи ответил ошибкой ($status) — говорю только запиской")
             broken = true
             pending.clear()
+            // Сломанный синтезатор держать незачем.
+            shutdown()
             return
         }
         val lang = runCatching { engine.setLanguage(Locale("ru", "RU")) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
@@ -85,6 +126,14 @@ class Speaker(private val context: Context, private val log: (String) -> Unit) {
         val result = runCatching {
             engine.speak(text, TextToSpeech.QUEUE_ADD, null, "pravka-${++seq}")
         }.getOrDefault(TextToSpeech.ERROR)
-        if (result == TextToSpeech.ERROR) log("не сказал «$text»")
+        if (result == TextToSpeech.ERROR) log("не сказал «$text»") else phrases++
+        main.removeCallbacks(idleRelease)
+        main.postDelayed(idleRelease, IDLE_MS)
+    }
+
+    private companion object {
+        /** Сколько держать синтезатор после последней фразы. */
+        const val IDLE_MS = 60_000L
+        const val RECHECK_MS = 5_000L
     }
 }

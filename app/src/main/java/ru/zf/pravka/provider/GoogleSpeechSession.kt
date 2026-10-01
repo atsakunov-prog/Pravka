@@ -377,6 +377,17 @@ class GoogleSpeechSession(
          */
         @Volatile var cloudEventSink: ((String) -> Unit)? = null
 
+        /**
+         * Счёт службы речи (`core/SpeechUse.kt`): сколько она слушала тейки и
+         * держалась прогревом — батарея пишет эту работу на счёт службы Google,
+         * не Правки. Любой поток.
+         */
+        @Volatile var useSink: ((ru.zf.pravka.core.SpeechUse.Kind, Long) -> Unit)? = null
+
+        internal fun use(kind: ru.zf.pravka.core.SpeechUse.Kind, ms: Long) {
+            useSink?.let { sink -> runCatching { sink(kind, ms) } }
+        }
+
         /** Сказано ли владельцу, что облако не отвечает, а пакета нет, — в этот раз молчания. */
         @Volatile private var noOfflineTold = 0L
 
@@ -464,6 +475,8 @@ class GoogleSpeechSession(
         private val warmMain = Handler(Looper.getMainLooper())
         private var warmClient: SpeechRecognizer? = null
         private var warmNetwork = false
+        /** С какого мига держим тёплого клиента — в счёт службы речи при отпуске. */
+        private var warmSinceMs = 0L
         private val warmDrop = Runnable { dropWarm() }
 
         // ---- Кто именно распознаёт ----
@@ -610,6 +623,7 @@ class GoogleSpeechSession(
             val fresh = newRecognizer(app, network) ?: return
             warmClient = fresh
             warmNetwork = network
+            warmSinceMs = android.os.SystemClock.elapsedRealtime()
             warmMain.postDelayed(warmDrop, WARM_TTL_MS)
             // Служба привязывается на ПЕРВОМ вызове, а не при создании объекта:
             // checkRecognitionSupport будит процесс движка и микрофона не
@@ -649,6 +663,7 @@ class GoogleSpeechSession(
             val client = warmClient ?: return
             warmClient = null
             runCatching { client.destroy() }
+            use(ru.zf.pravka.core.SpeechUse.Kind.WARM, android.os.SystemClock.elapsedRealtime() - warmSinceMs)
         }
 
         /**
@@ -1193,6 +1208,7 @@ class GoogleSpeechSession(
         feed?.abort()
         feed = null
         health.close(android.os.SystemClock.elapsedRealtime())
+        use(ru.zf.pravka.core.SpeechUse.Kind.TAKE, tookMs)
         // Include a partial that never got finalized, so the last utterance is
         // never silently dropped when the session ends mid-phrase.
         val text = liveText().trim()

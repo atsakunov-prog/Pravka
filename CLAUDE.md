@@ -119,7 +119,11 @@
   еда, дела — решает Сонет, `ClaudeZasechka.zasechkaFork` +
   `core/prompts/PromptsZasechka.kt`, запас — слова `core/ZasechkaIntent.kt`;
   дороги — `trigger/ServiceZasechkaRoutes.kt`) и
-  голос в конце (`provider/Speaker.kt`). Геометрия стопки — `core/StackGeometry.kt`,
+  голос в конце (`provider/Speaker.kt`, синтезатор отпускается минутой
+  тишины). Сколько служба речи Google работала на Правку (тейки, переразбор,
+  прогрев, голос) — `core/SpeechUse.kt` + `data/SpeechUseStore.kt`, карточка
+  «служба речи» в «Микрофон и распознавание»: батарея пишет эту работу на
+  службу, не на Правку. Геометрия стопки — `core/StackGeometry.kt`,
   пружины и сжатие кнопок — `core/ChainPhysics.kt` + `trigger/BubbleMotion.kt`,
   серая «отмена» у записи без пилюли (Whisper у «П») — `trigger/CancelBubble.kt`.
 - **Claude:** `provider/ClaudeProvider.kt` — только транспорт (HTTP, SSE-стрим,

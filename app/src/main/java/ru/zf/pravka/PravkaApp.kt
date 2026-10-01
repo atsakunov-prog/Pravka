@@ -85,6 +85,8 @@ class PravkaApp : Application() {
         ru.zf.pravka.provider.GoogleSpeechSession.cloudEventSink = { why ->
             netProber.live(ru.zf.pravka.core.NetProbe.Target.GOOGLE, why)
         }
+        // Сколько служба речи Google работала на Правку — тейки, переразбор, прогрев.
+        ru.zf.pravka.provider.GoogleSpeechSession.useSink = { kind, ms -> speechUse.add(kind, ms) }
         // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет;
         // затем все дороги Опуса и Fable — на Опус 5.5 с новыми усилиями (22.09);
         // затем чистка — на Сонет 5.5 (30.09). Порядок важен: последняя снимает
@@ -449,6 +451,8 @@ class PravkaApp : Application() {
     val netLog by lazy { EventLog(this, "net.log") }
     val netProbeStore by lazy { ru.zf.pravka.data.NetProbeStore(this) }
     internal val netProber by lazy { ru.zf.pravka.provider.NetProber(this, settings, netProbeStore, homeServer, netLog) }
+    /** Счёт службы речи Google по суткам: сколько она работала на Правку (`core/SpeechUse.kt`). */
+    val speechUse by lazy { ru.zf.pravka.data.SpeechUseStore(this) }
 
     /** Облако семьи: домашний сервер, если задан; нет — null, обмен и копии молчат. */
     fun familyCloud(): ru.zf.pravka.provider.FamilyCloud? = homeServer.saved.value?.let { homeServer.cloud }

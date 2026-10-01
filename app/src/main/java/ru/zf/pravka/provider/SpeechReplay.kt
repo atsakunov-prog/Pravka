@@ -241,7 +241,12 @@ class SpeechReplay(
     private fun teardown() {
         stopped = true
         main.removeCallbacks(guard)
-        recognizer?.let { r -> runCatching { r.cancel() }; runCatching { r.destroy() } }
+        recognizer?.let { r ->
+            runCatching { r.cancel() }
+            runCatching { r.destroy() }
+            // В счёт службы речи: переразбор — та же её работа, что тейк.
+            GoogleSpeechSession.use(ru.zf.pravka.core.SpeechUse.Kind.REPLAY, elapsedMs)
+        }
         recognizer = null
         readEnd?.let { runCatching { it.close() } }
         readEnd = null

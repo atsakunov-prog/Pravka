@@ -305,9 +305,16 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     @Volatile internal var zFromHeadset = false
 
-    /** Голос Правки (`provider/Speaker.kt`); синтезатор заводится при первой фразе. */
+    /**
+     * Голос Правки (`provider/Speaker.kt`); синтезатор заводится при первой
+     * фразе и отпускается минутой тишины — сколько держали, в счёт службы речи.
+     */
     internal val speakerLazy = lazy {
-        ru.zf.pravka.provider.Speaker(this) { line -> app.eventLog.add("голос: $line") }
+        ru.zf.pravka.provider.Speaker(
+            this,
+            log = { line -> app.eventLog.add("голос: $line") },
+            onHeld = { ms, phrases -> app.speechUse.add(ru.zf.pravka.core.SpeechUse.Kind.VOICE, ms, phrases) },
+        )
     }
 
     /** Автопилот Засечки: Wi-Fi-места, BT машины, «точно ещё …?». */

@@ -1335,6 +1335,53 @@ private fun VoiceSettings(app: PravkaApp) {
     }
     HeadsetButtonCard()
     SpeechSection(settings, app.whisperProvider)
+    SpeechUseCard(app)
+}
+
+/**
+ * Служба речи Google — сколько она работала на Правку (01.10.2026; владелец
+ * со снимком батареи: «Распознавание и синтез речи» 57 %, Правка 2 % —
+ * «проверь, что правка не тратит батарею сильно»). Батарея пишет работу
+ * распознавателя на счёт службы, а не того, кто попросил; здесь — доля Правки
+ * числом, чтобы сверить с экраном батареи за те же сутки.
+ */
+@Composable
+private fun SpeechUseCard(app: PravkaApp) {
+    LaunchedEffect(Unit) { app.speechUse.warm() }
+    val days by app.speechUse.days.collectAsState()
+    val now = System.currentTimeMillis()
+    val shown = listOf(
+        "Сегодня" to ru.zf.pravka.data.SpeechUseStore.dayKey(now),
+        "Вчера" to ru.zf.pravka.data.SpeechUseStore.dayKey(now - 24 * 60 * 60_000L),
+    )
+    PaperCard(label = "служба речи") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Сколько служба речи Google работала на Правку",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            ru.zf.pravka.ui.InfoButton(
+                "Служба речи и батарея",
+                "В батарее она зовётся «Распознавание и синтез речи». Это общая служба Google: " +
+                    "ею пользуются Правка, голосовой ввод клавиатуры, «Озвучка» Слушалки, субтитры, " +
+                    "навигация. Батарея пишет её работу на её счёт, а не того, кто попросил, — " +
+                    "поэтому Правка там видна маленькой, а служба большой. «Слушала» и «разбирала " +
+                    "заново» — настоящая работа на Правку (процессор и сеть). «Прогрев» и «голос» — " +
+                    "только привязка: служба жива и в батарее идёт «фоном», но ничего не считает; " +
+                    "прогрев — две минуты после касания кнопки и после тейка, чтобы первые слова не " +
+                    "терялись, голос отпускается через минуту после фразы. Строка батареи — часы, а " +
+                    "здесь минуты — значит, службу ест кто-то другой.",
+            )
+        }
+        shown.forEach { (title, key) ->
+            Spacer(Modifier.height(6.dp))
+            Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ru.zf.pravka.core.SpeechUse.lines(days.firstOrNull { it.day == key }).forEach { line ->
+                Text(line, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
 }
 
 /**
