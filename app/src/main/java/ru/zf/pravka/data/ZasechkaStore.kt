@@ -36,7 +36,7 @@ class ZasechkaStore(private val context: Context) {
 
     companion object {
         const val FORMAT = "pravka-zasechka"
-        private const val FILE_NAME = "zasechka.json"
+        const val FILE_NAME = "zasechka.json"
         /** Записи закрытого параллельного трека — не стёрты, а убраны сюда. */
         private const val PARALLEL_ARCHIVE = "zasechka-parallel-archive.json"
 

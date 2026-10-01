@@ -116,6 +116,18 @@ internal object HistoryFixes {
             val o = app.moneyEngine.reparsePushes()
             Result(o.looked, o.changed + o.added, if (o.added > 0) "добавлено записей: ${o.added}" else "")
         },
+        // BJJ с часов («Mixed Martial Arts») intervals клал ходьбой: свип
+        // теперь чинит тип и имя сам, но видит только двое суток. Сырьё —
+        // карточка в intervals и запись свипа в ленте; правленное владельцем
+        // (не `auto`) и имя, данное им самим, шаг не трогает.
+        Step(
+            id = "2026-10-01-bjj-walk",
+            title = "BJJ с часов: Other и «BJJ: борьба» в intervals, спорт в ленте",
+            files = listOf(ru.zf.pravka.data.ZasechkaStore.FILE_NAME),
+        ) { app ->
+            val r = app.icuSweeper.fixBjjHistory()
+            Result(r.looked, r.icu + r.ribbon, r.note)
+        },
     )
 
     private const val FILE = "history-fixes.json"
