@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -235,6 +236,12 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             }
 
             Section("Озвучка")
+            // Движок синтеза заводится по требованию: пока раздел на экране,
+            // он поднят ради списка голосов и пробы, ушли - отпускается.
+            DisposableEffect(Unit) {
+                app.readAloud.hold(true)
+                onDispose { app.readAloud.hold(false) }
+            }
             val speech by app.readAloud.state.collectAsState()
             Note(
                 "Книгу без записи читает вслух синтез речи телефона: кнопка «Озвучить» в " +

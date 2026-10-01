@@ -8,6 +8,7 @@ import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
@@ -35,6 +36,19 @@ import ru.zf.slushalka.text.BookText
  *
  * Место чтения пишется тем же порядком, что при листании: слушал перед сном
  * до середины главы - утром читалка откроется там.
+ *
+ * Движок синтеза заводится, когда нужен (пуск, экран голосов), и отпускается:
+ * через полминуты после «Стоп», через десять минут паузы (01.10.2026, проверка
+ * батареи: «Распознавание и синтез речи» 57 % за день). Раньше он поднимался на
+ * старте приложения и держался, пока жив процесс, - а с играющей аудиокнигой
+ * процесс живёт часами, и всё это время служба речи Google была привязана ради
+ * озвучки, которую могли и не включать. Пауза из-за звонка или навигатора движок
+ * не отпускает: продолжать надо сразу.
+ *
+ * Сторож молчания: озвучка «говорит», а движок давно не сообщал ни слова (его
+ * процесс умер, и обратные вызовы больше не придут) - заводится новый движок
+ * с той же фразы; замолчал и он - озвучка останавливается с ошибкой. Иначе
+ * служба держала бы процессор замком до шести часов в тишине.
  */
 class ReadAloud(private val app: SlushalkaApp) {
 
@@ -91,21 +105,77 @@ class ReadAloud(private val app: SlushalkaApp) {
     private var ready = false
     private var tts: TextToSpeech? = null
 
-    init {
-        // Движок поднимается заранее, чтобы список голосов был готов к
-        // настройкам, а «Озвучить» начинало говорить без задержки на запуск.
-        engine()
-    }
+    /** Сколько экранов держат движок (экран голосов): пока держат, не отпускаем. */
+    private var holds = 0
+    private val releaseIdle = Runnable { releaseIfIdle() }
 
-    private fun engine(): TextToSpeech {
-        tts?.let { return it }
+    /** Когда движок последний раз сообщал о ходе чтения; сторож молчания меряет от этого. */
+    private var lastProgressAt = 0L
+    /** Сторож уже заводил движок заново по этому молчанию. */
+    private var stallKicked = false
+    private val stallWatch = Runnable { checkStall() }
+
+    private fun engine() {
+        if (tts != null) return
+        ready = false
         // Обратный вызов инициализации может прийти раньше, чем присвоится
         // ссылка, поэтому внутри него к tts не обращаемся - только по главному
         // потоку, следующим сообщением.
-        val t = TextToSpeech(app) { status -> main.post { onInit(status == TextToSpeech.SUCCESS) } }
+        val t = runCatching {
+            TextToSpeech(app) { status -> main.post { onInit(status == TextToSpeech.SUCCESS) } }
+        }.getOrElse {
+            _state.value = _state.value.copy(ready = false, error = "На телефоне нет синтеза речи")
+            pendingStart = null
+            return
+        }
         tts = t
         t.setOnUtteranceProgressListener(listener)
-        return t
+        // Завели, а читать не стали (или движок не ответил) - не держать вечно.
+        scheduleRelease(STOPPED_HOLD_MS)
+    }
+
+    /**
+     * Экран голосов открыт - держать движок поднятым ([on] = true), закрыт -
+     * отпустить по обычному правилу. Пары вызовов - из DisposableEffect.
+     */
+    fun hold(on: Boolean) {
+        if (on) {
+            holds++
+            engine()
+        } else {
+            holds = (holds - 1).coerceAtLeast(0)
+            scheduleRelease(STOPPED_HOLD_MS)
+        }
+    }
+
+    private fun scheduleRelease(afterMs: Long) {
+        main.removeCallbacks(releaseIdle)
+        main.postDelayed(releaseIdle, afterMs)
+    }
+
+    /** Отпустить движок, если он никому не нужен: не говорит, не ждёт пуска, экран голосов закрыт. */
+    private fun releaseIfIdle() {
+        if (tts == null) return
+        if (!ready) {
+            // Движок за полминуты так и не ответил: пуск, который его ждёт, не
+            // состоится, - сказать об этом, а не висеть с «поднимается».
+            if (pendingStart != null) stop()
+            releaseEngine()
+            _state.value = _state.value.copy(error = "Синтез речи не отвечает")
+            return
+        }
+        if (holds > 0 || pendingStart != null || _state.value.speaking || pausedByFocus) return
+        releaseEngine()
+    }
+
+    private fun releaseEngine() {
+        main.removeCallbacks(releaseIdle)
+        val t = tts ?: return
+        tts = null
+        ready = false
+        runCatching { t.stop() }
+        runCatching { t.shutdown() }
+        _state.value = _state.value.copy(ready = false)
     }
 
     private fun onInit(ok: Boolean) {
@@ -114,6 +184,7 @@ class ReadAloud(private val app: SlushalkaApp) {
         if (!ok) {
             _state.value = _state.value.copy(ready = false, error = "На телефоне нет синтеза речи")
             pendingStart = null
+            releaseEngine()
             return
         }
         runCatching {
@@ -125,8 +196,10 @@ class ReadAloud(private val app: SlushalkaApp) {
             )
             t.language = java.util.Locale.forLanguageTag("ru-RU")
         }
-        applyVoice(app.settings.now().ttsVoice)
-        runCatching { t.setSpeechRate(app.settings.now().ttsRate) }
+        // Движок заводится заново после каждого отпуска: голос и темп - те, что
+        // выбраны сейчас, а не снимок настроек, который мог ещё не записаться.
+        applyVoice(chosenVoice ?: app.settings.now().ttsVoice)
+        runCatching { t.setSpeechRate(_state.value.rate) }
         _state.value = _state.value.copy(ready = true, error = null)
         pendingStart?.invoke()
         pendingStart = null
@@ -148,7 +221,11 @@ class ReadAloud(private val app: SlushalkaApp) {
 
     fun currentVoice(): String = runCatching { tts?.voice?.name }.getOrNull().orEmpty()
 
+    /** Голос, выбранный в этой жизни процесса: новый движок встаёт на него же. */
+    private var chosenVoice: String? = null
+
     fun setVoice(name: String) {
+        chosenVoice = name
         applyVoice(name)
         restartCurrent()
     }
@@ -206,6 +283,7 @@ class ReadAloud(private val app: SlushalkaApp) {
         pieces = buildPieces(bookText)
         lastSavedBlock = -1
         errorsInRow = 0
+        stallKicked = false
         _state.value = _state.value.copy(
             bookId = book.id, title = book.title, active = true, error = null,
         )
@@ -214,11 +292,7 @@ class ReadAloud(private val app: SlushalkaApp) {
             return
         }
         val index = pieces.indexOfLast { it.start <= fromChar }.coerceAtLeast(0)
-        if (!ready) {
-            // Движок ещё поднимается: договорим, как только он ответит.
-            pendingStart = { speakFrom(index, fromChar) }
-            return
-        }
+        // Движка нет или он ещё поднимается - speakFrom договорит, как только ответит.
         speakFrom(index, fromChar)
     }
 
@@ -233,7 +307,12 @@ class ReadAloud(private val app: SlushalkaApp) {
         if (!s.active || !s.speaking) return
         generation++
         runCatching { tts?.stop() }
-        if (!keepFocus) abandonFocus()
+        main.removeCallbacks(stallWatch)
+        if (!keepFocus) {
+            abandonFocus()
+            // Пауза кнопкой: к ней могут не вернуться до утра - движок отпускается.
+            scheduleRelease(PAUSED_HOLD_MS)
+        }
         _state.value = s.copy(speaking = false)
         app.journal.stopped(s.charOffset.toLong())
     }
@@ -242,6 +321,7 @@ class ReadAloud(private val app: SlushalkaApp) {
         val s = _state.value
         if (!s.active || s.speaking) return
         if (pieces.isEmpty()) return
+        stallKicked = false
         val index = pieces.indexOfLast { it.start <= s.charOffset }.coerceAtLeast(0)
         speakFrom(index, s.charOffset)
     }
@@ -265,6 +345,7 @@ class ReadAloud(private val app: SlushalkaApp) {
             else pieces.getOrNull(startOfHere - 1)?.let { prev -> pieces.indexOfFirst { it.block == prev.block } } ?: -1
         }
         if (target < 0) return
+        stallKicked = false
         speakFrom(target)
     }
 
@@ -272,19 +353,31 @@ class ReadAloud(private val app: SlushalkaApp) {
         val s = _state.value
         generation++
         runCatching { tts?.stop() }
+        main.removeCallbacks(stallWatch)
         abandonFocus()
         pausedByFocus = false
         pendingStart = null
         if (s.active && s.speaking) app.journal.stopped(s.charOffset.toLong())
         _state.value = State(rate = s.rate, ready = s.ready)
+        scheduleRelease(STOPPED_HOLD_MS)
     }
 
     // ------------------------------------------------------------- механика
 
     private fun speakFrom(index: Int, fromChar: Int? = null) {
         val t = text ?: return
-        val engine = tts ?: return
+        val engine = tts
+        if (engine == null || !ready) {
+            // Движок отпущен или ещё поднимается: договорим, как только он ответит.
+            pendingStart = { speakFrom(index, fromChar) }
+            engine()
+            return
+        }
         if (index >= pieces.size) return finish()
+        main.removeCallbacks(releaseIdle)
+        lastProgressAt = SystemClock.elapsedRealtime()
+        main.removeCallbacks(stallWatch)
+        main.postDelayed(stallWatch, STALL_CHECK_MS)
         generation++
         val gen = generation
         runCatching { engine.stop() }
@@ -379,6 +472,7 @@ class ReadAloud(private val app: SlushalkaApp) {
 
     private fun started(gen: Int, index: Int) {
         if (gen != generation) return
+        heard()
         val t = text ?: return
         val piece = pieceAt(index) ?: return
         current = index
@@ -402,7 +496,9 @@ class ReadAloud(private val app: SlushalkaApp) {
     }
 
     private fun progressed(gen: Int, index: Int, start: Int) {
-        if (gen != generation || index != current) return
+        if (gen != generation) return
+        heard()
+        if (index != current) return
         val t = text ?: return
         val piece = pieceAt(index) ?: return
         val at = (piece.start + start).coerceIn(piece.start, piece.end)
@@ -417,6 +513,7 @@ class ReadAloud(private val app: SlushalkaApp) {
 
     private fun done(gen: Int, index: Int) {
         if (gen != generation) return
+        heard()
         if (index >= pieces.lastIndex) return finish()
         // Следующий кусок обычно уже в очереди и сам сообщит о старте. Если
         // очередь пуста (движок не принял), подталкиваем.
@@ -433,6 +530,35 @@ class ReadAloud(private val app: SlushalkaApp) {
         }
         // Один сбойный кусок пропускается: книга не должна вставать из-за строки.
         if (index + 1 < pieces.size) speakFrom(index + 1)
+    }
+
+    // ------------------------------------------------------ сторож молчания
+
+    /** Движок сообщил о ходе чтения - он жив. */
+    private fun heard() {
+        lastProgressAt = SystemClock.elapsedRealtime()
+        stallKicked = false
+    }
+
+    private fun checkStall() {
+        val s = _state.value
+        if (!s.active || !s.speaking) return
+        val piece = pieceAt(current)
+        val quiet = SystemClock.elapsedRealtime() - lastProgressAt
+        if (quiet >= stallLimitMs(piece?.text?.length ?: 0, s.rate)) {
+            if (!stallKicked) {
+                // Обратные вызовы не приходят - скорее всего, процесс движка
+                // умер. Старый клиент бросаем, заводим новый, с той же фразы.
+                releaseEngine()
+                speakFrom(current.coerceAtLeast(0), s.charOffset)
+                stallKicked = true
+            } else {
+                stop()
+                _state.value = _state.value.copy(error = "Синтез речи замолчал - озвучка остановлена")
+                return
+            }
+        }
+        main.postDelayed(stallWatch, STALL_CHECK_MS)
     }
 
     // -------------------------------------------------------- фокус звука
@@ -512,5 +638,25 @@ class ReadAloud(private val app: SlushalkaApp) {
 
     private companion object {
         val SENTENCE_END = charArrayOf('.', '!', '?', '…', ';')
+
+        /** После «Стоп» движок держится полминуты: вдруг сейчас же включат снова. */
+        const val STOPPED_HOLD_MS = 30_000L
+
+        /** На паузе кнопкой - десять минут: короткая пауза не должна ждать заведения. */
+        const val PAUSED_HOLD_MS = 10 * 60_000L
+
+        /** Как часто сторож молчания смотрит на движок. */
+        const val STALL_CHECK_MS = 30_000L
+
+        /**
+         * Сколько молчания - уже поломка. Google сообщает о каждом слове, но не
+         * всякий движок умеет: тогда весть приходит раз на кусок, а кусок бывает
+         * в несколько минут. Поэтому - вдвое дольше, чем кусок звучит (около
+         * 14 знаков в секунду на темпе 1), и не меньше полутора минут.
+         */
+        fun stallLimitMs(chars: Int, rate: Float): Long {
+            val speaksMs = (chars / (14f * rate.coerceAtLeast(0.3f)) * 1000f).toLong()
+            return maxOf(90_000L, speaksMs * 2)
+        }
     }
 }
