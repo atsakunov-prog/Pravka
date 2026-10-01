@@ -1,0 +1,195 @@
+{
+  "device": "sasha-3f9a2c",
+  "profile": "sasha",
+  "app": "2.0.900",
+  "schema": 1,
+  "events": [
+    {
+      "eid": "sasha-3f9a2c:1", "seq": 1, "kind": "zasechka.reference", "key": "all", "op": "put",
+      "at": "2026-09-07T23:59:00.000+03:00",
+      "data": {
+        "categories": [
+          {"name": "Работа", "hint": "клиенты, звонки, документы", "base_min": 360, "value": 5, "ord": 1},
+          {"name": "Дети", "hint": "уроки, укладывание, Тора с Борей", "base_min": 120, "value": 6, "ord": 2},
+          {"name": "Еда", "hint": "завтрак, обед, ужин", "base_min": 90, "value": 1, "ord": 3},
+          {"name": "Спорт", "hint": "бег, Zwift, гиря", "base_min": 60, "value": 7, "ord": 4},
+          {"name": "Сон", "hint": "", "base_min": 450, "value": 3, "ord": 5},
+          {"name": "Не размечено", "hint": "", "base_min": 0, "value": -2, "ord": 6}
+        ],
+        "clients": ["Тестовый клиент"]
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:2", "seq": 2, "kind": "zasechka.day", "key": "2026-09-07", "op": "put",
+      "at": "2026-09-07T23:59:00.000+03:00",
+      "data": {
+        "day": "2026-09-07",
+        "entries": [
+          {"id": 1757190000000, "start": "2026-09-07T00:00:00.000+03:00", "end": "2026-09-07T07:10:00.000+03:00", "minutes": 430,
+           "title": "сон", "category": "Сон", "client": "", "source": "auto", "raw": "", "comment": "", "pomodoros": 0, "rating": 0,
+           "created": "2026-09-07T07:15:00.000+03:00"},
+          {"id": 1757218200000, "start": "2026-09-07T07:10:00.000+03:00", "end": "2026-09-07T07:40:00.000+03:00", "minutes": 30,
+           "title": "завтрак с детьми", "category": "Еда", "client": "", "source": "voice",
+           "raw": "завтракаем с Борей и Ромой\nКБЖУ: 520 ккал · Б32 Ж18 У55 — геркулес, творог", "comment": "", "pomodoros": 0, "rating": 0,
+           "created": "2026-09-07T07:10:05.000+03:00"},
+          {"id": 1757220000000, "start": "2026-09-07T07:40:00.000+03:00", "end": "2026-09-07T12:00:00.000+03:00", "minutes": 260,
+           "title": "разбор отчётности", "category": "Работа", "client": "Тестовый клиент", "source": "voice",
+           "raw": "сел работать над отчётностью клиента", "comment": "разобрал две формы, третья ждёт данных", "pomodoros": 3, "rating": 0,
+           "created": "2026-09-07T07:40:02.000+03:00"},
+          {"id": 1757235600000, "start": "2026-09-07T12:00:00.000+03:00", "end": "2026-09-07T13:00:00.000+03:00", "minutes": 60,
+           "title": "не размечено", "category": "Не размечено", "client": "", "source": "gap", "raw": "", "comment": "", "pomodoros": 0, "rating": 0,
+           "created": "2026-09-07T13:00:00.000+03:00"},
+          {"id": 1757239200000, "start": "2026-09-07T13:00:00.000+03:00", "end": "2026-09-07T13:40:00.000+03:00", "minutes": 40,
+           "title": "бег", "category": "Спорт", "client": "", "source": "auto", "raw": "", "comment": "", "pomodoros": 0, "rating": 0,
+           "created": "2026-09-07T13:45:00.000+03:00"},
+          {"id": 1757241600000, "start": "2026-09-07T13:40:00.000+03:00", "end": "2026-09-08T00:00:00.000+03:00", "minutes": 620,
+           "title": "вечер дома", "category": "Дети", "client": "", "source": "text",
+           "raw": "уроки с Серёжей, потом разговор с Марианной", "comment": "", "pomodoros": 0, "rating": 4,
+           "created": "2026-09-07T13:40:00.000+03:00"}
+        ]
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:3", "seq": 3, "kind": "phone.day", "key": "2026-09-07", "op": "put",
+      "at": "2026-09-07T23:59:00.000+03:00",
+      "data": {
+        "day": "2026-09-07", "screen_min": 312, "pickups": 85, "glances": 40, "calls_min": 24, "calls": 5, "backfilled": false,
+        "apps": [
+          {"pkg": "org.telegram.messenger", "label": "Telegram", "min": 55.5, "sessions": 30, "glances": 12},
+          {"pkg": "com.google.android.youtube", "label": "YouTube", "min": 40.2, "sessions": 4, "glances": 1},
+          {"pkg": "com.anthropic.claude", "label": "Claude", "min": 35.0, "sessions": 9, "glances": 2}
+        ],
+        "sites": [{"domain": "intervals.icu", "min": 6.5}],
+        "callers": [{"who": "Марианна", "min": 12.0}, {"who": "папа", "min": 8.0}]
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:4", "seq": 4, "kind": "food.norms", "key": "all", "op": "put",
+      "at": "2026-09-07T23:59:00.000+03:00",
+      "data": {
+        "substances": [
+          {"id": "vd", "name": "Витамин D", "group": "витамины", "unit": "мкг", "norm": 15, "upper": 100, "why": "кости и иммунитет", "where": "рыба, яйца, солнце", "ord": 1},
+          {"id": "mg", "name": "Магний", "group": "минералы", "unit": "мг", "norm": 420, "upper": 700, "why": "мышцы и сон", "where": "гречка, орехи", "ord": 2}
+        ]
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:5", "seq": 5, "kind": "food.meal", "key": "f1757218205000", "op": "put",
+      "at": "2026-09-07T07:12:00.000+03:00",
+      "data": {
+        "id": 1757218205000, "day": "2026-09-07", "at": "2026-09-07T07:15:00.000+03:00", "created": "2026-09-07T07:12:00.000+03:00",
+        "kind": "завтрак", "source": "voice", "confirmed": true,
+        "raw": "геркулес на молоке и творог пятипроцентный", "note": "", "photo": "",
+        "model": "claude-opus-5-5", "cost_usd": 0.012,
+        "items": [
+          {"name": "Геркулес на молоке", "grams": 250, "kcal": 300, "protein_g": 12, "fat_g": 8, "carbs_g": 45, "fiber_g": 5, "sureness": "примерно", "pill": false, "micro": {"mg": 90.5}},
+          {"name": "Творог 5%", "grams": 180, "kcal": 220, "protein_g": 30, "fat_g": 9, "carbs_g": 6, "fiber_g": 0, "sureness": "точно", "pill": false, "micro": {"mg": 30}},
+          {"name": "Витамин D", "grams": 0, "kcal": 0, "protein_g": 0, "fat_g": 0, "carbs_g": 0, "fiber_g": 0, "sureness": "точно", "pill": true, "micro": {"vd": 50}}
+        ],
+        "totals": {"kcal": 520, "protein_g": 42, "fat_g": 17, "carbs_g": 51, "fiber_g": 5, "grams": 430}
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:6", "seq": 6, "kind": "strength.session", "key": "s1757260000000", "op": "put",
+      "at": "2026-09-07T19:30:00.000+03:00",
+      "data": {
+        "id": 1757260000000, "day": "2026-09-07", "block": "A · дом", "title": "", "minutes": 25, "feel": 2, "rpe": 7,
+        "note": "гиря пошла легче", "done": true, "checked": [], "icu_activity_id": "", "raw_ids": [1757260100000],
+        "exercises": [
+          {"exercise_id": "swing", "name": "Махи гирей", "unit": "reps", "note": "",
+           "sets": [{"amount": 15, "weight_kg": 16, "note": ""}, {"amount": 15, "weight_kg": 16, "note": ""}]},
+          {"exercise_id": "pullup-band", "name": "Подтягивания с резинкой", "unit": "reps", "note": "",
+           "sets": [{"amount": 5, "weight_kg": 0, "note": "зелёная"}]}
+        ]
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:7", "seq": 7, "kind": "strength.gtg", "key": "2026-09-07", "op": "put",
+      "at": "2026-09-07T21:00:00.000+03:00",
+      "data": {
+        "day": "2026-09-07", "status": "частично", "charged": true, "hang_s": 40, "negatives": 3, "scapular": 10, "pullups": 0,
+        "knee": "зелёный", "feel": 2, "note": "", "items": [{"id": "hang", "name": "Вис", "plan": "3×20 с", "status": "ok", "fact": "40 с", "note": ""}]
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:8", "seq": 8, "kind": "strength.take", "key": "1757260100000", "op": "put",
+      "at": "2026-09-07T19:31:00.000+03:00",
+      "data": {"id": 1757260100000, "day": "2026-09-07", "at": "2026-09-07T19:31:00.000+03:00", "text": "свинги два по пятнадцать с шестнадцатой",
+               "kind": "strength", "source": "voice", "consumed_by": "s1757260000000", "error": ""}
+    },
+    {
+      "eid": "sasha-3f9a2c:9", "seq": 9, "kind": "money.reference", "key": "all", "op": "put",
+      "at": "2026-09-07T23:59:00.000+03:00",
+      "data": {
+        "categories": [
+          {"key": "groceries", "title": "Продукты", "group": "Дом", "shelf": "family", "income": false},
+          {"key": "cafe", "title": "Кафе и рестораны", "group": "Жизнь", "shelf": "family", "income": false},
+          {"key": "own", "title": "Между своими", "group": "Не трата", "shelf": "service", "income": false},
+          {"key": "inc_zf", "title": "Доход от ЗФ", "group": "Доходы", "shelf": "family", "income": true}
+        ],
+        "rules": [{"pattern": "вкусвилл", "category": "groceries", "for_whom": "", "sign": 0, "owner": "", "comment": "", "source": "", "mcc": "", "amount_kop": 0}],
+        "anchors": [{"account": "Т-Банк *1519", "at": "2026-09-01T00:00:00.000+03:00", "kop": 15000000, "source": "owner"}],
+        "zf_accounts": [], "not_zf_accounts": []
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:10", "seq": 10, "kind": "money.entry", "key": "t:3fa1c0d2e4b5a6978812", "op": "put",
+      "at": "2026-09-07T13:06:00.000+03:00",
+      "data": {
+        "id": "t:3fa1c0d2e4b5a6978812", "owner": "sasha", "source": "tinkoff", "day": "2026-09-07", "at": "2026-09-07T13:05:00.000+03:00",
+        "time_known": true, "amount_kop": -215000, "orig_minor": -215000, "currency": "RUB", "rub_basis": "bank",
+        "what": "ВкусВилл", "note": "", "mcc": "5411", "bank_category": "Супермаркеты", "account": "Т-Банк *1519",
+        "category": "groceries", "for_whom": "", "category_by": "rule", "draft": false, "dropped": false, "live": true,
+        "match_id": "", "replaced_by": "", "take_id": ""
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:11", "seq": 11, "kind": "money.entry", "key": "v:1757240000000:0", "op": "put",
+      "at": "2026-09-07T13:20:00.000+03:00",
+      "data": {
+        "id": "v:1757240000000:0", "owner": "sasha", "source": "voice", "day": "2026-09-07", "at": "2026-09-07T13:00:00.000+03:00",
+        "time_known": false, "amount_kop": -215000, "orig_minor": -215000, "currency": "RUB", "rub_basis": "said",
+        "what": "ВкусВилл", "note": "сказано: две сто пятьдесят во вкусвилле", "mcc": "", "bank_category": "", "account": "",
+        "category": "groceries", "for_whom": "", "category_by": "model", "draft": false, "dropped": false, "live": false,
+        "match_id": "t:3fa1c0d2e4b5a6978812", "replaced_by": "", "take_id": "1757240000000"
+      }
+    },
+    {
+      "eid": "sasha-3f9a2c:12", "seq": 12, "kind": "money.take", "key": "1757240000000", "op": "put",
+      "at": "2026-09-07T13:20:00.000+03:00",
+      "data": {"id": 1757240000000, "day": "2026-09-07", "at": "2026-09-07T13:20:00.000+03:00", "text": "две сто пятьдесят во вкусвилле продукты", "model": "claude-opus-5-5", "cost_usd": 0.004}
+    },
+    {
+      "eid": "sasha-3f9a2c:13", "seq": 13, "kind": "money.push", "key": "push-0011223344556677", "op": "put",
+      "at": "2026-09-07T13:05:30.000+03:00",
+      "data": {"day": "2026-09-07", "at": "2026-09-07T13:05:30.000+03:00", "pkg": "com.idamob.tinkoff.android", "title": "Покупка", "text": "Покупка 2 150 ₽ ВкусВилл. Доступно 148 000 ₽", "result": "money"}
+    },
+    {
+      "eid": "sasha-3f9a2c:14", "seq": 14, "kind": "pravka.take", "key": "1757250000000", "op": "put",
+      "at": "2026-09-07T15:46:40.000+03:00",
+      "data": {"id": 1757250000000, "day": "2026-09-07", "at": "2026-09-07T15:46:40.000+03:00", "engine": "google", "audio_ms": 9000,
+               "text": "Марианна привет напомни пожалуйста во сколько у Ромы кружок", "ok": true, "error": "", "audio": "take-1757250000000.wav"}
+    },
+    {
+      "eid": "sasha-3f9a2c:15", "seq": 15, "kind": "pravka.clean", "key": "1757250001000", "op": "put",
+      "at": "2026-09-07T15:46:41.000+03:00",
+      "data": {"id": 1757250001000, "day": "2026-09-07", "at": "2026-09-07T15:46:41.000+03:00", "mode": "clean", "model": "claude-sonnet-5-5",
+               "input": "Марианна привет напомни пожалуйста во сколько у Ромы кружок", "output": "Марианна, привет! Напомни, пожалуйста, во сколько у Ромы кружок?", "latency_ms": 1400}
+    },
+    {
+      "eid": "sasha-3f9a2c:16", "seq": 16, "kind": "pravka.correction", "key": "1757250002000", "op": "put",
+      "at": "2026-09-07T15:47:00.000+03:00",
+      "data": {"id": 1757250002000, "day": "2026-09-07", "at": "2026-09-07T15:47:00.000+03:00",
+               "said": "Марианна привет напомни пожалуйста во сколько у Ромы кружок",
+               "model": "Марианна, привет! Напомни, пожалуйста, во сколько у Ромы кружок?",
+               "final": "Марианна, привет! Во сколько у Ромы кружок?", "app": "org.telegram.messenger"}
+    },
+    {
+      "eid": "sasha-3f9a2c:17", "seq": 17, "kind": "sport.talk", "key": "1757262000000", "op": "put",
+      "at": "2026-09-07T20:00:00.000+03:00",
+      "data": {"id": 1757262000000, "day": "2026-09-07", "at": "2026-09-07T20:00:00.000+03:00",
+               "question": "можно завтра снова бежать или колено просит отдыха?",
+               "answer": "Колено зелёное, TSB −7: завтра лёгкие 5 км в первой зоне можно.", "model": "claude-opus-5-5", "error": ""}
+    }
+  ]
+}
