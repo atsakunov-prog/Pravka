@@ -79,6 +79,10 @@ class PravkaApp : Application() {
         appScope.launch { settings.readyChimeFlow.collect { readyChime = it } }
         appScope.launch { settings.chimeAfterStartFlow.collect { chimeAfterStartMs = it } }
         appScope.launch { settings.chimeAfterSwitchFlow.collect { chimeAfterSwitchMs = it } }
+        // Тейк ушёл с молчащего облака на пакет — сбой связи «в деле», в журнал связи.
+        ru.zf.pravka.provider.GoogleSpeechSession.cloudEventSink = { why ->
+            netProber.live(ru.zf.pravka.core.NetProbe.Target.GOOGLE, why)
+        }
         // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет;
         // затем все дороги Опуса и Fable — на Опус 5.5 с новыми усилиями (22.09);
         // затем чистка — на Сонет 5.5 (30.09). Порядок важен: последняя снимает
@@ -243,7 +247,14 @@ class PravkaApp : Application() {
     val evalStore by lazy { ru.zf.pravka.data.EvalStore(this) }
     val claudeProvider by lazy {
         ClaudeProvider(settings, promptStore, httpClient, rulesStore).also { p ->
-            p.transportLog = { line -> eventLog.add(line) }
+            p.transportLog = { line ->
+                eventLog.add(line)
+                // Не достучались или соединение умерло молча — это сбой связи «в деле»:
+                // в журнал связи и меткой на полосе Claude (`NetProber.live`).
+                if (line.contains("не достучались") || line.contains("соединение мёртвое")) {
+                    netProber.live(ru.zf.pravka.core.NetProbe.Target.CLAUDE, line.removePrefix("claude: "))
+                }
+            }
             p.author = {
                 profileStore.current?.let { ru.zf.pravka.core.Prompts.Author(it.name, it.female, it.owner) }
                     ?: ru.zf.pravka.core.Prompts.Author.OWNER
@@ -394,6 +405,11 @@ class PravkaApp : Application() {
             .build()
     }
     internal val homeServer by lazy { ru.zf.pravka.data.HomeServer(this, ru.zf.pravka.provider.WebDav(webdavHttp)) }
+
+    /** Проверка связи с облаками: журнал строками, замеры для картинки, сам проверяющий. */
+    val netLog by lazy { EventLog(this, "net.log") }
+    val netProbeStore by lazy { ru.zf.pravka.data.NetProbeStore(this) }
+    internal val netProber by lazy { ru.zf.pravka.provider.NetProber(this, settings, netProbeStore, homeServer, netLog) }
 
     /** Облако семьи: домашний сервер, если задан; нет — null, обмен и копии молчат. */
     fun familyCloud(): ru.zf.pravka.provider.FamilyCloud? = homeServer.saved.value?.let { homeServer.cloud }

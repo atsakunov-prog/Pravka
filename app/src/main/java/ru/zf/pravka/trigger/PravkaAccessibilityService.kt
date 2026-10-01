@@ -3033,6 +3033,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.cloudBackup.tick() } }
             // Обновления: сам решает, прошли ли сутки, сам тянет и сам говорит.
             scope.launch { runCatching { app.updates.tick() } }
+            // Связь с облаками: сама решает, пора ли (интервал в настройках), на IO.
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.netProber.tick() } }
             zasechkaReminderCheck()
             zReminderHandler.postDelayed(this, 5 * 60_000L)
         }

@@ -60,6 +60,8 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_OWN_MIC = booleanPreferencesKey("speech_own_mic")
         private val KEY_READY_CHIME = stringPreferencesKey("ready_chime")
         private val KEY_CHIME_AFTER_START = longPreferencesKey("chime_after_start_ms")
+        private val KEY_NET_PROBE = booleanPreferencesKey("net_probe")
+        private val KEY_NET_PROBE_MIN = intPreferencesKey("net_probe_interval_min")
         private val KEY_CHIME_AFTER_SWITCH = longPreferencesKey("chime_after_switch_ms")
         private val KEY_PROSE_MODE = booleanPreferencesKey("prose_mode")
         private val KEY_CONVO_CONTEXT = booleanPreferencesKey("convo_context")
@@ -381,6 +383,22 @@ class Settings(private val context: Context) {
     val chimeAfterStartFlow = context.dataStore.data.map { it[KEY_CHIME_AFTER_START] ?: ru.zf.pravka.core.ReadyChime.AFTER_START_MS }
     suspend fun setChimeAfterStart(ms: Long) {
         context.dataStore.edit { it[KEY_CHIME_AFTER_START] = ms.coerceIn(0L, ru.zf.pravka.core.ReadyChime.AFTER_MAX_MS) }
+    }
+    /**
+     * Проверка связи с облаками (`provider/NetProber.kt`, 01.10.2026; владелец:
+     * «тумблер, чтобы включался пинг каждые 5 минут… мне надо где-то неделю
+     * это проверять»). С завода включена — неделя наблюдения началась сразу.
+     */
+    val netProbeFlow = context.dataStore.data.map { it[KEY_NET_PROBE] ?: true }
+    suspend fun setNetProbe(on: Boolean) {
+        context.dataStore.edit { it[KEY_NET_PROBE] = on }
+    }
+    /** Как часто проверять, минут (`NetProbe.INTERVALS_MIN`). */
+    val netProbeIntervalFlow = context.dataStore.data.map {
+        it[KEY_NET_PROBE_MIN]?.takeIf { m -> m in ru.zf.pravka.core.NetProbe.INTERVALS_MIN } ?: ru.zf.pravka.core.NetProbe.INTERVAL_DEFAULT_MIN
+    }
+    suspend fun setNetProbeInterval(minutes: Int) {
+        context.dataStore.edit { it[KEY_NET_PROBE_MIN] = minutes }
     }
     val chimeAfterSwitchFlow = context.dataStore.data.map { it[KEY_CHIME_AFTER_SWITCH] ?: ru.zf.pravka.core.ReadyChime.AFTER_SWITCH_MS }
     suspend fun setChimeAfterSwitch(ms: Long) {

@@ -106,6 +106,7 @@ internal enum class SettingsGroup(
     MONEY("Деньги", "пуши банка", SettingsShelf.MODES, { Glyphs.Money }, ModeDecor.MONEY),
     VOICE("Микрофон и распознавание", "телефон или гарнитура, движок", SettingsShelf.VOICE, { Glyphs.Mic }),
     MODELS("Модели", "какая модель и с каким усилием", SettingsShelf.VOICE, { Glyphs.Spark }),
+    NET("Связь с облаками", "проверка Google и Claude, журнал, неделя доступа", SettingsShelf.VOICE, { Glyphs.Wifi }),
     ANTHROPIC("Anthropic", "ключ API", SettingsShelf.LINKS, { Glyphs.Key }),
     TODOIST("Todoist", "дела и разноска", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
     NOTION("Notion", "план, Дневник, «Вся жизнь»", SettingsShelf.LINKS, { Glyphs.Scroll }),
@@ -287,6 +288,24 @@ private fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
                 ).joinToString(" ")
             )
         }
+        SettingsGroup.NET -> {
+            // Второе место, где видно доступ, — прямо в меню: Google и Claude
+            // по последней проверке, не заходя внутрь.
+            val on by app.settings.netProbeFlow.collectAsState(initial = true)
+            val last by app.netProbeStore.last.collectAsState()
+            LaunchedEffect(Unit) { withContext(Dispatchers.IO) { app.netProbeStore.warm() } }
+            val p = last
+            when {
+                p == null -> GroupStatus(if (on) "ещё не проверял" else "выкл")
+                else -> {
+                    val main = listOf(ru.zf.pravka.core.NetProbe.Target.GOOGLE, ru.zf.pravka.core.NetProbe.Target.CLAUDE)
+                    val text = main.joinToString(" · ") { t ->
+                        "${t.short} " + when (p.hits[t]?.ok) { true -> "есть"; false -> "НЕТ"; null -> "—" }
+                    } + if (!on) " · выкл" else ""
+                    GroupStatus(text, ok = main.all { p.hits[it]?.ok == true }, dot = true)
+                }
+            }
+        }
         SettingsGroup.PROFILE -> {
             val p by app.profileStore.flow.collectAsState()
             p?.let { GroupStatus("${it.name} · ${it.modes.size + 1} из ${ru.zf.pravka.data.Profile.Mode.entries.size + 1}") }
@@ -448,6 +467,7 @@ private fun GroupContent(
         SettingsGroup.MONEY -> MoneySettings(app)
         SettingsGroup.VOICE -> VoiceSettings(app)
         SettingsGroup.MODELS -> ModelsSettings(app)
+        SettingsGroup.NET -> NetProbeSettings(app)
         SettingsGroup.ANTHROPIC -> AnthropicSettings(app)
         SettingsGroup.TODOIST -> TodoistSettings(app)
         SettingsGroup.NOTION -> NotionSettings(app)

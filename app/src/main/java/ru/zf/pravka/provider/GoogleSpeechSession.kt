@@ -371,6 +371,12 @@ class GoogleSpeechSession(
          */
         @Volatile private var cloudDeadAtMs = 0L
         @Volatile private var cloudDeadNet = ""
+        /**
+         * Облако подвело в деле — тейк ушёл на пакет или сразу начат пакетом:
+         * в журнал связи (`NetProber.live`), меткой на полосе Google. Любой поток.
+         */
+        @Volatile var cloudEventSink: ((String) -> Unit)? = null
+
         /** Сказано ли владельцу, что облако не отвечает, а пакета нет, — в этот раз молчания. */
         @Volatile private var noOfflineTold = 0L
 
@@ -2032,6 +2038,7 @@ class GoogleSpeechSession(
         cloudDeadNet = netKey(context)
         if (now - noOfflineTold < ListenPolicy.CLOUD_DEAD_TTL_MS) return
         noOfflineTold = now
+        cloudEventSink?.let { sink -> runCatching { sink("облако молчит, офлайн-пакета нет") } }
         onLog("облако молчит, а офлайн-пакета нет — перекинуть некуда")
         noticeSink?.let {
             runCatching { it("Облако Google не отвечает (нет сети? VPN?), а офлайн-пакета нет — Правка → «Подготовить модель»") }
@@ -2049,6 +2056,7 @@ class GoogleSpeechSession(
         if (!ListenPolicy.cloudStillDead(cloudDeadAtMs, now, cloudDeadNet == net)) return null
         networkNow = false
         onLog("облако молчало ${(now - cloudDeadAtMs) / 1000} с назад на этой же сети ($net) — тейк сразу офлайн-пакетом")
+        cloudEventSink?.let { sink -> runCatching { sink("тейк сразу офлайн-пакетом: облако молчало ${(now - cloudDeadAtMs) / 1000} с назад") } }
         return "облако молчало на этой сети"
     }
 
@@ -2084,6 +2092,7 @@ class GoogleSpeechSession(
         if (!headsetRefused) {
             cloudDeadAtMs = android.os.SystemClock.elapsedRealtime()
             cloudDeadNet = netKey(context)
+            cloudEventSink?.let { sink -> runCatching { sink("тейк ушёл на офлайн-пакет — $why") } }
         }
         fresh.setRecognitionListener(listener)
         recognizer = fresh
