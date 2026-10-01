@@ -41,6 +41,12 @@ $VenvPy = Join-Path $Server '.venv\Scripts\python.exe'
 
 New-Item -ItemType Directory -Force -Path $Logs | Out-Null
 $Log = Join-Path $Logs ('install-{0:yyyy-MM-dd-HHmmss}.log' -f (Get-Date))
+# Журнал установки (Start-Transcript) не видит вывод внешних программ, если
+# тот не прошёл через PowerShell: раздел «Самопроверка» выходил пустым
+# (01.10). Поэтому вывод Python пропускаем через Write-Host, а чтобы кириллица
+# не превратилась в кракозябры по пути, обе стороны говорят в UTF-8.
+$env:PYTHONIOENCODING = 'utf-8'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
 Start-Transcript -Path $Log | Out-Null
 
 function Step([string]$text) { Write-Host ''; Write-Host "== $text" -ForegroundColor Cyan }
@@ -89,7 +95,7 @@ try {
 
     Step 'Схема базы'
     Push-Location -LiteralPath $Server
-    try { Run 'migrate упал' { & $VenvPy -m pravka_archive migrate --env $EnvFile } } finally { Pop-Location }
+    try { Run 'migrate упал' { & $VenvPy -m pravka_archive migrate --env $EnvFile | Write-Host } } finally { Pop-Location }
 
     Step "Учётная запись службы: $RunAs"
     if ($RunAs -eq 'NetworkService') {
@@ -173,7 +179,7 @@ try {
 
     Step 'Самопроверка'
     Push-Location -LiteralPath $Server
-    try { & $VenvPy -m pravka_archive check --env $EnvFile } finally { Pop-Location }
+    try { & $VenvPy -m pravka_archive check --env $EnvFile | Write-Host } finally { Pop-Location }
 
     Step 'Дальше'
     $public = EnvValue 'PRAVKA_PUBLIC_URL'
