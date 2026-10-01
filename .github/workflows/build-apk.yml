@@ -21,7 +21,8 @@ name: build-apk
 on:
   push:
     branches: ["**"]
-    paths-ignore: ["README.md", "CLAUDE.md", "docs/**"]
+    # server/ — архив на домашнем компе, к APK отношения не имеет.
+    paths-ignore: ["README.md", "CLAUDE.md", "docs/**", "server/**"]
   workflow_dispatch:
 
 permissions:
