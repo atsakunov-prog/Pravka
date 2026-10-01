@@ -159,14 +159,33 @@ async def pull_forever(cfg: Config) -> None:
         await asyncio.sleep(600)
 
 
+def asgi(cfg: Config):
+    """Приложение целиком, как его видит uvicorn.
+
+    «/mcp/» с косой чертой Starlette перенаправил бы на «/mcp», собрав адрес из
+    запроса, — а роутер присылает Host: 192.168.1.77 и http, и Claude ушёл бы
+    по внутреннему адресу. Поэтому косую черту срезаем сами, без
+    перенаправления: все внешние адреса — только из PRAVKA_PUBLIC_URL.
+    """
+    mcp, _ = build(cfg)
+    inner = mcp.streamable_http_app()
+
+    async def app(scope, receive, send):
+        if scope.get("type") == "http" and scope.get("path") == "/mcp/":
+            scope = dict(scope, path="/mcp", raw_path=b"/mcp")
+        await inner(scope, receive, send)
+
+    return app
+
+
 async def serve(cfg: Config) -> None:
     import uvicorn
 
-    mcp, _ = build(cfg)
-    app = mcp.streamable_http_app()
-    # Роутер пересылает запросы под своим адресом (192.168.1.1), настоящий
-    # адрес клиента — последним в X-Forwarded-For. Верим этому заголовку только
-    # от адресов из PRAVKA_PROXIES, иначе любой подделал бы себе адрес.
+    app = asgi(cfg)
+    # Роутер Netcraze пересылает запросы под своим адресом (192.168.1.1), с
+    # Host: 192.168.1.77 и без X-Forwarded-For (проверено 01.10 из домашней
+    # сети). Если прокси когда-нибудь начнёт класть адрес клиента в
+    # X-Forwarded-For, верим ему только от адресов из PRAVKA_PROXIES.
     # log_config=None — журнал запросов uvicorn идёт в archive.log, а не в
     # консоль задачи планировщика, которую никто не видит.
     server = uvicorn.Server(uvicorn.Config(

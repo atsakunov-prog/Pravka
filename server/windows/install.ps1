@@ -11,7 +11,9 @@
     1. venv и зависимости из requirements.txt;
     2. схема базы (migrate);
     3. права служебной учётной записи на файл секретов, журналы и файлы;
-    4. правило брандмауэра: порт сервиса — только от роутера;
+    4. правило брандмауэра: порт сервиса — только от роутера и только для
+       python.exe (venv на Windows запускает базовый интерпретатор, поэтому
+       правило на него ловит и службу из venv);
     5. задача планировщика «Pravka Archive»: при старте системы, с перезапуском;
     6. запуск, ожидание /health, самопроверка (check).
   Итог — в D:\PravkaArchive\logs\install-<дата>.log.
@@ -73,9 +75,6 @@ try {
     foreach ($name in 'PRAVKA_OWNER_PASSWORD', 'PRAVKA_PUBLIC_URL', 'PRAVKA_INGEST_TOKEN') {
         if (-not (EnvValue $name)) { throw "В $EnvFile пуст $name — без него сервис не стартует." }
     }
-    if ((EnvValue 'PRAVKA_PROXIES') -notmatch [regex]::Escape($Router)) {
-        Write-Warning "В server.env нет PRAVKA_PROXIES=${Router}: сервис не будет верить X-Forwarded-For роутера, и в журнале вместо адреса клиента будет адрес роутера. Работать это не мешает."
-    }
     if (-not (EnvValue 'ICU_API_KEY')) {
         Write-Warning 'ICU_API_KEY пуст: сборщик intervals будет спать, пока ключ не появится (после — перезапустить задачу).'
     }
@@ -109,8 +108,14 @@ try {
     Step 'Брандмауэр'
     Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     New-NetFirewallRule -DisplayName $RuleName -Direction Inbound -Protocol TCP -LocalPort $port `
-        -RemoteAddress $Router -Action Allow -Profile Any | Out-Null
-    Write-Host "TCP $port открыт только для $Router (роутер), на любом профиле сети."
+        -RemoteAddress $Router -Program $Python -Action Allow -Profile Any | Out-Null
+    Write-Host "TCP $port открыт только для $Router (роутер) и только для $Python, на любом профиле сети."
+    # Правила на тот же порт, заведённые раньше руками (часть А), не трогаем —
+    # только показываем: два разрешающих правила не мешают друг другу.
+    $others = Get-NetFirewallPortFilter -ErrorAction SilentlyContinue |
+        Where-Object { $_.LocalPort -eq "$port" } | Get-NetFirewallRule -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -ne $RuleName }
+    foreach ($r in $others) { Write-Host "Есть и другое правило на $port`: «$($r.DisplayName)» ($($r.Action), $($r.Direction))" }
 
     Step 'Задача планировщика'
     $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -124,6 +129,16 @@ try {
         -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -StartWhenAvailable -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal | Out-Null
+
+    # Порт должен быть свободен: на нём мог остаться проверочный hello.py из
+    # шага 8 части А — тогда служба не встанет, а /health ответит не она.
+    Start-Sleep -Seconds 2
+    $busy = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($busy) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($busy.OwningProcess)" -ErrorAction SilentlyContinue
+        $what = if ($proc) { "$($proc.Name) (PID $($proc.ProcessId)): $($proc.CommandLine)" } else { "PID $($busy.OwningProcess)" }
+        throw "Порт $port уже занят: $what. Если это проверочный hello.py — останови его и запусти установку ещё раз."
+    }
     Start-ScheduledTask -TaskName $TaskName
 
     Step 'Ждём, пока служба ответит'

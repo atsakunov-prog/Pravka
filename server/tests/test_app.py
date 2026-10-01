@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from starlette.testclient import TestClient
 
-from pravka_archive.app import build
+from pravka_archive.app import asgi
 
 CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 MCP_HEADERS = {"accept": "application/json, text/event-stream", "content-type": "application/json"}
@@ -25,8 +25,8 @@ def client(cfg, clean, request):
     # 0.0.0.0 — за прокси роутера, 127.0.0.1 — за Caddy на том же компе.
     # Host в обоих случаях чужой: адрес роутера или имя домена.
     app_cfg = dataclasses.replace(cfg, listen_host=request.param)
-    mcp, _ = build(app_cfg)
-    with TestClient(mcp.streamable_http_app(), base_url="http://archive.example.duckdns.org:8443") as c:
+    # Как присылает роутер Netcraze: Host — внутренний адрес компа, http.
+    with TestClient(asgi(app_cfg), base_url="http://192.168.1.77") as c:
         yield c
 
 
@@ -129,3 +129,27 @@ def test_ingest_needs_phone_token(client, batch):
     r = client.post("/ingest", headers={"authorization": "Bearer " + "t" * 64}, content=b"{not json")
     assert r.status_code == 400 and re.search("JSON", r.text)
     assert client.get("/health").json()["service"] == "pravka-archive"
+
+
+def test_trailing_slash_is_not_redirected_to_inner_address(client):
+    # С косой чертой — тот же 401 с адресом метаданных из PRAVKA_PUBLIC_URL,
+    # а не перенаправление на http://192.168.1.77/mcp.
+    r = client.post("/mcp/", headers=MCP_HEADERS, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+                    follow_redirects=False)
+    assert r.status_code == 401
+    assert "https://archive.example.keenetic.pro:8443/.well-known/oauth-protected-resource" in r.headers["www-authenticate"]
+
+
+def test_wrong_passwords_lock_the_door_for_everyone(client):
+    reg = client.post("/register", json={"redirect_uris": [CALLBACK], "token_endpoint_auth_method": "none"}).json()
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    r = client.get("/authorize", params={
+        "response_type": "code", "client_id": reg["client_id"], "redirect_uri": CALLBACK, "state": "s",
+        "code_challenge": challenge, "code_challenge_method": "S256"}, follow_redirects=False)
+    txn = parse_qs(urlparse(r.headers["location"]).query)["txn"][0]
+    for _ in range(5):
+        assert client.post("/login", data={"txn": txn, "password": "мимо"}).status_code == 401
+    # Шестой раз закрыто даже верным паролем: адреса клиента нет, ограничение общее.
+    locked = client.post("/login", data={"txn": txn, "password": "верный-пароль-архива"}, follow_redirects=False)
+    assert locked.status_code == 429

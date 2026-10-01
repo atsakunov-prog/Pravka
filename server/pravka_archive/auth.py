@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import html
+import logging
 import secrets
 import time
 from dataclasses import dataclass
@@ -42,6 +43,8 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from .config import Config
+
+log = logging.getLogger("pravka.auth")
 
 SCOPE = "life"
 ACCESS_TTL = 8 * 3600
@@ -141,15 +144,22 @@ class OwnerAuth:
         pending = self.pending.get(txn)
         if pending is None or pending.expires < time.time():
             return _page("Ссылка входа устарела. Начни подключение в claude.ai заново.", None, status=400)
+        # Ограничение общее, а не по адресу: роутер присылает всё от своего
+        # имени (192.168.1.1, без X-Forwarded-For), настоящего адреса нет.
+        # Цена — подбирающий может на четверть часа закрыть вход и владельцу;
+        # пароль из пяти слов за 5 попыток в 15 минут не подобрать.
         if self.locked():
+            log.warning("вход: закрыт после %d неверных паролей за 15 минут", len(self.failures))
             return _page("Слишком много неверных паролей. Вход закрыт на четверть часа.", txn, status=429)
         if not hmac.compare_digest(password.encode("utf-8"), self.cfg.owner_password.encode("utf-8")):
             self.failures.append(time.time())
+            log.warning("вход: неверный пароль (%d за 15 минут)", len(self.failures))
             await anyio.sleep(1.0)
             return _page("Пароль не тот.", txn, status=401)
 
         del self.pending[txn]
         self.failures.clear()
+        log.info("вход: Claude пущен (клиент %s)", pending.client_id)
         code = secrets.token_urlsafe(32)
         p = pending.params
         self.codes[code] = AuthorizationCode(
