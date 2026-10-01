@@ -37,7 +37,21 @@ internal class HomeServer(private val context: Context, private val dav: WebDav)
     private fun read(): Saved? = runCatching {
         if (!file.isFile) return null
         val o = JSONObject(file.readText())
-        Saved(o.getString("url"), o.getString("user"), o.getString("pass"), o.optLong("at"))
+        val s = Saved(o.getString("url"), o.getString("user"), o.getString("pass"), o.optLong("at"))
+        val to = moved(s.url) ?: return s
+        // Сервер переехал на новый адрес — тот же rclone, те же входы: пишем
+        // новый адрес на место старого, вход и пароль не трогаем. Запись — на
+        // поток диска: read() зовут при первом обращении, и это может быть
+        // главный поток.
+        val next = s.copy(url = to)
+        DiskWriter.post {
+            StoreFiles.writeAtomic(
+                file,
+                JSONObject().put("url", next.url).put("user", next.user).put("pass", next.pass).put("at", next.at).toString(),
+            )
+        }
+        runCatching { (context.applicationContext as? ru.zf.pravka.PravkaApp)?.eventLog?.add("облако семьи: адрес ${s.url} сменён на ${next.url} (сервер переехал на новый роутер)") }
+        next
     }.getOrNull()
 
     /**
@@ -70,6 +84,25 @@ internal class HomeServer(private val context: Context, private val dav: WebDav)
 
     companion object {
         private const val FILE = "home-server.json"
+
+        /**
+         * Куда переехало облако семьи. 01.10.2026 владелец сменил роутер, и
+         * старое имя CrazeDNS (`pravka.netcraze.pro`) осталось за прежним
+         * роутером: облако не отвечало, общие Деньги и ночные копии ждали на
+         * телефонах. Владелец: «надо ещё адрес webdav туда» — вписывать новый
+         * адрес руками на трёх устройствах не нужно, сборка меняет его сама.
+         * Ключ — имя хоста целиком; rclone, входы и пароли те же.
+         */
+        private val MOVED = mapOf(
+            "webdav.pravka.netcraze.pro" to "https://webdav.znakomiy.netcraze.pro:8443/",
+        )
+
+        /** Новый адрес, если вписан переехавший; иначе null. */
+        fun moved(url: String): String? {
+            val host = url.trim().substringAfter("://", url.trim())
+                .substringBefore('/').substringBefore(':').lowercase()
+            return MOVED[host]
+        }
         /** Корень Правки на сервере; Слушалка живёт рядом в своей «Слушалке». */
         const val ROOT = "Правка"
 
