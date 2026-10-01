@@ -20,11 +20,13 @@ CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 MCP_HEADERS = {"accept": "application/json, text/event-stream", "content-type": "application/json"}
 
 
-@pytest.fixture()
-def client(cfg, clean):
-    app_cfg = dataclasses.replace(cfg, listen_host="0.0.0.0")
+@pytest.fixture(params=["0.0.0.0", "127.0.0.1"])
+def client(cfg, clean, request):
+    # 0.0.0.0 — за прокси роутера, 127.0.0.1 — за Caddy на том же компе.
+    # Host в обоих случаях чужой: адрес роутера или имя домена.
+    app_cfg = dataclasses.replace(cfg, listen_host=request.param)
     mcp, _ = build(app_cfg)
-    with TestClient(mcp.streamable_http_app(), base_url="http://192.168.1.10:8090") as c:
+    with TestClient(mcp.streamable_http_app(), base_url="http://archive.example.duckdns.org:8443") as c:
         yield c
 
 

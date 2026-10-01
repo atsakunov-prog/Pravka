@@ -22,6 +22,7 @@ from starlette.responses import JSONResponse, Response
 
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from . import icu, tools
 from .auth import SCOPE, OwnerAuth
@@ -54,6 +55,12 @@ def build(cfg: Config) -> tuple[FastMCP, OwnerAuth]:
         port=cfg.listen_port,
         stateless_http=True,
         json_response=True,
+        # Проверка заголовка Host — защита локальных серверов от чужих страниц
+        # в браузере. Здесь сервис публичный и закрыт OAuth, а Host зависит от
+        # того, кто стоит впереди: прокси роутера подставлял свой адрес, Caddy
+        # передаёт имя домена. С 127.0.0.1 SDK включил бы её сам и отверг бы
+        # всё, что пришло через прокси.
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
         auth_server_provider=auth,
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(cfg.public_url),
