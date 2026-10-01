@@ -45,7 +45,12 @@ import ru.zf.slushalka.library.BookFile
  * играли - они уже на телефоне, сеть для сверки не нужна.
  *
  * Кэш заводится при первом файле с сервера: у того, кто слушает только своё,
- * его нет вовсе.
+ * его нет вовсе. Размер - настройка, и вытеснитель спрашивает её каждый раз.
+ *
+ * Мобильная сеть - шлагбаум перед каждым соединением ([Gated]): «потоком»,
+ * «спрашивать» (плеер останавливается, приложение спрашивает - [askMobile]) или
+ * «только Wi-Fi». То, что уже на телефоне, играет при любом выборе: кэш
+ * читается без соединения.
  */
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 class Streaming(
@@ -56,7 +61,52 @@ class Streaming(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val evictor = SizedLruEvictor { CACHE_BYTES }
+    private val evictor = SizedLruEvictor { settings.now().streamCacheMb * 1024L * 1024L }
+
+    private val connectivity by lazy {
+        context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+    }
+
+    /** Мобильная сеть разрешена до следующего Wi-Fi: «спрашивать» спрашивает снова в следующий раз. */
+    @Volatile
+    private var mobileOk = false
+
+    private val _askMobile = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /** Плеер упёрся в мобильную сеть при «спрашивать»: приложение показывает вопрос. */
+    val askMobile: kotlinx.coroutines.flow.StateFlow<Boolean> = _askMobile
+
+    /** Слушать потоком и в мобильной сети - до следующего Wi-Fi. */
+    fun allowMobile() {
+        mobileOk = true
+        _askMobile.value = false
+    }
+
+    fun dismissAsk() {
+        _askMobile.value = false
+    }
+
+    /** Сеть сейчас мобильная (платная). Сети нет вовсе - не мобильная: пусть скажет сама ошибка связи. */
+    private fun metered(): Boolean = runCatching {
+        connectivity.activeNetwork != null && connectivity.isActiveNetworkMetered
+    }.getOrDefault(false)
+
+    /**
+     * Можно ли сейчас соединяться. [asks] - соединяется плеер: при «спрашивать»
+     * это повод спросить. Подкачка и распознавание не спрашивают - молча ждут.
+     */
+    private fun allowed(asks: Boolean): Boolean {
+        val mode = settings.now().streamMobile
+        if (mode == Settings.MOBILE_STREAM) return true
+        if (!metered()) {
+            // Снова Wi-Fi: разрешение на мобильную сеть кончилось.
+            mobileOk = false
+            return true
+        }
+        if (mode == Settings.MOBILE_ASK && mobileOk) return true
+        if (asks && mode == Settings.MOBILE_ASK) _askMobile.value = true
+        return false
+    }
 
     /** Кэш записи. SimpleCache на папку один на процесс - отсюда lazy и один экземпляр. */
     private val cache: SimpleCache by lazy {
@@ -66,23 +116,32 @@ class Streaming(
     @Volatile
     private var cacheMade = false
 
-    /** HTTP с входом: заголовок собирается на каждое соединение - логин могли сменить. */
-    private val http = DataSource.Factory {
-        DefaultHttpDataSource.Factory()
-            .setUserAgent(USER_AGENT)
-            .setConnectTimeoutMs(20_000)
-            .setReadTimeoutMs(30_000)
-            .setAllowCrossProtocolRedirects(true)
-            .setDefaultRequestProperties(mapOf("Authorization" to cloud.authHeader()))
-            .createDataSource()
+    /**
+     * HTTP с входом: заголовок собирается на каждое соединение - логин могли
+     * сменить. Перед соединением - шлагбаум мобильной сети.
+     */
+    private fun http(asks: Boolean) = DataSource.Factory {
+        Gated(
+            DefaultHttpDataSource.Factory()
+                .setUserAgent(USER_AGENT)
+                .setConnectTimeoutMs(20_000)
+                .setReadTimeoutMs(30_000)
+                .setAllowCrossProtocolRedirects(true)
+                .setDefaultRequestProperties(mapOf("Authorization" to cloud.authHeader()))
+                .createDataSource(),
+        ) { allowed(asks) }
     }
 
-    /** Кэш поверх HTTP: что уже на телефоне, читается с диска. */
+    /** Кэш поверх HTTP для плеера: что уже на телефоне, читается с диска. */
     private val cached: CacheDataSource.Factory by lazy {
         cacheMade = true
-        CacheDataSource.Factory()
-            .setCache(cache)
-            .setUpstreamDataSourceFactory(http)
+        CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(http(asks = true))
+    }
+
+    /** То же для подкачки и распознавания: кэш общий, но в мобильной сети они не спрашивают. */
+    private val quiet: CacheDataSource.Factory by lazy {
+        cacheMade = true
+        CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory(http(asks = false))
     }
 
     /**
@@ -91,6 +150,30 @@ class Streaming(
      */
     val dataSourceFactory: DataSource.Factory by lazy {
         DefaultDataSource.Factory(context) { Deferred { cached.createDataSource() } }
+    }
+
+    /**
+     * Отказ шлагбаума не повторяется: ExoPlayer иначе трижды стучался бы в
+     * закрытую дверь, прежде чем сказать, в чём дело. Остальное - как обычно.
+     */
+    val errorPolicy: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy =
+        object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
+            override fun getRetryDelayMsFor(
+                info: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo,
+            ): Long = if (generateSequence(info.exception as Throwable?) { it.cause }.any { it is MeteredException }) {
+                C.TIME_UNSET
+            } else super.getRetryDelayMsFor(info)
+        }
+
+    /** Шлагбаум не пустил: мобильная сеть, а выбрано «только Wi-Fi» или ещё не ответили. */
+    class MeteredException : java.io.IOException("Мобильная сеть: поток не разрешён")
+
+    /** Сетевой источник за шлагбаумом: соединение - только если [allowed]. */
+    private class Gated(private val real: DataSource, private val allowed: () -> Boolean) : DataSource by real {
+        override fun open(dataSpec: DataSpec): Long {
+            if (!allowed()) throw MeteredException()
+            return real.open(dataSpec)
+        }
     }
 
     /** Адрес файла книги на сервере: тот же для плеера, подкачки и распознавания - по нему кэш узнаёт своё. */
@@ -107,6 +190,10 @@ class Streaming(
      * Подкачать файл целиком заранее - следующий за тем, что играет. null -
      * отменить: книга своя, кончилась или закрыта. Тот же файл второй раз не
      * заводится; другой отменяет прежний - качается всегда один.
+     *
+     * Файл, который уже начал читать сам плеер, лучше не трогать: на время
+     * закачки участок заперт, и плеер читал бы его мимо кэша, второй раз.
+     * Поэтому подкачка заводится на смене файла - до стыка обычно далеко.
      */
     fun prefetch(file: BookFile?) {
         val url = file?.takeIf { it.isRemote }?.let(::urlOf)
@@ -115,7 +202,10 @@ class Streaming(
         prefetchUrl = url
         if (url == null) return
         prefetchJob = scope.launch {
-            val writer = CacheWriter(cached.createDataSource(), DataSpec(Uri.parse(url)), null, null)
+            // В мобильной сети впрок качается, только если выбрано «потоком»:
+            // при «спрашивать» человек бережёт трафик, и глава вперёд - лишняя.
+            if (metered() && settings.now().streamMobile != Settings.MOBILE_STREAM) return@launch
+            val writer = CacheWriter(quiet.createDataSource(), DataSpec(Uri.parse(url)), null, null)
             // Отмена корутины должна оборвать и закачку: CacheWriter блокирует поток.
             val handle = coroutineContext[Job]?.invokeOnCompletion { if (it != null) writer.cancel() }
             // Обрыв сети, сервер, отмена - не беда: доиграет плеер сам, а
@@ -132,7 +222,7 @@ class Streaming(
      * кэш, окнами по четверть мегабайта. Недостающее докачивается запросом с
      * `Range` и тоже остаётся в кэше.
      */
-    fun mediaSource(file: BookFile): MediaDataSource = CachedMedia(cached, uriOf(file), file.size)
+    fun mediaSource(file: BookFile): MediaDataSource = CachedMedia(quiet, uriOf(file), file.size)
 
     private class CachedMedia(
         private val factory: CacheDataSource.Factory,
@@ -189,6 +279,12 @@ class Streaming(
      */
     fun explain(error: PlaybackException): String? {
         val causes = generateSequence(error.cause as Throwable?) { it.cause }.toList()
+        if (causes.any { it is MeteredException }) {
+            return if (settings.now().streamMobile == Settings.MOBILE_WIFI) {
+                "Только по Wi-Fi: дальше записи на телефоне нет. Сыгранное и подкачанное играет и так; " +
+                    "выбор - в настройках, «Звук с сервера»"
+            } else "Мобильная сеть: слушать потоком?"
+        }
         causes.firstNotNullOfOrNull { it as? HttpDataSource.InvalidResponseCodeException }?.let { e ->
             return when (e.responseCode) {
                 401, 403 -> "Сервер библиотеки не пустил: проверь логин и пароль в настройках облака"
@@ -208,7 +304,22 @@ class Streaming(
     // ------------------------------------------------------------------ кэш
 
     /** Сколько записи лежит на телефоне. Кэш не заводили - ноль, и заводить ради ответа незачем. */
-    fun cachedBytes(): Long = if (cacheMade) runCatching { cache.cacheSpace }.getOrDefault(0L) else 0L
+    fun cachedBytes(): Long = if (cacheMade || cacheDirUsed()) runCatching { cache.cacheSpace }.getOrDefault(0L) else 0L
+
+    /** В папке кэша что-то лежит с прошлых запусков: тогда его стоит открыть, чтобы ответить честно. */
+    private fun cacheDirUsed(): Boolean = File(context.cacheDir, "stream").list()?.isNotEmpty() == true
+
+    /** Предел кэша уменьшили - лишнее уходит сразу, а не при следующей записи. */
+    fun trim() {
+        if (!cacheMade && !cacheDirUsed()) return
+        scope.launch { runCatching { synchronized(cache) { evictor.evict(cache, 0) } } }
+    }
+
+    /** Убрать с телефона всю запись с сервера. Играющий файл докачается заново. */
+    suspend fun clear() = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        if (!cacheMade && !cacheDirUsed()) return@withContext
+        runCatching { cache.keys.toList().forEach { cache.removeResource(it) } }
+    }
 
     /**
      * Источник, который заводит настоящий только при открытии. DefaultDataSource
@@ -287,8 +398,6 @@ class Streaming(
     private companion object {
         /** Окно чтения для распознавания: шесть секунд mp3 - это сто килобайт, окна хватает с запасом. */
         const val WINDOW = 256 * 1024
-        /** Предел кэша записи - два гигабайта, это часов тридцать пять mp3 на 128 кбит/с. */
-        const val CACHE_BYTES = 2048L * 1024 * 1024
         const val USER_AGENT = "Slushalka"
     }
 }

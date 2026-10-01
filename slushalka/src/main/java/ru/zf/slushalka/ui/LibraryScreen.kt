@@ -368,6 +368,8 @@ fun LibraryScreen(
             progress = progressOf(app, entry.shown),
             busy = transfer?.finished == false,
             onOpen = entry.local?.let { local -> { serverMenu = null; onOpen(local) } },
+            // Не скачивая: текст - во временный кэш, звук - потоком.
+            onStream = if (entry.local == null) { { serverMenu = null; onOpen(entry.server) } } else null,
             onDownload = if (sb != null && idx != null && entry.where != Where.PHONE) {
                 { serverMenu = null; app.cloudBooks.download(sb.folder, idx.booksDir, into = entry.local) }
             } else null,
@@ -964,6 +966,8 @@ private fun ServerBookMenu(
     /** Идёт другая передача: вторая разом не начинается. */
     busy: Boolean,
     onOpen: (() -> Unit)?,
+    /** Слушать и читать прямо с сервера; null - книга и так на телефоне. */
+    onStream: (() -> Unit)?,
     onDownload: (() -> Unit)?,
     /** Скачать текст, а звук слушать с сервера; null - не к этой книге. */
     onTextOnly: (() -> Unit)?,
@@ -1005,8 +1009,20 @@ private fun ServerBookMenu(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (onTextOnly != null && server != null) {
+                if (onStream != null) {
                     Spacer(Modifier.height(10.dp))
+                    Button(onClick = onStream, modifier = Modifier.fillMaxWidth()) {
+                        Icon(
+                            if (book.hasAudio) Glyphs.Headphones else Glyphs.MenuBook,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (book.hasAudio) "Слушать с сервера" else "Читать с сервера")
+                    }
+                }
+                if (onTextOnly != null && server != null) {
+                    Spacer(Modifier.height(if (onStream != null) 6.dp else 10.dp))
                     FilledTonalButton(onClick = onTextOnly, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                         Icon(Glyphs.MenuBook, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
@@ -1014,7 +1030,7 @@ private fun ServerBookMenu(
                     }
                 }
                 if (onDownload != null && server != null) {
-                    Spacer(Modifier.height(if (onTextOnly != null) 6.dp else 10.dp))
+                    Spacer(Modifier.height(if (onTextOnly != null || onStream != null) 6.dp else 10.dp))
                     FilledTonalButton(onClick = onDownload, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                         Icon(Glyphs.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))

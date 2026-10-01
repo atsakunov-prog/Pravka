@@ -91,7 +91,8 @@ class PlayerHolder(
             // Файл с телефона читается как раньше, с сервера - через кэш
             // записи (см. Streaming): сыгранное второй раз не качается.
             .setMediaSourceFactory(
-                androidx.media3.exoplayer.source.DefaultMediaSourceFactory(streaming.dataSourceFactory),
+                androidx.media3.exoplayer.source.DefaultMediaSourceFactory(streaming.dataSourceFactory)
+                    .setLoadErrorHandlingPolicy(streaming.errorPolicy),
             )
             // Запас вперёд - минуты, а не полминуты по умолчанию: с сервера
             // книга переживает лифт и тоннель. Для своих файлов это лишь
@@ -548,6 +549,24 @@ class PlayerHolder(
         book = null
         treeUri = null
         push()
+    }
+
+    /**
+     * Ещё раз - после «слушать потоком» в мобильной сети. Плеер стоит с
+     * ошибкой - готовится заново и играет. Играет ещё прежний файл, а в
+     * шлагбаум упёрлась загрузка следующего - перемотка на то же место
+     * сбрасывает очередь, и следующий загрузится заново, уже с разрешением;
+     * иначе книга замолчала бы на стыке.
+     */
+    fun retry() {
+        if (player.mediaItemCount == 0) return
+        clearError()
+        val stopped = player.playbackState == Player.STATE_IDLE
+        if (stopped) player.prepare()
+        else player.seekTo(player.currentMediaItemIndex, player.currentPosition)
+        lastPauseAt = 0L
+        // На паузе - так и остаётся: спросили ради загрузки впрок, а не пуска.
+        if (stopped || player.playWhenReady) player.play()
     }
 
     fun clearError() {

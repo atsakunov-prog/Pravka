@@ -176,9 +176,16 @@ fun PlayerScreen(
                         )
                     }
                     Spacer(Modifier.height(4.dp))
+                    // Файл с сервера - так и сказано: если звук задумался, понятно почему.
+                    val remote = b.files.getOrNull(play.fileIndex)?.isRemote == true
                     Text(
                         "${play.fileName.substringBeforeLast('.')} · " +
-                            "${play.fileIndex + 1} из ${b.files.size}",
+                            "${play.fileIndex + 1} из ${b.files.size}" +
+                            when {
+                                remote && play.buffering -> " · качаю с сервера…"
+                                remote -> " · с сервера"
+                                else -> ""
+                            },
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

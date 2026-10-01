@@ -111,7 +111,14 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     пределом из лямбды), `prefetch` следующего файла, `mediaSource` для
     `AudioChunk`/`Durations`, `explain` — ошибки сети по-русски. Разметка и
     справочник — через `data/BookDir.kt` (папка на телефоне и, у книги со
-    звуком на сервере, папка там).
+    звуком на сервере или без папки на телефоне, папка там). Без скачивания —
+    книга `serverBooks` открывается как есть: текст качает `TextRepo`
+    (`textRemote` → `cache/server-text`, после разбора стирается). Мобильная
+    сеть — `Prefs.streamMobile` («потоком / спрашивать / только Wi-Fi»),
+    шлагбаум `Streaming.Gated` перед соединением плеера, вопрос
+    `Streaming.askMobile` → `MobileDialog` в `MainActivity`, `PlayerHolder.retry`
+    перезагружает очередь; кэш — `Prefs.streamCacheMb`, раздел настроек
+    «Звук с сервера» (`StreamSettings`).
   - `update/Updater.kt` — самообновление из `apk-builds`.
   - `stats/` — `Journal.kt` (журнал подходов: плеер
     тиком и паузой, читалка страницей и уходом, озвучка абзацем; паузы до 15

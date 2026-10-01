@@ -70,13 +70,14 @@ class SlushalkaApp : Application() {
         settings = Settings(this, scope)
         positions = PositionStore(this)
         library = LibraryStore(this)
-        texts = TextRepo(this)
+        // Облако раньше текстов: книга с сервера качает текст через него.
+        cloud = ru.zf.slushalka.data.Cloud(settings)
+        texts = TextRepo(this, cloud)
         bookmarks = Bookmarks(this)
         askLog = AskLog(this)
         notes = Notes(this)
         journal = Journal(this)
         sync = PositionSync(this)
-        cloud = ru.zf.slushalka.data.Cloud(settings)
         server = ru.zf.slushalka.data.ServerLibrary(this, settings, cloud, scope)
         // Разметка и справочник - в папке книги, а у книги со звуком на сервере ещё и там.
         val bookDir = ru.zf.slushalka.data.BookDir(this, settings, cloud)

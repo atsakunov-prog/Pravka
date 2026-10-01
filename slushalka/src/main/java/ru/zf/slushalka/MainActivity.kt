@@ -338,6 +338,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            // Звук с сервера упёрся в мобильную сеть при «спрашивать»: вопрос
+            // поверх любого экрана - пуск мог быть и из шторки, и с гарнитуры.
+            val askMobile by app.streaming.askMobile.collectAsState()
+            if (askMobile) MobileDialog()
+
             if (asking) {
                 AskSheet(
                     app = app,
@@ -351,6 +356,42 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    /**
+     * «Слушать потоком?» Час mp3 на 128 кбит/с - около 60 МБ. Разрешение - до
+     * следующего Wi-Fi; «всегда» переключает настройку.
+     */
+    @Composable
+    private fun MobileDialog() {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { app.streaming.dismissAsk() },
+            title = { androidx.compose.material3.Text("Мобильная сеть") },
+            text = {
+                androidx.compose.foundation.layout.Column {
+                    androidx.compose.material3.Text(
+                        "Дальше звук книги идёт с сервера, а телефон сейчас не на Wi-Fi. Час записи - " +
+                            "около 60 МБ. Что уже на телефоне, играет и так."
+                    )
+                    androidx.compose.material3.TextButton(onClick = {
+                        app.scope.launch { app.settings.setStreamMobile(ru.zf.slushalka.data.Settings.MOBILE_STREAM) }
+                        app.streaming.allowMobile()
+                        app.player.retry()
+                    }) { androidx.compose.material3.Text("Всегда потоком") }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    app.streaming.allowMobile()
+                    app.player.retry()
+                }) { androidx.compose.material3.Text("Слушать потоком") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { app.streaming.dismissAsk() }) {
+                    androidx.compose.material3.Text("Подождать Wi-Fi")
+                }
+            },
+        )
     }
 
     private fun startPlayback() {

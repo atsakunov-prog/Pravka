@@ -317,7 +317,7 @@ class AppState(private val app: SlushalkaApp) {
         app.scope.launch {
             if (!book.hasText) return@launch
             _busy.value = "Разбираю текст книги…"
-            val t = app.texts.textFor(tree, book)
+            val t = app.texts.textFor(tree, book) { pct -> _busy.value = "Качаю текст с сервера: $pct%" }
             _busy.value = null
             if (_current.value?.id != book.id) return@launch
             _text.value = t

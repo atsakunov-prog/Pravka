@@ -138,6 +138,7 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
             }
 
             CloudSettings(app)
+            if (prefs.cloudReady) StreamSettings(app)
 
             Section("Флибуста")
             OutlinedTextField(
@@ -716,5 +717,74 @@ private fun CloudSettings(app: SlushalkaApp) {
             "библиотеки, так что обе дороги работают вместе. Книги - в «${prefs.cloudPath("Книги")}»: у " +
             "домашней библиотеки они на полке «В библиотеке», у другого облака - на экране облака " +
             "(значок на полке)."
+    )
+}
+
+/**
+ * Звук с сервера: мобильная сеть и кэш записи на телефоне. Час mp3 на
+ * 128 кбит/с - около 60 МБ: столько уходит и в трафик, и в кэш.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StreamSettings(app: SlushalkaApp) {
+    val prefs by app.state.prefs.collectAsState()
+    val scope = rememberCoroutineScope()
+    // Сколько занято - спрашивается при открытии и после «Очистить»: кэш растёт
+    // и сам, пока играет, но цифре на экране незачем дрожать.
+    var used by remember { mutableStateOf<Long?>(null) }
+    var rev by remember { mutableStateOf(0) }
+    androidx.compose.runtime.LaunchedEffect(rev) {
+        used = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { app.streaming.cachedBytes() }
+    }
+
+    Section("Звук с сервера")
+    Text("В мобильной сети", style = MaterialTheme.typography.bodyMedium)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Settings.MOBILES.forEach { m ->
+            FilterChip(
+                selected = prefs.streamMobile == m,
+                onClick = { scope.launch { app.settings.setStreamMobile(m) } },
+                label = { Text(Settings.mobileLabel(m)) },
+            )
+        }
+    }
+    Note(
+        when (prefs.streamMobile) {
+            Settings.MOBILE_STREAM -> "Книга с сервера играет и в мобильной сети, не спрашивая."
+            Settings.MOBILE_ASK -> "В мобильной сети плеер спросит один раз - до следующего Wi-Fi."
+            else -> "В мобильной сети играет только то, что уже на телефоне."
+        } + " Для справки: mp3 на 128 кбит/с - около 60 МБ в час. Пока играет файл, следующий качается " +
+            "целиком заранее - на Wi-Fi это запас на тоннель и дачу."
+    )
+    Text("Кэш записи на телефоне", style = MaterialTheme.typography.bodyMedium)
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Settings.CACHE_SIZES_MB.forEach { mb ->
+            FilterChip(
+                selected = prefs.streamCacheMb == mb,
+                onClick = {
+                    scope.launch {
+                        app.settings.setStreamCacheMb(mb)
+                        // Уменьшили - лишнее уходит сразу.
+                        app.streaming.trim()
+                    }
+                },
+                label = { Text(if (mb >= 1024) "${mb / 1024} ГБ" else "$mb МБ") },
+            )
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Занято: " + (used?.let { if (it > 0) formatBytes(it) else "ничего" } ?: "…"),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(
+            enabled = (used ?: 0L) > 0,
+            onClick = { scope.launch { app.streaming.clear(); rev++ } },
+        ) { Text("Очистить") }
+    }
+    Note(
+        "Сыгранное и подкачанное лежит на телефоне и второй раз не качается - и без сети играет. " +
+            "Давно не слушанное вытесняется первым. Скачанные книги в кэш не входят: они на полке."
     )
 }

@@ -32,11 +32,11 @@ class BookDir(
         book.treeUri ?: settings.now().libraryUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
 
     /**
-     * Сервер - тоже дом этой книги: её звук там. Полную свою копию на сервер
-     * не пишем - у неё своя папка, и так было всегда.
+     * Сервер - тоже дом этой книги: её звук там, или на телефоне её нет вовсе.
+     * Полную свою копию на сервер не пишем - у неё своя папка, и так было всегда.
      */
     private fun onServer(book: Book): Boolean =
-        book.remoteDir.isNotBlank() && book.streams && settings.now().cloudReady
+        book.remoteDir.isNotBlank() && (book.streams || !book.onPhone) && settings.now().cloudReady
 
     suspend fun read(book: Book, name: String): String? = withContext(Dispatchers.IO) {
         if (onServer(book)) {

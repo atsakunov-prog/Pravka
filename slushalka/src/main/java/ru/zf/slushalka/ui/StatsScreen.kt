@@ -78,7 +78,13 @@ import ru.zf.slushalka.library.Book
 @Composable
 fun StatsScreen(app: SlushalkaApp, onBack: () -> Unit) {
     val rev by app.journal.rev.collectAsState()
-    val books by app.state.books.collectAsState()
+    val shelf by app.state.books.collectAsState()
+    val server by app.state.serverBooks.collectAsState()
+    // Слушали и с сервера, не скачивая: названия таких книг - из оглавления.
+    val books = remember(shelf, server) {
+        val ids = shelf.map { it.id }.toSet()
+        shelf + server.filter { it.id !in ids }
+    }
     val current by app.state.current.collectAsState()
     val text by app.state.text.collectAsState()
 

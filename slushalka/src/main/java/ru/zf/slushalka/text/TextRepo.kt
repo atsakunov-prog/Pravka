@@ -15,8 +15,13 @@ import ru.zf.slushalka.library.documentUri
  * Текст книги: разбирается один раз и ложится в кэш приложения. Разбор
  * восьмисотстраничного романа стоит секунду-другую, и платить её на каждый
  * вопрос не за что.
+ *
+ * Книга, открытая прямо с сервера библиотеки, своего файла текста не имеет:
+ * он качается во временный кэш, разбирается и стирается - разобранное
+ * остаётся, как у любой книги, а файл понадобится разве что для «разобрать
+ * заново», и тогда скачается снова.
  */
-class TextRepo(private val context: Context) {
+class TextRepo(private val context: Context, private val cloud: ru.zf.slushalka.data.Cloud) {
 
     private val dir get() = File(context.filesDir, "text").apply { mkdirs() }
     private val coverDir get() = File(context.filesDir, "covers").apply { mkdirs() }
@@ -56,8 +61,11 @@ class TextRepo(private val context: Context) {
 
     fun cached(bookId: String): BookText? = memory[bookId]
 
-    /** Разбирает текст (или достаёт из кэша). null - текста рядом с аудио нет. */
-    suspend fun textFor(treeUri: Uri, book: Book): BookText? = withContext(Dispatchers.IO) {
+    /**
+     * Разбирает текст (или достаёт из кэша). null - текста рядом с аудио нет.
+     * [onDownload] - доля скачанного, когда текст качается с сервера.
+     */
+    suspend fun textFor(treeUri: Uri, book: Book, onDownload: (Int) -> Unit = {}): BookText? = withContext(Dispatchers.IO) {
         memory[book.id]?.let { return@withContext it }
         val k = key(book.id)
         val txt = File(dir, "$k.txt")
@@ -78,21 +86,27 @@ class TextRepo(private val context: Context) {
                 return@withContext cached
             }
         }
-        val docId = book.textDocId ?: return@withContext null
+        // Свой файл - документом SAF; книга с сервера - скачанным во временный кэш.
+        var downloaded: File? = null
+        val source: Uri = book.textDocId?.let { documentUri(treeUri, it) }
+            ?: book.textRemote?.let { remote -> download(book, remote, onDownload)?.also { downloaded = it }?.let(Uri::fromFile) }
+            ?: return@withContext null
         // Картинки уезжают на диск прямо по ходу разбора: держать в памяти
         // десяток разворотов ни к чему.
         val pics = picturesDir(book.id)
         val refToFile = HashMap<String, String>()
         val parsed = runCatching {
-            parse(treeUri, docId, book.textName.orEmpty()) { ref, bytes ->
+            parse(source, book.textName.orEmpty()) { ref, bytes ->
                 // Регистр ссылки и регистр id в книге совпадают не всегда.
                 val norm = ref.lowercase()
                 val name = key(norm) + ".img"
                 runCatching { File(pics, name).writeBytes(bytes) }
                     .onSuccess { refToFile[norm] = name }
             }
-        }.getOrNull() ?: return@withContext null
-        if (parsed.text.length < 200) return@withContext null
+        }.getOrNull()
+        // Скачанное больше не нужно: разобранное ляжет в кэш ниже.
+        downloaded?.delete()
+        if (parsed == null || parsed.text.length < 200) return@withContext null
         // Картинка без файла на диске нарисовалась бы дырой - такие выбрасываем.
         val ready = if (parsed.text.pictures.isEmpty()) parsed.text else BookText(
             plain = parsed.text.plain,
@@ -117,13 +131,37 @@ class TextRepo(private val context: Context) {
         ready
     }
 
+    /** Текст с сервера - во временный кэш, с долей скачанного. null - не скачался. */
+    private suspend fun download(book: Book, remote: String, onProgress: (Int) -> Unit): File? {
+        val dir = File(context.cacheDir, "server-text").apply { mkdirs() }
+        val out = File(dir, key(book.id) + "." + remote.substringAfterLast('.', "bin").lowercase())
+        val ok = cloud.download(remote) { input, total ->
+            out.outputStream().use { o ->
+                val buf = ByteArray(64 * 1024)
+                var got = 0L
+                var shown = -1
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    o.write(buf, 0, n)
+                    got += n
+                    val pct = if (total > 0) (got * 100 / total).toInt() else -1
+                    if (pct != shown && pct >= 0) {
+                        shown = pct
+                        onProgress(pct)
+                    }
+                }
+            }
+        }.isSuccess
+        if (!ok) out.delete()
+        return out.takeIf { ok && it.length() > 0 }
+    }
+
     private fun parse(
-        treeUri: Uri,
-        docId: String,
+        uri: Uri,
         name: String,
         onImage: (String, ByteArray) -> Unit,
     ): ParsedBook {
-        val uri = documentUri(treeUri, docId)
         val lower = name.lowercase()
         return when {
             lower.endsWith(".fb2") -> context.contentResolver.openInputStream(uri)!!

@@ -179,6 +179,14 @@ class Settings(private val context: Context, scope: CoroutineScope) {
          * сервера, тот и открывает приложение на нём.
          */
         val libraryView: String = VIEW_PHONE,
+        /**
+         * Звук с сервера в мобильной сети: потоком, спрашивать или только по
+         * Wi-Fi. Заводское - спрашивать: час mp3 на 128 кбит/с - это около
+         * 60 МБ, и решать это должен человек, а не приложение.
+         */
+        val streamMobile: String = MOBILE_ASK,
+        /** Сколько записи с сервера держать на телефоне, мегабайт. */
+        val streamCacheMb: Int = 2048,
     ) {
         /** Облако настроено: есть куда и с чем ходить. */
         val cloudReady: Boolean
@@ -283,6 +291,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 cloudDir = p[KEY_CLOUD_DIR]?.takeIf { it.isNotBlank() } ?: DEFAULT_CLOUD_DIR,
                 cloudSync = p[KEY_CLOUD_SYNC] ?: true,
                 libraryView = p[KEY_LIB_VIEW]?.takeIf { it in VIEWS } ?: VIEW_PHONE,
+                streamMobile = p[KEY_STREAM_MOBILE]?.takeIf { it in MOBILES } ?: MOBILE_ASK,
+                streamCacheMb = p[KEY_STREAM_CACHE]?.takeIf { it in CACHE_SIZES_MB } ?: 2048,
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, Prefs())
@@ -391,6 +401,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     }
     suspend fun setCloudSync(v: Boolean) = edit { it[KEY_CLOUD_SYNC] = v }
     suspend fun setLibraryView(v: String) = edit { if (v in VIEWS) it[KEY_LIB_VIEW] = v }
+    suspend fun setStreamMobile(v: String) = edit { if (v in MOBILES) it[KEY_STREAM_MOBILE] = v }
+    suspend fun setStreamCacheMb(v: Int) = edit { if (v in CACHE_SIZES_MB) it[KEY_STREAM_CACHE] = v }
 
     companion object {
         // Модели - в ask/Models.kt: там же имена, цены и «по умолчанию».
@@ -448,6 +460,21 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val VIEW_PHONE = "phone"
         const val VIEW_SERVER = "server"
         val VIEWS = listOf(VIEW_PHONE, VIEW_SERVER)
+
+        // Звук с сервера в мобильной сети.
+        const val MOBILE_STREAM = "stream"
+        const val MOBILE_ASK = "ask"
+        const val MOBILE_WIFI = "wifi"
+        val MOBILES = listOf(MOBILE_STREAM, MOBILE_ASK, MOBILE_WIFI)
+
+        fun mobileLabel(v: String): String = when (v) {
+            MOBILE_STREAM -> "Потоком"
+            MOBILE_ASK -> "Спрашивать"
+            else -> "Только Wi-Fi"
+        }
+
+        /** Ступени кэша записи: от полугига до восьми. */
+        val CACHE_SIZES_MB = listOf(512, 1024, 2048, 4096, 8192)
 
         /**
          * Книжный - Literata, своя гарнитура в ресурсах. Системный «с
@@ -713,6 +740,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_CLOUD_DIR = stringPreferencesKey("cloud_dir")
         private val KEY_CLOUD_SYNC = booleanPreferencesKey("cloud_sync")
         private val KEY_LIB_VIEW = stringPreferencesKey("library_view")
+        private val KEY_STREAM_MOBILE = stringPreferencesKey("stream_mobile")
+        private val KEY_STREAM_CACHE = intPreferencesKey("stream_cache_mb")
     }
 }
 
