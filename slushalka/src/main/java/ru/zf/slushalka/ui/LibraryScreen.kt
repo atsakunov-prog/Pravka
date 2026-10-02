@@ -64,6 +64,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.zf.slushalka.SlushalkaApp
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import ru.zf.slushalka.data.ServerLibrary
 import ru.zf.slushalka.data.Settings
@@ -289,8 +290,41 @@ fun LibraryScreen(
                                     Spacer(Modifier.height(8.dp))
                                     LinearProgressIndicator(Modifier.fillMaxWidth())
                                 }
-                                if (serverStatus == ServerLibrary.Status.Missing) {
-                                    TextButton(onClick = onCloud) { Text("Книги облака") }
+                                val trouble = serverStatus == ServerLibrary.Status.Missing ||
+                                    serverStatus is ServerLibrary.Status.Failed
+                                if (trouble) {
+                                    // Куда ходили - видно сразу: чаще всего дело в адресе.
+                                    Text(
+                                        "Облако: ${prefs.cloudUrl.substringAfter("://").trimEnd('/')}, папка " +
+                                            (if (prefs.cloudAtRoot) "корень сервера" else "«${prefs.cloudDir}»"),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                val home = prefs.cloudUrl.trimEnd('/').equals(Settings.HOME_LIBRARY_URL, ignoreCase = true) &&
+                                    prefs.cloudAtRoot
+                                Column {
+                                    // Облако смотрит не туда - одним тапом на домашнюю
+                                    // библиотеку: адрес и корень, логин и пароль прежние.
+                                    if (trouble && !home) {
+                                        TextButton(onClick = {
+                                            app.scope.launch {
+                                                app.settings.setCloudUrl(Settings.HOME_LIBRARY_URL)
+                                                app.settings.setCloudDir(Settings.ROOT_DIR)
+                                                app.server.forget()
+                                                // Снимок настроек догоняет запись не мгновенно:
+                                                // без ожидания запрос ушёл бы на прежний адрес.
+                                                app.settings.flow.first {
+                                                    it.cloudUrl == Settings.HOME_LIBRARY_URL && it.cloudAtRoot
+                                                }
+                                                app.server.refresh()
+                                            }
+                                        }) { Text("Подключить домашнюю библиотеку") }
+                                    }
+                                    if (trouble) TextButton(onClick = onSettings) { Text("Настройки") }
+                                    if (serverStatus == ServerLibrary.Status.Missing) {
+                                        TextButton(onClick = onCloud) { Text("Книги облака") }
+                                    }
                                 }
                             }
                         }
@@ -447,9 +481,9 @@ private fun serverNote(index: ServerLibrary.Index?, status: ServerLibrary.Status
         "На сервере нет оглавления index.json - это не домашняя библиотека. Книги этого облака - " +
             "на экране «Облако»; для библиотеки в настройках облака нужна папка «корень сервера»."
     status is ServerLibrary.Status.Failed ->
-        if (index != null) "Сервер не ответил (${status.message}) - показываю оглавление, " +
+        if (index != null) "Библиотека не обновилась: ${status.message}. Показываю оглавление, " +
             "взятое ${formatAgo(index.fetchedAt)}."
-        else "Сервер не ответил: ${status.message}"
+        else "Библиотека не открылась: ${status.message}."
     index == null -> "Читаю оглавление библиотеки…"
     index.books.isEmpty() -> "В библиотеке пока пусто."
     else -> null

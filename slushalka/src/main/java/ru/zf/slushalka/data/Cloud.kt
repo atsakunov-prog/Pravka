@@ -75,11 +75,25 @@ class Cloud(private val settings: Settings) {
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
+    /**
+     * Запрос с ошибкой по-русски. Сетевые исключения Java («Unable to resolve
+     * host…») человеку ничего не говорят, а за ними почти всегда одно из трёх:
+     * адреса нет, сервер молчит, сертификат не тот. Отмена корутины - не
+     * ошибка облака, она летит дальше.
+     */
+    private inline fun <T> guard(block: () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(if (e is CloudException) e else CloudException(human(e)))
+    }
+
     private fun auth(b: Request.Builder): Request.Builder = b.header("Authorization", authHeader())
 
     /** Проверка настроек: папка есть или заводится, логин и пароль приняты. */
     suspend fun check(): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        guard {
             if (!ready) throw CloudException("Облако не настроено: адрес, логин и пароль приложения")
             ensureDir("")
             list("").getOrThrow()
@@ -89,7 +103,7 @@ class Cloud(private val settings: Settings) {
 
     /** Что лежит в папке (без неё самой). */
     suspend fun list(path: String): Result<List<Item>> = withContext(Dispatchers.IO) {
-        runCatching {
+        guard {
             val body = """<?xml version="1.0" encoding="utf-8"?>
                 <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>"""
                 .toRequestBody("application/xml; charset=utf-8".toMediaType())
@@ -98,11 +112,11 @@ class Cloud(private val settings: Settings) {
                 .header("Depth", "1")
                 .build()
             http.newCall(req).execute().use { resp ->
-                if (resp.code == 404) return@runCatching emptyList<Item>()
+                if (resp.code == 404) return@guard emptyList<Item>()
                 if (resp.code == 401) throw CloudException("Облако не приняло логин или пароль приложения")
                 if (!resp.isSuccessful) throw CloudException("Облако ответило ${resp.code}")
                 val self = url(path.trimEnd('/') + "/").substringAfter("://").substringAfter('/')
-                parse(resp.body?.byteStream() ?: return@runCatching emptyList<Item>())
+                parse(resp.body?.byteStream() ?: return@guard emptyList<Item>())
                     .filter { it.path.trim('/') != URLDecoder.decode(self, "UTF-8").trim('/') }
             }
         }
@@ -110,7 +124,7 @@ class Cloud(private val settings: Settings) {
 
     /** Что лежит по пути: размер и время. null - ничего нет. */
     suspend fun stat(path: String): Result<Item?> = withContext(Dispatchers.IO) {
-        runCatching {
+        guard {
             val body = """<?xml version="1.0" encoding="utf-8"?>
                 <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>"""
                 .toRequestBody("application/xml; charset=utf-8".toMediaType())
@@ -119,10 +133,10 @@ class Cloud(private val settings: Settings) {
                 .header("Depth", "0")
                 .build()
             http.newCall(req).execute().use { resp ->
-                if (resp.code == 404) return@runCatching null
+                if (resp.code == 404) return@guard null
                 if (resp.code == 401) throw CloudException("Облако не приняло логин или пароль приложения")
                 if (!resp.isSuccessful) throw CloudException("Облако ответило ${resp.code}")
-                parse(resp.body?.byteStream() ?: return@runCatching null).firstOrNull()
+                parse(resp.body?.byteStream() ?: return@guard null).firstOrNull()
             }
         }
     }
@@ -132,7 +146,7 @@ class Cloud(private val settings: Settings) {
      * файл, залитый под временным именем.
      */
     suspend fun move(from: String, to: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        guard {
             val req = auth(Request.Builder().url(url(from)))
                 .method("MOVE", null)
                 .header("Destination", url(to))
@@ -172,7 +186,7 @@ class Cloud(private val settings: Settings) {
 
     /** Удалить файл. Его и так нет (404) - тоже удалён. */
     suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        guard {
             val req = auth(Request.Builder().url(url(path))).delete().build()
             http.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful && resp.code != 404) throw CloudException("Облако не удалило $path: ${resp.code}")
@@ -182,10 +196,11 @@ class Cloud(private val settings: Settings) {
 
     /** Файл целиком - для маленьких файлов синхронизации. null - файла нет. */
     suspend fun getText(path: String): Result<String?> = withContext(Dispatchers.IO) {
-        runCatching {
+        guard {
             val req = auth(Request.Builder().url(url(path))).get().build()
             http.newCall(req).execute().use { resp ->
-                if (resp.code == 404) return@runCatching null
+                if (resp.code == 404) return@guard null
+                if (resp.code == 401) throw CloudException("Облако не приняло логин или пароль")
                 if (!resp.isSuccessful) throw CloudException("Облако ответило ${resp.code}")
                 resp.body?.string()
             }
@@ -194,7 +209,7 @@ class Cloud(private val settings: Settings) {
 
     /** Большой файл - потоком, с долей скачанного: книга качается главами по сотне мегабайт. */
     suspend fun download(path: String, sink: (InputStream, Long) -> Unit): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        guard {
             val req = auth(Request.Builder().url(url(path))).get().build()
             http.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) throw CloudException("Облако ответило ${resp.code} на $path")
@@ -205,7 +220,7 @@ class Cloud(private val settings: Settings) {
     }
 
     suspend fun putText(path: String, text: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        guard {
             ensureDir(path.substringBeforeLast('/', ""))
             val req = auth(Request.Builder().url(url(path)))
                 .put(text.toRequestBody("application/json; charset=utf-8".toMediaType()))
@@ -218,7 +233,7 @@ class Cloud(private val settings: Settings) {
 
     /** Выгрузить файл потоком - аудио книги в память не помещается. */
     suspend fun upload(path: String, size: Long, open: () -> InputStream?): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        guard {
             ensureDir(path.substringBeforeLast('/', ""))
             val body = object : RequestBody() {
                 override fun contentType() = "application/octet-stream".toMediaType()
@@ -304,6 +319,22 @@ class Cloud(private val settings: Settings) {
 
         /** Хвост временного имени: под ним файл льётся, без него лежит готовым. */
         const val PARTIAL = ".partial"
+
+        /** Сетевая ошибка словами: что случилось и куда смотреть. */
+        fun human(e: Throwable): String = when (e) {
+            is java.net.UnknownHostException ->
+                "Адрес «${hostOf(e.message)}» не находится в сети: такого сервера нет или нет интернета. " +
+                    "Проверь адрес в настройках облака"
+            is java.net.SocketTimeoutException -> "Сервер не ответил вовремя: он выключен или сеть еле живая"
+            is java.net.ConnectException -> "Сервер не принимает соединение: выключен или порт закрыт"
+            is javax.net.ssl.SSLException -> "Сертификат сервера не принят: ${e.message ?: "защищённое соединение не сложилось"}"
+            is java.io.IOException -> "Связь с сервером оборвалась: ${e.message ?: e.javaClass.simpleName}"
+            else -> e.message ?: e.javaClass.simpleName
+        }
+
+        /** Имя сервера из «Unable to resolve host "x": …» - сообщение у Android одно и то же. */
+        private fun hostOf(message: String?): String =
+            message?.let { Regex("\"([^\"]+)\"").find(it)?.groupValues?.get(1) } ?: "сервера"
 
         private val HTTP_DATE = ThreadLocal.withInitial {
             SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
