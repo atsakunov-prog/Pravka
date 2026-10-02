@@ -93,4 +93,17 @@ class PlacesTest {
         assertEquals(42L, s.listenAt)
         assertEquals(42L, s.readAt)
     }
+
+    @Test
+    fun onlyOwnFilesAreRead() {
+        // Свои: с любого своего устройства и прежний файл.
+        assertTrue(PositionSync.isMine("места-Саша@Pixel 9.json", "Саша"))
+        assertTrue(PositionSync.isMine("места-Саша@Boox.json", "саша"))
+        assertTrue(PositionSync.isMine("позиции-Саша.json", "Саша"))
+        // Чужое личное - мимо, даже похожее имя.
+        assertFalse(PositionSync.isMine("места-Марианна@Pixel.json", "Саша"))
+        assertFalse(PositionSync.isMine("места-Сашенька@Boox.json", "Саша"))
+        assertFalse(PositionSync.isMine("позиции-Борис.json", "Саша"))
+        assertFalse(PositionSync.isMine("места-Саша@Boox.json", ""))
+    }
 }

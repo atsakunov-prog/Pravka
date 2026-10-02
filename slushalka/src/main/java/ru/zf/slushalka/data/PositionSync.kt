@@ -77,12 +77,12 @@ class PositionSync(private val context: Context) {
     fun pullNotes(treeUri: Uri, profile: String): Map<String, List<Note>>? =
         if (profile.isBlank()) null else read(treeUri, fileName(NOTES_PREFIX, profile))?.let(::parseNotes)
 
-    /** Всё, что лежит в папке синхронизации, включая чужие дорожки. */
-    fun pull(treeUri: Uri): List<Remote> = runCatching {
+    /** Свои места из папки синхронизации - со всех своих устройств; чужие дорожки не читаются. */
+    fun pull(treeUri: Uri, profile: String): List<Remote> = runCatching {
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)
         val dirId = findChild(treeUri, rootId, DIR) ?: return emptyList()
         children(treeUri, dirId)
-            .filter { isPositions(it.second) || isPlaces(it.second) }
+            .filter { isMine(it.second, profile) }
             .mapNotNull { (docId, name) ->
                 context.contentResolver.openInputStream(documentUri(treeUri, docId))
                     ?.use { it.readBytes().toString(Charsets.UTF_8) }
@@ -174,6 +174,17 @@ class PositionSync(private val context: Context) {
         }
 
         fun isPlaces(name: String): Boolean = name.startsWith(PLACES_PREFIX) && name.endsWith(".json")
+
+        /**
+         * Файл мест этого человека - с любого его устройства, или прежний его
+         * файл позиций. По имени, без чтения: чужое личное не качается.
+         */
+        fun isMine(name: String, profile: String): Boolean {
+            if (profile.isBlank()) return false
+            val places = placesFileName(profile, "x").substringBefore('@') + "@"
+            return name.equals(fileName(PREFIX, profile), ignoreCase = true) ||
+                (name.startsWith(places, ignoreCase = true) && name.endsWith(".json"))
+        }
 
         /**
          * Места человека на устройстве - два места у каждой книги, у каждого своё

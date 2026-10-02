@@ -97,7 +97,6 @@ fun LibraryScreen(
     val transfer by app.cloudBooks.transfer.collectAsState()
     val busy by state.busy.collectAsState()
     val notice by state.notice.collectAsState()
-    val others by state.others.collectAsState()
     val rev by state.positionsRev.collectAsState()
     val prefs by state.prefs.collectAsState()
     val update by app.updater.status.collectAsState()
@@ -344,7 +343,6 @@ fun LibraryScreen(
                     app = app,
                     book = book,
                     progress = progress.getValue(book.id),
-                    others = others[book.id].orEmpty(),
                     place = place,
                     format = formatOf(book),
                     series = seriesOf(book),
@@ -358,7 +356,6 @@ fun LibraryScreen(
                     app = app,
                     book = book,
                     progress = progress.getValue(book.id),
-                    others = others[book.id].orEmpty(),
                     place = place,
                     series = seriesOf(book),
                     onSeries = pickSeries,
@@ -572,7 +569,7 @@ fun LibraryScreen(
                 { menuFor = null; app.cloudBooks.upload(book, toRoot = index != null) }
             } else null,
             onDelete = if (book.onPhone) { { menuFor = null; deleteAsk = book } } else null,
-            places = placesOf(app, book, others[book.id].orEmpty(), prefs.profile),
+            places = placesOf(app, book),
             onClose = { menuFor = null },
         )
     }
@@ -600,7 +597,7 @@ fun LibraryScreen(
                 { serverMenu = null; app.cloudBooks.downloadText(idx, sb) }
             } else null,
             onDelete = entry.local?.takeIf { it.onPhone }?.let { local -> { serverMenu = null; deleteAsk = local } },
-            places = placesOf(app, entry.shown, others[entry.shown.id].orEmpty(), prefs.profile),
+            places = placesOf(app, entry.shown),
             onClose = { serverMenu = null },
         )
     }
@@ -1104,7 +1101,6 @@ private fun BookTile(
     app: SlushalkaApp,
     book: Book,
     progress: Progress,
-    others: List<AppState.OtherPlace>,
     /** Где книга: на телефоне, на сервере, текстом. null - сервера нет, и говорить не о чем. */
     place: String?,
     series: BookMeta.Series?,
@@ -1178,7 +1174,7 @@ private fun BookTile(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        val line = statusLine(book, progress, others)
+        val line = statusLine(book, progress)
         if (line.isNotBlank()) {
             Text(
                 line,
@@ -1212,7 +1208,6 @@ private fun BookRow(
     app: SlushalkaApp,
     book: Book,
     progress: Progress,
-    others: List<AppState.OtherPlace>,
     place: String?,
     /** «текст + аудио · 12 ч», «только текст» - что в книге есть. */
     format: String,
@@ -1267,7 +1262,7 @@ private fun BookRow(
             )
             val line = listOf(
                 if (progress.done) (if (book.hasAudio) "дослушано ✓" else "прочитано ✓")
-                else statusLine(book, progress, others, withSpan = false),
+                else statusLine(book, progress, withSpan = false),
                 place.orEmpty(),
             ).filter { it.isNotBlank() }.joinToString(" · ")
             if (line.isNotBlank()) {
@@ -1303,26 +1298,13 @@ private fun ProgressStrip(share: Float, modifier: Modifier, height: androidx.com
     }
 }
 
-/** Свой процент и где остальные: «37% · Марианна 52%». */
-private fun statusLine(book: Book, progress: Progress, others: List<AppState.OtherPlace>, withSpan: Boolean = true): String {
-    val mine = when {
-        progress.done -> if (book.hasAudio) "дослушано" else "прочитано"
-        progress.started -> "${(progress.share * 100).toInt().coerceAtLeast(1)}%"
-        withSpan && book.hasAudio && book.totalMs > 0 -> formatSpan(book.totalMs)
-        withSpan && !book.hasText -> "без текста"
-        else -> ""
-    }
-    // У другого - его последнее место: слушал позже - по записи, читал позже - по тексту.
-    val theirs = others.joinToString(" · ") { o ->
-        when {
-            o.listenedLast && book.totalMs > 0 -> "${o.who} ${(o.absMs * 100 / book.totalMs).toInt()}%"
-            o.readChar >= 0 && o.readShare > 0f -> "${o.who} ${(o.readShare * 100).toInt()}%"
-            o.readChar >= 0 -> "${o.who} стр. ${o.readChar / Settings.PAGE_CHARS + 1}"
-            book.totalMs > 0 -> "${o.who} ${(o.absMs * 100 / book.totalMs).toInt()}%"
-            else -> o.who
-        }
-    }
-    return listOf(mine, theirs).filter { it.isNotBlank() }.joinToString(" · ")
+/** Свой процент, а нет его - длительность или «без текста». */
+private fun statusLine(book: Book, progress: Progress, withSpan: Boolean = true): String = when {
+    progress.done -> if (book.hasAudio) "дослушано" else "прочитано"
+    progress.started -> "${(progress.share * 100).toInt().coerceAtLeast(1)}%"
+    withSpan && book.hasAudio && book.totalMs > 0 -> formatSpan(book.totalMs)
+    withSpan && !book.hasText -> "без текста"
+    else -> ""
 }
 
 /** Серия под названием - ссылкой: нажал, и на полке вся серия по порядку. */
@@ -1632,34 +1614,27 @@ private fun ServerBookMenu(
     )
 }
 
-/** Строка «кто где» в меню книги: чьё место, что и когда. */
-private data class PlaceLine(val who: String, val text: String)
+/** Строка «где я» в меню книги: что и когда. */
+private data class PlaceLine(val text: String)
 
 /**
- * Места в книге: свои (слушал и читал - каждое со своим временем) и других
- * людей - самые свежие с любого их устройства. Чтобы было видно, что место
- * не сбилось, и где сейчас Марианна.
+ * Свои места в книге: где слушал и где читал, каждое со своим временем, - чтобы
+ * было видно, что место не сбилось. Только свои: места у каждого личные.
  */
-private fun placesOf(app: SlushalkaApp, book: Book, others: List<AppState.OtherPlace>, me: String): List<PlaceLine> {
-    fun listen(absMs: Long, at: Long): String? =
-        if (at <= 0 || !book.hasAudio) null
-        else "слушал до ${formatClock(absMs)}" +
-            (if (book.totalMs > 0) " (${(absMs * 100 / book.totalMs).toInt()}%)" else "") + ", ${formatAgo(at)}"
-    fun read(char: Int, of: Int, at: Long): String? =
-        if (char < 0 || at <= 0) null
-        else "читал стр. ${char / Settings.PAGE_CHARS + 1}" +
-            (if (of > 0) " (${(char * 100L / of).toInt()}%)" else "") + ", ${formatAgo(at)}"
-    val mine = app.state.stateOf(book.id)
-    val out = ArrayList<PlaceLine>()
-    listOfNotNull(listen(mine.absMs, mine.listenAt), read(mine.readChar, mine.textChars, mine.readAt))
-        .takeIf { it.isNotEmpty() }
-        ?.let { out += PlaceLine(me.ifBlank { "Я" }, it.joinToString("; ")) }
-    others.forEach { o ->
-        listOfNotNull(listen(o.absMs, o.listenAt), read(o.readChar, o.textChars, o.readAt))
-            .takeIf { it.isNotEmpty() }
-            ?.let { out += PlaceLine(o.who, it.joinToString("; ")) }
-    }
-    return out
+private fun placesOf(app: SlushalkaApp, book: Book): List<PlaceLine> {
+    val st = app.state.stateOf(book.id)
+    return listOfNotNull(
+        if (st.listenAt > 0 && book.hasAudio) {
+            "Слушал до ${formatClock(st.absMs)}" +
+                (if (book.totalMs > 0) " (${(st.absMs * 100 / book.totalMs).toInt()}%)" else "") +
+                ", ${formatAgo(st.listenAt)}"
+        } else null,
+        if (st.readChar >= 0 && st.readAt > 0) {
+            "Читал стр. ${st.readChar / Settings.PAGE_CHARS + 1}" +
+                (if (st.textChars > 0) " (${(st.readChar * 100L / st.textChars).toInt()}%)" else "") +
+                ", ${formatAgo(st.readAt)}"
+        } else null,
+    ).map(::PlaceLine)
 }
 
 @Composable
@@ -1668,7 +1643,7 @@ private fun PlacesBlock(places: List<PlaceLine>) {
     Spacer(Modifier.height(8.dp))
     places.forEach { p ->
         Text(
-            "${p.who}: ${p.text}",
+            p.text,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -47,26 +47,6 @@ class AppState(private val app: SlushalkaApp) {
     private val _alignment = MutableStateFlow<Alignment?>(null)
     val alignment: StateFlow<Alignment?> = _alignment
 
-    /**
-     * Докуда дошёл другой человек: место в записи и место чтения, у каждого
-     * своё время, - самые свежие с любого его устройства.
-     */
-    data class OtherPlace(
-        val who: String,
-        val absMs: Long,
-        val readChar: Int,
-        val listenAt: Long = 0,
-        val readAt: Long = 0,
-        /** Длина текста, как её видела его читалка: доля прочитанного. */
-        val textChars: Int = 0,
-    ) {
-        val listenedLast: Boolean get() = listenAt > readAt
-        val readShare: Float get() = if (textChars > 0 && readChar > 0) (readChar.toFloat() / textChars).coerceIn(0f, 1f) else 0f
-    }
-
-    /** Докуда дошли на других устройствах и у второго слушателя. */
-    private val _others = MutableStateFlow<Map<String, List<OtherPlace>>>(emptyMap())
-    val others: StateFlow<Map<String, List<OtherPlace>>> = _others
 
     /**
      * Место книги приехало с другого своего устройства и заметно отличается от
@@ -1122,23 +1102,23 @@ class AppState(private val app: SlushalkaApp) {
     }
 
     /**
-     * Принять места: свои с других устройств и чужие.
-     *
-     * Свои сливаются по книге и по каждому месту отдельно (см.
+     * Принять свои места с других своих устройств (телефон и читалка Саши).
+     * Сливаются по книге и по каждому месту отдельно (см.
      * [ru.zf.slushalka.data.PositionStore.merge]): самое свежее слушание и
      * самое свежее чтение, с какого бы устройства они ни были. Заметно
      * сдвинулось место книги - строка «место с Boox» с «Вернуть»; открытый
-     * плеер на паузе встаёт туда же. Чужие - самые свежие места каждого
-     * человека со всех его устройств: их видно на полке.
+     * плеер на паузе встаёт туда же. Чужие места - личные: их здесь нет.
      */
     private suspend fun syncPullNow() {
         val p = prefs.value
         if (!p.syncPositions) return
         val tree = treeUri()
-        val remotes = (if (tree != null) withContext(Dispatchers.IO) { app.sync.pull(tree) } else emptyList()) +
-            cloudRemotes(p)
-        val mine = remotes.filter { it.profile.equals(p.profile, true) && p.profile.isNotBlank() }
-        val others = remotes.filter { !it.profile.equals(p.profile, true) }
+        if (p.profile.isBlank()) return
+        // Только свои файлы: места у каждого личные - чужие не качаются и не
+        // показываются, на одном сервере у каждого своя дорожка.
+        val mine = ((if (tree != null) withContext(Dispatchers.IO) { app.sync.pull(tree, p.profile) } else emptyList()) +
+            cloudRemotes(p))
+            .filter { it.profile.equals(p.profile, true) }
 
         // Свои: от старых к свежим - последнее слово за самым свежим.
         var moved: Moved? = null
@@ -1159,26 +1139,6 @@ class AppState(private val app: SlushalkaApp) {
         }
         if (moved != null) _moved.value = moved
 
-        // Чужие: по человеку и книге - свежайшее слушание и свежайшее чтение.
-        _others.value = others
-            .groupBy { it.profile.trim() }
-            .flatMap { (who, list) ->
-                list.flatMap { it.states.entries }
-                    .groupBy({ it.key }, { it.value })
-                    .map { (id, states) ->
-                        val l = states.maxBy { it.listenAt }
-                        val rd = states.filter { it.readChar >= 0 }.maxByOrNull { it.readAt }
-                        id to OtherPlace(
-                            who = who,
-                            absMs = l.absMs,
-                            readChar = rd?.readChar ?: -1,
-                            listenAt = l.listenAt,
-                            readAt = rd?.readAt ?: 0L,
-                            textChars = rd?.textChars ?: 0,
-                        )
-                    }
-            }
-            .groupBy({ it.first }, { it.second })
 
         bump()
         // Вопросы и пометки - отдельно и после: места нужны сразу, а эти файлы
@@ -1214,12 +1174,15 @@ class AppState(private val app: SlushalkaApp) {
         return listen || read
     }
 
-    /** Места из облака - и файлы мест, и прежние файлы позиций; пусто - облака нет или оно молчит. */
+    /**
+     * Свои места из облака - файлы мест всех своих устройств и прежний файл
+     * позиций; чужие не качаются. Пусто - облака нет или оно молчит.
+     */
     private suspend fun cloudRemotes(p: Settings.Prefs): List<PositionSync.Remote> {
         if (!p.cloudReady || !p.cloudSync) return emptyList()
         val dir = ru.zf.slushalka.data.Cloud.SYNC_DIR
         val names = app.cloud.list(dir).getOrNull().orEmpty()
-            .filter { !it.dir && (PositionSync.isPositions(it.name) || PositionSync.isPlaces(it.name)) }
+            .filter { !it.dir && PositionSync.isMine(it.name, p.profile) }
         return names.mapNotNull { item ->
             app.cloud.getText("$dir/${item.name}").getOrNull()?.let {
                 if (PositionSync.isPlaces(item.name)) PositionSync.parsePlaces(it) else PositionSync.parseRemote(it)
